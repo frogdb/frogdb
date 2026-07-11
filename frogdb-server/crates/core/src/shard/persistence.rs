@@ -112,7 +112,21 @@ impl ShardWorker {
             WalAction::MergeHllDelta { key, pairs } => {
                 self.merge_hll_delta_to_wal(key, pairs).await
             }
+            WalAction::ClearShard => self.clear_shard_to_wal().await,
         }
+    }
+
+    /// Persist a full-shard clear to the WAL as a `Clear` entry.
+    ///
+    /// The flush thread applies it as a full-range delete of the shard's primary
+    /// column family, seq-ordered with surrounding Put/Delete/Merge entries so a
+    /// write accepted after the flush lands after the range tombstone (see
+    /// [`WalWriter::write_clear`]).
+    pub(crate) async fn clear_shard_to_wal(&self) -> std::io::Result<()> {
+        if let Some(wal) = self.persistence.wal_writer() {
+            wal.write_clear().await?;
+        }
+        Ok(())
     }
 
     /// Persist a command's effects to WAL and confirm they are durable,

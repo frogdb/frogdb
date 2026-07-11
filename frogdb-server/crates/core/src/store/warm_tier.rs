@@ -21,7 +21,7 @@
 use std::sync::Arc;
 
 use frogdb_persistence::RocksStore;
-use frogdb_persistence::rocks::RocksError;
+use frogdb_persistence::rocks::{CfTier, RocksError};
 
 /// The warm (RocksDB-backed) storage tier for a single shard.
 #[derive(Default)]
@@ -118,6 +118,19 @@ impl WarmTier {
     pub(super) fn delete(&self, key: &[u8]) {
         if let Some(store) = &self.store {
             let _ = store.delete_warm(self.shard_id, key);
+        }
+    }
+
+    /// Best-effort clear of every value in this shard's warm CF via a single
+    /// range tombstone (FLUSHDB / `clear`). No-op if unconfigured. Does not touch
+    /// counters — the caller resets `warm_keys` via [`reset_keys`](Self::reset_keys).
+    ///
+    /// Runs synchronously on the shard thread, the warm CF's sole writer, so it
+    /// is naturally ordered before any later demotion — unlike the primary CF,
+    /// whose clear must ride the WAL flush pipeline.
+    pub(super) fn clear_range(&self) {
+        if let Some(store) = &self.store {
+            let _ = store.clear_tier_shard(CfTier::Warm, self.shard_id);
         }
     }
 

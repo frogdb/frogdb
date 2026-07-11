@@ -224,8 +224,16 @@ pub enum WalStrategy {
     /// the command's `keys_with_flags`, not by [`WalStrategy::actions`].
     Dynamic,
 
+    /// Clear the entire shard: persist a full-range delete of the shard's
+    /// primary column family through the WAL flush pipeline. Used by FLUSHDB and
+    /// FLUSHALL, whose clear is unconditional (not `Dynamic`). The in-memory
+    /// store — and, when tiered storage is enabled, the warm column family — are
+    /// cleared synchronously by the command's `store.clear()`; this strategy adds
+    /// the primary-CF range tombstone so a flush survives a restart.
+    ClearShard,
+
     /// No WAL action needed.
-    /// Used by FLUSHDB, FLUSHALL (handled by RocksDB clear) and read commands.
+    /// Used by read commands (and other writes whose effects are not persisted).
     #[default]
     NoOp,
 }
@@ -257,10 +265,16 @@ pub enum WalAction<'a> {
         key: &'a [u8],
         pairs: &'a [(u16, u8)],
     },
+
+    /// Clear the entire shard: persist a full-range delete of the shard's
+    /// primary column family. Carries no key — it targets the whole CF. Emitted
+    /// only by [`WalStrategy::ClearShard`] (FLUSHDB / FLUSHALL).
+    ClearShard,
 }
 
 impl<'a> WalAction<'a> {
-    /// Get the key this action targets.
+    /// Get the key this action targets, or an empty slice for keyless actions
+    /// ([`WalAction::ClearShard`] targets the whole CF, not a single key).
     pub fn key(&self) -> &'a [u8] {
         match self {
             WalAction::Persist(k)
@@ -268,6 +282,7 @@ impl<'a> WalAction<'a> {
             | WalAction::PersistOrDelete(k)
             | WalAction::PersistIfExists(k)
             | WalAction::MergeHllDelta { key: k, .. } => k,
+            WalAction::ClearShard => &[],
         }
     }
 }
@@ -377,6 +392,9 @@ impl WalStrategy {
                 Some(dest) => smallvec![WalAction::PersistIfExists(dest)],
                 None => SmallVec::new(),
             },
+            // Unconditional full-shard clear: one keyless action, independent of
+            // args (FLUSHDB/FLUSHALL take no key arguments).
+            WalStrategy::ClearShard => smallvec![WalAction::ClearShard],
             // Dynamic is resolved against the command's extracted write keys by
             // `Command::wal_actions`, which has access to `keys_with_flags`.
             // Resolving it from raw args alone is impossible, so this yields
@@ -1167,6 +1185,22 @@ mod tests {
         // No args (defensive — every PersistFirstKey command has at least one).
         let empty: Vec<Bytes> = Vec::new();
         assert!(WalStrategy::PersistFirstKey.actions(&empty).is_empty());
+    }
+
+    #[test]
+    fn wal_strategy_clear_shard() {
+        // Unconditional: one keyless ClearShard action regardless of args.
+        let with_args = args(&[b"ignored"]);
+        let actions = WalStrategy::ClearShard.actions(&with_args);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], WalAction::ClearShard));
+        assert_eq!(actions[0].key(), b"");
+
+        // Also emitted with no args (FLUSHDB/FLUSHALL take none).
+        let empty: Vec<Bytes> = Vec::new();
+        let actions = WalStrategy::ClearShard.actions(&empty);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], WalAction::ClearShard));
     }
 
     #[test]

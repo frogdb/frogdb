@@ -206,18 +206,30 @@ fn test_warm_keys_not_in_eviction_sample() {
 fn test_clear_cleans_warm_tier() {
     let (mut store, rocks, _tmp) = store_with_warm();
 
+    // Two demoted keys land in the warm CF; a third stays hot.
     store.set(Bytes::from("key1"), Value::string("v1"));
     store.set(Bytes::from("key2"), Value::string("v2"));
+    store.set(Bytes::from("key3"), Value::string("v3"));
     store.demote_key(b"key1").unwrap();
+    store.demote_key(b"key2").unwrap();
+    assert_eq!(store.warm_tier().warm_keys(), 2);
 
-    // FLUSHDB
+    // FLUSHDB clears the store and range-deletes the warm CF.
     store.clear();
     assert_eq!(store.len(), 0);
     assert_eq!(store.warm_tier().warm_keys(), 0);
     assert_eq!(store.memory_used(), 0);
 
-    // Verify warm CF is also cleaned
+    // Every demoted key is gone from the warm CF...
     assert!(rocks.get_warm(0, b"key1").unwrap().is_none());
+    assert!(rocks.get_warm(0, b"key2").unwrap().is_none());
+    // ...and the CF is entirely empty, so a recovery scan (which iterates the
+    // warm CF) resurrects nothing after a restart.
+    assert_eq!(
+        rocks.iter_warm_cf(0).unwrap().count(),
+        0,
+        "the warm CF must be empty after clear"
+    );
 }
 
 #[test]

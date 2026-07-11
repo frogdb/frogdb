@@ -826,14 +826,13 @@ impl Store for HashMapStore {
     }
 
     fn clear(&mut self) {
-        // Clean up all warm entries from RocksDB (best-effort; `delete` is a
-        // no-op when the tier is unconfigured).
+        // Clear every value in this shard's warm CF with a single range
+        // tombstone (best-effort; a no-op when the tier is unconfigured). This
+        // runs synchronously on the shard thread — the warm CF's only writer —
+        // so it is ordered before any later demotion. The primary CF is cleared
+        // separately through the WAL flush pipeline (`WalStrategy::ClearShard`).
         if self.warm_tier.warm_keys() > 0 {
-            for (key, entry) in &self.data {
-                if !entry.is_hot() {
-                    self.warm_tier.delete(key.as_ref());
-                }
-            }
+            self.warm_tier.clear_range();
         }
         self.data.clear();
         self.expiry_index = ExpiryIndex::new();

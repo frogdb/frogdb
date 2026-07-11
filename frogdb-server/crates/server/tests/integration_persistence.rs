@@ -791,3 +791,198 @@ async fn test_hll_sparse_to_dense_promotion_survives_restart() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// FLUSHDB / FLUSHALL persistence clearing (proposal 43)
+//
+// FLUSHDB/FLUSHALL must clear the *persisted* keyspace, not merely the
+// in-memory store. Before proposal 43 the flush emitted zero WAL actions, so a
+// flush followed by a restart silently resurrected the entire pre-flush
+// keyspace from RocksDB.
+// ============================================================================
+
+/// Test 1 — Resurrection regression (the bug): a persisted String + dense HLL
+/// must be gone after FLUSHDB + restart.
+#[tokio::test]
+async fn test_flushdb_clears_persisted_data_across_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // --- First boot: persist a String (Put) and a dense HLL (Put + Merge) ---
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    assert_ok(&client.command(&["SET", "str", "value"]).await);
+    // Build a dense HLL and add via the delta-merge path so both a Put and a
+    // Merge operand are on disk for the same key.
+    pfadd_distinct(&mut client, "hll", "e", 4000).await;
+    assert_eq!(
+        client.command(&["PFDEBUG", "ENCODING", "hll"]).await,
+        Response::Bulk(Some(Bytes::from("dense"))),
+        "4000 distinct elements must promote the HLL to dense encoding"
+    );
+    assert_eq!(
+        client.command(&["PFADD", "hll", "x", "y", "z"]).await,
+        Response::Integer(1),
+        "dense PFADD persists as a merge operand"
+    );
+    assert!(unwrap_integer(&client.command(&["DBSIZE"]).await) >= 2);
+
+    // FLUSHDB clears everything.
+    assert_ok(&client.command(&["FLUSHDB"]).await);
+    assert_eq!(unwrap_integer(&client.command(&["DBSIZE"]).await), 0);
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // --- Second boot: nothing may resurrect ---
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    assert_eq!(
+        unwrap_integer(&client.command(&["DBSIZE"]).await),
+        0,
+        "FLUSHDB must clear persisted keys; none may resurrect after restart"
+    );
+    assert_eq!(
+        client.command(&["GET", "str"]).await,
+        Response::Bulk(None),
+        "the flushed String key must not resurrect"
+    );
+    assert_eq!(
+        unwrap_integer(&client.command(&["PFCOUNT", "hll"]).await),
+        0,
+        "the flushed HLL (base + merge operands) must not resurrect"
+    );
+
+    server.shutdown().await;
+}
+
+/// Test 2 — Post-flush writes survive: the range tombstone is seq-ordered with
+/// surrounding writes, so a SET after FLUSHDB outlives it.
+#[tokio::test]
+async fn test_flushdb_preserves_post_flush_writes_across_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    assert_ok(&client.command(&["SET", "before", "old"]).await);
+    assert_ok(&client.command(&["FLUSHDB"]).await);
+    assert_ok(&client.command(&["SET", "after", "new"]).await);
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    assert_eq!(
+        client.command(&["GET", "before"]).await,
+        Response::Bulk(None),
+        "the pre-flush key must stay cleared"
+    );
+    assert_eq!(
+        client.command(&["GET", "after"]).await,
+        Response::Bulk(Some(Bytes::from("new"))),
+        "a write accepted after FLUSHDB must survive the restart"
+    );
+    assert_eq!(unwrap_integer(&client.command(&["DBSIZE"]).await), 1);
+
+    server.shutdown().await;
+}
+
+/// Test 4 — FLUSHALL parity: FLUSHALL clears persisted data exactly like
+/// FLUSHDB (single logical DB; both take the ClearShard path).
+#[tokio::test]
+async fn test_flushall_clears_persisted_data_across_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    assert_ok(&client.command(&["SET", "str", "value"]).await);
+    pfadd_distinct(&mut client, "hll", "e", 4000).await;
+    assert_eq!(
+        client.command(&["PFADD", "hll", "x", "y", "z"]).await,
+        Response::Integer(1)
+    );
+
+    assert_ok(&client.command(&["FLUSHALL"]).await);
+    assert_eq!(unwrap_integer(&client.command(&["DBSIZE"]).await), 0);
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    assert_eq!(
+        unwrap_integer(&client.command(&["DBSIZE"]).await),
+        0,
+        "FLUSHALL must clear persisted keys across a restart"
+    );
+    assert_eq!(client.command(&["GET", "str"]).await, Response::Bulk(None));
+    assert_eq!(
+        unwrap_integer(&client.command(&["PFCOUNT", "hll"]).await),
+        0
+    );
+
+    server.shutdown().await;
+}
+
+/// Test 5 — Merge-operand interaction across a clear: an outstanding dense-PFADD
+/// delta chain must not fold into a same-key PFADD issued after FLUSHDB. The
+/// range tombstone clears the base and every operand, and recovery must reflect
+/// only the post-flush add. Guards proposal 42's delta-base invariant across a
+/// clear.
+#[tokio::test]
+async fn test_flushdb_clears_hll_delta_chain_before_readd() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    // Dense HLL (~4000) plus a dense PFADD → a merge operand chain on disk.
+    pfadd_distinct(&mut client, "hll", "e", 4000).await;
+    assert_eq!(
+        client.command(&["PFDEBUG", "ENCODING", "hll"]).await,
+        Response::Bulk(Some(Bytes::from("dense"))),
+        "4000 distinct elements must promote the HLL to dense encoding"
+    );
+    assert_eq!(
+        client.command(&["PFADD", "hll", "x", "y", "z"]).await,
+        Response::Integer(1),
+        "dense PFADD lays down a merge operand"
+    );
+
+    // Clear the whole keyspace: base + operands must go.
+    assert_ok(&client.command(&["FLUSHDB"]).await);
+
+    // Re-add a single element to the SAME key: recreates it as a fresh full Put.
+    assert_eq!(
+        client.command(&["PFADD", "hll", "solo"]).await,
+        Response::Integer(1)
+    );
+    assert_eq!(
+        unwrap_integer(&client.command(&["PFCOUNT", "hll"]).await),
+        1
+    );
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Restart: a leaked pre-flush base or operand chain would recover ~4000.
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+    assert_eq!(
+        unwrap_integer(&client.command(&["PFCOUNT", "hll"]).await),
+        1,
+        "FLUSHDB must clear the delta chain; only the post-flush add survives"
+    );
+
+    server.shutdown().await;
+}
