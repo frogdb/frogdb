@@ -265,6 +265,62 @@ impl RocksStore {
         batch.delete_cf(&cf, key);
         Ok(())
     }
+
+    /// Stage a full-range delete over the shard's primary column family into
+    /// `batch` (FLUSHDB / FLUSHALL). One range tombstone, not O(keys) point
+    /// deletes.
+    ///
+    /// RocksDB's `delete_range(from, to)` is `[from, to)` — the end bound is
+    /// exclusive and keys are unbounded-length byte strings, so no fixed
+    /// sentinel covers "every key". We instead read the current maximum key and
+    /// use `max ++ [0x00]` as the exclusive upper bound: it is strictly greater
+    /// than `max` (a proper prefix compares less), and nothing exceeds `max`, so
+    /// `[[], max ++ [0]]` covers the whole CF in a single op. An empty CF stages
+    /// nothing. Callers that need the tombstone to cover in-flight writes must
+    /// ensure those writes are committed first (see
+    /// [`super::wal::flush::FlushEngine::apply_clear`]).
+    pub fn batch_clear_shard(
+        &self,
+        batch: &mut WriteBatch,
+        shard_id: usize,
+    ) -> Result<(), RocksError> {
+        let cf = self.cf_handle(shard_id)?;
+        if let Some(upper) = self.range_delete_upper_bound(&cf) {
+            batch.delete_range_cf(&cf, [].as_slice(), upper.as_slice());
+        }
+        Ok(())
+    }
+
+    /// Compute the exclusive upper bound for a full-CF range delete: the largest
+    /// key with a `0x00` byte appended, or `None` if the CF is empty. See
+    /// [`RocksStore::batch_clear_shard`] for why this covers every key.
+    fn range_delete_upper_bound(&self, cf: &impl rocksdb::AsColumnFamilyRef) -> Option<Vec<u8>> {
+        let mut iter = self.db.raw_iterator_cf(cf);
+        iter.seek_to_last();
+        iter.key().map(|max| {
+            let mut upper = Vec::with_capacity(max.len() + 1);
+            upper.extend_from_slice(max);
+            upper.push(0);
+            upper
+        })
+    }
+
+    /// Delete every key in a tier's shard column family via a single range
+    /// tombstone, committed directly (not batched). Used to clear the warm CF on
+    /// FLUSHDB, where the shard thread is the sole writer, so no flush-pipeline
+    /// ordering is required. A no-op when the CF is empty.
+    pub fn clear_tier_shard(&self, tier: CfTier, shard_id: usize) -> Result<(), RocksError> {
+        let cf = self.tier_cf_handle(tier, shard_id)?;
+        if let Some(upper) = self.range_delete_upper_bound(&cf) {
+            let mut batch = WriteBatch::default();
+            batch.delete_range_cf(&cf, [].as_slice(), upper.as_slice());
+            self.db.write(batch).map_err(|e| {
+                error!(shard_id, tier = ?tier, error = %e, "RocksDB range clear failed");
+                RocksError::from(e)
+            })?;
+        }
+        Ok(())
+    }
     pub fn iter_cf(&self, shard_id: usize) -> Result<RocksIterator<'_>, RocksError> {
         self.iter_tier(CfTier::Main, shard_id)
     }

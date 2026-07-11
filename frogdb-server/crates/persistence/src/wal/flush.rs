@@ -38,6 +38,11 @@ pub(super) enum WalEntry {
         operand: Vec<u8>,
         size_estimate: usize,
     },
+    /// Full-shard clear: a full-range delete over the shard's primary CF. Keyless
+    /// (it targets the whole CF). Handled specially by [`FlushEngine::apply`],
+    /// which drains lower-seq entries first so the tombstone covers exactly the
+    /// pre-clear keyspace.
+    Clear { seq: u64, size_estimate: usize },
 }
 
 impl WalEntry {
@@ -45,7 +50,8 @@ impl WalEntry {
         match self {
             WalEntry::Put { seq, .. }
             | WalEntry::Delete { seq, .. }
-            | WalEntry::Merge { seq, .. } => *seq,
+            | WalEntry::Merge { seq, .. }
+            | WalEntry::Clear { seq, .. } => *seq,
         }
     }
 
@@ -53,7 +59,8 @@ impl WalEntry {
         match self {
             WalEntry::Put { size_estimate, .. }
             | WalEntry::Delete { size_estimate, .. }
-            | WalEntry::Merge { size_estimate, .. } => *size_estimate,
+            | WalEntry::Merge { size_estimate, .. }
+            | WalEntry::Clear { size_estimate, .. } => *size_estimate,
         }
     }
 }
@@ -98,6 +105,11 @@ pub(super) trait WriteSink: Send {
     fn stage_delete(&mut self, key: &[u8]) -> std::io::Result<()>;
     /// Stage a merge operand for `key`, folded by the CF's merge operator.
     fn stage_merge(&mut self, key: &[u8], operand: &[u8]) -> std::io::Result<()>;
+    /// Stage a full-shard clear: a full-range delete over the shard's primary
+    /// column family. The engine flushes lower-seq entries before calling this
+    /// (see [`FlushEngine::apply_clear`]), so the range bound is computed from
+    /// committed state that already includes every pre-clear write.
+    fn stage_clear(&mut self) -> std::io::Result<()>;
     /// Atomically commit all staged entries, syncing to disk if `sync`.
     fn commit(&mut self, sync: bool) -> std::io::Result<()>;
     /// Number of currently staged (uncommitted) entries.
@@ -137,6 +149,12 @@ impl WriteSink for RocksSink {
     fn stage_merge(&mut self, key: &[u8], operand: &[u8]) -> std::io::Result<()> {
         self.rocks
             .batch_merge(&mut self.batch, self.shard_id, key, operand)
+            .map_err(std::io::Error::other)
+    }
+
+    fn stage_clear(&mut self) -> std::io::Result<()> {
+        self.rocks
+            .batch_clear_shard(&mut self.batch, self.shard_id)
             .map_err(std::io::Error::other)
     }
 
@@ -335,12 +353,21 @@ impl<S: WriteSink> FlushEngine<S> {
     /// Stage one entry. A staging failure (CF handle missing — effectively
     /// unreachable) is recorded as a lost entry rather than silently skipped.
     fn apply(&mut self, entry: WalEntry) {
+        // A clear is a flush barrier, not a batchable entry: it drains the
+        // current batch, then range-deletes the shard in its own committed
+        // batch. Handled separately so the range bound sees every lower-seq
+        // write on disk.
+        if let WalEntry::Clear { seq, size_estimate } = entry {
+            self.apply_clear(seq, size_estimate);
+            return;
+        }
         let seq = entry.seq();
         let size_estimate = entry.size_estimate();
         let staged = match &entry {
             WalEntry::Put { key, value, .. } => self.sink.stage_put(key, value),
             WalEntry::Delete { key, .. } => self.sink.stage_delete(key),
             WalEntry::Merge { key, operand, .. } => self.sink.stage_merge(key, operand),
+            WalEntry::Clear { .. } => unreachable!("Clear handled above"),
         };
         if let Err(e) = staged {
             self.outcomes
@@ -365,6 +392,74 @@ impl<S: WriteSink> FlushEngine<S> {
         if matches!(entry, WalEntry::Put { .. } | WalEntry::Merge { .. }) {
             WalWrites::inc(&*self.metrics, &self.shard_label);
             WalBytes::inc_by(&*self.metrics, size_estimate as u64, &self.shard_label);
+        }
+    }
+
+    /// Apply a full-shard clear as a flush barrier.
+    ///
+    /// The clear must range-delete exactly the keyspace that precedes it in
+    /// sequence order. Same-batch lower-seq puts are still uncommitted, so a
+    /// range bound computed from committed state alone would miss them. We
+    /// therefore (1) flush the current batch, making every lower-seq entry
+    /// durable, then (2) stage the range delete (its bound now sees them) and
+    /// (3) commit it as its own batch. Higher-seq entries that follow are applied
+    /// after this returns, into a fresh batch committed later — so post-flush
+    /// writes correctly survive the tombstone. The outcome is recorded under the
+    /// clear's `seq` even when the CF is empty (nothing staged), so the durable
+    /// sequence still advances past it.
+    fn apply_clear(&mut self, seq: u64, size_estimate: usize) {
+        // (1) Barrier: drain all lower-seq entries to disk.
+        let _ = self.flush();
+
+        // (2) Stage the full-range delete over the (now fully-committed) CF.
+        if let Err(e) = self.sink.stage_clear() {
+            self.outcomes
+                .record_failure(seq, 1, size_estimate, &e.to_string());
+            self.log_failure(
+                &e,
+                1,
+                size_estimate,
+                "WAL clear staging failed; entry dropped",
+            );
+            return;
+        }
+
+        // A clear is an effective write (it mutates the CF), so it counts toward
+        // write throughput like a put.
+        WalWrites::inc(&*self.metrics, &self.shard_label);
+        WalBytes::inc_by(&*self.metrics, size_estimate as u64, &self.shard_label);
+
+        // (3) Commit the clear as its own batch, recording the outcome under
+        // `seq`. `commit` of an empty batch (empty CF) is a durable no-op, which
+        // still lets the durable sequence advance past the clear.
+        let start = Instant::now();
+        self.last_flush = Instant::now();
+        match self.sink.commit(self.is_sync) {
+            Ok(()) => {
+                self.outcomes.record_success(seq);
+                self.lag
+                    .last_flush_timestamp_ms
+                    .store(current_timestamp_ms(), Ordering::Release);
+                WalFlushDuration::observe(
+                    &*self.metrics,
+                    start.elapsed().as_secs_f64(),
+                    &self.shard_label,
+                );
+                trace!(shard_id = self.shard_id, seq, "WAL shard clear committed");
+            }
+            Err(e) => {
+                self.outcomes
+                    .record_failure(seq, 1, size_estimate, &e.to_string());
+                WalFlushFailures::inc(&*self.metrics, &self.shard_label);
+                WalLostOps::inc_by(&*self.metrics, 1, &self.shard_label);
+                WalLostBytes::inc_by(&*self.metrics, size_estimate as u64, &self.shard_label);
+                self.log_failure(
+                    &e,
+                    1,
+                    size_estimate,
+                    "WAL clear flush failed; batch dropped",
+                );
+            }
         }
     }
 

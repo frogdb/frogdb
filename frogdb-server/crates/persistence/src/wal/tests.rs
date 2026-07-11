@@ -169,6 +169,7 @@ enum TestOp {
     Put(Vec<u8>, Vec<u8>),
     Delete(Vec<u8>),
     Merge(Vec<u8>, Vec<u8>),
+    Clear,
 }
 
 /// In-memory [`WriteSink`] with commit/stage failure injection.
@@ -204,6 +205,14 @@ impl WriteSink for TestSink {
         }
         self.staged
             .push(TestOp::Merge(key.to_vec(), operand.to_vec()));
+        Ok(())
+    }
+
+    fn stage_clear(&mut self) -> std::io::Result<()> {
+        if take_one(&self.fail_stages) {
+            return Err(std::io::Error::other("injected stage failure"));
+        }
+        self.staged.push(TestOp::Clear);
         Ok(())
     }
 
@@ -316,6 +325,14 @@ impl TestWal {
             .unwrap();
     }
 
+    fn clear(&self, seq: u64, size_estimate: usize) {
+        self.tx
+            .as_ref()
+            .unwrap()
+            .send(WalCommand::Write(WalEntry::Clear { seq, size_estimate }))
+            .unwrap();
+    }
+
     /// Explicit flush: this flush attempt's result only (writer's `flush_async`).
     fn flush(&self) -> std::io::Result<()> {
         let (done_tx, done_rx) = flume::bounded(1);
@@ -412,6 +429,54 @@ fn test_sink_stages_merge_operand_in_order() {
     assert_eq!(wal.outcomes.durable_sequence(), 2);
     assert!(wal.outcomes.last_flush_ok());
     assert_eq!(wal.lag.pending_ops.load(Ordering::Acquire), 0);
+    wal.shutdown();
+}
+
+/// A `Clear` entry is a flush barrier: it drains lower-seq entries into their
+/// own committed batch, commits itself as a second batch, and lets higher-seq
+/// entries land in a third — so a clear can neither drop a post-clear write nor
+/// spare a pre-clear one. (proposal 43)
+#[test]
+fn test_sink_clear_is_a_flush_barrier_between_batches() {
+    let mut wal = TestWal::spawn(1024 * 1024, Duration::from_secs(60));
+    wal.put(1, b"a", 10);
+    wal.put(2, b"b", 10);
+    wal.clear(3, 64);
+    wal.put(4, b"c", 10);
+    wal.flush_through(0, 4).unwrap();
+
+    let batches = wal.committed_batches();
+    assert_eq!(
+        batches,
+        vec![
+            vec![
+                TestOp::Put(b"a".to_vec(), b"v".to_vec()),
+                TestOp::Put(b"b".to_vec(), b"v".to_vec()),
+            ],
+            vec![TestOp::Clear],
+            vec![TestOp::Put(b"c".to_vec(), b"v".to_vec())],
+        ],
+        "pre-clear puts flush first, the clear commits alone, post-clear puts follow"
+    );
+    assert_eq!(wal.outcomes.durable_sequence(), 4);
+    assert!(wal.outcomes.last_flush_ok());
+    assert_eq!(wal.outcomes.flush_failures(), 0);
+    assert_eq!(wal.lag.pending_ops.load(Ordering::Acquire), 0);
+    assert_eq!(wal.lag.pending_bytes.load(Ordering::Acquire), 0);
+    wal.shutdown();
+}
+
+/// A standalone clear (no surrounding writes) advances the durable sequence
+/// past itself, so a durable-through confirmation succeeds. (The RocksDB
+/// empty-CF path — where the range delete stages nothing — is exercised by the
+/// server integration tests.)
+#[test]
+fn test_sink_clear_advances_durable_sequence() {
+    let mut wal = TestWal::spawn(1024 * 1024, Duration::from_secs(60));
+    wal.clear(1, 64);
+    wal.flush_through(0, 1).unwrap();
+    assert_eq!(wal.outcomes.durable_sequence(), 1);
+    assert!(wal.outcomes.last_flush_ok());
     wal.shutdown();
 }
 
