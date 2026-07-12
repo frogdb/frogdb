@@ -409,6 +409,14 @@
           "mutable": true
         },
         {
+          "name": "maxmemory-clients",
+          "type": "string",
+          "default": "0",
+          "description": "Maximum memory allowed for all client buffers combined.\nSupports: \"0\" (disabled), absolute values like \"100mb\"/\"1gb\",\nor a percentage of maxmemory like \"5%\".",
+          "config_param": "maxmemory-clients",
+          "mutable": true
+        },
+        {
           "name": "maxmemory-policy",
           "type": "string",
           "default": "noeviction",
@@ -545,6 +553,14 @@
           "default": true,
           "description": "Whether persistence is enabled.",
           "config_param": "persistence-enabled",
+          "mutable": false
+        },
+        {
+          "name": "flush-compact-range",
+          "type": "boolean",
+          "default": true,
+          "description": "Reclaim disk eagerly after FLUSHDB/FLUSHALL: follow the range tombstone\nwith an asynchronous DeleteFilesInRange + CompactRange over the cleared\ncolumn families. Without it, flushed SST bytes are only reclaimed when\na compaction happens to cover the range.",
+          "config_param": "flush-compact-range",
           "mutable": false
         },
         {
