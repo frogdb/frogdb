@@ -2641,6 +2641,68 @@ async fn test_bitop_empty_result_emits_set() {
     server.shutdown().await;
 }
 
+/// GEOADD emits `zadd` (class ZSET) on its key when a member is added — Redis
+/// parity: geo.c geoaddCommand routes through zaddGenericCommand, which fires
+/// `zadd` on an effective add/update.
+#[tokio::test]
+async fn test_geoadd_emits_zadd() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut subscriber, "zadd").await;
+
+    let resp = client
+        .command(&["GEOADD", "geo:add", "13.361389", "38.115556", "Palermo"])
+        .await;
+    assert_eq!(resp, Response::Integer(1));
+
+    assert_keyevent_keys(&mut subscriber, "zadd", &["geo:add"]).await;
+    server.shutdown().await;
+}
+
+/// A no-op GEOADD (re-adding an identical member — nothing added or changed)
+/// emits nothing: execute() sets `write_was_noop`, skipping the whole
+/// write-effect pipeline including the `zadd` notification. Matches Redis, which
+/// notifies only when a member was actually added or updated.
+#[tokio::test]
+async fn test_geoadd_noop_emits_nothing() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // Seed the member before subscribing, so the seeding `zadd` is not observed.
+    let resp = client
+        .command(&["GEOADD", "geo:noop", "13.361389", "38.115556", "Palermo"])
+        .await;
+    assert_eq!(resp, Response::Integer(1));
+
+    subscribe_keyevent(&mut subscriber, "zadd").await;
+
+    // Re-add the identical member: same score, nothing changes -> reply 0.
+    let resp = client
+        .command(&["GEOADD", "geo:noop", "13.361389", "38.115556", "Palermo"])
+        .await;
+    assert_eq!(resp, Response::Integer(0));
+
+    let msg = subscriber.read_message(Duration::from_millis(400)).await;
+    assert!(
+        msg.is_none(),
+        "a no-op GEOADD must not deliver a keyspace notification"
+    );
+    server.shutdown().await;
+}
+
 /// GEOSEARCHSTORE emits `geosearchstore` on the destination (Redis parity,
 /// geo.c:834, class ZSET) when the search returns members.
 #[tokio::test]

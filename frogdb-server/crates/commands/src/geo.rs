@@ -53,11 +53,16 @@ impl Command for GeoaddCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
-            // Known under-emission vs Redis: geo.c geoaddCommand routes through
-            // zaddGenericCommand, which emits `zadd` (NOTIFY_ZSET). Deliberately
-            // Suppressed rather than emitting an event unverified against
-            // FrogDB's own write paths; flipping to `zadd` is a follow-up.
-            event: EventSpec::Suppressed,
+            // geo.c geoaddCommand routes through zaddGenericCommand, which emits
+            // `zadd` (NOTIFY_ZSET) on the key. GEOADD is single-key (KeySpec::First),
+            // so a blanket `Emits` fires on exactly that key. The no-op path
+            // (nothing added or changed) sets `write_was_noop` in execute(), so an
+            // unchanged GEOADD stays silent — matching Redis, which notifies only
+            // when a member was added or updated.
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::ZSET,
+                name: "zadd",
+            },
             requires_same_slot: false,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Standard,
@@ -131,6 +136,22 @@ impl Command for GeoaddCommand {
                     message: format!("invalid longitude,latitude pair {},{}", lon, lat),
                 });
             }
+        }
+
+        // Nothing added or changed: this is a no-op. Clean up an empty zset
+        // created by get_or_create (e.g. GEOADD XX on a fresh key) and declare
+        // the write a no-op so the whole effect pipeline — including the `zadd`
+        // keyspace notification — is skipped, matching Redis (notifies only when
+        // a member was added or updated).
+        if added == 0
+            && changed == 0
+            && let Some(v) = ctx.store.get(key)
+            && v.as_sorted_set().is_some_and(|z| z.is_empty())
+        {
+            ctx.store.delete(key);
+        }
+        if added == 0 && changed == 0 {
+            ctx.write_was_noop = true;
         }
 
         let result = if ch { added + changed } else { added };
