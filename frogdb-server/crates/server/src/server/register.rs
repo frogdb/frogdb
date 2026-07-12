@@ -380,6 +380,9 @@ mod spec_exhaustiveness {
             ("SINTERSTORE", 0),
             ("SDIFFSTORE", 0),
             ("COPY", 1),
+            // Phase 2: former Suppressed under-emitters with a static dest.
+            ("PFMERGE", 0),
+            ("BITOP", 0),
         ];
         let dynamic: &[&str] = &[
             "RENAME",
@@ -393,6 +396,10 @@ mod spec_exhaustiveness {
             "BLMOVE",
             "BZPOPMIN",
             "BZPOPMAX",
+            // Phase 2: set-or-del (GEOSEARCHSTORE) and popped-key-only (LMPOP)
+            // are runtime-dependent.
+            "GEOSEARCHSTORE",
+            "LMPOP",
         ];
 
         let r = full_registry();

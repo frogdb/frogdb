@@ -2089,3 +2089,304 @@ async fn test_blpop_immediate_notifies_popped_key_only() {
     assert_keyevent_keys(&mut subscriber, "lpop", &["{blp}hit"]).await;
     server.shutdown().await;
 }
+
+// ===========================================================================
+// Keyspace-event key accuracy (proposal 44 phase 2)
+//
+// Statically-expressible Suppressed under-emitters flipped to real Redis events:
+// PFMERGE/BITOP emit on the destination (EventSpec::EmitsAt); GEOSEARCHSTORE
+// (set-or-del) and LMPOP (popped-key only) deposit at runtime (Dynamic).
+// ===========================================================================
+
+/// PFMERGE emits `pfadd` on the destination only (Redis parity,
+/// hyperloglog.c:1872) — the read-only source HLLs stay silent. Also covers the
+/// missing-destination creation path (dest did not exist beforehand).
+#[tokio::test]
+async fn test_pfmerge_notifies_destination_only() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // Same hash tag: PFMERGE requires dest + sources on one shard.
+    client.command(&["PFADD", "{pfm}s1", "a", "b"]).await;
+    client.command(&["PFADD", "{pfm}s2", "c", "d"]).await;
+
+    subscribe_keyevent(&mut subscriber, "pfadd").await;
+
+    // {pfm}dest does not exist yet: this is the creation path.
+    let resp = client
+        .command(&["PFMERGE", "{pfm}dest", "{pfm}s1", "{pfm}s2"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    assert_keyevent_keys(&mut subscriber, "pfadd", &["{pfm}dest"]).await;
+    server.shutdown().await;
+}
+
+/// A PFMERGE whose destination already contains every source register changes
+/// nothing (write_was_noop) and must emit no `pfadd` — the effect pipeline is
+/// skipped, same contract as a no-op PFADD.
+#[tokio::test]
+async fn test_pfmerge_noop_merge_emits_nothing() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // dest already has a,b,c; source is a subset, so the merge moves no register.
+    client.command(&["PFADD", "{pfn}dest", "a", "b", "c"]).await;
+    client.command(&["PFADD", "{pfn}src", "a"]).await;
+
+    subscribe_keyevent(&mut subscriber, "pfadd").await;
+
+    let resp = client.command(&["PFMERGE", "{pfn}dest", "{pfn}src"]).await;
+    assert_eq!(resp, Response::ok());
+
+    assert_keyevent_keys(&mut subscriber, "pfadd", &[]).await;
+    server.shutdown().await;
+}
+
+/// BITOP emits `set` on the destination only (Redis parity, bitops.c:1612) —
+/// the read-only source strings stay silent.
+#[tokio::test]
+async fn test_bitop_notifies_destination_only() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["SET", "{bop}a", "abc"]).await;
+    client.command(&["SET", "{bop}b", "abd"]).await;
+
+    subscribe_keyevent(&mut subscriber, "set").await;
+
+    let resp = client
+        .command(&["BITOP", "AND", "{bop}dest", "{bop}a", "{bop}b"])
+        .await;
+    assert_eq!(resp, Response::Integer(3));
+
+    assert_keyevent_keys(&mut subscriber, "set", &["{bop}dest"]).await;
+    server.shutdown().await;
+}
+
+/// BITOP with an empty result: FrogDB stores an empty string into the
+/// destination (it does NOT delete it, unlike Redis, which would emit `del` /
+/// nothing — see task-44p2 divergence note), so it emits `set` on the dest.
+/// This test pins FrogDB's actual behavior, not Redis's.
+#[tokio::test]
+async fn test_bitop_empty_result_emits_set() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut subscriber, "set").await;
+
+    // Both sources missing -> empty AND result. FrogDB stores "" into dest.
+    let resp = client
+        .command(&["BITOP", "AND", "{boe}dest", "{boe}x", "{boe}y"])
+        .await;
+    assert_eq!(resp, Response::Integer(0));
+
+    assert_keyevent_keys(&mut subscriber, "set", &["{boe}dest"]).await;
+    server.shutdown().await;
+}
+
+/// GEOSEARCHSTORE emits `geosearchstore` on the destination (Redis parity,
+/// geo.c:834, class ZSET) when the search returns members.
+#[tokio::test]
+async fn test_geosearchstore_notifies_destination() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client
+        .command(&[
+            "GEOADD",
+            "{gss}src",
+            "13.361389",
+            "38.115556",
+            "Palermo",
+            "15.087269",
+            "37.502669",
+            "Catania",
+        ])
+        .await;
+
+    subscribe_keyevent(&mut subscriber, "geosearchstore").await;
+
+    let resp = client
+        .command(&[
+            "GEOSEARCHSTORE",
+            "{gss}dest",
+            "{gss}src",
+            "FROMLONLAT",
+            "15",
+            "37",
+            "BYRADIUS",
+            "300",
+            "km",
+            "ASC",
+        ])
+        .await;
+    assert!(
+        matches!(resp, Response::Integer(n) if n >= 1),
+        "unexpected: {resp:?}"
+    );
+
+    assert_keyevent_keys(&mut subscriber, "geosearchstore", &["{gss}dest"]).await;
+    server.shutdown().await;
+}
+
+/// GEOSEARCHSTORE with an empty result deletes a pre-existing destination and
+/// emits `del` on it (Redis parity, geo.c:839, class GENERIC) — never
+/// `geosearchstore`. FrogDB deletes the dest on empty, matching Redis.
+#[tokio::test]
+async fn test_geosearchstore_empty_result_emits_del() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client
+        .command(&["GEOADD", "{gse}src", "13.361389", "38.115556", "Palermo"])
+        .await;
+    // Pre-existing destination so the empty-result path actually deletes it.
+    client.command(&["SET", "{gse}dest", "stale"]).await;
+
+    subscribe_keyevent(&mut subscriber, "del").await;
+
+    // Search far from Palermo with a tiny radius -> no members -> dest deleted.
+    let resp = client
+        .command(&[
+            "GEOSEARCHSTORE",
+            "{gse}dest",
+            "{gse}src",
+            "FROMLONLAT",
+            "0",
+            "0",
+            "BYRADIUS",
+            "1",
+            "km",
+        ])
+        .await;
+    assert_eq!(resp, Response::Integer(0));
+
+    assert_keyevent_keys(&mut subscriber, "del", &["{gse}dest"]).await;
+    server.shutdown().await;
+}
+
+/// GEOSEARCHSTORE with an empty result and a destination that never existed
+/// deletes nothing, so it emits neither `geosearchstore` nor `del`.
+#[tokio::test]
+async fn test_geosearchstore_empty_missing_dest_silent() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client
+        .command(&["GEOADD", "{gsm}src", "13.361389", "38.115556", "Palermo"])
+        .await;
+
+    subscribe_keyevent(&mut subscriber, "del").await;
+
+    let resp = client
+        .command(&[
+            "GEOSEARCHSTORE",
+            "{gsm}dest",
+            "{gsm}src",
+            "FROMLONLAT",
+            "0",
+            "0",
+            "BYRADIUS",
+            "1",
+            "km",
+        ])
+        .await;
+    assert_eq!(resp, Response::Integer(0));
+
+    assert_keyevent_keys(&mut subscriber, "del", &[]).await;
+    server.shutdown().await;
+}
+
+/// LMPOP LEFT notifies only the key it actually popped from with `lpop` (Redis
+/// parity, t_list.c:794) — empty/missing candidate keys stay silent
+/// (EventSpec::Dynamic deposit), mirroring ZMPOP.
+#[tokio::test]
+async fn test_lmpop_left_notifies_popped_key_only() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // {lmp}miss does not exist; only {lmp}hit can be popped.
+    client.command(&["RPUSH", "{lmp}hit", "a", "b"]).await;
+
+    subscribe_keyevent(&mut subscriber, "lpop").await;
+
+    let resp = client
+        .command(&["LMPOP", "2", "{lmp}miss", "{lmp}hit", "LEFT"])
+        .await;
+    assert!(matches!(resp, Response::Array(_)), "unexpected: {resp:?}");
+
+    assert_keyevent_keys(&mut subscriber, "lpop", &["{lmp}hit"]).await;
+    server.shutdown().await;
+}
+
+/// LMPOP RIGHT maps to `rpop` on the popped key (direction-accurate event name).
+#[tokio::test]
+async fn test_lmpop_right_notifies_rpop() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["RPUSH", "{lmr}hit", "a", "b"]).await;
+
+    subscribe_keyevent(&mut subscriber, "rpop").await;
+
+    let resp = client.command(&["LMPOP", "1", "{lmr}hit", "RIGHT"]).await;
+    assert!(matches!(resp, Response::Array(_)), "unexpected: {resp:?}");
+
+    assert_keyevent_keys(&mut subscriber, "rpop", &["{lmr}hit"]).await;
+    server.shutdown().await;
+}

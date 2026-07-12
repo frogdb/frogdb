@@ -11,7 +11,8 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, BitOp, BitfieldEncoding, BitfieldOffset, BitfieldSubCommand,
     Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec, ExecutionStrategy,
-    KeySpec, LookupSpec, OverflowMode, StringValue, Value, WaiterWake, WalStrategy, bitop,
+    KeySpec, KeyspaceEventFlags, LookupSpec, OverflowMode, StringValue, Value, WaiterWake,
+    WalStrategy, bitop,
 };
 use frogdb_protocol::Response;
 
@@ -215,7 +216,18 @@ impl Command for BitopCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistDestination(1),
             wakes: WaiterWake::None,
-            event: EventSpec::Suppressed,
+            // Redis fires `set` under NOTIFY_STRING on the BITOP destination
+            // (bitops.c bitopCommand); the read-only sources stay silent.
+            // `keys()[0]` is the destination for `KeySpec::Skip(1)`. FrogDB
+            // always stores the result — even an empty one (see execute()) —
+            // so `set` is accurate on every path. (Redis instead deletes the
+            // dest and fires `del` when the result is empty; if FrogDB ever
+            // adopts that delete-on-empty behavior this must become Dynamic.)
+            event: EventSpec::EmitsAt {
+                class: KeyspaceEventFlags::STRING,
+                name: "set",
+                key_index: 0,
+            },
             requires_same_slot: true,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Standard,
@@ -256,7 +268,10 @@ impl Command for BitopCommand {
         let result = bitop(op, &source_refs);
         let result_len = result.len();
 
-        // Redis stores the result even if empty (e.g. BITOP NOT on empty string)
+        // FrogDB stores the result even when it is empty. Redis instead
+        // deletes the destination on an empty result (bitops.c: dbDelete +
+        // `del` notification); the BITOP spec's `EmitsAt`/`set` event above
+        // relies on this always-store behavior — revisit both together.
         ctx.store.set(
             destkey.clone(),
             Value::String(StringValue::new(Bytes::from(result))),

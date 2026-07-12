@@ -939,7 +939,11 @@ impl Command for LmpopCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
-            event: EventSpec::Suppressed,
+            // Runtime-deposited (t_list.c listElementsRemoved): `lpop`/`rpop`
+            // — matching the LEFT/RIGHT direction — on the one candidate key
+            // actually popped, never on the empty/missing candidates. Mirrors
+            // ZMPOP's Dynamic deposit.
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Standard,
@@ -1033,6 +1037,12 @@ impl Command for LmpopCommand {
             if elements.is_empty() {
                 continue;
             }
+
+            // Only this candidate key was written; the empty/missing
+            // candidates skipped above deposit nothing. Redis names the event
+            // by pop direction (t_list.c listElementsRemoved).
+            let event = if pop_left { "lpop" } else { "rpop" };
+            ctx.notify_event(key.clone(), event, KeyspaceEventFlags::LIST);
 
             return Ok(Response::Array(vec![
                 Response::bulk(key.clone()),

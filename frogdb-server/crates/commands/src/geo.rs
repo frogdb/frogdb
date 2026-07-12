@@ -13,9 +13,10 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, BoundingBox, Command, CommandContext, CommandError, CommandFlags,
     CommandSpec, Coordinates, DistanceUnit, EventSpec, ExecutionStrategy, KeyAccessFlag, KeySpec,
-    LookupSpec, ScoreBound, SortedSetValue, StoreTypedFamilyExt, Value, WaiterWake, WalStrategy,
-    geohash_calculate_areas, geohash_decode, geohash_encode, geohash_score_range, geohash_to_score,
-    geohash_to_string, haversine_distance, is_within_box, score_to_geohash,
+    KeyspaceEventFlags, LookupSpec, ScoreBound, SortedSetValue, StoreTypedFamilyExt, Value,
+    WaiterWake, WalStrategy, geohash_calculate_areas, geohash_decode, geohash_encode,
+    geohash_score_range, geohash_to_score, geohash_to_string, haversine_distance, is_within_box,
+    score_to_geohash,
 };
 use frogdb_protocol::Response;
 
@@ -354,7 +355,13 @@ impl Command for GeosearchstoreCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistDestination(0),
             wakes: WaiterWake::None,
-            event: EventSpec::Suppressed,
+            // Runtime-deposited (geo.c georadiusGeneric): `geosearchstore`
+            // under NOTIFY_ZSET on the destination when the search stores
+            // members, but a *`del`* under NOTIFY_GENERIC when the result is
+            // empty and a pre-existing destination is deleted (and nothing at
+            // all when there was no destination to delete). Set-or-del cannot
+            // be a static EmitsAt.
+            event: EventSpec::Dynamic,
             requires_same_slot: true,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Standard,
@@ -373,7 +380,11 @@ impl Command for GeosearchstoreCommand {
             // Still need to validate the options syntax, but use a special
             // mode that skips FROMMEMBER member lookup on missing keys.
             let _ = parse_geosearch_options(&args[2..], ctx, srckey, true)?;
-            ctx.store.delete(destkey);
+            if ctx.store.delete(destkey) {
+                // Redis parity: deleting the stale destination fires `del`;
+                // a destination that never existed deposits nothing.
+                ctx.notify_event(destkey.clone(), "del", KeyspaceEventFlags::GENERIC);
+            }
             return Ok(Response::Integer(0));
         }
 
@@ -381,7 +392,9 @@ impl Command for GeosearchstoreCommand {
         let results = execute_geosearch(ctx, srckey, &opts)?;
 
         if results.is_empty() {
-            ctx.store.delete(destkey);
+            if ctx.store.delete(destkey) {
+                ctx.notify_event(destkey.clone(), "del", KeyspaceEventFlags::GENERIC);
+            }
             return Ok(Response::Integer(0));
         }
 
@@ -398,6 +411,9 @@ impl Command for GeosearchstoreCommand {
 
         let count = results.len();
         ctx.store.set(destkey.clone(), Value::SortedSet(dest_zset));
+        // Members were stored: `geosearchstore` on the destination only — the
+        // read-only source zset stays silent.
+        ctx.notify_event(destkey.clone(), "geosearchstore", KeyspaceEventFlags::ZSET);
 
         Ok(Response::Integer(count as i64))
     }
