@@ -1033,3 +1033,106 @@ async fn test_xackdel_wrongtype() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// XCLAIM TIME/IDLE observability regression tests
+//
+// Pin the fix that wired XCLAIM's IDLE/TIME options through to the PEL delivery
+// time. Before it, TIME collapsed to "now" and was black-box-indistinguishable
+// from being discarded; these drive XCLAIM then read the idle back via XPENDING.
+// ============================================================================
+
+/// Pull the `idle` field (index 2) of the first entry of an XPENDING detailed
+/// reply: `[[id, consumer, idle_ms, delivery_count], ...]`.
+fn first_pending_idle(resp: &Response) -> i64 {
+    match resp {
+        Response::Array(entries) => match entries.first() {
+            Some(Response::Array(fields)) => match fields.get(2) {
+                Some(Response::Integer(idle)) => *idle,
+                other => panic!("expected integer idle, got {:?}", other),
+            },
+            other => panic!("expected pending entry array, got {:?}", other),
+        },
+        other => panic!("expected array for XPENDING detailed, got {:?}", other),
+    }
+}
+
+async fn setup_pending_entry(client: &mut crate::common::test_server::TestClient) {
+    // One entry, delivered to consumer c1 so it lands in the group PEL.
+    client.command(&["XADD", "s", "1-1", "f", "v"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g", "0"]).await;
+    client
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "g",
+            "c1",
+            "COUNT",
+            "10",
+            "STREAMS",
+            "s",
+            ">",
+        ])
+        .await;
+}
+
+#[tokio::test]
+async fn test_xclaim_idle_option_sets_observable_idle() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+    setup_pending_entry(&mut client).await;
+
+    // Claim to c2 with a large IDLE so the delivery time is pushed far back.
+    client
+        .command(&["XCLAIM", "s", "g", "c2", "0", "1-1", "IDLE", "100000"])
+        .await;
+
+    let pending = client
+        .command(&["XPENDING", "s", "g", "-", "+", "10"])
+        .await;
+    let idle = first_pending_idle(&pending);
+    assert!(
+        idle >= 100_000,
+        "XCLAIM IDLE not observable: XPENDING idle_ms = {idle}, want >= 100000"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_xclaim_time_option_sets_observable_idle() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+    setup_pending_entry(&mut client).await;
+
+    // TIME is an absolute Unix ms; pick one 100s in the past.
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let past = now_ms - 100_000;
+
+    client
+        .command(&[
+            "XCLAIM",
+            "s",
+            "g",
+            "c2",
+            "0",
+            "1-1",
+            "TIME",
+            &past.to_string(),
+        ])
+        .await;
+
+    let pending = client
+        .command(&["XPENDING", "s", "g", "-", "+", "10"])
+        .await;
+    let idle = first_pending_idle(&pending);
+    assert!(
+        idle >= 100_000,
+        "XCLAIM TIME not observable: XPENDING idle_ms = {idle}, want >= 100000"
+    );
+
+    server.shutdown().await;
+}

@@ -298,7 +298,19 @@ impl PendingEntry {
 
     /// Get idle time in milliseconds.
     pub fn idle_ms(&self) -> u64 {
-        self.delivery_time.elapsed().as_millis() as u64
+        self.idle_ms_at(Instant::now())
+    }
+
+    /// Idle time in milliseconds relative to an explicit `now`.
+    ///
+    /// The `now`-injecting variant of [`Self::idle_ms`]: it lets tests read the
+    /// delivery bookkeeping deterministically against the same instant used to
+    /// write it (see [`ClaimClock`]), rather than the real monotonic clock.
+    /// Uses saturating subtraction so a `delivery_time` in the future (never
+    /// expected in practice) reports `0` instead of panicking.
+    pub fn idle_ms_at(&self, now: Instant) -> u64 {
+        now.saturating_duration_since(self.delivery_time)
+            .as_millis() as u64
     }
 
     /// The consumer that currently owns this pending entry.
@@ -403,18 +415,58 @@ impl Consumer {
     }
 }
 
+/// `now` moved back by `idle_ms`, clamped to `now` if that would predate the
+/// monotonic clock's origin (rather than panicking, as bare `Instant - Duration`
+/// does). Shared by the `IDLE` and `TIME` claim paths.
+fn back_off(now: Instant, idle_ms: u64) -> Instant {
+    now.checked_sub(Duration::from_millis(idle_ms))
+        .unwrap_or(now)
+}
+
+/// A single sampled "now", pairing the monotonic clock used for PEL idle
+/// bookkeeping with the wall-clock millisecond it corresponds to.
+///
+/// Threading this from the command layer into [`ClaimOpts::apply`] is what makes
+/// `XCLAIM TIME` / `IDLE` observable and deterministically testable. The `TIME`
+/// argument is an *absolute* Unix millisecond, but a pending entry's
+/// `delivery_time` is a monotonic [`Instant`] that cannot represent wall-clock
+/// values; mapping it through `now - (unix_ms - time)` anchors it to this
+/// sampled pair instead of collapsing to `Instant::now()` deep inside the type
+/// (which made `TIME` a no-op indistinguishable from being discarded).
+#[derive(Debug, Clone, Copy)]
+pub struct ClaimClock {
+    /// Monotonic instant, the origin for `delivery_time` arithmetic.
+    pub now: Instant,
+    /// Wall-clock milliseconds since the Unix epoch corresponding to `now`.
+    pub unix_ms: u64,
+}
+
+impl ClaimClock {
+    /// Sample the process clock, capturing the monotonic instant and the
+    /// wall-clock millisecond together so the two stay consistent.
+    pub fn sample() -> Self {
+        Self {
+            now: Instant::now(),
+            unix_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
+        }
+    }
+}
+
 /// How a claim adjusts a pending entry's delivery bookkeeping.
 ///
 /// One place for the `IDLE` / `TIME` / `RETRYCOUNT` / `JUSTID` rules that used
 /// to live inline — and divergently — in the XCLAIM and XAUTOCLAIM commands.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ClaimOpts {
-    /// `XCLAIM IDLE <ms>`: set `delivery_time` so `idle_ms()` equals this.
+    /// `XCLAIM IDLE <ms>`: set `delivery_time` so idle equals this many ms.
     pub idle: Option<u64>,
-    /// `XCLAIM TIME <unix-ms>`: set the last-delivery time. With the monotonic
-    /// `Instant` clock this degrades to "now": the supplied timestamp cannot be
-    /// represented, matching the previous behaviour where it was parsed then
-    /// discarded. See the proposal's risks section.
+    /// `XCLAIM TIME <unix-ms>`: set the last-delivery time to this absolute
+    /// wall-clock millisecond. Mapped onto the monotonic `delivery_time` via the
+    /// [`ClaimClock`] passed to [`ClaimOpts::apply`], so an entry claimed with a
+    /// past `TIME` reports the expected idle (`clock.unix_ms - time`).
     pub time: Option<u64>,
     /// `XCLAIM RETRYCOUNT <n>`: force `delivery_count` to this value.
     pub retrycount: Option<u32>,
@@ -436,16 +488,25 @@ impl ClaimOpts {
         }
     }
 
-    /// Apply the `delivery_time` / `delivery_count` rules to a pending entry.
+    /// Apply the `delivery_time` / `delivery_count` rules to a pending entry,
+    /// anchored to the sampled `clock` (see [`ClaimClock`]).
     ///
     /// Mirrors the previous inline order: `IDLE` then `TIME` (so `TIME` wins if
     /// both are given), then `RETRYCOUNT` overrides, else `!JUSTID` increments.
-    fn apply(self, pe: &mut PendingEntry) {
+    ///
+    /// Both `IDLE <ms>` and `TIME <unix-ms>` reduce to "set `delivery_time` to
+    /// `clock.now` minus some idle": for `IDLE` the idle is the argument; for
+    /// `TIME` it is `clock.unix_ms - time` (saturating, so a future `TIME`
+    /// yields idle `0`). `checked_sub` guards the monotonic subtraction so an
+    /// idle larger than the process uptime clamps to `clock.now` rather than
+    /// panicking.
+    fn apply(self, pe: &mut PendingEntry, clock: ClaimClock) {
         if let Some(idle_ms) = self.idle {
-            pe.delivery_time = Instant::now() - Duration::from_millis(idle_ms);
+            pe.delivery_time = back_off(clock.now, idle_ms);
         }
-        if self.time.is_some() {
-            pe.delivery_time = Instant::now();
+        if let Some(time_ms) = self.time {
+            let idle_ms = clock.unix_ms.saturating_sub(time_ms);
+            pe.delivery_time = back_off(clock.now, idle_ms);
         }
         if let Some(rc) = self.retrycount {
             pe.delivery_count = rc;
@@ -584,7 +645,13 @@ impl ConsumerGroup {
     /// If `id` is not already in the PEL the entry is created (the XCLAIM FORCE
     /// path); callers that must not create entries should branch on existence
     /// first (XAUTOCLAIM routes missing entries to [`Self::drop_missing_pending`]).
-    pub fn claim_pending(&mut self, id: StreamId, consumer: &Bytes, opts: ClaimOpts) {
+    pub fn claim_pending(
+        &mut self,
+        id: StreamId,
+        consumer: &Bytes,
+        opts: ClaimOpts,
+        clock: ClaimClock,
+    ) {
         // Decrement the prior owner's count, if the entry already exists.
         if let Some(pe) = self.pending.get(&id) {
             let old = pe.consumer.clone();
@@ -598,7 +665,7 @@ impl ConsumerGroup {
             .entry(id)
             .or_insert_with(|| PendingEntry::new(consumer.clone()));
         pe.consumer = consumer.clone();
-        opts.apply(pe);
+        opts.apply(pe, clock);
         // Increment the new owner's count, creating the consumer if needed
         // (Consumer has no Default, so or_insert_with builds it from the name).
         let c = self
@@ -1762,7 +1829,7 @@ mod claim_tests {
         let i = id(1, 0);
         let mut g = group_with(&[(b"a", &[i]), (b"b", &[])]);
 
-        g.claim_pending(i, &name(b"b"), ClaimOpts::default());
+        g.claim_pending(i, &name(b"b"), ClaimOpts::default(), ClaimClock::sample());
 
         assert_eq!(g.consumers[b"a".as_slice()].pending_count, 0);
         assert_eq!(g.consumers[b"b".as_slice()].pending_count, 1);
@@ -1777,7 +1844,7 @@ mod claim_tests {
         let i = id(1, 0);
         let mut g = group_with(&[(b"a", &[i])]);
 
-        g.claim_pending(i, &name(b"a"), ClaimOpts::default());
+        g.claim_pending(i, &name(b"a"), ClaimOpts::default(), ClaimClock::sample());
 
         assert_eq!(g.consumers[b"a".as_slice()].pending_count, 1);
         assert_eq!(g.pending[&i].consumer, name(b"a"));
@@ -1791,7 +1858,7 @@ mod claim_tests {
         assert!(g.pending.is_empty());
 
         // FORCE path: id absent, entry is created and owned by the claimant.
-        g.claim_pending(i, &name(b"a"), ClaimOpts::default());
+        g.claim_pending(i, &name(b"a"), ClaimOpts::default(), ClaimClock::sample());
 
         assert!(g.pending.contains_key(&i));
         assert_eq!(g.pending[&i].consumer, name(b"a"));
@@ -1806,7 +1873,12 @@ mod claim_tests {
         let i = id(5, 0);
         let mut g = group_with(&[(b"a", &[])]);
 
-        g.claim_pending(i, &name(b"a"), ClaimOpts::touch_now(true));
+        g.claim_pending(
+            i,
+            &name(b"a"),
+            ClaimOpts::touch_now(true),
+            ClaimClock::sample(),
+        );
 
         assert_eq!(g.pending[&i].delivery_count, 1);
         assert_eq!(g.consumers[b"a".as_slice()].pending_count, 1);
@@ -1820,7 +1892,7 @@ mod claim_tests {
         assert!(!g.consumers.contains_key(b"new".as_slice()));
 
         // The target consumer does not exist yet; claim_pending must create it.
-        g.claim_pending(i, &name(b"new"), ClaimOpts::default());
+        g.claim_pending(i, &name(b"new"), ClaimOpts::default(), ClaimClock::sample());
 
         assert!(g.consumers.contains_key(b"new".as_slice()));
         assert_eq!(g.consumers[b"new".as_slice()].pending_count, 1);
@@ -1840,6 +1912,7 @@ mod claim_tests {
                 justid: true,
                 ..Default::default()
             },
+            ClaimClock::sample(),
         );
 
         assert_eq!(g.pending[&i].delivery_count, 1);
@@ -1859,6 +1932,7 @@ mod claim_tests {
                 justid: true,
                 ..Default::default()
             },
+            ClaimClock::sample(),
         );
 
         assert_eq!(g.pending[&i].delivery_count, 7);
@@ -1877,6 +1951,7 @@ mod claim_tests {
                 idle: Some(1000),
                 ..Default::default()
             },
+            ClaimClock::sample(),
         );
 
         let idle = g.pending[&i].idle_ms();
@@ -1900,43 +1975,109 @@ mod claim_tests {
                 idle: Some(2000),
                 ..Default::default()
             },
+            ClaimClock::sample(),
         );
         // A claim without IDLE/TIME must NOT reset delivery_time.
-        g.claim_pending(i, &name(b"a"), ClaimOpts::default());
+        g.claim_pending(i, &name(b"a"), ClaimOpts::default(), ClaimClock::sample());
 
         let idle = g.pending[&i].idle_ms();
         assert!(idle >= 2000, "delivery_time was reset: idle_ms() = {idle}");
         assert_invariant(&g);
     }
 
+    /// Regression: `XCLAIM TIME <unix-ms>` must set the delivery time from the
+    /// *wall clock* — an entry claimed with a past `TIME` reports the expected
+    /// idle (`clock.unix_ms - time`), not ~0.
+    ///
+    /// Deterministic via the injected [`ClaimClock`], reading back with
+    /// [`PendingEntry::idle_ms_at`] against the same instant used to write it.
+    /// Before the seam, `TIME` collapsed to `Instant::now()`, so `idle_ms_at`
+    /// here would be ~0 and this `assert_eq!` would fail — the regression this
+    /// pins. (See the earlier XCLAIM TIME/IDLE audit.)
     #[test]
-    fn claim_time_resets_delivery_time_to_now() {
+    fn claim_time_sets_idle_from_wall_clock() {
         let i = id(1, 0);
         let mut g = group_with(&[(b"a", &[i])]);
 
-        // Age the entry, then claim with TIME — which maps to "now".
+        // Injected clock: monotonic origin `now`, pinned to wall-clock 1_000_000ms.
+        let now = Instant::now();
+        let clock = ClaimClock {
+            now,
+            unix_ms: 1_000_000,
+        };
+
+        // Claim with TIME 5_000ms in the past (995_000 vs a 1_000_000 "now").
         g.claim_pending(
             i,
             &name(b"b"),
             ClaimOpts {
-                idle: Some(2000),
+                time: Some(995_000),
                 ..Default::default()
             },
+            clock,
         );
+
+        // Read against the same injected instant → exactly 5_000ms idle.
+        assert_eq!(
+            g.pending[&i].idle_ms_at(now),
+            5_000,
+            "TIME must map delivery_time to clock.unix_ms - time"
+        );
+        assert_invariant(&g);
+    }
+
+    /// Regression: `XCLAIM IDLE <ms>` sets the delivery time exactly `ms` in the
+    /// past relative to the claim clock — deterministic via the injected
+    /// [`ClaimClock`]. Under a `delivery_time = now` collapse this would be ~0.
+    #[test]
+    fn claim_idle_sets_exact_delivery_time_via_clock() {
+        let i = id(1, 0);
+        let mut g = group_with(&[(b"a", &[i])]);
+
+        let now = Instant::now();
+        let clock = ClaimClock {
+            now,
+            unix_ms: 1_000_000,
+        };
+
+        g.claim_pending(
+            i,
+            &name(b"b"),
+            ClaimOpts {
+                idle: Some(4_000),
+                justid: true,
+                ..Default::default()
+            },
+            clock,
+        );
+
+        assert_eq!(g.pending[&i].idle_ms_at(now), 4_000);
+        assert_invariant(&g);
+    }
+
+    /// A `TIME` in the future (after `clock.unix_ms`) saturates to idle `0`
+    /// rather than underflowing.
+    #[test]
+    fn claim_time_in_future_saturates_to_zero_idle() {
+        let i = id(1, 0);
+        let mut g = group_with(&[(b"a", &[i])]);
+
+        let now = Instant::now();
+        let clock = ClaimClock {
+            now,
+            unix_ms: 1_000_000,
+        };
         g.claim_pending(
             i,
             &name(b"a"),
             ClaimOpts {
-                time: Some(99_999),
+                time: Some(2_000_000), // 1_000_000ms in the future
                 ..Default::default()
             },
+            clock,
         );
 
-        let idle = g.pending[&i].idle_ms();
-        assert!(
-            idle < 1000,
-            "TIME did not reset delivery_time: idle_ms() = {idle}"
-        );
+        assert_eq!(g.pending[&i].idle_ms_at(now), 0);
         assert_invariant(&g);
     }
 
@@ -1952,9 +2093,15 @@ mod claim_tests {
                 justid: true,
                 ..Default::default()
             },
+            ClaimClock::sample(),
         );
 
-        g.claim_pending(i, &name(b"b"), ClaimOpts::touch_now(false));
+        g.claim_pending(
+            i,
+            &name(b"b"),
+            ClaimOpts::touch_now(false),
+            ClaimClock::sample(),
+        );
 
         assert!(g.pending[&i].idle_ms() < 1000);
         assert_eq!(g.pending[&i].delivery_count, 2);
@@ -1995,7 +2142,12 @@ mod claim_tests {
         let mut g = group_with(&[(b"a", &[live, deleted]), (b"b", &[])]);
 
         // `deleted` is gone from the stream: evict, don't claim.
-        g.claim_pending(live, &name(b"b"), ClaimOpts::touch_now(false));
+        g.claim_pending(
+            live,
+            &name(b"b"),
+            ClaimOpts::touch_now(false),
+            ClaimClock::sample(),
+        );
         g.drop_missing_pending(&deleted);
 
         assert_eq!(g.consumers[b"a".as_slice()].pending_count, 0);
@@ -2092,6 +2244,7 @@ mod claim_tests {
                 justid: true,
                 ..Default::default()
             },
+            ClaimClock::sample(),
         );
 
         let got = g.pending_entries(
@@ -2116,6 +2269,7 @@ mod claim_tests {
                 justid: true,
                 ..Default::default()
             },
+            ClaimClock::sample(),
         );
 
         let idle = g.pending_idle(&i).expect("present in PEL");
@@ -2136,6 +2290,7 @@ mod claim_tests {
                     justid: true,
                     ..Default::default()
                 },
+                ClaimClock::sample(),
             );
         }
 
@@ -2162,6 +2317,7 @@ mod claim_tests {
                 justid: true,
                 ..Default::default()
             },
+            ClaimClock::sample(),
         );
 
         // `fresh` (idle ~0) is filtered out; only `aged` qualifies and the scan
