@@ -255,6 +255,47 @@ fn test_shard_count_validation_ignores_warm_cfs() {
     ));
 }
 
+/// A failing column-family enumeration on an *existing* database must abort the
+/// open, not be swallowed into an empty CF list. Swallowing it coerces the
+/// reopen onto the fresh-open path, which silently skips BOTH reopen guards (the
+/// shard-count and warm-tier invariants both trust `existing_cfs`) before
+/// failing confusingly deep in RocksDB. This drives that branch via an injected
+/// lister that fails, and asserts the enumeration error propagates verbatim and
+/// leaves the on-disk data untouched. (Regression test for ff24a1a4.)
+#[test]
+fn test_cf_enumeration_failure_propagates_and_preserves_data() {
+    let t = TempDir::new().unwrap();
+    // An existing database with real data across two shards.
+    {
+        let s = RocksStore::open(t.path(), 2, &RocksConfig::default()).unwrap();
+        s.put(0, b"k0", b"v0").unwrap();
+        s.put(1, b"k1", b"v1").unwrap();
+    }
+
+    // Force CF enumeration to fail with a distinctive sentinel error. If the
+    // error were swallowed into an empty CF list the open would instead surface
+    // some other (downstream) RocksDB error or a wrongly-fresh success — either
+    // way NOT this sentinel — so the assertion below is a genuine detector.
+    let sentinel = "forced-enumeration-failure";
+    let result = RocksStore::open_with_cf_lister(
+        t.path(),
+        2,
+        &RocksConfig::default(),
+        false,
+        |_opts, _path| Err(RocksError::ColumnFamilyNotFound(sentinel.to_string())),
+    );
+    match result {
+        Err(RocksError::ColumnFamilyNotFound(ref s)) if s == sentinel => {}
+        Err(other) => panic!("enumeration error must propagate verbatim, got {other:?}"),
+        Ok(_) => panic!("a failed CF enumeration on an existing db must abort the open"),
+    }
+
+    // The on-disk data is untouched: a normal reopen still reads both shards.
+    let s = RocksStore::open(t.path(), 2, &RocksConfig::default()).unwrap();
+    assert_eq!(s.get(0, b"k0").unwrap(), Some(b"v0".to_vec()));
+    assert_eq!(s.get(1, b"k1").unwrap(), Some(b"v1".to_vec()));
+}
+
 // ---------------------------------------------------------------------------
 // Staged checkpoint install (`load_staged_checkpoint`)
 //
