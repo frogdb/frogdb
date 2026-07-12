@@ -391,6 +391,61 @@ four at a time in three waves. Ordered by wave:
     not a server one, since round-4's `5f288af2` (item 8, `1856acd5`); and the last two hard-coded
     shard-0 pub/sub sites route through proposal 33's `BROADCAST_SHARD` (item 9, `d658c28b`).
 
+41. [41-architecture-followups.md](41-architecture-followups.md) — **Implemented** (items 1–5,
+    `ff5105f6`): `ConsumerGroup` accessors; HOTKEYS/FT.CURSOR-in-MULTI regression test;
+    `COMMAND GETKEYS` via the registry union (dual-reg stubs deleted); RESET deauths per Redis
+    `resetCommand`; READONLY/READWRITE/ASKING error outside cluster mode. Item 6 (slow-HLL
+    regression timeouts) resolved by proposal 42's Tier 2.
+
+42. [42-hll-write-amplification.md](42-hll-write-amplification.md) — **Implemented** (13 commits,
+    `866b53cf`…`615aa95a`): Tier 1 `write_was_noop` no-op write suppression + Tier 2 RocksDB
+    merge-operator delta persistence for dense-HLL PFADD (encoding byte `2` alongside `0`/`1`).
+
+43. [43-flushdb-persistence-clearing.md](43-flushdb-persistence-clearing.md) — **Implemented**
+    (2026-07-12, `57bcc568`, `96b251cc`, …): `WalStrategy::ClearShard` → `WalEntry::Clear` →
+    barrier-flush + full-range RocksDB DeleteRange, so FLUSHDB/FLUSHALL survive restart.
+    Space-reclamation follow-up split out as proposal 48.
+
+44. [44-keyspace-event-key-accuracy.md](44-keyspace-event-key-accuracy.md) — **Implemented**
+    (2026-07-12, `6a716aeb`…`30ace25b`): `EventSpec::EmitsAt`/`Dynamic` + `CommandContext` event
+    deposits; ~27 commands Redis-source-verified (dynamic-key STORE family, blocking-pop family,
+    woken-after-block path now emits); `validate()` rejects blanket `Emits` on multi-key/Dynamic
+    specs. Follow-ups split out as proposal 46.
+
+45. [45-stream-consumer-group-persistence.md](45-stream-consumer-group-persistence.md) —
+    **Implemented** (5 commits, `a7205aca`…`7c993222`): stream codec v1 (explicit version byte)
+    persists consumer groups, PEL (delivery time as unix ms via `ClaimClock`, delivery count),
+    and consumers (seen/active times — full Redis rdb.c parity); `last_id`/`entries_added`/
+    `max_deleted_id` persisted explicitly (previously reconstructed lossily). The two
+    `#[ignore]`d restart tests are unignored and green; persistence 127 + server 1615.
+    Follow-up filed: per-group delta persistence to cut write amplification.
+
+46. [46-keyspace-event-followups.md](46-keyspace-event-followups.md) — **Implemented** (items
+    1/2/4; item 3 won't-fix with recorded verdict; `f0001c32`, `2c768c56`, `2a580975`,
+    `4b25e794`): GEOADD emits `zadd` (+ `write_was_noop` on its no-op path); RENAME k k /
+    SMOVE k k m short-circuit silently per verified Redis source (LMOVE x x rotates — parity
+    kept); scripted writes now drain through the canonical `WRITE_EFFECT_ORDER` pipeline via
+    `ScriptWriteRecord` — the audit found scripts previously skipped **all** effects (WAL
+    persistence, replication, notifications, WATCH, tracking, waiter wake), far wider than the
+    proposal's events-only framing. Item 3 (~39 emptiness-gated delete sites, 17 files, no
+    single choke point) deferred with a documented future path.
+
+47. [47-command-parity-remnants.md](47-command-parity-remnants.md) — **Implemented**
+    (`38099a47`, `1511081f`): BITOP deletes the destination on an empty result (verified against
+    bitops.c; `EventSpec::Dynamic` set-or-del deposits; new
+    `WalStrategy::PersistOrDeleteDestination` so the deletion survives restart). MSETEX verdict:
+    canonical Redis 8.4 command whose `Integer(1)`/`Integer(0)` reply IS the upstream contract
+    (t_string.c + msetex.json) — documented at the spec site and pinned by a regression test,
+    no behavior change.
+
+48. [48-clearshard-compact-range.md](48-clearshard-compact-range.md) — **Implemented** (6
+    commits, `20ff249a`…`7f4003a4`): post-clear space reclamation — `DeleteFilesInRange` +
+    `CompactRange` (bottommost forced) on a dedicated named thread after the ClearShard
+    tombstone commits, both primary and warm CFs, per-`(tier, shard)` `ReclaimGuard` coalescing;
+    default-on `persistence.flush-compact-range` knob;
+    `frogdb_flush_compact_{started,completed}_total` counters. persistence 128; the SST-shrink
+    test measures `rocksdb.total-sst-files-size`, so no `#[ignore]` needed.
+
 \* `17cb35fc` carries both proposal 29 phase 1 and proposal 30 phase 1 (shared-index sweep
 during concurrent implementation; content correct, attribution tangled). Several round-5 commits
 carry small hunks from a concurrent wave agent for the same reason (shared working tree); content
