@@ -1,6 +1,6 @@
 # 43 — FLUSHDB/FLUSHALL never clears persisted data (keys resurrect after restart)
 
-**Status:** proposed
+**Status:** implemented (2026-07-12)
 **Severity:** Critical (durability correctness — silent data resurrection)
 **Found:** 2026-07-10, during proposal 42's final review (the reviewer could not trace a
 persistence-clearing path for FLUSHDB; a dedicated investigation confirmed none exists).
@@ -136,3 +136,32 @@ Deferrable — correctness does not depend on it.
 3. Replication: FLUSHDB already broadcasts as a logical command to replicas (unchanged), but
    confirm the replica apply path routes through the same scatter seam so its persistence clears
    too.
+
+## Implementation status (2026-07-12)
+
+**Shipped** on `refactor/command-spec-single-source`, commits `57bcc568`..`96b251cc` (2 commits).
+Implementer report: [`.superpowers/sdd/task-43-report.md`](../../.superpowers/sdd/task-43-report.md).
+
+The clear routes through the WAL flush pipeline exactly as designed above: a new
+`WalStrategy::ClearShard` → keyless `WalAction::ClearShard` → `WalEntry::Clear`, applied as a
+full-range `delete_range_cf` on the shard's primary CF.
+
+Open-decision resolutions (see report §"Open-decision resolutions"):
+
+1. **DeleteRange upper bound** = the CF's max key + a `0x00` suffix (`range_delete_upper_bound`),
+   made resurrection-safe by an **engine-level barrier flush** in `FlushEngine::apply_clear`: all
+   lower-seq entries are committed before the bound is computed and the clear is committed as its
+   own batch, so post-flush writes (higher seq) survive. No sentinel/iterate-and-point-delete
+   fallback needed.
+2. **`compact_range` space reclamation deferred** as a follow-up — the tombstone hides data
+   immediately; reclamation is orthogonal to correctness (todo: compact affected CFs post-clear).
+3. **Replica apply path verified spec-driven** — because the fix lives in the command spec, the
+   replica picks up `ClearShard` through the same write-effect seam; no extra work.
+
+**Deviation from the design:** the warm CF is cleared **synchronously on the shard thread**
+(`WarmTier::clear_range` → `RocksStore::clear_tier_shard`) rather than through `RocksSink`. The
+warm CF never rides the async WAL pipeline (demotions in `WarmTier::try_put` also write directly on
+the shard thread — the existing single-writer invariant there), so a range tombstone on the shard
+thread is correct and replaces the old O(warm keys) per-key delete loop.
+
+All 6 proposal tests implemented (see report §"Tests"); task review approved.

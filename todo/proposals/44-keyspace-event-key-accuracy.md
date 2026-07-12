@@ -1,6 +1,6 @@
 # 44 — Keyspace-event key accuracy: over-emission on source keys, under-emission via Suppressed
 
-**Status:** proposed
+**Status:** implemented (2026-07-12)
 **Severity:** Important (Redis-parity divergence, misleading notifications to subscribers)
 **Found:** 2026-07-09 during proposal 42 (PFMERGE could not declare its Redis-parity `pfadd`
 event); full sweep 2026-07-10.
@@ -168,3 +168,63 @@ proposal 42.
    purely about extraction (COMMAND GETKEYS parity) — events are a separate concern.
 3. LMPOP-vs-ZMPOP inconsistency resolves to both using `Dynamic` (phase 4); confirm no other
    Suppressed command was masking a same-shape bug.
+
+## Implementation status (2026-07-12)
+
+**Shipped** on `refactor/command-spec-single-source` across four phases. Phase reports:
+[p1](../../.superpowers/sdd/task-44p1-report.md) · [p2](../../.superpowers/sdd/task-44p2-report.md)
+· [p3](../../.superpowers/sdd/task-44p3-report.md) · [p4](../../.superpowers/sdd/task-44p4-report.md).
+
+| Phase | Commits | Scope |
+|---|---|---|
+| 1 | `6a716aeb`..`c4e79aa2` | `EventSpec::EmitsAt` + `Dynamic` mechanism, ctx deposits, seam, validate() invariant; Class A + B migrations |
+| 2 | `84804282` | static under-emitters flipped off `Suppressed`: PFMERGE, BITOP, GEOSEARCHSTORE, LMPOP |
+| 3 | `36d0237b` | rename/move family per-key names |
+| 4 | `13bd5427` + `c3dbd38d` + `84fee7f0` | dynamic-key STOREs, blocking-pop family, woken-after-block path, GEOADD revert |
+
+### Verification-driven corrections to this doc's own guesses
+
+Every event name was verified against redis/unstable source before encoding (per the accuracy
+caveat above). Several of this proposal's assumed names were **wrong** and were corrected:
+
+- **SMOVE** emits `srem` (source) + `sadd` (dest) — it is implemented as SREM+SADD in `t_set.c`;
+  there is **no** `smove` event in Redis. This doc's assumed `smove_from`/`smove_to` (line 32) were
+  model-knowledge guesses and are incorrect.
+- **LMOVE / RPOPLPUSH** emit direction-resolved `rpop`/`lpop` (source) + `lpush`/`rpush` (dest),
+  not a single `lmove`/`rpoplpush`.
+- **ZMPOP** emits `zpopmin`/`zpopmax` by direction (`t_zset.c:4334`), not the placeholder `zmpop`.
+- **GEORADIUS/GEORADIUSBYMEMBER STORE** emit `georadiusstore` (`geo.c:834`, the
+  `GEOSEARCH ? "geosearchstore" : "georadiusstore"` ternary), distinct from GEOSEARCHSTORE's
+  `geosearchstore`.
+
+### Resolved open decisions
+
+1. **Secondary `del` on emptied keys** (emptied pop/move source): **deferred codebase-wide, still
+   open.** No FrogDB command emits emptied-key `del` yet (LPOP/ZMPOP/LMPOP/LREM/LTRIM/SREM all
+   skip it); doing it only for the move/pop family would be inconsistent. Now also **inventoried
+   for the woken path** (a woken BLPOP on a singleton list emits `lpop` only, matching FrogDB's
+   immediate path). The STORE-family `del` (empty result deleting the *dest*) **is** implemented —
+   it is a primary command outcome and FrogDB already deletes the dest.
+3. LMPOP and ZMPOP both resolve to `EventSpec::Dynamic` (LMPOP in phase 2, ZMPOP since phase 1;
+   names aligned to `lpop`/`rpop` and `zpopmin`/`zpopmax` in phases 2/4).
+
+### Woken-after-block satisfaction path
+
+A scope addition surfaced by the phase-3 review and landed in phase 4 (`13bd5427`): FrogDB's
+satisfaction path pops directly on the store (Redis instead re-executes the command), so
+`Satisfaction::Done` gained an `events` field whose deposits are published through the coordinator
+seam (`emit_keyspace_notification` in `keyspace_notify.rs`, same seam eviction/expiry use — the
+`lint-keyspace-notify-routing` gate stays green). Observable events match the immediate path.
+
+### Known remaining under-emissions / divergences (follow-ups)
+
+- **GEOADD** should emit `zadd` (Redis) but is currently `EventSpec::Suppressed` with a comment —
+  an accidental flip was reverted to honest Suppressed in `84fee7f0`; real emission is a follow-up.
+- **BITOP empty result** stores `""` where Redis deletes the dest and emits `del`; FrogDB's event
+  (`set`) matches its own always-store data behavior. The underlying always-store divergence is a
+  separate follow-up (ripples into WAL/EXISTS/regression expectations).
+- **Scripted writes bypass deposits entirely** (pre-existing): `ScriptInvoker::run_local` builds
+  its own `CommandContext` and drops it without running write effects, so scripted sub-commands
+  emit no keyspace notifications. Out of scope; candidate for its own proposal.
+- **RENAME `overwritten` / `type_changed`** (newer Redis `NOTIFY_OVERWRITTEN`/`NOTIFY_TYPE_CHANGED`
+  classes on a pre-existing dest) are unimplemented — FrogDB has no equivalent `KeyspaceEventFlags`.
