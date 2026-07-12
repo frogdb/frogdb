@@ -151,6 +151,30 @@ impl KeySpec {
             | KeySpec::Dynamic => Option::None,
         }
     }
+
+    /// The number of keys this spec is *guaranteed* to extract given `min_arity`,
+    /// or `None` when the count is genuinely value-dependent (`Stride`,
+    /// `NumkeysAt`, `Dynamic`).
+    ///
+    /// Used by [`CommandSpec::validate`] to statically bound an
+    /// [`EventSpec::EmitsAt`] `key_index`: `key_index` must be `< min_key_count`,
+    /// so the seam can never index past the extracted key list for any valid
+    /// input. Conservative — it returns the guaranteed *lower bound*, so a valid
+    /// index is never rejected.
+    fn min_key_count(&self, min_arity: usize) -> Option<usize> {
+        match *self {
+            KeySpec::None => Some(0),
+            KeySpec::First | KeySpec::Index(_) => Some(1),
+            KeySpec::FirstTwo => Some(2),
+            KeySpec::All => Some(min_arity),
+            KeySpec::AllButLast => Some(min_arity.saturating_sub(1)),
+            KeySpec::Skip(n) => Some(min_arity.saturating_sub(n)),
+            // `DestThenNumkeys` always yields the destination key at index 0.
+            KeySpec::DestThenNumkeys { .. } => Some(1),
+            // Value-dependent counts — nothing statically guaranteed.
+            KeySpec::Stride { .. } | KeySpec::NumkeysAt { .. } | KeySpec::Dynamic => Option::None,
+        }
+    }
 }
 
 /// What keyspace notification a write command emits.
@@ -161,11 +185,31 @@ impl KeySpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventSpec {
     /// Emits `class` events named `name` for each extracted key
-    /// (e.g. `LIST` / `"lpush"`).
+    /// (e.g. `LIST` / `"lpush"`). Only legitimate on single-key writes and the
+    /// genuinely per-key multi-key writes (DEL, UNLINK, MSET, MSETNX);
+    /// [`CommandSpec::validate`] rejects any other multi-key `Emits`.
     Emits {
         class: KeyspaceEventFlags,
         name: &'static str,
     },
+    /// Emits `class`/`name` on exactly one extracted key: `keys()[key_index]`.
+    /// For STORE-family commands whose remaining keys are read-only sources
+    /// (ZRANGESTORE, S*STORE, Z*STORE emit on the destination only). The index
+    /// is into the *extracted key list*, not raw args, so it works uniformly
+    /// across `FirstTwo`, `All`, `DestThenNumkeys`, etc. An out-of-range index
+    /// is a `debug_assert` at emission time and emits nothing in release.
+    EmitsAt {
+        class: KeyspaceEventFlags,
+        name: &'static str,
+        key_index: usize,
+    },
+    /// The handler deposits its events at runtime via
+    /// [`CommandContext::notify_event`](crate::command::CommandContext::notify_event);
+    /// the notifications seam drains them. For commands whose emitted key/name
+    /// depends on execution (renames, moves, and the actually-popped key of a
+    /// multi-key pop). Deposits from a `write_was_noop` path are naturally
+    /// discarded — the whole effect pipeline is skipped.
+    Dynamic,
     /// Write command that deliberately emits nothing (e.g. FLUSHDB).
     Suppressed,
     /// Read command — notifications do not apply.
@@ -308,6 +352,16 @@ pub enum SpecError {
     /// commands are intercepted before shard routing, so they must be
     /// `WalStrategy::NoOp`.
     ConnectionLevelWithWal,
+    /// An [`EventSpec::EmitsAt`] `key_index` cannot be statically proven to fall
+    /// within the keys the `KeySpec` extracts for the command's minimum arity.
+    EmitsAtIndexOutOfRange { key_index: usize, min_keys: usize },
+    /// A multi-key `KeySpec` paired with a blanket [`EventSpec::Emits`] on a
+    /// command that is not on the genuinely-per-key allowlist (DEL/UNLINK/MSET/
+    /// MSETNX). Such a command would emit its event on read-only source keys —
+    /// the STORE-family over-emission bug this invariant closes. The fix is
+    /// [`EventSpec::EmitsAt`] (fixed destination) or [`EventSpec::Dynamic`]
+    /// (runtime-resolved keys).
+    MultiKeyBlanketEmits,
 }
 
 impl std::fmt::Display for SpecError {
@@ -338,6 +392,21 @@ impl std::fmt::Display for SpecError {
                 write!(
                     f,
                     "ConnectionLevel command must declare WalStrategy::NoOp (intercepted before shard routing)"
+                )
+            }
+            SpecError::EmitsAtIndexOutOfRange {
+                key_index,
+                min_keys,
+            } => {
+                write!(
+                    f,
+                    "EventSpec::EmitsAt key_index {key_index} is out of range: the KeySpec guarantees only {min_keys} key(s)"
+                )
+            }
+            SpecError::MultiKeyBlanketEmits => {
+                write!(
+                    f,
+                    "multi-key KeySpec with blanket EventSpec::Emits would over-emit on read-only keys; use EmitsAt or Dynamic (or add to the per-key allowlist)"
                 )
             }
         }
@@ -385,6 +454,21 @@ impl CommandSpec {
             && !matches!(self.wal, WalStrategy::NoOp)
         {
             return Err(SpecError::ConnectionLevelWithWal);
+        }
+
+        // `EmitsAt.key_index` must be statically provable in-bounds for the
+        // spec's minimum arity, so the emission seam can never index past the
+        // extracted key list. Value-dependent KeySpecs (`Stride`, `NumkeysAt`,
+        // `Dynamic`) guarantee nothing statically and therefore cannot host
+        // `EmitsAt` — such commands use `EventSpec::Dynamic` instead.
+        if let EventSpec::EmitsAt { key_index, .. } = self.event {
+            let min_keys = self.keys.min_key_count(self.arity.min()).unwrap_or(0);
+            if key_index >= min_keys {
+                return Err(SpecError::EmitsAtIndexOutOfRange {
+                    key_index,
+                    min_keys,
+                });
+            }
         }
 
         Ok(())
@@ -649,5 +733,114 @@ mod tests {
         );
         spec.arity = Arity::AtLeast(2);
         assert_eq!(spec.validate(), Ok(()));
+    }
+
+    /// Build a write spec with the given key shape, minimum arity, and an
+    /// `EmitsAt` event at `key_index`.
+    fn emits_at_spec(keys: KeySpec, min_arity: usize, key_index: usize) -> CommandSpec {
+        let mut spec = base_write_spec();
+        spec.keys = keys;
+        spec.arity = Arity::AtLeast(min_arity);
+        spec.event = EventSpec::EmitsAt {
+            class: KeyspaceEventFlags::STRING,
+            name: "testw",
+            key_index,
+        };
+        spec
+    }
+
+    #[test]
+    fn validate_emits_at_first_two() {
+        // FirstTwo guarantees 2 keys: indices 0 and 1 are provable, 2 is not.
+        assert_eq!(emits_at_spec(KeySpec::FirstTwo, 2, 0).validate(), Ok(()));
+        assert_eq!(emits_at_spec(KeySpec::FirstTwo, 2, 1).validate(), Ok(()));
+        assert_eq!(
+            emits_at_spec(KeySpec::FirstTwo, 2, 2).validate(),
+            Err(SpecError::EmitsAtIndexOutOfRange {
+                key_index: 2,
+                min_keys: 2
+            })
+        );
+    }
+
+    #[test]
+    fn validate_emits_at_all() {
+        // All with min arity 2 guarantees 2 keys.
+        assert_eq!(emits_at_spec(KeySpec::All, 2, 0).validate(), Ok(()));
+        assert_eq!(emits_at_spec(KeySpec::All, 2, 1).validate(), Ok(()));
+        assert_eq!(
+            emits_at_spec(KeySpec::All, 2, 2).validate(),
+            Err(SpecError::EmitsAtIndexOutOfRange {
+                key_index: 2,
+                min_keys: 2
+            })
+        );
+    }
+
+    #[test]
+    fn validate_emits_at_all_but_last() {
+        // AllButLast with min arity 3 guarantees 2 keys.
+        assert_eq!(emits_at_spec(KeySpec::AllButLast, 3, 1).validate(), Ok(()));
+        assert_eq!(
+            emits_at_spec(KeySpec::AllButLast, 3, 2).validate(),
+            Err(SpecError::EmitsAtIndexOutOfRange {
+                key_index: 2,
+                min_keys: 2
+            })
+        );
+    }
+
+    #[test]
+    fn validate_emits_at_skip() {
+        // Skip(1) with min arity 3 guarantees 2 keys.
+        assert_eq!(emits_at_spec(KeySpec::Skip(1), 3, 1).validate(), Ok(()));
+        assert_eq!(
+            emits_at_spec(KeySpec::Skip(1), 3, 2).validate(),
+            Err(SpecError::EmitsAtIndexOutOfRange {
+                key_index: 2,
+                min_keys: 2
+            })
+        );
+    }
+
+    #[test]
+    fn validate_emits_at_dest_then_numkeys() {
+        // Only the destination (index 0) is statically guaranteed.
+        let keys = KeySpec::DestThenNumkeys {
+            numkeys: 1,
+            first: 2,
+        };
+        assert_eq!(emits_at_spec(keys, 3, 0).validate(), Ok(()));
+        assert_eq!(
+            emits_at_spec(keys, 3, 1).validate(),
+            Err(SpecError::EmitsAtIndexOutOfRange {
+                key_index: 1,
+                min_keys: 1
+            })
+        );
+    }
+
+    #[test]
+    fn validate_emits_at_rejects_value_dependent_key_specs() {
+        // Stride/NumkeysAt/Dynamic guarantee no static key count, so EmitsAt
+        // is never provable — those commands must use EventSpec::Dynamic.
+        let numkeys = KeySpec::NumkeysAt {
+            numkeys: 0,
+            first: 1,
+        };
+        assert_eq!(
+            emits_at_spec(numkeys, 3, 0).validate(),
+            Err(SpecError::EmitsAtIndexOutOfRange {
+                key_index: 0,
+                min_keys: 0
+            })
+        );
+        assert_eq!(
+            emits_at_spec(KeySpec::Stride { step: 2 }, 2, 0).validate(),
+            Err(SpecError::EmitsAtIndexOutOfRange {
+                key_index: 0,
+                min_keys: 0
+            })
+        );
     }
 }

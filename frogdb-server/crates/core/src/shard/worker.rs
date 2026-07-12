@@ -225,6 +225,7 @@ impl ShardWorker {
             keyspace_misses: 0,
             write_was_noop: false,
             hll_wal_delta: None,
+            keyspace_events: Default::default(),
         }
     }
 

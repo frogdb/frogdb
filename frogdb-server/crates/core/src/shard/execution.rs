@@ -23,6 +23,13 @@ pub(crate) struct WriteCommandMeta {
     /// into the WAL as a `Merge` operand instead of a full `Put`. `None` for
     /// every other write.
     pub hll_wal_delta: Option<smallvec::SmallVec<[(u16, u8); 8]>>,
+    /// Keyspace events deposited by an [`EventSpec::Dynamic`] command via
+    /// [`CommandContext::notify_event`]; the notifications write effect emits
+    /// exactly these. Empty for every other write.
+    ///
+    /// [`EventSpec::Dynamic`]: crate::command_spec::EventSpec::Dynamic
+    /// [`CommandContext::notify_event`]: crate::command::CommandContext::notify_event
+    pub keyspace_events: crate::command::KeyspaceEventDeposits,
 }
 
 impl ShardWorker {
@@ -115,6 +122,7 @@ impl ShardWorker {
             lazyfreed_delta,
             write_was_noop,
             hll_wal_delta,
+            keyspace_events,
         ) = {
             let mut ctx = self.command_context(conn_id, protocol_version);
 
@@ -130,6 +138,7 @@ impl ShardWorker {
                 ctx.lazyfreed_delta,
                 ctx.write_was_noop,
                 ctx.hll_wal_delta.take(),
+                ctx.take_keyspace_events(),
             )
         };
         // Track lazyfreed objects (from UNLINK). Applied after the context is
@@ -176,6 +185,7 @@ impl ShardWorker {
                 handler,
                 dirty_delta,
                 hll_wal_delta,
+                keyspace_events,
             })
         } else {
             None
@@ -248,6 +258,7 @@ impl ShardWorker {
                     handler: write_meta.handler.as_ref(),
                     args: command.args.as_slice(),
                     hll_wal_delta: write_meta.hll_wal_delta.as_deref(),
+                    keyspace_events: write_meta.keyspace_events.as_slice(),
                 };
                 match self.persist_and_confirm(&record).await {
                     Ok(()) => {
@@ -279,6 +290,7 @@ impl ShardWorker {
                     handler: write_meta.handler.as_ref(),
                     args: command.args.as_slice(),
                     hll_wal_delta: write_meta.hll_wal_delta.as_deref(),
+                    keyspace_events: write_meta.keyspace_events.as_slice(),
                 };
                 self.run_write_effects(
                     WriteSummary {
@@ -381,6 +393,7 @@ impl ShardWorker {
                     handler: meta.handler.as_ref() as &dyn Command,
                     args: commands[*idx].args.as_slice(),
                     hll_wal_delta: meta.hll_wal_delta.as_deref(),
+                    keyspace_events: meta.keyspace_events.as_slice(),
                 })
                 .collect();
 
