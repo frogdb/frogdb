@@ -27,6 +27,21 @@ Tests: empty-result deletes existing dest + emits `del`; empty-result on never-e
 stays absent + silent; non-empty stores + emits `set`; restart-survival of the deletion
 (extends the BITOP test added by the regression wave in `integration_persistence.rs`).
 
+**Resolution (2026-07-12):** implemented, verified against redis/unstable bitops.c
+(`bitopCommand`: non-empty → `setKey` + NOTIFY_STRING `set`; empty → `dbDelete` +
+NOTIFY_GENERIC `del` iff the dest existed). `execute()` now deletes on empty (the `del`
+deposit gated on `store.delete()`'s bool) and stores + deposits `set` on non-empty. The spec
+flipped to `EventSpec::Dynamic` (GEOSEARCHSTORE pattern, commit `84804282`); the registry
+exhaustiveness test moved BITOP from the EmitsAt table to the Dynamic table. WAL: a new
+`WalStrategy::PersistOrDeleteDestination(idx)` variant (resolving to
+`WalAction::PersistOrDelete` on args\[idx\]) replaces `PersistDestination(1)` so the
+delete-on-empty is written to the WAL instead of leaving the stale prior value authoritative
+on disk. Tests: `test_bitop_empty_result_deletes_dest_emits_del`,
+`test_bitop_empty_missing_dest_silent` (new), `test_bitop_notifies_destination_only`
+(pre-existing, non-empty `set` path) in `integration_pubsub.rs`;
+`test_bitop_empty_result_deletion_survives_restart` (new) in `integration_persistence.rs`;
+unit test `wal_strategy_persist_or_delete_destination` in core.
+
 ## 2. MSETEX replies `Integer(1)`/`Integer(0)`, likely divergent
 
 Found while writing the MSETEX restart test: FrogDB's MSETEX returns an integer where SET-family

@@ -220,9 +220,10 @@ seam (`emit_keyspace_notification` in `keyspace_notify.rs`, same seam eviction/e
 
 - **GEOADD** should emit `zadd` (Redis) but is currently `EventSpec::Suppressed` with a comment —
   an accidental flip was reverted to honest Suppressed in `84fee7f0`; real emission is a follow-up.
-- **BITOP empty result** stores `""` where Redis deletes the dest and emits `del`; FrogDB's event
-  (`set`) matches its own always-store data behavior. The underlying always-store divergence is a
-  separate follow-up (ripples into WAL/EXISTS/regression expectations).
+- **BITOP empty result** — resolved by
+  [47-command-parity-remnants.md](47-command-parity-remnants.md) item 1: BITOP now deletes the
+  dest on an empty result and deposits set-or-del at runtime (`EventSpec::Dynamic`, WAL via
+  `WalStrategy::PersistOrDeleteDestination(1)`), matching Redis.
 - **Scripted writes bypass deposits entirely** (pre-existing): `ScriptInvoker::run_local` builds
   its own `CommandContext` and drops it without running write effects, so scripted sub-commands
   emit no keyspace notifications. Out of scope; candidate for its own proposal.

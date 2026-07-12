@@ -214,20 +214,19 @@ impl Command for BitopCommand {
             flags: CommandFlags::WRITE,
             keys: KeySpec::Skip(1),
             access: AccessSpec::Uniform,
-            wal: WalStrategy::PersistDestination(1),
+            // Persist-or-delete the destination (args[1]): a non-empty result
+            // stores, an empty result deletes (bitops.c bitopCommand). The
+            // deletion must reach the WAL so it survives a restart — a plain
+            // `PersistDestination` would leave the stale prior value on disk.
+            wal: WalStrategy::PersistOrDeleteDestination(1),
             wakes: WaiterWake::None,
-            // Redis fires `set` under NOTIFY_STRING on the BITOP destination
-            // (bitops.c bitopCommand); the read-only sources stay silent.
-            // `keys()[0]` is the destination for `KeySpec::Skip(1)`. FrogDB
-            // always stores the result — even an empty one (see execute()) —
-            // so `set` is accurate on every path. (Redis instead deletes the
-            // dest and fires `del` when the result is empty; if FrogDB ever
-            // adopts that delete-on-empty behavior this must become Dynamic.)
-            event: EventSpec::EmitsAt {
-                class: KeyspaceEventFlags::STRING,
-                name: "set",
-                key_index: 0,
-            },
+            // Runtime-deposited (bitops.c bitopCommand): `set` under
+            // NOTIFY_STRING on the destination when the result is non-empty,
+            // but a `del` under NOTIFY_GENERIC when the result is empty and a
+            // pre-existing destination is deleted (nothing at all when there
+            // was no destination to delete). The read-only sources stay silent.
+            // Set-or-del cannot be a static EmitsAt — see execute().
+            event: EventSpec::Dynamic,
             requires_same_slot: true,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Standard,
@@ -268,14 +267,21 @@ impl Command for BitopCommand {
         let result = bitop(op, &source_refs);
         let result_len = result.len();
 
-        // FrogDB stores the result even when it is empty. Redis instead
-        // deletes the destination on an empty result (bitops.c: dbDelete +
-        // `del` notification); the BITOP spec's `EmitsAt`/`set` event above
-        // relies on this always-store behavior — revisit both together.
-        ctx.store.set(
-            destkey.clone(),
-            Value::String(StringValue::new(Bytes::from(result))),
-        );
+        // Redis parity (bitops.c bitopCommand): a non-empty result is stored
+        // and fires `set`; an empty result deletes the destination and fires
+        // `del` iff the destination existed (a never-existed destination stays
+        // absent and silent).
+        if result_len == 0 {
+            if ctx.store.delete(destkey) {
+                ctx.notify_event(destkey.clone(), "del", KeyspaceEventFlags::GENERIC);
+            }
+        } else {
+            ctx.store.set(
+                destkey.clone(),
+                Value::String(StringValue::new(Bytes::from(result))),
+            );
+            ctx.notify_event(destkey.clone(), "set", KeyspaceEventFlags::STRING);
+        }
 
         Ok(Response::Integer(result_len as i64))
     }

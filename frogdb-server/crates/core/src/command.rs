@@ -207,6 +207,14 @@ pub enum WalStrategy {
     /// Used by SINTERSTORE (0), LMOVE dest (1), COPY dest (1), ZRANGESTORE (0).
     PersistDestination(usize),
 
+    /// If the destination key at the given arg index still exists, persist it;
+    /// otherwise persist its deletion. Used by STORE-style commands that delete
+    /// the destination on an empty result (BITOP dest (1)): unlike
+    /// [`WalStrategy::PersistDestination`], a delete-on-empty must be written to
+    /// the WAL so the removal survives a restart, rather than leaving the stale
+    /// prior value authoritative on disk.
+    PersistOrDeleteDestination(usize),
+
     /// Persist the first key (args[0]); but if the command deposited a
     /// HyperLogLog register delta on the context
     /// ([`CommandContext::hll_wal_delta`]), emit a `Merge` operand carrying
@@ -406,6 +414,10 @@ impl WalStrategy {
             }
             WalStrategy::PersistDestination(idx) => match args.get(*idx) {
                 Some(dest) => smallvec![WalAction::PersistIfExists(dest)],
+                None => SmallVec::new(),
+            },
+            WalStrategy::PersistOrDeleteDestination(idx) => match args.get(*idx) {
+                Some(dest) => smallvec![WalAction::PersistOrDelete(dest)],
                 None => SmallVec::new(),
             },
             // Unconditional full-shard clear: one keyless action, independent of
@@ -1322,6 +1334,23 @@ mod tests {
         // Out-of-bounds index — yields nothing.
         assert!(
             WalStrategy::PersistDestination(99)
+                .actions(&args)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn wal_strategy_persist_or_delete_destination() {
+        // BITOP-style: destination at index 1, persist-or-delete so a
+        // delete-on-empty reaches the WAL.
+        let args = args(&[b"AND", b"dest", b"src1", b"src2"]);
+        let actions = WalStrategy::PersistOrDeleteDestination(1).actions(&args);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], WalAction::PersistOrDelete(k) if k == b"dest"));
+
+        // Out-of-bounds index — yields nothing.
+        assert!(
+            WalStrategy::PersistOrDeleteDestination(99)
                 .actions(&args)
                 .is_empty()
         );

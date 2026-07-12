@@ -2526,8 +2526,8 @@ async fn test_blpop_immediate_notifies_popped_key_only() {
 // Keyspace-event key accuracy (proposal 44 phase 2)
 //
 // Statically-expressible Suppressed under-emitters flipped to real Redis events:
-// PFMERGE/BITOP emit on the destination (EventSpec::EmitsAt); GEOSEARCHSTORE
-// (set-or-del) and LMPOP (popped-key only) deposit at runtime (Dynamic).
+// PFMERGE emits on the destination (EventSpec::EmitsAt); GEOSEARCHSTORE and BITOP
+// (both set-or-del) and LMPOP (popped-key only) deposit at runtime (Dynamic).
 // ===========================================================================
 
 /// PFMERGE emits `pfadd` on the destination only (Redis parity,
@@ -2614,12 +2614,12 @@ async fn test_bitop_notifies_destination_only() {
     server.shutdown().await;
 }
 
-/// BITOP with an empty result: FrogDB stores an empty string into the
-/// destination (it does NOT delete it, unlike Redis, which would emit `del` /
-/// nothing — see task-44p2 divergence note), so it emits `set` on the dest.
-/// This test pins FrogDB's actual behavior, not Redis's.
+/// BITOP with an empty result deletes a pre-existing destination and emits
+/// `del` on it (Redis parity, bitops.c bitopCommand: `dbDelete` + NOTIFY_GENERIC
+/// `del` on `maxlen == 0`) — never `set`. FrogDB now deletes the dest on empty,
+/// matching Redis.
 #[tokio::test]
-async fn test_bitop_empty_result_emits_set() {
+async fn test_bitop_empty_result_deletes_dest_emits_del() {
     let server = TestServer::start_standalone().await;
     let mut subscriber = server.connect().await;
     let mut client = server.connect().await;
@@ -2629,15 +2629,54 @@ async fn test_bitop_empty_result_emits_set() {
         .await;
     assert_eq!(resp, Response::ok());
 
-    subscribe_keyevent(&mut subscriber, "set").await;
+    // Pre-existing destination so the empty-result path actually deletes it.
+    client.command(&["SET", "{boe}dest", "stale"]).await;
 
-    // Both sources missing -> empty AND result. FrogDB stores "" into dest.
+    subscribe_keyevent(&mut subscriber, "del").await;
+
+    // Both sources missing -> empty AND result -> dest deleted.
     let resp = client
         .command(&["BITOP", "AND", "{boe}dest", "{boe}x", "{boe}y"])
         .await;
     assert_eq!(resp, Response::Integer(0));
+    assert_eq!(
+        client.command(&["EXISTS", "{boe}dest"]).await,
+        Response::Integer(0),
+        "empty-result BITOP must delete the pre-existing destination"
+    );
 
-    assert_keyevent_keys(&mut subscriber, "set", &["{boe}dest"]).await;
+    assert_keyevent_keys(&mut subscriber, "del", &["{boe}dest"]).await;
+    server.shutdown().await;
+}
+
+/// BITOP with an empty result and a destination that never existed deletes
+/// nothing, so it emits neither `set` nor `del` (Redis parity: `dbDelete`
+/// returns 0, no notification fires).
+#[tokio::test]
+async fn test_bitop_empty_missing_dest_silent() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut subscriber, "del").await;
+
+    // Both sources missing, no pre-existing dest -> empty result deletes nothing.
+    let resp = client
+        .command(&["BITOP", "AND", "{bom}dest", "{bom}x", "{bom}y"])
+        .await;
+    assert_eq!(resp, Response::Integer(0));
+    assert_eq!(
+        client.command(&["EXISTS", "{bom}dest"]).await,
+        Response::Integer(0),
+        "empty-result BITOP must not create a destination that never existed"
+    );
+
+    assert_keyevent_keys(&mut subscriber, "del", &[]).await;
     server.shutdown().await;
 }
 
