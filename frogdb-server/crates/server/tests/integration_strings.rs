@@ -516,3 +516,30 @@ async fn test_msetex_wrong_numkeys() {
 
     server.shutdown().await;
 }
+
+/// MSETEX reply shape is Integer(1)/Integer(0), NOT the SET-family `+OK`.
+///
+/// Verified against redis/unstable (proposal 47 item 2): MSETEX is a canonical
+/// Redis 8.4 command — `t_string.c msetexCommand` replies `shared.cone`
+/// (Integer 1) when all keys were set and `shared.czero` (Integer 0) when the
+/// NX/XX condition fails, and `src/commands/msetex.json` documents the same
+/// 0|1 reply schema. This test pins the integer contract so nobody "fixes" it
+/// to a simple-string OK for assumed SET-family parity.
+#[tokio::test]
+async fn test_msetex_reply_shape_is_integer_not_ok() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Success (no condition): exactly Integer(1), never +OK.
+    let response = client
+        .command(&["MSETEX", "2", "{t}rk1", "v1", "{t}rk2", "v2"])
+        .await;
+    assert_ne!(response, Response::ok(), "MSETEX must not reply +OK");
+    assert_eq!(response, Response::Integer(1));
+
+    // Condition failure (NX with an existing key): exactly Integer(0).
+    let response = client.command(&["MSETEX", "1", "{t}rk1", "v3", "NX"]).await;
+    assert_eq!(response, Response::Integer(0));
+
+    server.shutdown().await;
+}

@@ -382,7 +382,6 @@ mod spec_exhaustiveness {
             ("COPY", 1),
             // Phase 2: former Suppressed under-emitters with a static dest.
             ("PFMERGE", 0),
-            ("BITOP", 0),
         ];
         let dynamic: &[&str] = &[
             "RENAME",
@@ -396,9 +395,10 @@ mod spec_exhaustiveness {
             "BLMOVE",
             "BZPOPMIN",
             "BZPOPMAX",
-            // Phase 2: set-or-del (GEOSEARCHSTORE) and popped-key-only (LMPOP)
-            // are runtime-dependent.
+            // Phase 2: set-or-del (GEOSEARCHSTORE, BITOP) and popped-key-only
+            // (LMPOP) are runtime-dependent.
             "GEOSEARCHSTORE",
+            "BITOP",
             "LMPOP",
             // Phase 4: dynamic-key STORE commands (dest present only with STORE,
             // set-or-del), the last Suppressed blocking-pop members, and the

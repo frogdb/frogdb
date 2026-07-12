@@ -1378,6 +1378,14 @@ impl Command for DelexCommand {
 pub struct MsetexCommand;
 
 impl Command for MsetexCommand {
+    /// Reply contract (verified against redis/unstable, proposal 47 item 2):
+    /// MSETEX is a canonical Redis 8.4 command, not a FrogDB extension, and it
+    /// deliberately does NOT reply `+OK` like the rest of the SET family.
+    /// `t_string.c msetexCommand` replies `shared.cone` (Integer 1) when all
+    /// keys were set and `shared.czero` (Integer 0) when the NX/XX condition
+    /// fails; `src/commands/msetex.json` documents the same 0|1 reply schema.
+    /// FrogDB's `Integer(1)`/`Integer(0)` below is the correct upstream shape —
+    /// do not "fix" it to a simple-string OK.
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "MSETEX",

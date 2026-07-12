@@ -897,6 +897,52 @@ async fn test_bitop_destination_survives_restart() {
     server.shutdown().await;
 }
 
+/// BITOP with an empty result deletes the destination (Redis parity,
+/// bitops.c bitopCommand: `dbDelete` on `maxlen == 0`). That deletion must
+/// reach the WAL — a `PersistDestination` (persist-if-exists) strategy would
+/// leave the stale prior value authoritative on disk, resurrecting the
+/// destination on restart. The `PersistOrDeleteDestination` strategy writes the
+/// removal so the destination stays absent after a reboot.
+#[tokio::test]
+async fn test_bitop_empty_result_deletion_survives_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // --- First boot: seed a destination, then empty it via BITOP on absent
+    // sources so the computed result is zero-length. ---
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    assert_ok(&client.command(&["SET", "edest", "preexisting"]).await);
+    // Both sources are missing -> AND yields an empty result -> dest deleted.
+    let len = unwrap_integer(
+        &client
+            .command(&["BITOP", "AND", "edest", "emiss1", "emiss2"])
+            .await,
+    );
+    assert_eq!(len, 0);
+    assert_eq!(
+        client.command(&["EXISTS", "edest"]).await,
+        Response::Integer(0),
+        "empty-result BITOP must delete the pre-existing destination"
+    );
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // --- Second boot: the destination must NOT be resurrected. ---
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    assert_eq!(
+        client.command(&["EXISTS", "edest"]).await,
+        Response::Integer(0),
+        "BITOP empty-result deletion must survive a restart"
+    );
+
+    server.shutdown().await;
+}
+
 /// XGROUP CREATE must persist the target stream key (args[1] after the
 /// subcommand) so the consumer group exists after a restart. The historical
 /// defect persisted the wrong argument (e.g. the CREATE subcommand token).
