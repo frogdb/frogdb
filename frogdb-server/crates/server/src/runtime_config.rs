@@ -259,6 +259,9 @@ pub struct StaticConfig {
     pub num_shards: usize,
     pub data_dir: String,
     pub persistence_enabled: bool,
+    /// Whether FLUSHDB/FLUSHALL is followed by an eager async
+    /// DeleteFilesInRange + CompactRange to reclaim disk (proposal 48).
+    pub flush_compact_range: bool,
     pub enable_debug_command: bool,
     pub metrics_enabled: bool,
     pub metrics_port: u16,
@@ -293,6 +296,7 @@ impl StaticConfig {
             num_shards: config.server.num_shards,
             data_dir: config.persistence.data_dir.display().to_string(),
             persistence_enabled: config.persistence.enabled,
+            flush_compact_range: config.persistence.flush_compact_range,
             enable_debug_command: config.server.enable_debug_command,
             metrics_enabled: config.http.enabled,
             metrics_port: config.http.port,
@@ -713,6 +717,17 @@ impl ConfigManager {
                     }
                 },
                 toml_getter: |mgr| mgr.static_config.persistence_enabled.to_toml_value(),
+            },
+            ParamMeta {
+                name: "flush-compact-range",
+                getter: |mgr| {
+                    if mgr.static_config.flush_compact_range {
+                        "yes".to_string()
+                    } else {
+                        "no".to_string()
+                    }
+                },
+                toml_getter: |mgr| mgr.static_config.flush_compact_range.to_toml_value(),
             },
             ParamMeta {
                 name: "metrics-enabled",
