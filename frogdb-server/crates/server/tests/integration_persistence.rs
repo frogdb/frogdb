@@ -791,3 +791,235 @@ async fn test_hll_sparse_to_dense_promotion_survives_restart() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// Proposal-01-era WAL argument regressions
+// ----------------------------------------------------------------------------
+// MSETEX, BITOP, XGROUP CREATE and XREADGROUP each once had a WAL declaration
+// that persisted the *wrong* argument (a non-key argument) or nothing at all
+// (a WAL-NoOp). The spec-level guard `every_write_command_declares_wal` catches
+// only the NoOp case; a strategy that persists the wrong arg still declares a
+// WAL action and passes that guard silently. These restart-survival tests close
+// that gap by exercising the real write → shutdown → restart → read cycle.
+// ============================================================================
+
+/// MSETEX must persist *every* key (not the leading `numkeys` argument) with
+/// its value and TTL. The historical defect persisted a non-key argument, so
+/// the actual keys were lost on restart.
+#[tokio::test]
+async fn test_msetex_keys_survive_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // --- First boot: MSETEX two keys with a shared TTL ---
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    // MSETEX replies Integer(1) when all keys were set.
+    assert_eq!(
+        client
+            .command(&["MSETEX", "2", "mk1", "mv1", "mk2", "mv2", "EX", "3600"])
+            .await,
+        Response::Integer(1)
+    );
+    // Sanity: both keys present with the expiry before restart.
+    assert_eq!(
+        client.command(&["GET", "mk1"]).await,
+        Response::Bulk(Some(Bytes::from("mv1")))
+    );
+    assert!(unwrap_integer(&client.command(&["TTL", "mk1"]).await) > 3500);
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // --- Second boot: every key + value + TTL must survive ---
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    assert_eq!(
+        client.command(&["GET", "mk1"]).await,
+        Response::Bulk(Some(Bytes::from("mv1"))),
+        "MSETEX key mk1 must survive a restart"
+    );
+    assert_eq!(
+        client.command(&["GET", "mk2"]).await,
+        Response::Bulk(Some(Bytes::from("mv2"))),
+        "MSETEX key mk2 must survive a restart"
+    );
+    let ttl1 = unwrap_integer(&client.command(&["TTL", "mk1"]).await);
+    assert!(ttl1 > 3500, "MSETEX TTL must survive a restart, got {ttl1}");
+    let ttl2 = unwrap_integer(&client.command(&["TTL", "mk2"]).await);
+    assert!(ttl2 > 3500, "MSETEX TTL must survive a restart, got {ttl2}");
+
+    server.shutdown().await;
+}
+
+/// BITOP must persist its destination key (args[1]), not a source key or the
+/// operation name. The historical defect persisted the wrong argument, dropping
+/// the computed destination on restart.
+#[tokio::test]
+async fn test_bitop_destination_survives_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // --- First boot: XOR two sources into a destination ---
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    assert_ok(&client.command(&["SET", "bsrc1", "abc"]).await);
+    assert_ok(&client.command(&["SET", "bsrc2", "abd"]).await);
+    // "abc" XOR "abd" = [0x00, 0x00, 0x07]  (only the last byte differs).
+    let len = unwrap_integer(
+        &client
+            .command(&["BITOP", "XOR", "bdest", "bsrc1", "bsrc2"])
+            .await,
+    );
+    assert_eq!(len, 3);
+    let expected = Bytes::from_static(&[0x00, 0x00, 0x07]);
+    assert_eq!(
+        client.command(&["GET", "bdest"]).await,
+        Response::Bulk(Some(expected.clone()))
+    );
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // --- Second boot: the destination bytes must survive ---
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    assert_eq!(
+        client.command(&["GET", "bdest"]).await,
+        Response::Bulk(Some(expected)),
+        "BITOP destination bytes must survive a restart"
+    );
+
+    server.shutdown().await;
+}
+
+/// XGROUP CREATE must persist the target stream key (args[1] after the
+/// subcommand) so the consumer group exists after a restart. The historical
+/// defect persisted the wrong argument (e.g. the CREATE subcommand token).
+///
+/// Currently ignored: stream serialization deliberately omits consumer groups
+/// (`persistence/src/serialization/stream.rs`), so no WAL declaration can make
+/// a group survive a restart yet. Unignore once group state is serialized.
+#[ignore = "consumer groups are not serialized (see persistence serialization/stream.rs); \
+            groups cannot survive a restart regardless of the WAL declaration"]
+#[tokio::test]
+async fn test_xgroup_create_survives_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // --- First boot: create a stream and a consumer group ---
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    let _ = client
+        .command(&["XADD", "xg:stream", "1-1", "field1", "value1"])
+        .await;
+    assert_ok(
+        &client
+            .command(&["XGROUP", "CREATE", "xg:stream", "xg:group", "0"])
+            .await,
+    );
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // --- Second boot: the group must still be registered on the stream ---
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    let groups = unwrap_array(client.command(&["XINFO", "GROUPS", "xg:stream"]).await);
+    assert!(
+        groups.iter().any(|g| {
+            let fields = match g {
+                Response::Array(arr) => arr,
+                _ => return false,
+            };
+            // Each group is a flat [name, <name>, ...] field list.
+            fields.windows(2).any(|w| {
+                w[0] == Response::bulk(Bytes::from_static(b"name"))
+                    && w[1] == Response::bulk(Bytes::from_static(b"xg:group"))
+            })
+        }),
+        "XGROUP CREATE consumer group must survive a restart, got: {groups:?}"
+    );
+
+    server.shutdown().await;
+}
+
+/// XREADGROUP is a write: reading with `>` advances the group's last-delivered
+/// id and adds the delivered entry to the consumer's PEL. Those effects must
+/// survive a restart. The historical defect persisted the wrong argument, so
+/// the pending entry was lost.
+///
+/// Currently ignored for the same reason as `test_xgroup_create_survives_restart`:
+/// consumer-group state (including the PEL) is not serialized, so the pending
+/// entry cannot survive a restart regardless of the WAL declaration.
+#[ignore = "consumer groups (incl. PEL) are not serialized (see persistence serialization/stream.rs); \
+            pending entries cannot survive a restart regardless of the WAL declaration"]
+#[tokio::test]
+async fn test_xreadgroup_pending_survives_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // --- First boot: deliver an entry to a consumer (no NOACK ⇒ it pends) ---
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    let _ = client
+        .command(&["XADD", "xr:stream", "1-1", "field1", "value1"])
+        .await;
+    assert_ok(
+        &client
+            .command(&["XGROUP", "CREATE", "xr:stream", "xr:group", "0"])
+            .await,
+    );
+    let delivered = unwrap_array(
+        client
+            .command(&[
+                "XREADGROUP",
+                "GROUP",
+                "xr:group",
+                "xr:consumer",
+                "STREAMS",
+                "xr:stream",
+                ">",
+            ])
+            .await,
+    );
+    assert!(!delivered.is_empty(), "XREADGROUP should deliver one entry");
+    // The delivered entry is now pending for xr:consumer.
+    let pending = client.command(&["XPENDING", "xr:stream", "xr:group"]).await;
+    assert_eq!(
+        pending_count(&pending),
+        1,
+        "one entry should be pending before restart"
+    );
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // --- Second boot: the PEL / last-delivered effect must survive ---
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    let pending = client.command(&["XPENDING", "xr:stream", "xr:group"]).await;
+    assert_eq!(
+        pending_count(&pending),
+        1,
+        "XREADGROUP pending entry must survive a restart, got: {pending:?}"
+    );
+
+    server.shutdown().await;
+}
+
+/// Extract the summary count (first element) from an XPENDING reply.
+fn pending_count(response: &Response) -> i64 {
+    match response {
+        Response::Array(items) => unwrap_integer(&items[0]),
+        _ => panic!("expected array from XPENDING, got {response:?}"),
+    }
+}
