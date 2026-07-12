@@ -1,6 +1,6 @@
 # 47 — Command parity remnants: BITOP empty-result, MSETEX reply shape
 
-**Status:** proposed
+**Status:** implemented (2026-07-12 — item 1 fixed; item 2 verified correct-as-is + pinned)
 **Severity:** Minor (behavioral Redis divergences, no data loss)
 **Found:** during proposal 44 phase 2 (BITOP, 2026-07-11) and the regression-test wave (MSETEX,
 2026-07-12). Two independent items.
@@ -51,3 +51,24 @@ and any client expectations before changing anything; if it mirrors a Redis-stac
 command, match that implementation's reply). Resolution is: verify origin → either document the
 integer contract at the spec site or flip to the verified upstream shape, with a regression test
 either way. Do not change behavior without the verification step (accuracy over assumed parity).
+
+**Resolution (2026-07-12): verified — no divergence; the integer reply IS the upstream
+contract. No behavior change.** Verdict: MSETEX is a canonical Redis 8.4 command, not a FrogDB
+extension. Evidence:
+
+- FrogDB origin: commit `c16316b7` ("implement Redis 8.4 string commands: DIGEST, DELEX,
+  MSETEX", 2026-03-18) introduced it explicitly as a Redis 8.4 port, removing the three
+  commands from `docs/todo/COMMANDS.md`'s gap-analysis table ("Lower: DELEX/DIGEST/MSETEX
+  (Redis 8.4, very new)").
+- Upstream reply shape (redis/unstable): `t_string.c msetexCommand` replies `shared.cone`
+  (Integer 1) after setting all pairs and `shared.czero` (Integer 0) when the NX/XX condition
+  fails — never `shared.ok`. `src/commands/msetex.json`'s reply_schema documents exactly
+  `0` ("No key was set (at least one key failed).") | `1` ("All the keys were set.").
+
+FrogDB's `Integer(1)`/`Integer(0)` already matches, so the proposal's "likely divergent"
+suspicion was wrong: unlike the rest of the SET family, upstream MSETEX itself replies an
+integer. Documented at the spec site (`string.rs` `MsetexCommand::spec` doc comment) and
+pinned by the dedicated regression test `test_msetex_reply_shape_is_integer_not_ok` in
+`integration_strings.rs` (asserts Integer(1) on success — explicitly not `+OK` — and
+Integer(0) on NX failure), alongside the pre-existing NX/XX tests that assert the same values
+incidentally.
