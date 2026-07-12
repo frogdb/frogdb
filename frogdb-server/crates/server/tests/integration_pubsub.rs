@@ -1409,6 +1409,206 @@ async fn test_ssubscribe_redirect_matches_keyed_path() {
     harness.shutdown_all().await;
 }
 
+/// Importing-target parity: when a slot is IMPORTING on this node and the client
+/// has sent ASKING, SSUBSCRIBE must serve the subscription *locally* instead of
+/// redirecting — exactly like a keyed GET does under the same ASKING+IMPORTING
+/// state. Both paths run through `coordinator.route()` + `to_response`, which
+/// yields `AcceptImporting` -> ServeLocal. This is the arm the fix added on the
+/// SSUBSCRIBE side; the generic-seam unit tests cover it, but nothing exercised
+/// it end-to-end at the SSUBSCRIBE command level until now.
+#[tokio::test]
+async fn test_ssubscribe_asking_serves_local_matches_keyed_path() {
+    use frogdb_test_harness::cluster_harness::ClusterTestHarness;
+    use frogdb_test_harness::cluster_helpers::{
+        is_ask_redirect, is_error, is_moved_redirect, slot_for_key,
+    };
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // The same string is used as both the key (GET) and the channel
+    // (SSUBSCRIBE), so both hash to the same slot.
+    let channel = "asking_local_chan";
+    let slot = slot_for_key(channel.as_bytes());
+
+    // Resolve the slot owner from the leader's converged view.
+    let leader_id = harness.get_leader().await.expect("leader should exist");
+    let leader_node = harness.node(leader_id).unwrap();
+    let owner_node_id = leader_node
+        .cluster_state()
+        .unwrap()
+        .snapshot()
+        .get_slot_owner(slot)
+        .expect("slot should be assigned");
+
+    // Pick an importing target that is NOT the owner.
+    let node_ids = harness.node_ids();
+    let target_node_id = *node_ids
+        .iter()
+        .find(|&&id| id != owner_node_id)
+        .expect("need a non-owner node as the importing target");
+    let source_id_str = harness.get_node_id_str(owner_node_id).unwrap();
+    let target_id_str = harness.get_node_id_str(target_node_id).unwrap();
+    let slot_str = slot.to_string();
+
+    // Mark the slot IMPORTING on the target (Raft command via the leader; both
+    // node IDs are explicit since the leader's my_node_id differs from target).
+    let import_resp = leader_node
+        .send(
+            "CLUSTER",
+            &[
+                "SETSLOT",
+                &slot_str,
+                "IMPORTING",
+                &source_id_str,
+                &target_id_str,
+            ],
+        )
+        .await;
+    assert!(
+        !is_error(&import_resp),
+        "SETSLOT IMPORTING failed: {:?}",
+        import_resp
+    );
+
+    let target_node = harness.node(target_node_id).unwrap();
+
+    // Converge: probe with ASKING + GET until IMPORTING has propagated to the
+    // target and the keyed path serves locally (no MOVED/ASK redirect). This
+    // explicit wait replaces a fixed sleep so the test does not race
+    // propagation under parallel load.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut probe = target_node.connect().await;
+        let _ = probe.command(&["ASKING"]).await;
+        let get_resp = probe.command(&["GET", channel]).await;
+        let redirect =
+            is_moved_redirect(&get_resp).is_some() || is_ask_redirect(&get_resp).is_some();
+        if !redirect {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() <= deadline,
+            "SETSLOT IMPORTING did not propagate to target within 5s"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // Keyed baseline: ASKING + GET on the importing target serves local.
+    let mut keyed = target_node.connect().await;
+    assert!(
+        !is_error(&keyed.command(&["ASKING"]).await),
+        "ASKING should succeed"
+    );
+    let get_resp = keyed.command(&["GET", channel]).await;
+    assert!(
+        is_moved_redirect(&get_resp).is_none() && is_ask_redirect(&get_resp).is_none(),
+        "keyed GET under ASKING on the importing target must serve local, got: {:?}",
+        get_resp
+    );
+
+    // SSUBSCRIBE parity: ASKING + SSUBSCRIBE on the importing target must also
+    // serve local — a real subscribe confirmation, not a redirect or error.
+    let mut sub = target_node.connect().await;
+    assert!(
+        !is_error(&sub.command(&["ASKING"]).await),
+        "ASKING should succeed"
+    );
+    let ssub_resp = sub.command(&["SSUBSCRIBE", channel]).await;
+    match &ssub_resp {
+        Response::Array(arr) if arr.len() == 3 => {
+            assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("ssubscribe"))));
+            assert_eq!(arr[1], Response::Bulk(Some(Bytes::from(channel))));
+        }
+        other => panic!(
+            "SSUBSCRIBE under ASKING on the importing target must serve local \
+             like the keyed GET, got: {:?}",
+            other
+        ),
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// Unassigned-slot parity: when a slot is owned by NO node, SSUBSCRIBE must fail
+/// with CLUSTERDOWN — the same terminal error a keyed GET returns for that slot.
+/// Both derive it from `RouteDecision::Unassigned` -> `to_response`. Pins the
+/// SSUBSCRIBE command level to the keyed path for the no-owner arm.
+#[tokio::test]
+async fn test_ssubscribe_unassigned_slot_clusterdown_matches_keyed_path() {
+    use frogdb_test_harness::cluster_harness::ClusterTestHarness;
+    use frogdb_test_harness::cluster_helpers::{is_cluster_down, is_error, slot_for_key};
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // Same string as key and channel, so GET and SSUBSCRIBE target one slot.
+    let channel = "clusterdown_chan";
+    let slot = slot_for_key(channel.as_bytes());
+    let slot_str = slot.to_string();
+
+    // DELSLOTS is a Raft command — issue it via the leader to unassign the
+    // channel's slot so it is owned by no node.
+    let leader_id = harness.get_leader().await.expect("leader should exist");
+    let leader_node = harness.node(leader_id).unwrap();
+    let del_resp = leader_node.send("CLUSTER", &["DELSLOTS", &slot_str]).await;
+    assert!(!is_error(&del_resp), "DELSLOTS failed: {:?}", del_resp);
+
+    let probe_node = harness.node(harness.node_ids()[0]).unwrap();
+
+    // Converge: wait until the unassignment has propagated and the keyed path
+    // reports CLUSTERDOWN for the slot (explicit wait over a fixed sleep).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let get_resp = probe_node.send("GET", &[channel]).await;
+        if is_cluster_down(&get_resp) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() <= deadline,
+            "DELSLOTS did not produce CLUSTERDOWN within 5s, got: {:?}",
+            get_resp
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // Keyed baseline: GET on the unassigned slot is CLUSTERDOWN.
+    let get_resp = probe_node.send("GET", &[channel]).await;
+    assert!(
+        is_cluster_down(&get_resp),
+        "keyed GET on an unassigned slot must be CLUSTERDOWN, got: {:?}",
+        get_resp
+    );
+
+    // SSUBSCRIBE parity: same terminal CLUSTERDOWN, not a subscribe confirmation.
+    let mut client = probe_node.connect().await;
+    let ssub_resp = client.command(&["SSUBSCRIBE", channel]).await;
+    assert!(
+        is_cluster_down(&ssub_resp),
+        "SSUBSCRIBE on an unassigned slot must be CLUSTERDOWN like the keyed \
+         GET, got: {:?}",
+        ssub_resp
+    );
+
+    harness.shutdown_all().await;
+}
+
 // =============================================================================
 // Confirmation reply shape: RESP2 Array vs RESP3 Push (proposal 26)
 //
