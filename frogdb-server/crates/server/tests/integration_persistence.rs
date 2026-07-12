@@ -901,11 +901,8 @@ async fn test_bitop_destination_survives_restart() {
 /// subcommand) so the consumer group exists after a restart. The historical
 /// defect persisted the wrong argument (e.g. the CREATE subcommand token).
 ///
-/// Currently ignored: stream serialization deliberately omits consumer groups
-/// (`persistence/src/serialization/stream.rs`), so no WAL declaration can make
-/// a group survive a restart yet. Unignore once group state is serialized.
-#[ignore = "consumer groups are not serialized (see persistence serialization/stream.rs); \
-            groups cannot survive a restart regardless of the WAL declaration"]
+/// Stream serialization persists consumer groups (proposal 45), so the group
+/// survives a restart.
 #[tokio::test]
 async fn test_xgroup_create_survives_restart() {
     let tmp = tempfile::tempdir().unwrap();
@@ -955,11 +952,8 @@ async fn test_xgroup_create_survives_restart() {
 /// survive a restart. The historical defect persisted the wrong argument, so
 /// the pending entry was lost.
 ///
-/// Currently ignored for the same reason as `test_xgroup_create_survives_restart`:
-/// consumer-group state (including the PEL) is not serialized, so the pending
-/// entry cannot survive a restart regardless of the WAL declaration.
-#[ignore = "consumer groups (incl. PEL) are not serialized (see persistence serialization/stream.rs); \
-            pending entries cannot survive a restart regardless of the WAL declaration"]
+/// Consumer-group state (including the PEL) is serialized (proposal 45), so the
+/// pending entry survives a restart.
 #[tokio::test]
 async fn test_xreadgroup_pending_survives_restart() {
     let tmp = tempfile::tempdir().unwrap();

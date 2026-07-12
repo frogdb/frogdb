@@ -296,6 +296,25 @@ impl PendingEntry {
         }
     }
 
+    /// Reconstruct a pending entry from persisted state (deserialization only).
+    ///
+    /// `delivery_time` is an [`Instant`] the caller has already anchored to the
+    /// persisted wall-clock delivery millisecond (see [`ClaimClock`]), so idle
+    /// time resumes from where it stood before the restart.
+    pub fn restore(consumer: Bytes, delivery_time: Instant, delivery_count: u32) -> Self {
+        Self {
+            consumer,
+            delivery_time,
+            delivery_count,
+        }
+    }
+
+    /// The monotonic instant this entry was last delivered. Serialization maps it
+    /// to a wall-clock millisecond via a [`ClaimClock`].
+    pub fn delivery_time(&self) -> Instant {
+        self.delivery_time
+    }
+
     /// Get idle time in milliseconds.
     pub fn idle_ms(&self) -> u64 {
         self.idle_ms_at(Instant::now())
@@ -380,9 +399,36 @@ impl Consumer {
         }
     }
 
+    /// Reconstruct a consumer from persisted timestamps (deserialization only).
+    ///
+    /// `pending_count` is left at zero: it is rebuilt as the PEL is restored (see
+    /// [`ConsumerGroup::restore_pending`]) so the invariant
+    /// `sum(pending_count) == pending.len()` holds. `last_seen` / `active_time`
+    /// are [`Instant`]s the caller has anchored to the persisted wall-clock values
+    /// via a [`ClaimClock`], so idle/inactive time resumes across a restart.
+    pub fn restore(name: Bytes, last_seen: Instant, active_time: Option<Instant>) -> Self {
+        Self {
+            name,
+            pending_count: 0,
+            last_seen,
+            active_time,
+        }
+    }
+
     /// Consumer name.
     pub fn name(&self) -> &Bytes {
         &self.name
+    }
+
+    /// Last time this consumer was seen (monotonic). Serialization maps it to a
+    /// wall-clock millisecond via a [`ClaimClock`].
+    pub fn last_seen(&self) -> Instant {
+        self.last_seen
+    }
+
+    /// Last time this consumer actively consumed entries, or `None` if never.
+    pub fn active_time(&self) -> Option<Instant> {
+        self.active_time
     }
 
     /// Number of pending entries currently owned by this consumer.
@@ -704,6 +750,48 @@ impl ConsumerGroup {
     /// Iterate the group's consumers (read-only) for XINFO GROUPS/CONSUMERS/STREAM.
     pub fn consumers(&self) -> impl Iterator<Item = &Consumer> {
         self.consumers.values()
+    }
+
+    /// Iterate the PEL as `(id, entry)` in ascending ID order (read-only), for
+    /// serialization. Exposes the [`PendingEntry`] so the codec can persist its
+    /// delivery time and count without draining the map.
+    pub fn pending_iter(&self) -> impl Iterator<Item = (&StreamId, &PendingEntry)> {
+        self.pending.iter()
+    }
+
+    /// Restore a consumer during deserialization. Any prior entry under `name` is
+    /// replaced; `pending_count` is rebuilt by [`Self::restore_pending`].
+    pub fn restore_consumer(
+        &mut self,
+        name: Bytes,
+        last_seen: Instant,
+        active_time: Option<Instant>,
+    ) {
+        self.consumers.insert(
+            name.clone(),
+            Consumer::restore(name, last_seen, active_time),
+        );
+    }
+
+    /// Restore a pending entry during deserialization, keeping the per-consumer
+    /// `pending_count` invariant. Creates the owning consumer if it was not
+    /// already restored (e.g. a truncated consumer table), mirroring how
+    /// [`Self::add_pending`] tolerates that at runtime.
+    pub fn restore_pending(
+        &mut self,
+        id: StreamId,
+        consumer: Bytes,
+        delivery_time: Instant,
+        delivery_count: u32,
+    ) {
+        self.consumers
+            .entry(consumer.clone())
+            .or_insert_with(|| Consumer::new(consumer.clone()))
+            .pending_count += 1;
+        self.pending.insert(
+            id,
+            PendingEntry::restore(consumer, delivery_time, delivery_count),
+        );
     }
 
     /// Idle time (ms since last delivery) of a single pending entry, or `None`
