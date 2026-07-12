@@ -34,10 +34,11 @@ impl Command for BlpopCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
-            event: EventSpec::Emits {
-                class: KeyspaceEventFlags::LIST,
-                name: "lpop",
-            },
+            // Runtime-deposited: `lpop` on the one candidate key actually
+            // popped on the immediate path (proposal 44 phase 1). The
+            // blocked-then-woken path is served by the shard wait queue, which
+            // does not emit keyspace events (pre-existing; phase 4 scope).
+            event: EventSpec::Dynamic,
             requires_same_slot: true, // All keys must be in the same shard,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Blocking {
@@ -74,6 +75,8 @@ impl Command for BlpopCommand {
                         if list_mut.is_empty() {
                             ctx.store.delete(key);
                         }
+                        // Only this candidate key was popped.
+                        ctx.notify_event(key.clone(), "lpop", KeyspaceEventFlags::LIST);
                         return Ok(Response::Array(vec![
                             Response::bulk(key.clone()),
                             Response::bulk(elem),
@@ -115,10 +118,8 @@ impl Command for BrpopCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
-            event: EventSpec::Emits {
-                class: KeyspaceEventFlags::LIST,
-                name: "rpop",
-            },
+            // Runtime-deposited: `rpop` on the popped key (see BLPOP).
+            event: EventSpec::Dynamic,
             requires_same_slot: true,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Blocking {
@@ -155,6 +156,8 @@ impl Command for BrpopCommand {
                         if list_mut.is_empty() {
                             ctx.store.delete(key);
                         }
+                        // Only this candidate key was popped.
+                        ctx.notify_event(key.clone(), "rpop", KeyspaceEventFlags::LIST);
                         return Ok(Response::Array(vec![
                             Response::bulk(key.clone()),
                             Response::bulk(elem),
@@ -193,10 +196,9 @@ impl Command for BlmoveCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::MoveKeys,
             wakes: WaiterWake::None,
-            event: EventSpec::Emits {
-                class: KeyspaceEventFlags::LIST,
-                name: "lmove",
-            },
+            // Runtime-deposited: `lmove` on both keys when the immediate path
+            // actually moved an element (see BLPOP for the woken path).
+            event: EventSpec::Dynamic,
             requires_same_slot: true, // Source and destination must be in same shard,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Blocking {
@@ -257,6 +259,10 @@ impl Command for BlmoveCommand {
                             Direction::Right => dest_list.push_back(elem.clone()),
                         }
                     }
+
+                    // An element moved: both keys were written.
+                    ctx.notify_event(source.clone(), "lmove", KeyspaceEventFlags::LIST);
+                    ctx.notify_event(dest.clone(), "lmove", KeyspaceEventFlags::LIST);
 
                     return Ok(Response::bulk(elem));
                 }
@@ -421,10 +427,8 @@ impl Command for BzpopminCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
-            event: EventSpec::Emits {
-                class: KeyspaceEventFlags::ZSET,
-                name: "zpopmin",
-            },
+            // Runtime-deposited: `zpopmin` on the popped key (see BLPOP).
+            event: EventSpec::Dynamic,
             requires_same_slot: true,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Blocking {
@@ -462,6 +466,8 @@ impl Command for BzpopminCommand {
                         if zset_mut.is_empty() {
                             ctx.store.delete(key);
                         }
+                        // Only this candidate key was popped.
+                        ctx.notify_event(key.clone(), "zpopmin", KeyspaceEventFlags::ZSET);
                         let is_resp3 = ctx.protocol_version.is_resp3();
                         return Ok(Response::Array(vec![
                             Response::bulk(key.clone()),
@@ -504,10 +510,8 @@ impl Command for BzpopmaxCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
-            event: EventSpec::Emits {
-                class: KeyspaceEventFlags::ZSET,
-                name: "zpopmax",
-            },
+            // Runtime-deposited: `zpopmax` on the popped key (see BLPOP).
+            event: EventSpec::Dynamic,
             requires_same_slot: true,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Blocking {
@@ -545,6 +549,8 @@ impl Command for BzpopmaxCommand {
                         if zset_mut.is_empty() {
                             ctx.store.delete(key);
                         }
+                        // Only this candidate key was popped.
+                        ctx.notify_event(key.clone(), "zpopmax", KeyspaceEventFlags::ZSET);
                         let is_resp3 = ctx.protocol_version.is_resp3();
                         return Ok(Response::Array(vec![
                             Response::bulk(key.clone()),

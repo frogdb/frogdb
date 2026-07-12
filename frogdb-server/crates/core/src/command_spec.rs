@@ -413,6 +413,12 @@ impl std::fmt::Display for SpecError {
     }
 }
 
+/// Commands whose multi-key `KeySpec` genuinely writes *every* extracted key, so
+/// a blanket [`EventSpec::Emits`] correctly fires on each. Anything else with a
+/// multi-key spec must name its destination ([`EventSpec::EmitsAt`]) or resolve
+/// keys at runtime ([`EventSpec::Dynamic`]); see [`SpecError::MultiKeyBlanketEmits`].
+const MULTI_KEY_EMITS_ALLOWLIST: &[&str] = &["DEL", "UNLINK", "MSET", "MSETNX"];
+
 impl CommandSpec {
     /// Whether this command carries `CommandFlags::WRITE`.
     pub fn is_write(&self) -> bool {
@@ -469,6 +475,27 @@ impl CommandSpec {
                     min_keys,
                 });
             }
+        }
+
+        // A blanket `Emits` on a multi-key KeySpec fires on every extracted
+        // key — only legitimate for commands that genuinely write every key
+        // (the explicit allowlist). Everything else must use `EmitsAt` or
+        // `Dynamic`, so the next STORE-style command cannot silently
+        // reintroduce the source-key over-emission bug.
+        if matches!(self.event, EventSpec::Emits { .. })
+            && matches!(
+                self.keys,
+                KeySpec::FirstTwo
+                    | KeySpec::All
+                    | KeySpec::AllButLast
+                    | KeySpec::Stride { .. }
+                    | KeySpec::Skip(_)
+                    | KeySpec::NumkeysAt { .. }
+                    | KeySpec::DestThenNumkeys { .. }
+            )
+            && !MULTI_KEY_EMITS_ALLOWLIST.contains(&self.name)
+        {
+            return Err(SpecError::MultiKeyBlanketEmits);
         }
 
         Ok(())
@@ -726,6 +753,9 @@ mod tests {
     fn validate_arity_too_small() {
         let mut spec = base_write_spec();
         spec.keys = KeySpec::FirstTwo;
+        // Dynamic event: multi-key blanket Emits is rejected on its own
+        // (see validate_rejects_multi_key_blanket_emits).
+        spec.event = EventSpec::Dynamic;
         spec.arity = Arity::Fixed(1); // needs >= 2
         assert_eq!(
             spec.validate(),
@@ -818,6 +848,54 @@ mod tests {
                 min_keys: 1
             })
         );
+    }
+
+    #[test]
+    fn validate_rejects_multi_key_blanket_emits() {
+        // A multi-key KeySpec with blanket Emits would fire on read-only
+        // source keys (the STORE-family bug); validate() rejects it unless the
+        // command is on the genuinely-per-key allowlist.
+        for keys in [
+            KeySpec::FirstTwo,
+            KeySpec::All,
+            KeySpec::AllButLast,
+            KeySpec::Stride { step: 2 },
+            KeySpec::Skip(1),
+            KeySpec::NumkeysAt {
+                numkeys: 0,
+                first: 1,
+            },
+            KeySpec::DestThenNumkeys {
+                numkeys: 1,
+                first: 2,
+            },
+        ] {
+            let mut spec = base_write_spec();
+            spec.keys = keys;
+            spec.arity = Arity::AtLeast(3);
+            assert_eq!(
+                spec.validate(),
+                Err(SpecError::MultiKeyBlanketEmits),
+                "{keys:?} with blanket Emits must be rejected"
+            );
+        }
+
+        // Allowlisted per-key writers keep blanket Emits.
+        let mut spec = base_write_spec();
+        spec.name = "DEL";
+        spec.keys = KeySpec::All;
+        spec.arity = Arity::AtLeast(1);
+        assert_eq!(spec.validate(), Ok(()));
+
+        // Single-key Emits is unaffected.
+        assert_eq!(base_write_spec().validate(), Ok(()));
+
+        // Multi-key EmitsAt/Dynamic/Suppressed are the sanctioned shapes.
+        let mut spec = base_write_spec();
+        spec.keys = KeySpec::FirstTwo;
+        spec.arity = Arity::AtLeast(2);
+        spec.event = EventSpec::Dynamic;
+        assert_eq!(spec.validate(), Ok(()));
     }
 
     #[test]

@@ -1855,3 +1855,237 @@ async fn test_unsubscribe_many_channels_batched_counts() {
 
     server.shutdown().await;
 }
+
+// ===========================================================================
+// Keyspace-event key accuracy (proposal 44 phase 1)
+//
+// Multi-key commands must notify only the keys they actually write:
+// STORE-family commands emit on the destination only (EventSpec::EmitsAt),
+// runtime-resolved commands (RENAME, ZMPOP, BLPOP, ...) deposit their events
+// via CommandContext::notify_event (EventSpec::Dynamic).
+// ===========================================================================
+
+/// Subscribe `subscriber` to the exact keyevent channel for `event`, returning
+/// after the subscription is confirmed and registered.
+async fn subscribe_keyevent(subscriber: &mut crate::common::test_server::TestClient, event: &str) {
+    let channel = format!("__keyevent@0__:{event}");
+    let resp = subscriber.command(&["SUBSCRIBE", &channel]).await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+    // Give the subscription time to register.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+}
+
+/// Read keyevent messages from `subscriber` and assert the notified keys are
+/// exactly `expected` (in order), followed by silence.
+async fn assert_keyevent_keys(
+    subscriber: &mut crate::common::test_server::TestClient,
+    event: &str,
+    expected: &[&str],
+) {
+    let channel = format!("__keyevent@0__:{event}");
+    for (i, want) in expected.iter().enumerate() {
+        let msg = subscriber.read_message(Duration::from_secs(2)).await;
+        let Some(Response::Array(arr)) = msg else {
+            panic!("expected keyevent #{i} ({event} -> {want}), got {msg:?}");
+        };
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("message"))));
+        assert_eq!(arr[1], Response::Bulk(Some(Bytes::from(channel.clone()))));
+        assert_eq!(
+            arr[2],
+            Response::Bulk(Some(Bytes::from(want.to_string()))),
+            "keyevent #{i} for '{event}' notified the wrong key"
+        );
+    }
+    // No further notifications: any extra message is an over-emission.
+    let extra = subscriber.read_message(Duration::from_millis(400)).await;
+    assert!(
+        extra.is_none(),
+        "unexpected extra '{event}' keyevent (over-emission): {extra:?}"
+    );
+}
+
+/// ZRANGESTORE emits `zrangestore` on the destination key only — never on the
+/// read-only source key (Redis parity; regression for the blanket-Emits bug).
+#[tokio::test]
+async fn test_zrangestore_notifies_destination_only() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // Same hash tag: ZRANGESTORE requires src and dest on one shard.
+    client
+        .command(&["ZADD", "{zrs}src", "1", "a", "2", "b"])
+        .await;
+
+    subscribe_keyevent(&mut subscriber, "zrangestore").await;
+
+    let resp = client
+        .command(&["ZRANGESTORE", "{zrs}dest", "{zrs}src", "0", "-1"])
+        .await;
+    assert_eq!(resp, Response::Integer(2));
+
+    assert_keyevent_keys(&mut subscriber, "zrangestore", &["{zrs}dest"]).await;
+    server.shutdown().await;
+}
+
+/// SINTERSTORE emits `sinterstore` on the destination only, not on the
+/// read-only source sets.
+#[tokio::test]
+async fn test_sinterstore_notifies_destination_only() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["SADD", "{sis}1", "a", "b"]).await;
+    client.command(&["SADD", "{sis}2", "b", "c"]).await;
+
+    subscribe_keyevent(&mut subscriber, "sinterstore").await;
+
+    let resp = client
+        .command(&["SINTERSTORE", "{sis}dest", "{sis}1", "{sis}2"])
+        .await;
+    assert_eq!(resp, Response::Integer(1));
+
+    assert_keyevent_keys(&mut subscriber, "sinterstore", &["{sis}dest"]).await;
+    server.shutdown().await;
+}
+
+/// COPY emits `copy_to` on the destination (`keys()[1]`) only — the source is
+/// read-only.
+#[tokio::test]
+async fn test_copy_notifies_destination_only() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["SET", "{cp}src", "v"]).await;
+
+    subscribe_keyevent(&mut subscriber, "copy_to").await;
+
+    let resp = client.command(&["COPY", "{cp}src", "{cp}dst"]).await;
+    assert_eq!(resp, Response::Integer(1));
+
+    assert_keyevent_keys(&mut subscriber, "copy_to", &["{cp}dst"]).await;
+    server.shutdown().await;
+}
+
+/// RENAME deposits its events at runtime (EventSpec::Dynamic): both the source
+/// and destination are written, so both notify — proving deposited events flow
+/// from the handler through the write-effect pipeline to subscribers.
+#[tokio::test]
+async fn test_rename_notifies_source_then_destination() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["SET", "{rn}src", "v"]).await;
+
+    subscribe_keyevent(&mut subscriber, "rename_from").await;
+
+    let resp = client.command(&["RENAME", "{rn}src", "{rn}dst"]).await;
+    assert_eq!(resp, Response::ok());
+
+    assert_keyevent_keys(&mut subscriber, "rename_from", &["{rn}src", "{rn}dst"]).await;
+    server.shutdown().await;
+}
+
+/// A RENAMENX that does nothing (destination already exists, reply 0) must
+/// emit nothing: EventSpec::Dynamic with no deposit — unlike the old blanket
+/// Emits, which fired on both keys even for the no-op reply.
+#[tokio::test]
+async fn test_renamenx_noop_emits_nothing() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["SET", "{rnx}src", "v"]).await;
+    client.command(&["SET", "{rnx}dst", "w"]).await;
+
+    subscribe_keyevent(&mut subscriber, "rename_from").await;
+
+    let resp = client.command(&["RENAMENX", "{rnx}src", "{rnx}dst"]).await;
+    assert_eq!(resp, Response::Integer(0));
+
+    assert_keyevent_keys(&mut subscriber, "rename_from", &[]).await;
+    server.shutdown().await;
+}
+
+/// ZMPOP notifies only the key it actually popped from — candidate keys that
+/// were empty or missing stay silent (EventSpec::Dynamic deposit).
+#[tokio::test]
+async fn test_zmpop_notifies_popped_key_only() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // {zmp}miss does not exist; only {zmp}hit can be popped.
+    client.command(&["ZADD", "{zmp}hit", "1", "a"]).await;
+
+    subscribe_keyevent(&mut subscriber, "zmpop").await;
+
+    let resp = client
+        .command(&["ZMPOP", "2", "{zmp}miss", "{zmp}hit", "MIN"])
+        .await;
+    assert!(matches!(resp, Response::Array(_)), "unexpected: {resp:?}");
+
+    assert_keyevent_keys(&mut subscriber, "zmpop", &["{zmp}hit"]).await;
+    server.shutdown().await;
+}
+
+/// BLPOP's immediate (non-blocking) path notifies only the key it popped —
+/// not every candidate key (EventSpec::Dynamic deposit).
+#[tokio::test]
+async fn test_blpop_immediate_notifies_popped_key_only() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // {blp}miss does not exist; the pop is served immediately from {blp}hit.
+    client.command(&["RPUSH", "{blp}hit", "a"]).await;
+
+    subscribe_keyevent(&mut subscriber, "lpop").await;
+
+    let resp = client
+        .command(&["BLPOP", "{blp}miss", "{blp}hit", "0.1"])
+        .await;
+    assert!(matches!(resp, Response::Array(_)), "unexpected: {resp:?}");
+
+    assert_keyevent_keys(&mut subscriber, "lpop", &["{blp}hit"]).await;
+    server.shutdown().await;
+}

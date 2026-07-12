@@ -160,10 +160,10 @@ impl Command for ZmpopCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
-            event: EventSpec::Emits {
-                class: KeyspaceEventFlags::ZSET,
-                name: "zmpop",
-            },
+            // Runtime-deposited: `zmpop` on the one candidate key actually
+            // popped — never on the empty/missing candidates. Redis-parity
+            // names (zpopmin/zpopmax) come in proposal 44 phase 4.
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Standard,
@@ -255,6 +255,10 @@ impl Command for ZmpopCommand {
             if !results.is_empty() {
                 // ZMPOP always uses nested format [[member, score], ...]
                 // in both RESP2 and RESP3
+                // Only this candidate key was written; the empty/missing
+                // candidates skipped above deposit nothing.
+                ctx.notify_event(key.clone(), "zmpop", KeyspaceEventFlags::ZSET);
+
                 let pop_result = scored_array_resp3(results, true);
                 return Ok(Response::Array(vec![
                     Response::bulk(key.clone()),

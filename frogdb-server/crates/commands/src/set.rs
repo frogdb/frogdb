@@ -483,9 +483,10 @@ impl Command for SunionstoreCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistDestination(0),
             wakes: WaiterWake::None,
-            event: EventSpec::Emits {
+            event: EventSpec::EmitsAt {
                 class: KeyspaceEventFlags::SET,
                 name: "sunionstore",
+                key_index: 0,
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
@@ -542,9 +543,10 @@ impl Command for SinterstoreCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistDestination(0),
             wakes: WaiterWake::None,
-            event: EventSpec::Emits {
+            event: EventSpec::EmitsAt {
                 class: KeyspaceEventFlags::SET,
                 name: "sinterstore",
+                key_index: 0,
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
@@ -613,9 +615,10 @@ impl Command for SdiffstoreCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistDestination(0),
             wakes: WaiterWake::None,
-            event: EventSpec::Emits {
+            event: EventSpec::EmitsAt {
                 class: KeyspaceEventFlags::SET,
                 name: "sdiffstore",
+                key_index: 0,
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
@@ -914,10 +917,10 @@ impl Command for SmoveCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
-            event: EventSpec::Emits {
-                class: KeyspaceEventFlags::SET,
-                name: "smove",
-            },
+            // Runtime-deposited: `smove` on both keys only when the member
+            // actually moved (moving a non-member emits nothing). Redis-parity
+            // per-key names (smove_from/smove_to) come in proposal 44 phase 3.
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Standard,
@@ -956,6 +959,11 @@ impl Command for SmoveCommand {
         // Add to dest (create if needed)
         let dest_set = ctx.store.get_or_create_set(dest)?;
         dest_set.add(member.clone(), ListpackThresholds::DEFAULT_SET);
+
+        // The member moved: both keys were written. The no-op replies (0)
+        // above deposit nothing.
+        ctx.notify_event(source.clone(), "smove", KeyspaceEventFlags::SET);
+        ctx.notify_event(dest.clone(), "smove", KeyspaceEventFlags::SET);
 
         Ok(Response::Integer(1))
     }

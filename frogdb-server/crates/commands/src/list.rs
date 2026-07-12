@@ -774,7 +774,10 @@ impl Command for RpoplpushCommand {
             wakes: // Pushes onto the destination list, so a client blocked in
         // BLPOP/BRPOP/BLMOVE on the destination key must be woken.
         WaiterWake::Kind(WaiterKind::List),
-            event: EventSpec::Emits { class: KeyspaceEventFlags::LIST, name: "rpoplpush" },
+            // Runtime-deposited: `rpoplpush` on both keys only when an element
+            // actually moved. Redis-parity per-key names (rpop on the source,
+            // lpush on the destination) come in proposal 44 phase 3.
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Standard,
@@ -814,6 +817,11 @@ impl Command for RpoplpushCommand {
         let dest_list = ctx.store.get_or_create_list(dest)?;
         dest_list.push_front(element.clone());
 
+        // An element moved: both keys were written. The empty/missing-source
+        // replies (null) above deposit nothing.
+        ctx.notify_event(source.clone(), "rpoplpush", KeyspaceEventFlags::LIST);
+        ctx.notify_event(dest.clone(), "rpoplpush", KeyspaceEventFlags::LIST);
+
         Ok(Response::bulk(element))
     }
 }
@@ -836,7 +844,10 @@ impl Command for LmoveCommand {
             wakes: // Pushes onto the destination list, so a client blocked in
         // BLPOP/BRPOP/BLMOVE on the destination key must be woken.
         WaiterWake::Kind(WaiterKind::List),
-            event: EventSpec::Emits { class: KeyspaceEventFlags::LIST, name: "lmove" },
+            // Runtime-deposited: `lmove` on both keys only when an element
+            // actually moved. Redis-parity direction-dependent names (lpop/rpop
+            // + lpush/rpush) come in proposal 44 phase 3.
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Standard,
@@ -899,6 +910,11 @@ impl Command for LmoveCommand {
         } else {
             dest_list.push_back(element.clone());
         }
+
+        // An element moved: both keys were written. The empty/missing-source
+        // replies (null) above deposit nothing.
+        ctx.notify_event(source.clone(), "lmove", KeyspaceEventFlags::LIST);
+        ctx.notify_event(dest.clone(), "lmove", KeyspaceEventFlags::LIST);
 
         Ok(Response::bulk(element))
     }

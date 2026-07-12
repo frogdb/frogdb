@@ -219,9 +219,10 @@ impl Command for ZunionstoreCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistDestination(0),
             wakes: WaiterWake::None,
-            event: EventSpec::Emits {
+            event: EventSpec::EmitsAt {
                 class: KeyspaceEventFlags::ZSET,
                 name: "zunionstore",
+                key_index: 0,
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
@@ -405,9 +406,10 @@ impl Command for ZinterstoreCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistDestination(0),
             wakes: WaiterWake::None,
-            event: EventSpec::Emits {
+            event: EventSpec::EmitsAt {
                 class: KeyspaceEventFlags::ZSET,
                 name: "zinterstore",
+                key_index: 0,
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
@@ -704,9 +706,10 @@ impl Command for ZdiffstoreCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistDestination(0),
             wakes: WaiterWake::None,
-            event: EventSpec::Emits {
+            event: EventSpec::EmitsAt {
                 class: KeyspaceEventFlags::ZSET,
                 name: "zdiffstore",
+                key_index: 0,
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
