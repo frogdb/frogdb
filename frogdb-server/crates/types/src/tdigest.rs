@@ -693,6 +693,93 @@ mod tests {
         );
     }
 
+    /// Compile-time barrier against a COW regression.
+    ///
+    /// Every READONLY t-digest query must take `&self`. If any read path
+    /// regresses to `&mut self` (the pre-2e7da3a4 shape that forced the
+    /// command layer onto `get_tdigest_mut` → `Arc::make_mut`, cloning the
+    /// stored value on every query), this function stops compiling because it
+    /// only holds a shared `&TDigestValue`. It is never called at runtime; its
+    /// job is purely to fail the build if the signatures regress.
+    #[allow(dead_code)]
+    fn read_paths_must_take_shared_ref(td: &TDigestValue) {
+        // A shared reference cannot be reborrowed mutably, so each call below
+        // fails to type-check the instant its method takes `&mut self`.
+        let _ = td.quantile(0.5);
+        let _ = td.cdf(1.0);
+        let _ = td.trimmed_mean(0.1, 0.9);
+        let _ = td.rank(1.0);
+        let _ = td.revrank(1.0);
+        let _ = td.min();
+        let _ = td.max();
+        let _ = td.total_weight();
+    }
+
+    /// Runtime barrier: READONLY queries must not mutate the stored digest.
+    ///
+    /// The COW clone that 2e7da3a4 removed was triggered by the read path
+    /// asking for mutable access to flush pending (unmerged) values in place.
+    /// A digest carrying an unmerged buffer is precisely the state where an
+    /// in-place flush would be observable, so we build one, snapshot its
+    /// internals, hammer every read path, and assert nothing moved. If a query
+    /// regresses to flushing `self` (instead of a throwaway clone), the
+    /// unmerged buffer drains and these assertions fire.
+    #[test]
+    fn test_read_paths_do_not_mutate_digest() {
+        let mut td = TDigestValue::new(100.0);
+        // buffer_limit = ceil(100/2) = 50, so the 50th add compresses and the
+        // remaining 10 stay unmerged: centroids populated AND a pending buffer.
+        for i in 0..60 {
+            td.add(i as f64);
+        }
+        assert!(
+            !td.unmerged().is_empty(),
+            "test needs a pending unmerged buffer to be meaningful"
+        );
+
+        // Snapshot every field a stray flush/compress would disturb.
+        let unmerged_len = td.unmerged().len();
+        let unmerged_weight = td.unmerged_weight();
+        let merged_weight = td.merged_weight();
+        let num_centroids = td.num_centroids();
+        let total_weight = td.total_weight();
+        let raw_min = td.raw_min();
+        let raw_max = td.raw_max();
+
+        // Repeatedly exercise every read path, including the flush-on-copy ones.
+        for _ in 0..5 {
+            let _ = td.quantile(0.1);
+            let _ = td.quantile(0.5);
+            let _ = td.quantile(0.99);
+            let _ = td.cdf(25.0);
+            let _ = td.trimmed_mean(0.2, 0.8);
+            let _ = td.rank(30.0);
+            let _ = td.revrank(30.0);
+            let _ = td.min();
+            let _ = td.max();
+        }
+
+        assert_eq!(
+            td.unmerged().len(),
+            unmerged_len,
+            "read query drained the unmerged buffer (COW/mutation regression)"
+        );
+        assert_eq!(
+            td.unmerged_weight(),
+            unmerged_weight,
+            "unmerged_weight moved"
+        );
+        assert_eq!(td.merged_weight(), merged_weight, "merged_weight moved");
+        assert_eq!(
+            td.num_centroids(),
+            num_centroids,
+            "centroids were re-merged"
+        );
+        assert_eq!(td.total_weight(), total_weight, "total_weight moved");
+        assert_eq!(td.raw_min(), raw_min, "min moved");
+        assert_eq!(td.raw_max(), raw_max, "max moved");
+    }
+
     #[test]
     fn test_compression_effect() {
         // Higher compression = more centroids = more accuracy
