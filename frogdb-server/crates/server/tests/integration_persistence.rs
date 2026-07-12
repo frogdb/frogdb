@@ -1018,6 +1018,195 @@ fn pending_count(response: &Response) -> i64 {
     }
 }
 
+/// Extract `(id, consumer, idle_ms, delivery_count)` rows from a detailed
+/// (`start end count`) XPENDING reply.
+fn pending_details(response: &Response) -> Vec<(Bytes, Bytes, i64, i64)> {
+    let rows = match response {
+        Response::Array(items) => items,
+        _ => panic!("expected array from detailed XPENDING, got {response:?}"),
+    };
+    rows.iter()
+        .map(|row| {
+            let fields = match row {
+                Response::Array(f) => f,
+                _ => panic!("expected per-entry array, got {row:?}"),
+            };
+            (
+                Bytes::copy_from_slice(unwrap_bulk(&fields[0])),
+                Bytes::copy_from_slice(unwrap_bulk(&fields[1])),
+                unwrap_integer(&fields[2]),
+                unwrap_integer(&fields[3]),
+            )
+        })
+        .collect()
+}
+
+/// Full consumer-group durability flow (proposal 45): XADD two entries,
+/// XREADGROUP pends both, XACK one, restart. After the restart XPENDING must
+/// show exactly the one unacked entry with its delivery count intact, XCLAIM
+/// must still work on it, and XINFO GROUPS must report the pre-restart
+/// last-delivered-id.
+#[tokio::test]
+async fn test_consumer_group_full_state_survives_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // --- First boot: build group state ---
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    let _ = client
+        .command(&["XADD", "xf:stream", "1-1", "f", "a"])
+        .await;
+    let _ = client
+        .command(&["XADD", "xf:stream", "2-1", "f", "b"])
+        .await;
+    assert_ok(
+        &client
+            .command(&["XGROUP", "CREATE", "xf:stream", "xf:group", "0"])
+            .await,
+    );
+    let delivered = unwrap_array(
+        client
+            .command(&[
+                "XREADGROUP",
+                "GROUP",
+                "xf:group",
+                "xf:consumer",
+                "STREAMS",
+                "xf:stream",
+                ">",
+            ])
+            .await,
+    );
+    assert!(!delivered.is_empty(), "XREADGROUP should deliver entries");
+    // Ack the first entry; 2-1 stays pending.
+    assert_eq!(
+        client
+            .command(&["XACK", "xf:stream", "xf:group", "1-1"])
+            .await,
+        Response::Integer(1)
+    );
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // --- Second boot: PEL, delivery count, XCLAIM, and last-delivered-id ---
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    let details = pending_details(
+        &client
+            .command(&["XPENDING", "xf:stream", "xf:group", "-", "+", "10"])
+            .await,
+    );
+    assert_eq!(
+        details.len(),
+        1,
+        "exactly the unacked entry must survive, got: {details:?}"
+    );
+    let (id, consumer, _idle, delivery_count) = &details[0];
+    assert_eq!(id.as_ref(), b"2-1");
+    assert_eq!(consumer.as_ref(), b"xf:consumer");
+    assert_eq!(
+        *delivery_count, 1,
+        "delivery count must survive the restart"
+    );
+
+    // XCLAIM still works on the restored PEL entry.
+    let claimed = unwrap_array(
+        client
+            .command(&["XCLAIM", "xf:stream", "xf:group", "xf:other", "0", "2-1"])
+            .await,
+    );
+    assert_eq!(claimed.len(), 1, "XCLAIM must reassign the restored entry");
+
+    // XINFO GROUPS reports the pre-restart last-delivered-id.
+    let groups = unwrap_array(client.command(&["XINFO", "GROUPS", "xf:stream"]).await);
+    assert!(
+        groups.iter().any(|g| {
+            let fields = match g {
+                Response::Array(arr) => arr,
+                _ => return false,
+            };
+            fields.windows(2).any(|w| {
+                w[0] == Response::bulk(Bytes::from_static(b"last-delivered-id"))
+                    && w[1] == Response::bulk(Bytes::from_static(b"2-1"))
+            })
+        }),
+        "last-delivered-id must survive a restart, got: {groups:?}"
+    );
+
+    server.shutdown().await;
+}
+
+/// Idle-time continuity (proposal 45): a pending entry's idle time must resume
+/// from its persisted wall-clock delivery time after a restart — never reset to
+/// zero. Uses the ClaimClock unix-ms mapping in the stream codec.
+#[tokio::test]
+async fn test_pending_idle_time_survives_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // --- First boot: pend one entry, let it idle ---
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    let _ = client
+        .command(&["XADD", "xi:stream", "1-1", "f", "v"])
+        .await;
+    assert_ok(
+        &client
+            .command(&["XGROUP", "CREATE", "xi:stream", "xi:group", "0"])
+            .await,
+    );
+    let _ = client
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "xi:group",
+            "xi:consumer",
+            "STREAMS",
+            "xi:stream",
+            ">",
+        ])
+        .await;
+
+    // Accumulate observable idle before the snapshot.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let details = pending_details(
+        &client
+            .command(&["XPENDING", "xi:stream", "xi:group", "-", "+", "10"])
+            .await,
+    );
+    let idle_before = details[0].2;
+    assert!(
+        idle_before >= 300,
+        "test setup: idle_before = {idle_before}"
+    );
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // --- Second boot: idle continues from the persisted delivery time ---
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    let details = pending_details(
+        &client
+            .command(&["XPENDING", "xi:stream", "xi:group", "-", "+", "10"])
+            .await,
+    );
+    assert_eq!(details.len(), 1, "entry must still be pending: {details:?}");
+    let idle_after = details[0].2;
+    assert!(
+        idle_after >= idle_before,
+        "idle must resume across a restart (never reset): before={idle_before}ms after={idle_after}ms"
+    );
+
+    server.shutdown().await;
+}
+
 // ============================================================================
 // FLUSHDB / FLUSHALL persistence clearing (proposal 43)
 //
