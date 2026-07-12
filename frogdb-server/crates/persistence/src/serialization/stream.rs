@@ -274,3 +274,227 @@ pub(super) fn deserialize_stream(payload: &[u8]) -> Result<StreamValue, Serializ
 
     Ok(stream)
 }
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use frogdb_types::types::{ClaimOpts, StreamRangeBound};
+
+    use super::*;
+
+    fn round_trip(stream: &StreamValue) -> StreamValue {
+        let (marker, payload) = serialize_stream(stream);
+        assert_eq!(marker, TypeMarker::Stream);
+        deserialize_stream(&payload).expect("round-trip deserialization must succeed")
+    }
+
+    /// Build a stream with `n` entries `1-1 .. n-1`, each `{f: v}`.
+    fn stream_with_entries(n: u64) -> StreamValue {
+        let mut s = StreamValue::new();
+        for ms in 1..=n {
+            let _ = s.add(
+                StreamIdSpec::Explicit(StreamId::new(ms, 1)),
+                vec![(Bytes::from_static(b"f"), Bytes::from_static(b"v"))],
+            );
+        }
+        s
+    }
+
+    /// Full shape: two groups, consumers, and PEL entries all survive the codec.
+    #[test]
+    fn round_trips_groups_pel_and_consumers() {
+        let mut s = stream_with_entries(3);
+        s.create_group(Bytes::from_static(b"g1"), StreamId::new(2, 1), Some(2))
+            .unwrap();
+        s.create_group(Bytes::from_static(b"g2"), StreamId::new(0, 0), None)
+            .unwrap();
+
+        let g1 = s.get_group_mut(b"g1").unwrap();
+        g1.create_consumer(Bytes::from_static(b"alice"));
+        g1.create_consumer(Bytes::from_static(b"bob"));
+        g1.add_pending(StreamId::new(1, 1), Bytes::from_static(b"alice"));
+        g1.add_pending(StreamId::new(2, 1), Bytes::from_static(b"bob"));
+
+        let restored = round_trip(&s);
+
+        assert_eq!(restored.group_count(), 2);
+
+        let g1 = restored.get_group(b"g1").unwrap();
+        assert_eq!(g1.last_delivered_id(), StreamId::new(2, 1));
+        assert_eq!(g1.entries_read(), Some(2));
+        assert_eq!(g1.consumer_count(), 2);
+        assert_eq!(g1.pending_count(), 2);
+        let pel = g1.pending_entries(
+            StreamRangeBound::Min,
+            StreamRangeBound::Max,
+            usize::MAX,
+            None,
+            None,
+        );
+        assert_eq!(pel.len(), 2);
+        assert_eq!(pel[0].id, StreamId::new(1, 1));
+        assert_eq!(pel[0].consumer, Bytes::from_static(b"alice"));
+        assert_eq!(pel[1].id, StreamId::new(2, 1));
+        assert_eq!(pel[1].consumer, Bytes::from_static(b"bob"));
+
+        // The PEL invariant is rebuilt: each consumer owns exactly one entry.
+        let counts: Vec<(Bytes, usize)> = g1
+            .consumers()
+            .map(|c| (c.name().clone(), c.pending_count()))
+            .collect();
+        assert_eq!(
+            counts,
+            vec![
+                (Bytes::from_static(b"alice"), 1),
+                (Bytes::from_static(b"bob"), 1)
+            ]
+        );
+
+        let g2 = restored.get_group(b"g2").unwrap();
+        assert_eq!(g2.last_delivered_id(), StreamId::new(0, 0));
+        assert_eq!(g2.entries_read(), None);
+        assert_eq!(g2.consumer_count(), 0);
+        assert_eq!(g2.pending_count(), 0);
+    }
+
+    /// An empty group (no consumers, no PEL) survives — the XGROUP CREATE case.
+    #[test]
+    fn round_trips_empty_group() {
+        let mut s = stream_with_entries(1);
+        s.create_group(Bytes::from_static(b"g"), StreamId::new(1, 1), Some(1))
+            .unwrap();
+
+        let restored = round_trip(&s);
+
+        let g = restored.get_group(b"g").unwrap();
+        assert_eq!(g.last_delivered_id(), StreamId::new(1, 1));
+        assert_eq!(g.entries_read(), Some(1));
+        assert_eq!(g.consumer_count(), 0);
+        assert_eq!(g.pending_count(), 0);
+    }
+
+    /// Consumers with an empty PEL (e.g. all entries acked, or XGROUP
+    /// CREATECONSUMER) survive with a zero pending count.
+    #[test]
+    fn round_trips_group_with_consumers_but_empty_pel() {
+        let mut s = stream_with_entries(1);
+        s.create_group(Bytes::from_static(b"g"), StreamId::new(1, 1), None)
+            .unwrap();
+        let g = s.get_group_mut(b"g").unwrap();
+        g.create_consumer(Bytes::from_static(b"alice"));
+        g.create_consumer(Bytes::from_static(b"bob"));
+
+        let restored = round_trip(&s);
+
+        let g = restored.get_group(b"g").unwrap();
+        assert_eq!(g.pending_count(), 0);
+        let consumers: Vec<(Bytes, usize)> = g
+            .consumers()
+            .map(|c| (c.name().clone(), c.pending_count()))
+            .collect();
+        assert_eq!(
+            consumers,
+            vec![
+                (Bytes::from_static(b"alice"), 0),
+                (Bytes::from_static(b"bob"), 0)
+            ]
+        );
+    }
+
+    /// A delivery count driven above 1 by claims survives exactly — losing it
+    /// would break XCLAIM retry/dead-letter logic after a restart.
+    #[test]
+    fn round_trips_delivery_count() {
+        let mut s = stream_with_entries(1);
+        s.create_group(Bytes::from_static(b"g"), StreamId::new(1, 1), None)
+            .unwrap();
+        let g = s.get_group_mut(b"g").unwrap();
+        g.create_consumer(Bytes::from_static(b"alice"));
+        g.add_pending(StreamId::new(1, 1), Bytes::from_static(b"alice"));
+        // Force the count to a distinctive value via the RETRYCOUNT claim path.
+        g.claim_pending(
+            StreamId::new(1, 1),
+            &Bytes::from_static(b"alice"),
+            ClaimOpts {
+                retrycount: Some(41),
+                ..Default::default()
+            },
+            ClaimClock::sample(),
+        );
+
+        let restored = round_trip(&s);
+
+        let pel = restored.get_group(b"g").unwrap().pending_entries(
+            StreamRangeBound::Min,
+            StreamRangeBound::Max,
+            usize::MAX,
+            None,
+            None,
+        );
+        assert_eq!(pel.len(), 1);
+        assert_eq!(pel[0].delivery_count, 41);
+    }
+
+    /// PEL idle time resumes across the codec: an entry pushed 5s into the past
+    /// via the IDLE claim path reports at least that idle after a round-trip
+    /// (the ClaimClock unix-ms mapping), never a reset-to-zero value.
+    #[test]
+    fn round_trip_preserves_pel_idle_time() {
+        let mut s = stream_with_entries(1);
+        s.create_group(Bytes::from_static(b"g"), StreamId::new(1, 1), None)
+            .unwrap();
+        let g = s.get_group_mut(b"g").unwrap();
+        g.create_consumer(Bytes::from_static(b"alice"));
+        g.add_pending(StreamId::new(1, 1), Bytes::from_static(b"alice"));
+        g.claim_pending(
+            StreamId::new(1, 1),
+            &Bytes::from_static(b"alice"),
+            ClaimOpts {
+                idle: Some(5_000),
+                justid: true,
+                ..Default::default()
+            },
+            ClaimClock::sample(),
+        );
+
+        let restored = round_trip(&s);
+
+        let idle = restored
+            .get_group(b"g")
+            .unwrap()
+            .pending_idle(&StreamId::new(1, 1))
+            .expect("entry must still be pending");
+        assert!(
+            (5_000..10_000).contains(&idle),
+            "idle must resume from the persisted wall-clock value, got {idle}ms"
+        );
+    }
+
+    /// Stream-level counters that feed XINFO STREAM / lag survive: last_id
+    /// beyond the newest entry (XSETID), entries_added, and max_deleted_id.
+    #[test]
+    fn round_trips_stream_header_counters() {
+        let mut s = stream_with_entries(3);
+        let _ = s.delete(&[StreamId::new(2, 1)]);
+        s.set_last_id(StreamId::new(100, 0)); // XSETID past the newest entry
+        s.set_entries_added(7); // XSETID ENTRIESADDED
+
+        let restored = round_trip(&s);
+
+        assert_eq!(restored.len(), 2);
+        assert_eq!(restored.last_id(), StreamId::new(100, 0));
+        assert_eq!(restored.entries_added(), 7);
+        assert_eq!(restored.max_deleted_id(), Some(StreamId::new(2, 1)));
+    }
+
+    /// An unknown version byte is rejected loudly, never mis-parsed as data.
+    #[test]
+    fn rejects_unknown_format_version() {
+        let (_, mut payload) = serialize_stream(&stream_with_entries(1));
+        payload[0] = 0xFF;
+        assert!(matches!(
+            deserialize_stream(&payload),
+            Err(SerializationError::InvalidPayload(_))
+        ));
+    }
+}
