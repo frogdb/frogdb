@@ -127,6 +127,30 @@ impl RocksWalWriter {
             })?;
         Ok(seq)
     }
+    /// Enqueue a full-shard clear as a `Clear` entry.
+    ///
+    /// The flush thread applies it as a full-range delete over the shard's
+    /// primary column family, after first draining every lower-sequence entry
+    /// (see [`super::flush::FlushEngine`]) so the tombstone covers exactly the
+    /// pre-clear keyspace. Uses the same `fetch_add` sequence discipline as
+    /// [`Self::write_set`]; an entry accepted after this one (higher seq) lands
+    /// after the tombstone and is not cleared.
+    pub async fn write_clear(&self) -> std::io::Result<u64> {
+        // Nominal accounting weight for a keyless range-tombstone entry.
+        let size_estimate = 64;
+        let seq = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
+        self.cmd_tx
+            .send_async(WalCommand::Write(WalEntry::Clear { seq, size_estimate }))
+            .await
+            .map_err(|_| {
+                error!(
+                    shard_id = self.shard_id,
+                    "WAL flush thread dead (write_clear)"
+                );
+                std::io::Error::other("WAL flush thread disconnected")
+            })?;
+        Ok(seq)
+    }
     pub async fn write_delete(&self, key: &[u8]) -> std::io::Result<u64> {
         let size_estimate = key.len() + 32;
         let seq = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;

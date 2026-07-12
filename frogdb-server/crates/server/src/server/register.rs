@@ -360,4 +360,79 @@ mod spec_exhaustiveness {
             );
         }
     }
+
+    /// Regression guard for the keyspace-event over-emission bug class
+    /// (proposal 44): STORE-family commands must pin their event to the
+    /// destination key (`EmitsAt`), and commands whose written keys are only
+    /// knowable at runtime must deposit their events (`Dynamic`). A blanket
+    /// `Emits` on any of these would notify read-only source keys — and is
+    /// also rejected wholesale by `CommandSpec::validate()` for multi-key
+    /// KeySpecs outside the DEL/UNLINK/MSET/MSETNX allowlist.
+    #[test]
+    fn multi_key_commands_declare_accurate_events() {
+        // (command, destination index into the extracted key list)
+        let emits_at: &[(&str, usize)] = &[
+            ("ZRANGESTORE", 0),
+            ("ZUNIONSTORE", 0),
+            ("ZINTERSTORE", 0),
+            ("ZDIFFSTORE", 0),
+            ("SUNIONSTORE", 0),
+            ("SINTERSTORE", 0),
+            ("SDIFFSTORE", 0),
+            ("COPY", 1),
+            // Phase 2: former Suppressed under-emitters with a static dest.
+            ("PFMERGE", 0),
+            ("BITOP", 0),
+        ];
+        let dynamic: &[&str] = &[
+            "RENAME",
+            "RENAMENX",
+            "SMOVE",
+            "LMOVE",
+            "RPOPLPUSH",
+            "ZMPOP",
+            "BLPOP",
+            "BRPOP",
+            "BLMOVE",
+            "BZPOPMIN",
+            "BZPOPMAX",
+            // Phase 2: set-or-del (GEOSEARCHSTORE) and popped-key-only (LMPOP)
+            // are runtime-dependent.
+            "GEOSEARCHSTORE",
+            "LMPOP",
+            // Phase 4: dynamic-key STORE commands (dest present only with STORE,
+            // set-or-del), the last Suppressed blocking-pop members, and the
+            // blocking multi-pops.
+            "SORT",
+            "GEORADIUS",
+            "GEORADIUSBYMEMBER",
+            "BRPOPLPUSH",
+            "BLMPOP",
+            "BZMPOP",
+        ];
+
+        let r = full_registry();
+        for (name, dest_index) in emits_at {
+            let entry = r
+                .get_entry(name)
+                .unwrap_or_else(|| panic!("{name} not registered"));
+            let spec = entry.as_command().unwrap().spec();
+            assert!(
+                matches!(spec.event, EventSpec::EmitsAt { key_index, .. } if key_index == *dest_index),
+                "{name} writes only its destination (key {dest_index}) and must declare EmitsAt, got {:?}",
+                spec.event
+            );
+        }
+        for name in dynamic {
+            let entry = r
+                .get_entry(name)
+                .unwrap_or_else(|| panic!("{name} not registered"));
+            let spec = entry.as_command().unwrap().spec();
+            assert_eq!(
+                spec.event,
+                EventSpec::Dynamic,
+                "{name}'s written keys are runtime-dependent and must deposit events (Dynamic)"
+            );
+        }
+    }
 }

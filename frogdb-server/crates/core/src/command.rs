@@ -7,6 +7,7 @@ use std::time::Duration;
 use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::command_spec::{AccessSpec, CommandSpec, KeySpec};
 use crate::error::CommandError;
+use crate::keyspace_event::KeyspaceEventFlags;
 use crate::registry::CommandRegistry;
 use crate::replication::ReplicationTrackerImpl;
 use crate::shard::ShardSender;
@@ -224,8 +225,16 @@ pub enum WalStrategy {
     /// the command's `keys_with_flags`, not by [`WalStrategy::actions`].
     Dynamic,
 
+    /// Clear the entire shard: persist a full-range delete of the shard's
+    /// primary column family through the WAL flush pipeline. Used by FLUSHDB and
+    /// FLUSHALL, whose clear is unconditional (not `Dynamic`). The in-memory
+    /// store — and, when tiered storage is enabled, the warm column family — are
+    /// cleared synchronously by the command's `store.clear()`; this strategy adds
+    /// the primary-CF range tombstone so a flush survives a restart.
+    ClearShard,
+
     /// No WAL action needed.
-    /// Used by FLUSHDB, FLUSHALL (handled by RocksDB clear) and read commands.
+    /// Used by read commands (and other writes whose effects are not persisted).
     #[default]
     NoOp,
 }
@@ -257,10 +266,16 @@ pub enum WalAction<'a> {
         key: &'a [u8],
         pairs: &'a [(u16, u8)],
     },
+
+    /// Clear the entire shard: persist a full-range delete of the shard's
+    /// primary column family. Carries no key — it targets the whole CF. Emitted
+    /// only by [`WalStrategy::ClearShard`] (FLUSHDB / FLUSHALL).
+    ClearShard,
 }
 
 impl<'a> WalAction<'a> {
-    /// Get the key this action targets.
+    /// Get the key this action targets, or an empty slice for keyless actions
+    /// ([`WalAction::ClearShard`] targets the whole CF, not a single key).
     pub fn key(&self) -> &'a [u8] {
         match self {
             WalAction::Persist(k)
@@ -268,18 +283,29 @@ impl<'a> WalAction<'a> {
             | WalAction::PersistOrDelete(k)
             | WalAction::PersistIfExists(k)
             | WalAction::MergeHllDelta { key: k, .. } => k,
+            WalAction::ClearShard => &[],
         }
     }
 }
+
+/// One keyspace event deposited by an [`crate::command_spec::EventSpec::Dynamic`]
+/// command via [`CommandContext::notify_event`]: the written key, the event
+/// name, and its class.
+pub type KeyspaceEventDeposit = (Bytes, &'static str, KeyspaceEventFlags);
+
+/// The per-command deposit buffer for [`KeyspaceEventDeposit`]s. Sized for the
+/// dominant Dynamic shapes (a move/rename touches two keys; a pop touches one).
+pub type KeyspaceEventDeposits = SmallVec<[KeyspaceEventDeposit; 2]>;
 
 /// One write performed by a command execution — the unit the post-execution
 /// pipeline and the rollback path both operate on.
 ///
 /// Carries the handler and its args (for keyspace notifications, replication,
-/// tracking, search) plus an optional HyperLogLog register delta deposited by
-/// the handler on its [`CommandContext`]. The delta lets
+/// tracking, search) plus the runtime facts the handler deposited on its
+/// [`CommandContext`]: an optional HyperLogLog register delta (lets
 /// [`WalStrategy::MergeDeltaOrPersistFirstKey`] persist a compact `Merge`
-/// operand rather than a full value `Put`.
+/// operand rather than a full value `Put`) and the keyspace events of an
+/// [`crate::command_spec::EventSpec::Dynamic`] command.
 #[derive(Clone, Copy)]
 pub struct WriteRecord<'a> {
     /// The command handler that performed the write.
@@ -288,15 +314,20 @@ pub struct WriteRecord<'a> {
     pub args: &'a [Bytes],
     /// HyperLogLog register delta, if this write deposited one (dense PFADD).
     pub hll_wal_delta: Option<&'a [(u16, u8)]>,
+    /// Keyspace events deposited via [`CommandContext::notify_event`]. Only
+    /// consulted for [`crate::command_spec::EventSpec::Dynamic`] commands;
+    /// empty for every other write.
+    pub keyspace_events: &'a [KeyspaceEventDeposit],
 }
 
 impl<'a> WriteRecord<'a> {
-    /// Create a record with no HLL delta (the common case).
+    /// Create a record with no HLL delta and no deposited events (the common case).
     pub fn new(handler: &'a dyn Command, args: &'a [Bytes]) -> Self {
         Self {
             handler,
             args,
             hll_wal_delta: None,
+            keyspace_events: &[],
         }
     }
 
@@ -377,6 +408,9 @@ impl WalStrategy {
                 Some(dest) => smallvec![WalAction::PersistIfExists(dest)],
                 None => SmallVec::new(),
             },
+            // Unconditional full-shard clear: one keyless action, independent of
+            // args (FLUSHDB/FLUSHALL take no key arguments).
+            WalStrategy::ClearShard => smallvec![WalAction::ClearShard],
             // Dynamic is resolved against the command's extracted write keys by
             // `Command::wal_actions`, which has access to `keys_with_flags`.
             // Resolving it from raw args alone is impossible, so this yields
@@ -910,6 +944,16 @@ pub struct CommandContext<'a> {
     /// small already, and creation must establish the base on disk). Reset per
     /// command (it lives on the per-command context).
     pub hll_wal_delta: Option<SmallVec<[(u16, u8); 8]>>,
+
+    /// Keyspace events deposited by an
+    /// [`EventSpec::Dynamic`](crate::command_spec::EventSpec::Dynamic) command.
+    ///
+    /// Handlers must go through [`CommandContext::notify_event`]; the execution
+    /// seam drains the buffer via [`CommandContext::take_keyspace_events`] and
+    /// routes it to the notifications write effect. A `write_was_noop` command
+    /// discards its deposits wholesale (the effect pipeline is skipped), same
+    /// contract as `hll_wal_delta`.
+    pub keyspace_events: KeyspaceEventDeposits,
 }
 
 impl<'a> CommandContext<'a> {
@@ -946,7 +990,30 @@ impl<'a> CommandContext<'a> {
             keyspace_misses: 0,
             write_was_noop: false,
             hll_wal_delta: None,
+            keyspace_events: SmallVec::new(),
         }
+    }
+
+    /// Deposit a keyspace event for this command's write.
+    ///
+    /// Only meaningful on commands declaring
+    /// [`EventSpec::Dynamic`](crate::command_spec::EventSpec::Dynamic) — the
+    /// notifications write effect emits exactly the deposited events, in
+    /// deposit order, instead of iterating the extracted key list. Call it
+    /// once per (key, event) the command actually wrote; skip it entirely on
+    /// no-op paths so nothing is emitted.
+    #[inline]
+    pub fn notify_event(&mut self, key: Bytes, name: &'static str, class: KeyspaceEventFlags) {
+        self.keyspace_events.push((key, name, class));
+    }
+
+    /// Drain the deposited keyspace events (execution seam only).
+    ///
+    /// Leaves the buffer empty; the caller owns routing the events into the
+    /// write-effect pipeline (or dropping them for a `write_was_noop` command).
+    #[inline]
+    pub fn take_keyspace_events(&mut self) -> KeyspaceEventDeposits {
+        std::mem::take(&mut self.keyspace_events)
     }
 
     /// Report a single keyspace lookup from a [`LookupSpec::Reported`] command.
@@ -1170,6 +1237,22 @@ mod tests {
     }
 
     #[test]
+    fn wal_strategy_clear_shard() {
+        // Unconditional: one keyless ClearShard action regardless of args.
+        let with_args = args(&[b"ignored"]);
+        let actions = WalStrategy::ClearShard.actions(&with_args);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], WalAction::ClearShard));
+        assert_eq!(actions[0].key(), b"");
+
+        // Also emitted with no args (FLUSHDB/FLUSHALL take none).
+        let empty: Vec<Bytes> = Vec::new();
+        let actions = WalStrategy::ClearShard.actions(&empty);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], WalAction::ClearShard));
+    }
+
+    #[test]
     fn wal_strategy_delete_keys() {
         let args = args(&[b"a", b"b", b"c"]);
         let actions = WalStrategy::DeleteKeys.actions(&args);
@@ -1307,5 +1390,41 @@ mod tests {
                 .actions_with_delta(&empty, Some(&pairs))
                 .is_empty()
         );
+    }
+
+    fn deposit_test_context() -> CommandContext<'static> {
+        let store = Box::leak(Box::new(crate::store::HashMapStore::new()));
+        let shard_senders = Box::leak(Box::new(Arc::new(Vec::new())));
+        CommandContext::new(store, shard_senders, 0, 1, 0, ProtocolVersion::Resp2)
+    }
+
+    /// `notify_event` deposits accumulate in call order and `take` drains them,
+    /// leaving the buffer empty for reuse (the seam relies on both).
+    #[test]
+    fn keyspace_event_deposits_drain_in_order() {
+        let mut ctx = deposit_test_context();
+        assert!(ctx.take_keyspace_events().is_empty());
+
+        ctx.notify_event(
+            Bytes::from_static(b"src"),
+            "rename_from",
+            crate::keyspace_event::KeyspaceEventFlags::GENERIC,
+        );
+        ctx.notify_event(
+            Bytes::from_static(b"dst"),
+            "rename_from",
+            crate::keyspace_event::KeyspaceEventFlags::GENERIC,
+        );
+
+        let events = ctx.take_keyspace_events();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].0, Bytes::from_static(b"src"));
+        assert_eq!(events[1].0, Bytes::from_static(b"dst"));
+        assert!(events.iter().all(|(_, name, class)| {
+            *name == "rename_from" && *class == crate::keyspace_event::KeyspaceEventFlags::GENERIC
+        }));
+
+        // Drained: a second take yields nothing.
+        assert!(ctx.take_keyspace_events().is_empty());
     }
 }

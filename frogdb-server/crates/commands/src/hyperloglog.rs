@@ -164,17 +164,16 @@ impl Command for PfmergeCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
-            // Redis fires `pfadd` on the PFMERGE *destination* only. We cannot
-            // express that here: `keys: KeySpec::All` makes the notification seam
-            // (`core/src/shard/keyspace_notify.rs`) iterate every key from
-            // `handler.keys(args)` — dest AND read-only sources — with no
-            // per-spec mechanism to restrict emission to the destination (the
-            // existing ZRANGESTORE command with `KeySpec::FirstTwo` over-emits on
-            // its source key for the same reason). Flipping to `Emits` would wrongly
-            // notify `pfadd` on the source keys, so we keep it suppressed rather
-            // than emit inaccurate events. PFADD, which reads only its single
-            // key, does emit.
-            event: EventSpec::Suppressed,
+            // Redis fires `pfadd` under NOTIFY_STRING on the PFMERGE
+            // *destination* only (hyperloglog.c pfmergeCommand); the read-only
+            // sources stay silent. `keys()[0]` is the destination for
+            // `KeySpec::All`, and the `write_was_noop` gate in execute()
+            // suppresses the event when the merge moves no register.
+            event: EventSpec::EmitsAt {
+                class: KeyspaceEventFlags::STRING,
+                name: "pfadd",
+                key_index: 0,
+            },
             requires_same_slot: false,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Standard,

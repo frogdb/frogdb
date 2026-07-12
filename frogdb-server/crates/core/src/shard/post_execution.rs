@@ -212,7 +212,7 @@ impl ShardWorker {
                 }
                 WriteEffectKind::KeyspaceNotifications => {
                     for record in summary.writes {
-                        self.emit_keyspace_notifications_for_command(record.handler, record.args);
+                        self.emit_keyspace_notifications_for_command(record);
                     }
                 }
                 WriteEffectKind::DirtyCounter => {

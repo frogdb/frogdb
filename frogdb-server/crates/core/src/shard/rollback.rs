@@ -4,7 +4,7 @@ use std::time::Instant;
 use bytes::Bytes;
 use smallvec::SmallVec;
 
-use crate::command::Command;
+use crate::command::{Command, WalAction};
 use crate::store::Store;
 use crate::types::{KeyMetadata, Value};
 
@@ -41,10 +41,15 @@ impl ShardWorker {
     ) -> WriteSnapshot {
         // Collect keys based on the handler's WalStrategy, which tells us
         // exactly which keys will be persisted (and thus which need rollback).
+        // `ClearShard` (FLUSHDB/FLUSHALL) targets the whole CF, not a key, so it
+        // has no per-key state to snapshot — filter it out rather than capturing
+        // a bogus empty key. A full clear cannot be rolled back from a per-key
+        // snapshot anyway; on a WAL failure the in-memory clear stands.
         let snapshot_keys: SmallVec<[Bytes; 2]> = handler
             .wal_strategy()
             .actions(args)
             .iter()
+            .filter(|a| !matches!(a, WalAction::ClearShard))
             .map(|a| Bytes::copy_from_slice(a.key()))
             .collect();
 

@@ -10,7 +10,7 @@ use std::sync::atomic::Ordering;
 
 use bytes::Bytes;
 
-use crate::command::Command;
+use crate::command::WriteRecord;
 use crate::command_spec::EventSpec;
 use crate::keyspace_event::KeyspaceEventFlags;
 
@@ -64,12 +64,17 @@ impl ShardWorker {
 
     /// Emit keyspace notifications after a write command executes.
     ///
-    /// Called from the post-execution pipeline for write commands.
-    pub(crate) fn emit_keyspace_notifications_for_command(
-        &self,
-        handler: &dyn Command,
-        args: &[Bytes],
-    ) {
+    /// Called from the post-execution pipeline for write commands. The record's
+    /// spec decides which keys notify:
+    /// - [`EventSpec::Emits`]: every extracted key (single-key writes and the
+    ///   genuinely per-key multi-key writes like DEL/MSET).
+    /// - [`EventSpec::EmitsAt`]: exactly `keys()[key_index]` — STORE-family
+    ///   commands notify their destination, never the read-only sources.
+    /// - [`EventSpec::Dynamic`]: exactly the events the handler deposited via
+    ///   [`notify_event`](crate::command::CommandContext::notify_event), in
+    ///   deposit order. A no-op write never reaches here (the effect pipeline
+    ///   is skipped), so its deposits are naturally discarded.
+    pub(crate) fn emit_keyspace_notifications_for_command(&self, record: &WriteRecord<'_>) {
         // Fast path: skip if notifications are disabled entirely
         let flags_bits = self.notify_keyspace_events.load(Ordering::Relaxed);
         if flags_bits == 0 {
@@ -77,12 +82,38 @@ impl ShardWorker {
         }
 
         // The event class and name live together on the command's spec.
-        let EventSpec::Emits { class, name } = handler.spec().event else {
-            return; // Suppressed or NotApplicable: emit nothing.
-        };
-
-        for key in &handler.keys(args) {
-            self.emit_keyspace_notification(key, name, class);
+        match record.handler.spec().event {
+            EventSpec::Emits { class, name } => {
+                for key in &record.handler.keys(record.args) {
+                    self.emit_keyspace_notification(key, name, class);
+                }
+            }
+            EventSpec::EmitsAt {
+                class,
+                name,
+                key_index,
+            } => {
+                let keys = record.handler.keys(record.args);
+                if let Some(key) = keys.get(key_index) {
+                    self.emit_keyspace_notification(key, name, class);
+                } else {
+                    // validate() bounds key_index statically for every valid
+                    // arity, so this is unreachable for registered specs.
+                    debug_assert!(
+                        false,
+                        "{}: EmitsAt key_index {key_index} out of range ({} extracted keys)",
+                        record.handler.name(),
+                        keys.len()
+                    );
+                }
+            }
+            EventSpec::Dynamic => {
+                for (key, name, class) in record.keyspace_events {
+                    self.emit_keyspace_notification(key, name, *class);
+                }
+            }
+            // Suppressed or NotApplicable: emit nothing.
+            EventSpec::Suppressed | EventSpec::NotApplicable => {}
         }
     }
 }

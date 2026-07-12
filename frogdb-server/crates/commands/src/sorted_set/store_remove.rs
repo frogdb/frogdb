@@ -24,9 +24,10 @@ impl Command for ZrangestoreCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistDestination(0),
             wakes: WaiterWake::None,
-            event: EventSpec::Emits {
+            event: EventSpec::EmitsAt {
                 class: KeyspaceEventFlags::ZSET,
                 name: "zrangestore",
+                key_index: 0,
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,

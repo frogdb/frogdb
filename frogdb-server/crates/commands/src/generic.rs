@@ -64,10 +64,10 @@ impl Command for RenameCommand {
             access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::OW]),
             wal: WalStrategy::RenameKeys,
             wakes: WaiterWake::All,
-            event: EventSpec::Emits {
-                class: KeyspaceEventFlags::GENERIC,
-                name: "rename_from",
-            },
+            // Runtime-deposited (proposal 44): Redis-verified per-key names —
+            // `rename_from` on the source, `rename_to` on the destination
+            // (db.c renameGenericCommand:62-63). A no-op RENAMENX emits nothing.
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Standard,
@@ -109,6 +109,11 @@ impl Command for RenameCommand {
             ctx.store.set_expiry(new_key, expires_at);
         }
 
+        // Both keys were written: `rename_from` on the deleted source,
+        // `rename_to` on the set destination (db.c renameGenericCommand:62-63).
+        ctx.notify_event(old_key.clone(), "rename_from", KeyspaceEventFlags::GENERIC);
+        ctx.notify_event(new_key.clone(), "rename_to", KeyspaceEventFlags::GENERIC);
+
         Ok(Response::ok())
     }
 }
@@ -129,10 +134,10 @@ impl Command for RenamenxCommand {
             access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::OW]),
             wal: WalStrategy::RenameKeys,
             wakes: WaiterWake::All,
-            event: EventSpec::Emits {
-                class: KeyspaceEventFlags::GENERIC,
-                name: "rename_from",
-            },
+            // Runtime-deposited (proposal 44): Redis-verified per-key names —
+            // `rename_from` on the source, `rename_to` on the destination
+            // (db.c renameGenericCommand:62-63). A no-op RENAMENX emits nothing.
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Standard,
@@ -178,6 +183,11 @@ impl Command for RenamenxCommand {
         if let Some(expires_at) = expiry {
             ctx.store.set_expiry(new_key, expires_at);
         }
+
+        // Both keys were written; the no-op reply (0) above deposits nothing.
+        // `rename_from` on the source, `rename_to` on the destination.
+        ctx.notify_event(old_key.clone(), "rename_from", KeyspaceEventFlags::GENERIC);
+        ctx.notify_event(new_key.clone(), "rename_to", KeyspaceEventFlags::GENERIC);
 
         Ok(Response::Integer(1))
     }
@@ -482,9 +492,10 @@ impl Command for CopyCommand {
             access: AccessSpec::Positional(&[KeyAccessFlag::R, KeyAccessFlag::OW]),
             wal: WalStrategy::PersistDestination(1),
             wakes: WaiterWake::None,
-            event: EventSpec::Emits {
+            event: EventSpec::EmitsAt {
                 class: KeyspaceEventFlags::GENERIC,
                 name: "copy_to",
+                key_index: 1,
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,

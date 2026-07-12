@@ -774,7 +774,11 @@ impl Command for RpoplpushCommand {
             wakes: // Pushes onto the destination list, so a client blocked in
         // BLPOP/BRPOP/BLMOVE on the destination key must be woken.
         WaiterWake::Kind(WaiterKind::List),
-            event: EventSpec::Emits { class: KeyspaceEventFlags::LIST, name: "rpoplpush" },
+            // Runtime-deposited (proposal 44): RPOPLPUSH is LMOVE RIGHT LEFT, so
+            // Redis emits `rpop` on the source and `lpush` on the destination
+            // (t_list.c listElementsRemoved + lmoveHandlePush) — not a bespoke
+            // `rpoplpush` event. Fires only when an element actually moved.
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Standard,
@@ -814,6 +818,12 @@ impl Command for RpoplpushCommand {
         let dest_list = ctx.store.get_or_create_list(dest)?;
         dest_list.push_front(element.clone());
 
+        // An element moved: `rpop` on the source (popped from the tail),
+        // `lpush` on the destination (pushed to the head). The empty/missing-
+        // source replies (null) above deposit nothing.
+        ctx.notify_event(source.clone(), "rpop", KeyspaceEventFlags::LIST);
+        ctx.notify_event(dest.clone(), "lpush", KeyspaceEventFlags::LIST);
+
         Ok(Response::bulk(element))
     }
 }
@@ -836,7 +846,11 @@ impl Command for LmoveCommand {
             wakes: // Pushes onto the destination list, so a client blocked in
         // BLPOP/BRPOP/BLMOVE on the destination key must be woken.
         WaiterWake::Kind(WaiterKind::List),
-            event: EventSpec::Emits { class: KeyspaceEventFlags::LIST, name: "lmove" },
+            // Runtime-deposited (proposal 44): direction-resolved Redis names —
+            // `lpop`/`rpop` on the source per wherefrom and `lpush`/`rpush` on
+            // the destination per whereto (t_list.c listElementsRemoved +
+            // lmoveHandlePush). Fires only when an element actually moved.
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Standard,
@@ -900,6 +914,14 @@ impl Command for LmoveCommand {
             dest_list.push_back(element.clone());
         }
 
+        // An element moved: pop event on the source per wherefrom, push event on
+        // the destination per whereto. The empty/missing-source replies (null)
+        // above deposit nothing.
+        let pop_event = if pop_left { "lpop" } else { "rpop" };
+        let push_event = if push_left { "lpush" } else { "rpush" };
+        ctx.notify_event(source.clone(), pop_event, KeyspaceEventFlags::LIST);
+        ctx.notify_event(dest.clone(), push_event, KeyspaceEventFlags::LIST);
+
         Ok(Response::bulk(element))
     }
 }
@@ -923,7 +945,11 @@ impl Command for LmpopCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
-            event: EventSpec::Suppressed,
+            // Runtime-deposited (t_list.c listElementsRemoved): `lpop`/`rpop`
+            // — matching the LEFT/RIGHT direction — on the one candidate key
+            // actually popped, never on the empty/missing candidates. Mirrors
+            // ZMPOP's Dynamic deposit.
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Standard,
@@ -1017,6 +1043,12 @@ impl Command for LmpopCommand {
             if elements.is_empty() {
                 continue;
             }
+
+            // Only this candidate key was written; the empty/missing
+            // candidates skipped above deposit nothing. Redis names the event
+            // by pop direction (t_list.c listElementsRemoved).
+            let event = if pop_left { "lpop" } else { "rpop" };
+            ctx.notify_event(key.clone(), event, KeyspaceEventFlags::LIST);
 
             return Ok(Response::Array(vec![
                 Response::bulk(key.clone()),

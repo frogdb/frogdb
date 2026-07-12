@@ -9,6 +9,7 @@ use frogdb_types::metrics::definitions::{
 };
 
 use crate::command::WaiterKind;
+use crate::keyspace_event::KeyspaceEventFlags;
 use crate::store::{HashMapStore, Store};
 use crate::types::{BlockingOp, Direction, StreamEntry, Value};
 
@@ -262,9 +263,21 @@ impl ShardWorker {
             match strat.satisfy(&mut self.store, key, &entry) {
                 Satisfaction::Retry => continue,
                 Satisfaction::Reject(reply) => self.complete_blocked_waiter(entry, reply),
-                Satisfaction::Done { reply, cascade } => {
+                Satisfaction::Done {
+                    reply,
+                    cascade,
+                    events,
+                } => {
                     if strat.bumps_version() {
                         self.increment_version();
+                    }
+                    // Publish the same keyspace events the immediate command path
+                    // deposits. Routed through the coordinator seam
+                    // (`emit_keyspace_notification`), which honours the
+                    // notify-keyspace-events config gate; nothing is published
+                    // when notifications are disabled.
+                    for (key, name, class) in &events {
+                        self.emit_keyspace_notification(key, name, *class);
                     }
                     self.complete_blocked_waiter(entry, reply);
                     // A BLMove/BRPOPLPUSH pushes to its destination; wake any
@@ -342,6 +355,16 @@ impl ShardWorker {
 // not hand a strategy the wait queue, or the seam dissolves.
 // ===========================================================================
 
+/// Keyspace events a woken serve must publish: `(key, event_name, class)`.
+///
+/// The immediate (non-blocking) command paths deposit the very same
+/// Redis-verified events via `CommandContext::notify_event`; the satisfaction
+/// path re-emits them here because it pops/moves directly on the store instead
+/// of re-executing the command (unlike Redis, which re-runs the command on the
+/// serve path — see blocked.c handleClientsBlockedOnKeys). At most two events
+/// fire (a pop plus a BLMOVE/BRPOPLPUSH push).
+type WokenEvents = Vec<(Bytes, &'static str, KeyspaceEventFlags)>;
+
 /// What a satisfaction attempt produced for one popped waiter.
 #[derive(Debug)]
 enum Satisfaction {
@@ -352,6 +375,9 @@ enum Satisfaction {
         reply: Response,
         /// Destination key whose waiters should be woken next, if any.
         cascade: Option<Bytes>,
+        /// Keyspace notifications to publish for this serve (pop, and push for
+        /// a move). Empty for stream reads, which emit nothing.
+        events: WokenEvents,
     },
     /// The key is no longer satisfiable for this waiter (it lost a race to an
     /// earlier waiter that emptied the key); drop the waiter and re-loop.
@@ -449,6 +475,7 @@ impl WaiterSatisfaction for ListSatisfaction {
                                 Response::bulk(value),
                             ]),
                             cascade: None,
+                            events: vec![(key.clone(), "lpop", KeyspaceEventFlags::LIST)],
                         }
                     }
                     None => Satisfaction::Retry,
@@ -468,6 +495,7 @@ impl WaiterSatisfaction for ListSatisfaction {
                                 Response::bulk(value),
                             ]),
                             cascade: None,
+                            events: vec![(key.clone(), "rpop", KeyspaceEventFlags::LIST)],
                         }
                     }
                     None => Satisfaction::Retry,
@@ -519,9 +547,23 @@ impl WaiterSatisfaction for ListSatisfaction {
                     }
                 }
 
+                // Direction-resolved pop on the source, push on the destination
+                // (mirrors the immediate BLMOVE/BRPOPLPUSH deposits).
+                let pop_event = match src_dir {
+                    Direction::Left => "lpop",
+                    Direction::Right => "rpop",
+                };
+                let push_event = match dest_dir {
+                    Direction::Left => "lpush",
+                    Direction::Right => "rpush",
+                };
                 Satisfaction::Done {
                     reply: Response::bulk(value),
                     cascade: Some(dest.clone()),
+                    events: vec![
+                        (key.clone(), pop_event, KeyspaceEventFlags::LIST),
+                        (dest.clone(), push_event, KeyspaceEventFlags::LIST),
+                    ],
                 }
             }
             BlockingOp::BLMPop { direction, count } => {
@@ -544,12 +586,17 @@ impl WaiterSatisfaction for ListSatisfaction {
                 }
 
                 cleanup_empty_list(store, key);
+                let pop_event = match direction {
+                    Direction::Left => "lpop",
+                    Direction::Right => "rpop",
+                };
                 Satisfaction::Done {
                     reply: Response::Array(vec![
                         Response::bulk(key.clone()),
                         Response::Array(elements),
                     ]),
                     cascade: None,
+                    events: vec![(key.clone(), pop_event, KeyspaceEventFlags::LIST)],
                 }
             }
             _ => {
@@ -617,6 +664,7 @@ impl WaiterSatisfaction for ZsetSatisfaction {
                         zset_score_reply(score, is_resp3),
                     ]),
                     cascade: None,
+                    events: vec![(key.clone(), "zpopmin", KeyspaceEventFlags::ZSET)],
                 }
             }
             BlockingOp::BZPopMax => {
@@ -638,6 +686,7 @@ impl WaiterSatisfaction for ZsetSatisfaction {
                         zset_score_reply(score, is_resp3),
                     ]),
                     cascade: None,
+                    events: vec![(key.clone(), "zpopmax", KeyspaceEventFlags::ZSET)],
                 }
             }
             BlockingOp::BZMPop { min, count } => {
@@ -661,12 +710,14 @@ impl WaiterSatisfaction for ZsetSatisfaction {
                 }
 
                 cleanup_empty_zset(store, key);
+                let pop_event = if *min { "zpopmin" } else { "zpopmax" };
                 Satisfaction::Done {
                     reply: Response::Array(vec![
                         Response::bulk(key.clone()),
                         Response::Array(elements),
                     ]),
                     cascade: None,
+                    events: vec![(key.clone(), pop_event, KeyspaceEventFlags::ZSET)],
                 }
             }
             _ => {
@@ -730,6 +781,9 @@ impl WaiterSatisfaction for StreamSatisfaction {
                 Satisfaction::Done {
                     reply: format_xread_response(key, &entries),
                     cascade: None,
+                    // A blocking stream read emits no keyspace event (reads never
+                    // do; XADD already notified when the entry was written).
+                    events: Vec::new(),
                 }
             }
             BlockingOp::XReadGroup {
@@ -760,6 +814,7 @@ impl WaiterSatisfaction for StreamSatisfaction {
                     Some(entries) if !entries.is_empty() => Satisfaction::Done {
                         reply: format_xread_response(key, &entries),
                         cascade: None,
+                        events: Vec::new(),
                     },
                     _ => Satisfaction::Retry,
                 }
@@ -878,7 +933,7 @@ mod tests {
         let (entry, _rx) = make_entry(BlockingOp::BLPop, vec![key.clone()]);
 
         match ListSatisfaction.satisfy(&mut store, &key, &entry) {
-            Satisfaction::Done { reply, cascade } => {
+            Satisfaction::Done { reply, cascade, .. } => {
                 assert!(cascade.is_none());
                 assert!(matches!(reply, Response::Array(_)));
             }
@@ -940,7 +995,7 @@ mod tests {
             vec![src.clone()],
         );
         match ListSatisfaction.satisfy(&mut store, &src, &entry) {
-            Satisfaction::Done { reply, cascade } => {
+            Satisfaction::Done { reply, cascade, .. } => {
                 assert!(matches!(reply, Response::Bulk(Some(_))));
                 assert_eq!(cascade, Some(dst.clone()), "BLMOVE cascades to its dest");
             }
@@ -963,7 +1018,7 @@ mod tests {
 
         let (entry, _rx) = make_entry(BlockingOp::BZPopMin, vec![key.clone()]);
         match ZsetSatisfaction.satisfy(&mut store, &key, &entry) {
-            Satisfaction::Done { reply, cascade } => {
+            Satisfaction::Done { reply, cascade, .. } => {
                 assert!(cascade.is_none());
                 assert!(matches!(reply, Response::Array(_)));
             }
