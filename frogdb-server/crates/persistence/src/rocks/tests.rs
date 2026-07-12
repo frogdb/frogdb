@@ -662,3 +662,248 @@ fn test_prune_backups_noop_within_retention() {
     assert!(parent.join("data_backup_5").exists());
     assert!(parent.join("data_backup_9").exists());
 }
+
+// ============================================================================
+// Post-clear space reclamation (proposal 48)
+// ============================================================================
+
+/// Counting [`frogdb_types::traits::MetricsRecorder`] so reclamation tests can
+/// assert the started/completed counters without a real metrics backend.
+#[derive(Default)]
+struct CountingRecorder {
+    counters: Mutex<std::collections::HashMap<String, u64>>,
+}
+
+impl frogdb_types::traits::MetricsRecorder for CountingRecorder {
+    fn increment_counter(&self, name: &str, value: u64, _labels: &[(&str, &str)]) {
+        *self
+            .counters
+            .lock()
+            .unwrap()
+            .entry(name.to_string())
+            .or_insert(0) += value;
+    }
+    fn record_gauge(&self, _name: &str, _value: f64, _labels: &[(&str, &str)]) {}
+    fn record_histogram(&self, _name: &str, _value: f64, _labels: &[(&str, &str)]) {}
+    fn counter_value(&self, name: &str) -> Option<u64> {
+        self.counters.lock().unwrap().get(name).copied()
+    }
+}
+
+/// Total live SST bytes for a shard's primary CF (excludes memtables and the
+/// DB's own WAL, so it is a precise "on-disk table bytes" measure).
+fn sst_bytes(s: &RocksStore, sid: usize) -> u64 {
+    let cf = s.cf_handle(sid).unwrap();
+    s.db.property_int_value_cf(&cf, "rocksdb.total-sst-files-size")
+        .unwrap()
+        .unwrap_or(0)
+}
+
+/// Commit a full-shard range tombstone the way the WAL flush pipeline does
+/// (batch_clear_shard + write_batch) and return the tombstone's upper bound.
+fn commit_clear(s: &RocksStore, sid: usize) -> Option<Vec<u8>> {
+    let mut batch = WriteBatch::default();
+    let upper = s.batch_clear_shard(&mut batch, sid).unwrap();
+    s.write_batch(batch).unwrap();
+    upper
+}
+
+/// Block until no reclamation pass is in flight (async spawn path).
+fn wait_reclaim_idle(s: &RocksStore) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while s.reclaim_guard.in_flight_count() > 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "reclamation did not finish within 60s"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+use frogdb_types::traits::MetricsRecorder as _;
+use std::sync::Mutex;
+
+/// Proposal 48 test 1 (functional): after a clear plus the full reclamation
+/// pass (DeleteFilesInRange + forced bottommost CompactRange), the data is
+/// still gone across a restart — compaction must not resurrect anything —
+/// and other shards are untouched.
+#[test]
+fn clear_reclamation_keeps_data_gone_after_reopen() {
+    let t = TempDir::new().unwrap();
+    {
+        let s = Arc::new(RocksStore::open(t.path(), 2, &RocksConfig::default()).unwrap());
+        for i in 0..500u32 {
+            s.put(0, format!("key{i:04}").as_bytes(), &i.to_le_bytes())
+                .unwrap();
+        }
+        s.put(1, b"other-shard", b"survives").unwrap();
+        // Force the pre-clear data into SSTs so reclamation has files to act on.
+        s.flush().unwrap();
+
+        let upper = commit_clear(&s, 0).expect("non-empty CF stages a tombstone");
+        super::reclaim::run_reclamation(&s, CfTier::Main, 0, &upper);
+
+        assert_eq!(
+            s.iter_cf(0).unwrap().count(),
+            0,
+            "cleared shard must stay empty"
+        );
+        assert_eq!(
+            s.get(1, b"other-shard").unwrap(),
+            Some(b"survives".to_vec())
+        );
+    }
+    // Restart: compaction output must not resurrect cleared keys.
+    let s = RocksStore::open(t.path(), 2, &RocksConfig::default()).unwrap();
+    assert_eq!(
+        s.iter_cf(0).unwrap().count(),
+        0,
+        "cleared data resurrected after reopen"
+    );
+    assert_eq!(
+        s.get(1, b"other-shard").unwrap(),
+        Some(b"survives".to_vec())
+    );
+}
+
+/// Proposal 48 test 2 (disk shrink): reclamation must actually return SST
+/// bytes, not just hide the keys behind the tombstone. Measured via the
+/// `rocksdb.total-sst-files-size` CF property (precise: no WAL / memtable
+/// noise), so this is deterministic rather than flaky-prone and does not need
+/// `#[ignore]`.
+#[test]
+fn clear_reclamation_shrinks_sst_bytes() {
+    let t = TempDir::new().unwrap();
+    let s = Arc::new(RocksStore::open(t.path(), 1, &RocksConfig::default()).unwrap());
+
+    // ~4 MB of pseudorandom (incompressible) values.
+    let mut state = 0x9E3779B97F4A7C15u64;
+    let mut value = vec![0u8; 4096];
+    for i in 0..1000u32 {
+        for b in value.iter_mut() {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            *b = state as u8;
+        }
+        s.put(0, format!("bulk{i:05}").as_bytes(), &value).unwrap();
+    }
+    s.flush().unwrap();
+    let before = sst_bytes(&s, 0);
+    assert!(
+        before > 1024 * 1024,
+        "setup: expected >1MB of SSTs before the clear, got {before}"
+    );
+
+    let upper = commit_clear(&s, 0).expect("non-empty CF stages a tombstone");
+    super::reclaim::run_reclamation(&s, CfTier::Main, 0, &upper);
+
+    let after = sst_bytes(&s, 0);
+    assert!(
+        after < before / 10,
+        "reclamation should drop SST bytes materially: before={before} after={after}"
+    );
+}
+
+/// Proposal 48 test 3 (concurrency): writes accepted immediately after the
+/// tombstone commit must survive the full asynchronous reclamation pass, and
+/// the pre-clear keys must stay gone. Exercises the real spawn path.
+#[test]
+fn clear_reclamation_preserves_post_clear_writes() {
+    let t = TempDir::new().unwrap();
+    {
+        let s = Arc::new(RocksStore::open(t.path(), 1, &RocksConfig::default()).unwrap());
+        for i in 0..200u32 {
+            s.put(0, format!("old{i:04}").as_bytes(), b"pre-clear")
+                .unwrap();
+        }
+        s.flush().unwrap();
+
+        let upper = commit_clear(&s, 0).expect("non-empty CF stages a tombstone");
+        // Writes racing the (not yet started) reclamation, exactly like the WAL
+        // flush thread committing post-clear entries while compaction runs.
+        for i in 0..50u32 {
+            s.put(0, format!("new{i:04}").as_bytes(), b"post-clear")
+                .unwrap();
+        }
+        s.spawn_clear_reclamation(CfTier::Main, 0, upper);
+        for i in 50..100u32 {
+            s.put(0, format!("new{i:04}").as_bytes(), b"post-clear")
+                .unwrap();
+        }
+        wait_reclaim_idle(&s);
+
+        assert_eq!(
+            s.get(0, b"old0000").unwrap(),
+            None,
+            "pre-clear key resurrected"
+        );
+        let live = s.iter_cf(0).unwrap().count();
+        assert_eq!(live, 100, "all post-clear writes must survive reclamation");
+    }
+    let s = RocksStore::open(t.path(), 1, &RocksConfig::default()).unwrap();
+    assert_eq!(s.iter_cf(0).unwrap().count(), 100);
+    assert_eq!(s.get(0, b"new0099").unwrap(), Some(b"post-clear".to_vec()));
+}
+
+/// Warm-tier FLUSHDB path: `clear_tier_shard` both clears the CF and triggers
+/// the same reclamation pass (observed via the started/completed counters).
+#[test]
+fn warm_clear_tier_shard_reclaims_and_counts() {
+    let t = TempDir::new().unwrap();
+    let s =
+        Arc::new(RocksStore::open_with_warm(t.path(), 1, &RocksConfig::default(), true).unwrap());
+    let recorder = Arc::new(CountingRecorder::default());
+    s.set_metrics_recorder(recorder.clone());
+
+    for i in 0..100u32 {
+        s.put_warm(0, format!("warm{i:03}").as_bytes(), b"cold-value")
+            .unwrap();
+    }
+    s.clear_tier_shard(CfTier::Warm, 0).unwrap();
+    wait_reclaim_idle(&s);
+
+    assert_eq!(s.iter_warm_cf(0).unwrap().count(), 0);
+    assert_eq!(
+        recorder.counter_value("frogdb_flush_compact_started_total"),
+        Some(1)
+    );
+    assert_eq!(
+        recorder.counter_value("frogdb_flush_compact_completed_total"),
+        Some(1)
+    );
+}
+
+/// With `flush-compact-range no`, the clear itself still works (tombstone
+/// semantics are untouched) but no reclamation pass starts — the counters
+/// stay unset and no pass is ever in flight.
+#[test]
+fn reclamation_disabled_by_config_knob() {
+    let t = TempDir::new().unwrap();
+    let config = RocksConfig {
+        flush_compact_range: false,
+        ..RocksConfig::default()
+    };
+    let s = Arc::new(RocksStore::open(t.path(), 1, &config).unwrap());
+    let recorder = Arc::new(CountingRecorder::default());
+    s.set_metrics_recorder(recorder.clone());
+
+    s.put(0, b"k", b"v").unwrap();
+    let upper = commit_clear(&s, 0).expect("non-empty CF stages a tombstone");
+    s.spawn_clear_reclamation(CfTier::Main, 0, upper);
+
+    assert_eq!(
+        s.reclaim_guard.in_flight_count(),
+        0,
+        "knob off must not start a pass"
+    );
+    assert_eq!(
+        recorder.counter_value("frogdb_flush_compact_started_total"),
+        None
+    );
+    assert_eq!(
+        s.iter_cf(0).unwrap().count(),
+        0,
+        "tombstone still clears the data"
+    );
+}
