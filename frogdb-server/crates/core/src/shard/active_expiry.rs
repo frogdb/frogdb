@@ -479,4 +479,195 @@ mod tests {
         store.add_expired_keys(3);
         assert_eq!(store.expired_keys(), 3);
     }
+
+    // ========================================================================
+    // TTL-avalanche scan boundedness (regression for ffdd156f)
+    //
+    // The fix replaced the "clone every due key up front, then delete under the
+    // budget" cycle with a bounded batched scan. A pure black-box assertion on
+    // `ExpiryResult` cannot see the difference (the per-key budget check bounds
+    // deletions either way), so we decorate the store to record the largest
+    // batch the coordinator ever pulls and assert it stays within the batch cap.
+    // Under the pre-fix clone-all behavior that recorded batch equals the whole
+    // due set, tripping the bound assertion.
+    // ========================================================================
+
+    use std::cell::Cell;
+    use std::sync::Arc;
+
+    /// A [`Store`] decorator over [`HashMapStore`] that records the largest
+    /// batch handed back by the `*_limited` scans and can inject a per-delete
+    /// delay so mid-cycle budget exhaustion is deterministic. It exists purely
+    /// to pin the avalanche fix.
+    struct BatchSpyStore {
+        inner: HashMapStore,
+        max_key_batch: Cell<usize>,
+        max_field_batch: Cell<usize>,
+        delete_delay: Duration,
+    }
+
+    impl BatchSpyStore {
+        fn new() -> Self {
+            Self {
+                inner: HashMapStore::new(),
+                max_key_batch: Cell::new(0),
+                max_field_batch: Cell::new(0),
+                delete_delay: Duration::ZERO,
+            }
+        }
+
+        /// Seed one already-due key.
+        fn add_expired_key(&mut self, key: &str) {
+            let past = Instant::now() - Duration::from_secs(60);
+            self.inner
+                .set(Bytes::from(key.to_string()), Value::string("v"));
+            assert!(self.inner.set_expiry(key.as_bytes(), past));
+        }
+    }
+
+    impl Store for BatchSpyStore {
+        fn get(&mut self, key: &[u8]) -> Option<Arc<Value>> {
+            self.inner.get(key)
+        }
+        fn set(&mut self, key: Bytes, value: Value) -> Option<Value> {
+            self.inner.set(key, value)
+        }
+        fn delete(&mut self, key: &[u8]) -> bool {
+            if !self.delete_delay.is_zero() {
+                std::thread::sleep(self.delete_delay);
+            }
+            self.inner.delete(key)
+        }
+        fn contains(&self, key: &[u8]) -> bool {
+            self.inner.contains(key)
+        }
+        fn key_type(&self, key: &[u8]) -> crate::types::KeyType {
+            self.inner.key_type(key)
+        }
+        fn len(&self) -> usize {
+            self.inner.len()
+        }
+        fn memory_used(&self) -> usize {
+            self.inner.memory_used()
+        }
+        fn clear(&mut self) {
+            self.inner.clear()
+        }
+        fn all_keys(&self) -> Vec<Bytes> {
+            self.inner.all_keys()
+        }
+        fn get_mut(&mut self, key: &[u8]) -> Option<&mut Value> {
+            self.inner.get_mut(key)
+        }
+        fn scan(&self, cursor: u64, count: usize, pattern: Option<&[u8]>) -> (u64, Vec<Bytes>) {
+            self.inner.scan(cursor, count, pattern)
+        }
+        fn set_expiry(&mut self, key: &[u8], expires_at: Instant) -> bool {
+            self.inner.set_expiry(key, expires_at)
+        }
+        fn get_expiry(&self, key: &[u8]) -> Option<Instant> {
+            self.inner.get_expiry(key)
+        }
+        fn set_field_expiry(&mut self, key: &[u8], field: &[u8], expires_at: Instant) {
+            self.inner.set_field_expiry(key, field, expires_at)
+        }
+        fn purge_expired_hash_fields(&mut self, key: &[u8]) -> usize {
+            self.inner.purge_expired_hash_fields(key)
+        }
+        fn get_expired_keys(&self, now: Instant) -> Vec<Bytes> {
+            self.inner.get_expired_keys(now)
+        }
+        fn get_expired_fields(&self, now: Instant) -> Vec<(Bytes, Bytes)> {
+            self.inner.get_expired_fields(now)
+        }
+        fn get_expired_keys_limited(&self, now: Instant, limit: usize) -> Vec<Bytes> {
+            let batch = self.inner.get_expired_keys_limited(now, limit);
+            self.max_key_batch
+                .set(self.max_key_batch.get().max(batch.len()));
+            batch
+        }
+        fn get_expired_fields_limited(&self, now: Instant, limit: usize) -> Vec<(Bytes, Bytes)> {
+            let batch = self.inner.get_expired_fields_limited(now, limit);
+            self.max_field_batch
+                .set(self.max_field_batch.get().max(batch.len()));
+            batch
+        }
+    }
+
+    #[test]
+    fn avalanche_scan_stays_bounded_within_a_cycle() {
+        // Far more due keys than the batch cap, generous budget: the cycle
+        // drains them all, but must do so in bounded batches. Under the pre-fix
+        // clone-everything scan the coordinator would pull all 5_000 at once.
+        let mut store = BatchSpyStore::new();
+        for i in 0..5_000 {
+            store.add_expired_key(&format!("k{i}"));
+        }
+
+        let mut coord = ActiveExpiryCoordinator::with_config(Duration::from_secs(30), 128);
+        let result = coord.run_cycle(&mut store, Instant::now());
+
+        assert_eq!(
+            result.deleted_keys.len(),
+            5_000,
+            "generous budget drains all"
+        );
+        assert!(!result.budget_exhausted);
+        assert_eq!(store.len(), 0);
+        assert!(
+            store.max_key_batch.get() <= 128,
+            "scan handed back {} keys at once, exceeding the 128 batch cap",
+            store.max_key_batch.get()
+        );
+    }
+
+    #[test]
+    fn avalanche_exhausts_budget_and_next_cycle_resumes() {
+        let total = 2_000usize;
+        let mut store = BatchSpyStore::new();
+        for i in 0..total {
+            store.add_expired_key(&format!("k{i}"));
+        }
+
+        // Per-delete delay + tight budget makes mid-cycle exhaustion
+        // deterministic: draining 2_000 keys at 2ms each would take ~4s, far
+        // past the 15ms budget, so the first cycle must stop well short.
+        store.delete_delay = Duration::from_millis(2);
+        let mut coord = ActiveExpiryCoordinator::with_config(Duration::from_millis(15), 128);
+        let first = coord.run_cycle(&mut store, Instant::now());
+
+        assert!(
+            first.budget_exhausted,
+            "tight budget must stop the cycle early"
+        );
+        assert!(
+            first.deleted_keys.len() < total,
+            "a single cycle must not drain the whole avalanche (deleted {})",
+            first.deleted_keys.len()
+        );
+        assert!(
+            !first.deleted_keys.is_empty(),
+            "the cycle should still make forward progress"
+        );
+        assert!(
+            store.max_key_batch.get() <= 128,
+            "scan handed back {} keys at once, exceeding the 128 batch cap",
+            store.max_key_batch.get()
+        );
+        let remaining = total - first.deleted_keys.len();
+        assert_eq!(store.len(), remaining);
+
+        // A subsequent cycle (no delay, generous budget) continues the drain.
+        store.delete_delay = Duration::ZERO;
+        let mut coord2 = ActiveExpiryCoordinator::with_config(Duration::from_secs(30), 128);
+        let second = coord2.run_cycle(&mut store, Instant::now());
+
+        assert_eq!(
+            second.deleted_keys.len(),
+            remaining,
+            "the second cycle finishes the drain"
+        );
+        assert!(!second.budget_exhausted);
+        assert_eq!(store.len(), 0);
+    }
 }
