@@ -152,3 +152,163 @@ impl ConnectionHandler {
         Response::Array(help)
     }
 }
+
+// Proves SCRIPT LOAD and PUBSUB introspection actually route through the timed
+// broadcast seam (`ScatterGather`). The seam has its own timeout unit test, but
+// nothing pinned that the *handlers* use it: reverting the handlers to a bare
+// per-shard await (or an await-only-shard-0) still passed every other test.
+// Here a real handler is wired to two mock shards where shard 1 stalls forever;
+// SCRIPT LOAD and PUBSUB CHANNELS must surface `ERR timeout` rather than hang or
+// silently ignore the stalled shard.
+#[cfg(all(test, not(feature = "turmoil")))]
+mod broadcast_timeout_routing_tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use bytes::Bytes;
+    use frogdb_core::{
+        IntrospectionRequest, IntrospectionResponse, ShardMessage, ShardReceiver, ShardSender,
+    };
+    use frogdb_protocol::Response;
+    use tokio::sync::mpsc;
+
+    use crate::connection::ConnectionHandler;
+    use crate::connection::deps::*;
+    use crate::connection::pubsub_conn_command::PUBSUB_CONN_COMMAND;
+
+    /// A stalled shard's parked receiver plus shard 0's responder task. Both must
+    /// stay alive for the duration of the test: dropping the receiver would close
+    /// the channel (turning the stall into an "unavailable" error), and dropping
+    /// the task would stop shard 0 from answering.
+    struct MockShards {
+        _stalled: ShardReceiver,
+        _responder: tokio::task::JoinHandle<()>,
+    }
+
+    /// Build a `ConnectionHandler` over two mock shards: shard 0 answers the
+    /// scripting/introspection broadcasts, shard 1 receives its request but never
+    /// replies (a stall). The gather must hit `timeout` and error.
+    async fn handler_with_stalled_shard(timeout: Duration) -> (ConnectionHandler, MockShards) {
+        // Loopback TCP pair for the handler's framed socket (never exercised).
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let connect_fut = tokio::net::TcpStream::connect(addr);
+        let (stream, _) = tokio::join!(async { listener.accept().await.unwrap() }, connect_fut);
+        let tcp_stream: crate::net::ConnectionStream =
+            crate::tls::MaybeTlsStream::Plain { inner: stream.0 };
+
+        let (tx0, rx0) = mpsc::channel(16);
+        let (tx1, rx1) = mpsc::channel(16);
+        let shard_senders = Arc::new(vec![ShardSender::new(tx0), ShardSender::new(tx1)]);
+
+        // Healthy shard 0: answer the two broadcast message kinds these handlers
+        // emit. A real cluster would reply on every shard; here shard 1 does not,
+        // exercising the stall path.
+        let mut rx0 = ShardReceiver::new(rx0);
+        let responder = tokio::spawn(async move {
+            while let Some(env) = rx0.recv().await {
+                match env.message {
+                    ShardMessage::ScriptLoad { response_tx, .. } => {
+                        let _ = response_tx.send("deadbeef".to_string());
+                    }
+                    ShardMessage::PubSubIntrospection {
+                        request,
+                        response_tx,
+                    } => {
+                        let reply = match request {
+                            IntrospectionRequest::NumPat => IntrospectionResponse::NumPat(0),
+                            IntrospectionRequest::NumSub { channels }
+                            | IntrospectionRequest::ShardNumSub { channels } => {
+                                IntrospectionResponse::NumSub(
+                                    channels.into_iter().map(|c| (c, 0)).collect(),
+                                )
+                            }
+                            _ => IntrospectionResponse::Channels(vec![]),
+                        };
+                        let _ = response_tx.send(reply);
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        // Shard 1: keep the receiver alive but never poll it, so the request sits
+        // buffered and its oneshot never resolves.
+        let stalled = ShardReceiver::new(rx1);
+
+        let mut registry = frogdb_core::CommandRegistry::new();
+        crate::register_commands(&mut registry);
+        let core = CoreDeps {
+            registry: Arc::new(registry),
+            shard_senders,
+            acl_manager: frogdb_core::AclManager::new(Default::default()),
+        };
+        let client_registry = Arc::new(frogdb_core::ClientRegistry::new());
+        let admin = AdminDeps {
+            client_registry: client_registry.clone(),
+            config_manager: Arc::new(crate::runtime_config::ConfigManager::new(
+                &crate::config::Config::default(),
+            )),
+            snapshot_coordinator: Arc::new(frogdb_core::NoopSnapshotCoordinator::new()),
+            function_registry: frogdb_core::SharedFunctionRegistry::default(),
+            cursor_store: Arc::new(crate::cursor_store::AggregateCursorStore::new()),
+        };
+        let mut config = ConnectionConfig::default_for_testing(2);
+        config.scatter_gather_timeout = timeout;
+        let client_handle = client_registry.register(1, "127.0.0.1:9999".parse().unwrap(), None);
+
+        let handler = ConnectionHandler::from_deps(
+            tcp_stream,
+            "127.0.0.1:9999".parse().unwrap(),
+            1,
+            0,
+            client_handle,
+            core,
+            admin,
+            ClusterDeps::default(),
+            config,
+            ObservabilityDeps::default(),
+        );
+
+        (
+            handler,
+            MockShards {
+                _stalled: stalled,
+                _responder: responder,
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn script_load_errors_when_a_shard_stalls() {
+        let (handler, _shards) = handler_with_stalled_shard(Duration::from_millis(150)).await;
+
+        let resp = handler
+            .handle_script(&[Bytes::from_static(b"LOAD"), Bytes::from_static(b"return 1")])
+            .await;
+
+        assert!(
+            matches!(resp, Response::Error(ref e) if e.as_ref() == b"ERR timeout"),
+            "SCRIPT LOAD must route through the timed broadcast seam and error on a \
+             stalled shard rather than hang or return a SHA while a shard never cached \
+             the script; got {resp:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pubsub_channels_errors_when_a_shard_stalls() {
+        let (mut handler, _shards) = handler_with_stalled_shard(Duration::from_millis(150)).await;
+
+        let responses = handler
+            .execute_pubsub(&PUBSUB_CONN_COMMAND, &[Bytes::from_static(b"CHANNELS")])
+            .await;
+
+        assert_eq!(responses.len(), 1, "PUBSUB CHANNELS returns one frame");
+        assert!(
+            matches!(responses[0], Response::Error(ref e) if e.as_ref() == b"ERR timeout"),
+            "PUBSUB CHANNELS must route through the timed broadcast seam and error on a \
+             stalled shard rather than hang; got {:?}",
+            responses[0]
+        );
+    }
+}
