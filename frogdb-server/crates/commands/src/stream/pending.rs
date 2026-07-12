@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, ArgParser, Arity, ClaimOpts, Command, CommandContext, CommandError, CommandFlags,
-    CommandSpec, EventSpec, ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt,
-    StreamEntry, StreamId, WaiterWake, WalStrategy,
+    AccessSpec, ArgParser, Arity, ClaimClock, ClaimOpts, Command, CommandContext, CommandError,
+    CommandFlags, CommandSpec, EventSpec, ExecutionStrategy, KeySpec, LookupSpec,
+    StoreTypedFamilyExt, StreamEntry, StreamId, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -228,8 +228,12 @@ impl Command for XclaimCommand {
                 retrycount,
                 justid,
             };
+            // Sample the clock once so every claimed id shares one consistent
+            // now; this is the seam that makes TIME/IDLE observable (see
+            // ClaimClock). TIME's absolute unix-ms is mapped onto delivery_time.
+            let clock = ClaimClock::sample();
             for id in &ids_to_claim {
-                group.claim_pending(*id, &consumer_name, opts);
+                group.claim_pending(*id, &consumer_name, opts, clock);
             }
         }
 
@@ -366,9 +370,10 @@ impl Command for XautoclaimCommand {
             // deleted ids dropped the entry without decrementing its owner, so
             // the new consumer over-counted by the number of deleted entries.
             let opts = ClaimOpts::touch_now(justid);
+            let clock = ClaimClock::sample();
             for id in &to_claim {
                 if existing_ids.contains(id) {
-                    group.claim_pending(*id, &consumer_name, opts);
+                    group.claim_pending(*id, &consumer_name, opts, clock);
                 } else {
                     group.drop_missing_pending(id);
                 }
