@@ -3,6 +3,7 @@ mod checkpoint;
 pub mod columns;
 pub mod config;
 mod manifest;
+mod reclaim;
 pub mod staged;
 #[cfg(test)]
 mod tests;
@@ -27,6 +28,19 @@ pub struct RocksStore {
     pub(crate) warm_enabled: bool,
     pub(crate) warm_cf_names: Vec<String>,
     pub(crate) search_meta_cf_names: Vec<String>,
+    /// Whether a FLUSHDB/FLUSHALL range tombstone is followed by an eager
+    /// DeleteFilesInRange + CompactRange to reclaim disk (proposal 48). Baked
+    /// from [`RocksConfig::flush_compact_range`] at open time.
+    pub(crate) flush_compact_range: bool,
+    /// Coalescing guard: at most one post-clear reclamation pass runs per
+    /// `(tier, shard)` at a time. Shared across the flush thread (primary CF)
+    /// and any other trigger site via the `Arc<RocksStore>`.
+    pub(crate) reclaim_guard: reclaim::ReclaimGuard,
+    /// Metrics recorder for store-initiated background work (post-clear
+    /// reclamation counters). Starts as a no-op recorder; server startup
+    /// installs the real one via [`RocksStore::set_metrics_recorder`] before
+    /// any client command can run.
+    metrics: std::sync::Mutex<Arc<dyn frogdb_types::traits::MetricsRecorder>>,
 }
 
 impl RocksStore {
@@ -174,6 +188,9 @@ impl RocksStore {
             warm_enabled,
             warm_cf_names: manifest.warm_names().to_vec(),
             search_meta_cf_names: manifest.search_meta_names().to_vec(),
+            flush_compact_range: config.flush_compact_range,
+            reclaim_guard: reclaim::ReclaimGuard::new(),
+            metrics: std::sync::Mutex::new(Arc::new(frogdb_types::traits::NoopMetricsRecorder)),
         })
     }
     /// Main-tier resolver shim; see [`RocksStore::tier_cf_handle`] for the
@@ -300,16 +317,22 @@ impl RocksStore {
     /// nothing. Callers that need the tombstone to cover in-flight writes must
     /// ensure those writes are committed first (see
     /// [`super::wal::flush::FlushEngine::apply_clear`]).
+    ///
+    /// Returns the staged tombstone's exclusive upper bound, or `None` when the
+    /// CF was empty (nothing staged). The caller uses the bound to trigger
+    /// post-commit space reclamation ([`RocksStore::spawn_clear_reclamation`])
+    /// once — and only if — the batch containing the tombstone commits.
     pub fn batch_clear_shard(
         &self,
         batch: &mut WriteBatch,
         shard_id: usize,
-    ) -> Result<(), RocksError> {
+    ) -> Result<Option<Vec<u8>>, RocksError> {
         let cf = self.cf_handle(shard_id)?;
-        if let Some(upper) = self.range_delete_upper_bound(&cf) {
+        let upper = self.range_delete_upper_bound(&cf);
+        if let Some(upper) = &upper {
             batch.delete_range_cf(&cf, [].as_slice(), upper.as_slice());
         }
-        Ok(())
+        Ok(upper)
     }
 
     /// Compute the exclusive upper bound for a full-CF range delete: the largest
@@ -330,7 +353,16 @@ impl RocksStore {
     /// tombstone, committed directly (not batched). Used to clear the warm CF on
     /// FLUSHDB, where the shard thread is the sole writer, so no flush-pipeline
     /// ordering is required. A no-op when the CF is empty.
-    pub fn clear_tier_shard(&self, tier: CfTier, shard_id: usize) -> Result<(), RocksError> {
+    ///
+    /// Once the tombstone commits, an asynchronous space-reclamation pass
+    /// (DeleteFilesInRange + forced-bottommost CompactRange, proposal 48) is
+    /// spawned so the cleared SST bytes are returned eagerly rather than
+    /// whenever compaction happens to cover the range.
+    pub fn clear_tier_shard(
+        self: &Arc<Self>,
+        tier: CfTier,
+        shard_id: usize,
+    ) -> Result<(), RocksError> {
         let cf = self.tier_cf_handle(tier, shard_id)?;
         if let Some(upper) = self.range_delete_upper_bound(&cf) {
             let mut batch = WriteBatch::default();
@@ -339,8 +371,36 @@ impl RocksStore {
                 error!(shard_id, tier = ?tier, error = %e, "RocksDB range clear failed");
                 RocksError::from(e)
             })?;
+            drop(cf);
+            self.spawn_clear_reclamation(tier, shard_id, upper);
         }
         Ok(())
+    }
+
+    /// Trigger an asynchronous post-clear space-reclamation pass over one
+    /// column family (see [`reclaim`]). `upper_bound` is the committed range
+    /// tombstone's exclusive upper bound as returned by
+    /// [`RocksStore::batch_clear_shard`]. Coalesced: a second call for the same
+    /// `(tier, shard)` while a pass is in flight is dropped, not queued.
+    pub fn spawn_clear_reclamation(
+        self: &Arc<Self>,
+        tier: CfTier,
+        shard_id: usize,
+        upper_bound: Vec<u8>,
+    ) {
+        reclaim::spawn_clear_reclamation(Arc::clone(self), tier, shard_id, upper_bound);
+    }
+
+    /// Install the metrics recorder used by store-initiated background work
+    /// (post-clear reclamation counters). Called once during server startup.
+    pub fn set_metrics_recorder(&self, recorder: Arc<dyn frogdb_types::traits::MetricsRecorder>) {
+        *self.metrics.lock().unwrap() = recorder;
+    }
+
+    /// Current metrics recorder (no-op until
+    /// [`set_metrics_recorder`](Self::set_metrics_recorder) installs the real one).
+    pub(crate) fn metrics_recorder(&self) -> Arc<dyn frogdb_types::traits::MetricsRecorder> {
+        Arc::clone(&self.metrics.lock().unwrap())
     }
     pub fn iter_cf(&self, shard_id: usize) -> Result<RocksIterator<'_>, RocksError> {
         self.iter_tier(CfTier::Main, shard_id)

@@ -121,6 +121,13 @@ pub(super) struct RocksSink {
     rocks: Arc<RocksStore>,
     shard_id: usize,
     batch: WriteBatch,
+    /// Upper bound of a staged full-shard range tombstone awaiting commit.
+    /// Set by [`WriteSink::stage_clear`] when a tombstone was actually staged
+    /// (non-empty CF); consumed by the next commit. On commit success it seeds
+    /// the asynchronous post-clear space reclamation (proposal 48); on failure
+    /// it is dropped — the tombstone never landed, so there is nothing to
+    /// reclaim.
+    pending_clear_upper: Option<Vec<u8>>,
 }
 
 impl RocksSink {
@@ -129,6 +136,7 @@ impl RocksSink {
             rocks,
             shard_id,
             batch: WriteBatch::default(),
+            pending_clear_upper: None,
         }
     }
 }
@@ -153,18 +161,35 @@ impl WriteSink for RocksSink {
     }
 
     fn stage_clear(&mut self) -> std::io::Result<()> {
-        self.rocks
+        let upper = self
+            .rocks
             .batch_clear_shard(&mut self.batch, self.shard_id)
-            .map_err(std::io::Error::other)
+            .map_err(std::io::Error::other)?;
+        self.pending_clear_upper = upper;
+        Ok(())
     }
 
     fn commit(&mut self, sync: bool) -> std::io::Result<()> {
         let batch = std::mem::take(&mut self.batch);
         let mut write_opts = WriteOptions::default();
         write_opts.set_sync(sync);
-        self.rocks
+        let pending_clear = self.pending_clear_upper.take();
+        let result = self
+            .rocks
             .write_batch_opt(batch, &write_opts)
-            .map_err(std::io::Error::other)
+            .map_err(std::io::Error::other);
+        // The tombstone batch just committed (the correctness point stays with
+        // the commit above — reclamation is purely a disk-space follow-up).
+        // Trigger the asynchronous DeleteFilesInRange + CompactRange pass; it
+        // runs on its own thread, never on this flush thread, and repeated
+        // clears coalesce inside `spawn_clear_reclamation`.
+        if result.is_ok()
+            && let Some(upper) = pending_clear
+        {
+            self.rocks
+                .spawn_clear_reclamation(crate::rocks::CfTier::Main, self.shard_id, upper);
+        }
+        result
     }
 
     fn staged_len(&self) -> usize {

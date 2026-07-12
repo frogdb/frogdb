@@ -49,6 +49,13 @@ pub struct PersistenceConfig {
     #[serde(default = "default_compaction_rate_limit_mb")]
     pub compaction_rate_limit_mb: u64,
 
+    /// Reclaim disk eagerly after FLUSHDB/FLUSHALL: follow the range tombstone
+    /// with an asynchronous DeleteFilesInRange + CompactRange over the cleared
+    /// column families. Without it, flushed SST bytes are only reclaimed when
+    /// a compaction happens to cover the range.
+    #[serde(default = "default_flush_compact_range")]
+    pub flush_compact_range: bool,
+
     /// Batch size threshold in KB before flushing.
     #[serde(default = "default_batch_size_threshold_kb")]
     pub batch_size_threshold_kb: usize,
@@ -124,6 +131,10 @@ fn default_compaction_rate_limit_mb() -> u64 {
     0 // unlimited
 }
 
+fn default_flush_compact_range() -> bool {
+    true
+}
+
 fn default_batch_size_threshold_kb() -> usize {
     DEFAULT_BATCH_SIZE_THRESHOLD_KB
 }
@@ -149,6 +160,7 @@ impl Default for PersistenceConfig {
             bloom_filter_bits: default_bloom_filter_bits(),
             max_write_buffer_number: default_max_write_buffer_number(),
             compaction_rate_limit_mb: default_compaction_rate_limit_mb(),
+            flush_compact_range: default_flush_compact_range(),
             batch_size_threshold_kb: default_batch_size_threshold_kb(),
             batch_timeout_ms: default_batch_timeout_ms(),
             wal_failure_policy: default_wal_failure_policy(),

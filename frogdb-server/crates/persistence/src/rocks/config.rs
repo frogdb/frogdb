@@ -41,6 +41,12 @@ pub struct RocksConfig {
     pub target_file_size_base: u64,
     pub max_bytes_for_level_base: u64,
     pub compaction_rate_limit_mb: Option<u64>,
+    /// Follow a FLUSHDB/FLUSHALL range tombstone with an eager, asynchronous
+    /// DeleteFilesInRange + CompactRange over the cleared column family so SST
+    /// bytes are reclaimed immediately instead of waiting for a compaction to
+    /// happen to cover the range (proposal 48). Default on — this is what
+    /// Kvrocks does unconditionally after its FLUSHDB DeleteRange.
+    pub flush_compact_range: bool,
 }
 impl Default for RocksConfig {
     fn default() -> Self {
@@ -56,6 +62,7 @@ impl Default for RocksConfig {
             target_file_size_base: 128 * 1024 * 1024,
             max_bytes_for_level_base: 512 * 1024 * 1024,
             compaction_rate_limit_mb: None,
+            flush_compact_range: true,
         }
     }
 }

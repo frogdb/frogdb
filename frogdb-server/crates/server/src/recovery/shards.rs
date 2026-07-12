@@ -35,6 +35,7 @@ pub(super) fn open_rocks(inputs: &RecoveryInputs<'_>) -> Result<Arc<RocksStore>>
         } else {
             None
         },
+        flush_compact_range: config.flush_compact_range,
     };
 
     let rocks = Arc::new(RocksStore::open_with_warm(

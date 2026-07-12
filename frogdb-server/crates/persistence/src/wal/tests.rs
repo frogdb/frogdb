@@ -632,3 +632,56 @@ async fn test_wal_lag_stats() {
     assert!(s.last_flush_ok);
     assert_eq!(s.lost_ops, 0);
 }
+
+/// Proposal 48 end-to-end: a FLUSHDB clear through the real WAL pipeline
+/// (write_clear → flush barrier → tombstone commit) triggers the asynchronous
+/// post-clear reclamation, post-clear writes survive it, and nothing is
+/// resurrected across a restart.
+#[tokio::test]
+async fn test_wal_clear_reclamation_end_to_end() {
+    let tmp = TempDir::new().unwrap();
+    let md = KeyMetadata::new(10);
+    {
+        let rocks = Arc::new(
+            crate::rocks::RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap(),
+        );
+        let m = Arc::new(NoopMetricsRecorder::new());
+        let wal = RocksWalWriter::new(rocks.clone(), 0, WalConfig::default(), m);
+
+        let v = Value::string("pre-clear");
+        for i in 0..100u32 {
+            wal.write_set(format!("old{i:03}").as_bytes(), &v, &md)
+                .await
+                .unwrap();
+        }
+        wal.flush_async().await.unwrap();
+        // Push the pre-clear data into SSTs so reclamation has files to drop.
+        rocks.flush().unwrap();
+
+        wal.write_clear().await.unwrap();
+        // Writes accepted immediately after the clear (higher seq) must land
+        // after the tombstone and survive the compaction that follows.
+        let nv = Value::string("post-clear");
+        for i in 0..10u32 {
+            wal.write_set(format!("new{i:03}").as_bytes(), &nv, &md)
+                .await
+                .unwrap();
+        }
+        wal.flush_async().await.unwrap();
+
+        // The tombstone commit spawned the reclamation thread; wait it out.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while rocks.reclaim_guard.in_flight_count() > 0 {
+            assert!(Instant::now() < deadline, "reclamation did not finish");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        assert!(rocks.get(0, b"old000").unwrap().is_none());
+        assert!(rocks.get(0, b"new009").unwrap().is_some());
+        assert_eq!(rocks.iter_cf(0).unwrap().count(), 10);
+    }
+    // Restart: compaction must not have resurrected cleared keys.
+    let rocks = crate::rocks::RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
+    assert_eq!(rocks.iter_cf(0).unwrap().count(), 10);
+    assert!(rocks.get(0, b"old000").unwrap().is_none());
+}
