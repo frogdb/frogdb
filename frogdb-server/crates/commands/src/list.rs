@@ -774,9 +774,10 @@ impl Command for RpoplpushCommand {
             wakes: // Pushes onto the destination list, so a client blocked in
         // BLPOP/BRPOP/BLMOVE on the destination key must be woken.
         WaiterWake::Kind(WaiterKind::List),
-            // Runtime-deposited: `rpoplpush` on both keys only when an element
-            // actually moved. Redis-parity per-key names (rpop on the source,
-            // lpush on the destination) come in proposal 44 phase 3.
+            // Runtime-deposited (proposal 44): RPOPLPUSH is LMOVE RIGHT LEFT, so
+            // Redis emits `rpop` on the source and `lpush` on the destination
+            // (t_list.c listElementsRemoved + lmoveHandlePush) — not a bespoke
+            // `rpoplpush` event. Fires only when an element actually moved.
             event: EventSpec::Dynamic,
             requires_same_slot: false,
             lookup: LookupSpec::None,
@@ -817,10 +818,11 @@ impl Command for RpoplpushCommand {
         let dest_list = ctx.store.get_or_create_list(dest)?;
         dest_list.push_front(element.clone());
 
-        // An element moved: both keys were written. The empty/missing-source
-        // replies (null) above deposit nothing.
-        ctx.notify_event(source.clone(), "rpoplpush", KeyspaceEventFlags::LIST);
-        ctx.notify_event(dest.clone(), "rpoplpush", KeyspaceEventFlags::LIST);
+        // An element moved: `rpop` on the source (popped from the tail),
+        // `lpush` on the destination (pushed to the head). The empty/missing-
+        // source replies (null) above deposit nothing.
+        ctx.notify_event(source.clone(), "rpop", KeyspaceEventFlags::LIST);
+        ctx.notify_event(dest.clone(), "lpush", KeyspaceEventFlags::LIST);
 
         Ok(Response::bulk(element))
     }
@@ -844,9 +846,10 @@ impl Command for LmoveCommand {
             wakes: // Pushes onto the destination list, so a client blocked in
         // BLPOP/BRPOP/BLMOVE on the destination key must be woken.
         WaiterWake::Kind(WaiterKind::List),
-            // Runtime-deposited: `lmove` on both keys only when an element
-            // actually moved. Redis-parity direction-dependent names (lpop/rpop
-            // + lpush/rpush) come in proposal 44 phase 3.
+            // Runtime-deposited (proposal 44): direction-resolved Redis names —
+            // `lpop`/`rpop` on the source per wherefrom and `lpush`/`rpush` on
+            // the destination per whereto (t_list.c listElementsRemoved +
+            // lmoveHandlePush). Fires only when an element actually moved.
             event: EventSpec::Dynamic,
             requires_same_slot: false,
             lookup: LookupSpec::None,
@@ -911,10 +914,13 @@ impl Command for LmoveCommand {
             dest_list.push_back(element.clone());
         }
 
-        // An element moved: both keys were written. The empty/missing-source
-        // replies (null) above deposit nothing.
-        ctx.notify_event(source.clone(), "lmove", KeyspaceEventFlags::LIST);
-        ctx.notify_event(dest.clone(), "lmove", KeyspaceEventFlags::LIST);
+        // An element moved: pop event on the source per wherefrom, push event on
+        // the destination per whereto. The empty/missing-source replies (null)
+        // above deposit nothing.
+        let pop_event = if pop_left { "lpop" } else { "rpop" };
+        let push_event = if push_left { "lpush" } else { "rpush" };
+        ctx.notify_event(source.clone(), pop_event, KeyspaceEventFlags::LIST);
+        ctx.notify_event(dest.clone(), push_event, KeyspaceEventFlags::LIST);
 
         Ok(Response::bulk(element))
     }

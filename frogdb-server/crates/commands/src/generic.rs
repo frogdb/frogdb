@@ -64,10 +64,9 @@ impl Command for RenameCommand {
             access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::OW]),
             wal: WalStrategy::RenameKeys,
             wakes: WaiterWake::All,
-            // Runtime-deposited: `rename_from` on the source and destination
-            // actually written (a RENAMENX that changes nothing emits nothing).
-            // Redis-parity per-key names (rename_from/rename_to) come in
-            // proposal 44 phase 3.
+            // Runtime-deposited (proposal 44): Redis-verified per-key names —
+            // `rename_from` on the source, `rename_to` on the destination
+            // (db.c renameGenericCommand:62-63). A no-op RENAMENX emits nothing.
             event: EventSpec::Dynamic,
             requires_same_slot: false,
             lookup: LookupSpec::None,
@@ -110,9 +109,10 @@ impl Command for RenameCommand {
             ctx.store.set_expiry(new_key, expires_at);
         }
 
-        // Both keys were written: the source was deleted, the destination set.
+        // Both keys were written: `rename_from` on the deleted source,
+        // `rename_to` on the set destination (db.c renameGenericCommand:62-63).
         ctx.notify_event(old_key.clone(), "rename_from", KeyspaceEventFlags::GENERIC);
-        ctx.notify_event(new_key.clone(), "rename_from", KeyspaceEventFlags::GENERIC);
+        ctx.notify_event(new_key.clone(), "rename_to", KeyspaceEventFlags::GENERIC);
 
         Ok(Response::ok())
     }
@@ -134,10 +134,9 @@ impl Command for RenamenxCommand {
             access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::OW]),
             wal: WalStrategy::RenameKeys,
             wakes: WaiterWake::All,
-            // Runtime-deposited: `rename_from` on the source and destination
-            // actually written (a RENAMENX that changes nothing emits nothing).
-            // Redis-parity per-key names (rename_from/rename_to) come in
-            // proposal 44 phase 3.
+            // Runtime-deposited (proposal 44): Redis-verified per-key names —
+            // `rename_from` on the source, `rename_to` on the destination
+            // (db.c renameGenericCommand:62-63). A no-op RENAMENX emits nothing.
             event: EventSpec::Dynamic,
             requires_same_slot: false,
             lookup: LookupSpec::None,
@@ -186,8 +185,9 @@ impl Command for RenamenxCommand {
         }
 
         // Both keys were written; the no-op reply (0) above deposits nothing.
+        // `rename_from` on the source, `rename_to` on the destination.
         ctx.notify_event(old_key.clone(), "rename_from", KeyspaceEventFlags::GENERIC);
-        ctx.notify_event(new_key.clone(), "rename_from", KeyspaceEventFlags::GENERIC);
+        ctx.notify_event(new_key.clone(), "rename_to", KeyspaceEventFlags::GENERIC);
 
         Ok(Response::Integer(1))
     }

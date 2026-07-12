@@ -917,9 +917,10 @@ impl Command for SmoveCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
-            // Runtime-deposited: `smove` on both keys only when the member
-            // actually moved (moving a non-member emits nothing). Redis-parity
-            // per-key names (smove_from/smove_to) come in proposal 44 phase 3.
+            // Runtime-deposited (proposal 44): SMOVE is SREM+SADD internally, so
+            // Redis emits `srem` on the source and `sadd` on the destination
+            // (t_set.c smoveCommand:36,66) — not a bespoke `smove` event. Fires
+            // only when the member actually moved; a non-member no-op is silent.
             event: EventSpec::Dynamic,
             requires_same_slot: false,
             lookup: LookupSpec::None,
@@ -956,14 +957,17 @@ impl Command for SmoveCommand {
             ctx.store.delete(source);
         }
 
-        // Add to dest (create if needed)
-        let dest_set = ctx.store.get_or_create_set(dest)?;
-        dest_set.add(member.clone(), ListpackThresholds::DEFAULT_SET);
+        // Remove from source succeeded: `srem` on the source (t_set.c:36).
+        ctx.notify_event(source.clone(), "srem", KeyspaceEventFlags::SET);
 
-        // The member moved: both keys were written. The no-op replies (0)
-        // above deposit nothing.
-        ctx.notify_event(source.clone(), "smove", KeyspaceEventFlags::SET);
-        ctx.notify_event(dest.clone(), "smove", KeyspaceEventFlags::SET);
+        // Add to dest (create if needed). Redis only emits `sadd` when the
+        // element was newly added (setTypeAdd truthy, t_set.c:66); if the member
+        // was already present in the destination, the add is a no-op and no
+        // `sadd` fires — but `srem` on the source still did.
+        let dest_set = ctx.store.get_or_create_set(dest)?;
+        if dest_set.add(member.clone(), ListpackThresholds::DEFAULT_SET) {
+            ctx.notify_event(dest.clone(), "sadd", KeyspaceEventFlags::SET);
+        }
 
         Ok(Response::Integer(1))
     }

@@ -1985,13 +1985,15 @@ async fn test_copy_notifies_destination_only() {
     server.shutdown().await;
 }
 
-/// RENAME deposits its events at runtime (EventSpec::Dynamic): both the source
-/// and destination are written, so both notify — proving deposited events flow
-/// from the handler through the write-effect pipeline to subscribers.
+/// RENAME deposits its events at runtime (EventSpec::Dynamic): Redis-verified
+/// per-key names — `rename_from` on the source, `rename_to` on the destination
+/// (db.c renameGenericCommand:62-63). Proves deposited events flow from the
+/// handler through the write-effect pipeline to subscribers.
 #[tokio::test]
 async fn test_rename_notifies_source_then_destination() {
     let server = TestServer::start_standalone().await;
-    let mut subscriber = server.connect().await;
+    let mut from_sub = server.connect().await;
+    let mut to_sub = server.connect().await;
     let mut client = server.connect().await;
 
     let resp = client
@@ -2001,12 +2003,39 @@ async fn test_rename_notifies_source_then_destination() {
 
     client.command(&["SET", "{rn}src", "v"]).await;
 
-    subscribe_keyevent(&mut subscriber, "rename_from").await;
+    subscribe_keyevent(&mut from_sub, "rename_from").await;
+    subscribe_keyevent(&mut to_sub, "rename_to").await;
 
     let resp = client.command(&["RENAME", "{rn}src", "{rn}dst"]).await;
     assert_eq!(resp, Response::ok());
 
-    assert_keyevent_keys(&mut subscriber, "rename_from", &["{rn}src", "{rn}dst"]).await;
+    assert_keyevent_keys(&mut from_sub, "rename_from", &["{rn}src"]).await;
+    assert_keyevent_keys(&mut to_sub, "rename_to", &["{rn}dst"]).await;
+    server.shutdown().await;
+}
+
+/// RENAME of a missing source returns an error and writes nothing, so it must
+/// emit no keyspace events (Dynamic with no deposit on the error path).
+#[tokio::test]
+async fn test_rename_missing_source_emits_nothing() {
+    let server = TestServer::start_standalone().await;
+    let mut from_sub = server.connect().await;
+    let mut to_sub = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut from_sub, "rename_from").await;
+    subscribe_keyevent(&mut to_sub, "rename_to").await;
+
+    let resp = client.command(&["RENAME", "{rnm}src", "{rnm}dst"]).await;
+    assert!(matches!(resp, Response::Error(_)));
+
+    assert_keyevent_keys(&mut from_sub, "rename_from", &[]).await;
+    assert_keyevent_keys(&mut to_sub, "rename_to", &[]).await;
     server.shutdown().await;
 }
 
@@ -2033,6 +2062,208 @@ async fn test_renamenx_noop_emits_nothing() {
     assert_eq!(resp, Response::Integer(0));
 
     assert_keyevent_keys(&mut subscriber, "rename_from", &[]).await;
+    server.shutdown().await;
+}
+
+/// SMOVE is SREM+SADD internally: Redis emits `srem` on the source and `sadd`
+/// on the destination (t_set.c smoveCommand:36,66) — not a bespoke `smove`
+/// event. Each fires only on its own key; no cross-key bleed.
+#[tokio::test]
+async fn test_smove_notifies_srem_source_sadd_dest() {
+    let server = TestServer::start_standalone().await;
+    let mut srem_sub = server.connect().await;
+    let mut sadd_sub = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["SADD", "{sm}src", "a", "b"]).await;
+    client.command(&["SADD", "{sm}dst", "z"]).await;
+
+    subscribe_keyevent(&mut srem_sub, "srem").await;
+    subscribe_keyevent(&mut sadd_sub, "sadd").await;
+
+    let resp = client.command(&["SMOVE", "{sm}src", "{sm}dst", "a"]).await;
+    assert_eq!(resp, Response::Integer(1));
+
+    assert_keyevent_keys(&mut srem_sub, "srem", &["{sm}src"]).await;
+    assert_keyevent_keys(&mut sadd_sub, "sadd", &["{sm}dst"]).await;
+    server.shutdown().await;
+}
+
+/// SMOVE of a non-member is a no-op (reply 0): nothing moved, so neither `srem`
+/// nor `sadd` fires (EventSpec::Dynamic with no deposit on the no-op path).
+#[tokio::test]
+async fn test_smove_nonmember_emits_nothing() {
+    let server = TestServer::start_standalone().await;
+    let mut srem_sub = server.connect().await;
+    let mut sadd_sub = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["SADD", "{smn}src", "a"]).await;
+    client.command(&["SADD", "{smn}dst", "z"]).await;
+
+    subscribe_keyevent(&mut srem_sub, "srem").await;
+    subscribe_keyevent(&mut sadd_sub, "sadd").await;
+
+    // "nope" is not a member of the source: no move, no events.
+    let resp = client
+        .command(&["SMOVE", "{smn}src", "{smn}dst", "nope"])
+        .await;
+    assert_eq!(resp, Response::Integer(0));
+
+    assert_keyevent_keys(&mut srem_sub, "srem", &[]).await;
+    assert_keyevent_keys(&mut sadd_sub, "sadd", &[]).await;
+    server.shutdown().await;
+}
+
+/// RPOPLPUSH = LMOVE RIGHT LEFT: Redis emits `rpop` on the source (popped from
+/// the tail) and `lpush` on the destination (pushed to the head) — t_list.c
+/// listElementsRemoved:2 + lmoveHandlePush:23. Not a bespoke `rpoplpush` event.
+#[tokio::test]
+async fn test_rpoplpush_notifies_rpop_source_lpush_dest() {
+    let server = TestServer::start_standalone().await;
+    let mut rpop_sub = server.connect().await;
+    let mut lpush_sub = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["RPUSH", "{rpl}src", "a", "b", "c"]).await;
+
+    subscribe_keyevent(&mut rpop_sub, "rpop").await;
+    subscribe_keyevent(&mut lpush_sub, "lpush").await;
+
+    let resp = client.command(&["RPOPLPUSH", "{rpl}src", "{rpl}dst"]).await;
+    assert_eq!(resp, Response::Bulk(Some(Bytes::from("c"))));
+
+    assert_keyevent_keys(&mut rpop_sub, "rpop", &["{rpl}src"]).await;
+    assert_keyevent_keys(&mut lpush_sub, "lpush", &["{rpl}dst"]).await;
+    server.shutdown().await;
+}
+
+/// LMOVE LEFT RIGHT: `lpop` on the source (popped from the head), `rpush` on the
+/// destination (pushed to the tail) — direction-resolved names per t_list.c.
+#[tokio::test]
+async fn test_lmove_left_right_notifies_lpop_rpush() {
+    let server = TestServer::start_standalone().await;
+    let mut lpop_sub = server.connect().await;
+    let mut rpush_sub = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["RPUSH", "{lmlr}src", "a", "b", "c"]).await;
+
+    subscribe_keyevent(&mut lpop_sub, "lpop").await;
+    subscribe_keyevent(&mut rpush_sub, "rpush").await;
+
+    let resp = client
+        .command(&["LMOVE", "{lmlr}src", "{lmlr}dst", "LEFT", "RIGHT"])
+        .await;
+    assert_eq!(resp, Response::Bulk(Some(Bytes::from("a"))));
+
+    assert_keyevent_keys(&mut lpop_sub, "lpop", &["{lmlr}src"]).await;
+    assert_keyevent_keys(&mut rpush_sub, "rpush", &["{lmlr}dst"]).await;
+    server.shutdown().await;
+}
+
+/// LMOVE RIGHT LEFT: `rpop` on the source, `lpush` on the destination — the
+/// mirror direction, proving the pop/push names track the wherefrom/whereto args.
+#[tokio::test]
+async fn test_lmove_right_left_notifies_rpop_lpush() {
+    let server = TestServer::start_standalone().await;
+    let mut rpop_sub = server.connect().await;
+    let mut lpush_sub = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["RPUSH", "{lmrl}src", "a", "b", "c"]).await;
+
+    subscribe_keyevent(&mut rpop_sub, "rpop").await;
+    subscribe_keyevent(&mut lpush_sub, "lpush").await;
+
+    let resp = client
+        .command(&["LMOVE", "{lmrl}src", "{lmrl}dst", "RIGHT", "LEFT"])
+        .await;
+    assert_eq!(resp, Response::Bulk(Some(Bytes::from("c"))));
+
+    assert_keyevent_keys(&mut rpop_sub, "rpop", &["{lmrl}src"]).await;
+    assert_keyevent_keys(&mut lpush_sub, "lpush", &["{lmrl}dst"]).await;
+    server.shutdown().await;
+}
+
+/// LMOVE from a missing source is a no-op (reply nil): no pop, no push, no
+/// events on either key.
+#[tokio::test]
+async fn test_lmove_missing_source_emits_nothing() {
+    let server = TestServer::start_standalone().await;
+    let mut lpop_sub = server.connect().await;
+    let mut rpush_sub = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut lpop_sub, "lpop").await;
+    subscribe_keyevent(&mut rpush_sub, "rpush").await;
+
+    let resp = client
+        .command(&["LMOVE", "{lmm}src", "{lmm}dst", "LEFT", "RIGHT"])
+        .await;
+    assert_eq!(resp, Response::null());
+
+    assert_keyevent_keys(&mut lpop_sub, "lpop", &[]).await;
+    assert_keyevent_keys(&mut rpush_sub, "rpush", &[]).await;
+    server.shutdown().await;
+}
+
+/// BLMOVE immediate (non-blocking) path with data present: same direction-
+/// resolved names as LMOVE. LEFT LEFT -> `lpop` on source, `lpush` on dest.
+#[tokio::test]
+async fn test_blmove_immediate_notifies_lpop_lpush() {
+    let server = TestServer::start_standalone().await;
+    let mut lpop_sub = server.connect().await;
+    let mut lpush_sub = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["RPUSH", "{blm}src", "a", "b"]).await;
+
+    subscribe_keyevent(&mut lpop_sub, "lpop").await;
+    subscribe_keyevent(&mut lpush_sub, "lpush").await;
+
+    let resp = client
+        .command(&["BLMOVE", "{blm}src", "{blm}dst", "LEFT", "LEFT", "0"])
+        .await;
+    assert_eq!(resp, Response::Bulk(Some(Bytes::from("a"))));
+
+    assert_keyevent_keys(&mut lpop_sub, "lpop", &["{blm}src"]).await;
+    assert_keyevent_keys(&mut lpush_sub, "lpush", &["{blm}dst"]).await;
     server.shutdown().await;
 }
 

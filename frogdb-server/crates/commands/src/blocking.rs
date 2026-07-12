@@ -196,8 +196,11 @@ impl Command for BlmoveCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::MoveKeys,
             wakes: WaiterWake::None,
-            // Runtime-deposited: `lmove` on both keys when the immediate path
-            // actually moved an element (see BLPOP for the woken path).
+            // Runtime-deposited (proposal 44): direction-resolved Redis names —
+            // `lpop`/`rpop` on the source per src_dir and `lpush`/`rpush` on the
+            // destination per dest_dir, matching LMOVE. Deposited on the
+            // immediate path that actually moves an element (see BLPOP for the
+            // woken path, which re-executes through the same effect pipeline).
             event: EventSpec::Dynamic,
             requires_same_slot: true, // Source and destination must be in same shard,
             lookup: LookupSpec::None,
@@ -260,9 +263,18 @@ impl Command for BlmoveCommand {
                         }
                     }
 
-                    // An element moved: both keys were written.
-                    ctx.notify_event(source.clone(), "lmove", KeyspaceEventFlags::LIST);
-                    ctx.notify_event(dest.clone(), "lmove", KeyspaceEventFlags::LIST);
+                    // An element moved: pop event on the source per src_dir,
+                    // push event on the destination per dest_dir.
+                    let pop_event = match src_dir {
+                        Direction::Left => "lpop",
+                        Direction::Right => "rpop",
+                    };
+                    let push_event = match dest_dir {
+                        Direction::Left => "lpush",
+                        Direction::Right => "rpush",
+                    };
+                    ctx.notify_event(source.clone(), pop_event, KeyspaceEventFlags::LIST);
+                    ctx.notify_event(dest.clone(), push_event, KeyspaceEventFlags::LIST);
 
                     return Ok(Response::bulk(elem));
                 }
