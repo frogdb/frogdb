@@ -39,6 +39,27 @@ impl RocksStore {
         config: &RocksConfig,
         warm_enabled: bool,
     ) -> Result<Self, RocksError> {
+        // Production path: enumerate the persisted column families with the real
+        // `DB::list_cf`. The enumeration is threaded through an injectable seam
+        // ([`open_with_cf_lister`]) so tests can force it to fail and assert the
+        // error propagates rather than being coerced into an empty CF list.
+        Self::open_with_cf_lister(path, num_shards, config, warm_enabled, |opts, p| {
+            DB::list_cf(opts, p).map_err(RocksError::from)
+        })
+    }
+
+    /// Reopen seam parameterised over the column-family enumerator. The public
+    /// [`open_with_warm`](Self::open_with_warm) supplies the real `DB::list_cf`;
+    /// tests supply a lister that fails, exercising the branch where a failed
+    /// enumeration must be propagated (not swallowed into a fresh-open that
+    /// bypasses the shard-count and warm-tier reopen guards).
+    fn open_with_cf_lister(
+        path: &Path,
+        num_shards: usize,
+        config: &RocksConfig,
+        warm_enabled: bool,
+        list_cf: impl FnOnce(&Options, &Path) -> Result<Vec<String>, RocksError>,
+    ) -> Result<Self, RocksError> {
         let path_str = path.display().to_string();
         info!(path = %path_str, num_shards, write_buffer_size = config.write_buffer_size, "Opening RocksDB");
         let mut db_opts = Options::default();
@@ -87,7 +108,7 @@ impl RocksStore {
         // then ask RocksDB to open a non-empty database with an empty descriptor
         // set, surfacing as a confusing open failure. Propagate the error.
         let existing_cfs = if db_exists {
-            DB::list_cf(&db_opts, path).map_err(RocksError::from)?
+            list_cf(&db_opts, path)?
         } else {
             Vec::new()
         };
