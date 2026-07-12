@@ -831,6 +831,11 @@ impl Store for HashMapStore {
         // runs synchronously on the shard thread — the warm CF's only writer —
         // so it is ordered before any later demotion. The primary CF is cleared
         // separately through the WAL flush pipeline (`WalStrategy::ClearShard`).
+        // The two clears are NOT crash-atomic: a crash between them leaves the
+        // warm CF cleared but the primary CF not yet (or vice versa never —
+        // warm goes first). Recovery then resurrects only hot keys, matching
+        // the pre-clear-shard behavior for exactly the un-cleared CF; no path
+        // deletes data that should survive.
         if self.warm_tier.warm_keys() > 0 {
             self.warm_tier.clear_range();
         }

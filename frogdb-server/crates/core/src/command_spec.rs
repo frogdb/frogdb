@@ -492,6 +492,10 @@ impl CommandSpec {
                     | KeySpec::Skip(_)
                     | KeySpec::NumkeysAt { .. }
                     | KeySpec::DestThenNumkeys { .. }
+                    // Dynamic key extraction can also yield multiple keys
+                    // (e.g. SORT...STORE returns [source, dest]), so a blanket
+                    // `Emits` is just as wrong there.
+                    | KeySpec::Dynamic
             )
             && !MULTI_KEY_EMITS_ALLOWLIST.contains(&self.name)
         {
