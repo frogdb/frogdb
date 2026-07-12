@@ -944,6 +944,20 @@ impl Command for SmoveCommand {
         // below stays disjoint.
         ctx.store.check_set(dest)?;
 
+        // src == dst short-circuit (t_set.c smoveCommand: `if (srcset == dstset)`).
+        // Redis performs no modification and emits no events; it just replies 1
+        // when the member is present, 0 otherwise. Declaring the write a no-op
+        // skips the whole effect pipeline (WAL, replication, notifications,
+        // WATCH bump) — matching Redis, which returns before signalModifiedKey.
+        if source == dest {
+            let is_member = ctx
+                .store
+                .get_set(source)?
+                .is_some_and(|set| set.contains(member));
+            ctx.write_was_noop = true;
+            return Ok(Response::Integer(if is_member { 1 } else { 0 }));
+        }
+
         // Remove from source.
         let Some(source_set) = ctx.store.get_set_mut(source)? else {
             return Ok(Response::Integer(0));

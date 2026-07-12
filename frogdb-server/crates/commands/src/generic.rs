@@ -95,6 +95,17 @@ impl Command for RenameCommand {
                 message: "no such key".to_string(),
             })?;
 
+        // src == dst short-circuit. Redis renameGenericCommand checks samekey
+        // *after* confirming the source exists (missing source is still an
+        // error), then returns plain OK with no modification and no events. A
+        // no-op write skips the whole effect pipeline (WAL, replication,
+        // notifications, WATCH bump) — matching Redis, which returns before
+        // signalModifiedKey / server.dirty++.
+        if old_key == new_key {
+            ctx.write_was_noop = true;
+            return Ok(Response::ok());
+        }
+
         // Get expiry if any
         let expiry = ctx.store.get_expiry(old_key);
 
@@ -157,8 +168,13 @@ impl Command for RenamenxCommand {
             return Err(CommandError::CrossSlot);
         }
 
-        // Check if new key exists
+        // Check if new key exists. Covers RENAMENX k k on an existing k, too:
+        // Redis renameGenericCommand replies czero on samekey for NX without
+        // modifying anything or emitting events. Declaring the no-op skips the
+        // effect pipeline (WAL, replication, notifications, WATCH bump) —
+        // Redis returns before signalModifiedKey / server.dirty++.
         if ctx.store.contains(new_key) {
+            ctx.write_was_noop = true;
             return Ok(Response::Integer(0));
         }
 

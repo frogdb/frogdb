@@ -351,6 +351,42 @@ impl<'a> WriteRecord<'a> {
     }
 }
 
+/// An owned [`WriteRecord`]: one effective write performed by a script
+/// sub-command (`redis.call` / `redis.pcall` executing on the local shard).
+///
+/// The scripting seam cannot run write effects mid-script — the store is
+/// mutably borrowed by the [`ScriptInvoker`](crate::scripting) for the whole
+/// execution — so each effective write is captured with owned data here and
+/// drained after the script completes, when the shard worker routes the batch
+/// through the same `WRITE_EFFECT_ORDER` pipeline as direct commands.
+pub struct ScriptWriteRecord {
+    /// The command handler that performed the write.
+    pub handler: Arc<dyn Command>,
+    /// The sub-command's arguments (owned: the Lua-side buffers do not outlive
+    /// the call).
+    pub args: Vec<Bytes>,
+    /// The dirty delta the sub-command reported (WATCH no-op rule input).
+    pub dirty_delta: i64,
+    /// HyperLogLog register delta, if this write deposited one (dense PFADD).
+    pub hll_wal_delta: Option<SmallVec<[(u16, u8); 8]>>,
+    /// Keyspace events deposited via [`CommandContext::notify_event`]
+    /// (consulted for [`crate::command_spec::EventSpec::Dynamic`] commands).
+    pub keyspace_events: KeyspaceEventDeposits,
+}
+
+impl ScriptWriteRecord {
+    /// View this owned record as the borrowed [`WriteRecord`] the write-effect
+    /// pipeline consumes.
+    pub fn as_write_record(&self) -> WriteRecord<'_> {
+        WriteRecord {
+            handler: self.handler.as_ref(),
+            args: self.args.as_slice(),
+            hll_wal_delta: self.hll_wal_delta.as_deref(),
+            keyspace_events: self.keyspace_events.as_slice(),
+        }
+    }
+}
+
 impl WalStrategy {
     /// Resolve this strategy + args to the concrete sequence of per-key WAL actions.
     ///
@@ -966,6 +1002,17 @@ pub struct CommandContext<'a> {
     /// discards its deposits wholesale (the effect pipeline is skipped), same
     /// contract as `hll_wal_delta`.
     pub keyspace_events: KeyspaceEventDeposits,
+
+    /// Effective writes performed by script sub-commands during an
+    /// EVAL/EVALSHA/FCALL running on this context.
+    ///
+    /// Populated by the scripting seam (`ScriptInvoker::run_local`) for each
+    /// `redis.call`/`redis.pcall` write that actually changed data; drained by
+    /// the shard worker after the script completes and routed through the same
+    /// `WRITE_EFFECT_ORDER` pipeline as direct commands (notifications, WATCH
+    /// bump, tracking invalidation, waiter wake, WAL, replication). Always
+    /// empty for ordinary (non-script) command executions.
+    pub script_writes: Vec<ScriptWriteRecord>,
 }
 
 impl<'a> CommandContext<'a> {
@@ -1003,6 +1050,7 @@ impl<'a> CommandContext<'a> {
             write_was_noop: false,
             hll_wal_delta: None,
             keyspace_events: SmallVec::new(),
+            script_writes: Vec::new(),
         }
     }
 

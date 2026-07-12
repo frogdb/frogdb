@@ -226,6 +226,7 @@ impl ShardWorker {
             write_was_noop: false,
             hll_wal_delta: None,
             keyspace_events: Default::default(),
+            script_writes: Vec::new(),
         }
     }
 

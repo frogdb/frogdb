@@ -2325,6 +2325,119 @@ async fn test_smove_nonmember_emits_nothing() {
     server.shutdown().await;
 }
 
+/// RENAME k k (source == destination, key exists): Redis renameGenericCommand
+/// short-circuits samekey with a plain OK *before* any modification or
+/// notifyKeyspaceEvent call — no `rename_from`, no `rename_to`. The key and its
+/// value must survive untouched.
+#[tokio::test]
+async fn test_rename_self_emits_nothing() {
+    let server = TestServer::start_standalone().await;
+    let mut from_sub = server.connect().await;
+    let mut to_sub = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["SET", "rnself", "v"]).await;
+
+    subscribe_keyevent(&mut from_sub, "rename_from").await;
+    subscribe_keyevent(&mut to_sub, "rename_to").await;
+
+    // Same key on both sides: silent success, no events, value preserved.
+    let resp = client.command(&["RENAME", "rnself", "rnself"]).await;
+    assert_eq!(resp, Response::ok());
+
+    assert_keyevent_keys(&mut from_sub, "rename_from", &[]).await;
+    assert_keyevent_keys(&mut to_sub, "rename_to", &[]).await;
+
+    let resp = client.command(&["GET", "rnself"]).await;
+    assert_eq!(resp, Response::Bulk(Some(Bytes::from("v"))));
+    server.shutdown().await;
+}
+
+/// RENAME k k on a MISSING key is still an error: Redis checks the source
+/// exists (lookupKeyWriteOrReply, "no such key") *before* the samekey
+/// short-circuit. Nothing is written, so nothing fires.
+#[tokio::test]
+async fn test_rename_self_missing_key_errors() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["RENAME", "rnselfmiss", "rnselfmiss"])
+        .await;
+    assert!(
+        matches!(resp, Response::Error(_)),
+        "RENAME of a missing key onto itself must error, got {resp:?}"
+    );
+    server.shutdown().await;
+}
+
+/// RENAMENX k k on an existing key replies 0 (Redis samekey path: czero for
+/// NX) with no modification and no events.
+#[tokio::test]
+async fn test_renamenx_self_returns_zero_silently() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["SET", "rnxself", "v"]).await;
+
+    subscribe_keyevent(&mut subscriber, "rename_from").await;
+
+    let resp = client.command(&["RENAMENX", "rnxself", "rnxself"]).await;
+    assert_eq!(resp, Response::Integer(0));
+
+    assert_keyevent_keys(&mut subscriber, "rename_from", &[]).await;
+    server.shutdown().await;
+}
+
+/// SMOVE k k m (source == destination): Redis smoveCommand short-circuits
+/// `srcset == dstset` before any modification — reply 1 if the member is
+/// present (0 otherwise), with NO `srem`/`sadd` events, and the set is left
+/// untouched.
+#[tokio::test]
+async fn test_smove_same_key_emits_nothing() {
+    let server = TestServer::start_standalone().await;
+    let mut srem_sub = server.connect().await;
+    let mut sadd_sub = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["SADD", "smself", "a", "b"]).await;
+
+    subscribe_keyevent(&mut srem_sub, "srem").await;
+    subscribe_keyevent(&mut sadd_sub, "sadd").await;
+
+    // Member present: reply 1, but no events and no modification.
+    let resp = client.command(&["SMOVE", "smself", "smself", "a"]).await;
+    assert_eq!(resp, Response::Integer(1));
+
+    // Member absent: reply 0, same silence.
+    let resp = client.command(&["SMOVE", "smself", "smself", "nope"]).await;
+    assert_eq!(resp, Response::Integer(0));
+
+    assert_keyevent_keys(&mut srem_sub, "srem", &[]).await;
+    assert_keyevent_keys(&mut sadd_sub, "sadd", &[]).await;
+
+    // The set is untouched.
+    let resp = client.command(&["SCARD", "smself"]).await;
+    assert_eq!(resp, Response::Integer(2));
+    server.shutdown().await;
+}
+
 /// RPOPLPUSH = LMOVE RIGHT LEFT: Redis emits `rpop` on the source (popped from
 /// the tail) and `lpush` on the destination (pushed to the head) — t_list.c
 /// listElementsRemoved:2 + lmoveHandlePush:23. Not a bespoke `rpoplpush` event.
@@ -2677,6 +2790,68 @@ async fn test_bitop_empty_missing_dest_silent() {
     );
 
     assert_keyevent_keys(&mut subscriber, "del", &[]).await;
+    server.shutdown().await;
+}
+
+/// GEOADD emits `zadd` (class ZSET) on its key when a member is added — Redis
+/// parity: geo.c geoaddCommand routes through zaddGenericCommand, which fires
+/// `zadd` on an effective add/update.
+#[tokio::test]
+async fn test_geoadd_emits_zadd() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut subscriber, "zadd").await;
+
+    let resp = client
+        .command(&["GEOADD", "geo:add", "13.361389", "38.115556", "Palermo"])
+        .await;
+    assert_eq!(resp, Response::Integer(1));
+
+    assert_keyevent_keys(&mut subscriber, "zadd", &["geo:add"]).await;
+    server.shutdown().await;
+}
+
+/// A no-op GEOADD (re-adding an identical member — nothing added or changed)
+/// emits nothing: execute() sets `write_was_noop`, skipping the whole
+/// write-effect pipeline including the `zadd` notification. Matches Redis, which
+/// notifies only when a member was actually added or updated.
+#[tokio::test]
+async fn test_geoadd_noop_emits_nothing() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // Seed the member before subscribing, so the seeding `zadd` is not observed.
+    let resp = client
+        .command(&["GEOADD", "geo:noop", "13.361389", "38.115556", "Palermo"])
+        .await;
+    assert_eq!(resp, Response::Integer(1));
+
+    subscribe_keyevent(&mut subscriber, "zadd").await;
+
+    // Re-add the identical member: same score, nothing changes -> reply 0.
+    let resp = client
+        .command(&["GEOADD", "geo:noop", "13.361389", "38.115556", "Palermo"])
+        .await;
+    assert_eq!(resp, Response::Integer(0));
+
+    let msg = subscriber.read_message(Duration::from_millis(400)).await;
+    assert!(
+        msg.is_none(),
+        "a no-op GEOADD must not deliver a keyspace notification"
+    );
     server.shutdown().await;
 }
 
@@ -3443,5 +3618,162 @@ async fn test_lmove_self_move_rotate_emits_both_events() {
 
     assert_keyevent_keys(&mut sub_pop, "rpop", &["{lsm}k"]).await;
     assert_keyevent_keys(&mut sub_push, "lpush", &["{lsm}k"]).await;
+    server.shutdown().await;
+}
+
+// ===========================================================================
+// Scripted writes emit keyspace events (proposal 46 item 2)
+//
+// A write performed via `redis.call(...)` inside EVAL/EVALSHA must have the
+// same side effects as a direct command: the scripting seam records each
+// effective write and routes it through the canonical write-effect pipeline
+// (keyspace notifications, WATCH bump, tracking invalidation, waiter wake,
+// WAL, replication) after the script completes.
+// ===========================================================================
+
+/// EVAL that SETs a key fires the same `set` keyevent a direct SET does.
+#[tokio::test]
+async fn test_eval_scripted_set_emits_set_event() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut subscriber, "set").await;
+
+    let resp = client
+        .command(&[
+            "EVAL",
+            "return redis.call('SET', KEYS[1], ARGV[1])",
+            "1",
+            "evset",
+            "v",
+        ])
+        .await;
+    assert_eq!(resp, Response::Simple(Bytes::from("OK")));
+
+    assert_keyevent_keys(&mut subscriber, "set", &["evset"]).await;
+    server.shutdown().await;
+}
+
+/// A script that performs several writes emits each write's event, in
+/// execution order (the multi-write batch flows through the pipeline as one
+/// atomic effect group).
+#[tokio::test]
+async fn test_eval_multi_write_script_emits_each_event() {
+    let server = TestServer::start_standalone().await;
+    let mut set_sub = server.connect().await;
+    let mut lpush_sub = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut set_sub, "set").await;
+    subscribe_keyevent(&mut lpush_sub, "lpush").await;
+
+    // Same hash tag so both writes run on the script's local shard.
+    let resp = client
+        .command(&[
+            "EVAL",
+            "redis.call('SET', KEYS[1], 'v'); redis.call('LPUSH', KEYS[2], 'a'); return 1",
+            "2",
+            "{evm}s",
+            "{evm}l",
+        ])
+        .await;
+    assert_eq!(resp, Response::Integer(1));
+
+    assert_keyevent_keys(&mut set_sub, "set", &["{evm}s"]).await;
+    assert_keyevent_keys(&mut lpush_sub, "lpush", &["{evm}l"]).await;
+    server.shutdown().await;
+}
+
+/// A scripted LPUSH wakes a client blocked in BLPOP, with the same events a
+/// direct LPUSH produces: `lpush` from the script's write, then `lpop` from
+/// the woken serve.
+#[tokio::test]
+async fn test_eval_scripted_lpush_wakes_blocked_blpop() {
+    let server = TestServer::start_standalone().await;
+    let mut lpush_sub = server.connect().await;
+    let mut lpop_sub = server.connect().await;
+    let mut blocker = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // Block on a missing key, then subscribe before the waking scripted push.
+    blocker.send_only(&["BLPOP", "evblk", "5"]).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    subscribe_keyevent(&mut lpush_sub, "lpush").await;
+    subscribe_keyevent(&mut lpop_sub, "lpop").await;
+
+    let resp = client
+        .command(&[
+            "EVAL",
+            "return redis.call('LPUSH', KEYS[1], ARGV[1])",
+            "1",
+            "evblk",
+            "a",
+        ])
+        .await;
+    assert_eq!(resp, Response::Integer(1));
+
+    let woken = blocker.read_response(Duration::from_secs(2)).await;
+    assert!(
+        matches!(woken, Some(Response::Array(_))),
+        "scripted LPUSH must wake the blocked BLPOP, got: {woken:?}"
+    );
+
+    assert_keyevent_keys(&mut lpush_sub, "lpush", &["evblk"]).await;
+    assert_keyevent_keys(&mut lpop_sub, "lpop", &["evblk"]).await;
+    server.shutdown().await;
+}
+
+/// A scripted no-op write (duplicate PFADD: no register moved, write_was_noop)
+/// stays silent — the seam records only effective writes.
+#[tokio::test]
+async fn test_eval_scripted_noop_stays_silent() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // Seed the HLL before subscribing so the seed event is not observed.
+    let resp = client.command(&["PFADD", "evhll", "a"]).await;
+    assert_eq!(resp, Response::Integer(1));
+
+    subscribe_keyevent(&mut subscriber, "pfadd").await;
+
+    // Duplicate add via script: no register moves, reply 0, no event.
+    let resp = client
+        .command(&[
+            "EVAL",
+            "return redis.call('PFADD', KEYS[1], ARGV[1])",
+            "1",
+            "evhll",
+            "a",
+        ])
+        .await;
+    assert_eq!(resp, Response::Integer(0));
+
+    let msg = subscriber.read_message(Duration::from_millis(400)).await;
+    assert!(
+        msg.is_none(),
+        "a scripted no-op write must not deliver a keyspace notification"
+    );
     server.shutdown().await;
 }
