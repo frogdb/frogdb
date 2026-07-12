@@ -548,6 +548,67 @@ mod tests {
         );
     }
 
+    /// Regression guard for the *loud* EXEC spec-carrier (proposal 40 item 7,
+    /// as it survives the command-spec-single-source refactor).
+    ///
+    /// EXEC is dispatched to
+    /// [`ConnectionHandler::handle_exec`](crate::connection::ConnectionHandler);
+    /// [`ExecConnCommand::execute`] is only a spec carrier and is **never**
+    /// reached through the `ConnCtx` seam. If a routing/dispatch bug ever does
+    /// reach it, it must surface *loudly* — a `debug_assert!` panic in debug
+    /// builds, an internal error response in release builds — and must **never**
+    /// fabricate a `+OK`/success that would silently lie to the client (the
+    /// pre-proposal-40 behavior). This asserts the non-fabrication in whichever
+    /// build profile the test runs under.
+    ///
+    /// Note: the sibling connection-level commands (MULTI/DISCARD/WATCH/UNWATCH)
+    /// are *not* covered here because, on this branch, they carry real
+    /// `ConnCtx` logic and legitimately return OK/errors — only EXEC is a
+    /// never-reached spec carrier, so it is the sole fabrication surface.
+    #[test]
+    fn exec_spec_carrier_execute_never_fabricates_success() {
+        // Build the runtime and fixture *outside* `catch_unwind` so only the
+        // `execute` call's panic (if any) is captured, not fixture setup.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("build current-thread runtime");
+        let mut fx = Fixture::new();
+
+        // Silence the panic hook only around the call so the expected
+        // `debug_assert!` backtrace does not clutter test output; restore it
+        // immediately afterwards.
+        let prev_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            rt.block_on(async {
+                let mut ctx = fx.ctx_mut();
+                EXEC_CONN_COMMAND.execute(&mut ctx, &[]).await
+            })
+        }));
+        std::panic::set_hook(prev_hook);
+
+        match outcome {
+            // Debug builds: the `debug_assert!(false, ...)` fired — loud and
+            // correct. A regression to a fabricated success (which drops the
+            // `debug_assert!`) would land on the `Ok` arm instead and fail.
+            Err(_panic) => {}
+            // Release builds: must be the internal error, never a fabricated
+            // success.
+            Ok(resp) => {
+                assert_ne!(
+                    resp,
+                    Response::ok(),
+                    "EXEC spec carrier must never fabricate a +OK success"
+                );
+                assert_eq!(
+                    resp,
+                    Response::error("ERR internal: EXEC must be dispatched via handle_exec"),
+                    "EXEC spec carrier must surface a loud internal error; got {resp:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn specs_are_transaction_and_valid() {
         for spec in [
