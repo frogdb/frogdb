@@ -1025,6 +1025,117 @@ async fn test_keyspace_exists_touch_cross_shard_count_per_key() {
     server.shutdown().await;
 }
 
+// ============================================================================
+// Eviction Metrics Tests
+// ============================================================================
+
+/// Read `used_memory` from `INFO memory` over the RESP connection.
+async fn used_memory(client: &mut crate::common::test_server::TestClient) -> u64 {
+    let body = match client.command(&["INFO", "memory"]).await {
+        Response::Bulk(Some(data)) => String::from_utf8_lossy(&data).into_owned(),
+        other => panic!("expected bulk reply for INFO memory, got: {other:?}"),
+    };
+    parse_info_stat(&body, "used_memory")
+}
+
+/// Driving eviction under `allkeys-lru` must emit the
+/// `frogdb_eviction_samples_total` series carrying the active policy label
+/// (`policy="allkeys-lru"`).
+///
+/// Regression for commit 01cd1bda, which restored the `policy` label that had
+/// been dropped from the eviction sampler's metric emission. No test previously
+/// scraped this series' labels, so reverting the fix (dropping `policy` from the
+/// definition and the call site) compiled clean and nothing failed. This test
+/// closes that gap: it fails if the emitted series lacks `policy="allkeys-lru"`.
+#[tokio::test]
+async fn test_eviction_samples_series_carries_policy_label() {
+    // A single shard makes per-shard memory accounting deterministic: the whole
+    // `maxmemory` budget belongs to shard 0, so the limit we set is exactly the
+    // limit the sampler enforces.
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    client.command(&["FLUSHALL"]).await;
+
+    // Pin a tight budget just above current usage, then select an LRU policy.
+    // Only the sample-rank-pool policies (LRU/LFU/TTL) route through the sampler
+    // that emits `frogdb_eviction_samples_total`; `allkeys-lru` also evicts
+    // non-volatile keys, so plain SETs are eligible candidates.
+    let used = used_memory(&mut client).await;
+    let limit = used + 100 * 1024;
+    let set_max = client
+        .command(&["CONFIG", "SET", "maxmemory", &limit.to_string()])
+        .await;
+    assert!(
+        !matches!(set_max, Response::Error(_)),
+        "CONFIG SET maxmemory failed: {set_max:?}"
+    );
+    let set_policy = client
+        .command(&["CONFIG", "SET", "maxmemory-policy", "allkeys-lru"])
+        .await;
+    assert!(
+        !matches!(set_policy, Response::Error(_)),
+        "CONFIG SET maxmemory-policy failed: {set_policy:?}"
+    );
+
+    // Fill up to the limit with sizeable values...
+    let payload = "x".repeat(512);
+    let mut numkeys = 0u32;
+    loop {
+        client
+            .command(&["SET", &format!("ev:{numkeys}"), &payload])
+            .await;
+        numkeys += 1;
+        if used_memory(&mut client).await + 4096 > limit {
+            assert!(numkeys > 10, "should add >10 keys before nearing the limit");
+            break;
+        }
+        assert!(numkeys < 100_000, "never reached the memory limit");
+    }
+
+    // ...then keep writing so the shard has to sample-and-evict to stay under
+    // the limit, driving the sampler and its metric.
+    for j in 0..numkeys {
+        client
+            .command(&["SET", &format!("ev:more:{j}"), &payload])
+            .await;
+    }
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let metrics = server.fetch_metrics().await;
+
+    // The series must exist AND carry `policy="allkeys-lru"`. Dropping the policy
+    // label (the pre-01cd1bda regression) makes this selector match nothing, so
+    // `get_counter` returns 0.0 and the assertion fails.
+    let samples = get_counter(
+        &metrics,
+        "frogdb_eviction_samples_total",
+        &[("policy", "allkeys-lru")],
+    );
+    assert!(
+        samples > 0.0,
+        "expected frogdb_eviction_samples_total with policy=\"allkeys-lru\" to be nonzero, \
+         got {samples}. /metrics:\n{metrics}"
+    );
+
+    // Guard the exact label text too, so a mislabeled series (e.g. the value
+    // emitted under a different label key) cannot satisfy the test.
+    assert!(
+        metrics
+            .lines()
+            .any(|l| l.starts_with("frogdb_eviction_samples_total{")
+                && l.contains("policy=\"allkeys-lru\"")),
+        "no frogdb_eviction_samples_total line carried policy=\"allkeys-lru\". /metrics:\n{metrics}"
+    );
+
+    server.shutdown().await;
+}
+
 /// Parity pin: dictionary-iterating reads (SCAN, RANDOMKEY) do NOT move the
 /// keyspace counters, matching Redis, which does not route them through
 /// `lookupKeyRead`. They are `LookupSpec::None`.
