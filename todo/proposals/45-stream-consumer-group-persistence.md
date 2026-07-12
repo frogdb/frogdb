@@ -1,6 +1,10 @@
 # 45 — Stream consumer groups are not persisted (groups, last-delivered, PEL lost on restart)
 
-**Status:** proposed
+**Status:** implemented (2026-07-12) — stream codec format v1 persists groups, consumers, and the
+PEL; both `#[ignore]`d restart tests unignored and green. PEL/consumer times are persisted as
+wall-clock ms via the ClaimClock mapping; per-consumer seen/active times are persisted exactly
+(open decision 1: matched Redis, it was cheap). Deferred follow-up: per-group delta/merge-operand
+persistence to cut write amplification (design-sketch point 3; parity-first, not built here).
 **Severity:** Critical (silent data loss for consumer-group workloads)
 **Found:** 2026-07-12, by the regression-test wave: restart-survival tests for XGROUP CREATE and
 XREADGROUP could not pass and are checked in `#[ignore]`d

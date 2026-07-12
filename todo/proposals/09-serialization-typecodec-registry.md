@@ -518,19 +518,24 @@ pure internal restructure; every phase is verified to be byte-for-byte compatibl
   and must be asserted (a test that a hash-with-expiry never matches `HASH_CODEC` first). An
   alternative is an explicit `marker_of(&Value)` that encodes the selection logic in one match;
   decide which is clearer.
-- **Legacy / version markers.** There is currently no format-version byte (the header `flags` byte at
-  `mod.rs:124` is reserved and unused). The Stream encoder already does *in-payload* versioning: it
-  appends `total_appended` + idempotency keys after the entries and the decoder detects old vs new
-  format by remaining-byte length (`stream.rs:60-72`, `stream.rs:160-195`). The registry must not
-  disturb this — `STREAM_CODEC` wraps the existing functions verbatim. If a real format version is
-  ever needed, the reserved `flags` byte is the place, and the codec abstraction should grow a
+- **Legacy / version markers.** There is no *header*-level format-version byte (the header `flags`
+  byte at `mod.rs:124` is reserved and unused). The Stream encoder originally did *in-payload*
+  versioning by remaining-byte length (appending `total_appended` + idempotency keys after the
+  entries); [proposal 45](45-stream-consumer-group-persistence.md) replaced that with an explicit
+  leading version byte (`STREAM_FORMAT_VERSION` in `stream.rs`) when consumer-group persistence
+  landed — unknown versions are rejected loudly. The registry must not disturb this —
+  `STREAM_CODEC` wraps the existing functions verbatim. If a *cross-type* format version is ever
+  needed, the reserved `flags` byte is the place, and the codec abstraction should grow a
   `decode(version, payload)` rather than minting new markers.
 - **Asymmetric-by-design encodes.** Some encoders intentionally drop state, so decode cannot
-  reproduce the in-memory value exactly: stream consumer groups are deliberately not persisted
-  ("ephemeral state", `stream.rs:23`). The round-trip test must compare on what is *meant* to
-  survive (entries, last-id, total_appended), not full structural equality — hence the test asserts
-  `key_type()` and per-type semantic checks, not `Value == Value`. Each codec's sample/assertion has
-  to encode that type's contract.
+  reproduce the in-memory value exactly. (Historical note: stream consumer groups used to be the
+  example here — "deliberately not persisted" as ephemeral state. That scope cut was closed by
+  [proposal 45](45-stream-consumer-group-persistence.md): the stream codec's versioned format now
+  persists groups, consumers, and the PEL, mapping monotonic delivery times to wall-clock ms.)
+  The round-trip test must still compare on what is *meant* to survive, not full structural
+  equality — e.g. PEL delivery times round-trip through a wall-clock mapping, not bit-identically —
+  hence the test asserts `key_type()` and per-type semantic checks, not `Value == Value`. Each
+  codec's sample/assertion has to encode that type's contract.
 - **Encode-time compaction / normalization.** HyperLogLog has three encode branches (sparse / dense
   / empty-fallback) all under one marker with an internal encoding byte (`probabilistic.rs:152-186`);
   TimeSeries compresses chunks. The registry samples must cover each internal branch (the HLL codec's
