@@ -211,6 +211,23 @@ define_metrics! {
     /// full value Put).
     counter WalMergeOperands("frogdb_wal_merge_operands_total") {}
 
+    /// Total post-clear space-reclamation passes started (a FLUSHDB/FLUSHALL
+    /// range tombstone was followed by an async DeleteFilesInRange + CompactRange
+    /// over the cleared column family). Only counts passes that actually began;
+    /// a reclamation coalesced away because one was already in flight for the
+    /// same shard/tier does not increment this.
+    counter FlushCompactStarted("frogdb_flush_compact_started_total") {
+        labels: [shard: &str],
+    }
+
+    /// Total post-clear space-reclamation passes that finished executing
+    /// (the compaction routine returned). Pairs with
+    /// [`FlushCompactStarted`]; a persistent gap between the two indicates
+    /// reclamation passes still running or a stuck compaction.
+    counter FlushCompactCompleted("frogdb_flush_compact_completed_total") {
+        labels: [shard: &str],
+    }
+
     // ========================================================================
     // Persistence Metrics (Snapshot)
     // ========================================================================

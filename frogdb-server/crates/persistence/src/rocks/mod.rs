@@ -3,6 +3,7 @@ mod checkpoint;
 pub mod columns;
 pub mod config;
 mod manifest;
+mod reclaim;
 pub mod staged;
 #[cfg(test)]
 mod tests;
@@ -27,6 +28,14 @@ pub struct RocksStore {
     pub(crate) warm_enabled: bool,
     pub(crate) warm_cf_names: Vec<String>,
     pub(crate) search_meta_cf_names: Vec<String>,
+    /// Whether a FLUSHDB/FLUSHALL range tombstone is followed by an eager
+    /// DeleteFilesInRange + CompactRange to reclaim disk (proposal 48). Baked
+    /// from [`RocksConfig::flush_compact_range`] at open time.
+    pub(crate) flush_compact_range: bool,
+    /// Coalescing guard: at most one post-clear reclamation pass runs per
+    /// `(tier, shard)` at a time. Shared across the flush thread (primary CF)
+    /// and any other trigger site via the `Arc<RocksStore>`.
+    pub(crate) reclaim_guard: reclaim::ReclaimGuard,
 }
 
 impl RocksStore {
@@ -174,6 +183,8 @@ impl RocksStore {
             warm_enabled,
             warm_cf_names: manifest.warm_names().to_vec(),
             search_meta_cf_names: manifest.search_meta_names().to_vec(),
+            flush_compact_range: config.flush_compact_range,
+            reclaim_guard: reclaim::ReclaimGuard::new(),
         })
     }
     /// Main-tier resolver shim; see [`RocksStore::tier_cf_handle`] for the
