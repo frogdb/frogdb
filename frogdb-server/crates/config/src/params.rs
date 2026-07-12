@@ -386,6 +386,13 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
             noop: false,
         },
         ConfigParamInfo {
+            name: "flush-compact-range",
+            section: Some("persistence"),
+            field: Some("flush-compact-range"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
             name: "metrics-enabled",
             section: Some("metrics"),
             field: Some("enabled"),

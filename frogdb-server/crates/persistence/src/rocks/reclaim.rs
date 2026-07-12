@@ -29,7 +29,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use frogdb_types::metrics::definitions::{FlushCompactCompleted, FlushCompactStarted};
-use frogdb_types::traits::MetricsRecorder;
 use rocksdb::{BottommostLevelCompaction, CompactOptions};
 use tracing::{debug, info, warn};
 
@@ -99,16 +98,15 @@ impl ReclaimGuard {
 /// coalescing slot on completion.
 ///
 /// `upper_bound` is the exclusive upper bound of the cleared keyspace captured
-/// at clear time (`max_key ++ [0x00]`), used to scope the cheap
-/// `delete_file_in_range` pass. `None` means the CF was empty at clear time, so
-/// the file-drop pass is skipped and only the (tombstone-dropping) compaction
-/// runs.
+/// when the range tombstone was staged (`max_key ++ [0x00]`), scoping the cheap
+/// `delete_file_in_range` pass. Callers only invoke this when a tombstone was
+/// actually committed — an empty CF stages no tombstone and has nothing to
+/// reclaim.
 pub(crate) fn spawn_clear_reclamation(
     rocks: Arc<RocksStore>,
     tier: CfTier,
     shard_id: usize,
-    upper_bound: Option<Vec<u8>>,
-    metrics: Arc<dyn MetricsRecorder>,
+    upper_bound: Vec<u8>,
 ) {
     if !rocks.flush_compact_range {
         return;
@@ -126,7 +124,7 @@ pub(crate) fn spawn_clear_reclamation(
     let spawn = std::thread::Builder::new()
         .name(format!("clear-reclaim-{shard_id}"))
         .spawn(move || {
-            run_reclamation(&rocks_for_thread, tier, shard_id, upper_bound, &metrics);
+            run_reclamation(&rocks_for_thread, tier, shard_id, &upper_bound);
             rocks_for_thread.reclaim_guard.finish(tier, shard_id);
         });
 
@@ -141,13 +139,14 @@ pub(crate) fn spawn_clear_reclamation(
 
 /// The reclamation body: DeleteFilesInRange (best-effort, cheap) then a forced
 /// bottommost CompactRange over the whole CF. Shared by the production spawn
-/// path and by tests that want to run it synchronously.
+/// path and by tests that want to run it synchronously. Emits the
+/// `frogdb_flush_compact_{started,completed}_total` counters through the
+/// store's metrics recorder.
 pub(crate) fn run_reclamation(
     rocks: &RocksStore,
     tier: CfTier,
     shard_id: usize,
-    upper_bound: Option<Vec<u8>>,
-    metrics: &Arc<dyn MetricsRecorder>,
+    upper_bound: &[u8],
 ) {
     let shard_label = shard_id.to_string();
     let cf = match rocks.tier_cf_handle(tier, shard_id) {
@@ -158,22 +157,21 @@ pub(crate) fn run_reclamation(
         }
     };
 
-    FlushCompactStarted::inc(&**metrics, &shard_label);
+    let metrics = rocks.metrics_recorder();
+    FlushCompactStarted::inc(&*metrics, &shard_label);
     let start = Instant::now();
     info!(shard_id, tier = ?tier, "post-clear reclamation started");
 
     // (1) Cheap first pass: drop SSTs entirely within the cleared keyspace.
     // Bounded by the pre-clear max key so it never targets files that begin
     // above the cleared range; L0 files (where fresh post-clear writes live) are
-    // exempt by RocksDB regardless. Skipped when the CF was empty at clear time.
-    if let Some(upper) = &upper_bound {
-        if let Err(e) = rocks
-            .db
-            .delete_file_in_range_cf(&cf, [].as_slice(), upper.as_slice())
-        {
-            // Non-fatal: the compaction below still reclaims the space.
-            warn!(shard_id, tier = ?tier, error = %e, "post-clear delete_file_in_range failed; falling through to compaction");
-        }
+    // exempt by RocksDB regardless.
+    if let Err(e) = rocks
+        .db
+        .delete_file_in_range_cf(&cf, [].as_slice(), upper_bound)
+    {
+        // Non-fatal: the compaction below still reclaims the space.
+        warn!(shard_id, tier = ?tier, error = %e, "post-clear delete_file_in_range failed; falling through to compaction");
     }
 
     // (2) Force a bottommost compaction over the whole CF to rewrite the
@@ -186,7 +184,7 @@ pub(crate) fn run_reclamation(
         .db
         .compact_range_cf_opt(&cf, None::<&[u8]>, None::<&[u8]>, &opts);
 
-    FlushCompactCompleted::inc(&**metrics, &shard_label);
+    FlushCompactCompleted::inc(&*metrics, &shard_label);
     info!(
         shard_id,
         tier = ?tier,
