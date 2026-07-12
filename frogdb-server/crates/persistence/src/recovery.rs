@@ -196,7 +196,9 @@ mod tests {
     use std::time::Duration;
 
     use frogdb_types::hyperloglog::HyperLogLogValue;
-    use frogdb_types::types::{SortedSetValue, Value};
+    use frogdb_types::types::{
+        SortedSetValue, StreamId, StreamIdSpec, StreamRangeBound, StreamValue, Value,
+    };
     use tempfile::TempDir;
 
     use super::*;
@@ -347,6 +349,29 @@ mod tests {
             .unwrap();
         let hll_delta_count = hll_ref.count_no_cache();
 
+        // A stream carrying consumer-group state (proposal 45): a group with a
+        // consumer and one pending entry must survive the full disk round-trip.
+        let mut stream = StreamValue::new();
+        let _ = stream.add(
+            StreamIdSpec::Explicit(StreamId::new(1, 1)),
+            vec![(Bytes::from("f"), Bytes::from("v"))],
+        );
+        stream
+            .create_group(Bytes::from("grp"), StreamId::new(1, 1), Some(1))
+            .unwrap();
+        {
+            let g = stream.get_group_mut(b"grp").unwrap();
+            g.create_consumer(Bytes::from("worker"));
+            g.add_pending(StreamId::new(1, 1), Bytes::from("worker"));
+        }
+        rocks
+            .put(
+                0,
+                b"hot_stream",
+                &serialize(&Value::Stream(stream), &KeyMetadata::new(10)),
+            )
+            .unwrap();
+
         // --- Warm tier ---
         // Unique warm key — recovered as warm.
         rocks
@@ -383,13 +408,13 @@ mod tests {
         recover_warm_shard_into(&rocks, 0, &mut sink, &mut stats).unwrap();
 
         // --- Assert exact reconstruction ---
-        // Hot: 6 live keys loaded, 1 expired skipped.
+        // Hot: 7 live keys loaded, 1 expired skipped.
         assert_eq!(
-            stats.keys_loaded, 6,
-            "hot_str, hot_zset, hot_future, dup, hot_hll_full, hot_hll_delta"
+            stats.keys_loaded, 7,
+            "hot_str, hot_zset, hot_future, dup, hot_hll_full, hot_hll_delta, hot_stream"
         );
         assert_eq!(stats.keys_expired_skipped, 2, "hot_expired + warm_expired");
-        assert_eq!(sink.hot.len(), 6);
+        assert_eq!(sink.hot.len(), 7);
 
         // Values reconstructed byte-for-byte.
         let (v, _) = sink.hot.get(b"hot_str".as_slice()).unwrap();
@@ -421,6 +446,31 @@ mod tests {
             hll_delta_count,
             "recovered HLL must fold both merge operands onto the base"
         );
+
+        // Stream consumer-group state survives recovery: the group, its
+        // last-delivered-id / entries-read, the consumer, and the PEL entry.
+        let (v, _) = sink.hot.get(b"hot_stream".as_slice()).unwrap();
+        let Value::Stream(s) = v else {
+            panic!("hot_stream recovered as the wrong type")
+        };
+        assert_eq!(s.len(), 1);
+        let g = s
+            .get_group(b"grp")
+            .expect("consumer group must survive recovery");
+        assert_eq!(g.last_delivered_id(), StreamId::new(1, 1));
+        assert_eq!(g.entries_read(), Some(1));
+        assert_eq!(g.consumer_count(), 1);
+        let pel = g.pending_entries(
+            StreamRangeBound::Min,
+            StreamRangeBound::Max,
+            usize::MAX,
+            None,
+            None,
+        );
+        assert_eq!(pel.len(), 1, "PEL entry must survive recovery");
+        assert_eq!(pel[0].id, StreamId::new(1, 1));
+        assert_eq!(pel[0].consumer, Bytes::from("worker"));
+        assert_eq!(pel[0].delivery_count, 1);
 
         // Hot-wins-over-warm precedence.
         let (v, _) = sink.hot.get(b"dup".as_slice()).unwrap();
