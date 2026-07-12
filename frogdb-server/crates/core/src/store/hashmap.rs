@@ -1720,4 +1720,75 @@ mod tests {
         assert!(glob_match(b"exact", b"exact"));
         assert!(!glob_match(b"exact", b"notexact"));
     }
+
+    // ========================================================================
+    // Active-expiry scan boundedness (TTL-avalanche regression)
+    //
+    // The active-expiry cycle relies on the `*_limited` scans to cap the
+    // up-front clone of the due set: an unbounded scan clones every due entry
+    // before any time budget is consulted, so a TTL avalanche stalls the shard.
+    // These pin that the store never hands back more than `limit` entries, even
+    // when the due set dwarfs the limit. They FAIL if the scan reverts to
+    // cloning the whole due set (i.e. ignoring `limit`).
+    // ========================================================================
+
+    #[test]
+    fn get_expired_keys_limited_caps_far_larger_due_set() {
+        let mut store = HashMapStore::new();
+        let past = Instant::now() - Duration::from_secs(60);
+        for i in 0..10_000 {
+            let key = format!("k{i}");
+            store.set(Bytes::from(key.clone()), Value::string("v"));
+            assert!(store.set_expiry(key.as_bytes(), past));
+        }
+        assert_eq!(store.keys_with_expiry_count(), 10_000);
+
+        let now = Instant::now();
+        // 10_000 due, limit 100 -> at most 100 collected, not the whole set.
+        let batch = store.get_expired_keys_limited(now, 100);
+        assert!(
+            batch.len() <= 100,
+            "bounded scan returned {} keys for a limit of 100",
+            batch.len()
+        );
+        assert_eq!(batch.len(), 100, "a full limit's worth should be available");
+
+        // limit == 0 collects nothing.
+        assert!(store.get_expired_keys_limited(now, 0).is_empty());
+    }
+
+    #[test]
+    fn get_expired_fields_limited_caps_far_larger_due_set() {
+        use crate::types::{HashValue, ListpackThresholds};
+
+        let mut store = HashMapStore::new();
+        let past = Instant::now() - Duration::from_secs(60);
+        // One hash carrying 10_000 already-expired fields.
+        let mut hash = HashValue::new();
+        for i in 0..10_000 {
+            let field = format!("f{i}");
+            hash.set(
+                Bytes::from(field.clone()),
+                Bytes::from("v"),
+                ListpackThresholds::DEFAULT_HASH,
+            );
+            hash.set_field_expiry(field.as_bytes(), past);
+        }
+        store.set(Bytes::from("h"), Value::Hash(hash));
+        for i in 0..10_000 {
+            store.set_field_expiry(b"h", format!("f{i}").as_bytes(), past);
+        }
+
+        let now = Instant::now();
+        // 10_000 due fields, limit 100 -> at most 100 collected.
+        let batch = store.get_expired_fields_limited(now, 100);
+        assert!(
+            batch.len() <= 100,
+            "bounded field scan returned {} pairs for a limit of 100",
+            batch.len()
+        );
+        assert_eq!(batch.len(), 100, "a full limit's worth should be available");
+
+        assert!(store.get_expired_fields_limited(now, 0).is_empty());
+    }
 }
