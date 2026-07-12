@@ -588,3 +588,134 @@ impl ConnectionHandler {
         false
     }
 }
+
+#[cfg(test)]
+mod tracking_redirect_tests {
+    //! Regression coverage for the REDIRECT re-enable task leak (proposal 34).
+    //!
+    //! Re-enabling `CLIENT TRACKING ON REDIRECT <id>` previously spawned a fresh
+    //! invalidation-forwarding task on every call without aborting the prior one,
+    //! leaking one task per re-enable. The fix in
+    //! [`TrackingIo::enable`](super::TrackingIo) aborts the stale task before
+    //! respawning (`self.redirect_task.take() -> abort()`).
+    //!
+    //! Why this is a unit test rather than an integration/behavioral one: the
+    //! shard-side invalidation registry stores exactly one sender per connection
+    //! (`InvalidationRegistry::register` inserts, replacing any prior sender), so a
+    //! re-enable drops the old task's sender and an un-aborted task exits on its
+    //! own once the drop propagates. There is therefore no steady-state
+    //! double-delivery to observe from a client. The genuine, deterministic
+    //! observable is the forwarding task's lifecycle, reached here via the
+    //! `JoinHandle` on `TrackingIo` and its `AbortHandle::is_finished()`.
+    //!
+    //! The retained shard receivers below keep every sender cloned into a queued
+    //! `TrackingRegister` message alive, so an un-aborted forwarding task blocks on
+    //! `recv()` forever instead of exiting — isolating the abort logic as the sole
+    //! thing under test. With the abort removed, the first handle never finishes
+    //! and these tests fail on the bounded-timeout assertion.
+
+    use std::time::{Duration, Instant};
+
+    use frogdb_core::ClientTrackingProvider;
+    use frogdb_core::shard::Envelope;
+    use tokio::sync::mpsc;
+
+    use super::TrackingIo;
+
+    /// Build `count` [`ShardSender`](frogdb_core::ShardSender)s, returning the
+    /// receivers so the caller can keep them (and thus any queued senders) alive.
+    fn make_shard_senders(
+        count: usize,
+    ) -> (Vec<frogdb_core::ShardSender>, Vec<mpsc::Receiver<Envelope>>) {
+        let mut senders = Vec::with_capacity(count);
+        let mut receivers = Vec::with_capacity(count);
+        for _ in 0..count {
+            let (tx, rx) = mpsc::channel::<Envelope>(64);
+            senders.push(frogdb_core::ShardSender::new(tx));
+            receivers.push(rx);
+        }
+        (senders, receivers)
+    }
+
+    /// Poll `cond` until it holds or `timeout` elapses. Used instead of a fixed
+    /// sleep because task cancellation is observed by the runtime asynchronously.
+    async fn wait_until(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < timeout {
+            if cond() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        cond()
+    }
+
+    /// Re-enabling REDIRECT to a *different* target id must abort the previous
+    /// forwarding task before spawning the replacement.
+    #[tokio::test]
+    async fn reenable_redirect_different_target_aborts_previous_task() {
+        let mut io = TrackingIo::default();
+        // Keep the receivers alive so queued senders stay live for the test.
+        let (senders, _receivers) = make_shard_senders(4);
+
+        // First enable: REDIRECT to connection id 2.
+        io.enable(1, 2, false, false, Vec::new(), &senders).await;
+        let first = io
+            .redirect_task
+            .as_ref()
+            .expect("first enable should spawn a forwarding task")
+            .abort_handle();
+        assert!(
+            !first.is_finished(),
+            "first forwarding task should be running after the first enable"
+        );
+
+        // Re-enable: REDIRECT to a different connection id 3.
+        io.enable(1, 3, false, false, Vec::new(), &senders).await;
+        let second = io
+            .redirect_task
+            .as_ref()
+            .expect("re-enable should spawn a new forwarding task")
+            .abort_handle();
+        assert!(
+            !second.is_finished(),
+            "second forwarding task should be running after re-enable"
+        );
+
+        let aborted = wait_until(Duration::from_secs(5), || first.is_finished()).await;
+        assert!(
+            aborted,
+            "re-enabling REDIRECT must abort the previous forwarding task (task-leak regression)"
+        );
+        // The replacement task must still be alive.
+        assert!(
+            !second.is_finished(),
+            "replacement task must remain running after the old one is aborted"
+        );
+    }
+
+    /// Re-enabling REDIRECT to the *same* target id twice must likewise abort and
+    /// respawn — a leaked task double-forwarding to one target is the classic
+    /// symptom this guards against.
+    #[tokio::test]
+    async fn reenable_redirect_same_target_aborts_previous_task() {
+        let mut io = TrackingIo::default();
+        let (senders, _receivers) = make_shard_senders(4);
+
+        io.enable(1, 2, false, false, Vec::new(), &senders).await;
+        let first = io
+            .redirect_task
+            .as_ref()
+            .expect("first enable should spawn a forwarding task")
+            .abort_handle();
+        assert!(!first.is_finished());
+
+        io.enable(1, 2, false, false, Vec::new(), &senders).await;
+
+        let aborted = wait_until(Duration::from_secs(5), || first.is_finished()).await;
+        assert!(
+            aborted,
+            "re-enabling REDIRECT to the same id must abort the previous forwarding task"
+        );
+    }
+}
