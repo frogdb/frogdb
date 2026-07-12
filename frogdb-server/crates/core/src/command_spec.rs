@@ -742,6 +742,10 @@ mod tests {
     fn validate_dynamic_requires_movable() {
         let mut spec = base_write_spec();
         spec.keys = KeySpec::Dynamic;
+        // Dynamic keys with a blanket `Emits` is rejected on its own (see
+        // validate_rejects_multi_key_blanket_emits) — use a Dynamic event so
+        // this test isolates the MOVABLEKEYS invariant.
+        spec.event = EventSpec::Dynamic;
         // Dynamic without MOVABLEKEYS -> error
         assert_eq!(spec.validate(), Err(SpecError::DynamicKeysMovableMismatch));
         // With MOVABLEKEYS -> ok
