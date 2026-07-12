@@ -2283,14 +2283,15 @@ async fn test_zmpop_notifies_popped_key_only() {
     // {zmp}miss does not exist; only {zmp}hit can be popped.
     client.command(&["ZADD", "{zmp}hit", "1", "a"]).await;
 
-    subscribe_keyevent(&mut subscriber, "zmpop").await;
+    // ZMPOP MIN emits `zpopmin` (Redis parity, t_zset.c) on the popped key only.
+    subscribe_keyevent(&mut subscriber, "zpopmin").await;
 
     let resp = client
         .command(&["ZMPOP", "2", "{zmp}miss", "{zmp}hit", "MIN"])
         .await;
     assert!(matches!(resp, Response::Array(_)), "unexpected: {resp:?}");
 
-    assert_keyevent_keys(&mut subscriber, "zmpop", &["{zmp}hit"]).await;
+    assert_keyevent_keys(&mut subscriber, "zpopmin", &["{zmp}hit"]).await;
     server.shutdown().await;
 }
 
@@ -2619,5 +2620,589 @@ async fn test_lmpop_right_notifies_rpop() {
     assert!(matches!(resp, Response::Array(_)), "unexpected: {resp:?}");
 
     assert_keyevent_keys(&mut subscriber, "rpop", &["{lmr}hit"]).await;
+    server.shutdown().await;
+}
+
+// ===========================================================================
+// Keyspace-event key accuracy (proposal 44 phase 4)
+//
+// Dynamic-key STORE commands (SORT STORE, GEORADIUS STORE) deposit their
+// destination event at runtime (set-or-del); the blocking-pop family is
+// completed (BRPOPLPUSH/BLMPOP/BZMPOP immediate paths, ZMPOP direction names);
+// and the blocked-then-woken satisfaction path publishes the same events the
+// immediate path deposits.
+// ===========================================================================
+
+/// SORT ... STORE emits `sortstore` on the destination only (sort.c
+/// NOTIFY_LIST) — the read-only source list stays silent.
+#[tokio::test]
+async fn test_sort_store_notifies_sortstore_destination_only() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["RPUSH", "{srt}src", "3", "1", "2"]).await;
+
+    subscribe_keyevent(&mut subscriber, "sortstore").await;
+
+    let resp = client
+        .command(&["SORT", "{srt}src", "STORE", "{srt}dest"])
+        .await;
+    assert_eq!(resp, Response::Integer(3));
+
+    assert_keyevent_keys(&mut subscriber, "sortstore", &["{srt}dest"]).await;
+    server.shutdown().await;
+}
+
+/// SORT ... STORE of an empty/missing source deletes a pre-existing destination
+/// and emits `del` (sort.c NOTIFY_GENERIC) — never `sortstore`.
+#[tokio::test]
+async fn test_sort_store_empty_result_emits_del() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // Pre-existing destination; the source does not exist.
+    client.command(&["RPUSH", "{srt2}dest", "stale"]).await;
+
+    subscribe_keyevent(&mut subscriber, "del").await;
+
+    let resp = client
+        .command(&["SORT", "{srt2}missing", "STORE", "{srt2}dest"])
+        .await;
+    assert_eq!(resp, Response::Integer(0));
+
+    assert_keyevent_keys(&mut subscriber, "del", &["{srt2}dest"]).await;
+    server.shutdown().await;
+}
+
+/// SORT ... STORE of an empty result with no pre-existing destination emits
+/// nothing (the never-existed destination is not deleted).
+#[tokio::test]
+async fn test_sort_store_empty_missing_dest_silent() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut subscriber, "del").await;
+
+    let resp = client
+        .command(&["SORT", "{srt3}missing", "STORE", "{srt3}dest"])
+        .await;
+    assert_eq!(resp, Response::Integer(0));
+
+    assert_keyevent_keys(&mut subscriber, "del", &[]).await;
+    server.shutdown().await;
+}
+
+/// GEORADIUS ... STORE emits `georadiusstore` on the destination (geo.c
+/// NOTIFY_ZSET) — distinct from GEOSEARCHSTORE's `geosearchstore`.
+#[tokio::test]
+async fn test_georadius_store_notifies_georadiusstore() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client
+        .command(&["GEOADD", "{geo}src", "13.361389", "38.115556", "a"])
+        .await;
+
+    subscribe_keyevent(&mut subscriber, "georadiusstore").await;
+
+    let resp = client
+        .command(&[
+            "GEORADIUS",
+            "{geo}src",
+            "15",
+            "37",
+            "200",
+            "km",
+            "STORE",
+            "{geo}dest",
+        ])
+        .await;
+    assert_eq!(resp, Response::Integer(1));
+
+    assert_keyevent_keys(&mut subscriber, "georadiusstore", &["{geo}dest"]).await;
+    server.shutdown().await;
+}
+
+/// GEORADIUS ... STORE with an empty result deletes a pre-existing destination
+/// and emits `del`.
+#[tokio::test]
+async fn test_georadius_store_empty_result_emits_del() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // Source far from the search center; pre-existing destination to delete.
+    client
+        .command(&["GEOADD", "{geo2}src", "13.361389", "38.115556", "a"])
+        .await;
+    client.command(&["ZADD", "{geo2}dest", "1", "stale"]).await;
+
+    subscribe_keyevent(&mut subscriber, "del").await;
+
+    let resp = client
+        .command(&[
+            "GEORADIUS",
+            "{geo2}src",
+            "0",
+            "0",
+            "1",
+            "km",
+            "STORE",
+            "{geo2}dest",
+        ])
+        .await;
+    assert_eq!(resp, Response::Integer(0));
+
+    assert_keyevent_keys(&mut subscriber, "del", &["{geo2}dest"]).await;
+    server.shutdown().await;
+}
+
+/// ZMPOP MIN emits `zpopmin` (not the phase-1 placeholder `zmpop`) on the one
+/// popped key — Redis parity (t_zset.c genericZpopCommand).
+#[tokio::test]
+async fn test_zmpop_min_notifies_zpopmin_popped_key_only() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // {zmp}miss does not exist; the pop is served from {zmp}hit.
+    client
+        .command(&["ZADD", "{zmp}hit", "1", "a", "2", "b"])
+        .await;
+
+    subscribe_keyevent(&mut subscriber, "zpopmin").await;
+
+    let resp = client
+        .command(&["ZMPOP", "2", "{zmp}miss", "{zmp}hit", "MIN"])
+        .await;
+    assert!(matches!(resp, Response::Array(_)), "unexpected: {resp:?}");
+
+    assert_keyevent_keys(&mut subscriber, "zpopmin", &["{zmp}hit"]).await;
+    server.shutdown().await;
+}
+
+/// ZMPOP MAX maps to `zpopmax` on the popped key (direction-accurate).
+#[tokio::test]
+async fn test_zmpop_max_notifies_zpopmax() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client
+        .command(&["ZADD", "{zmx}hit", "1", "a", "2", "b"])
+        .await;
+
+    subscribe_keyevent(&mut subscriber, "zpopmax").await;
+
+    let resp = client.command(&["ZMPOP", "1", "{zmx}hit", "MAX"]).await;
+    assert!(matches!(resp, Response::Array(_)), "unexpected: {resp:?}");
+
+    assert_keyevent_keys(&mut subscriber, "zpopmax", &["{zmx}hit"]).await;
+    server.shutdown().await;
+}
+
+/// BRPOPLPUSH immediate path emits `rpop` on the source and `lpush` on the
+/// destination (RPOPLPUSH = LMOVE RIGHT LEFT) — not a bespoke event.
+#[tokio::test]
+async fn test_brpoplpush_immediate_notifies_rpop_lpush() {
+    let server = TestServer::start_standalone().await;
+    let mut sub_pop = server.connect().await;
+    let mut sub_push = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["RPUSH", "{brl}src", "a", "b"]).await;
+
+    subscribe_keyevent(&mut sub_pop, "rpop").await;
+    subscribe_keyevent(&mut sub_push, "lpush").await;
+
+    let resp = client
+        .command(&["BRPOPLPUSH", "{brl}src", "{brl}dst", "0"])
+        .await;
+    assert_eq!(resp, Response::Bulk(Some(Bytes::from("b"))));
+
+    assert_keyevent_keys(&mut sub_pop, "rpop", &["{brl}src"]).await;
+    assert_keyevent_keys(&mut sub_push, "lpush", &["{brl}dst"]).await;
+    server.shutdown().await;
+}
+
+/// BLMPOP immediate path emits `lpop`/`rpop` (by direction) on the one popped
+/// candidate only.
+#[tokio::test]
+async fn test_blmpop_immediate_notifies_popped_key_only() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["RPUSH", "{blm}hit", "a", "b"]).await;
+
+    subscribe_keyevent(&mut subscriber, "lpop").await;
+
+    let resp = client
+        .command(&["BLMPOP", "0", "2", "{blm}miss", "{blm}hit", "LEFT"])
+        .await;
+    assert!(matches!(resp, Response::Array(_)), "unexpected: {resp:?}");
+
+    assert_keyevent_keys(&mut subscriber, "lpop", &["{blm}hit"]).await;
+    server.shutdown().await;
+}
+
+/// BZMPOP immediate path emits `zpopmin`/`zpopmax` (by direction) on the one
+/// popped candidate only.
+#[tokio::test]
+async fn test_bzmpop_immediate_notifies_popped_key_only() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client
+        .command(&["ZADD", "{bzm}hit", "1", "a", "2", "b"])
+        .await;
+
+    subscribe_keyevent(&mut subscriber, "zpopmin").await;
+
+    let resp = client
+        .command(&["BZMPOP", "0", "2", "{bzm}miss", "{bzm}hit", "MIN"])
+        .await;
+    assert!(matches!(resp, Response::Array(_)), "unexpected: {resp:?}");
+
+    assert_keyevent_keys(&mut subscriber, "zpopmin", &["{bzm}hit"]).await;
+    server.shutdown().await;
+}
+
+// --- Section C: blocked-then-woken satisfaction path emits keyspace events ---
+
+/// A client blocked in BLPOP is served by a later RPUSH; the woken serve must
+/// publish `lpop` on the popped key (the satisfaction path pops directly on the
+/// store — this closes the phase-1/3 woken-path coverage gap).
+#[tokio::test]
+async fn test_blpop_woken_notifies_lpop() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut blocker = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // Block on a missing key, then subscribe before the waking push.
+    blocker.send_only(&["BLPOP", "{wbp}key", "5"]).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    subscribe_keyevent(&mut subscriber, "lpop").await;
+
+    client.command(&["RPUSH", "{wbp}key", "a"]).await;
+
+    let woken = blocker.read_response(Duration::from_secs(2)).await;
+    assert!(
+        matches!(woken, Some(Response::Array(_))),
+        "blocker woke: {woken:?}"
+    );
+
+    assert_keyevent_keys(&mut subscriber, "lpop", &["{wbp}key"]).await;
+    server.shutdown().await;
+}
+
+/// A client blocked in BRPOP is served by a later push; the woken serve emits
+/// `rpop`.
+#[tokio::test]
+async fn test_brpop_woken_notifies_rpop() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut blocker = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    blocker.send_only(&["BRPOP", "{wbr}key", "5"]).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    subscribe_keyevent(&mut subscriber, "rpop").await;
+
+    client.command(&["RPUSH", "{wbr}key", "a"]).await;
+
+    let woken = blocker.read_response(Duration::from_secs(2)).await;
+    assert!(
+        matches!(woken, Some(Response::Array(_))),
+        "blocker woke: {woken:?}"
+    );
+
+    assert_keyevent_keys(&mut subscriber, "rpop", &["{wbr}key"]).await;
+    server.shutdown().await;
+}
+
+/// A client blocked in BZPOPMIN is served by a later ZADD; the woken serve emits
+/// `zpopmin`.
+#[tokio::test]
+async fn test_bzpopmin_woken_notifies_zpopmin() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut blocker = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    blocker.send_only(&["BZPOPMIN", "{wzn}key", "5"]).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    subscribe_keyevent(&mut subscriber, "zpopmin").await;
+
+    client.command(&["ZADD", "{wzn}key", "1", "a"]).await;
+
+    let woken = blocker.read_response(Duration::from_secs(2)).await;
+    assert!(
+        matches!(woken, Some(Response::Array(_))),
+        "blocker woke: {woken:?}"
+    );
+
+    assert_keyevent_keys(&mut subscriber, "zpopmin", &["{wzn}key"]).await;
+    server.shutdown().await;
+}
+
+/// A client blocked in BZPOPMAX is served by a later ZADD; the woken serve emits
+/// `zpopmax`.
+#[tokio::test]
+async fn test_bzpopmax_woken_notifies_zpopmax() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut blocker = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    blocker.send_only(&["BZPOPMAX", "{wzx}key", "5"]).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    subscribe_keyevent(&mut subscriber, "zpopmax").await;
+
+    client.command(&["ZADD", "{wzx}key", "1", "a"]).await;
+
+    let woken = blocker.read_response(Duration::from_secs(2)).await;
+    assert!(
+        matches!(woken, Some(Response::Array(_))),
+        "blocker woke: {woken:?}"
+    );
+
+    assert_keyevent_keys(&mut subscriber, "zpopmax", &["{wzx}key"]).await;
+    server.shutdown().await;
+}
+
+/// A client blocked in BLMOVE is served by a later push to the source; the woken
+/// serve emits BOTH the source pop (`lpop`) and the destination push (`lpush`).
+#[tokio::test]
+async fn test_blmove_woken_notifies_lpop_and_lpush() {
+    let server = TestServer::start_standalone().await;
+    let mut sub_pop = server.connect().await;
+    let mut sub_push = server.connect().await;
+    let mut blocker = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    blocker
+        .send_only(&["BLMOVE", "{wmv}src", "{wmv}dst", "LEFT", "LEFT", "5"])
+        .await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    subscribe_keyevent(&mut sub_pop, "lpop").await;
+    subscribe_keyevent(&mut sub_push, "lpush").await;
+
+    client.command(&["RPUSH", "{wmv}src", "a"]).await;
+
+    let woken = blocker.read_response(Duration::from_secs(2)).await;
+    assert!(
+        matches!(woken, Some(Response::Bulk(Some(_)))),
+        "blocker woke: {woken:?}"
+    );
+
+    assert_keyevent_keys(&mut sub_pop, "lpop", &["{wmv}src"]).await;
+    assert_keyevent_keys(&mut sub_push, "lpush", &["{wmv}dst"]).await;
+    server.shutdown().await;
+}
+
+/// A client blocked in BRPOPLPUSH is served by a later push; the woken serve
+/// emits `rpop` on the source and `lpush` on the destination.
+#[tokio::test]
+async fn test_brpoplpush_woken_notifies_rpop_and_lpush() {
+    let server = TestServer::start_standalone().await;
+    let mut sub_pop = server.connect().await;
+    let mut sub_push = server.connect().await;
+    let mut blocker = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    blocker
+        .send_only(&["BRPOPLPUSH", "{wbl}src", "{wbl}dst", "5"])
+        .await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    subscribe_keyevent(&mut sub_pop, "rpop").await;
+    subscribe_keyevent(&mut sub_push, "lpush").await;
+
+    client.command(&["RPUSH", "{wbl}src", "a"]).await;
+
+    let woken = blocker.read_response(Duration::from_secs(2)).await;
+    assert!(
+        matches!(woken, Some(Response::Bulk(Some(_)))),
+        "blocker woke: {woken:?}"
+    );
+
+    assert_keyevent_keys(&mut sub_pop, "rpop", &["{wbl}src"]).await;
+    assert_keyevent_keys(&mut sub_push, "lpush", &["{wbl}dst"]).await;
+    server.shutdown().await;
+}
+
+// --- Section D: close phase-3 test minors ---
+
+/// SMOVE of a member already present in the destination removes it from the
+/// source (`srem`) but performs no add — so `sadd` must NOT fire.
+#[tokio::test]
+async fn test_smove_member_already_in_dest_srem_only() {
+    let server = TestServer::start_standalone().await;
+    let mut sub_srem = server.connect().await;
+    let mut sub_sadd = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["SADD", "{smv}src", "m"]).await;
+    client.command(&["SADD", "{smv}dst", "m"]).await; // m already in dest
+
+    subscribe_keyevent(&mut sub_srem, "srem").await;
+    subscribe_keyevent(&mut sub_sadd, "sadd").await;
+
+    let resp = client
+        .command(&["SMOVE", "{smv}src", "{smv}dst", "m"])
+        .await;
+    assert_eq!(resp, Response::Integer(1));
+
+    assert_keyevent_keys(&mut sub_srem, "srem", &["{smv}src"]).await;
+    // The destination already held the member: no `sadd`.
+    assert_keyevent_keys(&mut sub_sadd, "sadd", &[]).await;
+    server.shutdown().await;
+}
+
+/// A successful RENAMENX emits `rename_from` on the source and `rename_to` on
+/// the destination (positive path — dest did not previously exist).
+#[tokio::test]
+async fn test_renamenx_success_notifies_rename_from_and_to() {
+    let server = TestServer::start_standalone().await;
+    let mut sub_from = server.connect().await;
+    let mut sub_to = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["SET", "{rnx}src", "v"]).await;
+
+    subscribe_keyevent(&mut sub_from, "rename_from").await;
+    subscribe_keyevent(&mut sub_to, "rename_to").await;
+
+    let resp = client.command(&["RENAMENX", "{rnx}src", "{rnx}dst"]).await;
+    assert_eq!(resp, Response::Integer(1));
+
+    assert_keyevent_keys(&mut sub_from, "rename_from", &["{rnx}src"]).await;
+    assert_keyevent_keys(&mut sub_to, "rename_to", &["{rnx}dst"]).await;
+    server.shutdown().await;
+}
+
+/// LMOVE with src == dst rotates the list in place; FrogDB pops then pushes on
+/// the same key, so BOTH the pop and the push event fire on that one key.
+#[tokio::test]
+async fn test_lmove_self_move_rotate_emits_both_events() {
+    let server = TestServer::start_standalone().await;
+    let mut sub_pop = server.connect().await;
+    let mut sub_push = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["RPUSH", "{lsm}k", "a", "b", "c"]).await;
+
+    subscribe_keyevent(&mut sub_pop, "rpop").await;
+    subscribe_keyevent(&mut sub_push, "lpush").await;
+
+    // RIGHT -> LEFT rotate on the same key: rpop tail, lpush head.
+    let resp = client
+        .command(&["LMOVE", "{lsm}k", "{lsm}k", "RIGHT", "LEFT"])
+        .await;
+    assert_eq!(resp, Response::Bulk(Some(Bytes::from("c"))));
+
+    assert_keyevent_keys(&mut sub_pop, "rpop", &["{lsm}k"]).await;
+    assert_keyevent_keys(&mut sub_push, "lpush", &["{lsm}k"]).await;
     server.shutdown().await;
 }

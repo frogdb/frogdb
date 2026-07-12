@@ -6,8 +6,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    EventSpec, ExecutionStrategy, KeyAccessFlag, KeySpec, LookupSpec, Value, WaiterKind,
-    WaiterWake, WalStrategy, shard_for_key,
+    EventSpec, ExecutionStrategy, KeyAccessFlag, KeySpec, KeyspaceEventFlags, LookupSpec, Value,
+    WaiterKind, WaiterWake, WalStrategy, shard_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -293,8 +293,11 @@ fn execute_sort(ctx: &mut CommandContext, opts: &SortOptions) -> Result<Response
         None => {
             // Key doesn't exist - return empty array or store empty list
             if let Some(dest) = &opts.store {
-                // Delete destination key if it exists (store empty result)
-                ctx.store.delete(dest);
+                // Empty result: delete a pre-existing dest and fire `del`
+                // (sort.c); a never-existed dest stays silent.
+                if ctx.store.delete(dest) {
+                    ctx.notify_event(dest.clone(), "del", KeyspaceEventFlags::GENERIC);
+                }
                 return Ok(Response::Integer(0));
             }
             return Ok(Response::Array(vec![]));
@@ -303,7 +306,11 @@ fn execute_sort(ctx: &mut CommandContext, opts: &SortOptions) -> Result<Response
 
     if elements.is_empty() {
         if let Some(dest) = &opts.store {
-            ctx.store.delete(dest);
+            // Empty/missing source with STORE: delete a pre-existing dest and
+            // fire `del` (sort.c); a never-existed dest stays silent.
+            if ctx.store.delete(dest) {
+                ctx.notify_event(dest.clone(), "del", KeyspaceEventFlags::GENERIC);
+            }
             return Ok(Response::Integer(0));
         }
         return Ok(Response::Array(vec![]));
@@ -395,9 +402,18 @@ fn execute_sort(ctx: &mut CommandContext, opts: &SortOptions) -> Result<Response
         }
 
         if list.is_empty() {
-            ctx.store.delete(dest);
+            // Empty sorted result: Redis deletes a pre-existing destination and
+            // fires `del` (sort.c NOTIFY_GENERIC "del"); a destination that
+            // never existed is left untouched and stays silent. `delete`'s bool
+            // gates the deposit so the never-existed case emits nothing.
+            if ctx.store.delete(dest) {
+                ctx.notify_event(dest.clone(), "del", KeyspaceEventFlags::GENERIC);
+            }
         } else {
             ctx.store.set(dest.clone(), Value::List(list));
+            // Result stored: `sortstore` on the destination only (sort.c
+            // NOTIFY_LIST "sortstore"). The read-only source stays silent.
+            ctx.notify_event(dest.clone(), "sortstore", KeyspaceEventFlags::LIST);
         }
 
         Ok(Response::Integer(count))
@@ -446,7 +462,12 @@ impl Command for SortCommand {
             wal: WalStrategy::Dynamic,
             wakes: // SORT..STORE always creates a list at the destination key.
         WaiterWake::Kind(WaiterKind::List),
-            event: EventSpec::Suppressed,
+            // Runtime-deposited (sort.c): `sortstore` (NOTIFY_LIST) on the
+            // destination when the sorted result is stored, or `del`
+            // (NOTIFY_GENERIC) when the result is empty and a pre-existing
+            // destination is deleted. The destination is present only with
+            // STORE, and set-or-del is not a static EmitsAt — so Dynamic.
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Standard,

@@ -53,7 +53,12 @@ impl Command for GeoaddCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
-            event: EventSpec::Suppressed,
+            // Runtime-deposited (geo.c georadiusGeneric): `georadiusstore`
+            // (NOTIFY_ZSET) on the destination when members are stored, or `del`
+            // (NOTIFY_GENERIC) when the result is empty and a pre-existing
+            // destination is deleted. The destination is present only with
+            // STORE/STOREDIST, and set-or-del is not a static EmitsAt.
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Standard,
@@ -435,7 +440,12 @@ impl Command for GeoradiusCommand {
             access: AccessSpec::Dynamic,
             wal: WalStrategy::Dynamic,
             wakes: WaiterWake::None,
-            event: EventSpec::Suppressed,
+            // Runtime-deposited (geo.c georadiusGeneric): `georadiusstore`
+            // (NOTIFY_ZSET) on the destination when members are stored, or `del`
+            // (NOTIFY_GENERIC) when the result is empty and a pre-existing
+            // destination is deleted. The destination is present only with
+            // STORE/STOREDIST, and set-or-del is not a static EmitsAt.
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Standard,
@@ -487,7 +497,12 @@ impl Command for GeoradiusCommand {
         // Handle STORE option: store results in destination key and return count
         if let Some(dest) = radius_opts.store {
             if results.is_empty() {
-                ctx.store.delete(&dest);
+                // Empty result: delete a pre-existing destination and fire `del`
+                // (geo.c NOTIFY_GENERIC "del"); a destination that never existed
+                // stays silent (`delete`'s bool gates the deposit).
+                if ctx.store.delete(&dest) {
+                    ctx.notify_event(dest.clone(), "del", KeyspaceEventFlags::GENERIC);
+                }
                 return Ok(Response::Integer(0));
             }
             let mut dest_zset = SortedSetValue::new();
@@ -500,7 +515,10 @@ impl Command for GeoradiusCommand {
                 dest_zset.add(result.member.clone(), score);
             }
             let count = dest_zset.len();
-            ctx.store.set(dest, Value::SortedSet(dest_zset));
+            ctx.store.set(dest.clone(), Value::SortedSet(dest_zset));
+            // Members stored: `georadiusstore` on the destination only (geo.c
+            // emits "georadiusstore" for the GEORADIUS variants, NOTIFY_ZSET).
+            ctx.notify_event(dest, "georadiusstore", KeyspaceEventFlags::ZSET);
             return Ok(Response::Integer(count as i64));
         }
 
@@ -558,7 +576,12 @@ impl Command for GeoradiusbymemberCommand {
             access: AccessSpec::Dynamic,
             wal: WalStrategy::Dynamic,
             wakes: WaiterWake::None,
-            event: EventSpec::Suppressed,
+            // Runtime-deposited (geo.c georadiusGeneric): `georadiusstore`
+            // (NOTIFY_ZSET) on the destination when members are stored, or `del`
+            // (NOTIFY_GENERIC) when the result is empty and a pre-existing
+            // destination is deleted. The destination is present only with
+            // STORE/STOREDIST, and set-or-del is not a static EmitsAt.
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Standard,
@@ -603,9 +626,13 @@ impl Command for GeoradiusbymemberCommand {
                 }
             },
             None => {
-                // Key doesn't exist — with STORE, delete dest and return 0
+                // Key doesn't exist — with STORE, delete dest and return 0.
+                // A pre-existing destination deleted here fires `del`; a
+                // never-existed destination stays silent.
                 if let Some(dest) = radius_opts.store {
-                    ctx.store.delete(&dest);
+                    if ctx.store.delete(&dest) {
+                        ctx.notify_event(dest.clone(), "del", KeyspaceEventFlags::GENERIC);
+                    }
                     return Ok(Response::Integer(0));
                 }
                 return Ok(Response::Array(vec![]));
@@ -633,7 +660,12 @@ impl Command for GeoradiusbymemberCommand {
         // Handle STORE option: store results and return count
         if let Some(dest) = radius_opts.store {
             if results.is_empty() {
-                ctx.store.delete(&dest);
+                // Empty result: delete a pre-existing destination and fire `del`
+                // (geo.c NOTIFY_GENERIC "del"); a destination that never existed
+                // stays silent (`delete`'s bool gates the deposit).
+                if ctx.store.delete(&dest) {
+                    ctx.notify_event(dest.clone(), "del", KeyspaceEventFlags::GENERIC);
+                }
                 return Ok(Response::Integer(0));
             }
             let mut dest_zset = SortedSetValue::new();
@@ -646,7 +678,10 @@ impl Command for GeoradiusbymemberCommand {
                 dest_zset.add(result.member.clone(), score);
             }
             let count = dest_zset.len();
-            ctx.store.set(dest, Value::SortedSet(dest_zset));
+            ctx.store.set(dest.clone(), Value::SortedSet(dest_zset));
+            // Members stored: `georadiusstore` on the destination only (geo.c
+            // emits "georadiusstore" for the GEORADIUS variants, NOTIFY_ZSET).
+            ctx.notify_event(dest, "georadiusstore", KeyspaceEventFlags::ZSET);
             return Ok(Response::Integer(count as i64));
         }
 

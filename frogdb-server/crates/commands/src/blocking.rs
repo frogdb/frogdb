@@ -36,8 +36,9 @@ impl Command for BlpopCommand {
             wakes: WaiterWake::None,
             // Runtime-deposited: `lpop` on the one candidate key actually
             // popped on the immediate path (proposal 44 phase 1). The
-            // blocked-then-woken path is served by the shard wait queue, which
-            // does not emit keyspace events (pre-existing; phase 4 scope).
+            // blocked-then-woken path is served by the shard wait queue's
+            // satisfaction seam, which publishes the same `lpop` event directly
+            // (core/src/shard/blocking.rs, phase 4).
             event: EventSpec::Dynamic,
             requires_same_slot: true, // All keys must be in the same shard,
             lookup: LookupSpec::None,
@@ -199,8 +200,9 @@ impl Command for BlmoveCommand {
             // Runtime-deposited (proposal 44): direction-resolved Redis names —
             // `lpop`/`rpop` on the source per src_dir and `lpush`/`rpush` on the
             // destination per dest_dir, matching LMOVE. Deposited on the
-            // immediate path that actually moves an element (see BLPOP for the
-            // woken path, which re-executes through the same effect pipeline).
+            // immediate path that actually moves an element; the blocked-then-
+            // woken path publishes the same pop+push pair directly from the
+            // shard satisfaction seam (core/src/shard/blocking.rs, phase 4).
             event: EventSpec::Dynamic,
             requires_same_slot: true, // Source and destination must be in same shard,
             lookup: LookupSpec::None,
@@ -316,7 +318,11 @@ impl Command for BlmpopCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
-            event: EventSpec::Suppressed,
+            // Runtime-deposited: `lpop`/`rpop` by direction on the one candidate
+            // actually popped (t_list.c, shared with LMPOP) — never on the
+            // empty/missing candidates. The woken path emits the same from the
+            // shard satisfaction seam.
+            event: EventSpec::Dynamic,
             requires_same_slot: true,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Blocking {
@@ -398,6 +404,14 @@ impl Command for BlmpopCommand {
                     if !elements.is_empty() {
                         // Delete empty list
                         delete_if_empty_list(ctx, key);
+
+                        // Only the popped candidate notifies: `lpop`/`rpop` by
+                        // direction (shared with LMPOP).
+                        let pop_event = match direction {
+                            Direction::Left => "lpop",
+                            Direction::Right => "rpop",
+                        };
+                        ctx.notify_event(key.clone(), pop_event, KeyspaceEventFlags::LIST);
 
                         return Ok(Response::Array(vec![
                             Response::bulk(key.clone()),
@@ -605,7 +619,11 @@ impl Command for BzmpopCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
-            event: EventSpec::Suppressed,
+            // Runtime-deposited: `zpopmin`/`zpopmax` by direction on the one
+            // candidate actually popped (t_zset.c genericZpopCommand, shared with
+            // ZMPOP/BZPOPMIN/BZPOPMAX) — never on the empty/missing candidates.
+            // The woken path emits the same from the shard satisfaction seam.
+            event: EventSpec::Dynamic,
             requires_same_slot: true,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Blocking {
@@ -698,6 +716,11 @@ impl Command for BzmpopCommand {
                         // Delete empty zset
                         delete_if_empty_zset(ctx, key);
 
+                        // Only the popped candidate notifies: `zpopmin`/`zpopmax`
+                        // by direction (shared with ZMPOP).
+                        let pop_event = if min { "zpopmin" } else { "zpopmax" };
+                        ctx.notify_event(key.clone(), pop_event, KeyspaceEventFlags::ZSET);
+
                         return Ok(Response::Array(vec![
                             Response::bulk(key.clone()),
                             Response::Array(elements),
@@ -736,7 +759,12 @@ impl Command for BrpoplpushCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::MoveKeys,
             wakes: WaiterWake::None,
-            event: EventSpec::Suppressed,
+            // Runtime-deposited (proposal 44): BRPOPLPUSH is BLMOVE RIGHT LEFT,
+            // so Redis emits `rpop` on the source and `lpush` on the destination
+            // (t_list.c lmoveGenericCommand) — not a bespoke event. Deposited on
+            // the immediate path that actually moves an element; the woken path
+            // emits the same events from the shard satisfaction seam.
+            event: EventSpec::Dynamic,
             requires_same_slot: true,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Blocking {
@@ -791,6 +819,11 @@ impl Command for BrpoplpushCommand {
                     if let Some(dest_list) = ctx.store.get_mut(dest).and_then(|v| v.as_list_mut()) {
                         dest_list.push_front(elem.clone());
                     }
+
+                    // An element moved: `rpop` on the source (tail pop), `lpush`
+                    // on the destination (head push) — RPOPLPUSH is LMOVE R L.
+                    ctx.notify_event(source.clone(), "rpop", KeyspaceEventFlags::LIST);
+                    ctx.notify_event(dest.clone(), "lpush", KeyspaceEventFlags::LIST);
 
                     return Ok(Response::bulk(elem));
                 }

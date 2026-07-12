@@ -400,6 +400,15 @@ mod spec_exhaustiveness {
             // are runtime-dependent.
             "GEOSEARCHSTORE",
             "LMPOP",
+            // Phase 4: dynamic-key STORE commands (dest present only with STORE,
+            // set-or-del), the last Suppressed blocking-pop members, and the
+            // blocking multi-pops.
+            "SORT",
+            "GEORADIUS",
+            "GEORADIUSBYMEMBER",
+            "BRPOPLPUSH",
+            "BLMPOP",
+            "BZMPOP",
         ];
 
         let r = full_registry();
