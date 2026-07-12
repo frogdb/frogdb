@@ -53,12 +53,11 @@ impl Command for GeoaddCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
-            // Runtime-deposited (geo.c georadiusGeneric): `georadiusstore`
-            // (NOTIFY_ZSET) on the destination when members are stored, or `del`
-            // (NOTIFY_GENERIC) when the result is empty and a pre-existing
-            // destination is deleted. The destination is present only with
-            // STORE/STOREDIST, and set-or-del is not a static EmitsAt.
-            event: EventSpec::Dynamic,
+            // Known under-emission vs Redis: geo.c geoaddCommand routes through
+            // zaddGenericCommand, which emits `zadd` (NOTIFY_ZSET). Deliberately
+            // Suppressed rather than emitting an event unverified against
+            // FrogDB's own write paths; flipping to `zadd` is a follow-up.
+            event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Standard,
