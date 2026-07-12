@@ -3581,3 +3581,160 @@ async fn test_lmove_self_move_rotate_emits_both_events() {
     assert_keyevent_keys(&mut sub_push, "lpush", &["{lsm}k"]).await;
     server.shutdown().await;
 }
+
+// ===========================================================================
+// Scripted writes emit keyspace events (proposal 46 item 2)
+//
+// A write performed via `redis.call(...)` inside EVAL/EVALSHA must have the
+// same side effects as a direct command: the scripting seam records each
+// effective write and routes it through the canonical write-effect pipeline
+// (keyspace notifications, WATCH bump, tracking invalidation, waiter wake,
+// WAL, replication) after the script completes.
+// ===========================================================================
+
+/// EVAL that SETs a key fires the same `set` keyevent a direct SET does.
+#[tokio::test]
+async fn test_eval_scripted_set_emits_set_event() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut subscriber, "set").await;
+
+    let resp = client
+        .command(&[
+            "EVAL",
+            "return redis.call('SET', KEYS[1], ARGV[1])",
+            "1",
+            "evset",
+            "v",
+        ])
+        .await;
+    assert_eq!(resp, Response::Simple(Bytes::from("OK")));
+
+    assert_keyevent_keys(&mut subscriber, "set", &["evset"]).await;
+    server.shutdown().await;
+}
+
+/// A script that performs several writes emits each write's event, in
+/// execution order (the multi-write batch flows through the pipeline as one
+/// atomic effect group).
+#[tokio::test]
+async fn test_eval_multi_write_script_emits_each_event() {
+    let server = TestServer::start_standalone().await;
+    let mut set_sub = server.connect().await;
+    let mut lpush_sub = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut set_sub, "set").await;
+    subscribe_keyevent(&mut lpush_sub, "lpush").await;
+
+    // Same hash tag so both writes run on the script's local shard.
+    let resp = client
+        .command(&[
+            "EVAL",
+            "redis.call('SET', KEYS[1], 'v'); redis.call('LPUSH', KEYS[2], 'a'); return 1",
+            "2",
+            "{evm}s",
+            "{evm}l",
+        ])
+        .await;
+    assert_eq!(resp, Response::Integer(1));
+
+    assert_keyevent_keys(&mut set_sub, "set", &["{evm}s"]).await;
+    assert_keyevent_keys(&mut lpush_sub, "lpush", &["{evm}l"]).await;
+    server.shutdown().await;
+}
+
+/// A scripted LPUSH wakes a client blocked in BLPOP, with the same events a
+/// direct LPUSH produces: `lpush` from the script's write, then `lpop` from
+/// the woken serve.
+#[tokio::test]
+async fn test_eval_scripted_lpush_wakes_blocked_blpop() {
+    let server = TestServer::start_standalone().await;
+    let mut lpush_sub = server.connect().await;
+    let mut lpop_sub = server.connect().await;
+    let mut blocker = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // Block on a missing key, then subscribe before the waking scripted push.
+    blocker.send_only(&["BLPOP", "evblk", "5"]).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    subscribe_keyevent(&mut lpush_sub, "lpush").await;
+    subscribe_keyevent(&mut lpop_sub, "lpop").await;
+
+    let resp = client
+        .command(&[
+            "EVAL",
+            "return redis.call('LPUSH', KEYS[1], ARGV[1])",
+            "1",
+            "evblk",
+            "a",
+        ])
+        .await;
+    assert_eq!(resp, Response::Integer(1));
+
+    let woken = blocker.read_response(Duration::from_secs(2)).await;
+    assert!(
+        matches!(woken, Some(Response::Array(_))),
+        "scripted LPUSH must wake the blocked BLPOP, got: {woken:?}"
+    );
+
+    assert_keyevent_keys(&mut lpush_sub, "lpush", &["evblk"]).await;
+    assert_keyevent_keys(&mut lpop_sub, "lpop", &["evblk"]).await;
+    server.shutdown().await;
+}
+
+/// A scripted no-op write (duplicate PFADD: no register moved, write_was_noop)
+/// stays silent — the seam records only effective writes.
+#[tokio::test]
+async fn test_eval_scripted_noop_stays_silent() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // Seed the HLL before subscribing so the seed event is not observed.
+    let resp = client.command(&["PFADD", "evhll", "a"]).await;
+    assert_eq!(resp, Response::Integer(1));
+
+    subscribe_keyevent(&mut subscriber, "pfadd").await;
+
+    // Duplicate add via script: no register moves, reply 0, no event.
+    let resp = client
+        .command(&[
+            "EVAL",
+            "return redis.call('PFADD', KEYS[1], ARGV[1])",
+            "1",
+            "evhll",
+            "a",
+        ])
+        .await;
+    assert_eq!(resp, Response::Integer(0));
+
+    let msg = subscriber.read_message(Duration::from_millis(400)).await;
+    assert!(
+        msg.is_none(),
+        "a scripted no-op write must not deliver a keyspace notification"
+    );
+    server.shutdown().await;
+}

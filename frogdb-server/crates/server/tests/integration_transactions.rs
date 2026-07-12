@@ -646,3 +646,49 @@ async fn test_transaction_increments() {
 
     server.shutdown().await;
 }
+
+/// A write performed inside an EVAL script bumps the WATCH version exactly
+/// like a direct write: a transaction watching the key must abort after a
+/// scripted SET modifies it (proposal 46 item 2 — the scripting seam used to
+/// skip the whole write-effect pipeline, including the version increment).
+#[tokio::test]
+async fn test_scripted_write_dirties_watch() {
+    let server = TestServer::start_standalone().await;
+    let mut client1 = server.connect().await;
+    let mut client2 = server.connect().await;
+
+    client1.command(&["SET", "evwatch", "initial"]).await;
+
+    let response = client1.command(&["WATCH", "evwatch"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    // Client 2 modifies the watched key via a script.
+    let response = client2
+        .command(&[
+            "EVAL",
+            "return redis.call('SET', KEYS[1], ARGV[1])",
+            "1",
+            "evwatch",
+            "scripted",
+        ])
+        .await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    let response = client1.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    let response = client1.command(&["SET", "evwatch", "txn"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+
+    // EXEC must abort: the scripted write dirtied the watched key.
+    let response = client1.command(&["EXEC"]).await;
+    assert_eq!(
+        response,
+        Response::Bulk(None),
+        "a scripted write must invalidate a WATCH on the written key"
+    );
+
+    let response = client1.command(&["GET", "evwatch"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("scripted"))));
+
+    server.shutdown().await;
+}

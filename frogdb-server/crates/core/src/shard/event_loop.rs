@@ -247,7 +247,7 @@ impl ShardWorker {
             | ScriptFlush { .. }
             | ScriptKill { .. }
             | ScriptSubCommand { .. }
-            | FunctionCall { .. } => self.dispatch_scripting(msg),
+            | FunctionCall { .. } => self.dispatch_scripting(msg).await,
             BlockWait { .. } | UnregisterWait { .. } => {
                 self.dispatch_blocking(msg);
                 false

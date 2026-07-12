@@ -59,7 +59,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 
-use crate::command::{Command, WaiterKind, WaiterWake, WriteRecord};
+use crate::command::{Command, ScriptWriteRecord, WaiterKind, WaiterWake, WriteRecord};
 use crate::store::Store;
 
 use super::helpers::REPLICA_INTERNAL_CONN_ID;
@@ -332,6 +332,50 @@ impl ShardWorker {
             },
             WalPhase::Persist,
             EffectScope::ScatterPart,
+        )
+        .await;
+    }
+
+    /// Run the canonical write-effect pipeline for the effective writes a
+    /// script (EVAL/EVALSHA/FCALL) performed via `redis.call`/`redis.pcall`.
+    ///
+    /// The scripting seam cannot run effects mid-script (the store is mutably
+    /// borrowed by the invoker for the whole execution), so
+    /// `ScriptInvoker::run_local` records each effective local write as an
+    /// owned [`ScriptWriteRecord`] and the shard worker drains them here after
+    /// the script completes — Redis parity: a scripted write has exactly the
+    /// side effects of a direct one (keyspace notifications, WATCH bump,
+    /// tracking invalidation, waiter wake, WAL persistence, replication).
+    ///
+    /// Scope selection mirrors Redis's effects replication: a single write
+    /// propagates as itself ([`EffectScope::Command`]); multiple writes
+    /// propagate as an atomic MULTI/EXEC-framed batch
+    /// ([`EffectScope::Transaction`]) so replicas never observe intermediate
+    /// script state. No-op sub-commands were never recorded, so an entirely
+    /// no-op script short-circuits before any effect runs.
+    pub(crate) async fn run_script_write_effects(
+        &mut self,
+        writes: Vec<ScriptWriteRecord>,
+        conn_id: u64,
+    ) {
+        if writes.is_empty() {
+            return;
+        }
+        let dirty_delta: i64 = writes.iter().map(|w| w.dirty_delta).sum();
+        let write_refs: Vec<WriteRecord<'_>> = writes.iter().map(|w| w.as_write_record()).collect();
+        let scope = if write_refs.len() == 1 {
+            EffectScope::Command
+        } else {
+            EffectScope::Transaction
+        };
+        self.run_write_effects(
+            WriteSummary {
+                writes: &write_refs,
+                dirty_delta,
+                conn_id,
+            },
+            WalPhase::Persist,
+            scope,
         )
         .await;
     }

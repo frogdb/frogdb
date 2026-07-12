@@ -32,7 +32,7 @@ use super::bindings::{
     extract_keys_from_command, is_forbidden_in_script, is_forbidden_subcommand, is_write_command,
 };
 use super::lua_vm::ExecutionState;
-use crate::command::CommandContext;
+use crate::command::{CommandContext, ScriptWriteRecord};
 use crate::registry::CommandRegistry;
 use crate::shard::message::ShardMessage;
 use crate::shard::{ShardSender, shard_for_key, slot_for_key};
@@ -255,6 +255,14 @@ pub(crate) struct ScriptInvoker<'a> {
     is_replica_flag: Option<Arc<AtomicBool>>,
     master_host: Option<String>,
     master_port: Option<u16>,
+    /// Effective local writes performed by this script's sub-commands, recorded
+    /// so the shard worker can run the canonical write-effect pipeline
+    /// (notifications, WATCH bump, tracking, waiter wake, WAL, replication)
+    /// after the script completes. Borrowed from the outer
+    /// [`CommandContext::script_writes`] so the records outlive this invoker.
+    /// Behind a `RefCell` for the same reason as `store`: the Lua callbacks
+    /// that reach it are shared `Fn` closures.
+    script_writes: RefCell<&'a mut Vec<ScriptWriteRecord>>,
 }
 
 impl<'a> ScriptInvoker<'a> {
@@ -277,7 +285,10 @@ impl<'a> ScriptInvoker<'a> {
             master_host: ctx.master_host.clone(),
             master_port: ctx.master_port,
             // Reborrow last, after every scalar field is read, so the mutable
-            // borrow of the store does not shadow the disjoint field reads.
+            // borrows of the two written-to fields do not shadow the disjoint
+            // scalar reads. `store` and `script_writes` are distinct fields of
+            // `ctx`, so the two `&mut` borrows are disjoint.
+            script_writes: RefCell::new(&mut ctx.script_writes),
             store: RefCell::new(&mut *ctx.store),
         }
     }
@@ -366,7 +377,33 @@ impl CommandInvoker for ScriptInvoker<'_> {
         ctx.master_host = self.master_host.clone();
         ctx.master_port = self.master_port;
 
-        match handler.execute(&mut ctx, args) {
+        let result = handler.execute(&mut ctx, args);
+
+        // Record every effective write so the shard worker can run the
+        // canonical write-effect pipeline (keyspace notifications, WATCH bump,
+        // tracking invalidation, waiter wake, WAL, replication) after the
+        // script completes — a scripted write must have the same side effects
+        // as a direct one. A `write_was_noop` write is dropped wholesale (same
+        // contract as the direct path), and a failed sub-command recorded
+        // nothing effective. Deposited state (`keyspace_events`,
+        // `hll_wal_delta`) is drained off the throwaway sub-command context
+        // into the owned record.
+        if result.is_ok()
+            && handler
+                .flags()
+                .contains(crate::command::CommandFlags::WRITE)
+            && !ctx.write_was_noop
+        {
+            self.script_writes.borrow_mut().push(ScriptWriteRecord {
+                handler: Arc::clone(&handler),
+                args: args.to_vec(),
+                dirty_delta: ctx.dirty_delta,
+                hll_wal_delta: ctx.hll_wal_delta.take(),
+                keyspace_events: ctx.take_keyspace_events(),
+            });
+        }
+
+        match result {
             Ok(response) => Ok(response),
             Err(err) => Err(err.to_string()),
         }
@@ -563,6 +600,7 @@ mod tests {
         senders: Vec<ShardSender>,
         store: &'a mut HashMapStore,
         registry: &'a CommandRegistry,
+        writes: &'a mut Vec<ScriptWriteRecord>,
     ) -> ScriptInvoker<'a> {
         ScriptInvoker {
             registry,
@@ -576,6 +614,7 @@ mod tests {
             master_host: None,
             master_port: None,
             store: RefCell::<&mut dyn Store>::new(store),
+            script_writes: RefCell::new(writes),
         }
     }
 
@@ -662,8 +701,9 @@ mod tests {
         registry.register(SeamWrite);
         let gate = open_gate();
 
+        let mut writes = Vec::new();
         {
-            let invoker = live_invoker(1, 0, vec![], &mut store, &registry);
+            let invoker = live_invoker(1, 0, vec![], &mut store, &registry, &mut writes);
             let resp = gate
                 .dispatch(&invoker, &[part("__SEAMWRITE")])
                 .expect("__SEAMWRITE dispatches locally through the seam");
@@ -687,6 +727,7 @@ mod tests {
         let mut registry = CommandRegistry::new();
         registry.register(ReplicaProbe);
 
+        let mut writes = Vec::new();
         let invoker = ScriptInvoker {
             registry: &registry,
             shard_senders: Arc::new(vec![]),
@@ -699,6 +740,7 @@ mod tests {
             master_host: Some("primary.example".to_string()),
             master_port: Some(6390),
             store: RefCell::<&mut dyn Store>::new(&mut store),
+            script_writes: RefCell::new(&mut writes),
         };
         let gate = open_gate();
 
@@ -717,7 +759,8 @@ mod tests {
         let mut store = HashMapStore::new();
         let mut registry = CommandRegistry::new();
         registry.register(ReplicaProbe);
-        let invoker = live_invoker(1, 0, vec![], &mut store, &registry);
+        let mut writes = Vec::new();
+        let invoker = live_invoker(1, 0, vec![], &mut store, &registry, &mut writes);
         let gate = open_gate();
         let resp = gate
             .dispatch(&invoker, &[part("__REPLICAPROBE")])
@@ -746,8 +789,9 @@ mod tests {
         let gate = open_gate();
         let parts = vec![part("SET"), key, part("v")];
 
+        let mut writes = Vec::new();
         {
-            let invoker = live_invoker(2, 0, senders, &mut store, &registry);
+            let invoker = live_invoker(2, 0, senders, &mut store, &registry, &mut writes);
             let err = gate
                 .dispatch(&invoker, &parts)
                 .expect_err("cross-shard call on current_thread must error, not fall through");
@@ -783,7 +827,8 @@ mod tests {
         let gate = open_gate();
         let parts = vec![part("SET"), key, part("v")];
 
-        let invoker = live_invoker(2, 0, senders, &mut store, &registry);
+        let mut writes = Vec::new();
+        let invoker = live_invoker(2, 0, senders, &mut store, &registry, &mut writes);
         let resp = gate
             .dispatch(&invoker, &parts)
             .expect("remote dispatch should succeed");

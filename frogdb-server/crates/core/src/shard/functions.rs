@@ -8,7 +8,7 @@ use super::worker::ShardWorker;
 
 impl ShardWorker {
     /// Handle FCALL/FCALL_RO - execute a function.
-    pub(crate) fn handle_function_call(
+    pub(crate) async fn handle_function_call(
         &mut self,
         function_name: &Bytes,
         keys: &[Bytes],
@@ -91,9 +91,9 @@ impl ShardWorker {
             .scripting
             .take_executor()
             .expect("executor presence checked above");
-        let result = {
+        let (result, script_writes) = {
             let mut ctx = self.command_context(conn_id, protocol_version);
-            executor.execute_function(
+            let result = executor.execute_function(
                 &func_name,
                 &library_code,
                 keys,
@@ -101,9 +101,14 @@ impl ShardWorker {
                 &mut ctx,
                 &registry,
                 effective_read_only,
-            )
+            );
+            (result, std::mem::take(&mut ctx.script_writes))
         };
         self.scripting.set_executor(executor);
+
+        // Same contract as EVAL/EVALSHA: the function's effective writes run
+        // through the canonical write-effect pipeline after execution.
+        self.run_script_write_effects(script_writes, conn_id).await;
 
         match result {
             Ok(response) => response,

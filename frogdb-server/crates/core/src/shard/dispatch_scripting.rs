@@ -3,7 +3,7 @@ use super::worker::ShardWorker;
 
 impl ShardWorker {
     /// Dispatch scripting messages (EvalScript, EvalScriptSha, ScriptLoad, etc.).
-    pub(super) fn dispatch_scripting(&mut self, msg: ShardMessage) -> bool {
+    pub(super) async fn dispatch_scripting(&mut self, msg: ShardMessage) -> bool {
         match msg {
             ShardMessage::EvalScript {
                 script_source,
@@ -18,14 +18,16 @@ impl ShardWorker {
                     let _ = response_tx.send(err);
                     return false;
                 }
-                let response = self.handle_eval_script(
-                    &script_source,
-                    &keys,
-                    &argv,
-                    conn_id,
-                    protocol_version,
-                    read_only,
-                );
+                let response = self
+                    .handle_eval_script(
+                        &script_source,
+                        &keys,
+                        &argv,
+                        conn_id,
+                        protocol_version,
+                        read_only,
+                    )
+                    .await;
                 let _ = response_tx.send(response);
             }
             ShardMessage::EvalScriptSha {
@@ -41,14 +43,16 @@ impl ShardWorker {
                     let _ = response_tx.send(err);
                     return false;
                 }
-                let response = self.handle_evalsha(
-                    &script_sha,
-                    &keys,
-                    &argv,
-                    conn_id,
-                    protocol_version,
-                    read_only,
-                );
+                let response = self
+                    .handle_evalsha(
+                        &script_sha,
+                        &keys,
+                        &argv,
+                        conn_id,
+                        protocol_version,
+                        read_only,
+                    )
+                    .await;
                 let _ = response_tx.send(response);
             }
             ShardMessage::ScriptLoad {
@@ -79,14 +83,16 @@ impl ShardWorker {
                 read_only,
                 response_tx,
             } => {
-                let response = self.handle_function_call(
-                    &function_name,
-                    &keys,
-                    &argv,
-                    conn_id,
-                    protocol_version,
-                    read_only,
-                );
+                let response = self
+                    .handle_function_call(
+                        &function_name,
+                        &keys,
+                        &argv,
+                        conn_id,
+                        protocol_version,
+                        read_only,
+                    )
+                    .await;
                 let _ = response_tx.send(response);
             }
             ShardMessage::ScriptSubCommand {
@@ -99,7 +105,9 @@ impl ShardWorker {
                     let _ = response_tx.send(err);
                     return false;
                 }
-                let response = self.execute_script_sub_command(&command, conn_id, protocol_version);
+                let response = self
+                    .execute_script_sub_command(&command, conn_id, protocol_version)
+                    .await;
                 let _ = response_tx.send(response);
             }
             _ => unreachable!(),

@@ -17,7 +17,7 @@ use super::worker::ShardWorker;
 
 impl ShardWorker {
     /// Handle EVAL / EVAL_RO - execute a Lua script.
-    pub(crate) fn handle_eval_script(
+    pub(crate) async fn handle_eval_script(
         &mut self,
         script_source: &Bytes,
         keys: &[Bytes],
@@ -43,10 +43,11 @@ impl ShardWorker {
                 )
             },
         )
+        .await
     }
 
     /// Handle EVALSHA / EVALSHA_RO - execute a cached Lua script by SHA.
-    pub(crate) fn handle_evalsha(
+    pub(crate) async fn handle_evalsha(
         &mut self,
         script_sha: &Bytes,
         keys: &[Bytes],
@@ -72,6 +73,7 @@ impl ShardWorker {
                 )
             },
         )
+        .await
     }
 
     /// Shared EVAL/EVALSHA execution path.
@@ -83,7 +85,7 @@ impl ShardWorker {
     /// matching the formatted error string. This is the single place that
     /// owns cache-disposition + metric emission for both handlers above, so
     /// they only need to build the ctx and call into the executor.
-    fn run_script(
+    async fn run_script(
         &mut self,
         kind: ScriptKind,
         conn_id: u64,
@@ -109,11 +111,24 @@ impl ShardWorker {
             .scripting
             .take_executor()
             .expect("executor presence checked above");
-        let outcome = {
+        let (outcome, script_writes) = {
             let mut ctx = self.command_context(conn_id, protocol_version);
-            invoke(&mut executor, &mut ctx, &registry)
+            let outcome = invoke(&mut executor, &mut ctx, &registry);
+            // Drain the effective writes the script's `redis.call`s recorded
+            // before the context drops; the pipeline below consumes them.
+            (outcome, std::mem::take(&mut ctx.script_writes))
         };
         self.scripting.set_executor(executor);
+
+        // Route the script's effective writes through the canonical
+        // write-effect pipeline (keyspace notifications, WATCH bump, tracking
+        // invalidation, waiter wake, WAL, replication) — a scripted write has
+        // exactly the side effects of a direct one. Runs even when the script
+        // itself errored mid-way: the sub-commands that DID complete really
+        // wrote (scripts are not transactions; Redis propagates completed
+        // effects of a failed script the same way).
+        self.run_script_write_effects(script_writes, conn_id).await;
+
         let elapsed = start.elapsed().as_secs_f64();
 
         match outcome.disposition {
@@ -163,7 +178,7 @@ impl ShardWorker {
     }
 
     /// Execute a sub-command dispatched from a Lua script running on another shard.
-    pub(crate) fn execute_script_sub_command(
+    pub(crate) async fn execute_script_sub_command(
         &mut self,
         parts: &[Bytes],
         conn_id: u64,
@@ -187,8 +202,39 @@ impl ShardWorker {
         // Route through the shared builder so a cross-shard script sub-command
         // sees the same cluster + replica identity as any other command on this
         // shard (previously it used the bare `new` constructor).
-        let mut ctx = self.command_context(conn_id, protocol_version);
-        match handler.execute(&mut ctx, args) {
+        let (result, dirty_delta, write_was_noop, hll_wal_delta, keyspace_events) = {
+            let mut ctx = self.command_context(conn_id, protocol_version);
+            let result = handler.execute(&mut ctx, args);
+            (
+                result,
+                ctx.dirty_delta,
+                ctx.write_was_noop,
+                ctx.hll_wal_delta.take(),
+                ctx.take_keyspace_events(),
+            )
+        };
+
+        // A cross-shard scripted write runs its effects on THIS shard — the
+        // one that owns the key — through the same canonical pipeline as a
+        // direct command (the local-shard analogue is the record accumulated
+        // by `ScriptInvoker::run_local` and drained after the script).
+        let is_effective_write = result.is_ok()
+            && handler
+                .flags()
+                .contains(crate::command::CommandFlags::WRITE)
+            && !write_was_noop;
+        if is_effective_write {
+            let record = crate::command::ScriptWriteRecord {
+                handler: std::sync::Arc::clone(&handler),
+                args: args.to_vec(),
+                dirty_delta,
+                hll_wal_delta,
+                keyspace_events,
+            };
+            self.run_script_write_effects(vec![record], conn_id).await;
+        }
+
+        match result {
             Ok(response) => response,
             Err(err) => Response::error(err.to_string()),
         }
