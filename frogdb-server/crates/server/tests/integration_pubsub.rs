@@ -2325,6 +2325,119 @@ async fn test_smove_nonmember_emits_nothing() {
     server.shutdown().await;
 }
 
+/// RENAME k k (source == destination, key exists): Redis renameGenericCommand
+/// short-circuits samekey with a plain OK *before* any modification or
+/// notifyKeyspaceEvent call — no `rename_from`, no `rename_to`. The key and its
+/// value must survive untouched.
+#[tokio::test]
+async fn test_rename_self_emits_nothing() {
+    let server = TestServer::start_standalone().await;
+    let mut from_sub = server.connect().await;
+    let mut to_sub = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["SET", "rnself", "v"]).await;
+
+    subscribe_keyevent(&mut from_sub, "rename_from").await;
+    subscribe_keyevent(&mut to_sub, "rename_to").await;
+
+    // Same key on both sides: silent success, no events, value preserved.
+    let resp = client.command(&["RENAME", "rnself", "rnself"]).await;
+    assert_eq!(resp, Response::ok());
+
+    assert_keyevent_keys(&mut from_sub, "rename_from", &[]).await;
+    assert_keyevent_keys(&mut to_sub, "rename_to", &[]).await;
+
+    let resp = client.command(&["GET", "rnself"]).await;
+    assert_eq!(resp, Response::Bulk(Some(Bytes::from("v"))));
+    server.shutdown().await;
+}
+
+/// RENAME k k on a MISSING key is still an error: Redis checks the source
+/// exists (lookupKeyWriteOrReply, "no such key") *before* the samekey
+/// short-circuit. Nothing is written, so nothing fires.
+#[tokio::test]
+async fn test_rename_self_missing_key_errors() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["RENAME", "rnselfmiss", "rnselfmiss"])
+        .await;
+    assert!(
+        matches!(resp, Response::Error(_)),
+        "RENAME of a missing key onto itself must error, got {resp:?}"
+    );
+    server.shutdown().await;
+}
+
+/// RENAMENX k k on an existing key replies 0 (Redis samekey path: czero for
+/// NX) with no modification and no events.
+#[tokio::test]
+async fn test_renamenx_self_returns_zero_silently() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["SET", "rnxself", "v"]).await;
+
+    subscribe_keyevent(&mut subscriber, "rename_from").await;
+
+    let resp = client.command(&["RENAMENX", "rnxself", "rnxself"]).await;
+    assert_eq!(resp, Response::Integer(0));
+
+    assert_keyevent_keys(&mut subscriber, "rename_from", &[]).await;
+    server.shutdown().await;
+}
+
+/// SMOVE k k m (source == destination): Redis smoveCommand short-circuits
+/// `srcset == dstset` before any modification — reply 1 if the member is
+/// present (0 otherwise), with NO `srem`/`sadd` events, and the set is left
+/// untouched.
+#[tokio::test]
+async fn test_smove_same_key_emits_nothing() {
+    let server = TestServer::start_standalone().await;
+    let mut srem_sub = server.connect().await;
+    let mut sadd_sub = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["SADD", "smself", "a", "b"]).await;
+
+    subscribe_keyevent(&mut srem_sub, "srem").await;
+    subscribe_keyevent(&mut sadd_sub, "sadd").await;
+
+    // Member present: reply 1, but no events and no modification.
+    let resp = client.command(&["SMOVE", "smself", "smself", "a"]).await;
+    assert_eq!(resp, Response::Integer(1));
+
+    // Member absent: reply 0, same silence.
+    let resp = client.command(&["SMOVE", "smself", "smself", "nope"]).await;
+    assert_eq!(resp, Response::Integer(0));
+
+    assert_keyevent_keys(&mut srem_sub, "srem", &[]).await;
+    assert_keyevent_keys(&mut sadd_sub, "sadd", &[]).await;
+
+    // The set is untouched.
+    let resp = client.command(&["SCARD", "smself"]).await;
+    assert_eq!(resp, Response::Integer(2));
+    server.shutdown().await;
+}
+
 /// RPOPLPUSH = LMOVE RIGHT LEFT: Redis emits `rpop` on the source (popped from
 /// the tail) and `lpush` on the destination (pushed to the head) — t_list.c
 /// listElementsRemoved:2 + lmoveHandlePush:23. Not a bespoke `rpoplpush` event.
