@@ -421,3 +421,73 @@ async fn test_evalsha_after_script_load() {
 
     server.shutdown().await;
 }
+
+/// Regression: SCRIPT LOAD must cache the script on EVERY shard, not just shard
+/// 0. Before the broadcast-gather fix, SCRIPT LOAD awaited only shard 0, so a
+/// script could be cached on some shards but not others — an EVALSHA whose key
+/// lived on a shard that never saw the LOAD returned NOSCRIPT. This pins the
+/// all-shards semantics by running EVALSHA against keys chosen to hash to every
+/// one of the default 4 shards; each must hit a shard-local cache.
+///
+/// The happy-path `test_evalsha_after_script_load` above passes even with the
+/// fix reverted (its `shakey` happens to land on shard 0), so it does not cover
+/// this; this test fails the moment LOAD stops broadcasting to every shard.
+#[tokio::test]
+async fn test_script_load_caches_on_every_shard() {
+    use frogdb_core::shard_for_key;
+
+    // Default topology is 4 shards.
+    let num_shards = 4;
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // `shard-probe-0..3` hash (CRC16 % 16384 % 4) to shards 2, 3, 0, 1 — i.e.
+    // together they cover all four shards. Assert that coverage up front so the
+    // test fails loudly (rather than silently under-probing) if the default
+    // shard count or hashing ever changes.
+    let keys: [&str; 4] = [
+        "shard-probe-0",
+        "shard-probe-1",
+        "shard-probe-2",
+        "shard-probe-3",
+    ];
+    let mut covered: Vec<usize> = keys
+        .iter()
+        .map(|k| shard_for_key(k.as_bytes(), num_shards))
+        .collect();
+    covered.sort();
+    covered.dedup();
+    assert_eq!(
+        covered,
+        (0..num_shards).collect::<Vec<_>>(),
+        "probe keys must cover every shard; got shards {covered:?}"
+    );
+
+    // Load the script once (returned SHA is shard 0's, shared by all shards).
+    let script = "return redis.call('SET', KEYS[1], ARGV[1])";
+    let sha = match client.command(&["SCRIPT", "LOAD", script]).await {
+        Response::Bulk(Some(b)) => String::from_utf8_lossy(&b).to_string(),
+        other => panic!("Expected bulk string with SHA, got: {other:?}"),
+    };
+
+    // EVALSHA runs on the shard that owns KEYS[1]. If LOAD skipped that shard,
+    // this returns a NOSCRIPT error instead of executing.
+    for key in keys {
+        let resp = client.command(&["EVALSHA", &sha, "1", key, "value"]).await;
+        assert_eq!(
+            resp,
+            Response::Simple(Bytes::from("OK")),
+            "EVALSHA for key {key} (shard {}) must hit a shard-local cache, got: {resp:?}",
+            shard_for_key(key.as_bytes(), num_shards)
+        );
+        let got = client.command(&["GET", key]).await;
+        assert_eq!(got, Response::Bulk(Some(Bytes::from("value"))));
+    }
+
+    // SCRIPT EXISTS is a cross-shard OR, so it should also report the script as
+    // present after a full-broadcast load.
+    let exists = client.command(&["SCRIPT", "EXISTS", &sha]).await;
+    assert_eq!(exists, Response::Array(vec![Response::Integer(1)]));
+
+    server.shutdown().await;
+}
