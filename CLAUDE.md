@@ -30,6 +30,19 @@ just fmt-py                             # format Python code
   `just test frogdb-server test_name`
 - If you encounter an error with `sccache`, rerun the command prefixed with `RUSTC_WRAPPER=""`
 
+### Long-Running Commands (watchdog rules)
+
+- **Known issue**: test binaries hang forever at `_dyld_start` (0% CPU) when executed inside the
+  Claude sandbox — run `just test` / `cargo nextest` **unsandboxed**.
+- Run any command expected to take >2 minutes in the background with **raw output redirected to a
+  log file** (`cmd > /path/to/log 2>&1`). Never pipe a long run through `grep`/`sort`/`tail` —
+  filters buffer output and hide all progress.
+- After launching a long background command, **verify liveness within ~3 minutes** and re-check
+  every few minutes: the log file must be growing (`wc -c`), or its processes must accumulate CPU
+  time (`ps -Ao pid,pcpu,etime,command`). A static log plus 0% CPU for 2+ minutes means stuck —
+  diagnose with `sample <pid>` (macOS), then kill and rerun (usually unsandboxed).
+- Do not passively wait more than ~5 minutes on a long run without performing a liveness check.
+
 ## Agent Guidelines
 
 - Check the `Justfile` before performing an action to see if there is already a target to do this
