@@ -32,8 +32,12 @@ just fmt-py                             # format Python code
 
 ### Long-Running Commands (watchdog rules)
 
-- **Known issue**: test binaries hang forever at `_dyld_start` (0% CPU) when executed inside the
-  Claude sandbox — run `just test` / `cargo nextest` **unsandboxed**.
+- **Known issue**: nextest test binaries sometimes hang forever at `_dyld_start` (0% CPU) during
+  the `--list` phase — observed both sandboxed and unsandboxed (2026-07-12), so the trigger is a
+  system-level exec wedge (suspected code-sign/amfid validation of freshly built binaries), not
+  the sandbox alone. Signature: `--list --format terse` processes piling up at 0% CPU. Recovery:
+  `pkill -f cargo-nextest; pkill -f 'target/debug/deps.*--list'`, verify one binary execs
+  directly (`target/debug/deps/<bin> --list | head`), then rerun.
 - Run any command expected to take >2 minutes in the background with **raw output redirected to a
   log file** (`cmd > /path/to/log 2>&1`). Never pipe a long run through `grep`/`sort`/`tail` —
   filters buffer output and hide all progress.
