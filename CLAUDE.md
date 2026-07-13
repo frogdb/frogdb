@@ -32,12 +32,14 @@ just fmt-py                             # format Python code
 
 ### Long-Running Commands (watchdog rules)
 
-- **Known issue**: nextest test binaries sometimes hang forever at `_dyld_start` (0% CPU) during
-  the `--list` phase — observed both sandboxed and unsandboxed (2026-07-12), so the trigger is a
-  system-level exec wedge (suspected code-sign/amfid validation of freshly built binaries), not
-  the sandbox alone. Signature: `--list --format terse` processes piling up at 0% CPU. Recovery:
-  `pkill -f cargo-nextest; pkill -f 'target/debug/deps.*--list'`, verify one binary execs
-  directly (`target/debug/deps/<bin> --list | head`), then rerun.
+- **Known issue (root-caused 2026-07-12)**: background shell tasks are spawned at Darwin
+  background QoS (`ps` STAT `SN`, nice 5), and macOS throttles their disk I/O to a trickle. Fresh
+  debug test binaries then take **minutes** to page in — processes sit at `_dyld_start` with 0%
+  CPU (nextest `--list` phase looks hung; rustc crawls; a small crate compiled in 5m that takes
+  33s un-throttled). Foreground runs are unaffected. Fix for a live tree:
+  `taskpolicy -B -p <pid>` on each process (clears the background band); or run heavy
+  builds/tests in the foreground. Diagnostic signature: `ps -o stat` shows `SN` and `sample`
+  shows only `_dyld_start + 0`.
 - Run any command expected to take >2 minutes in the background with **raw output redirected to a
   log file** (`cmd > /path/to/log 2>&1`). Never pipe a long run through `grep`/`sort`/`tail` —
   filters buffer output and hide all progress.
