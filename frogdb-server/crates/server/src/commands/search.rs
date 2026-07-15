@@ -1,7 +1,10 @@
 //! FT.* search command definitions.
 //!
-//! ServerWide commands (FT.CREATE, FT.SEARCH, etc.) have stub execute() methods;
-//! the actual logic lives in scatter handlers.
+//! ServerWide commands (FT.CREATE, FT.SEARCH, etc.) never execute on a shard;
+//! the actual logic lives in scatter handlers reached via
+//! `ConnectionHandler::dispatch_server_wide`. Their `execute()` methods return
+//! a loud internal error so a routing regression yields an ERR reply instead
+//! of a fabricated success.
 //!
 //! Key-based commands (FT.SUGADD, FT.SUGGET, etc.) use Standard execution and
 //! implement their logic directly in execute().
@@ -43,8 +46,14 @@ impl Command for FtCreateCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        // Handled via ServerWide dispatch
-        Ok(Response::ok())
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -78,8 +87,14 @@ impl Command for FtAlterCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        // Handled via ServerWide dispatch
-        Ok(Response::ok())
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -114,8 +129,14 @@ impl Command for FtSearchCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        // Handled via ServerWide dispatch
-        Ok(Response::Array(vec![]))
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -149,8 +170,14 @@ impl Command for FtDropIndexCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        // Handled via ServerWide dispatch
-        Ok(Response::ok())
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -184,8 +211,14 @@ impl Command for FtInfoCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        // Handled via ServerWide dispatch
-        Ok(Response::Array(vec![]))
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -219,8 +252,14 @@ impl Command for FtListCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        // Handled via ServerWide dispatch
-        Ok(Response::Array(vec![]))
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -255,8 +294,14 @@ impl Command for FtAggregateCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        // Handled via ServerWide dispatch
-        Ok(Response::Array(vec![]))
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -292,8 +337,14 @@ impl Command for FtHybridCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        // Handled via ServerWide dispatch
-        Ok(Response::Array(vec![]))
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -327,8 +378,14 @@ impl Command for FtSynupdateCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        // Handled via ServerWide dispatch
-        Ok(Response::ok())
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -362,8 +419,14 @@ impl Command for FtSyndumpCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        // Handled via ServerWide dispatch
-        Ok(Response::Array(vec![]))
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -400,7 +463,14 @@ impl Command for FtAliasaddCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        Ok(Response::ok())
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -433,7 +503,14 @@ impl Command for FtAliasdelCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        Ok(Response::ok())
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -466,7 +543,14 @@ impl Command for FtAliasupdateCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        Ok(Response::ok())
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -499,7 +583,14 @@ impl Command for FtTagvalsCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        Ok(Response::ok())
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -532,7 +623,14 @@ impl Command for FtDictaddCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        Ok(Response::ok())
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -565,7 +663,14 @@ impl Command for FtDictdelCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        Ok(Response::ok())
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -598,7 +703,14 @@ impl Command for FtDictdumpCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        Ok(Response::ok())
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -631,7 +743,14 @@ impl Command for FtConfigCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        Ok(Response::ok())
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -664,7 +783,14 @@ impl Command for FtSpellcheckCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        Ok(Response::ok())
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -1063,7 +1189,14 @@ impl Command for FtExplainCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        Ok(Response::ok())
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -1097,8 +1230,14 @@ impl Command for FtProfileCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        // Handled via ServerWide dispatch
-        Ok(Response::Array(vec![]))
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -1132,6 +1271,13 @@ impl Command for FtExplainCliCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        Ok(Response::ok())
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }

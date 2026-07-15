@@ -7,14 +7,18 @@
 //! What stays here is the part that cannot be expressed against the narrow
 //! `ConnCtx`:
 //! - `handle_exec` — EXEC's orchestration: draining the queued commands over the
-//!   owning shard(s) and running the deferred connection-level commands (which
-//!   re-enter the `ConnCtx` dispatch machinery — the meta-circularity).
+//!   owning shard(s) and running the deferred commands: connection-level ones
+//!   (which re-enter the `ConnCtx` dispatch machinery — the meta-circularity)
+//!   and server-wide ones (which fan out to all shards via
+//!   `dispatch_server_wide`).
 //! - `queue_command` — validating and queuing a command while a MULTI is open.
 //!
 //! These are implemented as extension methods on `ConnectionHandler`.
 
 use bytes::Bytes;
-use frogdb_core::{RateLimitExceeded, ShardMessage, TransactionResult, shard_for_key};
+use frogdb_core::{
+    RateLimitExceeded, ServerWideOp, ShardMessage, TransactionResult, shard_for_key,
+};
 use frogdb_protocol::{ParsedCommand, Response};
 use tokio::sync::oneshot;
 use tracing::debug;
@@ -42,6 +46,22 @@ enum TransactionOutcome {
     WatchAborted,
     /// Executed; results returned to the client.
     Committed,
+}
+
+/// A queued command that cannot execute on the shard (its shard-side
+/// `Command::execute` is a placeholder) and is therefore deferred until after
+/// the shard transaction completes. Deferred commands are NOT atomic with the
+/// shard transaction — matching prior FrogDB convention (and Redis semantics,
+/// where admin commands inside MULTI take effect at EXEC time).
+enum DeferredKind {
+    /// `ConnectionLevel(_)` strategy: re-enters the ConnCtx dispatch machinery
+    /// via `execute_connection_level_in_transaction`.
+    ConnectionLevel { name: String },
+    /// `ServerWide(_)` strategy: fans out to all shards via
+    /// [`ConnectionHandler::dispatch_server_wide`]. Running these on the single
+    /// transaction shard would execute the placeholder (or a one-shard subset:
+    /// partial KEYS, one-shard FLUSHDB, stub FT.* replies).
+    ServerWide(ServerWideOp),
 }
 
 impl TransactionOutcome {
@@ -110,8 +130,9 @@ impl ConnectionHandler {
     /// Execute a taken transaction, returning how it ended plus the wire replies.
     ///
     /// This owns everything between `take_transaction` and metric recording:
-    /// abort/rate-limit gates, the connection-level/shard partition, target-shard
-    /// resolution, the shard round-trip, and the deferred-command merge. Each
+    /// abort/rate-limit gates, the deferred (connection-level + server-wide) /
+    /// shard partition, target-shard resolution, the shard round-trip, and the
+    /// deferred-command merge. Each
     /// return names its [`TransactionOutcome`]; the caller records the metric.
     async fn execute_transaction(
         &mut self,
@@ -169,35 +190,37 @@ impl ConnectionHandler {
             self.wait_if_paused_for_transaction().await;
         }
 
-        // Partition commands into shard-executable and connection-level-deferred.
-        // Connection-level commands (CLIENT, CONFIG, INFO, etc.) can't execute on
-        // the shard — their Command::execute() is a placeholder. We extract them
-        // and run them after the shard transaction, matching Redis semantics where
-        // admin commands inside MULTI take effect after EXEC.
+        // Partition commands into shard-executable and deferred. Two strategy
+        // groups cannot execute on the shard — their shard-side
+        // `Command::execute()` is a placeholder (see [`DeferredKind`]):
+        // - Connection-level commands (CLIENT, CONFIG, INFO, etc.).
+        // - Server-wide commands (SCAN, KEYS, FLUSHDB, FT.*, ...), which must
+        //   fan out to all shards; a single-shard run would silently return
+        //   partial results (or the stub reply).
+        // Both are extracted and run after the shard transaction, matching
+        // Redis semantics where admin commands inside MULTI take effect after
+        // EXEC. They are NOT atomic with the shard transaction.
         let mut shard_commands = Vec::new();
-        // (original_index, cmd_name, args) for deferred connection-level commands
-        let mut deferred: Vec<(usize, String, Vec<Bytes>)> = Vec::new();
+        // (original_index, kind, args) for deferred commands
+        let mut deferred: Vec<(usize, DeferredKind, Vec<Bytes>)> = Vec::new();
 
         for (i, cmd) in queue.iter().enumerate() {
             let name = cmd.name_uppercase();
             let name_str = String::from_utf8_lossy(&name).to_string();
-            // A connection-level command (`ConnectionLevel` strategy) has a
-            // placeholder shard `Command::execute`, so it cannot run on the shard;
-            // it is deferred and executed post-transaction (Redis semantics).
-            let is_connection_level =
-                self.core
-                    .registry
-                    .get_entry(&name_str)
-                    .is_some_and(|entry| {
-                        matches!(
-                            entry.execution_strategy(),
-                            frogdb_core::ExecutionStrategy::ConnectionLevel(_)
-                        )
-                    });
-            if is_connection_level {
-                deferred.push((i, name_str, cmd.args.clone()));
-            } else {
-                shard_commands.push(cmd.clone());
+            let kind = self.core.registry.get_entry(&name_str).and_then(|entry| {
+                match entry.execution_strategy() {
+                    frogdb_core::ExecutionStrategy::ConnectionLevel(_) => {
+                        Some(DeferredKind::ConnectionLevel { name: name_str })
+                    }
+                    frogdb_core::ExecutionStrategy::ServerWide(op) => {
+                        Some(DeferredKind::ServerWide(op))
+                    }
+                    _ => None,
+                }
+            });
+            match kind {
+                Some(kind) => deferred.push((i, kind, cmd.args.clone())),
+                None => shard_commands.push(cmd.clone()),
             }
         }
 
@@ -238,10 +261,12 @@ impl ConnectionHandler {
             }
         };
 
-        // Merge shard results with deferred connection-level command results.
-        // Execute deferred commands now (post-transaction, matching Redis
-        // semantics). Both sequences are ordered by original queue index, so a
-        // single linear pass zips them back together.
+        // Merge shard results with deferred command results. Execute deferred
+        // commands now (post-transaction, matching Redis semantics): connection
+        // level commands re-enter the ConnCtx machinery, server-wide commands
+        // fan out to all shards via `dispatch_server_wide`. Both sequences are
+        // ordered by original queue index, so a single linear pass zips them
+        // back together — every reply lands at its queued position.
         let mut final_results = Vec::with_capacity(queued_count);
         let mut deferred_pushes = Vec::new();
         let mut shard_results = shard_results.into_iter();
@@ -249,12 +274,19 @@ impl ConnectionHandler {
 
         for i in 0..queued_count {
             if deferred.peek().is_some_and(|(idx, ..)| *idx == i) {
-                let (_, name, args) = deferred.next().expect("peeked entry exists");
-                let (response, pushes) = self
-                    .execute_connection_level_in_transaction(&name, &args)
-                    .await;
-                final_results.push(response);
-                deferred_pushes.extend(pushes);
+                let (_, kind, args) = deferred.next().expect("peeked entry exists");
+                match kind {
+                    DeferredKind::ConnectionLevel { name } => {
+                        let (response, pushes) = self
+                            .execute_connection_level_in_transaction(&name, &args)
+                            .await;
+                        final_results.push(response);
+                        deferred_pushes.extend(pushes);
+                    }
+                    DeferredKind::ServerWide(op) => {
+                        final_results.push(self.dispatch_server_wide(op, &args).await);
+                    }
+                }
             } else {
                 final_results.push(
                     shard_results

@@ -71,7 +71,15 @@ impl ConnectionHandler {
     /// on the command spec. The compiler then forces a match arm here (a missing
     /// arm is a compile error), so the name-keyed table plus drift tests this
     /// replaced are gone.
-    async fn dispatch_server_wide(&mut self, op: ServerWideOp, args: &[Bytes]) -> Response {
+    ///
+    /// `pub(crate)` because EXEC also routes here: server-wide commands queued
+    /// in a MULTI are deferred past the shard transaction and dispatched
+    /// through this same match (see `handlers::transaction::execute_transaction`).
+    pub(crate) async fn dispatch_server_wide(
+        &mut self,
+        op: ServerWideOp,
+        args: &[Bytes],
+    ) -> Response {
         match op {
             ServerWideOp::Scan => self.handle_scan(args).await,
             ServerWideOp::Keys => self.handle_keys(args).await,

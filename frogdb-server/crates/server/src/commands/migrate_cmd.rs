@@ -11,8 +11,6 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
-use crate::migrate::MigrateArgs;
-
 /// MIGRATE command - move keys to another Redis instance.
 ///
 /// Format: MIGRATE host port key|"" dest-db timeout [COPY] [REPLACE] [AUTH password] [AUTH2 username password] [KEYS key...]
@@ -38,14 +36,18 @@ impl Command for MigrateCommand {
         &SPEC
     }
 
-    fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
-        // Parse arguments to validate them
-        MigrateArgs::parse(args).map_err(|e| CommandError::InvalidArgument { message: e })?;
-
-        // Return a special response indicating async migration is needed
-        // The connection handler will intercept this and perform the migration
-        Ok(Response::MigrateNeeded {
-            args: args.to_vec(),
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        // Executes via ConnectionHandler::dispatch_server_wide (handle_migrate
+        // does its own parsing and async network I/O), never on a shard.
+        // Reaching this shard-side executor is a routing regression (or a Lua
+        // redis.call, which cannot perform the async migration) -- fail loudly
+        // rather than leak an internal MigrateNeeded signal.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
         })
     }
 

@@ -212,14 +212,12 @@ impl Command for ShutdownCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        // Parse optional NOSAVE/SAVE and NOW arguments
-        // Note: Actual shutdown is handled by the connection handler
-        // This command just returns OK; the caller (connection.rs) should trigger shutdown
-
-        // In a real implementation, this would trigger a graceful shutdown
-        // For now, we return an error indicating that shutdown should be handled specially
-        Err(CommandError::InvalidArgument {
-            message: "SHUTDOWN command should be handled by connection handler".to_string(),
+        // Executes via ConnectionHandler::dispatch_server_wide
+        // (handle_shutdown), never on a shard. Reaching this shard-side
+        // executor is a routing regression -- fail loudly rather than
+        // fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
         })
     }
 }

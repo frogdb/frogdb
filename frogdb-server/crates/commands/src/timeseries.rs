@@ -1024,8 +1024,14 @@ impl Command for TsQueryIndexCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        // Handled via ServerWide dispatch
-        Ok(Response::Array(vec![]))
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -1059,7 +1065,14 @@ impl Command for TsMgetCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        Ok(Response::Array(vec![]))
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -1095,7 +1108,14 @@ impl Command for TsMrangeCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        Ok(Response::Array(vec![]))
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 
@@ -1129,7 +1149,14 @@ impl Command for TsMrevrangeCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        Ok(Response::Array(vec![]))
+        // Executes via ConnectionHandler::dispatch_server_wide (all-shard
+        // fan-out), never on a shard. Reaching this shard-side executor is a
+        // routing regression (or a Lua redis.call, which cannot run a
+        // server-wide command against a single shard) -- fail loudly rather
+        // than fabricate a reply.
+        Err(CommandError::Internal {
+            message: "internal: server-wide command reached shard executor".to_string(),
+        })
     }
 }
 

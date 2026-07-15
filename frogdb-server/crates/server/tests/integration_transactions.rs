@@ -692,3 +692,227 @@ async fn test_scripted_write_dirties_watch() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// Server-wide commands inside MULTI/EXEC
+//
+// Server-wide commands (KEYS, SCAN, FLUSHDB, FT.*, ...) queued in a MULTI are
+// deferred past the shard transaction and fan out to ALL shards via
+// `dispatch_server_wide` — exactly like the direct (non-transactional) path.
+// Before this deferral existed, they executed on the single transaction shard,
+// silently returning partial results (KEYS/SCAN), clearing one shard only
+// (FLUSHDB), or replying from a do-nothing stub (FT.*).
+// ============================================================================
+
+/// `MULTI; KEYS *; EXEC` must return keys from ALL shards. The test server
+/// runs 4 shards; 20 distinct keys deterministically hash across several of
+/// them, so a single-shard execution could only ever see a strict subset.
+#[tokio::test]
+async fn test_multi_exec_keys_spans_all_shards() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    for i in 0..20 {
+        let key = format!("mxkeys:{i}");
+        let response = client.command(&["SET", &key, "v"]).await;
+        assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    }
+
+    let response = client.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    let response = client.command(&["KEYS", "mxkeys:*"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+
+    let response = client.command(&["EXEC"]).await;
+    let results = match response {
+        Response::Array(results) => results,
+        other => panic!("Expected array response from EXEC, got {other:?}"),
+    };
+    assert_eq!(results.len(), 1);
+    let keys = match &results[0] {
+        Response::Array(keys) => keys,
+        other => panic!("Expected KEYS reply array, got {other:?}"),
+    };
+    assert_eq!(
+        keys.len(),
+        20,
+        "KEYS inside MULTI must return keys from all shards, got {keys:?}"
+    );
+
+    server.shutdown().await;
+}
+
+/// `MULTI; FLUSHDB; EXEC` must clear ALL shards, not just the transaction's
+/// target shard. Verified via DBSIZE == 0 afterwards.
+#[tokio::test]
+async fn test_multi_exec_flushdb_clears_all_shards() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    for i in 0..20 {
+        let key = format!("mxflush:{i}");
+        client.command(&["SET", &key, "v"]).await;
+    }
+    let response = client.command(&["DBSIZE"]).await;
+    assert_eq!(response, Response::Integer(20));
+
+    let response = client.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    let response = client.command(&["FLUSHDB"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+
+    let response = client.command(&["EXEC"]).await;
+    match response {
+        Response::Array(results) => {
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0], Response::Simple(Bytes::from("OK")));
+        }
+        other => panic!("Expected array response from EXEC, got {other:?}"),
+    }
+
+    let response = client.command(&["DBSIZE"]).await;
+    assert_eq!(
+        response,
+        Response::Integer(0),
+        "FLUSHDB inside MULTI must clear every shard"
+    );
+
+    server.shutdown().await;
+}
+
+/// `MULTI; SCAN 0; EXEC` must return a proper `[cursor, [keys...]]` reply that
+/// walks the whole (multi-shard) keyspace, not a single shard's slice.
+#[tokio::test]
+async fn test_multi_exec_scan_returns_full_cursor_reply() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    for i in 0..20 {
+        let key = format!("mxscan:{i}");
+        client.command(&["SET", &key, "v"]).await;
+    }
+
+    let response = client.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    let response = client.command(&["SCAN", "0", "COUNT", "100"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+
+    let response = client.command(&["EXEC"]).await;
+    let results = match response {
+        Response::Array(results) => results,
+        other => panic!("Expected array response from EXEC, got {other:?}"),
+    };
+    assert_eq!(results.len(), 1);
+
+    // Collect keys from the EXEC-embedded SCAN reply, then follow the cursor
+    // (outside the transaction) until exhaustion.
+    let mut collected: Vec<Bytes> = Vec::new();
+    let mut reply = results[0].clone();
+    loop {
+        let parts = match reply {
+            Response::Array(parts) => parts,
+            other => panic!("Expected [cursor, keys] SCAN reply, got {other:?}"),
+        };
+        assert_eq!(parts.len(), 2, "SCAN reply must be [cursor, keys]");
+        let cursor = match &parts[0] {
+            Response::Bulk(Some(c)) => String::from_utf8_lossy(c).to_string(),
+            other => panic!("Expected bulk cursor, got {other:?}"),
+        };
+        match &parts[1] {
+            Response::Array(keys) => {
+                for key in keys {
+                    match key {
+                        Response::Bulk(Some(k)) => collected.push(k.clone()),
+                        other => panic!("Expected bulk key, got {other:?}"),
+                    }
+                }
+            }
+            other => panic!("Expected key array, got {other:?}"),
+        }
+        if cursor == "0" {
+            break;
+        }
+        reply = client.command(&["SCAN", &cursor, "COUNT", "100"]).await;
+    }
+
+    collected.sort();
+    collected.dedup();
+    assert_eq!(
+        collected.len(),
+        20,
+        "SCAN started inside MULTI must cover all shards, got {collected:?}"
+    );
+
+    server.shutdown().await;
+}
+
+/// `MULTI; FT.SEARCH <nonexistent>; EXEC` must run the real server-wide
+/// FT.SEARCH (which errors on an unknown index), not the shard-side stub
+/// (which used to fabricate an empty result).
+#[tokio::test]
+async fn test_multi_exec_ft_search_unknown_index_errors() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    let response = client
+        .command(&["FT.SEARCH", "mx-nonexistent-index", "x"])
+        .await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+
+    let response = client.command(&["EXEC"]).await;
+    let results = match response {
+        Response::Array(results) => results,
+        other => panic!("Expected array response from EXEC, got {other:?}"),
+    };
+    assert_eq!(results.len(), 1);
+    match &results[0] {
+        Response::Error(e) => {
+            let msg = String::from_utf8_lossy(e);
+            assert!(
+                msg.contains("no such index"),
+                "expected unknown-index error, got {msg:?}"
+            );
+        }
+        other => panic!("FT.SEARCH on unknown index inside MULTI must error, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// EXEC replies must appear at their queued positions when shard, server-wide,
+/// and shard commands interleave: `SET k v; KEYS k*; GET k` → `[OK, [k], v]`.
+#[tokio::test]
+async fn test_multi_exec_server_wide_reply_ordering() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    for cmd in [
+        &["SET", "mxorder:key", "value1"][..],
+        &["KEYS", "mxorder:*"][..],
+        &["GET", "mxorder:key"][..],
+    ] {
+        let response = client.command(cmd).await;
+        assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    }
+
+    let response = client.command(&["EXEC"]).await;
+    let results = match response {
+        Response::Array(results) => results,
+        other => panic!("Expected array response from EXEC, got {other:?}"),
+    };
+    assert_eq!(results.len(), 3, "one reply per queued command");
+    assert_eq!(results[0], Response::Simple(Bytes::from("OK")));
+    assert_eq!(
+        results[1],
+        Response::Array(vec![Response::Bulk(Some(Bytes::from("mxorder:key")))]),
+        "KEYS (deferred server-wide) reply must sit at its queued position and \
+         see the transaction's write"
+    );
+    assert_eq!(results[2], Response::Bulk(Some(Bytes::from("value1"))));
+
+    server.shutdown().await;
+}
