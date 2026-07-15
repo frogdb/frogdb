@@ -7,7 +7,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, LookupSpec, WaiterWake, WalStrategy,
+    ExecutionStrategy, KeySpec, LookupSpec, ServerWideOp, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -33,7 +33,7 @@ impl Command for MigrateCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::Migrate),
         };
         &SPEC
     }

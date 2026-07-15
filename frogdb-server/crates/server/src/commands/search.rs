@@ -9,7 +9,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, HashValue, KeySpec, LookupSpec, WaiterWake, WalStrategy,
+    ExecutionStrategy, HashValue, KeySpec, LookupSpec, ServerWideOp, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -33,7 +33,7 @@ impl Command for FtCreateCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FtCreate),
         };
         &SPEC
     }
@@ -68,7 +68,7 @@ impl Command for FtAlterCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FtAlter),
         };
         &SPEC
     }
@@ -104,7 +104,7 @@ impl Command for FtSearchCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FtSearch),
         };
         &SPEC
     }
@@ -139,7 +139,7 @@ impl Command for FtDropIndexCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FtDropIndex),
         };
         &SPEC
     }
@@ -174,7 +174,7 @@ impl Command for FtInfoCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FtInfo),
         };
         &SPEC
     }
@@ -209,7 +209,7 @@ impl Command for FtListCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FtList),
         };
         &SPEC
     }
@@ -245,7 +245,7 @@ impl Command for FtAggregateCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FtAggregate),
         };
         &SPEC
     }
@@ -282,7 +282,7 @@ impl Command for FtHybridCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FtHybrid),
         };
         &SPEC
     }
@@ -317,7 +317,7 @@ impl Command for FtSynupdateCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FtSynUpdate),
         };
         &SPEC
     }
@@ -352,7 +352,7 @@ impl Command for FtSyndumpCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FtSynDump),
         };
         &SPEC
     }
@@ -390,7 +390,7 @@ impl Command for FtAliasaddCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FtAliasAdd),
         };
         &SPEC
     }
@@ -423,7 +423,7 @@ impl Command for FtAliasdelCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FtAliasDel),
         };
         &SPEC
     }
@@ -456,7 +456,7 @@ impl Command for FtAliasupdateCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FtAliasUpdate),
         };
         &SPEC
     }
@@ -489,7 +489,7 @@ impl Command for FtTagvalsCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FtTagVals),
         };
         &SPEC
     }
@@ -522,7 +522,7 @@ impl Command for FtDictaddCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FtDictAdd),
         };
         &SPEC
     }
@@ -555,7 +555,7 @@ impl Command for FtDictdelCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FtDictDel),
         };
         &SPEC
     }
@@ -588,7 +588,7 @@ impl Command for FtDictdumpCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FtDictDump),
         };
         &SPEC
     }
@@ -621,7 +621,7 @@ impl Command for FtConfigCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FtConfig),
         };
         &SPEC
     }
@@ -654,7 +654,7 @@ impl Command for FtSpellcheckCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FtSpellCheck),
         };
         &SPEC
     }
@@ -1053,7 +1053,7 @@ impl Command for FtExplainCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FtExplain),
         };
         &SPEC
     }
@@ -1087,7 +1087,7 @@ impl Command for FtProfileCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FtProfile),
         };
         &SPEC
     }
@@ -1122,7 +1122,7 @@ impl Command for FtExplainCliCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FtExplainCli),
         };
         &SPEC
     }

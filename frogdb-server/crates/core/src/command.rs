@@ -99,7 +99,49 @@ pub enum ExecutionStrategy {
 
     /// Server-wide: command needs to execute across all shards and merge results.
     /// Used for commands like SCAN, KEYS, DBSIZE, RANDOMKEY, FLUSHDB, FLUSHALL.
-    ServerWide,
+    ServerWide(ServerWideOp),
+}
+
+/// Identifies a server-wide command (executes across all shards via a
+/// ConnectionHandler method). Mirrors [`ConnectionLevelOp`]: pure command
+/// identity — handler calling conventions live in the dispatch match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerWideOp {
+    Scan,
+    Keys,
+    DbSize,
+    RandomKey,
+    FlushDb,
+    FlushAll,
+    Migrate,
+    Shutdown,
+    TsQueryIndex,
+    TsMGet,
+    TsMRange,
+    TsMRevRange,
+    FtCreate,
+    FtSearch,
+    FtDropIndex,
+    FtInfo,
+    FtList,
+    FtAlter,
+    FtSynUpdate,
+    FtSynDump,
+    FtAggregate,
+    FtHybrid,
+    FtAliasAdd,
+    FtAliasDel,
+    FtAliasUpdate,
+    FtTagVals,
+    FtDictAdd,
+    FtDictDel,
+    FtDictDump,
+    FtConfig,
+    FtSpellCheck,
+    FtExplain,
+    FtExplainCli,
+    FtProfile,
+    EsAll,
 }
 
 /// Operations handled at the connection level (not routed to shards).

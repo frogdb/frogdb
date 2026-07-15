@@ -10,7 +10,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, LookupSpec, WaiterWake, WalStrategy,
+    ExecutionStrategy, KeySpec, LookupSpec, ServerWideOp, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -34,7 +34,7 @@ impl Command for DbsizeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::DbSize),
         };
         &SPEC
     }
@@ -64,7 +64,7 @@ impl Command for FlushdbCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FlushDb),
         };
         &SPEC
     }
@@ -110,7 +110,7 @@ impl Command for FlushallCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::FlushAll),
         };
         &SPEC
     }
@@ -202,7 +202,7 @@ impl Command for ShutdownCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::Shutdown),
         };
         &SPEC
     }

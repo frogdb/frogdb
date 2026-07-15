@@ -6,7 +6,7 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Aggregation, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags,
     CommandSpec, DownsampleRule, DuplicatePolicy, EventSpec, ExecutionStrategy, KeySpec,
-    LookupSpec, StoreTypedFamilyExt, TimeSeriesValue, Value, WaiterWake, WalStrategy,
+    LookupSpec, ServerWideOp, StoreTypedFamilyExt, TimeSeriesValue, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -1014,7 +1014,7 @@ impl Command for TsQueryIndexCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::TsQueryIndex),
         };
         &SPEC
     }
@@ -1049,7 +1049,7 @@ impl Command for TsMgetCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::TsMGet),
         };
         &SPEC
     }
@@ -1085,7 +1085,7 @@ impl Command for TsMrangeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::TsMRange),
         };
         &SPEC
     }
@@ -1119,7 +1119,7 @@ impl Command for TsMrevrangeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::TsMRevRange),
         };
         &SPEC
     }

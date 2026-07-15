@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, LookupSpec, WaiterWake, WalStrategy,
+    ExecutionStrategy, KeySpec, LookupSpec, ServerWideOp, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -24,7 +24,7 @@ impl Command for EsAllCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::EsAll),
         };
         &SPEC
     }

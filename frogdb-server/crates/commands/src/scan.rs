@@ -7,7 +7,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    EventSpec, ExecutionStrategy, KeySpec, KeyType, LookupSpec, WaiterWake, WalStrategy,
+    EventSpec, ExecutionStrategy, KeySpec, KeyType, LookupSpec, ServerWideOp, WaiterWake,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -56,7 +57,7 @@ impl Command for ScanCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::Scan),
         };
         &SPEC
     }
@@ -121,7 +122,7 @@ impl Command for KeysCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::Keys),
         };
         &SPEC
     }

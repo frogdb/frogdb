@@ -13,7 +13,7 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
     EventSpec, ExecutionStrategy, KeyAccessFlag, KeySpec, KeyspaceEventFlags, LookupSpec,
-    MergeStrategy, Value, WaiterWake, WalStrategy, shard_for_key,
+    MergeStrategy, ServerWideOp, Value, WaiterWake, WalStrategy, shard_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -604,7 +604,7 @@ impl Command for RandomkeyCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ServerWide,
+            strategy: ExecutionStrategy::ServerWide(ServerWideOp::RandomKey),
         };
         &SPEC
     }
