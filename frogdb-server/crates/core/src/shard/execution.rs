@@ -996,7 +996,12 @@ mod scatter_effect_tests {
     }
 
     impl ReplicationBroadcaster for RecordingBroadcaster {
-        fn broadcast_command(&self, cmd_name: &str, args: &[Bytes]) -> u64 {
+        fn broadcast_command_on_shard(
+            &self,
+            _shard_id: u16,
+            cmd_name: &str,
+            args: &[Bytes],
+        ) -> u64 {
             let mut g = self.commands.lock().unwrap();
             g.push((cmd_name.to_string(), args.to_vec()));
             g.len() as u64
@@ -1006,9 +1011,6 @@ mod scatter_effect_tests {
         }
         fn current_offset(&self) -> u64 {
             self.commands.lock().unwrap().len() as u64
-        }
-        fn extract_divergent_writes(&self, _last: u64) -> Vec<(u64, Bytes)> {
-            Vec::new()
         }
     }
 

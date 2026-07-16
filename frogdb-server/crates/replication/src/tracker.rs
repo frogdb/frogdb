@@ -197,6 +197,21 @@ impl ReplicationTrackerImpl {
         }
     }
 
+    /// Seed a replica's initial acked position when its session enters the
+    /// streaming phase — the offset it resumed from (its PSYNC offset for a
+    /// partial resync, or the checkpoint's `snapshot_offset` for a full resync).
+    ///
+    /// This is the primary recording where the replica *started*, not the
+    /// replica acknowledging an offset, so it never emits a WAIT-waiter
+    /// notification (unlike [`ReplicationTracker::record_ack`]). It shares the
+    /// session's monotonic `acked_offset` atomic, so no second source of truth
+    /// is introduced.
+    pub fn seed_acked_position(&self, replica_id: u64, offset: u64) {
+        if let Some(session) = self.replicas.read().get(&replica_id) {
+            session.seed_acked_position(offset);
+        }
+    }
+
     /// True iff a replica's address is within the cooldown window after a
     /// proactive lag disconnect.
     pub fn is_in_lag_cooldown(&self, replica_id: u64, cooldown: Duration) -> bool {
@@ -304,6 +319,35 @@ mod tests {
         assert_eq!(tracker.replica_lag(session.id()), Some(200));
         tracker.record_ack(session.id(), 1000);
         assert_eq!(tracker.replica_lag(session.id()), Some(0));
+    }
+
+    /// Seeding regression (proposal 57): seeding the resume position advances
+    /// the acked offset (so WAIT quorum counting and the lag monitor start
+    /// from where the replica resumed) but does **not** emit a WAIT-waiter
+    /// notification — only a genuine replica ACK does.
+    #[test]
+    fn seed_acked_position_does_not_notify_wait_waiters() {
+        let tracker = ReplicationTrackerImpl::new();
+        let session = tracker.register_replica(test_addr());
+        session.force_phase_for_test(Phase::Streaming);
+        let mut acks = tracker.subscribe_acks();
+
+        // Seed: position advances, no notification.
+        tracker.seed_acked_position(session.id(), 100);
+        assert_eq!(session.acked_offset(), 100);
+        assert_eq!(tracker.count_acked(100), 1);
+        assert!(
+            acks.try_recv().is_err(),
+            "seeding must not notify WAIT waiters"
+        );
+
+        // Genuine ACK at a higher offset: notification fires.
+        tracker.record_ack(session.id(), 200);
+        assert_eq!(acks.try_recv().unwrap(), (session.id(), 200));
+
+        // A stale seed never regresses the monotonic offset.
+        tracker.seed_acked_position(session.id(), 50);
+        assert_eq!(session.acked_offset(), 200);
     }
 
     #[test]

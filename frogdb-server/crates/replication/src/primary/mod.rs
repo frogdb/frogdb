@@ -14,13 +14,12 @@ mod tests;
 use bytes::Bytes;
 use frogdb_persistence::RocksStore;
 use frogdb_types::ReplicationTracker;
-use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::sync::{RwLock, broadcast, mpsc};
+use std::time::Duration;
+use tokio::sync::{RwLock, broadcast};
 
 use crate::BoxedStream;
 use crate::ReplicationBroadcaster;
@@ -60,8 +59,6 @@ pub struct PrimaryReplicationHandler {
     pub(crate) tracker: Arc<ReplicationTrackerImpl>,
     /// Channel for broadcasting WAL frames to all replicas
     pub(crate) wal_broadcast: broadcast::Sender<ReplicationFrame>,
-    /// Active replica connections
-    pub(crate) connections: Arc<RwLock<HashMap<u64, ReplicaConnectionHandle>>>,
     /// Optional RocksDB store for FULLRESYNC checkpoint streaming.
     pub(crate) rocks_store: Option<Arc<RocksStore>>,
     /// Directory for storing temporary checkpoint data.
@@ -84,18 +81,6 @@ pub struct PrimaryReplicationHandler {
     /// connection handler asks this seam instead of assembling WAIT from
     /// tracker primitives.
     pub(crate) wait: WaitCoordinator,
-}
-
-/// Handle to a streaming replica connection.
-///
-/// Inserted into [`PrimaryReplicationHandler::connections`] by the session's
-/// streaming-phase setup; removed by the session's exit handler.
-#[allow(dead_code)]
-pub(crate) struct ReplicaConnectionHandle {
-    pub(crate) _replica_id: u64,
-    pub(crate) _address: SocketAddr,
-    pub(crate) _frame_tx: mpsc::Sender<ReplicationFrame>,
-    pub(crate) _connected_at: Instant,
 }
 
 impl PrimaryReplicationHandler {
@@ -121,7 +106,6 @@ impl PrimaryReplicationHandler {
             state_path,
             tracker,
             wal_broadcast,
-            connections: Arc::new(RwLock::new(HashMap::new())),
             rocks_store,
             data_dir,
             lag_config,
@@ -224,6 +208,28 @@ impl PrimaryReplicationHandler {
         let _ = self.wal_broadcast.send(frame);
     }
 
+    /// Untagged broadcast: control/global commands with no shard origin.
+    ///
+    /// Reachable through the `CONTROL_SHARD` frame tag. Kept as a crate-private
+    /// helper (tests and any future control-only path) rather than a trait
+    /// method, since production writes flow through the shard-tagged variant
+    /// [`Self::broadcast_command_on_shard`]. This keeps the frame-emit trait
+    /// surface to the tagged path only.
+    #[cfg_attr(not(test), allow(dead_code))] // exercised by unit tests; kept per proposal 57
+    pub(crate) fn broadcast_command(&self, cmd_name: &str, args: &[Bytes]) -> u64 {
+        self.broadcast_tagged(CONTROL_SHARD, cmd_name, args)
+    }
+
+    /// Extract commands with offset > `last_replicated_offset` from the backlog
+    /// ring buffer. Returns `(offset, RESP-encoded command)` pairs in order;
+    /// non-destructive. This is a backlog-introspection method — meaningful only
+    /// on the primary handler that owns the ring buffer — so it lives here
+    /// rather than on the frame-emit [`ReplicationBroadcaster`] trait. The
+    /// split-brain reconciliation on the demotion path is the only caller.
+    pub fn extract_divergent_writes(&self, last_replicated_offset: u64) -> Vec<(u64, Bytes)> {
+        self.replay.extract_divergent_writes(last_replicated_offset)
+    }
+
     /// Advance the offset, record into the backlog, and broadcast a single
     /// frame tagged with `shard_id`. Shared by [`Self::broadcast_command`] (the
     /// untagged path, `shard_id == CONTROL_SHARD`) and
@@ -288,11 +294,6 @@ impl PrimaryReplicationHandler {
 }
 
 impl ReplicationBroadcaster for PrimaryReplicationHandler {
-    fn broadcast_command(&self, cmd_name: &str, args: &[Bytes]) -> u64 {
-        // Untagged path (control/global commands with no shard origin).
-        self.broadcast_tagged(CONTROL_SHARD, cmd_name, args)
-    }
-
     fn broadcast_command_on_shard(&self, shard_id: u16, cmd_name: &str, args: &[Bytes]) -> u64 {
         self.broadcast_tagged(shard_id, cmd_name, args)
     }
@@ -302,10 +303,6 @@ impl ReplicationBroadcaster for PrimaryReplicationHandler {
     }
     fn current_offset(&self) -> u64 {
         self.offsets.current()
-    }
-
-    fn extract_divergent_writes(&self, last_replicated_offset: u64) -> Vec<(u64, Bytes)> {
-        self.replay.extract_divergent_writes(last_replicated_offset)
     }
 }
 
