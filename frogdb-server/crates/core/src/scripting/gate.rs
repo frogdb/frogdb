@@ -32,7 +32,7 @@ use super::bindings::{
     extract_keys_from_command, is_forbidden_in_script, is_forbidden_subcommand, is_write_command,
 };
 use super::lua_vm::ExecutionState;
-use crate::command::{CommandContext, ScriptWriteRecord};
+use crate::command::{CommandContext, ExecutionStrategy, ScriptWriteRecord};
 use crate::registry::CommandRegistry;
 use crate::shard::message::ShardMessage;
 use crate::shard::{ShardSender, shard_for_key, slot_for_key};
@@ -124,6 +124,16 @@ pub(crate) trait CommandInvoker {
     fn num_shards(&self) -> usize;
     /// This shard's id (routing dimension).
     fn shard_id(&self) -> usize;
+    /// Reject a sub-command that cannot run from inside a shard-local script.
+    ///
+    /// Server-wide commands (SCAN, KEYS, DBSIZE, FLUSHDB, FT.*, ...) must fan out
+    /// to every shard and merge — coordination that lives at the connection level
+    /// by design. A shard worker running a Lua VM cannot drive that fan-out
+    /// (shard-as-coordinator deadlocks / needs continuation-state machinery), so
+    /// dispatching one here would silently run against a SINGLE shard and return
+    /// partial/wrong results. We deny it with a clean, catchable error instead.
+    /// Returns `Ok(())` for every command that is safe to run shard-locally.
+    fn reject_server_wide(&self, name: &str) -> Result<(), String>;
     /// Run a fully-validated command against this shard's local store.
     fn run_local(&self, parts: &[Bytes]) -> Result<Response, String>;
     /// Dispatch a command to the shard that owns its keys and await the reply.
@@ -228,6 +238,14 @@ impl ScriptCommandGate {
         invoker: &dyn CommandInvoker,
         parts: &[Bytes],
     ) -> Result<Response, String> {
+        // Deny server-wide commands before routing: they cannot be coordinated
+        // from a shard worker, and the name-based `classify` cannot see a
+        // command's `ExecutionStrategy` (it is store/registry-agnostic), so the
+        // check goes through the invoker, which owns the registry handle.
+        if let Some(first) = parts.first() {
+            let name = String::from_utf8_lossy(first).to_uppercase();
+            invoker.reject_server_wide(&name)?;
+        }
         match self.classify(parts, invoker.num_shards(), invoker.shard_id())? {
             Plan::Local => invoker.run_local(parts),
             Plan::Remote(target) => invoker.run_remote(target, parts),
@@ -339,6 +357,26 @@ impl CommandInvoker for ScriptInvoker<'_> {
 
     fn shard_id(&self) -> usize {
         self.shard_id
+    }
+
+    /// Deny a registry command whose [`ExecutionStrategy`] is `ServerWide(_)`.
+    ///
+    /// FrogDB intentionally diverges from Redis here: Redis is single-threaded so
+    /// KEYS/SCAN/FLUSHDB are trivially global inside a script; FrogDB's keyspace
+    /// is sharded and a server-wide fan-out can only be driven at the connection
+    /// level, so we return a clean error rather than silently touch one shard.
+    /// Unknown commands pass through — `run_local` surfaces the unknown-command
+    /// error for them.
+    fn reject_server_wide(&self, name: &str) -> Result<(), String> {
+        if let Some(handler) = self.registry.get(name)
+            && let ExecutionStrategy::ServerWide(_) = handler.execution_strategy()
+        {
+            return Err(format!(
+                "ERR {} is not allowed from scripts: server-wide commands cannot run inside a shard-local script",
+                handler.name()
+            ));
+        }
+        Ok(())
     }
 
     /// Execute the command against this shard's local store.
@@ -689,6 +727,68 @@ mod tests {
             );
             Ok(Response::Simple(Bytes::from_static(b"OK")))
         }
+    }
+
+    /// A command whose `ExecutionStrategy` is `ServerWide`, used to prove the
+    /// gate denies server-wide commands before they ever reach `run_local`.
+    struct ServerWideProbe;
+
+    impl crate::command::Command for ServerWideProbe {
+        fn spec(&self) -> &'static crate::command_spec::CommandSpec {
+            use crate::command::{
+                Arity, CommandFlags, ExecutionStrategy, ServerWideOp, WaiterWake, WalStrategy,
+            };
+            use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec};
+            static SPEC: CommandSpec = CommandSpec {
+                name: "__SERVERWIDEPROBE",
+                arity: Arity::Fixed(0),
+                flags: CommandFlags::READONLY,
+                keys: KeySpec::None,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::NoOp,
+                wakes: WaiterWake::None,
+                event: EventSpec::NotApplicable,
+                requires_same_slot: false,
+                lookup: LookupSpec::None,
+                strategy: ExecutionStrategy::ServerWide(ServerWideOp::DbSize),
+            };
+            &SPEC
+        }
+
+        fn execute(
+            &self,
+            _ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, crate::error::CommandError> {
+            // Reaching a shard executor for a server-wide command is a bug; the
+            // gate must deny it before we get here.
+            panic!("server-wide command must be denied before shard-local execute");
+        }
+    }
+
+    /// The gate denies a `ServerWide` sub-command with a clean, catchable error
+    /// (`redis.call` raises it, `redis.pcall` surfaces it as `{err=...}`) and
+    /// never reaches the command's shard-local `execute`.
+    #[test]
+    fn dispatch_denies_server_wide_command() {
+        let mut store = HashMapStore::new();
+        let mut registry = CommandRegistry::new();
+        registry.register(ServerWideProbe);
+        let gate = open_gate();
+
+        let mut writes = Vec::new();
+        let invoker = live_invoker(1, 0, vec![], &mut store, &registry, &mut writes);
+        let err = gate
+            .dispatch(&invoker, &[part("__SERVERWIDEPROBE")])
+            .expect_err("server-wide command must be denied from a script");
+        assert!(
+            err.contains("not allowed from scripts"),
+            "expected script-deny message, got: {err}"
+        );
+        assert!(
+            err.contains("__SERVERWIDEPROBE"),
+            "error must name the offending command, got: {err}"
+        );
     }
 
     /// A re-entrant sub-command dispatched through the seam runs against the

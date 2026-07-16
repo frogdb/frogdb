@@ -211,6 +211,127 @@ async fn test_eval_redis_pcall_success() {
 }
 
 // =============================================================================
+// Server-wide command gating Tests
+// =============================================================================
+//
+// Server-wide commands (SCAN/KEYS/DBSIZE/FLUSHDB/FT.*/...) fan out to every
+// shard and merge at the connection level. A Lua script runs inside a single
+// shard worker and cannot drive that fan-out, so calling one from a script would
+// silently touch ONE shard and return partial/wrong results. FrogDB denies them
+// with a clean, catchable error instead. This intentionally diverges from Redis,
+// which is single-threaded and can run these globally from a script.
+
+/// EVAL calling KEYS via `redis.call` is denied (raises through redis.call).
+#[tokio::test]
+async fn test_eval_server_wide_keys_denied() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let response = client
+        .command(&["EVAL", "return redis.call('KEYS', '*')", "0"])
+        .await;
+
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("not allowed from scripts"),
+                "expected server-wide deny for KEYS, got: {err_str}"
+            );
+            assert!(
+                err_str.contains("KEYS"),
+                "error must name KEYS, got: {err_str}"
+            );
+        }
+        other => panic!("Expected error response for KEYS from script, got: {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// EVAL calling FLUSHDB via `redis.call` is denied — proves a real-bodied
+/// server-wide command is gated before it can clear a single shard.
+#[tokio::test]
+async fn test_eval_server_wide_flushdb_denied() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let response = client
+        .command(&["EVAL", "return redis.call('FLUSHDB')", "0"])
+        .await;
+
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("not allowed from scripts"),
+                "expected server-wide deny for FLUSHDB, got: {err_str}"
+            );
+        }
+        other => panic!("Expected error response for FLUSHDB from script, got: {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// EVAL calling FT._LIST via `redis.call` is denied — proves the server-wide
+/// stub family (whose shard-local executor fails loudly) is gated by the same
+/// strategy check, not by reaching the stub error.
+#[tokio::test]
+async fn test_eval_server_wide_ft_list_denied() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let response = client
+        .command(&["EVAL", "return redis.call('FT._LIST')", "0"])
+        .await;
+
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("not allowed from scripts"),
+                "expected server-wide deny for FT._LIST, got: {err_str}"
+            );
+        }
+        other => panic!("Expected error response for FT._LIST from script, got: {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// `redis.pcall` on a server-wide command surfaces the deny as an error table
+/// (script keeps running) rather than aborting the whole script.
+#[tokio::test]
+async fn test_eval_pcall_server_wide_caught() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let script = r#"
+        local result = redis.pcall('KEYS', '*')
+        if result.err then
+            return 'caught'
+        end
+        return 'not caught'
+    "#;
+
+    let response = client.command(&["EVAL", script, "0"]).await;
+
+    match response {
+        Response::Bulk(Some(b)) | Response::Simple(b) => {
+            assert_eq!(
+                String::from_utf8_lossy(&b),
+                "caught",
+                "pcall must catch the server-wide deny as an error table"
+            );
+        }
+        other => panic!("Expected 'caught' bulk string, got: {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+// =============================================================================
 // Key Validation Tests
 // =============================================================================
 
