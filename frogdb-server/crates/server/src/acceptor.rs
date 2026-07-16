@@ -1,31 +1,23 @@
 //! TCP connection acceptor.
 
 use anyhow::Result;
+use frogdb_core::shard::NewConnection;
 use frogdb_core::sync::{Arc, AtomicUsize, Ordering};
-use frogdb_core::{
-    AclManager, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState,
-    CommandLatencyHistograms, CommandRegistry, MetricsRecorder, ReplicationTrackerImpl,
-    ShardSender, SharedFunctionRegistry, SharedHotkeySession, command::QuorumChecker,
-    persistence::SnapshotCoordinator, shard::NewConnection,
-};
 
-use crate::cluster_pubsub::ClusterPubSubForwarder;
-use frogdb_telemetry::SharedTracer;
 use frogdb_telemetry::definitions::{
     ConnectionsCurrent, ConnectionsRejected, ConnectionsTotal, TlsHandshakeErrors,
 };
 use frogdb_telemetry::labels::{RejectionReason, TlsHandshakeError};
 use std::sync::atomic::AtomicI64;
 
-use crate::config::TracingConfig;
-use crate::replication::PrimaryReplicationHandler;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 use crate::connection::ConnectionHandler;
-use crate::connection::deps::{AdminDeps, ClusterDeps, CoreDeps, ObservabilityDeps};
+use crate::connection::deps::{
+    AdminDeps, ClusterDeps, ConnectionConfig, ConnectionDeps, CoreDeps, ObservabilityDeps,
+};
 use crate::net::{TcpListener, spawn};
-use crate::runtime_config::ConfigManager;
 use crate::server::next_conn_id;
 
 /// Round-robin connection assigner.
@@ -53,138 +45,36 @@ pub struct Acceptor {
     /// TCP listener.
     listener: TcpListener,
 
-    /// New connection senders (one per shard).
-    /// Reserved for future use when connections are routed to shard workers.
-    #[allow(dead_code)]
-    new_conn_senders: Vec<mpsc::Sender<NewConnection>>,
-
-    /// Shard message senders.
-    shard_senders: Arc<Vec<ShardSender>>,
-
-    /// Command registry.
-    registry: Arc<CommandRegistry>,
-
-    /// Client registry for CLIENT commands.
-    client_registry: Arc<ClientRegistry>,
-
-    /// Configuration manager for CONFIG commands.
-    config_manager: Arc<ConfigManager>,
-
     /// Connection assigner.
     assigner: RoundRobinAssigner,
 
-    /// Allow cross-slot operations.
-    allow_cross_slot: bool,
-
-    /// Scatter-gather timeout in milliseconds.
-    scatter_gather_timeout_ms: u64,
-
-    /// Metrics recorder.
-    metrics_recorder: Arc<dyn MetricsRecorder>,
-
-    /// Current connection count (shared for decrement on drop).
+    /// Current connection count for this port (shared across every connection
+    /// on the port for the maxclients gate and decremented on drop).
+    ///
+    /// Minted fresh per [`Acceptor::bind`] and deliberately kept *out* of the
+    /// cloned [`ConnectionDeps`] bundle: if it were cloned per connection, each
+    /// connection would count against its own zeroed counter and the gate would
+    /// never fire.
     current_connections: Arc<AtomicI64>,
 
-    /// ACL manager for authentication and authorization.
-    acl_manager: Arc<AclManager>,
-
-    /// Snapshot coordinator for BGSAVE/LASTSAVE commands.
-    snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
-
-    /// Function registry for FUNCTION/FCALL commands.
-    function_registry: SharedFunctionRegistry,
-
-    /// Cursor store for FT.AGGREGATE WITHCURSOR / FT.CURSOR.
-    cursor_store: Arc<crate::cursor_store::AggregateCursorStore>,
-
-    /// Optional shared tracer for distributed tracing.
-    shared_tracer: Option<SharedTracer>,
-
-    /// Tracing configuration.
-    tracing_config: TracingConfig,
-
-    /// Optional replication tracker for WAIT command.
-    replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
-
-    /// Optional cluster state (only when cluster mode is enabled).
-    cluster_state: Option<Arc<ClusterState>>,
-
-    /// This node's ID (for cluster mode).
-    node_id: Option<u64>,
-
-    /// Whether this acceptor handles admin connections.
-    is_admin: bool,
-
-    /// Whether admin port separation is enabled (admin commands blocked on regular port).
-    admin_enabled: bool,
-
-    /// Hot shard detection configuration.
-    hotshards_config: frogdb_debug::HotShardConfig,
-
-    /// Memory diagnostics configuration.
-    memory_diag_config: frogdb_debug::MemoryDiagConfig,
-
-    /// Optional Raft instance (only when cluster mode is enabled).
-    raft: Option<Arc<ClusterRaft>>,
-
-    /// Optional network factory for cluster node management.
-    network_factory: Option<Arc<ClusterNetworkFactory>>,
-
-    /// Optional slot migration coordinator (only when cluster mode is enabled).
-    slot_migration: Option<Arc<crate::slot_migration::SlotMigrationCoordinator>>,
-
-    /// Optional primary replication handler for PSYNC connection handoff.
-    primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
-
-    /// Shared replication state (IDs + offset) for INFO `master_replid`.
-    ///
-    /// Holds the active role's `Arc<RwLock<ReplicationState>>` (primary or
-    /// replica). `None` in standalone and pure cluster mode.
-    replication_state: Option<Arc<tokio::sync::RwLock<frogdb_core::ReplicationState>>>,
-
     /// Maximum simultaneous client connections (0 = unlimited). Admin exempt.
+    /// Never enters the handler — it is the acceptor-local maxclients gate.
     max_clients: Arc<std::sync::atomic::AtomicU64>,
-
-    /// Whether per-request tracing spans are enabled.
-    per_request_spans: Arc<std::sync::atomic::AtomicBool>,
-
-    /// Whether this server is a replica (rejects write commands from clients).
-    /// Shared across all connections so REPLICAOF NO ONE takes effect immediately.
-    is_replica: Arc<std::sync::atomic::AtomicBool>,
-
-    /// Optional quorum checker for self-fencing (write rejection on quorum loss).
-    quorum_checker: Option<Arc<dyn QuorumChecker>>,
 
     /// Optional task monitor for connection handler tasks.
     conn_monitor: Option<tokio_metrics::TaskMonitor>,
 
-    /// Optional pub/sub forwarder for cross-node message delivery.
-    pubsub_forwarder: Option<Arc<ClusterPubSubForwarder>>,
-
-    /// MONITOR command broadcaster.
-    monitor_broadcaster: Arc<crate::monitor::MonitorBroadcaster>,
-
-    /// Server-wide per-command latency histograms for INFO latencystats.
-    latency_histograms: Arc<CommandLatencyHistograms>,
-
-    /// Server-wide hotkey sampling session.
-    hotkey_session: SharedHotkeySession,
-
-    /// Process-wide keyspace hit/miss accumulator, shared with the shard
-    /// workers (INFO reads it, RESETSTAT rebases it).
-    keyspace_stats: Arc<frogdb_core::KeyspaceStats>,
-
-    /// Chaos testing configuration (turmoil simulation only).
-    #[cfg(feature = "turmoil")]
-    chaos_config: Arc<crate::config::ChaosConfig>,
-
-    /// Optional TLS manager for accepting TLS connections.
+    /// Optional TLS manager for accepting TLS connections (per-port).
     #[cfg(not(feature = "turmoil"))]
     tls_manager: Option<Arc<crate::tls::TlsManager>>,
 
     /// TLS handshake timeout duration.
     #[cfg(not(feature = "turmoil"))]
     tls_handshake_timeout: std::time::Duration,
+
+    /// The five dependency groups, pre-assembled once at [`Acceptor::bind`] and
+    /// cloned (Arc-cheap) per accepted connection to hand to the handler.
+    deps: ConnectionDeps,
 }
 
 /// Dependencies shared by every acceptor (main, admin, and TLS ports).
@@ -265,54 +155,45 @@ impl Acceptor {
     /// Bind an acceptor to a listener, combining the shared [`AcceptorContext`]
     /// with the per-listener [`PortSpec`].
     pub fn bind(ctx: AcceptorContext, spec: PortSpec) -> Self {
-        let num_shards = ctx.new_conn_senders.len();
-        let per_request_spans = ctx.admin.config_manager.per_request_spans_flag();
-        Self {
-            listener: spec.listener,
-            new_conn_senders: ctx.new_conn_senders,
-            shard_senders: ctx.core.shard_senders,
-            registry: ctx.core.registry,
-            client_registry: ctx.admin.client_registry,
-            config_manager: ctx.admin.config_manager,
-            assigner: RoundRobinAssigner::new(num_shards),
+        let num_shards = ctx.core.shard_senders.len();
+
+        // core/admin/cluster/observability move in wholesale — they are already
+        // grouped exactly as `from_deps` wants them. Only `ConnectionConfig` is
+        // *assembled* here, because it is not present in `AcceptorContext`: two
+        // of its members are knowable only at bind time (`spec.is_admin`, which
+        // is per-port) and two derive from the `ConfigManager`.
+        let config = ConnectionConfig {
+            num_shards,
             allow_cross_slot: ctx.allow_cross_slot,
-            scatter_gather_timeout_ms: ctx.scatter_gather_timeout_ms,
-            metrics_recorder: ctx.observability.metrics_recorder,
-            current_connections: Arc::new(AtomicI64::new(0)),
-            acl_manager: ctx.core.acl_manager,
-            snapshot_coordinator: ctx.admin.snapshot_coordinator,
-            function_registry: ctx.admin.function_registry,
-            cursor_store: ctx.admin.cursor_store,
-            shared_tracer: ctx.observability.shared_tracer,
-            tracing_config: ctx.observability.tracing_config,
-            replication_tracker: ctx.cluster.replication_tracker,
-            cluster_state: ctx.cluster.cluster_state,
-            node_id: ctx.cluster.node_id,
+            scatter_gather_timeout: std::time::Duration::from_millis(ctx.scatter_gather_timeout_ms),
             is_admin: spec.is_admin,
             admin_enabled: ctx.admin_enabled,
             hotshards_config: ctx.hotshards_config,
             memory_diag_config: ctx.memory_diag_config,
-            raft: ctx.cluster.raft,
-            network_factory: ctx.cluster.network_factory,
-            slot_migration: ctx.cluster.slot_migration,
-            primary_replication_handler: ctx.cluster.primary_replication_handler,
-            replication_state: ctx.cluster.replication_state,
-            max_clients: ctx.max_clients,
-            per_request_spans,
+            per_request_spans: ctx.admin.config_manager.per_request_spans_flag(),
             is_replica: ctx.is_replica,
-            quorum_checker: ctx.cluster.quorum_checker,
-            conn_monitor: ctx.conn_monitor,
-            pubsub_forwarder: ctx.cluster.pubsub_forwarder,
-            monitor_broadcaster: ctx.observability.monitor_broadcaster,
-            latency_histograms: ctx.observability.latency_histograms,
-            hotkey_session: ctx.observability.hotkey_session,
-            keyspace_stats: ctx.observability.keyspace_stats,
+            enable_debug_command: ctx.admin.config_manager.enable_debug_command(),
             #[cfg(feature = "turmoil")]
             chaos_config: ctx.chaos_config,
+        };
+
+        Self {
+            listener: spec.listener,
+            assigner: RoundRobinAssigner::new(num_shards),
+            current_connections: Arc::new(AtomicI64::new(0)),
+            max_clients: ctx.max_clients,
+            conn_monitor: ctx.conn_monitor,
             #[cfg(not(feature = "turmoil"))]
             tls_manager: spec.tls_manager,
             #[cfg(not(feature = "turmoil"))]
             tls_handshake_timeout: ctx.tls_handshake_timeout,
+            deps: ConnectionDeps {
+                core: ctx.core,
+                admin: ctx.admin,
+                cluster: ctx.cluster,
+                config,
+                observability: ctx.observability,
+            },
         }
     }
 
@@ -329,13 +210,13 @@ impl Acceptor {
                     }
 
                     // Check maxclients limit (admin port is exempt)
-                    if !self.is_admin {
+                    if !self.deps.config.is_admin {
                         let limit = self.max_clients.load(std::sync::atomic::Ordering::Relaxed);
                         if limit > 0 {
                             let current = self.current_connections.load(Ordering::SeqCst);
                             if current >= limit as i64 {
                                 ConnectionsRejected::inc(
-                                    &*self.metrics_recorder,
+                                    &*self.deps.observability.metrics_recorder,
                                     RejectionReason::MaxClients,
                                 );
                                 // Best-effort error write, then graceful close
@@ -376,7 +257,7 @@ impl Acceptor {
                                 Ok(Err(e)) => {
                                     debug!(addr = %addr, error = %e, "TLS handshake failed");
                                     TlsHandshakeErrors::inc(
-                                        &*self.metrics_recorder,
+                                        &*self.deps.observability.metrics_recorder,
                                         TlsHandshakeError::HandshakeError,
                                     );
                                     continue;
@@ -384,7 +265,7 @@ impl Acceptor {
                                 Err(_) => {
                                     debug!(addr = %addr, "TLS handshake timed out");
                                     TlsHandshakeErrors::inc(
-                                        &*self.metrics_recorder,
+                                        &*self.deps.observability.metrics_recorder,
                                         TlsHandshakeError::Timeout,
                                     );
                                     continue;
@@ -395,12 +276,19 @@ impl Acceptor {
                         };
 
                     // Register connection with client registry
-                    let client_handle = self.client_registry.register(conn_id, addr, local_addr);
+                    let client_handle = self
+                        .deps
+                        .admin
+                        .client_registry
+                        .register(conn_id, addr, local_addr);
 
                     // Record connection metrics
-                    ConnectionsTotal::inc(&*self.metrics_recorder);
+                    ConnectionsTotal::inc(&*self.deps.observability.metrics_recorder);
                     let current = self.current_connections.fetch_add(1, Ordering::SeqCst) + 1;
-                    ConnectionsCurrent::set(&*self.metrics_recorder, current as f64);
+                    ConnectionsCurrent::set(
+                        &*self.deps.observability.metrics_recorder,
+                        current as f64,
+                    );
 
                     // Fire USDT probe: connection-accept
                     frogdb_core::probes::fire_connection_accept(conn_id, &addr.to_string());
@@ -412,61 +300,19 @@ impl Acceptor {
                         "Accepted connection"
                     );
 
-                    // Build grouped dependencies for the connection handler
-                    use crate::connection::deps::ConnectionConfig;
-                    use std::time::Duration;
+                    // Clone the pre-assembled dep bundle for this connection.
+                    // Every member is an `Arc`/`Copy`/small owned value, so this
+                    // is the same Arc-bumping the old regroup did — minus the
+                    // field-by-field restatement.
+                    let ConnectionDeps {
+                        core,
+                        admin,
+                        cluster,
+                        config,
+                        observability,
+                    } = self.deps.clone();
 
-                    let core = CoreDeps {
-                        registry: self.registry.clone(),
-                        shard_senders: self.shard_senders.clone(),
-                        acl_manager: self.acl_manager.clone(),
-                    };
-                    let admin = AdminDeps {
-                        client_registry: self.client_registry.clone(),
-                        config_manager: self.config_manager.clone(),
-                        snapshot_coordinator: self.snapshot_coordinator.clone(),
-                        function_registry: self.function_registry.clone(),
-                        cursor_store: self.cursor_store.clone(),
-                    };
-                    let cluster = ClusterDeps {
-                        cluster_state: self.cluster_state.clone(),
-                        node_id: self.node_id,
-                        raft: self.raft.clone(),
-                        network_factory: self.network_factory.clone(),
-                        slot_migration: self.slot_migration.clone(),
-                        replication_tracker: self.replication_tracker.clone(),
-                        primary_replication_handler: self.primary_replication_handler.clone(),
-                        replication_state: self.replication_state.clone(),
-                        quorum_checker: self.quorum_checker.clone(),
-                        pubsub_forwarder: self.pubsub_forwarder.clone(),
-                    };
-                    let config = ConnectionConfig {
-                        num_shards: self.shard_senders.len(),
-                        allow_cross_slot: self.allow_cross_slot,
-                        scatter_gather_timeout: Duration::from_millis(
-                            self.scatter_gather_timeout_ms,
-                        ),
-                        is_admin: self.is_admin,
-                        admin_enabled: self.admin_enabled,
-                        hotshards_config: self.hotshards_config.clone(),
-                        memory_diag_config: self.memory_diag_config.clone(),
-                        per_request_spans: self.per_request_spans.clone(),
-                        is_replica: self.is_replica.clone(),
-                        enable_debug_command: self.config_manager.enable_debug_command(),
-                        #[cfg(feature = "turmoil")]
-                        chaos_config: self.chaos_config.clone(),
-                    };
-                    let observability = ObservabilityDeps {
-                        metrics_recorder: self.metrics_recorder.clone(),
-                        shared_tracer: self.shared_tracer.clone(),
-                        tracing_config: self.tracing_config.clone(),
-                        monitor_broadcaster: self.monitor_broadcaster.clone(),
-                        latency_histograms: self.latency_histograms.clone(),
-                        hotkey_session: self.hotkey_session.clone(),
-                        keyspace_stats: self.keyspace_stats.clone(),
-                    };
-
-                    let metrics_recorder = self.metrics_recorder.clone();
+                    let metrics_recorder = observability.metrics_recorder.clone();
                     let current_connections = self.current_connections.clone();
 
                     let conn_future = async move {
@@ -509,7 +355,11 @@ impl Acceptor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use frogdb_core::NoopSnapshotCoordinator;
+    use crate::runtime_config::ConfigManager;
+    use frogdb_core::{
+        AclManager, ClientRegistry, CommandRegistry, NoopSnapshotCoordinator, ShardSender,
+        SharedFunctionRegistry, persistence::SnapshotCoordinator,
+    };
     use std::sync::atomic::{AtomicBool, AtomicU64};
 
     /// Build an `AcceptorContext` with minimal test doubles (empty command
@@ -576,7 +426,7 @@ mod tests {
                 tls_manager: None,
             },
         );
-        assert!(!main.is_admin);
+        assert!(!main.deps.config.is_admin);
         #[cfg(not(feature = "turmoil"))]
         assert!(main.tls_manager.is_none());
 
@@ -590,15 +440,78 @@ mod tests {
                 tls_manager: None,
             },
         );
-        assert!(admin.is_admin);
+        assert!(admin.deps.config.is_admin);
 
         // Fields sourced from the shared context must be identical across
         // ports; only `is_admin` (and TLS, tested separately) may differ.
         assert_eq!(
-            admin.scatter_gather_timeout_ms,
-            main.scatter_gather_timeout_ms
+            admin.deps.config.scatter_gather_timeout,
+            main.deps.config.scatter_gather_timeout
         );
-        assert_eq!(admin.admin_enabled, main.admin_enabled);
+        assert_eq!(
+            admin.deps.config.admin_enabled,
+            main.deps.config.admin_enabled
+        );
+    }
+
+    /// Pre-assembling the dep bundle at `bind` makes "the deps the handler
+    /// receives" inspectable without accepting a socket. Two ports built from
+    /// the same context must *share* their Arc dep members (pointer-equal), not
+    /// copy them — while `config.is_admin` still tracks the per-port `PortSpec`.
+    #[tokio::test]
+    async fn bind_shares_deps_across_ports() {
+        let ctx = test_context();
+
+        let main_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let main = Acceptor::bind(
+            ctx.clone(),
+            PortSpec {
+                listener: main_listener,
+                is_admin: false,
+                #[cfg(not(feature = "turmoil"))]
+                tls_manager: None,
+            },
+        );
+
+        let admin_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let admin = Acceptor::bind(
+            ctx,
+            PortSpec {
+                listener: admin_listener,
+                is_admin: true,
+                #[cfg(not(feature = "turmoil"))]
+                tls_manager: None,
+            },
+        );
+
+        // Per-port config differs.
+        assert!(!main.deps.config.is_admin);
+        assert!(admin.deps.config.is_admin);
+
+        // Shared Arc dep members are the same allocation, not per-port copies.
+        assert!(Arc::ptr_eq(
+            &main.deps.core.registry,
+            &admin.deps.core.registry
+        ));
+        assert!(Arc::ptr_eq(
+            &main.deps.core.shard_senders,
+            &admin.deps.core.shard_senders
+        ));
+        assert!(Arc::ptr_eq(
+            &main.deps.admin.client_registry,
+            &admin.deps.admin.client_registry
+        ));
+        assert!(Arc::ptr_eq(
+            &main.deps.admin.config_manager,
+            &admin.deps.admin.config_manager
+        ));
+
+        // `current_connections` is minted fresh per bind — NOT shared — so the
+        // maxclients gate counts per port.
+        assert!(!Arc::ptr_eq(
+            &main.current_connections,
+            &admin.current_connections
+        ));
     }
 
     /// The TLS port gets a `tls_manager`; the plaintext port does not, even
@@ -640,6 +553,6 @@ mod tests {
             },
         );
         assert!(tls.tls_manager.is_some());
-        assert!(!tls.is_admin);
+        assert!(!tls.deps.config.is_admin);
     }
 }
