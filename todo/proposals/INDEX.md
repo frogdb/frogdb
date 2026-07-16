@@ -852,3 +852,76 @@ Found while writing proposals 29-40; grouped by proposal. All fixed by the round
   round-4's `5f288af2` made subscribe confirmations correctly Push-only, the harness's
   wait-for-non-Push loop timed out, failing 6 pubsub regression tests. A harness bug, not a server
   one.~~ Fixed by proposal 40 (subscribe-aware `command()`).
+
+## Round 7 — proposed (2026-07-16)
+
+A seventh deepening review on 2026-07-16, focused on the core request/response flow: connection
+acceptance → protocol decode → dispatch → shard execution → persistence → replication. Three
+parallel explorations (front half, execution→persistence, replication) followed by per-proposal
+evidence verification. Ordered by expected leverage:
+
+53. [53-predispatch-stage-pipeline.md](53-predispatch-stage-pipeline.md) — **Proposed**: the
+    ~230-line `route_and_execute_with_transaction` gauntlet (~15 ordered interceptions whose
+    ordering is load-bearing Redis semantics, encoded only as control flow + prose) becomes a
+    static `PRE_DISPATCH_ORDER: [DispatchStage; 17]` array driven by an inlined match (no dyn
+    dispatch on the hot path), with guard stages over a socketless `PreDispatchView` — ordering
+    becomes pinned data (the `WRITE_EFFECT_ORDER` precedent), and pre-checks stop requiring a
+    loopback TCP listener to test.
+54. [54-shard-persistence-bridge.md](54-shard-persistence-bridge.md) — **Proposed**: collapse the
+    triplicated persist loops (`persist_by_strategy` / `persist_and_confirm` /
+    `persist_transaction_to_wal` — one durability boolean expressed as three functions) into one
+    `persist(..., Durability)`; add a narrow store-view seam (`WalTarget`) so `execute_wal_action`
+    (zero tests today; only reachable via full `ShardWorker`) is unit-testable — copying the
+    `WriteSink` two-adapter pattern up one layer. Folds in: converge the 11 index-based
+    `WalStrategy` destination variants onto the `Dynamic`/`keys_with_flags` key extraction.
+55. [55-write-outcome-return.md](55-write-outcome-return.md) — **Proposed**: `CommandContext`'s
+    eight loose deposit fields (`dirty_delta`, `write_was_noop`, `hll_wal_delta`,
+    `keyspace_events`, …) consolidate into one `CommandEffects` struct drained by exhaustive
+    destructure at the three real drain sites (execution.rs, script gate, cross-shard scripting) —
+    a new effect field becomes a compile error, and the no-op suppression rule gets one home
+    (`into_write_meta`). Keeps the 354 handler signatures unchanged; typed-return end state
+    documented as mechanical follow-up.
+56. [56-checkpoint-stream-codec.md](56-checkpoint-stream-codec.md) — **Proposed**: the full-sync
+    checkpoint wire format (`$FROGDB_CHECKPOINT` envelope) is hand-written in `stream_checkpoint`
+    and hand-parsed across two receiver sites, defined only in prose; `receive_checkpoint` has
+    zero unit tests. One symmetric `CheckpointStreamCodec` (deepening the existing `fullsync.rs`
+    module, mirroring `ReplicationFrameCodec`) gives the envelope one owner + round-trip/corrupt
+    property tests. Keeps the shared `StagedCheckpoint` landing contract; stays deliberately
+    separate from proposal 25's on-disk stager.
+57. [57-replica-session-streaming.md](57-replica-session-streaming.md) — **Proposed**: delete
+    verified-dead machinery (the write-only `connections` map, the never-sent `_frame_tx`, the
+    ~30-line dead `frame_rx` select arm duplicating the write branch); extract `forward_frame`
+    (timeout+error once) and a named lag-disconnect policy from the 180-line `start_streaming`;
+    trait diet for `ReplicationBroadcaster` (`extract_divergent_writes` off the hot-path trait —
+    one caller; untagged broadcast defaults collapsed into the `_on_shard` variants).
+58. [58-offset-single-ownership.md](58-offset-single-ownership.md) — **Proposed** (follow-up to
+    proposal 18: that unified offset *reads*; this unifies *ownership*): the offset atomic moves
+    into `OffsetCoordinator` (tracker borrows; cluster-bus handle vended by the coordinator);
+    both ends advance through one `advance(&payload)` gate so the payload-bytes unit is defined
+    once (primary currently uses `resp_bytes.len()` by convention); `record_ack` splits into
+    `ingest_replica_ack` (durability) vs `seed_replica_position` (resume bookkeeping).
+59. [59-delete-command-metadata.md](59-delete-command-metadata.md) — **Proposed**: pure deletion,
+    verified dead — `CommandMetadata` trait + `CommandImpl::MetadataOnly` + `register_metadata`
+    (zero production callers) + 9 registry match arms, **plus** the entire dead
+    `core/src/command_macro.rs` (209 lines) and `server/src/commands/metadata.rs` (157 lines —
+    proposal 40 §7 claimed these deleted; only the pub/sub subset was). `CommandImpl` becomes
+    two-way (Shard | Connection). Final cleanup of proposal 01's single-source migration.
+60. [60-connctx-builder-collapse.md](60-connctx-builder-collapse.md) — **Proposed**: the `ConnCtx`
+    seam earns its keep (socketless command tests), but its 25-field literal is hand-copied at 14
+    sites (5 production builders incl. two inline, 9 test fixtures). One `ConnCtx::new` home +
+    `base_ctx` disjoint-borrow adapter + `.with_*` capability layering; kills the `NOOP_*` statics
+    and placeholder slots. Verdict reversal from the review: all 11 provider traits **stay** —
+    they are the core↔server crate boundary, folding would cycle the dependency graph.
+61. [61-acceptor-dep-groups.md](61-acceptor-dep-groups.md) — **Proposed**: `Acceptor`'s ~40 flat
+    fields are a flatten/regroup pass-through (context → fields → 5 dep groups per connection);
+    hold one pre-assembled `ConnectionDeps` template (type already exists) cloned per connection
+    — Arc-cheap, "add a dependency" becomes a single-struct edit, and dep threading gets a
+    socket-free `Arc::ptr_eq` test. `current_connections` stays acceptor-local (maxclients gate).
+62. [62-small-seams-round7.md](62-small-seams-round7.md) — **Proposed**: five independent small
+    items: (A) RESP2 null-array encoding moves into the encoder (finishes proposals 26/49; kills
+    the silent best-effort branch + connection-layer buffer poke); (B) table-driven unit tests
+    for the zero-test RESP2 edge-case codec (consume-on-error contract); (C) `WRITE_EFFECT_ORDER`
+    must-precede pairs as a checked relation (the WalPersistence→ReplicationBroadcast constraint
+    is currently unencoded); (D) scatter-path serialize helper (COPY/DUMP reach into the
+    persistence codec directly) + `LookupSpec` hit/miss dedup (three inline copies); (E) inline
+    (telnet-style) command support: decision item — regression suite explicitly excludes it today.
