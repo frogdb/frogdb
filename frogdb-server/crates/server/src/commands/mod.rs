@@ -10,7 +10,6 @@
 
 pub mod cluster;
 pub mod info;
-pub mod metadata;
 pub mod migrate_cmd;
 pub mod persistence;
 pub mod replication;
@@ -21,7 +20,6 @@ pub mod version;
 
 pub use cluster::*;
 pub use info::*;
-pub use metadata::*;
 pub use migrate_cmd::*;
 pub use persistence::*;
 pub use replication::*;

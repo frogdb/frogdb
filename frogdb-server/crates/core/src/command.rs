@@ -648,39 +648,6 @@ pub trait Command: Send + Sync {
     }
 }
 
-/// Metadata trait for commands that don't execute through the normal path.
-///
-/// This is used for commands like pub/sub and transaction commands where the
-/// connection handler intercepts them before normal routing. These commands
-/// need metadata for introspection (COMMAND INFO) but don't implement full execution.
-pub trait CommandMetadata: Send + Sync {
-    /// Command name (e.g., "SUBSCRIBE", "MULTI").
-    fn name(&self) -> &'static str;
-
-    /// Expected argument count.
-    fn arity(&self) -> Arity;
-
-    /// Command behavior flags.
-    fn flags(&self) -> CommandFlags;
-
-    /// How this command should be executed.
-    fn execution_strategy(&self) -> ExecutionStrategy;
-
-    /// Extract key(s) from arguments for routing.
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]>;
-
-    /// Extract key(s) with per-key access flags (default derives from command flags).
-    fn keys_with_flags<'a>(&self, args: &'a [Bytes]) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
-        let keys = self.keys(args);
-        let flag = if self.flags().contains(CommandFlags::WRITE) {
-            KeyAccessFlag::OW
-        } else {
-            KeyAccessFlag::R
-        };
-        keys.into_iter().map(|k| (k, vec![flag])).collect()
-    }
-}
-
 /// Specifies the expected number of arguments for a command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Arity {

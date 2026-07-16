@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::command::{Arity, Command, CommandFlags, CommandMetadata, ExecutionStrategy};
+use crate::command::{Arity, Command, CommandFlags, ExecutionStrategy};
 use crate::conn_command::ConnectionCommand;
 
 /// The single executor a registered command carries — a tagged union so that a
@@ -26,9 +26,6 @@ use crate::conn_command::ConnectionCommand;
 ///   its stub until it is migrated behind the [`ConnectionCommand`] seam; once
 ///   every connection group has migrated, the reverse invariant — a
 ///   `ConnectionLevel` strategy must never be `Shard` — can be enforced too.)
-/// - [`CommandImpl::MetadataOnly`] is the transitional entry for connection
-///   commands (pub/sub, transaction, …) that provide metadata for introspection
-///   but whose execution is still handled by the connection handler.
 pub enum CommandImpl {
     /// Shard-local executor: `execute(&mut CommandContext)`. Standard,
     /// ScatterGather, Blocking, and ServerWide (per-shard) commands.
@@ -36,17 +33,12 @@ pub enum CommandImpl {
     /// Connection-level executor: `execute(&ConnCtx)`. Migrated connection
     /// commands (CONFIG; more groups follow in Phase 2).
     Connection(&'static dyn ConnectionCommand),
-    /// Metadata-only entry: execution handled elsewhere (connection handler).
-    /// Transitional — collapses into [`CommandImpl::Connection`] as each
-    /// connection group is migrated behind the seam.
-    MetadataOnly(Arc<dyn CommandMetadata>),
 }
 
 /// Retained name for the registry entry. The entry *is* its [`CommandImpl`]
 /// (each variant is spec-backed, so no separate `RegistryEntry { spec, imp }`
 /// wrapper is needed): [`Command::spec`] / [`ConnectionCommand::spec`] carry the
-/// metadata, and the transitional [`CommandImpl::MetadataOnly`] variant reads
-/// from the metadata trait until it too is spec-backed.
+/// metadata.
 pub type CommandEntry = CommandImpl;
 
 impl CommandImpl {
@@ -55,7 +47,6 @@ impl CommandImpl {
         match self {
             CommandImpl::Shard(cmd) => cmd.name(),
             CommandImpl::Connection(cmd) => cmd.spec().name,
-            CommandImpl::MetadataOnly(meta) => meta.name(),
         }
     }
 
@@ -64,7 +55,6 @@ impl CommandImpl {
         match self {
             CommandImpl::Shard(cmd) => cmd.arity(),
             CommandImpl::Connection(cmd) => cmd.spec().arity,
-            CommandImpl::MetadataOnly(meta) => meta.arity(),
         }
     }
 
@@ -73,7 +63,6 @@ impl CommandImpl {
         match self {
             CommandImpl::Shard(cmd) => cmd.flags(),
             CommandImpl::Connection(cmd) => cmd.spec().flags,
-            CommandImpl::MetadataOnly(meta) => meta.flags(),
         }
     }
 
@@ -82,7 +71,6 @@ impl CommandImpl {
         match self {
             CommandImpl::Shard(cmd) => cmd.execution_strategy(),
             CommandImpl::Connection(cmd) => cmd.spec().strategy.clone(),
-            CommandImpl::MetadataOnly(meta) => meta.execution_strategy(),
         }
     }
 
@@ -95,7 +83,6 @@ impl CommandImpl {
             // the spec; the keyed scripting commands (EVAL/EVALSHA/FCALL, whose
             // keys are located by a runtime `numkeys`) override it.
             CommandImpl::Connection(cmd) => cmd.dynamic_keys(args),
-            CommandImpl::MetadataOnly(meta) => meta.keys(args),
         }
     }
 
@@ -110,7 +97,6 @@ impl CommandImpl {
                 let spec = cmd.spec();
                 spec.access.resolve(self.keys(args), spec.is_write())
             }
-            CommandImpl::MetadataOnly(meta) => meta.keys_with_flags(args),
         }
     }
 
@@ -123,7 +109,7 @@ impl CommandImpl {
     pub fn as_command(&self) -> Option<&Arc<dyn Command>> {
         match self {
             CommandImpl::Shard(cmd) => Some(cmd),
-            CommandImpl::Connection(_) | CommandImpl::MetadataOnly(_) => None,
+            CommandImpl::Connection(_) => None,
         }
     }
 
@@ -131,7 +117,7 @@ impl CommandImpl {
     pub fn as_connection(&self) -> Option<&'static dyn ConnectionCommand> {
         match self {
             CommandImpl::Connection(cmd) => Some(*cmd),
-            CommandImpl::Shard(_) | CommandImpl::MetadataOnly(_) => None,
+            CommandImpl::Shard(_) => None,
         }
     }
 
@@ -141,8 +127,8 @@ impl CommandImpl {
     /// A [`CommandImpl::Connection`] executor *must* declare an
     /// [`ExecutionStrategy::ConnectionLevel`] strategy: a connection command
     /// that claimed, say, `Standard` would never be reached by connection-level
-    /// dispatch. The `Shard`/`MetadataOnly` variants are unconstrained here
-    /// during the transition (see the type docs).
+    /// dispatch. The `Shard` variant is unconstrained here during the transition
+    /// (see the type docs).
     pub fn validate_strategy(&self) -> Result<(), String> {
         match self {
             CommandImpl::Connection(cmd) => {
@@ -156,7 +142,7 @@ impl CommandImpl {
                     ))
                 }
             }
-            CommandImpl::Shard(_) | CommandImpl::MetadataOnly(_) => Ok(()),
+            CommandImpl::Shard(_) => Ok(()),
         }
     }
 }
@@ -165,7 +151,8 @@ impl CommandImpl {
 #[derive(Default)]
 pub struct CommandRegistry {
     commands: HashMap<String, Arc<dyn Command>>,
-    /// Combined registry supporting both full commands and metadata-only entries.
+    /// Combined registry supporting both shard commands and connection-level
+    /// (introspection-visible, no shard executor) entries.
     entries: HashMap<String, CommandEntry>,
 }
 
@@ -221,35 +208,30 @@ impl CommandRegistry {
         self.entries.insert(name, entry);
     }
 
-    /// Register a metadata-only command (for commands handled at connection level).
-    pub fn register_metadata(&mut self, metadata: impl CommandMetadata + 'static) {
-        let name = metadata.name().to_ascii_uppercase();
-        self.entries
-            .insert(name, CommandImpl::MetadataOnly(Arc::new(metadata)));
-    }
-
     /// Get a command by name (case-insensitive).
     pub fn get(&self, name: &str) -> Option<Arc<dyn Command>> {
         self.commands.get(&name.to_ascii_uppercase()).cloned()
     }
 
     /// Get a command entry by name (case-insensitive).
-    /// This returns both full commands and metadata-only entries.
+    /// This returns both shard commands and connection-level entries.
     pub fn get_entry(&self, name: &str) -> Option<&CommandEntry> {
         self.entries.get(&name.to_ascii_uppercase())
     }
 
-    /// Get all registered command names (includes metadata-only commands).
+    /// Get all registered command names (includes connection-level commands,
+    /// which have no shard executor).
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.entries.keys().map(|s| s.as_str())
     }
 
-    /// Get all registered full command names (excludes metadata-only).
+    /// Get all registered shard command names (excludes connection-level
+    /// commands, which are absent from `commands`).
     pub fn command_names(&self) -> impl Iterator<Item = &str> {
         self.commands.keys().map(|s| s.as_str())
     }
 
-    /// Number of registered commands (includes metadata-only).
+    /// Number of registered commands (includes connection-level commands).
     pub fn len(&self) -> usize {
         self.entries.len()
     }
@@ -313,30 +295,6 @@ mod tests {
         }
     }
 
-    struct TestMetadataOnly;
-
-    impl CommandMetadata for TestMetadataOnly {
-        fn name(&self) -> &'static str {
-            "TESTMETA"
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::AtLeast(1)
-        }
-
-        fn flags(&self) -> CommandFlags {
-            CommandFlags::PUBSUB
-        }
-
-        fn execution_strategy(&self) -> ExecutionStrategy {
-            ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub)
-        }
-
-        fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-            vec![]
-        }
-    }
-
     #[test]
     fn test_register_and_get() {
         let mut registry = CommandRegistry::new();
@@ -365,25 +323,6 @@ mod tests {
         assert!(entry.is_full());
         assert_eq!(entry.name(), "TEST");
         assert_eq!(entry.execution_strategy(), ExecutionStrategy::Standard);
-    }
-
-    #[test]
-    fn test_metadata_only_registration() {
-        let mut registry = CommandRegistry::new();
-        registry.register_metadata(TestMetadataOnly);
-
-        // Should not be accessible via get() (no execute method)
-        assert!(registry.get("TESTMETA").is_none());
-
-        // Should be accessible via get_entry()
-        let entry = registry.get_entry("TESTMETA").unwrap();
-        assert!(!entry.is_full());
-        assert_eq!(entry.name(), "TESTMETA");
-        assert_eq!(
-            entry.execution_strategy(),
-            ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub)
-        );
-        assert!(entry.flags().contains(CommandFlags::PUBSUB));
     }
 
     /// A connection command whose declared strategy is a parameter, so we can
@@ -430,7 +369,9 @@ mod tests {
         let mut registry = CommandRegistry::new();
         registry.register_connection(&CMD);
 
-        // Metadata is readable through the entry, but there is no shard executor.
+        // Metadata (including flags) is readable through the entry, but there
+        // is no shard executor. This is the in-`get_entry()`/not-in-`get()`
+        // introspection contract the removed `MetadataOnly` variant carried.
         let entry = registry.get_entry("TESTCONN").unwrap();
         assert!(!entry.is_full());
         assert!(entry.as_command().is_none());
@@ -440,8 +381,14 @@ mod tests {
             entry.execution_strategy(),
             ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin)
         );
+        assert!(entry.flags().contains(CommandFlags::ADMIN));
         // Not reachable via get() (no shard execute()).
         assert!(registry.get("TESTCONN").is_none());
+        // But it is visible to names() and absent from command_names().
+        let names: Vec<_> = registry.names().collect();
+        assert!(names.contains(&"TESTCONN"));
+        let cmd_names: Vec<_> = registry.command_names().collect();
+        assert!(!cmd_names.contains(&"TESTCONN"));
     }
 
     #[test]
@@ -466,19 +413,25 @@ mod tests {
 
     #[test]
     fn test_mixed_registration() {
+        static SPEC: CommandSpec =
+            conn_spec(ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin));
+        static CMD: TestConnCommand = TestConnCommand { spec: &SPEC };
+
         let mut registry = CommandRegistry::new();
         registry.register(TestCommand);
-        registry.register_metadata(TestMetadataOnly);
+        registry.register_connection(&CMD);
 
         // Both should be in names()
         let names: Vec<_> = registry.names().collect();
         assert!(names.contains(&"TEST"));
-        assert!(names.contains(&"TESTMETA"));
+        assert!(names.contains(&"TESTCONN"));
 
-        // Only full command in command_names()
+        // Only the shard command in command_names(); the connection-level entry
+        // is in names()/get_entry() but not get()/command_names().
         let cmd_names: Vec<_> = registry.command_names().collect();
         assert!(cmd_names.contains(&"TEST"));
-        assert!(!cmd_names.contains(&"TESTMETA"));
+        assert!(!cmd_names.contains(&"TESTCONN"));
+        assert!(registry.get("TESTCONN").is_none());
 
         assert_eq!(registry.len(), 2);
     }
