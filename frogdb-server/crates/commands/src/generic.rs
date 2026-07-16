@@ -102,7 +102,7 @@ impl Command for RenameCommand {
         // notifications, WATCH bump) — matching Redis, which returns before
         // signalModifiedKey / server.dirty++.
         if old_key == new_key {
-            ctx.write_was_noop = true;
+            ctx.effects.write_was_noop = true;
             return Ok(Response::ok());
         }
 
@@ -174,7 +174,7 @@ impl Command for RenamenxCommand {
         // effect pipeline (WAL, replication, notifications, WATCH bump) —
         // Redis returns before signalModifiedKey / server.dirty++.
         if ctx.store.contains(new_key) {
-            ctx.write_was_noop = true;
+            ctx.effects.write_was_noop = true;
             return Ok(Response::Integer(0));
         }
 
@@ -291,11 +291,11 @@ impl Command for UnlinkCommand {
             }
         }
         // Track lazyfreed objects for INFO memory reporting
-        ctx.lazyfreed_delta = deleted as u64;
+        ctx.effects.lazyfreed_delta = deleted as u64;
         // Signal the post-execution pipeline that no data was modified so
         // it can skip incrementing the shard version (preserving WATCH state).
         if deleted == 0 {
-            ctx.dirty_delta = -1;
+            ctx.effects.dirty_delta = -1;
         }
         Ok(Response::Integer(deleted))
     }

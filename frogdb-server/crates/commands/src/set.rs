@@ -954,7 +954,7 @@ impl Command for SmoveCommand {
                 .store
                 .get_set(source)?
                 .is_some_and(|set| set.contains(member));
-            ctx.write_was_noop = true;
+            ctx.effects.write_was_noop = true;
             return Ok(Response::Integer(if is_member { 1 } else { 0 }));
         }
 

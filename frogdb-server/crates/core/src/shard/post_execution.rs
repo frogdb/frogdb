@@ -650,7 +650,7 @@ mod tests {
             ctx: &mut CommandContext,
             _args: &[Bytes],
         ) -> Result<Response, frogdb_types::CommandError> {
-            ctx.write_was_noop = true; // verified: nothing changed
+            ctx.effects.write_was_noop = true; // verified: nothing changed
             Ok(Response::Integer(0))
         }
     }

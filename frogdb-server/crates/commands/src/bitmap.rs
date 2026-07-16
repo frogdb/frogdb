@@ -81,7 +81,7 @@ impl Command for SetbitCommand {
 
         // Signal dirty state to the shard for rdb_changes_since_last_save tracking
         if !is_dirty {
-            ctx.dirty_delta = -1; // No actual change, suppress dirty increment
+            ctx.effects.dirty_delta = -1; // No actual change, suppress dirty increment
         }
 
         Ok(Response::Integer(old_bit as i64))
@@ -525,10 +525,10 @@ fn execute_bitfield(
 
     // Signal dirty state to the shard for rdb_changes_since_last_save tracking
     if dirty_count > 0 {
-        ctx.dirty_delta = dirty_count;
+        ctx.effects.dirty_delta = dirty_count;
     } else if modified {
         // Modified but no dirty subcommands -> suppress dirty increment
-        ctx.dirty_delta = -1;
+        ctx.effects.dirty_delta = -1;
     }
 
     Ok(Response::Array(results))
