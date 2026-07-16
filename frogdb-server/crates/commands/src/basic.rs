@@ -537,7 +537,8 @@ impl Command for SetCommand {
             } else if parser.try_flag(b"KEEPTTL") {
                 opts.keep_ttl = true;
             } else if parser.try_flag(b"EX") {
-                // EX is relative seconds: guard the later secs*1000 conversion.
+                // EX is a seconds unit: guard the secs*1000 conversion
+                // (Redis getExpireMillisecondsOrReply, UNIT_SECONDS).
                 let secs = checked_expire_value(
                     parse_i64(parser.next_arg()?)?,
                     true,
@@ -552,9 +553,11 @@ impl Command for SetCommand {
                 )?;
                 opts.expiry = Some(Expiry::Px(ms));
             } else if parser.try_flag(b"EXAT") {
+                // EXAT is also a seconds unit upstream (unit stays
+                // UNIT_SECONDS), so it carries the same overflow guard.
                 let ts = checked_expire_value(
                     parse_i64(parser.next_arg()?)?,
-                    false,
+                    true,
                     ExpiryErr::Named("set"),
                 )?;
                 opts.expiry = Some(Expiry::ExAt(ts));
@@ -872,6 +875,16 @@ mod expiry_grammar_pin_tests {
     fn set_exat_zero_message() {
         assert_eq!(
             expect_invalid(&["k", "v", "EXAT", "0"]),
+            "invalid expire time in 'set' command"
+        );
+    }
+
+    #[test]
+    fn set_exat_secs_overflow_rejected() {
+        // EXAT is also a seconds unit upstream (unit stays UNIT_SECONDS in
+        // parseExtendedStringArgumentsOrReply), so it carries the same guard.
+        assert_eq!(
+            expect_invalid(&["k", "v", "EXAT", "18446744073709551"]),
             "invalid expire time in 'set' command"
         );
     }

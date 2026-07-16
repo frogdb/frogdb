@@ -97,7 +97,9 @@ impl Command for SetexCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = args[0].clone();
-        let seconds = checked_expire_value(parse_i64(&args[1])?, false, ExpiryErr::Named("setex"))?;
+        // Seconds unit: guard the secs*1000 conversion, matching Redis's
+        // setexCommand -> getExpireMillisecondsOrReply(UNIT_SECONDS) path.
+        let seconds = checked_expire_value(parse_i64(&args[1])?, true, ExpiryErr::Named("setex"))?;
         let value = args[2].clone();
 
         let opts = SetOptions {
@@ -466,7 +468,8 @@ impl Command for GetexCommand {
         while parser.has_more() {
             if parser.try_flag(b"EX") {
                 let raw = parse_i64(parser.next_arg()?).map_err(|_| CommandError::NotInteger)?;
-                // EX is relative seconds: guard the secs*1000 conversion.
+                // EX is a seconds unit: guard the secs*1000 conversion
+                // (Redis getExpireMillisecondsOrReply, UNIT_SECONDS).
                 let seconds = checked_expire_value(raw, true, ExpiryErr::Named("getex"))?;
                 let expires_at = Instant::now() + Duration::from_secs(seconds);
                 ctx.store.set_expiry(key, expires_at);
@@ -477,7 +480,8 @@ impl Command for GetexCommand {
                 ctx.store.set_expiry(key, expires_at);
             } else if parser.try_flag(b"EXAT") {
                 let raw = parse_i64(parser.next_arg()?).map_err(|_| CommandError::NotInteger)?;
-                let ts = checked_expire_value(raw, false, ExpiryErr::Named("getex"))?;
+                // EXAT is also a seconds unit upstream: same overflow guard.
+                let ts = checked_expire_value(raw, true, ExpiryErr::Named("getex"))?;
                 let target = UNIX_EPOCH + Duration::from_secs(ts);
                 let now = SystemTime::now();
                 if let Ok(duration) = target.duration_since(now) {
@@ -1421,7 +1425,9 @@ impl Command for MsetexCommand {
                 b"EX" | b"PX" | b"EXAT" | b"PXAT" => {
                     // All four positive-expiry units share the same index-based
                     // shape; they differ only in the resulting `Expiry` variant.
-                    // MSETEX carries no secs*1000 overflow guard.
+                    // The seconds units (EX/EXAT) guard the secs*1000
+                    // conversion, matching Redis's msetexCommand ->
+                    // getExpireMillisecondsOrReply(UNIT_SECONDS) path.
                     let unit = ExpiryUnit::from_flag(&opt).expect("matched an expiry flag above");
                     if expiry.is_some() || keep_ttl {
                         return Err(CommandError::SyntaxError);
@@ -1430,9 +1436,10 @@ impl Command for MsetexCommand {
                     if i >= option_args.len() {
                         return Err(CommandError::SyntaxError);
                     }
+                    let guard = matches!(unit, ExpiryUnit::Ex | ExpiryUnit::ExAt);
                     let value = checked_expire_value(
                         parse_i64(&option_args[i])?,
-                        false,
+                        guard,
                         ExpiryErr::Named("msetex"),
                     )?;
                     expiry = Some(unit.into_expiry(value));
@@ -1555,13 +1562,15 @@ mod expiry_grammar_pin_tests {
     }
 
     #[test]
-    fn setex_large_value_accepted() {
-        // SETEX has no secs*1000 overflow guard: a large in-range i64 succeeds.
+    fn setex_secs_overflow_rejected() {
+        // Redis parity: setexCommand routes through
+        // getExpireMillisecondsOrReply(UNIT_SECONDS), which rejects seconds
+        // values whose *1000 conversion would overflow (t_string.c).
         let mut c = ctx();
-        let r = SetexCommand
-            .execute(&mut c, &args(&["k", "18446744073709551", "v"]))
-            .unwrap();
-        assert_eq!(r, Response::ok());
+        assert_eq!(
+            invalid_msg(SetexCommand, &mut c, &["k", "18446744073709551", "v"]),
+            "invalid expire time in 'setex' command"
+        );
     }
 
     // ---- PSETEX ----
@@ -1582,6 +1591,17 @@ mod expiry_grammar_pin_tests {
             invalid_msg(PsetexCommand, &mut c, &["k", "-1", "v"]),
             "invalid expire time in 'psetex' command"
         );
+    }
+
+    #[test]
+    fn psetex_large_value_accepted() {
+        // PSETEX takes milliseconds (UNIT_MILLISECONDS upstream): the secs*1000
+        // overflow guard does not apply, so a large in-range i64 succeeds.
+        let mut c = ctx();
+        let r = PsetexCommand
+            .execute(&mut c, &args(&["k", "18446744073709551", "v"]))
+            .unwrap();
+        assert_eq!(r, Response::ok());
     }
 
     // ---- GETEX (numeric validation only runs once the key exists) ----
@@ -1640,6 +1660,17 @@ mod expiry_grammar_pin_tests {
     }
 
     #[test]
+    fn getex_exat_secs_overflow_rejected() {
+        // EXAT is also a seconds unit upstream (unit stays UNIT_SECONDS in
+        // parseExtendedStringArgumentsOrReply), so it carries the same guard.
+        let mut c = getex_ctx_with_key();
+        assert_eq!(
+            invalid_msg(GetexCommand, &mut c, &["k", "EXAT", "18446744073709551"]),
+            "invalid expire time in 'getex' command"
+        );
+    }
+
+    #[test]
     fn getex_pxat_zero_message() {
         let mut c = getex_ctx_with_key();
         assert_eq!(
@@ -1687,11 +1718,40 @@ mod expiry_grammar_pin_tests {
     }
 
     #[test]
-    fn msetex_ex_large_value_accepted() {
-        // MSETEX has no secs*1000 overflow guard: a large in-range i64 succeeds.
+    fn msetex_ex_secs_overflow_rejected() {
+        // Redis parity: msetexCommand routes through
+        // getExpireMillisecondsOrReply(UNIT_SECONDS) for EX (t_string.c).
+        let mut c = ctx();
+        assert_eq!(
+            invalid_msg(
+                MsetexCommand,
+                &mut c,
+                &["1", "k", "v", "EX", "18446744073709551"]
+            ),
+            "invalid expire time in 'msetex' command"
+        );
+    }
+
+    #[test]
+    fn msetex_exat_secs_overflow_rejected() {
+        // EXAT is also a seconds unit upstream: same guard.
+        let mut c = ctx();
+        assert_eq!(
+            invalid_msg(
+                MsetexCommand,
+                &mut c,
+                &["1", "k", "v", "EXAT", "18446744073709551"]
+            ),
+            "invalid expire time in 'msetex' command"
+        );
+    }
+
+    #[test]
+    fn msetex_px_large_value_accepted() {
+        // PX is a milliseconds unit: no *1000 guard, large in-range i64 succeeds.
         let mut c = ctx();
         let r = MsetexCommand
-            .execute(&mut c, &args(&["1", "k", "v", "EX", "18446744073709551"]))
+            .execute(&mut c, &args(&["1", "k", "v", "PX", "18446744073709551"]))
             .unwrap();
         assert_eq!(r, Response::Integer(1));
     }
