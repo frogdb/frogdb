@@ -899,9 +899,10 @@ async fn test_bitop_destination_survives_restart() {
 
 /// BITOP with an empty result deletes the destination (Redis parity,
 /// bitops.c bitopCommand: `dbDelete` on `maxlen == 0`). That deletion must
-/// reach the WAL — a `PersistDestination` (persist-if-exists) strategy would
-/// leave the stale prior value authoritative on disk, resurrecting the
-/// destination on restart. The `PersistOrDeleteDestination` strategy writes the
+/// reach the WAL — a persist-if-exists (`WalStrategy::PersistDestination`)
+/// strategy would leave the stale prior value authoritative on disk,
+/// resurrecting the destination on restart. BITOP's `WalStrategy::Dynamic`
+/// (persist-or-delete over its declared write-access destination) writes the
 /// removal so the destination stays absent after a reboot.
 #[tokio::test]
 async fn test_bitop_empty_result_deletion_survives_restart() {

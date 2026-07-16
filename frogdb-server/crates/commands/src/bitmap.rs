@@ -11,8 +11,8 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, BitOp, BitfieldEncoding, BitfieldOffset, BitfieldSubCommand,
     Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec, ExecutionStrategy,
-    KeySpec, KeyspaceEventFlags, LookupSpec, OverflowMode, StringValue, Value, WaiterWake,
-    WalStrategy, bitop,
+    KeyAccessFlag, KeySpec, KeyspaceEventFlags, LookupSpec, OverflowMode, StringValue, Value,
+    WaiterWake, WalStrategy, bitop,
 };
 use frogdb_protocol::Response;
 
@@ -213,12 +213,16 @@ impl Command for BitopCommand {
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::Skip(1),
-            access: AccessSpec::Uniform,
-            // Persist-or-delete the destination (args[1]): a non-empty result
-            // stores, an empty result deletes (bitops.c bitopCommand). The
-            // deletion must reach the WAL so it survives a restart — a plain
-            // `PersistDestination` would leave the stale prior value on disk.
-            wal: WalStrategy::PersistOrDeleteDestination(1),
+            // Destination (key 0 of the `Skip(1)` extraction, args[1]) is
+            // overwritten; the source keys are read-only.
+            access: AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
+            // Persist-or-delete the destination: a non-empty result stores, an
+            // empty result deletes (bitops.c bitopCommand). The deletion must
+            // reach the WAL so it survives a restart — a plain persist-if-exists
+            // would leave the stale prior value on disk. `Dynamic` resolves the
+            // destination through the declared write-access key (the sole `OW`
+            // key above) and emits persist-or-delete over it.
+            wal: WalStrategy::Dynamic,
             wakes: WaiterWake::None,
             // Runtime-deposited (bitops.c bitopCommand): `set` under
             // NOTIFY_STRING on the destination when the result is non-empty,

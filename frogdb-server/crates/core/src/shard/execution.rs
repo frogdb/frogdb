@@ -298,7 +298,13 @@ impl ShardWorker {
                     hll_wal_delta: write_meta.hll_wal_delta.as_deref(),
                     keyspace_events: write_meta.keyspace_events.as_slice(),
                 };
-                match self.persist_and_confirm(&record).await {
+                match self
+                    .persist(
+                        std::slice::from_ref(&record),
+                        super::persistence::Durability::Confirm,
+                    )
+                    .await
+                {
                     Ok(()) => {
                         self.run_write_effects(
                             WriteSummary {
@@ -437,7 +443,10 @@ impl ShardWorker {
 
             if rollback_mode {
                 // Batch WAL persistence with rollback on failure
-                if let Err(e) = self.persist_transaction_to_wal(&write_infos).await {
+                if let Err(e) = self
+                    .persist(&write_infos, super::persistence::Durability::Confirm)
+                    .await
+                {
                     tracing::error!(
                         error = %e,
                         "Transaction WAL persistence failed, rolling back"

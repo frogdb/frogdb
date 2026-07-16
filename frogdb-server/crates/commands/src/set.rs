@@ -12,8 +12,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    EventSpec, ExecutionStrategy, KeySpec, KeyspaceEventFlags, ListpackThresholds, LookupSpec,
-    SetValue, StoreTypedFamilyExt, Value, WaiterWake, WalStrategy,
+    EventSpec, ExecutionStrategy, KeyAccessFlag, KeySpec, KeyspaceEventFlags, ListpackThresholds,
+    LookupSpec, SetValue, StoreTypedFamilyExt, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -480,8 +480,9 @@ impl Command for SunionstoreCommand {
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::All,
-            access: AccessSpec::Uniform,
-            wal: WalStrategy::PersistDestination(0),
+            // Destination (key 0) is overwritten; the source keys are read-only.
+            access: AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
+            wal: WalStrategy::PersistDestination,
             wakes: WaiterWake::None,
             event: EventSpec::EmitsAt {
                 class: KeyspaceEventFlags::SET,
@@ -540,8 +541,9 @@ impl Command for SinterstoreCommand {
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::All,
-            access: AccessSpec::Uniform,
-            wal: WalStrategy::PersistDestination(0),
+            // Destination (key 0) is overwritten; the source keys are read-only.
+            access: AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
+            wal: WalStrategy::PersistDestination,
             wakes: WaiterWake::None,
             event: EventSpec::EmitsAt {
                 class: KeyspaceEventFlags::SET,
@@ -612,8 +614,9 @@ impl Command for SdiffstoreCommand {
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::All,
-            access: AccessSpec::Uniform,
-            wal: WalStrategy::PersistDestination(0),
+            // Destination (key 0) is overwritten; the source keys are read-only.
+            access: AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
+            wal: WalStrategy::PersistDestination,
             wakes: WaiterWake::None,
             event: EventSpec::EmitsAt {
                 class: KeyspaceEventFlags::SET,

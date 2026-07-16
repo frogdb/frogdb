@@ -875,13 +875,22 @@ evidence verification. Ordered by expected leverage:
     executors. `queue_command` moved from `handlers/transaction.rs` onto the view; `PauseGate`
     kept as a thin `wait_if_paused` call (the pause loop mutates the client registry and sleeps —
     documented, not forced). integration_transactions 25/25, integration_pubsub 94/94.
-54. [54-shard-persistence-bridge.md](54-shard-persistence-bridge.md) — **Proposed**: collapse the
-    triplicated persist loops (`persist_by_strategy` / `persist_and_confirm` /
-    `persist_transaction_to_wal` — one durability boolean expressed as three functions) into one
-    `persist(..., Durability)`; add a narrow store-view seam (`WalTarget`) so `execute_wal_action`
-    (zero tests today; only reachable via full `ShardWorker`) is unit-testable — copying the
-    `WriteSink` two-adapter pattern up one layer. Folds in: converge the 11 index-based
-    `WalStrategy` destination variants onto the `Dynamic`/`keys_with_flags` key extraction.
+54. [54-shard-persistence-bridge.md](54-shard-persistence-bridge.md) — **Implemented**
+    (2026-07-16): the three persist loops (`persist_by_strategy` / `persist_and_confirm` /
+    `persist_transaction_to_wal`) collapsed into one `ShardWorker::persist(&[WriteRecord],
+    Durability)` (`Confirm` snapshots the sequence + `flush_through`s once; `FireAndForget`
+    stages and logs). `execute_wal_action` became a free `async fn` over a narrow `WalTarget`
+    seam (probe + write_set/delete/merge/clear); `ShardWorker` is the production adapter (owns
+    the `get_hot`/`get_metadata` framing), an in-memory `TestTarget` records writes and answers
+    `contains` from a set — 8 new probe/routing unit tests, no RocksDB. The 4 `persist_*_to_wal`
+    helpers folded into the adapter. Move 3: the 10 `PersistDestination(idx)` sites → unit
+    `WalStrategy::PersistDestination` (persist-if-exists over the declared write-access keys),
+    BITOP's `PersistOrDeleteDestination(1)` → `Dynamic`; both index variants deleted. The nine
+    multi-key store commands' `AccessSpec::Uniform` → `Positional([OW, R])` so `keys_with_flags`
+    marks only the destination write (also correcting `COMMAND GETKEYSANDFLAGS`); a new
+    `validate()` invariant (`WalDestinationWithoutWriteKey`) rejects a flag-derived WAL strategy
+    whose positional access declares no write flag. WAL actions byte-for-byte preserved
+    (integration_persistence 24/24, core 714/714).
 55. [55-write-outcome-return.md](55-write-outcome-return.md) — **Implemented** (2026-07-16,
     `dfdb588b`, Option B): the eight loose deposit fields consolidated into one
     `CommandEffects` struct held as `ctx.effects`; the three drain sites (execution.rs, script
