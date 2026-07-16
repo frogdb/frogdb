@@ -1,6 +1,6 @@
 # Proposal: Pre-Dispatch Stage Pipeline
 
-Status: proposed
+Status: implemented (2026-07-16)
 Date: 2026-07-16
 
 ## Problem
@@ -252,3 +252,49 @@ stopping at write effects.
   routing (proposal 05's subject) sits *inside* the `ConnectionCommand`/`Execute` arms; the
   `ConnectionCommand` stage delegates to the unchanged `dispatch_connection_command`, so the
   single-routing-decision seam stays the one authority — the two proposals compose, not overlap.
+
+## Implementation notes (2026-07-16)
+
+Landed as designed. Delta from the sketch, and the judgment calls:
+
+- **The array and driver.** `DispatchStage`, `PRE_DISPATCH_ORDER: [DispatchStage; 17]`, and
+  `StageOutcome` live in `connection/dispatch.rs`. `route_and_execute_with_transaction` is now the
+  proposal's exact `for stage in PRE_DISPATCH_ORDER { match run_stage(...).await { … } }` loop
+  ending in `unreachable!`. `run_stage` is one `match stage { … }` whose arms are the former inline
+  bodies, moved verbatim. Stage order matches the proposal enum 1:1 (PreAuthIntercept=0 …
+  Execute=16) and preserves the old top-to-bottom `if`-ladder order exactly.
+- **The socketless view.** `PreDispatchView<'a>` lives in `guards.rs` (the guard half of the
+  gauntlet). Guard predicates moved onto it: `run_pre_checks`, `is_auth_exempt`,
+  `is_allowed_in_pubsub_mode`, `permission_guard`, `validate_cluster_slots`, `is_cluster_exempt`,
+  `check_migrating_multikey`, `pubsub_mode_ping`, `arity_check`, `try_queue_in_transaction`, and
+  `queue_command` (moved out of `handlers/transaction.rs` — its only caller was dispatch). The view
+  holds `state: &mut ConnectionState` + borrowed dep handles and **no socket**. `ConnectionHandler::
+  pre_dispatch_view(&mut self)` builds it from disjoint fields; each guard arm binds the owned
+  result to a `let` (so the view temporary drops before `record_error_response`/executors reborrow
+  `self`), which is the borrow discipline the Risks section flagged.
+- **Shared `permission_guard`.** Extracted `build_permission_guard(&AclManager, &ConnectionState)`
+  in `permission_guard.rs`; both `ConnectionHandler::permission_guard` (key checks on the routing
+  path) and `PreDispatchView::permission_guard` delegate to it — identical user/client-info binding,
+  no drift.
+- **Two stages kept as thin handler closures, deliberately** (the "do not force it" clause):
+  `PauseGate` calls `self.wait_if_paused(...).await` — the pause *wait loop* mutates the client
+  registry's paused flag and sleeps, so only its predicate (`should_pause_command`) is guard-shaped;
+  moving the loop would drag `client_registry` mutation into the view for no test win. The `Execute`
+  terminal and the other eight dispatch stages (`PreAuthIntercept`, `ResetIntercept`,
+  `TransactionControl`, `ConnectionStateCommand`, `ConnectionCommand`, `PsyncIntercept`,
+  `WaitIntercept`, `ServerWide`, `ClusterSlotSubcommand`) terminate into executors that need the
+  full handler and stay adapters over the unchanged code.
+- **Post-execution tail stays on the handler** (out of scope, as stated): `migrating_ask_for_nil`,
+  `handle_internal_action`, `record_error_response` run inside the `Execute` arm.
+- **Tests.** Order-pinning (`every_stage_appears_exactly_once`: each variant once, `len == 17`) and
+  the load-bearing relative orderings (`load_bearing_ordering_invariants`) in `dispatch.rs`, modeled
+  on `WRITE_EFFECT_ORDER`'s tests. The four `run_pre_checks` self-fence tests migrated off
+  `make_test_handler`/loopback TCP to a socketless `ViewFixture` in `guards.rs`, plus five new guard
+  unit tests (replica-readonly, admin-port NOADMIN, arity, pub/sub-PING RESP2 framing, NOAUTH).
+  `make_test_handler` was fully removed (no remaining callers).
+- **Verification.** `just check frogdb-server` clean; `just lint frogdb-server` clean;
+  dispatch tests 3/3, guards 9/9, integration_transactions 25/25 (the MULTI-queue ordering risk),
+  integration_pubsub 94/94. The criterion micro-bench in Risks was not added — the design is a
+  monomorphized `match` over a `Copy` enum with no boxing/allocation, so it lowers to the same shape
+  as the old `if`-ladder; a bench harness for `route_and_execute_with_transaction` did not exist to
+  extend and building one was out of scope for this change.

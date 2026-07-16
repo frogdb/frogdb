@@ -23,8 +23,8 @@ use frogdb_protocol::{ParsedCommand, Response};
 use tokio::sync::oneshot;
 use tracing::debug;
 
+use crate::connection::ConnectionHandler;
 use crate::connection::state::{TransactionTarget, TxnSummary};
-use crate::connection::{ConnectionHandler, key_access_type_for_flags};
 
 /// How a transaction ended. Every exit of [`ConnectionHandler::execute_transaction`]
 /// names its variant, and the single call site in `handle_exec` records the
@@ -359,80 +359,6 @@ impl ConnectionHandler {
                 Response::error("ERR shard dropped request"),
             )),
         }
-    }
-
-    /// Queue a command during transaction mode.
-    pub(crate) fn queue_command(&mut self, cmd: &ParsedCommand) -> Response {
-        let cmd_name = cmd.name_uppercase();
-        let cmd_name_str = String::from_utf8_lossy(&cmd_name);
-
-        // Look up command for validation (get_entry covers both full and metadata-only
-        // commands, so connection-level commands like PUBLISH/SPUBLISH can be queued).
-        let entry = match self.core.registry.get_entry(&cmd_name_str) {
-            Some(e) => e,
-            None => {
-                let msg = format!(
-                    "ERR unknown command '{}', with args beginning with:",
-                    cmd_name_str
-                );
-                self.state.abort_transaction(Some(msg.clone()));
-                return Response::error(msg);
-            }
-        };
-
-        // Validate arity
-        if !entry.arity().check(cmd.args.len()) {
-            let msg = format!(
-                "ERR wrong number of arguments for '{}' command",
-                entry.name()
-            );
-            self.state.abort_transaction(Some(msg.clone()));
-            return Response::error(msg);
-        }
-
-        // Extract keys for same-slot validation
-        let keys = entry.keys(&cmd.args);
-
-        // Check key + channel permissions through the unified enforcement seam, so
-        // queue-time denials are logged to ACL LOG exactly like the live paths.
-        // (The command itself is already validated upstream by run_pre_checks.)
-        if let Some(guard) = self.permission_guard() {
-            if !keys.is_empty() {
-                let access_type = key_access_type_for_flags(entry.flags());
-                if let Err(err) = guard.check_keys(&keys, access_type) {
-                    return err;
-                }
-            }
-            match cmd_name_str.as_ref() {
-                // First arg is the channel.
-                "PUBLISH" | "SPUBLISH" => {
-                    if let Some(channel) = cmd.args.first()
-                        && let Err(err) = guard.check_channels(std::slice::from_ref(channel))
-                    {
-                        return err;
-                    }
-                }
-                // All args are channels.
-                "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE" => {
-                    if let Err(err) = guard.check_channels(&cmd.args) {
-                        return err;
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        // Fold this command's keys into the transaction target. In cluster mode
-        // the accumulator uses slot-level detection (Redis requires all keys in
-        // one slot); in standalone mode, shard-level detection.
-        let is_cluster = self.cluster.cluster_state.is_some();
-        self.state
-            .fold_transaction_keys(&keys, self.num_shards, is_cluster);
-
-        // Queue the command
-        self.state.push_queued_command(cmd.clone());
-
-        Response::Simple(Bytes::from_static(b"QUEUED"))
     }
 
     /// Execute a connection-level command that was deferred from a transaction.
