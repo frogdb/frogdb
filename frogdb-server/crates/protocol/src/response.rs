@@ -4,7 +4,10 @@
 //! and internal control-flow responses:
 //!
 //! - [`WireResponse`] - Only contains types that can be serialized to RESP2/RESP3.
-//!   The `to_resp2_frame()` and `to_resp3_frame()` methods CANNOT panic.
+//!   The `to_resp2_frame()` and `to_resp3_frame()` methods cannot panic over the
+//!   frames they are asked to encode. The one RESP2 shape a `Resp2BytesFrame`
+//!   cannot represent — the array-null `*-1\r\n` — is owned by the RESP2 codec
+//!   (`Resp2Outbound::NullArray`), not by `to_resp2_frame()`.
 //!
 //! - [`InternalAction`] - Control-flow signals that must be intercepted before
 //!   serialization (blocking commands, Raft operations, migrations).
@@ -99,7 +102,9 @@ pub enum SlotMigrationKind {
 /// Response types that can be safely serialized to the wire protocol.
 ///
 /// This enum ONLY contains types that can be encoded as RESP2 or RESP3 frames.
-/// The `to_resp2_frame()` and `to_resp3_frame()` methods will NEVER panic.
+/// `to_resp3_frame()` never panics for any variant; `to_resp2_frame()` never
+/// panics for any variant it is asked to encode — [`WireResponse::NullArray`] is
+/// diverted to the RESP2 codec (`Resp2Outbound::NullArray`) and never reaches it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WireResponse {
     // === RESP2 Types ===
@@ -203,7 +208,12 @@ impl WireResponse {
     /// - Null → Null bulk string
     /// - Push → Array
     ///
-    /// This method CANNOT panic - all variants are wire-serializable.
+    /// This method is total — and cannot panic — over every variant it is asked
+    /// to encode. The sole exception is [`WireResponse::NullArray`]: the RESP2
+    /// array-null (`*-1\r\n`) is not representable as a single [`Resp2BytesFrame`]
+    /// (`redis-protocol`'s `Null` is always `$-1\r\n`), so it is encoded by the
+    /// RESP2 codec (`Resp2Outbound::NullArray`) and diverted before reaching this
+    /// method. Its arm here is therefore unreachable.
     pub fn to_resp2_frame(self) -> Resp2BytesFrame {
         match self {
             WireResponse::Simple(s) => Resp2BytesFrame::SimpleString(s),
@@ -258,9 +268,14 @@ impl WireResponse {
                 Resp2BytesFrame::BulkString(n)
             }
             WireResponse::NullArray => {
-                // NullArray needs special handling at the connection layer to emit *-1\r\n.
-                // If it reaches here, fall back to Null ($-1\r\n) as best effort.
-                Resp2BytesFrame::Null
+                // The RESP2 array-null (`*-1\r\n`) is encoded by the RESP2 codec
+                // (`Resp2Outbound::NullArray`), not here — `Resp2BytesFrame` cannot
+                // represent it (its `Null` is `$-1\r\n`). NullArray is diverted to
+                // the codec before this method is called, so this arm is unreachable.
+                unreachable!(
+                    "WireResponse::NullArray must be encoded by the RESP2 codec \
+                     (Resp2Outbound::NullArray), not to_resp2_frame"
+                )
             }
         }
     }

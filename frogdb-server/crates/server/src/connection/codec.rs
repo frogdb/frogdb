@@ -26,6 +26,28 @@ const PROTO_MAX_MULTIBULK_LEN: i64 = 1_048_576;
 /// Redis uses `512ll * 1024 * 1024`.
 const PROTO_MAX_BULK_LEN: i64 = 512 * 1024 * 1024;
 
+/// The RESP2 array-null literal (`*-1\r\n`).
+///
+/// The `redis-protocol` crate cannot produce it — its `Null` frame is always
+/// `$-1\r\n` — so the codec owns these raw bytes. This is the single home of the
+/// RESP2 array-null encoding, alongside the rest of the RESP2 wire encoding.
+pub const RESP2_NULL_ARRAY: &[u8] = b"*-1\r\n";
+
+/// An item the RESP2 codec can encode on the outbound path.
+///
+/// Most responses narrow to an ordinary [`BytesFrame`]. The one exception is
+/// [`WireResponse::NullArray`](frogdb_protocol::WireResponse::NullArray), which
+/// `redis-protocol` cannot represent (its `Null` is `$-1\r\n`, never `*-1\r\n`);
+/// it rides this enum so the `*-1\r\n` bytes stay in feed order with surrounding
+/// frames without the connection layer poking the write buffer directly.
+#[derive(Clone, Debug)]
+pub enum Resp2Outbound {
+    /// An ordinary RESP2 frame, encoded by the upstream codec.
+    Frame(BytesFrame),
+    /// The RESP2 array-null (`*-1\r\n`), encoded by this codec.
+    NullArray,
+}
+
 /// Redis-compatible RESP2 codec that handles protocol edge cases.
 #[derive(Clone, Debug, Default)]
 pub struct FrogDbResp2 {
@@ -37,6 +59,20 @@ impl Encoder<BytesFrame> for FrogDbResp2 {
 
     fn encode(&mut self, item: BytesFrame, dst: &mut BytesMut) -> Result<(), Self::Error> {
         self.inner.encode(item, dst)
+    }
+}
+
+impl Encoder<Resp2Outbound> for FrogDbResp2 {
+    type Error = RedisProtocolError;
+
+    fn encode(&mut self, item: Resp2Outbound, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        match item {
+            Resp2Outbound::Frame(frame) => self.inner.encode(frame, dst),
+            Resp2Outbound::NullArray => {
+                dst.extend_from_slice(RESP2_NULL_ARRAY);
+                Ok(())
+            }
+        }
     }
 }
 
@@ -413,5 +449,32 @@ mod tests {
         let next = codec.decode(&mut buf).unwrap();
         assert_eq!(next, Some(array(vec![bulk(b"PING")])));
         assert!(buf.is_empty());
+    }
+
+    /// The codec owns the RESP2 array-null encoding: feeding
+    /// [`Resp2Outbound::NullArray`] emits exactly `*-1\r\n` — the shape the
+    /// upstream `redis-protocol` `Null` frame cannot produce.
+    #[test]
+    fn encode_null_array_emits_star_minus_one() {
+        let mut codec = FrogDbResp2::default();
+        let mut dst = BytesMut::new();
+        codec
+            .encode(Resp2Outbound::NullArray, &mut dst)
+            .expect("encoding a null array cannot fail");
+        assert_eq!(&dst[..], b"*-1\r\n");
+    }
+
+    /// The `Frame` arm delegates to the upstream RESP2 encoder unchanged.
+    #[test]
+    fn encode_frame_delegates_to_inner() {
+        let mut codec = FrogDbResp2::default();
+        let mut dst = BytesMut::new();
+        codec
+            .encode(
+                Resp2Outbound::Frame(BytesFrame::BulkString(bytes::Bytes::from_static(b"a"))),
+                &mut dst,
+            )
+            .expect("encoding a bulk string cannot fail");
+        assert_eq!(&dst[..], b"$1\r\na\r\n");
     }
 }
