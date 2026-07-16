@@ -34,7 +34,10 @@ use tokio::sync::broadcast;
 
 use crate::BoxedStream;
 use crate::frame::ReplicationFrame;
-use crate::fullsync::{FullSyncMetadata, calculate_file_checksum, stream_file_to_writer};
+use crate::fullsync::{
+    CheckpointFileHeader, CheckpointStreamCodec, FullSyncMetadata, calculate_file_checksum,
+    stream_file_to_writer,
+};
 use crate::primary::{
     LAG_CHECK_INTERVAL, LagThresholdConfig, PrimaryReplicationHandler, parse_replconf_ack,
 };
@@ -480,11 +483,9 @@ impl ReplicaSession {
 
     /// Stream checkpoint files to the replica.
     ///
-    /// Protocol:
-    /// 1. `$FROGDB_CHECKPOINT\r\n` header
-    /// 2. File count `<n>\r\n`
-    /// 3. For each file: filename bulk-string, size, raw bytes
-    /// 4. Metadata frame (replication_id:offset:checksum)
+    /// The on-wire grammar is owned by [`CheckpointStreamCodec`]; this method
+    /// drives it: prelude, then a per-file header + raw payload for each file,
+    /// then the trailing metadata frame.
     async fn stream_checkpoint(
         &self,
         stream: &mut BoxedStream,
@@ -521,20 +522,19 @@ impl ReplicaSession {
             "Streaming checkpoint to replica"
         );
 
-        // Header.
-        stream.write_all(b"$FROGDB_CHECKPOINT\r\n").await?;
-        stream
-            .write_all(format!("{}\r\n", files.len()).as_bytes())
-            .await?;
+        // Envelope prelude: marker + file count.
+        CheckpointStreamCodec::write_prelude(stream, files.len()).await?;
 
-        // Bodies.
+        // Bodies: per-file header via the codec, then the raw payload bytes.
         for (file_name, file_size, file_path) in &files {
-            stream
-                .write_all(format!("${}\r\n{}\r\n", file_name.len(), file_name).as_bytes())
-                .await?;
-            stream
-                .write_all(format!("${}\r\n", file_size).as_bytes())
-                .await?;
+            CheckpointStreamCodec::write_file_header(
+                stream,
+                &CheckpointFileHeader {
+                    name: file_name.clone(),
+                    size: *file_size,
+                },
+            )
+            .await?;
             let bytes_written =
                 stream_file_to_writer(file_path, stream, Some(&self.sync_bytes_transferred))
                     .await?;
@@ -563,12 +563,7 @@ impl ReplicaSession {
             replication_id: replication_id.to_string(),
             replication_offset,
         };
-        let metadata_bytes = metadata.to_bytes();
-        stream
-            .write_all(format!("${}\r\n", metadata_bytes.len()).as_bytes())
-            .await?;
-        stream.write_all(&metadata_bytes).await?;
-        stream.write_all(b"\r\n").await?;
+        CheckpointStreamCodec::write_metadata(stream, &metadata).await?;
 
         let elapsed = self
             .inner

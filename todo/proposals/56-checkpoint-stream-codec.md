@@ -1,7 +1,37 @@
 # Proposal: Checkpoint Stream Codec
 
-Status: proposed
+Status: implemented
 Date: 2026-07-16
+
+## Implementation notes (2026-07-16)
+
+Implemented as described. `CheckpointStreamCodec` + `CheckpointFileHeader` live in
+`replication/src/fullsync.rs` beside `FullSyncMetadata`. Encode side: `write_prelude`,
+`write_file_header`, `write_metadata`. Decode side: `read_file_header`, `read_metadata`, plus
+`read_prelude` (symmetric inverse, used by the round-trip test) and `parse_file_count` (used by the
+live receiver's marker/count detector, which stays in `connection.rs::psync` on the raw byte-at-a-time
+reader so the RDB-vs-checkpoint decision is not entangled with the envelope, exactly as the "risks"
+section required).
+
+All three hand-rolled sites now route through the codec: sender `stream_checkpoint`
+(`replica_session.rs`), the PSYNC-reply marker/count branch, and `receive_checkpoint`
+(`connection.rs`). The combined-SHA256 verification and the `StagedCheckpoint` landing stayed in
+`receive_checkpoint` verbatim (codec is framing-only, per the "should the codec own the checksum"
+open question — left as a follow-up).
+
+Deviation from the sketch: added length-prefix sanity bounds (`MAX_CHECKPOINT_FILE_COUNT`,
+`MAX_CHECKPOINT_NAME_LEN`, `MAX_CHECKPOINT_METADATA_LEN`) so a hostile/corrupt count returns a clean
+`InvalidData` instead of a `Vec::with_capacity`/`vec![0u8; n]` capacity panic — this is what makes
+the "oversized counts / never panic or hang" corrupt-input tests pass. Legitimate checkpoints sit far
+below the bounds; wire bytes for valid input are unchanged.
+
+Tests added to `fullsync.rs` (12): round-trip (full envelope), golden-bytes (pins the exact old
+wire), zero-file prelude, `parse_file_count` garbage/oversized, bad/prefix-less marker, non-numeric
+name len, oversized name len, truncated name (`UnexpectedEof`), wrong metadata field count, oversized
+metadata len, truncated metadata body, and a proptest over arbitrary header sequences. `proptest`
+added to the crate's dev-deps. Verification: `just check frogdb-replication`/`frogdb-server` clean,
+`just test frogdb-replication` 131/131, `just lint frogdb-replication` clean, targeted
+`integration_replication` full-sync subset 11/11 (proves byte-for-byte wire compatibility end to end).
 
 ## Problem
 

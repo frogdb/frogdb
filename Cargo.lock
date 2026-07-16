@@ -1797,6 +1797,7 @@ dependencies = [
  "frogdb-types",
  "hex",
  "parking_lot",
+ "proptest",
  "rand 0.10.0",
  "redis-protocol",
  "serde",

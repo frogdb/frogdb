@@ -1,7 +1,7 @@
 //! Replica connection state machine.
 
 use crate::frame::serialize_command_to_resp;
-use crate::fullsync::{FullSyncMetadata, receive_to_file};
+use crate::fullsync::{CHECKPOINT_MARKER, CheckpointStreamCodec, receive_to_file};
 use crate::state::{ReplicationState, StagedReplicationMetadata};
 use bytes::Bytes;
 use sha2::{Digest, Sha256};
@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::fs;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::RwLock;
 use tokio::time::timeout;
 
@@ -165,14 +165,12 @@ impl ReplicaConnection {
                     ));
                 }
                 let marker = &line[1..];
-                if marker == "FROGDB_CHECKPOINT" {
+                if marker == CHECKPOINT_MARKER {
+                    // Marker detection stays here (raw, byte-at-a-time reads) so
+                    // the RDB-vs-checkpoint decision is not entangled with the
+                    // envelope, but the count parse routes through the codec.
                     let line_buf = read_resp_line(&mut self.stream).await?;
-                    let file_count: usize = line_buf.trim().parse().map_err(|_| {
-                        io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "invalid file count in checkpoint",
-                        )
-                    })?;
+                    let file_count = CheckpointStreamCodec::parse_file_count(&line_buf)?;
                     tracing::info!(file_count = file_count, "FrogDB checkpoint FULLRESYNC");
                     Ok(SyncType::FullSyncCheckpoint { file_count })
                 } else {
@@ -238,37 +236,16 @@ impl ReplicaConnection {
         let mut reader = BufReader::new(&mut self.stream);
         let mut file_checksums: Vec<(String, [u8; 32])> = Vec::with_capacity(file_count);
         for i in 0..file_count {
-            let mut line = String::new();
-            reader.read_line(&mut line).await?;
-            let filename_len: usize =
-                line.trim().trim_start_matches('$').parse().map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidData, "invalid filename length")
-                })?;
-            let mut filename_buf = vec![0u8; filename_len + 2];
-            reader.read_exact(&mut filename_buf).await?;
-            let filename = String::from_utf8_lossy(&filename_buf[..filename_len]).to_string();
-            line.clear();
-            reader.read_line(&mut line).await?;
-            let file_size: u64 = line
-                .trim()
-                .trim_start_matches('$')
-                .parse()
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid file size"))?;
-            let file_path = checkpoint_dir.join(&filename);
-            let checksum = receive_to_file(&mut reader, &file_path, file_size, None).await?;
-            total_bytes += file_size;
-            file_checksums.push((filename.clone(), checksum));
-            tracing::debug!(file = i + 1, filename = %filename, size = file_size, checksum = %hex::encode(&checksum[..8]), "Received checkpoint file");
+            // Framing (per-file header) via the codec; the payload bytes still
+            // flow through `receive_to_file`, which computes the per-file hash.
+            let header = CheckpointStreamCodec::read_file_header(&mut reader).await?;
+            let file_path = checkpoint_dir.join(&header.name);
+            let checksum = receive_to_file(&mut reader, &file_path, header.size, None).await?;
+            total_bytes += header.size;
+            file_checksums.push((header.name.clone(), checksum));
+            tracing::debug!(file = i + 1, filename = %header.name, size = header.size, checksum = %hex::encode(&checksum[..8]), "Received checkpoint file");
         }
-        let mut line = String::new();
-        reader.read_line(&mut line).await?;
-        let metadata_len: usize =
-            line.trim().trim_start_matches('$').parse().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, "invalid metadata length")
-            })?;
-        let mut metadata_buf = vec![0u8; metadata_len + 2];
-        reader.read_exact(&mut metadata_buf).await?;
-        let metadata = FullSyncMetadata::from_bytes(&metadata_buf[..metadata_len])?;
+        let metadata = CheckpointStreamCodec::read_metadata(&mut reader).await?;
         tracing::info!(total_bytes = total_bytes, files = file_count, replication_id = %metadata.replication_id, offset = metadata.replication_offset, "Checkpoint received successfully");
         let mut combined_hash = Sha256::new();
         for (file_name, file_checksum) in &file_checksums {

@@ -884,13 +884,18 @@ evidence verification. Ordered by expected leverage:
     (`ctx.<field>` → `ctx.effects.<field>`); the 354 `impl Command` signatures unchanged. Unit
     pins added for the suppression contract. Typed-return end state (Option C) remains a
     documented mechanical follow-up.
-56. [56-checkpoint-stream-codec.md](56-checkpoint-stream-codec.md) — **Proposed**: the full-sync
-    checkpoint wire format (`$FROGDB_CHECKPOINT` envelope) is hand-written in `stream_checkpoint`
-    and hand-parsed across two receiver sites, defined only in prose; `receive_checkpoint` has
-    zero unit tests. One symmetric `CheckpointStreamCodec` (deepening the existing `fullsync.rs`
-    module, mirroring `ReplicationFrameCodec`) gives the envelope one owner + round-trip/corrupt
-    property tests. Keeps the shared `StagedCheckpoint` landing contract; stays deliberately
-    separate from proposal 25's on-disk stager.
+56. [56-checkpoint-stream-codec.md](56-checkpoint-stream-codec.md) — **Implemented**
+    (2026-07-16): the `$FROGDB_CHECKPOINT` envelope now has one owner — `CheckpointStreamCodec`
+    in `fullsync.rs`, mirroring `ReplicationFrameCodec` in `frame.rs`. Symmetric `write_prelude`/
+    `write_file_header`/`write_metadata` + inverse `read_*` (plus `parse_file_count` / `read_prelude`);
+    all three hand-rolled sites route through it (sender `stream_checkpoint`, receiver marker/count
+    detection in `psync`, body parse in `receive_checkpoint`). Wire bytes unchanged — golden-bytes
+    test pins them; the two-server `integration_replication` full-sync suite (11 tests) passes
+    untouched. The previously zero-test receive path gains 12 unit/property/corrupt-input tests
+    (round-trip, golden, bad marker, non-numeric/oversized/truncated lengths, wrong metadata field
+    count, zero-file prelude, proptest header-sequence). Length-prefix sanity bounds added so hostile
+    counts return `InvalidData` instead of a capacity panic. Kept the shared `StagedCheckpoint`
+    landing contract and proposal 25's on-disk `SnapshotStager` untouched.
 57. [57-replica-session-streaming.md](57-replica-session-streaming.md) — **Implemented**
     (2026-07-16, `5e259ff2`): deleted the verified-dead machinery (the write-only `connections`
     map, `ReplicaConnectionHandle`/never-sent `_frame_tx`, the ~30-line dead `frame_rx` select
