@@ -52,37 +52,12 @@ impl Command for MigrateCommand {
     }
 
     fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        // Extract keys from the command
-        // Format: MIGRATE host port key|"" dest-db timeout [COPY] [REPLACE] [AUTH password] [AUTH2 username password] [KEYS key...]
-        let mut keys = Vec::new();
-
-        if args.len() >= 3 {
-            let key = &args[2];
-            if !key.is_empty() {
-                keys.push(key.as_ref());
-            }
-        }
-
-        // Look for KEYS argument
-        let mut i = 5;
-        while i < args.len() {
-            if args[i].to_ascii_uppercase() == b"KEYS" {
-                for arg in args[(i + 1)..].iter() {
-                    keys.push(arg.as_ref());
-                }
-                break;
-            }
-            // Skip AUTH and AUTH2 arguments
-            let arg = args[i].to_ascii_uppercase();
-            if arg == b"AUTH" {
-                i += 2;
-            } else if arg == b"AUTH2" {
-                i += 3;
-            } else {
-                i += 1;
-            }
-        }
-
-        keys
+        // Key selection follows the shared MIGRATE grammar walker so the
+        // dispatcher (slot validation, ACL checks, locking) always guards the
+        // exact key set MigrateArgs::parse migrates.
+        crate::migrate::key_positions(args)
+            .into_iter()
+            .map(|i| args[i].as_ref())
+            .collect()
     }
 }

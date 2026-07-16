@@ -80,6 +80,58 @@ pub struct MigrateArgs {
     pub auth: Option<AuthInfo>,
 }
 
+/// Single grammar walker for MIGRATE key selection.
+///
+/// Returns the indices into `args` that name keys to migrate, following the
+/// MIGRATE grammar:
+///
+/// `MIGRATE host port <key|""> destination-db timeout [COPY] [REPLACE]
+///  [AUTH password] [AUTH2 username password] [KEYS key...]`
+///
+/// The rule is: `args[2]` is a key iff non-empty, plus every argument after a
+/// `KEYS` token. Options are skipped by width — COPY/REPLACE (+1), AUTH (+2),
+/// AUTH2 (+3) — and anything else advances by one.
+///
+/// This is the single source of truth shared by both grammar consumers:
+/// [`MigrateArgs::parse`] (the executor's owned-`Bytes` parse) and
+/// `MigrateCommand::dynamic_keys` (the dispatcher's borrowed key extraction for
+/// slot validation, ACL checks, and locking). Keeping key selection in one
+/// place ensures the dispatcher can never guard a different key set than the
+/// executor migrates.
+///
+/// Note on semantics: this walker is intentionally *permissive* — it mirrors
+/// the dispatcher's behavior of silently skipping unknown options (+1) so that
+/// key extraction still works on inputs the executor would reject.
+/// [`MigrateArgs::parse`] layers its own strict validation (unknown-option
+/// errors, AUTH arg-count errors) on top, calling this only for the
+/// key-selection rule; on any grammar it accepts, the two agree by construction.
+pub(crate) fn key_positions(args: &[Bytes]) -> Vec<usize> {
+    let mut positions = Vec::new();
+
+    // Positional single key: args[2] iff present and non-empty.
+    if args.len() >= 3 && !args[2].is_empty() {
+        positions.push(2);
+    }
+
+    // Skip loop over the trailing options, collecting any KEYS tail.
+    let mut i = 5;
+    while i < args.len() {
+        match args[i].to_ascii_uppercase().as_slice() {
+            b"KEYS" => {
+                // All remaining arguments are keys.
+                positions.extend((i + 1)..args.len());
+                break;
+            }
+            b"AUTH" => i += 2,
+            b"AUTH2" => i += 3,
+            // COPY, REPLACE, and (permissively) any unknown option.
+            _ => i += 1,
+        }
+    }
+
+    positions
+}
+
 impl MigrateArgs {
     /// Parse MIGRATE arguments.
     ///
@@ -95,8 +147,6 @@ impl MigrateArgs {
             .parse::<u16>()
             .map_err(|_| "ERR port is not a valid integer")?;
 
-        let key = &args[2];
-
         let dest_db = String::from_utf8_lossy(&args[3])
             .parse::<u32>()
             .map_err(|_| "ERR destination-db is not a valid integer")?;
@@ -108,14 +158,11 @@ impl MigrateArgs {
         let mut copy = false;
         let mut replace = false;
         let mut auth: Option<AuthInfo> = None;
-        let mut keys: Vec<Bytes> = Vec::new();
 
-        // If key is not empty, add it to keys
-        if !key.is_empty() {
-            keys.push(key.clone());
-        }
-
-        // Parse optional arguments
+        // Strict validation walk: sets copy/replace/auth and rejects malformed
+        // grammar. Key selection is *not* done here — it comes from the shared
+        // `key_positions` walker below so the executor and dispatcher can never
+        // disagree on which keys are migrated.
         let mut i = 5;
         while i < args.len() {
             let arg = args[i].to_ascii_uppercase();
@@ -149,10 +196,7 @@ impl MigrateArgs {
                     i += 3;
                 }
                 b"KEYS" => {
-                    // All remaining arguments are keys
-                    for arg in args[(i + 1)..].iter() {
-                        keys.push(arg.clone());
-                    }
+                    // Remaining arguments are keys; no further options to validate.
                     break;
                 }
                 _ => {
@@ -163,6 +207,13 @@ impl MigrateArgs {
                 }
             }
         }
+
+        // Single source of truth for key selection, shared with the dispatcher's
+        // `MigrateCommand::dynamic_keys`.
+        let keys: Vec<Bytes> = key_positions(args)
+            .into_iter()
+            .map(|i| args[i].clone())
+            .collect();
 
         Ok(MigrateArgs {
             host,
