@@ -40,6 +40,21 @@ just fmt-py                             # format Python code
   `taskpolicy -B -p <pid>` on each process (clears the background band); or run heavy
   builds/tests in the foreground. Diagnostic signature: `ps -o stat` shows `SN` and `sample`
   shows only `_dyld_start + 0`.
+- **Second `_dyld_start` failure mode (observed 2026-07-16): system-wide exec-validation wedge.**
+  Distinct from the QoS throttle: processes hang at `_dyld_start` even at normal QoS (`ps` STAT
+  `S`, foreground-launched), `taskpolicy -B`/`renice` do nothing, and even a freshly-compiled
+  hello-world hangs on exec — while previously-executed binaries run instantly. Root cause
+  signature: `syspolicyd` spinning at ~100% CPU with a huge accumulated TIME (hours), often with
+  a freshly-respawned `amfid` (recent PID = it crashed). Every *new* binary's code-signature
+  validation queues behind the wedged daemon forever. Check:
+  `ps -Ao pid,stat,pcpu,time,command | grep -E "syspolicyd|amfid"`. Observed behavior
+  (2026-07-16): the wedge sometimes self-clears in ~10-15 min as the queue drains, but a
+  parallel nextest `--list` storm (30+ big test binaries at once) re-crashes amfid and re-wedges
+  it; `rustc` also queues (it dlopens freshly built proc-macro dylibs). Serial exec of one
+  binary at a time works but is slow (~2 min/binary validation tax). Real fix requires the
+  user: `sudo pkill syspolicyd` (launchd respawns it) or a reboot. Don't burn time on
+  taskpolicy/renice/codesign once this signature is confirmed; probe with a freshly `cp`'d
+  hello-world binary (new inode = fresh validation) to detect recovery.
 - Run any command expected to take >2 minutes in the background with **raw output redirected to a
   log file** (`cmd > /path/to/log 2>&1`). Never pipe a long run through `grep`/`sort`/`tail` —
   filters buffer output and hide all progress.

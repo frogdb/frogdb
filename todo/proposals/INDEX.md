@@ -451,6 +451,47 @@ during concurrent implementation; content correct, attribution tangled). Several
 carry small hunks from a concurrent wave agent for the same reason (shared working tree); content
 is correct at HEAD, attribution is occasionally tangled — noted per-proposal.
 
+## Round 6 — implemented (2026-07-16)
+
+A sixth deepening review on 2026-07-16 (fresh fan-out over the least-touched areas: connection
+frame I/O, option-grammar parsing, the operator crate, MIGRATE plumbing). Two carried verified
+🔴 live bugs, both fixed. Implemented as a four-agent worktree wave:
+
+49. [49-nullarray-ordering.md](49-nullarray-ordering.md) — 🔴 **Implemented** (`d2d3fdca`):
+    RESP2 pipelined batches containing a `NullArray` reply desynchronized the wire —
+    `write_null_array` wrote `*-1\r\n` straight to the socket, jumping ahead of frames buffered
+    in the `Framed` codec. Now queued into the codec write buffer (`write_buffer_mut`) in feed
+    order; the send path flushes through `flush_responses`. Red-before/green-after byte-order
+    unit test over a duplex, RESP3 order pin, and a pipelined
+    `GET k1; LPOP missing 2; GET k2` integration regression. server 1640/1640.
+50. [50-option-grammar.md](50-option-grammar.md) — **Implemented** (`1224b22e`, `b16aad42`,
+    `fb4f713d`, `e4b8d7e1`): dead option-grammar twin cluster deleted from `types::args`
+    (`ScanOptions`/`ExpiryOption`/`SetCondition` twin/`CompareCondition`, zero callers);
+    `checked_expire_value` + `ExpiryErr`/`ExpiryUnit` (commands `utils.rs`) own the
+    EX/PX/EXAT/PXAT validation grammar once — six hand-rolled copies migrated (SET, SETEX/
+    PSETEX, GETEX, MSETEX, HGETEX/HSETEX) with error strings pinned byte-identical first;
+    `flag_value_named` collapses the bloom/cuckoo named-flag value blocks (real count 8, not
+    ~26; cms/topk are positional). Bonus parity fix verified per-arm against Redis unstable:
+    seconds-unit arms (SETEX, SET/GETEX/MSETEX EXAT, MSETEX EX, HGETEX/HSETEX EX/EXAT) now
+    guard the secs×1000 overflow; PSETEX + all PX/PXAT arms stay unguarded, matching upstream.
+    commands 105/105.
+51. [51-operator-typed-config.md](51-operator-typed-config.md) — 🔴 **Implemented**
+    (`ecf78c3d`, `854291ab`, `edfc9393`): the operator generated snake_case TOML against the
+    `deny_unknown_fields` + kebab-case server schema — every operator-deployed config failed to
+    parse, and both guard tests in `frogdb-operator/tests/integration.rs` were failing
+    invisibly (own workspace, no CI job). `generate_toml`/`cluster_env_toml` now build typed
+    `frogdb_config` section structs and serialize (drift = compile error); guard tests upgraded
+    to value round-trips; latent metrics-section-omitted-when-disabled bug fixed (server
+    default won). New `operator-tests` CI job via the workflow generator, gated on
+    `rust || operator` paths; operator nextest config added (Raft-test flake was missing root
+    tuning). operator 71/71 (was 2 red).
+52. [52-migrate-single-walker.md](52-migrate-single-walker.md) — **Implemented** (`7b71e87c`,
+    `ac233ce8`): one `key_positions` walker (`migrate.rs`) owns the MIGRATE key-selection rule
+    (positional `args[2]` iff non-empty + COPY/REPLACE/AUTH/AUTH2/KEYS skip loop) for both
+    `MigrateArgs::parse` (owned, strict validation kept on top) and
+    `MigrateCommand::dynamic_keys` (borrowed, previously zero tests). 10 adversarial unit tests
+    + 13-case parse/dynamic_keys differential. migrate 20/20.
+
 ## Correctness flags found during the review
 
 Bugs adjacent to (but separable from) the proposals:

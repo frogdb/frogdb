@@ -1,6 +1,6 @@
 # 50 — Option-grammar seam: delete the dead twin cluster, deepen the live helpers
 
-**Status:** proposed (2026-07-16, round 6)
+**Status:** implemented (2026-07-16, `1224b22e`, `b16aad42`, `fb4f713d`, `e4b8d7e1`)
 **Severity:** Moderate (duplication + dead code; error-message drift risk, not a live bug)
 **Found:** round-6 deepening review fan-out over `frogdb-types::args` and command parsing.
 
@@ -59,3 +59,28 @@ messages with tests **before** migrating each site.
 ## Verify
 
 `just test frogdb-commands` per phase + full `just test` at the end. Commit per phase.
+
+## Implementation notes (2026-07-16)
+
+- Phase 1 (`1224b22e`): dead cluster deleted (zero non-test callers re-verified). Correction to
+  the survey: `SetCondition` was never re-exported from `lib.rs` — only
+  `CompareCondition, ExpiryOption, ScanOptions` were; the live `SetCondition`
+  (`types/src/types/mod.rs:531`) is untouched.
+- Phase 2 (`b16aad42`): `commands/src/utils.rs` gains `checked_expire_value(raw, guard_overflow,
+  ExpiryErr)` (parser-agnostic validation core), `ExpiryErr` (Named `'<cmd>'` vs the hash
+  family's name-less message shape), and `ExpiryUnit` (flag→`Expiry` mapping). All six sites
+  migrated (SET, SETEX/PSETEX, GETEX, MSETEX, HGETEX/HSETEX); MSETEX's four expiry arms collapse
+  to one. 36 pin/edge tests written red-first against unmodified code.
+- Phase 3 (`fb4f713d`): `flag_value_named(parser, flag, invalid_msg)` collapses the hand-rolled
+  value blocks. Correction: the real count was **8** blocks (bloom BF.RESERVE/BF.INSERT, cuckoo
+  CF.RESERVE/CF.INSERT) — the "~26" was an overcount; cms.rs/topk.rs are positional and had
+  none. The BF/CF "invalid …" messages are bespoke phrases ("Invalid capacity", "Invalid bucket
+  size", …) so the helper derives only the "`<flag>` requires a value" half from the token and
+  takes the invalid-message explicitly. Grep gate clean.
+- Parity fix (`e4b8d7e1`, follow-up found during phase 2): SETEX, SET EXAT, GETEX EXAT,
+  MSETEX EX/EXAT, HGETEX/HSETEX EX/EXAT now guard the secs×1000 overflow, verified per-arm
+  against Redis unstable (`t_string.c getExpireMillisecondsOrReply` — the guard is seconds-unit
+  only; `t_hash.c parseExpireTime`). PSETEX and all PX/PXAT arms stay unguarded, matching
+  upstream. Noted divergence left open: upstream hash-field expiry uses the tighter
+  `HFE_MAX_ABS_TIME_MSEC/1000` bound; FrogDB uses `i64::MAX/1000`.
+- `just test frogdb-commands`: 105 passed. `just check` + `just lint frogdb-commands`: clean.

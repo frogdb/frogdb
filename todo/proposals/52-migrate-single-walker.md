@@ -1,6 +1,6 @@
 # 52 — MIGRATE single grammar walker
 
-**Status:** proposed (2026-07-16, round 6)
+**Status:** implemented (2026-07-16, `7b71e87c`, `ac233ce8`)
 **Severity:** Moderate (duplicated grammar walk; divergence means wrong key routing/locking)
 **Found:** round-6 deepening review fan-out over server command plumbing.
 
@@ -52,3 +52,17 @@ values.
 ## Verify
 
 `just test frogdb-server migrate`.
+
+## Implementation notes (2026-07-16)
+
+- `7b71e87c` — `pub(crate) fn key_positions(args: &[Bytes]) -> Vec<usize>` lives in
+  `server/src/migrate.rs` beside `MigrateArgs`; `dynamic_keys` maps positions to borrowed
+  `args[i].as_ref()`, `parse` maps to owned clones **after** its strict validation walk succeeds
+  (so the permissive walker never leaks lenient accept behavior into `parse` results). The
+  permissive-vs-strict split is documented on the walker.
+- `ac233ce8` — 10 direct `dynamic_keys` unit tests (previously zero), covering key-named-AUTH in
+  the KEYS tail, empty single-key form, AUTH2 mid-args, AUTH consuming a "KEYS"-spelled token,
+  COPY/REPLACE interleaving, bare 5-arg form, zero-key form, case-insensitivity, too-few args;
+  plus a 13-case table-driven differential test (`dynamic_keys(args)` ==
+  `MigrateArgs::parse(args).keys` on every success case).
+- `just test frogdb-server migrate`: 20 passed, 0 failed.

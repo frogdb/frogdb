@@ -1,6 +1,6 @@
 # 51 — Operator generates unparseable server config (typed config generation)
 
-**Status:** proposed (2026-07-16, round 6)
+**Status:** implemented (2026-07-16, `ecf78c3d`, `854291ab`, `edfc9393`)
 **Severity:** 🔴 Correctness (operator-deployed servers cannot boot; verified by running tests)
 **Found:** round-6 deepening review fan-out over `frogdb-operator` (its own workspace, no CI job —
 nobody runs its tests).
@@ -56,3 +56,28 @@ automatically, and schema drift becomes a **compile error** instead of a runtime
 ## Verify
 
 `just operator-test` green (red before on the two guard tests); new CI job present.
+
+## Implementation notes (2026-07-16)
+
+- `ecf78c3d` — `generate_toml` populates the real `frogdb_config` section structs
+  (`ServerConfig`, `LoggingConfig`, `PersistenceConfig`, `MetricsConfig`, `MemoryConfig`) inside
+  a small `#[derive(Serialize)]` projection matching `Config`'s section names, emitted via
+  `toml::to_string`; `cluster_env_toml` same with `ClusterConfigSection`. Red-before confirmed:
+  both guard tests failed with `unknown field maxmemory_policy, expected … maxmemory-policy`.
+- Field-mapping corrections to the survey: durability_mode / maxmemory-policy / log level are
+  plain `String`s in the schema (not enums), validated at server startup — CRD strings pass
+  through verbatim, invalid values caught by `Config::validate` at boot (matches prior
+  behavior, no duplicated validation). The `[metrics]` section is now **always emitted** with
+  the CRD `enabled` flag carried through — the old template omitted it when disabled, letting
+  the server default `enabled = true` win (latent semantic bug, fixed and pinned by the
+  round-trip test).
+- Guard tests upgraded to value round-trip assertions; `generated_cluster_toml_round_trips`
+  added; config_gen unit tests rewritten as round-trips.
+- `854291ab` — CI `operator-tests` job added via the workflow **generator**
+  (`workflow_gen/.../test.py`; `test.yml` is generated), path-filtered on
+  `frogdb-operator/**` and gated on `rust || operator` so server-side schema changes re-run it;
+  wired into `ci-pass`. `just workflow-gen --check` clean.
+- `edfc9393` — `frogdb-operator/.config/nextest.toml` added (own workspace inherited none of the
+  root nextest tuning; its Raft cluster tests flaked under default fail-fast/no-retries —
+  pre-existing flakiness, verified passing standalone).
+- `just operator-test`: 71 passed, 0 failed (was 2 failed / run cancelled).

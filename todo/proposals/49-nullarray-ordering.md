@@ -1,6 +1,6 @@
 # 49 — RESP2 NullArray replies desynchronize pipelined batches
 
-**Status:** proposed (2026-07-16, round 6)
+**Status:** implemented (2026-07-16, `d2d3fdca`)
 **Severity:** 🔴 Correctness (wire-protocol reply reordering, verified by code read)
 **Found:** round-6 deepening review fan-out over the connection layer.
 
@@ -62,3 +62,19 @@ frames. Concretely:
 ## Verify
 
 `just test frogdb-server` + the new regression red-before/green-after.
+
+## Implementation notes (2026-07-16)
+
+- `d2d3fdca` — the RESP2 NullArray path queues `*-1\r\n` into the codec write buffer via a new
+  `queue_resp2_null_array` seam (`write_buffer_mut().extend_from_slice`), staying in feed order
+  with surrounding frames; stats accounting preserved. `send_wire_response`'s NullArray arm now
+  flushes via `flush_responses()` (two-level codec-buffer + stream flush) instead of a
+  stream-only flush, so the newly-buffered bytes actually drain. RESP3 arms verified unchanged.
+- Red-before proof: pre-fix byte order captured as
+  `*-1\r\n$1\r\na\r\n$1\r\nb\r\n` (null-array first) vs expected
+  `$1\r\na\r\n*-1\r\n$1\r\nb\r\n`; permanent test green after.
+- Tests: `resp2_null_array_feed_order_is_preserved` (unit, duplex byte-order assertion),
+  `resp3_null_array_feed_order_is_preserved` (pins `_\r\n` order), and
+  `test_pipelined_null_array_preserves_reply_order_resp2` (pipelined
+  `GET k1; LPOP missing 2; GET k2` integration regression in `tests/resp3.rs`).
+- `just test frogdb-server`: 1640 passed, 0 failed.
