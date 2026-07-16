@@ -245,17 +245,24 @@ pub enum WalStrategy {
     /// Used by RPOPLPUSH, LMOVE.
     MoveKeys,
 
-    /// Persist destination key at the given arg index if it exists.
-    /// Used by SINTERSTORE (0), LMOVE dest (1), COPY dest (1), ZRANGESTORE (0).
-    PersistDestination(usize),
-
-    /// If the destination key at the given arg index still exists, persist it;
-    /// otherwise persist its deletion. Used by STORE-style commands that delete
-    /// the destination on an empty result (BITOP dest (1)): unlike
-    /// [`WalStrategy::PersistDestination`], a delete-on-empty must be written to
-    /// the WAL so the removal survives a restart, rather than leaving the stale
-    /// prior value authoritative on disk.
-    PersistOrDeleteDestination(usize),
+    /// Persist-if-exists over each write-access key the command declares, located
+    /// through `keys_with_flags` (filtered to `W`/`OW`/`RW`) rather than a fixed
+    /// arg index — the same key extraction the router uses. A store-style command
+    /// (SINTERSTORE, SUNIONSTORE, SDIFFSTORE, COPY, ZRANGESTORE, GEOSEARCHSTORE,
+    /// XGROUP, Z*STORE) declares its written destination once via its
+    /// [`KeySpec`](crate::command_spec::KeySpec) +
+    /// [`AccessSpec`](crate::command_spec::AccessSpec), so the WAL destination is
+    /// a derivation of the declared write keys and cannot silently point at the
+    /// wrong slot when an arg order changes.
+    ///
+    /// Like [`WalStrategy::Dynamic`], this is resolved by
+    /// [`Command::wal_actions`] against `keys_with_flags` (which
+    /// [`WalStrategy::actions`] lacks), not from raw args — so `actions_with_delta`
+    /// yields nothing for it. Distinct from `Dynamic` only in the action emitted:
+    /// `Dynamic` is persist-*or-delete* (delete-on-empty, e.g. SORT…STORE, BITOP);
+    /// this is persist-*if-exists* (no delete-on-empty), preserving the former
+    /// `PersistDestination(idx)` semantics exactly.
+    PersistDestination,
 
     /// Persist the first key (args[0]); but if the command deposited a
     /// HyperLogLog register delta on the context
@@ -383,9 +390,9 @@ impl<'a> WriteRecord<'a> {
 
     /// Resolve this record to its concrete WAL actions.
     ///
-    /// The single delta-vs-full routing decision, shared by both the write-effect
-    /// path ([`super::shard`] `persist_by_strategy`) and the rollback path
-    /// (`persist_and_confirm` / `persist_transaction_to_wal`), so the two can
+    /// The single delta-vs-full routing decision, shared by the effect path and
+    /// the rollback path — both funnel through [`super::shard`] `persist`
+    /// (`Durability::FireAndForget` vs `Durability::Confirm`) — so the two can
     /// never disagree on whether a dense PFADD becomes a `Merge` or a `Put`.
     pub fn wal_actions(&self) -> SmallVec<[WalAction<'_>; 2]> {
         self.handler
@@ -490,22 +497,17 @@ impl WalStrategy {
                     SmallVec::new()
                 }
             }
-            WalStrategy::PersistDestination(idx) => match args.get(*idx) {
-                Some(dest) => smallvec![WalAction::PersistIfExists(dest)],
-                None => SmallVec::new(),
-            },
-            WalStrategy::PersistOrDeleteDestination(idx) => match args.get(*idx) {
-                Some(dest) => smallvec![WalAction::PersistOrDelete(dest)],
-                None => SmallVec::new(),
-            },
             // Unconditional full-shard clear: one keyless action, independent of
             // args (FLUSHDB/FLUSHALL take no key arguments).
             WalStrategy::ClearShard => smallvec![WalAction::ClearShard],
-            // Dynamic is resolved against the command's extracted write keys by
-            // `Command::wal_actions`, which has access to `keys_with_flags`.
-            // Resolving it from raw args alone is impossible, so this yields
-            // nothing — callers must go through `Command::wal_actions`.
-            WalStrategy::Dynamic | WalStrategy::NoOp => SmallVec::new(),
+            // `Dynamic` and `PersistDestination` are resolved against the
+            // command's extracted write keys by `Command::wal_actions`, which has
+            // access to `keys_with_flags`. Resolving them from raw args alone is
+            // impossible, so this yields nothing — callers must go through
+            // `Command::wal_actions`.
+            WalStrategy::Dynamic | WalStrategy::PersistDestination | WalStrategy::NoOp => {
+                SmallVec::new()
+            }
         }
     }
 }
@@ -578,18 +580,39 @@ pub trait Command: Send + Sync {
         hll_delta: Option<&'a [(u16, u8)]>,
     ) -> SmallVec<[WalAction<'a>; 2]> {
         match self.wal_strategy() {
+            // Both derive their destinations from the same write-access key
+            // extraction the router uses (`keys_with_flags` filtered to
+            // `W`/`OW`/`RW`); they differ only in the action emitted per key.
             WalStrategy::Dynamic => self
-                .keys_with_flags(args)
+                .write_access_keys(args)
                 .into_iter()
-                .filter(|(_, flags)| {
-                    flags.iter().any(|f| {
-                        matches!(f, KeyAccessFlag::W | KeyAccessFlag::OW | KeyAccessFlag::RW)
-                    })
-                })
-                .map(|(key, _)| WalAction::PersistOrDelete(key))
+                .map(WalAction::PersistOrDelete)
+                .collect(),
+            WalStrategy::PersistDestination => self
+                .write_access_keys(args)
+                .into_iter()
+                .map(WalAction::PersistIfExists)
                 .collect(),
             other => other.actions_with_delta(args, hll_delta),
         }
+    }
+
+    /// The command's write-access keys: `keys_with_flags` filtered to keys
+    /// carrying a `W`/`OW`/`RW` flag. The shared extraction behind the
+    /// `keys_with_flags`-resolved WAL strategies ([`WalStrategy::Dynamic`],
+    /// [`WalStrategy::PersistDestination`]) — so the WAL destination is derived
+    /// from the same declared write keys the router uses. Returns a concrete
+    /// [`SmallVec`] (not `impl Iterator`) to keep [`Command`] dyn-compatible.
+    fn write_access_keys<'a>(&self, args: &'a [Bytes]) -> SmallVec<[&'a [u8]; 2]> {
+        self.keys_with_flags(args)
+            .into_iter()
+            .filter(|(_, flags)| {
+                flags
+                    .iter()
+                    .any(|f| matches!(f, KeyAccessFlag::W | KeyAccessFlag::OW | KeyAccessFlag::RW))
+            })
+            .map(|(key, _)| key)
+            .collect()
     }
 
     /// Extract key(s) from arguments for routing.
@@ -1420,42 +1443,97 @@ mod tests {
         assert!(WalStrategy::MoveKeys.actions(&one).is_empty());
     }
 
+    // ------------------------------------------------------------------------
+    // Move-3 convergence: index-based WAL destinations resolved through the
+    // declared write-access keys (`keys_with_flags`), not an arg index. Each
+    // mock pins that the flag-derived destination equals the old index-derived
+    // one for a migrated key layout, so the integration suite's implicit
+    // coverage becomes an explicit, cheap unit assertion.
+    // ------------------------------------------------------------------------
+
+    /// Declare a mock write command with a given key/access layout and WAL
+    /// strategy, so `wal_actions` can be exercised against the resolved
+    /// write-access keys.
+    macro_rules! wal_mock {
+        ($name:ident, $keys:expr, $access:expr, $wal:expr) => {
+            struct $name;
+            impl Command for $name {
+                fn spec(&self) -> &'static CommandSpec {
+                    static SPEC: CommandSpec = CommandSpec {
+                        name: "WALMOCK",
+                        arity: Arity::AtLeast(1),
+                        flags: CommandFlags::WRITE,
+                        keys: $keys,
+                        access: $access,
+                        wal: $wal,
+                        wakes: WaiterWake::None,
+                        event: crate::command_spec::EventSpec::Suppressed,
+                        requires_same_slot: false,
+                        lookup: crate::command_spec::LookupSpec::None,
+                        strategy: ExecutionStrategy::Standard,
+                    };
+                    &SPEC
+                }
+                fn execute(
+                    &self,
+                    _ctx: &mut CommandContext,
+                    _args: &[Bytes],
+                ) -> Result<Response, CommandError> {
+                    Ok(Response::ok())
+                }
+            }
+        };
+    }
+
+    // SINTERSTORE / SUNIONSTORE / SDIFFSTORE: dest at extracted-key 0, sources
+    // read-only. Former `PersistDestination(0)` → persist-if-exists over dest.
+    wal_mock!(
+        StoreDestFirst,
+        KeySpec::All,
+        AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
+        WalStrategy::PersistDestination
+    );
+    // COPY: source read, dest at extracted-key 1. Former `PersistDestination(1)`.
+    wal_mock!(
+        CopyLike,
+        KeySpec::FirstTwo,
+        AccessSpec::Positional(&[KeyAccessFlag::R, KeyAccessFlag::OW]),
+        WalStrategy::PersistDestination
+    );
+    // BITOP: dest at extracted-key 0 (KeySpec::Skip(1)), delete-on-empty. Former
+    // `PersistOrDeleteDestination(1)` → converged onto `Dynamic` (persist-or-delete
+    // over write keys).
+    wal_mock!(
+        BitopLike,
+        KeySpec::Skip(1),
+        AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
+        WalStrategy::Dynamic
+    );
+
     #[test]
-    fn wal_strategy_persist_destination() {
-        // Index 0 — SINTERSTORE-style.
-        let args = args(&[b"dest", b"src1", b"src2"]);
-        let actions = WalStrategy::PersistDestination(0).actions(&args);
+    fn wal_persist_destination_over_write_keys() {
+        // Dest-first store command: only the destination (OW) is persisted;
+        // the read-only sources emit nothing.
+        let store_args = args(&[b"dest", b"src1", b"src2"]);
+        let actions = StoreDestFirst.wal_actions(&store_args);
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], WalAction::PersistIfExists(k) if k == b"dest"));
 
-        // Index 1 — COPY-style.
-        let actions = WalStrategy::PersistDestination(1).actions(&args);
+        // COPY-style: destination is the second key.
+        let copy_args = args(&[b"src", b"dest"]);
+        let actions = CopyLike.wal_actions(&copy_args);
         assert_eq!(actions.len(), 1);
-        assert!(matches!(actions[0], WalAction::PersistIfExists(k) if k == b"src1"));
-
-        // Out-of-bounds index — yields nothing.
-        assert!(
-            WalStrategy::PersistDestination(99)
-                .actions(&args)
-                .is_empty()
-        );
+        assert!(matches!(actions[0], WalAction::PersistIfExists(k) if k == b"dest"));
     }
 
     #[test]
-    fn wal_strategy_persist_or_delete_destination() {
-        // BITOP-style: destination at index 1, persist-or-delete so a
-        // delete-on-empty reaches the WAL.
+    fn wal_dynamic_persist_or_delete_over_write_keys() {
+        // BITOP-style: destination persist-or-delete so a delete-on-empty
+        // reaches the WAL; the read-only sources emit nothing.
         let args = args(&[b"AND", b"dest", b"src1", b"src2"]);
-        let actions = WalStrategy::PersistOrDeleteDestination(1).actions(&args);
+        let actions = BitopLike.wal_actions(&args);
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], WalAction::PersistOrDelete(k) if k == b"dest"));
-
-        // Out-of-bounds index — yields nothing.
-        assert!(
-            WalStrategy::PersistOrDeleteDestination(99)
-                .actions(&args)
-                .is_empty()
-        );
     }
 
     #[test]

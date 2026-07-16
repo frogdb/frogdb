@@ -82,9 +82,9 @@ pub(crate) struct WriteSummary<'a> {
 
 /// Whether the pipeline persists the WAL, or the caller already did so.
 ///
-/// In rollback mode the caller runs `persist_and_confirm` /
-/// `persist_transaction_to_wal` *before* invoking the pipeline and rolls back on
-/// failure, so the pipeline must not persist again.
+/// In rollback mode the caller runs `persist(records, Durability::Confirm)`
+/// *before* invoking the pipeline and rolls back on failure, so the pipeline
+/// must not persist again.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum WalPhase {
     /// The pipeline performs WAL persistence (default path).
@@ -228,9 +228,14 @@ impl ShardWorker {
                 }
                 WriteEffectKind::WalPersistence => {
                     if matches!(wal, WalPhase::Persist) {
-                        for record in summary.writes {
-                            self.persist_by_strategy(record).await;
-                        }
+                        // Hot path: stage every write's actions and log on error;
+                        // the flush pipeline owns durability asynchronously.
+                        let _ = self
+                            .persist(
+                                summary.writes,
+                                super::persistence::Durability::FireAndForget,
+                            )
+                            .await;
                     }
                 }
                 WriteEffectKind::SearchIndex => {
@@ -442,19 +447,6 @@ impl ShardWorker {
                 WaiterKind::SortedSet => self.try_satisfy_zset_waiters(&key_bytes),
                 WaiterKind::Stream => self.try_satisfy_stream_waiters(&key_bytes),
             }
-        }
-    }
-
-    async fn persist_by_strategy(&self, record: &WriteRecord<'_>) {
-        if !self.persistence.has_wal() {
-            return;
-        }
-
-        for action in record.wal_actions() {
-            let _ = self
-                .execute_wal_action(&action)
-                .await
-                .inspect_err(|e| tracing::error!(error = %e, "WAL persist failed"));
         }
     }
 }
