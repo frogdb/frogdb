@@ -8,7 +8,7 @@
 //! - **Transaction reconstruction.** Frames arrive one command per frame. The
 //!   consume loop groups `MULTI … EXEC` back into a single unit and hands it to
 //!   the applier as one atomic apply, so the replica never observes intermediate
-//!   state — the promise `broadcast_transaction` makes.
+//!   state — the promise `broadcast_transaction_on_shard` makes.
 //! - **Tagged routing, not re-derivation.** Each frame carries its origin shard,
 //!   so the replica applies on *that* shard instead of re-deriving routing from
 //!   `args[0]` (which sent keyless commands and the literal `MULTI`/`EXEC` frames
