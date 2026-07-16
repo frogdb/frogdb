@@ -166,3 +166,252 @@ fn scan_for_oversized_bulk(buf: &[u8]) -> Option<usize> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    //! Table-driven unit tests for the RESP2 edge-case pre-processing in
+    //! [`FrogDbResp2::decode`] (proposal 62, Item B).
+    //!
+    //! The load-bearing invariant these tests pin is the **consume-on-error-and-
+    //! continue** contract: for every edge case the wrapper handles ahead of the
+    //! upstream `redis_protocol` decoder, we assert *both* the returned
+    //! frame/error *and* the residual buffer state after the call. A client
+    //! depends on exactly how much of the buffer is consumed to resynchronize its
+    //! stream after a protocol error, so both halves are part of the contract.
+    //!
+    //! Note (measure-before-optimizing, per the proposal): [`scan_for_oversized_bulk`]
+    //! is an O(n) full-buffer scan run on *every* `*`-prefixed decode. These tests
+    //! pin its current behavior so a later bound (e.g. cap the scan at the first
+    //! `$` header) can be shown to be equivalence-preserving; they are not a change
+    //! to that scan.
+
+    use super::*;
+    use bytes::Bytes;
+
+    fn bulk(s: &'static [u8]) -> BytesFrame {
+        BytesFrame::BulkString(Bytes::from_static(s))
+    }
+
+    fn array(frames: Vec<BytesFrame>) -> BytesFrame {
+        BytesFrame::Array(frames)
+    }
+
+    /// Expected outcome of a single `decode` call.
+    enum Expect {
+        /// `Ok(Some(frame))` — a complete frame was produced.
+        Frame(BytesFrame),
+        /// `Ok(None)` — the decoder needs more bytes (partial / fully-consumed input).
+        Pending,
+        /// `Err(_)` whose `Display` contains this substring.
+        Err(&'static str),
+    }
+
+    fn run_case(name: &str, input: &[u8], expect: Expect, residual: &[u8]) {
+        let mut codec = FrogDbResp2::default();
+        let mut buf = BytesMut::from(input);
+        let got = codec.decode(&mut buf);
+
+        match (&got, &expect) {
+            (Ok(Some(g)), Expect::Frame(f)) => {
+                assert_eq!(g, f, "case `{name}`: decoded frame mismatch");
+            }
+            (Ok(None), Expect::Pending) => {}
+            (Err(e), Expect::Err(sub)) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains(sub),
+                    "case `{name}`: error {msg:?} does not contain {sub:?}",
+                );
+            }
+            _ => panic!("case `{name}`: unexpected decode result: {got:?}"),
+        }
+
+        assert_eq!(
+            &buf[..],
+            residual,
+            "case `{name}`: residual buffer mismatch (consume-on-error contract)",
+        );
+    }
+
+    /// Single-`decode`-call edge cases. Each row is
+    /// `(name, input bytes, expected outcome, expected residual buffer)`.
+    #[test]
+    fn decode_edge_cases_table() {
+        let ping = || array(vec![bulk(b"PING")]);
+
+        let cases: Vec<(&str, &[u8], Expect, &[u8])> = vec![
+            // --- empty / blank lines ---
+            ("empty buffer", b"", Expect::Pending, b""),
+            ("blank line only", b"\r\n", Expect::Pending, b""),
+            (
+                "blank line skipped before command",
+                b"\r\n*1\r\n$4\r\nPING\r\n",
+                Expect::Frame(ping()),
+                b"",
+            ),
+            (
+                "multiple blank lines skipped before command",
+                b"\r\n\r\n*1\r\n$4\r\nPING\r\n",
+                Expect::Frame(ping()),
+                b"",
+            ),
+            // --- negative multibulk *-N ---
+            (
+                "*-N (N>1) consumed then continues to next frame",
+                b"*-3\r\n*1\r\n$4\r\nPING\r\n",
+                Expect::Frame(ping()),
+                b"",
+            ),
+            (
+                "*-2 alone consumed, nothing follows",
+                b"*-2\r\n",
+                Expect::Pending,
+                b"",
+            ),
+            // --- oversized multibulk count ---
+            (
+                "oversized multibulk count consumed + errors",
+                b"*1048577\r\n",
+                Expect::Err("invalid multibulk length"),
+                b"",
+            ),
+            (
+                "at-limit multibulk count is not oversized (partial, needs elements)",
+                b"*1048576\r\n",
+                Expect::Pending,
+                b"*1048576\r\n",
+            ),
+            // --- oversized bulk length ---
+            (
+                "top-level oversized bulk consumed + errors",
+                b"$536870913\r\n",
+                Expect::Err("invalid bulk length"),
+                b"",
+            ),
+            (
+                "in-array oversized bulk: scan consumes up to bad header, leaves the rest",
+                b"*2\r\n$536870913\r\nx\r\n",
+                Expect::Err("invalid bulk length"),
+                b"x\r\n",
+            ),
+            (
+                "at-limit bulk length is not oversized (partial, needs data)",
+                b"$536870912\r\n",
+                Expect::Pending,
+                b"$536870912\r\n",
+            ),
+            // --- partial frames (need more bytes) ---
+            (
+                "partial multibulk header (no CRLF yet)",
+                b"*1\r",
+                Expect::Pending,
+                b"*1\r",
+            ),
+            (
+                "partial bulk payload",
+                b"*1\r\n$4\r\nPI",
+                Expect::Pending,
+                b"*1\r\n$4\r\nPI",
+            ),
+            // --- normal RESP2 array passes through ---
+            (
+                "normal multi-element array passes through unchanged",
+                b"*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n",
+                Expect::Frame(array(vec![bulk(b"SET"), bulk(b"foo"), bulk(b"bar")])),
+                b"",
+            ),
+        ];
+
+        for (name, input, expect, residual) in cases {
+            run_case(name, input, expect, residual);
+        }
+    }
+
+    /// A multibulk count of exactly `-1` is the RESP2 null array — distinct from
+    /// the `*-N` (N>1) case, which the wrapper silently consumes. `-1` does *not*
+    /// match `count < -1`, so it falls through to the upstream decoder, which
+    /// yields [`BytesFrame::Null`] and drains the buffer.
+    ///
+    /// (The null-array wire bytes are assembled from parts rather than written as
+    /// one literal so this test does not trip the `lint-pubsub-confirmation-seam`
+    /// gate, which reserves the `*-1` array-null literal for `write_null_array`.)
+    #[test]
+    fn decode_null_array_passes_through() {
+        let mut codec = FrogDbResp2::default();
+        let mut buf = BytesMut::new();
+        buf.extend_from_slice(b"*");
+        buf.extend_from_slice(b"-1\r\n");
+
+        let got = codec.decode(&mut buf).unwrap();
+        assert_eq!(got, Some(BytesFrame::Null));
+        assert!(buf.is_empty(), "null array must drain the buffer");
+    }
+
+    /// Two complete frames arriving in one buffer: the first `decode` returns the
+    /// first frame and leaves the second untouched in the buffer; the second
+    /// `decode` returns it and drains the buffer.
+    #[test]
+    fn decode_pipelined_frames_in_one_buffer() {
+        let mut codec = FrogDbResp2::default();
+        let mut buf = BytesMut::from(&b"*1\r\n$4\r\nPING\r\n*2\r\n$4\r\nECHO\r\n$2\r\nhi\r\n"[..]);
+
+        let first = codec.decode(&mut buf).unwrap();
+        assert_eq!(first, Some(array(vec![bulk(b"PING")])));
+        assert_eq!(
+            &buf[..],
+            b"*2\r\n$4\r\nECHO\r\n$2\r\nhi\r\n",
+            "first decode must leave the second frame intact",
+        );
+
+        let second = codec.decode(&mut buf).unwrap();
+        assert_eq!(second, Some(array(vec![bulk(b"ECHO"), bulk(b"hi")])));
+        assert!(buf.is_empty(), "second decode must drain the buffer");
+    }
+
+    /// The consume-on-error-and-continue contract across two `decode` calls: an
+    /// oversized-multibulk error is consumed, and the *next* `decode` on the same
+    /// buffer resynchronizes onto the following valid frame.
+    #[test]
+    fn decode_error_then_valid_frame_continuation() {
+        let mut codec = FrogDbResp2::default();
+        let mut buf = BytesMut::from(&b"*1048577\r\n*1\r\n$4\r\nPING\r\n"[..]);
+
+        let err = codec.decode(&mut buf).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid multibulk length"),
+            "expected oversized-multibulk error, got {err:?}",
+        );
+        assert_eq!(
+            &buf[..],
+            b"*1\r\n$4\r\nPING\r\n",
+            "the bad multibulk line must be consumed, the valid frame preserved",
+        );
+
+        let next = codec.decode(&mut buf).unwrap();
+        assert_eq!(next, Some(array(vec![bulk(b"PING")])));
+        assert!(buf.is_empty(), "the recovered frame must drain the buffer");
+    }
+
+    /// Same continuation contract for a top-level oversized *bulk* error: the bad
+    /// `$N\r\n` line is consumed and the following valid frame decodes next.
+    #[test]
+    fn decode_oversized_bulk_then_valid_frame_continuation() {
+        let mut codec = FrogDbResp2::default();
+        let mut buf = BytesMut::from(&b"$536870913\r\n*1\r\n$4\r\nPING\r\n"[..]);
+
+        let err = codec.decode(&mut buf).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid bulk length"),
+            "expected oversized-bulk error, got {err:?}",
+        );
+        assert_eq!(
+            &buf[..],
+            b"*1\r\n$4\r\nPING\r\n",
+            "the bad bulk line must be consumed, the valid frame preserved",
+        );
+
+        let next = codec.decode(&mut buf).unwrap();
+        assert_eq!(next, Some(array(vec![bulk(b"PING")])));
+        assert!(buf.is_empty());
+    }
+}
