@@ -913,12 +913,14 @@ evidence verification. Ordered by expected leverage:
     `core/src/command_macro.rs` (209 lines) and `server/src/commands/metadata.rs` (157 lines —
     proposal 40 §7 claimed these deleted; only the pub/sub subset was). `CommandImpl` becomes
     two-way (Shard | Connection). Final cleanup of proposal 01's single-source migration.
-60. [60-connctx-builder-collapse.md](60-connctx-builder-collapse.md) — **Proposed**: the `ConnCtx`
-    seam earns its keep (socketless command tests), but its 25-field literal is hand-copied at 14
-    sites (5 production builders incl. two inline, 9 test fixtures). One `ConnCtx::new` home +
-    `base_ctx` disjoint-borrow adapter + `.with_*` capability layering; kills the `NOOP_*` statics
-    and placeholder slots. Verdict reversal from the review: all 11 provider traits **stay** —
-    they are the core↔server crate boundary, folding would cycle the dependency graph.
+60. [60-connctx-builder-collapse.md](60-connctx-builder-collapse.md) — **Implemented**
+    (2026-07-16, `1f2e35dc`): the 25-field `ConnCtx` literal (hand-copied at 14 sites) collapsed
+    into one `ConnCtx::new` home in core + `.with_*` capability layering; the server's `base_ctx`
+    adapter takes the dep groups as explicit parameters (not `&self` — whole-handler borrows would
+    destroy the disjointness the mutable caps need). `NOOP_*` statics and the
+    `username: ""`/`protocol_version: default()` placeholder slots deleted; a core test pins the
+    defaults and the read-path override. All 11 provider traits **stay** — they are the
+    core↔server crate boundary, folding would cycle the dependency graph.
 61. [61-acceptor-dep-groups.md](61-acceptor-dep-groups.md) — **Proposed**: `Acceptor`'s ~40 flat
     fields are a flatten/regroup pass-through (context → fields → 5 dep groups per connection);
     hold one pre-assembled `ConnectionDeps` template (type already exists) cloned per connection
