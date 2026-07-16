@@ -137,16 +137,36 @@ async fn cluster_get(harness: &ClusterTestHarness, key: &str) -> Option<String> 
 mod config_gen_tests {
     use super::*;
 
+    /// Deserialize a generated TOML string through the real server schema,
+    /// asserting it parses and returning the typed config for value checks.
+    fn parse_generated(toml_str: &str) -> frogdb_config::Config {
+        let result: Result<frogdb_config::Config, _> = toml::from_str(toml_str);
+        result.unwrap_or_else(|e| panic!("Operator TOML failed to parse: {e}\n---\n{toml_str}"))
+    }
+
     #[test]
     fn generated_toml_parses_as_frogdb_config() {
         let spec = default_spec();
-        let toml_str = config_gen::generate_toml(&spec.config);
-        let result: Result<frogdb_config::Config, _> = toml::from_str(&toml_str);
-        assert!(
-            result.is_ok(),
-            "Operator TOML failed to parse: {}",
-            result.unwrap_err()
+        let config = parse_generated(&config_gen::generate_toml(&spec.config));
+
+        // Fixed operator choices.
+        assert_eq!(config.server.bind, "0.0.0.0");
+        assert_eq!(config.logging.format, "json");
+        assert_eq!(
+            config.persistence.data_dir,
+            std::path::PathBuf::from("/data")
         );
+
+        // Values carried from the (default) CRD spec.
+        assert_eq!(config.server.port, 6379);
+        assert_eq!(config.server.num_shards, 1);
+        assert_eq!(config.logging.level, "info");
+        assert!(config.persistence.enabled);
+        assert_eq!(config.persistence.durability_mode, "periodic");
+        assert!(config.metrics.enabled);
+        assert_eq!(config.metrics.port, 9090);
+        assert_eq!(config.memory.maxmemory, 0);
+        assert_eq!(config.memory.maxmemory_policy, "noeviction");
     }
 
     #[test]
@@ -173,13 +193,30 @@ mod config_gen_tests {
             },
             ..default_spec()
         };
-        let toml_str = config_gen::generate_toml(&spec.config);
-        let result: Result<frogdb_config::Config, _> = toml::from_str(&toml_str);
-        assert!(
-            result.is_ok(),
-            "Custom TOML failed to parse: {}",
-            result.unwrap_err()
-        );
+        let config = parse_generated(&config_gen::generate_toml(&spec.config));
+
+        assert_eq!(config.server.port, 6380);
+        assert_eq!(config.server.num_shards, 8);
+        assert!(!config.persistence.enabled);
+        assert_eq!(config.persistence.durability_mode, "async");
+        assert!(!config.metrics.enabled);
+        assert_eq!(config.metrics.port, 9191);
+        assert_eq!(config.logging.level, "debug");
+        assert_eq!(config.memory.maxmemory, 1_073_741_824);
+        assert_eq!(config.memory.maxmemory_policy, "allkeys-lru");
+    }
+
+    #[test]
+    fn generated_cluster_toml_round_trips() {
+        let config: frogdb_config::Config =
+            toml::from_str(&config_gen::cluster_env_toml(16380, 900, 200, true))
+                .expect("cluster TOML must parse as frogdb_config::Config");
+
+        assert!(config.cluster.enabled);
+        assert_eq!(config.cluster.cluster_bus_addr, "0.0.0.0:16380");
+        assert_eq!(config.cluster.election_timeout_ms, 900);
+        assert_eq!(config.cluster.heartbeat_interval_ms, 200);
+        assert!(config.cluster.auto_failover);
     }
 
     #[test]

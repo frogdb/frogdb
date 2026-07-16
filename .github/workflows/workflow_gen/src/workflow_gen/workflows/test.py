@@ -68,6 +68,7 @@ def test_workflow() -> Workflow:
             runs_on=RUNS_ON,
             outputs=omap(
                 rust="${{ steps.filter.outputs.rust }}",
+                operator="${{ steps.filter.outputs.operator }}",
                 workflows="${{ steps.filter.outputs.workflows }}",
                 grafana="${{ steps.filter.outputs.grafana }}",
                 helm="${{ steps.filter.outputs.helm }}",
@@ -91,6 +92,10 @@ def test_workflow() -> Workflow:
                               - '.mise.toml'
                               - '.cargo/**'
                               - '.config/nextest.toml'
+                            operator:
+                              - 'frogdb-operator/**'
+                              - 'rust-toolchain.toml'
+                              - '.mise.toml'
                             workflows:
                               - '.github/**'
                             grafana:
@@ -246,6 +251,29 @@ def test_workflow() -> Workflow:
                     name="Run Turmoil simulation tests",
                     run="cargo nextest run -p frogdb-server --features turmoil -E 'test(/simulation/)'",
                 ),
+            ],
+        ),
+    )
+
+    # The operator is a separate cargo workspace with its own lockfile and no
+    # coverage under `cargo nextest run --all`. It depends on frogdb-config, so
+    # a server-side schema change (rust filter) must also re-run these tests to
+    # catch config-generation drift — hence the `rust || operator` gate.
+    operator_tests = w.job(
+        "operator-tests",
+        Job(
+            name="Operator Tests",
+            runs_on=RUNS_ON,
+            needs="changes",
+            if_="needs.changes.outputs.rust == 'true' || needs.changes.outputs.operator == 'true'",
+            steps=[
+                checkout_step(),
+                self_hosted_env_step(),
+                mise_setup_step(install_args=MISE_JUST_NEXTEST),
+                rust_toolchain_step(),
+                libclang_step(),
+                cargo_cache_step(shared_key="operator"),
+                run_step(name="Run operator tests", run="just operator-test"),
             ],
         ),
     )
@@ -439,6 +467,7 @@ def test_workflow() -> Workflow:
                 unit_tests,
                 shuttle_tests,
                 turmoil_tests,
+                operator_tests,
                 helm_gen_check,
                 dashboard_gen_check,
                 dashboard_lint,
