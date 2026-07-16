@@ -8,7 +8,7 @@ use frogdb_protocol::Response;
 
 use frogdb_core::ArgParser;
 
-use super::utils::parse_i64;
+use super::utils::{ExpiryErr, checked_expire_value, parse_i64};
 
 /// PING command.
 pub struct PingCommand;
@@ -500,18 +500,6 @@ impl Command for SetCommand {
         let mut has_condition = false; // NX/XX/IFxx mutual exclusion
         let mut if_condition: Option<(Bytes, Bytes)> = None; // (flag_name_upper, cmp_value)
 
-        // Parse a positive expire value (EX/PX/EXAT/PXAT): must be a valid
-        // integer and strictly positive, else "invalid expire time".
-        let parse_expire = |parser: &mut ArgParser<'_>| -> Result<i64, CommandError> {
-            let v = parse_i64(parser.next_arg()?)?;
-            if v <= 0 {
-                return Err(CommandError::InvalidArgument {
-                    message: "invalid expire time in 'set' command".to_string(),
-                });
-            }
-            Ok(v)
-        };
-
         const IF_FLAGS: &[&[u8]] = &[b"IFEQ", b"IFNE", b"IFDEQ", b"IFDNE"];
         let mut parser = ArgParser::from_position(args, 2);
         while parser.has_more() {
@@ -549,19 +537,34 @@ impl Command for SetCommand {
             } else if parser.try_flag(b"KEEPTTL") {
                 opts.keep_ttl = true;
             } else if parser.try_flag(b"EX") {
-                let secs = parse_expire(&mut parser)?;
-                if secs > i64::MAX / 1000 {
-                    return Err(CommandError::InvalidArgument {
-                        message: "invalid expire time in 'set' command".to_string(),
-                    });
-                }
-                opts.expiry = Some(Expiry::Ex(secs as u64));
+                // EX is relative seconds: guard the later secs*1000 conversion.
+                let secs = checked_expire_value(
+                    parse_i64(parser.next_arg()?)?,
+                    true,
+                    ExpiryErr::Named("set"),
+                )?;
+                opts.expiry = Some(Expiry::Ex(secs));
             } else if parser.try_flag(b"PX") {
-                opts.expiry = Some(Expiry::Px(parse_expire(&mut parser)? as u64));
+                let ms = checked_expire_value(
+                    parse_i64(parser.next_arg()?)?,
+                    false,
+                    ExpiryErr::Named("set"),
+                )?;
+                opts.expiry = Some(Expiry::Px(ms));
             } else if parser.try_flag(b"EXAT") {
-                opts.expiry = Some(Expiry::ExAt(parse_expire(&mut parser)? as u64));
+                let ts = checked_expire_value(
+                    parse_i64(parser.next_arg()?)?,
+                    false,
+                    ExpiryErr::Named("set"),
+                )?;
+                opts.expiry = Some(Expiry::ExAt(ts));
             } else if parser.try_flag(b"PXAT") {
-                opts.expiry = Some(Expiry::PxAt(parse_expire(&mut parser)? as u64));
+                let ts = checked_expire_value(
+                    parse_i64(parser.next_arg()?)?,
+                    false,
+                    ExpiryErr::Named("set"),
+                )?;
+                opts.expiry = Some(Expiry::PxAt(ts));
             } else {
                 return Err(CommandError::SyntaxError);
             }
@@ -799,5 +802,96 @@ impl Command for ExistsCommand {
             }
         }
         Ok(Response::Integer(count))
+    }
+}
+
+#[cfg(test)]
+mod expiry_grammar_pin_tests {
+    //! Wire-compat pins for the SET command's EX/PX/EXAT/PXAT grammar. These
+    //! assert the exact `invalid expire time in 'set' command` message and the
+    //! secs*1000 overflow rejection so the shared-helper migration stays
+    //! byte-identical.
+    use super::*;
+    use frogdb_core::HashMapStore;
+    use frogdb_protocol::ProtocolVersion;
+    use std::sync::Arc;
+
+    fn ctx() -> CommandContext<'static> {
+        let store = Box::leak(Box::new(HashMapStore::new()));
+        let shard_senders = Box::leak(Box::new(Arc::new(Vec::new())));
+        CommandContext::new(store, shard_senders, 0, 1, 0, ProtocolVersion::Resp2)
+    }
+
+    fn args(parts: &[&str]) -> Vec<Bytes> {
+        parts.iter().map(|s| Bytes::from(s.to_string())).collect()
+    }
+
+    fn expect_invalid(parts: &[&str]) -> String {
+        let mut c = ctx();
+        match SetCommand.execute(&mut c, &args(parts)) {
+            Err(CommandError::InvalidArgument { message }) => message,
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_ex_zero_message() {
+        assert_eq!(
+            expect_invalid(&["k", "v", "EX", "0"]),
+            "invalid expire time in 'set' command"
+        );
+    }
+
+    #[test]
+    fn set_ex_negative_message() {
+        assert_eq!(
+            expect_invalid(&["k", "v", "EX", "-1"]),
+            "invalid expire time in 'set' command"
+        );
+    }
+
+    #[test]
+    fn set_ex_secs_overflow_rejected() {
+        // 18446744073709551 > i64::MAX / 1000, so the seconds->millis conversion
+        // would overflow: SET rejects it up front.
+        assert_eq!(
+            expect_invalid(&["k", "v", "EX", "18446744073709551"]),
+            "invalid expire time in 'set' command"
+        );
+    }
+
+    #[test]
+    fn set_px_zero_message() {
+        assert_eq!(
+            expect_invalid(&["k", "v", "PX", "0"]),
+            "invalid expire time in 'set' command"
+        );
+    }
+
+    #[test]
+    fn set_exat_zero_message() {
+        assert_eq!(
+            expect_invalid(&["k", "v", "EXAT", "0"]),
+            "invalid expire time in 'set' command"
+        );
+    }
+
+    #[test]
+    fn set_pxat_zero_message() {
+        assert_eq!(
+            expect_invalid(&["k", "v", "PXAT", "0"]),
+            "invalid expire time in 'set' command"
+        );
+    }
+
+    #[test]
+    fn set_px_large_value_accepted() {
+        // PX does not carry the seconds overflow guard: a large millisecond
+        // value that fits i64 is accepted (returns OK, not an error).
+        let mut c = ctx();
+        let r = SetCommand
+            .execute(&mut c, &args(&["k", "v", "PX", "18446744073709551"]))
+            .unwrap();
+        assert_eq!(r, Response::ok());
     }
 }
