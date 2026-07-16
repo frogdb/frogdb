@@ -32,8 +32,6 @@ use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::broadcast;
 
-use frogdb_types::ReplicationTracker;
-
 use crate::BoxedStream;
 use crate::frame::ReplicationFrame;
 use crate::fullsync::{FullSyncMetadata, calculate_file_checksum, stream_file_to_writer};
@@ -659,17 +657,19 @@ impl ReplicaSession {
             stream.write_all(&encoded).await?;
             resume_offset = offset;
         }
-        // Seed the tracker with where the replica resumed, so WAIT waiters and
-        // the lag monitor start from the resumed position. This is a primary
-        // bookkeeping fact ("where this replica started"), not a replica ACK, so
-        // it uses `seed_acked_position` — it advances the same monotonic atomic
-        // but emits no WAIT-waiter notification (a genuine ACK from the read task
-        // still does).
-        handler.tracker.seed_acked_position(self.id, resume_offset);
+        // Seed where the replica resumed, so WAIT waiters and the lag monitor
+        // start from the resumed position. This is a primary bookkeeping fact
+        // ("where this replica started"), not a replica ACK, so it uses the
+        // coordinator's `seed_replica_position` verb — it advances the same
+        // monotonic atomic but emits no WAIT-waiter notification (a genuine ACK
+        // from the read task still does, via `ingest_replica_ack`).
+        handler
+            .offsets
+            .seed_replica_position(self.id, resume_offset);
 
         let (mut read_half, mut write_half) = tokio::io::split(stream);
 
-        let read_tracker = handler.tracker.clone();
+        let read_offsets = handler.offsets.clone();
         let read_replica_id = self.id;
         let read_task = tokio::spawn(async move {
             let mut buf = BytesMut::with_capacity(1024);
@@ -678,7 +678,7 @@ impl ReplicaSession {
                     Ok(0) => break,
                     Ok(_) => {
                         while let Some((ack_offset, consumed)) = parse_replconf_ack(&buf) {
-                            read_tracker.record_ack(read_replica_id, ack_offset);
+                            read_offsets.ingest_replica_ack(read_replica_id, ack_offset);
                             buf.advance(consumed);
                         }
                     }
@@ -892,6 +892,7 @@ mod tests {
     use crate::tracker::ReplicationTrackerImpl;
     use bytes::Bytes;
     use frogdb_persistence::{RocksConfig, RocksStore};
+    use frogdb_types::ReplicationTracker;
     use std::net::SocketAddr;
     use tempfile::TempDir;
     use tokio::io::AsyncReadExt;

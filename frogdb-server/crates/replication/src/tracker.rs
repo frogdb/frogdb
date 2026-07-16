@@ -27,8 +27,11 @@ pub struct ReplicationTrackerImpl {
     /// Next replica id to allocate.
     next_replica_id: AtomicU64,
 
-    /// Current replication offset (primary's write position). Wrapped in `Arc`
-    /// so it can be shared with the cluster bus for HealthProbe responses.
+    /// Current replication offset (primary's write position). A *borrowed*
+    /// clone of the atomic owned by [`crate::offset_coordinator::OffsetCoordinator`]
+    /// (its canonical home, and the sole vendor of the cluster-bus handle). The
+    /// tracker keeps this handle only for its INFO/ROLE read + lag accessors;
+    /// the coordinator, not the tracker, advances it and hands it to the bus.
     current_offset: Arc<AtomicU64>,
 
     /// Channel for notifying WAIT waiters about new ACKs.
@@ -61,9 +64,14 @@ impl ReplicationTrackerImpl {
         Arc::new(Self::new())
     }
 
-    /// Get a shared handle to the replication offset atomic.
-    /// Used by the cluster bus to respond to HealthProbe RPCs.
-    pub fn shared_offset(&self) -> Arc<AtomicU64> {
+    /// Hand the offset atomic to the [`crate::offset_coordinator::OffsetCoordinator`]
+    /// so it can adopt it as its canonical `live` handle at construction.
+    ///
+    /// This is the ONLY place the tracker vends its offset atomic: the public
+    /// cluster-bus handle is vended by the coordinator
+    /// ([`crate::offset_coordinator::OffsetCoordinator::shared_offset`]), the
+    /// single owner, not here.
+    pub(crate) fn offset_handle(&self) -> Arc<AtomicU64> {
         self.current_offset.clone()
     }
 
@@ -130,16 +138,18 @@ impl ReplicationTrackerImpl {
     }
 
     /// Set the current replication offset.
+    ///
+    /// Used at wiring time to seed the offset from recovered state. The live
+    /// advance is owned by the coordinator's `advance` gate, which writes the
+    /// same (shared) atomic.
     pub fn set_offset(&self, offset: u64) {
         self.current_offset.store(offset, Ordering::Release);
     }
 
-    /// Increment the current replication offset, returning the new value.
-    pub fn increment_offset(&self, bytes: u64) -> u64 {
-        self.current_offset.fetch_add(bytes, Ordering::Release) + bytes
-    }
-
     /// Get the current replication offset.
+    ///
+    /// Reads the borrowed handle for INFO/ROLE reporting and lag; the
+    /// coordinator's `current()` reads the same atomic.
     pub fn current_offset(&self) -> u64 {
         self.current_offset.load(Ordering::Acquire)
     }

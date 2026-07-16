@@ -18,6 +18,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use tokio::sync::{RwLock, broadcast};
 
@@ -239,7 +240,9 @@ impl PrimaryReplicationHandler {
     fn broadcast_tagged(&self, shard_id: u16, cmd_name: &str, args: &[Bytes]) -> u64 {
         let resp_bytes = serialize_command_to_resp(cmd_name, args);
         let bytes_len = resp_bytes.len() as u64;
-        let new_offset = self.offsets.advance_broadcast(bytes_len);
+        // The single advance gate defines the byte unit; the primary no longer
+        // hands a raw `.len()` a caller could mismeasure.
+        let new_offset = self.offsets.advance(&resp_bytes);
         self.replay.record(new_offset, shard_id, resp_bytes.clone());
         let frame = ReplicationFrame::new_on_shard(new_offset, shard_id, resp_bytes);
         self.broadcast_frame(frame);
@@ -262,7 +265,8 @@ impl PrimaryReplicationHandler {
         // offset on both ends. The replica counts it via `frame_advance`, so the
         // primary must advance + stamp it too (and record it in the backlog like
         // any other command); stamping sequence 0 here would diverge the offsets.
-        let new_offset = self.offsets.advance_broadcast(resp_bytes.len() as u64);
+        // Same advance gate as `broadcast_tagged`, so the unit is identical.
+        let new_offset = self.offsets.advance(&resp_bytes);
         self.replay
             .record(new_offset, CONTROL_SHARD, resp_bytes.clone());
         self.broadcast_frame(ReplicationFrame::new(new_offset, resp_bytes));
@@ -287,6 +291,15 @@ impl PrimaryReplicationHandler {
     /// [`crate::replica::ReplicaReplicationHandler::shared_state`].
     pub fn shared_state(&self) -> Arc<RwLock<ReplicationState>> {
         self.state.clone()
+    }
+
+    /// The shared live-offset handle for the cluster bus's HealthProbe path.
+    ///
+    /// Vended by the [`OffsetCoordinator`] — the offset's single owner — rather
+    /// than by the tracker, so the bus and every other reader observe the one
+    /// atomic the `advance` gate writes.
+    pub fn shared_offset(&self) -> Arc<AtomicU64> {
+        self.offsets.shared_offset()
     }
     pub fn current_offset_sync(&self) -> u64 {
         self.offsets.current()
