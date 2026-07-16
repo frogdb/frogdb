@@ -455,6 +455,8 @@ impl ShardWorker {
 mod tests {
     use super::*;
 
+    use WriteEffectKind::*;
+
     fn position(kind: WriteEffectKind) -> usize {
         WRITE_EFFECT_ORDER
             .iter()
@@ -462,12 +464,86 @@ mod tests {
             .expect("effect must be present in WRITE_EFFECT_ORDER")
     }
 
+    /// The must-precede relation as data: each pair `(a, b)` asserts `a` runs
+    /// strictly before `b`. This is the single written home of the ordering
+    /// constraints the module docs justify — validated against
+    /// [`WRITE_EFFECT_ORDER`] by [`order_satisfies_all_declared_constraints`], so
+    /// a reorder that violates any pair fails, and (with
+    /// [`every_effect_declares_a_constraint`]) a newly added effect cannot be
+    /// slotted in without declaring how it orders against the rest.
+    ///
+    /// `VersionIncrement`-first and `ReplicationBroadcast`-terminal are the two
+    /// endpoint invariants, checked directly rather than enumerated pairwise
+    /// against every other kind.
+    const MUST_PRECEDE: &[(WriteEffectKind, WriteEffectKind)] = &[
+        // Version settles WATCH/dirty state before any observer reads it.
+        (VersionIncrement, TrackingInvalidation),
+        (VersionIncrement, ReplicationBroadcast),
+        // RESP3 caching clients are invalidated on the same ordering replicas
+        // observe the write (otherwise rollback- vs default-mode race differ).
+        (TrackingInvalidation, ReplicationBroadcast),
+        // Keyspace listeners are notified before blocking waiters are woken.
+        (KeyspaceNotifications, WaiterSatisfaction),
+        // Dirty counter is bumped before waiters wake.
+        (DirtyCounter, WaiterSatisfaction),
+        // A write is durable locally (WAL) before the search index reflects the
+        // persisted state and before replicas can observe it.
+        (WalPersistence, SearchIndex),
+        (WalPersistence, ReplicationBroadcast),
+    ];
+
+    /// Pairs `(a, b)` where `a` must be *immediately* followed by `b`.
+    const MUST_BE_ADJACENT: &[(WriteEffectKind, WriteEffectKind)] =
+        &[(WaiterSatisfaction, KeysizesFlush)];
+
+    /// Validates [`WRITE_EFFECT_ORDER`] against **every** declared constraint —
+    /// the endpoint invariants plus all [`MUST_PRECEDE`] / [`MUST_BE_ADJACENT`]
+    /// pairs — so a reorder that compiles but breaks a correctness invariant
+    /// fails here. Subsumes the former hand-picked `safety_ordering_invariants`
+    /// asserts by driving them from the relation data instead.
+    #[test]
+    fn order_satisfies_all_declared_constraints() {
+        // Version increment is first: WATCH/dirty state settles before any
+        // observer (tracking, replicas) can read it.
+        assert_eq!(position(VersionIncrement), 0);
+        // Replication broadcast is the terminal effect.
+        assert_eq!(position(ReplicationBroadcast), WRITE_EFFECT_ORDER.len() - 1);
+        for &(a, b) in MUST_PRECEDE {
+            assert!(
+                position(a) < position(b),
+                "{a:?} must run strictly before {b:?}"
+            );
+        }
+        for &(a, b) in MUST_BE_ADJACENT {
+            assert_eq!(
+                position(a) + 1,
+                position(b),
+                "{a:?} must be immediately followed by {b:?}"
+            );
+        }
+    }
+
+    /// Every effect in the canonical order participates in at least one declared
+    /// ordering constraint. Adding a [`WriteEffectKind`] to
+    /// [`WRITE_EFFECT_ORDER`] without declaring a [`MUST_PRECEDE`] /
+    /// [`MUST_BE_ADJACENT`] pair for it fails here — the ordering rule can no
+    /// longer be added by comment alone.
+    #[test]
+    fn every_effect_declares_a_constraint() {
+        for kind in WRITE_EFFECT_ORDER {
+            let constrained = MUST_PRECEDE
+                .iter()
+                .chain(MUST_BE_ADJACENT)
+                .any(|&(a, b)| a == kind || b == kind);
+            assert!(constrained, "{kind:?} has no declared ordering constraint");
+        }
+    }
+
     /// Pins the exact canonical order. A reorder must update this test
     /// consciously — the invariant is no longer "a comment four functions agree
     /// on" but a failing test.
     #[test]
     fn canonical_order_is_exact() {
-        use WriteEffectKind::*;
         assert_eq!(
             WRITE_EFFECT_ORDER,
             [
@@ -488,7 +564,6 @@ mod tests {
     /// from (or duplicated in) the canonical order.
     #[test]
     fn every_effect_appears_exactly_once() {
-        use WriteEffectKind::*;
         for kind in [
             VersionIncrement,
             TrackingInvalidation,
@@ -507,40 +582,6 @@ mod tests {
             );
         }
         assert_eq!(WRITE_EFFECT_ORDER.len(), 9);
-    }
-
-    /// The safety-relevant relative orderings the module docs justify. These
-    /// would catch a reorder that compiles but breaks a correctness invariant.
-    #[test]
-    fn safety_ordering_invariants() {
-        // Version increment is first: WATCH/dirty state settles before any
-        // observer (tracking, replicas) can read it.
-        assert_eq!(position(WriteEffectKind::VersionIncrement), 0);
-
-        // Tracking invalidation precedes replication broadcast: caching clients
-        // are invalidated on the same ordering replicas observe the write.
-        assert!(
-            position(WriteEffectKind::TrackingInvalidation)
-                < position(WriteEffectKind::ReplicationBroadcast)
-        );
-
-        // Dirty counter is bumped before waiters wake.
-        assert!(
-            position(WriteEffectKind::DirtyCounter) < position(WriteEffectKind::WaiterSatisfaction)
-        );
-
-        // Keysizes flush immediately follows waiter satisfaction so it captures
-        // get_mut() mutations made while waking waiters.
-        assert_eq!(
-            position(WriteEffectKind::KeysizesFlush),
-            position(WriteEffectKind::WaiterSatisfaction) + 1
-        );
-
-        // Replication broadcast is the terminal effect.
-        assert_eq!(
-            position(WriteEffectKind::ReplicationBroadcast),
-            WRITE_EFFECT_ORDER.len() - 1
-        );
     }
 
     // ------------------------------------------------------------------------

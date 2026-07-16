@@ -1,6 +1,6 @@
 # Proposal: Small Seams, Round 7
 
-Status: proposed
+Status: Items C, D implemented (2026-07-16); A, B, E proposed
 Date: 2026-07-16
 
 ## Problem
@@ -122,6 +122,16 @@ edge case. Deletion test: these tests document a contract that has no other writ
 
 ## Item C — `WRITE_EFFECT_ORDER` must-precede constraints as a checked relation
 
+**Status: implemented (2026-07-16).** `post_execution.rs` now declares the must-precede relation as
+`MUST_PRECEDE` (7 `(before, after)` pairs) plus `MUST_BE_ADJACENT`
+(`WaiterSatisfaction`→`KeysizesFlush`) in the tests module next to `WRITE_EFFECT_ORDER`.
+`order_satisfies_all_declared_constraints` validates the order against the two endpoint invariants
+(version first, broadcast terminal) plus every declared pair — subsuming the old hand-picked
+`safety_ordering_invariants` (deleted). `every_effect_declares_a_constraint` asserts every effect in
+the order participates in at least one declared constraint, so a new effect cannot be slotted in by
+comment alone. The previously-unencoded `WalPersistence`→`ReplicationBroadcast` (durability before
+replicas) and `WalPersistence`→`SearchIndex` constraints now have a written home.
+
 **Problem.** `WRITE_EFFECT_ORDER` (`frogdb-server/crates/core/src/shard/post_execution.rs:156-166`)
 is the single canonical 9-step post-execution order, guarded by `safety_ordering_invariants`
 (`:522-552`) with **hand-picked position asserts**. The encoded constraints are a *subset* of the
@@ -179,6 +189,23 @@ broadcast durability constraint gains a written home it never had.
 ---
 
 ## Item D — scatter path reaches past the transport-codec and keyspace-accounting seams
+
+**Status: implemented (2026-07-16).** D1: `ShardWorker::serialize_key_for_transport(key,
+expiry_in_header) -> Option<(Bytes, Option<i64>)>` is the single producer of the self-describing
+transport frame in the scatter path — the value fetch, expiry lookup, and `persistence::serialize`
+call happen there once. The COPY and DUMP arms shrink to a call plus reply shaping; a paired
+`deserialize_transport_frame` seam owns the decode side (CopySet). The `expiry_in_header` flag
+encodes the one legitimate difference: DUMP embeds the expiry in the frame header (RESTORE reads it
+back when no TTL override is given), COPY writes an expiry-free header and ships the relative TTL
+out-of-band — behavior byte-identical to the prior inline arms (DUMP and COPY frames each unchanged;
+only the shared extraction moved). D2: `record_lookup_existence(existed)` is the single home of the
+*existence == hit* accounting rule for the scatter path; the EXISTS, TOUCH, and MGET arms build
+their per-key existence verdict with their own primitive (EXISTS/TOUCH probe `exists_unexpired`;
+MGET uses the value it fetched — deliberately preserved, since `get` and `exists_unexpired` disagree
+on expired-but-unpurged keys) and hand it to the seam, which tallies and records. Three new core
+unit tests pin the transport-frame producer, the COPY arm's frame+TTL shaping, and the
+EXISTS/TOUCH/MGET accounting; the cross-shard keyspace-count and DUMP-restore-TTL integration suites
+stay green.
 
 **Problem.** `execute_scatter_part` (`frogdb-server/crates/core/src/shard/execution.rs:450-693`)
 reaches past two established seams:

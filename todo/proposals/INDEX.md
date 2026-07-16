@@ -948,11 +948,20 @@ evidence verification. Ordered by expected leverage:
     hold one pre-assembled `ConnectionDeps` template (type already exists) cloned per connection
     — Arc-cheap, "add a dependency" becomes a single-struct edit, and dep threading gets a
     socket-free `Arc::ptr_eq` test. `current_connections` stays acceptor-local (maxclients gate).
-62. [62-small-seams-round7.md](62-small-seams-round7.md) — **Proposed**: five independent small
-    items: (A) RESP2 null-array encoding moves into the encoder (finishes proposals 26/49; kills
-    the silent best-effort branch + connection-layer buffer poke); (B) table-driven unit tests
-    for the zero-test RESP2 edge-case codec (consume-on-error contract); (C) `WRITE_EFFECT_ORDER`
-    must-precede pairs as a checked relation (the WalPersistence→ReplicationBroadcast constraint
-    is currently unencoded); (D) scatter-path serialize helper (COPY/DUMP reach into the
-    persistence codec directly) + `LookupSpec` hit/miss dedup (three inline copies); (E) inline
-    (telnet-style) command support: decision item — regression suite explicitly excludes it today.
+62. [62-small-seams-round7.md](62-small-seams-round7.md) — **Items C, D implemented**
+    (2026-07-16); A, B, E still **proposed**. Five independent small items: (A) RESP2 null-array
+    encoding moves into the encoder (finishes proposals 26/49; kills the silent best-effort branch
+    + connection-layer buffer poke); (B) table-driven unit tests for the zero-test RESP2 edge-case
+    codec (consume-on-error contract); **(C) implemented** — `WRITE_EFFECT_ORDER` must-precede
+    pairs declared as `MUST_PRECEDE`/`MUST_BE_ADJACENT` relation data, validated against the order
+    by `order_satisfies_all_declared_constraints` (subsumes the old hand-picked
+    `safety_ordering_invariants`); `every_effect_declares_a_constraint` forces a new effect to
+    declare its ordering; the previously-unencoded WalPersistence→ReplicationBroadcast and
+    WalPersistence→SearchIndex constraints now have a written home; **(D) implemented** — D1: one
+    `serialize_key_for_transport` producer (+ `deserialize_transport_frame` seam) so COPY/DUMP/
+    CopySet stop calling `persistence::serialize`/`deserialize` inline (DUMP embeds expiry in the
+    header, COPY ships it out-of-band, selected by one flag; expiry extraction lives once); D2:
+    one `record_lookup_existence` seam routes the EXISTS/TOUCH/MGET inline hit/miss copies through
+    the *existence == hit* rule; behavior byte-identical, pinned by 3 new unit tests + green
+    cross-shard keyspace/DUMP-TTL integration suites; (E) inline (telnet-style) command support:
+    decision item — regression suite explicitly excludes it today.
