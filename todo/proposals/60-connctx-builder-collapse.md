@@ -1,6 +1,6 @@
 # Proposal: ConnCtx Builder Collapse
 
-Status: proposed
+Status: implemented
 Date: 2026-07-16
 
 ## Problem
@@ -225,5 +225,33 @@ builder collapse.
 - **`const NOOP_*` promotion.** The sketch promotes the no-op providers to `const` references inside
   `new`; confirm `NoopInfoProvider`/`NoopScriptingProvider` are zero-field (they are) so `const`
   promotion is valid, else keep the existing `static` pattern (once, in `new`, not four times).
+
+## Implementation notes (2026-07-16)
+
+Implemented in `1f2e35dc`, as designed with one anticipated adjustment:
+
+- **`base_ctx` is an associated fn, not a `&self` method.** The "consuming `.with_*` vs. mutating"
+  risk resolved one level earlier than the sketch anticipated: a `&self` method borrows the *whole*
+  handler for the returned `ConnCtx`'s lifetime, so no builder style downstream can free
+  `self.state`/`self.tracking_io` for the `&mut` caps. `ConnectionHandler::base_ctx(admin, core,
+  observability, cluster, memory_diag, num_shards)` takes the disjoint dep groups as explicit
+  parameters instead; each call site names the sub-field borrows, preserving disjointness exactly as
+  the "must stay a sub-field borrow" risk note required (the invariant is pinned in its doc comment).
+  The `self`-consuming `.with_*` builders then compose without a fight.
+- `ConnCtx::new` (core) is the one field-list home; the `NOOP_*` statics collapsed into two `const`
+  promotions inside it (the providers are zero-sized, so promotion is valid). All four
+  `username: ""`/`protocol_version: default()` placeholder pairs and both re-pasted static
+  declarations are gone from the server crate.
+- The five production literals became `base_ctx` + one-line cap tails
+  (`with_full_reads` / `with_conn_state` / `with_conn_state().with_tracking()` / `with_pubsub` /
+  `with_monitor`); the nine fixtures call `ConnCtx::new(..)` directly, plus `with_username` where
+  the command under test reads identity without `conn_state` (ACL) or the fixture previously pinned
+  `"default"`. The debug fixture assigns its `Option<&dyn DebugProvider>` slot directly (fields are
+  public).
+- The "one targeted assertion" landed as a core unit test
+  (`conn_command::tests::new_defaults_are_placeholders_and_with_full_reads_overrides_them`): `new`'s
+  defaults are the documented placeholders/no-ops/absent caps, and `with_full_reads` overrides every
+  one of them.
+- All 11 provider traits kept, per the verdict table — no trait was folded.
 </content>
 </invoke>
