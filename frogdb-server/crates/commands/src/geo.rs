@@ -151,7 +151,7 @@ impl Command for GeoaddCommand {
             ctx.store.delete(key);
         }
         if added == 0 && changed == 0 {
-            ctx.write_was_noop = true;
+            ctx.effects.write_was_noop = true;
         }
 
         let result = if ch { added + changed } else { added };

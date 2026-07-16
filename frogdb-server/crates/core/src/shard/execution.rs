@@ -11,7 +11,7 @@ use super::post_execution::{EffectScope, WalPhase, WriteSummary};
 use super::rollback::WriteSnapshot;
 use super::types::{PartialResult, TransactionResult};
 use super::worker::ShardWorker;
-use crate::command::{Command, WriteRecord};
+use crate::command::{Command, CommandEffects, WriteRecord};
 use crate::store::Store;
 use crate::types::{KeyMetadata, Value};
 
@@ -30,6 +30,48 @@ pub(crate) struct WriteCommandMeta {
     /// [`EventSpec::Dynamic`]: crate::command_spec::EventSpec::Dynamic
     /// [`CommandContext::notify_event`]: crate::command::CommandContext::notify_event
     pub keyspace_events: crate::command::KeyspaceEventDeposits,
+}
+
+impl CommandEffects {
+    /// The write-effect payload of a drained [`CommandEffects`], or `None` when
+    /// the write declared itself a no-op — the **single home** of the no-op
+    /// suppression rule documented on
+    /// [`CommandEffects::write_was_noop`](crate::command::CommandEffects::write_was_noop):
+    /// a no-op write's deposits (`keyspace_events`, `hll_wal_delta`,
+    /// `dirty_delta`) are discarded wholesale because the whole write-effect
+    /// pipeline is skipped. The script drain sites reuse the rule through
+    /// [`CommandEffects::into_script_record`], which chains here.
+    ///
+    /// The caller still owns the "is this a WRITE command?" classification —
+    /// this method owns only what the *effects* say. The destructure is
+    /// exhaustive on purpose: adding a `CommandEffects` field stops this from
+    /// compiling until the new effect's routing is decided.
+    pub(crate) fn into_write_meta(self, handler: Arc<dyn Command>) -> Option<WriteCommandMeta> {
+        let CommandEffects {
+            dirty_delta,
+            // Accounting scalars: consumed by the execution seam before the
+            // meta is built (lazyfree counter, keyspace hit/miss stats); a
+            // script sub-command drops them, matching the pre-consolidation
+            // drains. `script_writes` only ever populates on an outer
+            // EVAL/EVALSHA/FCALL context, never on a single command's.
+            lazyfreed_delta: _,
+            keyspace_hits: _,
+            keyspace_misses: _,
+            write_was_noop,
+            hll_wal_delta,
+            keyspace_events,
+            script_writes: _,
+        } = self;
+        if write_was_noop {
+            return None;
+        }
+        Some(WriteCommandMeta {
+            handler,
+            dirty_delta,
+            hll_wal_delta,
+            keyspace_events,
+        })
+    }
 }
 
 impl ShardWorker {
@@ -114,33 +156,34 @@ impl ShardWorker {
 
         // Create command context and execute. `command_context` is the single
         // builder that wires cluster + replica identity + registry from `self`.
-        let (
-            response,
-            dirty_delta,
-            keyspace_hits,
-            keyspace_misses,
-            lazyfreed_delta,
-            write_was_noop,
-            hll_wal_delta,
-            keyspace_events,
-        ) = {
+        // The deposits come back as ONE value: everything the handler produced
+        // besides the response.
+        let (response, effects) = {
             let mut ctx = self.command_context(conn_id, protocol_version);
 
             let response = match handler.execute(&mut ctx, &command.args) {
                 Ok(response) => response,
                 Err(err) => err.to_response(),
             };
-            (
-                response,
-                ctx.dirty_delta,
-                ctx.keyspace_hits,
-                ctx.keyspace_misses,
-                ctx.lazyfreed_delta,
-                ctx.write_was_noop,
-                ctx.hll_wal_delta.take(),
-                ctx.take_keyspace_events(),
-            )
+            (response, std::mem::take(&mut ctx.effects))
         };
+        // Exhaustive by-ref destructure of the drained effects: the accounting
+        // scalars are consumed here, the write payload below (via
+        // `into_write_meta`, which is itself exhaustive). Adding a
+        // `CommandEffects` field stops this site from compiling until its
+        // routing is decided.
+        let CommandEffects {
+            dirty_delta: _,
+            lazyfreed_delta,
+            keyspace_hits,
+            keyspace_misses,
+            write_was_noop: _,
+            hll_wal_delta: _,
+            keyspace_events: _,
+            script_writes: _,
+        } = &effects;
+        let (lazyfreed_delta, keyspace_hits, keyspace_misses) =
+            (*lazyfreed_delta, *keyspace_hits, *keyspace_misses);
         // Track lazyfreed objects (from UNLINK). Applied after the context is
         // dropped so `self` is no longer borrowed by it.
         if lazyfreed_delta > 0 {
@@ -175,18 +218,13 @@ impl ShardWorker {
             }
         }
 
-        // A write that declared itself a no-op gets no WriteCommandMeta, so
-        // the post-execution match runs the read path (no write effects) —
-        // this covers the single-command, rollback, and MULTI/EXEC paths in
-        // one place. Redis parity: no-op writes do not propagate, notify,
-        // or dirty WATCH.
-        let meta = if is_write && !write_was_noop {
-            Some(WriteCommandMeta {
-                handler,
-                dirty_delta,
-                hll_wal_delta,
-                keyspace_events,
-            })
+        // A write that declared itself a no-op gets no WriteCommandMeta
+        // (`into_write_meta` owns that rule), so the post-execution match runs
+        // the read path (no write effects) — this covers the single-command,
+        // rollback, and MULTI/EXEC paths in one place. Redis parity: no-op
+        // writes do not propagate, notify, or dirty WATCH.
+        let meta = if is_write {
+            effects.into_write_meta(handler)
         } else {
             None
         };
@@ -1244,5 +1282,115 @@ mod scatter_effect_tests {
             bc.commands.lock().unwrap().is_empty(),
             "nothing to replicate when nothing was deleted"
         );
+    }
+}
+
+#[cfg(test)]
+mod command_effects_tests {
+    //! Unit pins for the no-op suppression rule, stated once on
+    //! [`CommandEffects::into_write_meta`] (proposal 55): a `write_was_noop`
+    //! write drops its whole effect payload — `keyspace_events`,
+    //! `hll_wal_delta`, `dirty_delta` — instead of relying on each drain site
+    //! independently getting the gate right. `into_script_record` chains
+    //! through the same rule for the two script drain sites.
+    use super::*;
+
+    use crate::command::{
+        Arity, CommandContext, CommandEffects, CommandFlags, WaiterWake, WalStrategy,
+    };
+    use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec};
+    use crate::keyspace_event::KeyspaceEventFlags;
+
+    /// Minimal WRITE handler: the tests only need an `Arc<dyn Command>` to
+    /// thread through the constructors; it is never executed.
+    struct ProbeWrite;
+    impl Command for ProbeWrite {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "PROBEWRITE",
+                arity: Arity::AtLeast(1),
+                flags: CommandFlags::WRITE,
+                keys: KeySpec::First,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::PersistFirstKey,
+                wakes: WaiterWake::None,
+                event: EventSpec::Dynamic,
+                requires_same_slot: false,
+                lookup: LookupSpec::None,
+                strategy: crate::command::ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+        fn execute(
+            &self,
+            _ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            Ok(Response::ok())
+        }
+    }
+
+    /// A fully-loaded deposit set, as a PFADD-like dynamic-event write would
+    /// leave it on the context.
+    fn loaded_effects(write_was_noop: bool) -> CommandEffects {
+        CommandEffects {
+            dirty_delta: 3,
+            write_was_noop,
+            hll_wal_delta: Some(smallvec::smallvec![(7u16, 5u8)]),
+            keyspace_events: smallvec::smallvec![(
+                Bytes::from_static(b"k"),
+                "pfadd",
+                KeyspaceEventFlags::STRING,
+            )],
+            ..Default::default()
+        }
+    }
+
+    /// The exact contract documented on `CommandEffects::write_was_noop`: a
+    /// no-op write's deposits (including keyspace_events and hll_wal_delta)
+    /// are discarded wholesale — no `WriteCommandMeta` is built.
+    #[test]
+    fn into_write_meta_suppresses_noop_write_payload() {
+        let meta = loaded_effects(true).into_write_meta(Arc::new(ProbeWrite));
+        assert!(
+            meta.is_none(),
+            "a write_was_noop write must not produce a WriteCommandMeta"
+        );
+    }
+
+    /// A non-no-op write carries its payload through unchanged.
+    #[test]
+    fn into_write_meta_carries_effect_payload() {
+        let meta = loaded_effects(false)
+            .into_write_meta(Arc::new(ProbeWrite))
+            .expect("an effective write produces a WriteCommandMeta");
+        assert_eq!(meta.dirty_delta, 3);
+        assert_eq!(meta.hll_wal_delta.as_deref(), Some(&[(7u16, 5u8)][..]));
+        assert_eq!(meta.keyspace_events.len(), 1);
+        assert_eq!(meta.keyspace_events[0].0, Bytes::from_static(b"k"));
+        assert_eq!(meta.keyspace_events[0].1, "pfadd");
+        assert_eq!(meta.handler.name(), "PROBEWRITE");
+    }
+
+    /// The script drain sites reuse the same single-home rule: a no-op scripted
+    /// sub-command records nothing.
+    #[test]
+    fn into_script_record_applies_same_noop_rule() {
+        let args = vec![Bytes::from_static(b"k"), Bytes::from_static(b"v")];
+        assert!(
+            loaded_effects(true)
+                .into_script_record(Arc::new(ProbeWrite), args.clone())
+                .is_none(),
+            "a write_was_noop sub-command must not produce a ScriptWriteRecord"
+        );
+
+        let record = loaded_effects(false)
+            .into_script_record(Arc::new(ProbeWrite), args.clone())
+            .expect("an effective scripted write produces a ScriptWriteRecord");
+        assert_eq!(record.args, args);
+        assert_eq!(record.dirty_delta, 3);
+        assert_eq!(record.hll_wal_delta.as_deref(), Some(&[(7u16, 5u8)][..]));
+        assert_eq!(record.keyspace_events.len(), 1);
+        assert_eq!(record.keyspace_events[0].1, "pfadd");
     }
 }

@@ -259,7 +259,7 @@ pub enum WalStrategy {
 
     /// Persist the first key (args[0]); but if the command deposited a
     /// HyperLogLog register delta on the context
-    /// ([`CommandContext::hll_wal_delta`]), emit a `Merge` operand carrying
+    /// ([`CommandEffects::hll_wal_delta`](crate::command::CommandEffects::hll_wal_delta)), emit a `Merge` operand carrying
     /// only the raised registers instead of a full `Put`. Used by PFADD on a
     /// dense existing HLL: the delta serializes far smaller than the 12 KiB
     /// dense value, and the CF merge operator folds it onto the base on replay.
@@ -848,6 +848,124 @@ impl<'a> CommandContextCore<'a> {
 }
 
 // ============================================================================
+// CommandEffects
+// ============================================================================
+
+/// Everything a command execution *produces* besides its [`Response`] — the
+/// out-buffer half of [`CommandContext`], as one named value.
+///
+/// Handlers deposit into this struct (via [`CommandContext::notify_event`],
+/// [`CommandContext::record_lookup`], or direct `ctx.effects.…` assignment)
+/// and the execution seam drains it in one move —
+/// `std::mem::take(&mut ctx.effects)` — then consumes it exhaustively, so
+/// adding an effect field is a compile error at every drain site instead of a
+/// silent drop.
+///
+/// The no-op suppression rule ("a write that declared itself a no-op discards
+/// its whole effect payload") has a single home here: `into_write_meta` in
+/// `shard::execution` (which `into_script_record` chains through).
+#[derive(Default)]
+pub struct CommandEffects {
+    /// Number of dirty changes made by this command (for rdb_changes_since_last_save).
+    ///
+    /// Defaults to 0. Write commands that modify data should set this to indicate
+    /// how many logical changes were made. The shard uses this to track
+    /// `rdb_changes_since_last_save` in INFO persistence.
+    ///
+    /// Commands like SETBIT and BITFIELD SET should only set this when the value
+    /// actually changed.
+    pub dirty_delta: i64,
+
+    /// Number of objects freed via lazyfree operations (UNLINK, FLUSHALL ASYNC).
+    ///
+    /// Defaults to 0. The UNLINK command sets this to the number of keys deleted.
+    /// The shard adds this to its `lazyfreed_objects` counter after command execution.
+    pub lazyfreed_delta: u64,
+
+    /// Number of keyspace read lookups that hit an existing key.
+    ///
+    /// Only populated by [`LookupSpec::Reported`] commands, which call
+    /// [`CommandContext::record_lookup`]. `FirstKey` / `EveryKey` commands are
+    /// counted by the execution seam from actual key existence and never touch
+    /// these fields. Mirrors Redis's `lookupKeyReadWithFlags`, which increments
+    /// `keyspace_hits`/`keyspace_misses` based on whether the looked-up KEY
+    /// exists in the keyspace dictionary — not on the shape of the reply.
+    ///
+    /// [`LookupSpec::Reported`]: crate::command_spec::LookupSpec::Reported
+    pub keyspace_hits: u64,
+
+    /// Number of keyspace read lookups that missed (the key did not exist).
+    ///
+    /// See [`CommandEffects::keyspace_hits`].
+    pub keyspace_misses: u64,
+
+    /// A WRITE command sets this `true` to declare it verified it made NO
+    /// change (e.g. PFADD where no register moved), so the execution seam
+    /// skips the entire write-effect pipeline: WAL persist, replication
+    /// broadcast, version bump (WATCH), keyspace notification, and tracking
+    /// invalidation. Matches Redis, which does not propagate a no-op write.
+    ///
+    /// Distinct from `dirty_delta = -1`, which only suppresses the version
+    /// bump and dirty counter while the write still persists and replicates.
+    pub write_was_noop: bool,
+
+    /// HyperLogLog register delta deposited by a write for the
+    /// [`WalStrategy::MergeDeltaOrPersistFirstKey`] strategy.
+    ///
+    /// PFADD sets this to the `(register_index, new_value)` pairs it raised
+    /// **only when the post-add value is dense** — so the WAL persists a compact
+    /// `Merge` operand instead of the full ~12 KiB dense value. Left `None` for
+    /// sparse or newly-created values (which keep a full `Put`: sparse serializes
+    /// small already, and creation must establish the base on disk). Reset per
+    /// command (it lives on the per-command context).
+    pub hll_wal_delta: Option<SmallVec<[(u16, u8); 8]>>,
+
+    /// Keyspace events deposited by an
+    /// [`EventSpec::Dynamic`](crate::command_spec::EventSpec::Dynamic) command.
+    ///
+    /// Handlers must go through [`CommandContext::notify_event`]; the execution
+    /// seam drains the deposits and routes them to the notifications write
+    /// effect. A `write_was_noop` command discards its deposits wholesale (the
+    /// effect pipeline is skipped), same contract as `hll_wal_delta`.
+    pub keyspace_events: KeyspaceEventDeposits,
+
+    /// Effective writes performed by script sub-commands during an
+    /// EVAL/EVALSHA/FCALL running on this context.
+    ///
+    /// Populated by the scripting seam (`ScriptInvoker::run_local`) for each
+    /// `redis.call`/`redis.pcall` write that actually changed data; drained by
+    /// the shard worker after the script completes and routed through the same
+    /// `WRITE_EFFECT_ORDER` pipeline as direct commands (notifications, WATCH
+    /// bump, tracking invalidation, waiter wake, WAL, replication). Always
+    /// empty for ordinary (non-script) command executions.
+    pub script_writes: Vec<ScriptWriteRecord>,
+}
+
+impl CommandEffects {
+    /// Convert the drained effects of a script sub-command into the owned
+    /// [`ScriptWriteRecord`] the shard worker replays after the script.
+    ///
+    /// Returns `None` for a `write_was_noop` sub-command — the same no-op
+    /// suppression rule as the direct path, because this chains through
+    /// `into_write_meta` (the rule's single home, in `shard::execution`).
+    /// The caller still owns the "was it a successful WRITE command?" check;
+    /// this method owns only what the *effects* say.
+    pub(crate) fn into_script_record(
+        self,
+        handler: Arc<dyn Command>,
+        args: Vec<Bytes>,
+    ) -> Option<ScriptWriteRecord> {
+        self.into_write_meta(handler).map(|meta| ScriptWriteRecord {
+            handler: meta.handler,
+            args,
+            dirty_delta: meta.dirty_delta,
+            hll_wal_delta: meta.hll_wal_delta,
+            keyspace_events: meta.keyspace_events,
+        })
+    }
+}
+
+// ============================================================================
 // CommandContext
 // ============================================================================
 
@@ -950,78 +1068,10 @@ pub struct CommandContext<'a> {
     /// Primary port (set when running as a replica, for INFO replication).
     pub master_port: Option<u16>,
 
-    /// Number of dirty changes made by this command (for rdb_changes_since_last_save).
-    ///
-    /// Defaults to 0. Write commands that modify data should set this to indicate
-    /// how many logical changes were made. The shard uses this to track
-    /// `rdb_changes_since_last_save` in INFO persistence.
-    ///
-    /// Commands like SETBIT and BITFIELD SET should only set this when the value
-    /// actually changed.
-    pub dirty_delta: i64,
-
-    /// Number of objects freed via lazyfree operations (UNLINK, FLUSHALL ASYNC).
-    ///
-    /// Defaults to 0. The UNLINK command sets this to the number of keys deleted.
-    /// The shard adds this to its `lazyfreed_objects` counter after command execution.
-    pub lazyfreed_delta: u64,
-
-    /// Number of keyspace read lookups that hit an existing key.
-    ///
-    /// Only populated by [`LookupSpec::Reported`] commands, which call
-    /// [`CommandContext::record_lookup`]. `FirstKey` / `EveryKey` commands are
-    /// counted by the execution seam from actual key existence and never touch
-    /// these fields. Mirrors Redis's `lookupKeyReadWithFlags`, which increments
-    /// `keyspace_hits`/`keyspace_misses` based on whether the looked-up KEY
-    /// exists in the keyspace dictionary — not on the shape of the reply.
-    pub keyspace_hits: u64,
-
-    /// Number of keyspace read lookups that missed (the key did not exist).
-    ///
-    /// See [`CommandContext::keyspace_hits`].
-    pub keyspace_misses: u64,
-
-    /// A WRITE command sets this `true` to declare it verified it made NO
-    /// change (e.g. PFADD where no register moved), so the execution seam
-    /// skips the entire write-effect pipeline: WAL persist, replication
-    /// broadcast, version bump (WATCH), keyspace notification, and tracking
-    /// invalidation. Matches Redis, which does not propagate a no-op write.
-    ///
-    /// Distinct from `dirty_delta = -1`, which only suppresses the version
-    /// bump and dirty counter while the write still persists and replicates.
-    pub write_was_noop: bool,
-
-    /// HyperLogLog register delta deposited by a write for the
-    /// [`WalStrategy::MergeDeltaOrPersistFirstKey`] strategy.
-    ///
-    /// PFADD sets this to the `(register_index, new_value)` pairs it raised
-    /// **only when the post-add value is dense** — so the WAL persists a compact
-    /// `Merge` operand instead of the full ~12 KiB dense value. Left `None` for
-    /// sparse or newly-created values (which keep a full `Put`: sparse serializes
-    /// small already, and creation must establish the base on disk). Reset per
-    /// command (it lives on the per-command context).
-    pub hll_wal_delta: Option<SmallVec<[(u16, u8); 8]>>,
-
-    /// Keyspace events deposited by an
-    /// [`EventSpec::Dynamic`](crate::command_spec::EventSpec::Dynamic) command.
-    ///
-    /// Handlers must go through [`CommandContext::notify_event`]; the execution
-    /// seam drains the buffer via [`CommandContext::take_keyspace_events`] and
-    /// routes it to the notifications write effect. A `write_was_noop` command
-    /// discards its deposits wholesale (the effect pipeline is skipped), same
-    /// contract as `hll_wal_delta`.
-    pub keyspace_events: KeyspaceEventDeposits,
-
-    /// Effective writes performed by script sub-commands during an
-    /// EVAL/EVALSHA/FCALL running on this context.
-    ///
-    /// Populated by the scripting seam (`ScriptInvoker::run_local`) for each
-    /// `redis.call`/`redis.pcall` write that actually changed data; drained by
-    /// the shard worker after the script completes and routed through the same
-    /// `WRITE_EFFECT_ORDER` pipeline as direct commands (notifications, WATCH
-    /// bump, tracking invalidation, waiter wake, WAL, replication). Always
-    /// empty for ordinary (non-script) command executions.
-    pub script_writes: Vec<ScriptWriteRecord>,
+    /// Everything this execution *produces* besides the [`Response`] — the
+    /// command's out-buffer, drained as one value by the execution seam via
+    /// `std::mem::take(&mut ctx.effects)`. See [`CommandEffects`].
+    pub effects: CommandEffects,
 }
 
 impl<'a> CommandContext<'a> {
@@ -1052,14 +1102,7 @@ impl<'a> CommandContext<'a> {
             is_replica_flag: None,
             master_host: None,
             master_port: None,
-            dirty_delta: 0,
-            lazyfreed_delta: 0,
-            keyspace_hits: 0,
-            keyspace_misses: 0,
-            write_was_noop: false,
-            hll_wal_delta: None,
-            keyspace_events: SmallVec::new(),
-            script_writes: Vec::new(),
+            effects: CommandEffects::default(),
         }
     }
 
@@ -1073,16 +1116,18 @@ impl<'a> CommandContext<'a> {
     /// no-op paths so nothing is emitted.
     #[inline]
     pub fn notify_event(&mut self, key: Bytes, name: &'static str, class: KeyspaceEventFlags) {
-        self.keyspace_events.push((key, name, class));
+        self.effects.keyspace_events.push((key, name, class));
     }
 
-    /// Drain the deposited keyspace events (execution seam only).
+    /// Drain the deposited keyspace events.
     ///
     /// Leaves the buffer empty; the caller owns routing the events into the
     /// write-effect pipeline (or dropping them for a `write_was_noop` command).
+    /// The execution seam drains the whole [`CommandEffects`] value instead;
+    /// this remains for callers that only need the event deposits.
     #[inline]
     pub fn take_keyspace_events(&mut self) -> KeyspaceEventDeposits {
-        std::mem::take(&mut self.keyspace_events)
+        std::mem::take(&mut self.effects.keyspace_events)
     }
 
     /// Report a single keyspace lookup from a [`LookupSpec::Reported`] command.
@@ -1099,8 +1144,8 @@ impl<'a> CommandContext<'a> {
     #[inline]
     pub fn record_lookup(&mut self, outcome: crate::command_spec::LookupOutcome) {
         match outcome {
-            crate::command_spec::LookupOutcome::Hit => self.keyspace_hits += 1,
-            crate::command_spec::LookupOutcome::Miss => self.keyspace_misses += 1,
+            crate::command_spec::LookupOutcome::Hit => self.effects.keyspace_hits += 1,
+            crate::command_spec::LookupOutcome::Miss => self.effects.keyspace_misses += 1,
         }
     }
 
