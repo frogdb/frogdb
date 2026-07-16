@@ -638,3 +638,47 @@ async fn test_null_array_wire_bytes_resp3() {
 
     server.shutdown().await;
 }
+
+/// Pipelined regression (proposal 49): a single batch whose middle reply is a
+/// RESP2 null array must not reorder the replies. `GET k1; LPOP missing 2;
+/// GET k2` written in one segment returns `[bulk v1, *-1, bulk v2]` in command
+/// order. Before the fix the buffered null-array (`*-1\r\n`) was written
+/// straight to the socket, jumping ahead of the two buffered GET replies and
+/// desynchronizing the client.
+#[tokio::test]
+async fn test_pipelined_null_array_preserves_reply_order_resp2() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let server = start_server().await;
+
+    // Seed the two string keys the pipeline reads back.
+    server.send("SET", &["k1", "v1"]).await;
+    server.send("SET", &["k2", "v2"]).await;
+
+    let mut stream = TcpStream::connect(server.socket_addr()).await.unwrap();
+
+    // One pipelined write: GET k1 ; LPOP missing 2 (null array) ; GET k2.
+    stream
+        .write_all(
+            b"*2\r\n$3\r\nGET\r\n$2\r\nk1\r\n\
+              *3\r\n$4\r\nLPOP\r\n$7\r\nmissing\r\n$1\r\n2\r\n\
+              *2\r\n$3\r\nGET\r\n$2\r\nk2\r\n",
+        )
+        .await
+        .unwrap();
+
+    // Read the exact expected reply bytes in command order.
+    let expected: &[u8] = b"$2\r\nv1\r\n*-1\r\n$2\r\nv2\r\n";
+    let mut got = vec![0u8; expected.len()];
+    timeout(Duration::from_secs(5), stream.read_exact(&mut got))
+        .await
+        .expect("timeout reading pipelined replies")
+        .expect("read error");
+    assert_eq!(
+        got.as_slice(),
+        expected,
+        "pipelined replies must arrive in command order: GET k1, LPOP null-array, GET k2",
+    );
+
+    server.shutdown().await;
+}
