@@ -4,7 +4,9 @@
 //! multiple command modules to avoid code duplication.
 
 use bytes::Bytes;
-use frogdb_core::{ArgParser, CommandError, IncrementError, LexBound, ScoreBound, StreamTrimMode};
+use frogdb_core::{
+    ArgParser, CommandError, Expiry, IncrementError, LexBound, ScoreBound, StreamTrimMode,
+};
 use frogdb_protocol::Response;
 
 // ============================================================================
@@ -501,6 +503,136 @@ impl ZaddOptions {
 
         Ok((opts, i))
     }
+}
+
+// ============================================================================
+// Expiry Grammar Parsing (EX / PX / EXAT / PXAT)
+// ============================================================================
+//
+// The EX/PX/EXAT/PXAT expire operand is validated identically across the whole
+// SET family (SET, SETEX, PSETEX, GETEX, MSETEX) and the hash field-expiry
+// commands (HGETEX/HSETEX): the value must be a strictly-positive integer, the
+// relative-seconds form additionally guards its later `*1000` millisecond
+// conversion against overflow, and a rejection surfaces one of two fixed
+// `invalid expire time ...` messages. [`checked_expire_value`] owns that shared
+// validation so each hand-rolled copy collapses to a single call while staying
+// byte-identical on the wire.
+
+/// Which `invalid expire time ...` message a command emits for a rejected
+/// expire operand.
+///
+/// The SET family (`SET`, `SETEX`, `PSETEX`, `GETEX`, `MSETEX`) all use the
+/// quoted `invalid expire time in '<cmd>' command` form; the hash field-expiry
+/// commands (`HGETEX`/`HSETEX`) historically emit the shorter, name-less
+/// `invalid expire time in command`. Both shapes are reproduced verbatim.
+#[derive(Debug, Clone, Copy)]
+pub enum ExpiryErr<'a> {
+    /// `invalid expire time in '<cmd>' command`.
+    Named(&'a str),
+    /// `invalid expire time in command` (HGETEX/HSETEX legacy shape).
+    Unnamed,
+}
+
+impl ExpiryErr<'_> {
+    /// Build the `CommandError` for a rejected expire operand.
+    pub fn build(self) -> CommandError {
+        let message = match self {
+            ExpiryErr::Named(cmd) => format!("invalid expire time in '{cmd}' command"),
+            ExpiryErr::Unnamed => "invalid expire time in command".to_string(),
+        };
+        CommandError::InvalidArgument { message }
+    }
+}
+
+/// Validate a raw expire operand shared by the whole EX/PX/EXAT/PXAT family.
+///
+/// Rejects non-positive values (`raw <= 0`) with `err`. When `guard_overflow`
+/// is set (the relative-seconds `EX` operand, whose value is later multiplied
+/// by 1000 to reach milliseconds), also rejects values above `i64::MAX / 1000`
+/// so the conversion cannot overflow. Returns the validated value as `u64`.
+///
+/// `guard_overflow` is an explicit per-call-site flag rather than a property of
+/// the unit because the live commands disagree: `SET EX` and `GETEX EX` guard
+/// the conversion, whereas `SETEX`/`PSETEX`/`MSETEX`/`HGETEX`/`HSETEX`
+/// historically do not. Each caller passes the value that reproduces its
+/// current behavior byte-for-byte.
+pub fn checked_expire_value(
+    raw: i64,
+    guard_overflow: bool,
+    err: ExpiryErr<'_>,
+) -> Result<u64, CommandError> {
+    if raw <= 0 {
+        return Err(err.build());
+    }
+    if guard_overflow && raw > i64::MAX / 1000 {
+        return Err(err.build());
+    }
+    Ok(raw as u64)
+}
+
+/// The four positive-expiry units (`EX`, `PX`, `EXAT`, `PXAT`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpiryUnit {
+    /// Relative seconds (`EX`).
+    Ex,
+    /// Relative milliseconds (`PX`).
+    Px,
+    /// Absolute Unix seconds (`EXAT`).
+    ExAt,
+    /// Absolute Unix milliseconds (`PXAT`).
+    PxAt,
+}
+
+impl ExpiryUnit {
+    /// Match a flag token (case-insensitive) to its unit, if any.
+    pub fn from_flag(flag: &[u8]) -> Option<Self> {
+        match flag.to_ascii_uppercase().as_slice() {
+            b"EX" => Some(Self::Ex),
+            b"PX" => Some(Self::Px),
+            b"EXAT" => Some(Self::ExAt),
+            b"PXAT" => Some(Self::PxAt),
+            _ => None,
+        }
+    }
+
+    /// Build a typed [`Expiry`] from a validated `u64` value.
+    pub fn into_expiry(self, value: u64) -> Expiry {
+        match self {
+            Self::Ex => Expiry::Ex(value),
+            Self::Px => Expiry::Px(value),
+            Self::ExAt => Expiry::ExAt(value),
+            Self::PxAt => Expiry::PxAt(value),
+        }
+    }
+}
+
+// ============================================================================
+// Named Flag-Value Parsing
+// ============================================================================
+
+/// Consume and parse the value following a named option flag whose keyword the
+/// caller has already matched (e.g. after `parser.try_flag(b"CAPACITY")`).
+///
+/// A missing value produces the derived `"<flag> requires a value"` message; a
+/// non-UTF-8 or unparseable value produces `invalid_msg`. The invalid message
+/// is passed explicitly rather than derived from the flag token because the
+/// probabilistic-filter commands use bespoke human phrasings ("Invalid
+/// capacity", "Invalid bucket size", ...) that don't follow the token. Shared
+/// by the `BF.*` / `CF.*` option loops in `bloom.rs` and `cuckoo.rs`.
+pub fn flag_value_named<T: std::str::FromStr>(
+    parser: &mut ArgParser<'_>,
+    flag: &str,
+    invalid_msg: &str,
+) -> Result<T, CommandError> {
+    let val = parser.next().ok_or_else(|| CommandError::InvalidArgument {
+        message: format!("{flag} requires a value"),
+    })?;
+    std::str::from_utf8(val)
+        .ok()
+        .and_then(|s| s.parse::<T>().ok())
+        .ok_or_else(|| CommandError::InvalidArgument {
+            message: invalid_msg.to_string(),
+        })
 }
 
 // ============================================================================
@@ -1015,5 +1147,81 @@ mod scan_seam_tests {
         .unwrap();
         assert!(novalues);
         assert_eq!(req.pattern, Some(b"x*".as_slice()));
+    }
+}
+
+#[cfg(test)]
+mod expiry_grammar_tests {
+    use super::*;
+    use frogdb_core::Expiry;
+
+    #[test]
+    fn named_error_uses_quoted_command_form() {
+        let err = ExpiryErr::Named("setex").build();
+        match err {
+            CommandError::InvalidArgument { message } => {
+                assert_eq!(message, "invalid expire time in 'setex' command");
+            }
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unnamed_error_omits_command_name() {
+        let err = ExpiryErr::Unnamed.build();
+        match err {
+            CommandError::InvalidArgument { message } => {
+                assert_eq!(message, "invalid expire time in command");
+            }
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_zero_and_negative() {
+        for raw in [0, -1, -100] {
+            assert!(checked_expire_value(raw, false, ExpiryErr::Named("set")).is_err());
+            assert!(checked_expire_value(raw, true, ExpiryErr::Named("set")).is_err());
+        }
+    }
+
+    #[test]
+    fn accepts_positive_without_guard() {
+        assert_eq!(
+            checked_expire_value(18446744073709551, false, ExpiryErr::Named("setex")).unwrap(),
+            18446744073709551u64
+        );
+        assert_eq!(
+            checked_expire_value(1, false, ExpiryErr::Named("setex")).unwrap(),
+            1u64
+        );
+    }
+
+    #[test]
+    fn guard_rejects_secs_overflow_boundary() {
+        // i64::MAX / 1000 is the largest value that still converts.
+        let max_ok = i64::MAX / 1000;
+        assert_eq!(
+            checked_expire_value(max_ok, true, ExpiryErr::Named("set")).unwrap(),
+            max_ok as u64
+        );
+        assert!(checked_expire_value(max_ok + 1, true, ExpiryErr::Named("set")).is_err());
+    }
+
+    #[test]
+    fn from_flag_matches_case_insensitively() {
+        assert_eq!(ExpiryUnit::from_flag(b"ex"), Some(ExpiryUnit::Ex));
+        assert_eq!(ExpiryUnit::from_flag(b"PX"), Some(ExpiryUnit::Px));
+        assert_eq!(ExpiryUnit::from_flag(b"ExAt"), Some(ExpiryUnit::ExAt));
+        assert_eq!(ExpiryUnit::from_flag(b"pxat"), Some(ExpiryUnit::PxAt));
+        assert_eq!(ExpiryUnit::from_flag(b"KEEPTTL"), None);
+    }
+
+    #[test]
+    fn into_expiry_maps_each_unit() {
+        assert!(matches!(ExpiryUnit::Ex.into_expiry(5), Expiry::Ex(5)));
+        assert!(matches!(ExpiryUnit::Px.into_expiry(5), Expiry::Px(5)));
+        assert!(matches!(ExpiryUnit::ExAt.into_expiry(5), Expiry::ExAt(5)));
+        assert!(matches!(ExpiryUnit::PxAt.into_expiry(5), Expiry::PxAt(5)));
     }
 }

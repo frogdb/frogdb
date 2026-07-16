@@ -25,10 +25,7 @@ pub mod traits;
 pub mod types;
 pub mod vectorset;
 
-pub use args::{
-    ArgParser, CompareCondition, ExpiryOption, ScanOptions, parse_f64, parse_from_bytes, parse_i64,
-    parse_u64, parse_usize,
-};
+pub use args::{ArgParser, parse_f64, parse_from_bytes, parse_i64, parse_u64, parse_usize};
 pub use bitmap::{
     BitOp, BitfieldEncoding, BitfieldOffset, BitfieldSubCommand, OverflowMode, bitcount,
     bitfield_get, bitfield_incrby, bitfield_set, bitop, bitpos, getbit, setbit,

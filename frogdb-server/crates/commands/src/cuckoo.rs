@@ -11,6 +11,8 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
+use super::utils::flag_value_named;
+
 /// CF.RESERVE - Create a new cuckoo filter.
 ///
 /// CF.RESERVE key capacity [BUCKETSIZE bucketsize] [MAXITERATIONS maxiterations] [EXPANSION expansion]
@@ -58,41 +60,12 @@ impl Command for CfReserve {
         let mut parser = ArgParser::from_position(args, 2);
         while parser.has_more() {
             if parser.try_flag(b"BUCKETSIZE") {
-                let val = parser.next().ok_or_else(|| CommandError::InvalidArgument {
-                    message: "BUCKETSIZE requires a value".to_string(),
-                })?;
-                bucket_size = std::str::from_utf8(val)
-                    .map_err(|_| CommandError::InvalidArgument {
-                        message: "Invalid bucket size".to_string(),
-                    })?
-                    .parse()
-                    .map_err(|_| CommandError::InvalidArgument {
-                        message: "Invalid bucket size".to_string(),
-                    })?;
+                bucket_size = flag_value_named(&mut parser, "BUCKETSIZE", "Invalid bucket size")?;
             } else if parser.try_flag(b"MAXITERATIONS") {
-                let val = parser.next().ok_or_else(|| CommandError::InvalidArgument {
-                    message: "MAXITERATIONS requires a value".to_string(),
-                })?;
-                max_iterations = std::str::from_utf8(val)
-                    .map_err(|_| CommandError::InvalidArgument {
-                        message: "Invalid max iterations".to_string(),
-                    })?
-                    .parse()
-                    .map_err(|_| CommandError::InvalidArgument {
-                        message: "Invalid max iterations".to_string(),
-                    })?;
+                max_iterations =
+                    flag_value_named(&mut parser, "MAXITERATIONS", "Invalid max iterations")?;
             } else if parser.try_flag(b"EXPANSION") {
-                let val = parser.next().ok_or_else(|| CommandError::InvalidArgument {
-                    message: "EXPANSION requires a value".to_string(),
-                })?;
-                expansion = std::str::from_utf8(val)
-                    .map_err(|_| CommandError::InvalidArgument {
-                        message: "Invalid expansion".to_string(),
-                    })?
-                    .parse()
-                    .map_err(|_| CommandError::InvalidArgument {
-                        message: "Invalid expansion".to_string(),
-                    })?;
+                expansion = flag_value_named(&mut parser, "EXPANSION", "Invalid expansion")?;
             } else {
                 let arg = parser.next().expect("has_more() guarantees an argument");
                 let opt = std::str::from_utf8(arg)
@@ -281,17 +254,7 @@ fn cf_insert_impl(
     let mut parser = ArgParser::from_position(args, 1);
     while parser.has_more() {
         if parser.try_flag(b"CAPACITY") {
-            let val = parser.next().ok_or_else(|| CommandError::InvalidArgument {
-                message: "CAPACITY requires a value".to_string(),
-            })?;
-            capacity = std::str::from_utf8(val)
-                .map_err(|_| CommandError::InvalidArgument {
-                    message: "Invalid capacity".to_string(),
-                })?
-                .parse()
-                .map_err(|_| CommandError::InvalidArgument {
-                    message: "Invalid capacity".to_string(),
-                })?;
+            capacity = flag_value_named(&mut parser, "CAPACITY", "Invalid capacity")?;
         } else if parser.try_flag(b"NOCREATE") {
             nocreate = true;
         } else if parser.try_flag(b"ITEMS") {
@@ -757,5 +720,96 @@ impl Command for CfLoadchunk {
         ctx.store.set(key.clone(), Value::CuckooFilter(cf));
 
         Ok(Response::ok())
+    }
+}
+
+#[cfg(test)]
+mod flag_value_pin_tests {
+    //! Wire-compat pins for CF.RESERVE / CF.INSERT named-flag value parsing.
+    use super::*;
+    use frogdb_core::HashMapStore;
+    use frogdb_protocol::ProtocolVersion;
+    use std::sync::Arc;
+
+    fn ctx() -> CommandContext<'static> {
+        let store = Box::leak(Box::new(HashMapStore::new()));
+        let shard_senders = Box::leak(Box::new(Arc::new(Vec::new())));
+        CommandContext::new(store, shard_senders, 0, 1, 0, ProtocolVersion::Resp2)
+    }
+
+    fn args(parts: &[&str]) -> Vec<Bytes> {
+        parts.iter().map(|s| Bytes::from(s.to_string())).collect()
+    }
+
+    fn err_of<C: Command>(cmd: C, parts: &[&str]) -> String {
+        let mut c = ctx();
+        match cmd.execute(&mut c, &args(parts)) {
+            Err(CommandError::InvalidArgument { message }) => message,
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reserve_bucketsize_requires_value() {
+        assert_eq!(
+            err_of(CfReserve, &["k", "100", "BUCKETSIZE"]),
+            "BUCKETSIZE requires a value"
+        );
+    }
+
+    #[test]
+    fn reserve_bucketsize_invalid() {
+        assert_eq!(
+            err_of(CfReserve, &["k", "100", "BUCKETSIZE", "abc"]),
+            "Invalid bucket size"
+        );
+    }
+
+    #[test]
+    fn reserve_maxiterations_requires_value() {
+        assert_eq!(
+            err_of(CfReserve, &["k", "100", "MAXITERATIONS"]),
+            "MAXITERATIONS requires a value"
+        );
+    }
+
+    #[test]
+    fn reserve_maxiterations_invalid() {
+        assert_eq!(
+            err_of(CfReserve, &["k", "100", "MAXITERATIONS", "abc"]),
+            "Invalid max iterations"
+        );
+    }
+
+    #[test]
+    fn reserve_expansion_requires_value() {
+        assert_eq!(
+            err_of(CfReserve, &["k", "100", "EXPANSION"]),
+            "EXPANSION requires a value"
+        );
+    }
+
+    #[test]
+    fn reserve_expansion_invalid() {
+        assert_eq!(
+            err_of(CfReserve, &["k", "100", "EXPANSION", "abc"]),
+            "Invalid expansion"
+        );
+    }
+
+    #[test]
+    fn insert_capacity_requires_value() {
+        assert_eq!(
+            err_of(CfInsert, &["k", "CAPACITY"]),
+            "CAPACITY requires a value"
+        );
+    }
+
+    #[test]
+    fn insert_capacity_invalid() {
+        assert_eq!(
+            err_of(CfInsert, &["k", "CAPACITY", "abc"]),
+            "Invalid capacity"
+        );
     }
 }

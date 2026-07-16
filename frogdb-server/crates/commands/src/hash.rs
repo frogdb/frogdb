@@ -20,7 +20,9 @@ use super::expiry::{
     instant_to_unix_ms, instant_to_unix_secs, parse_expire_conditions_from_slice,
     unix_ms_to_instant, unix_secs_to_instant,
 };
-use super::utils::{format_float, parse_f64, parse_i64, reject_non_finite_delta};
+use super::utils::{
+    ExpiryErr, checked_expire_value, format_float, parse_f64, parse_i64, reject_non_finite_delta,
+};
 use std::time::{Duration, Instant};
 
 // ============================================================================
@@ -1558,46 +1560,29 @@ fn parse_field_expiry_option(
     match keyword.as_slice() {
         b"EX" => {
             let val = args.get(offset + 1).ok_or(CommandError::SyntaxError)?;
-            let secs = parse_i64(val)?;
-            if secs <= 0 {
-                return Err(CommandError::InvalidArgument {
-                    message: "invalid expire time in command".to_string(),
-                });
-            }
-            let instant = Instant::now() + Duration::from_secs(secs as u64);
+            // Field-expiry commands use the name-less message shape. The
+            // seconds units (EX/EXAT) guard the secs*1000 conversion, matching
+            // Redis's t_hash.c parseExpireTime(UNIT_SECONDS) rejection.
+            let secs = checked_expire_value(parse_i64(val)?, true, ExpiryErr::Unnamed)?;
+            let instant = Instant::now() + Duration::from_secs(secs);
             Ok((FieldExpiryAction::SetExpiry(instant), 2))
         }
         b"PX" => {
             let val = args.get(offset + 1).ok_or(CommandError::SyntaxError)?;
-            let ms = parse_i64(val)?;
-            if ms <= 0 {
-                return Err(CommandError::InvalidArgument {
-                    message: "invalid expire time in command".to_string(),
-                });
-            }
-            let instant = Instant::now() + Duration::from_millis(ms as u64);
+            let ms = checked_expire_value(parse_i64(val)?, false, ExpiryErr::Unnamed)?;
+            let instant = Instant::now() + Duration::from_millis(ms);
             Ok((FieldExpiryAction::SetExpiry(instant), 2))
         }
         b"EXAT" => {
             let val = args.get(offset + 1).ok_or(CommandError::SyntaxError)?;
-            let ts = parse_i64(val)?;
-            if ts <= 0 {
-                return Err(CommandError::InvalidArgument {
-                    message: "invalid expire time in command".to_string(),
-                });
-            }
-            let instant = unix_secs_to_instant(ts as u64).ok_or(CommandError::NotInteger)?;
+            let ts = checked_expire_value(parse_i64(val)?, true, ExpiryErr::Unnamed)?;
+            let instant = unix_secs_to_instant(ts).ok_or(CommandError::NotInteger)?;
             Ok((FieldExpiryAction::SetExpiry(instant), 2))
         }
         b"PXAT" => {
             let val = args.get(offset + 1).ok_or(CommandError::SyntaxError)?;
-            let ts = parse_i64(val)?;
-            if ts <= 0 {
-                return Err(CommandError::InvalidArgument {
-                    message: "invalid expire time in command".to_string(),
-                });
-            }
-            let instant = unix_ms_to_instant(ts as u64).ok_or(CommandError::NotInteger)?;
+            let ts = checked_expire_value(parse_i64(val)?, false, ExpiryErr::Unnamed)?;
+            let instant = unix_ms_to_instant(ts).ok_or(CommandError::NotInteger)?;
             Ok((FieldExpiryAction::SetExpiry(instant), 2))
         }
         b"PERSIST" if allow_persist => Ok((FieldExpiryAction::Persist, 1)),
@@ -1994,5 +1979,130 @@ impl Command for HsetexCommand {
         }
 
         Ok(Response::Integer(1))
+    }
+}
+
+#[cfg(test)]
+mod expiry_grammar_pin_tests {
+    //! Wire-compat pins for HGETEX / HSETEX field-expiry grammar. These use the
+    //! name-less `invalid expire time in command` message shape (distinct from
+    //! the SET family's quoted form) and carry no secs*1000 overflow guard.
+    use super::*;
+    use frogdb_core::HashMapStore;
+    use frogdb_protocol::ProtocolVersion;
+    use std::sync::Arc;
+
+    fn ctx() -> CommandContext<'static> {
+        let store = Box::leak(Box::new(HashMapStore::new()));
+        let shard_senders = Box::leak(Box::new(Arc::new(Vec::new())));
+        CommandContext::new(store, shard_senders, 0, 1, 0, ProtocolVersion::Resp2)
+    }
+
+    fn args(parts: &[&str]) -> Vec<Bytes> {
+        parts.iter().map(|s| Bytes::from(s.to_string())).collect()
+    }
+
+    fn invalid_msg<C: Command>(cmd: C, parts: &[&str]) -> String {
+        let mut c = ctx();
+        match cmd.execute(&mut c, &args(parts)) {
+            Err(CommandError::InvalidArgument { message }) => message,
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hgetex_ex_zero_message() {
+        assert_eq!(
+            invalid_msg(HgetexCommand, &["h", "EX", "0", "FIELDS", "1", "f"]),
+            "invalid expire time in command"
+        );
+    }
+
+    #[test]
+    fn hgetex_px_negative_message() {
+        assert_eq!(
+            invalid_msg(HgetexCommand, &["h", "PX", "-1", "FIELDS", "1", "f"]),
+            "invalid expire time in command"
+        );
+    }
+
+    #[test]
+    fn hgetex_exat_zero_message() {
+        assert_eq!(
+            invalid_msg(HgetexCommand, &["h", "EXAT", "0", "FIELDS", "1", "f"]),
+            "invalid expire time in command"
+        );
+    }
+
+    #[test]
+    fn hgetex_pxat_zero_message() {
+        assert_eq!(
+            invalid_msg(HgetexCommand, &["h", "PXAT", "0", "FIELDS", "1", "f"]),
+            "invalid expire time in command"
+        );
+    }
+
+    #[test]
+    fn hsetex_ex_zero_message() {
+        assert_eq!(
+            invalid_msg(HsetexCommand, &["h", "EX", "0", "FIELDS", "1", "f", "v"]),
+            "invalid expire time in command"
+        );
+    }
+
+    #[test]
+    fn hsetex_px_negative_message() {
+        assert_eq!(
+            invalid_msg(HsetexCommand, &["h", "PX", "-2", "FIELDS", "1", "f", "v"]),
+            "invalid expire time in command"
+        );
+    }
+
+    #[test]
+    fn hgetex_ex_secs_overflow_rejected() {
+        // Redis parity: t_hash.c parseExpireTime rejects over-large seconds
+        // values for the seconds units (EX/EXAT), keeping the name-less shape.
+        assert_eq!(
+            invalid_msg(
+                HgetexCommand,
+                &["h", "EX", "18446744073709551", "FIELDS", "1", "f"]
+            ),
+            "invalid expire time in command"
+        );
+    }
+
+    #[test]
+    fn hgetex_exat_secs_overflow_rejected() {
+        assert_eq!(
+            invalid_msg(
+                HgetexCommand,
+                &["h", "EXAT", "18446744073709551", "FIELDS", "1", "f"]
+            ),
+            "invalid expire time in command"
+        );
+    }
+
+    #[test]
+    fn hsetex_ex_secs_overflow_rejected() {
+        assert_eq!(
+            invalid_msg(
+                HsetexCommand,
+                &["h", "EX", "18446744073709551", "FIELDS", "1", "f", "v"]
+            ),
+            "invalid expire time in command"
+        );
+    }
+
+    #[test]
+    fn hsetex_px_large_value_accepted() {
+        // PX is a milliseconds unit: no *1000 guard applies.
+        let mut c = ctx();
+        let r = HsetexCommand
+            .execute(
+                &mut c,
+                &args(&["h", "PX", "18446744073709551", "FIELDS", "1", "f", "v"]),
+            )
+            .unwrap();
+        assert_eq!(r, Response::Integer(1));
     }
 }
