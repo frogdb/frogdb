@@ -1,6 +1,6 @@
 # Proposal: Replica-Session Streaming Loop — Delete the Dead Fan-Out, Split the Overloaded Loop
 
-Status: proposed
+Status: implemented
 Date: 2026-07-16
 
 ## Problem
@@ -219,3 +219,31 @@ notification on a position no replica has actually confirmed.
 - **Lag-check cadence unchanged.** `LagPolicy` preserves the every-`LAG_CHECK_INTERVAL`-frames check
   (`primary/mod.rs:49`); this refactor moves the policy, it does not retune it. Any change to the
   cadence or thresholds is out of scope.
+
+## Implementation notes (2026-07-16)
+
+- Implemented in `5e259ff2` as specified, with two refinements:
+  - **Seed keeps the lag-clock refresh.** The old `record_ack` seed also refreshed
+    `last_ack_time`; `seed_acked_position` preserves that (resets the lag clock to the resume
+    instant) so a long FULLRESYNC checkpoint stream cannot trip the time-based lag threshold the
+    moment streaming starts. Only the WAIT-waiter notification is dropped — the deliberate change.
+  - **`extract_divergent_writes` call site takes `Option<&Arc<PrimaryReplicationHandler>>`.**
+    `cluster_init.rs`'s demotion task received the `SharedBroadcaster` trait object, not the
+    concrete handler, so `init_cluster` now also threads the optional primary handler through
+    (`server/mod.rs` passes `repl.primary_replication_handler.as_ref()`); a replica/standalone
+    node yields no divergent writes, matching the old `Noop` empty-vec behavior.
+- The untagged `broadcast_command` helper on the primary handler is `pub(crate)` and used only by
+  the replication crate's own session/backlog tests; it carries
+  `#[cfg_attr(not(test), allow(dead_code))]` pending the separate deletion audit the proposal
+  anticipates.
+- Trait diet went further than the minimum: `broadcast_command_on_shard` is now the trait's sole
+  required emit method (no untagged default remains on the trait), and the untagged
+  `broadcast_transaction` is gone outright — `broadcast_transaction_on_shard` is the single
+  MULTI/EXEC framing. `Noop` and the two shard `RecordingBroadcaster` test doubles shrank
+  accordingly (`core/src/shard/execution.rs`, `core/src/shard/post_execution.rs`).
+- Testing impact landed as written: `forward_frame` Continue/timeout/IO-error;
+  `LagPolicy` byte + time thresholds, cooldown suppression, disabled-never-fires
+  (`replica_session.rs`); the seeding regression pin
+  (`tracker.rs::seed_acked_position_does_not_notify_wait_waiters`); the four
+  `connections`-map assertions deleted with the map; all `run_cleans_up_*` duplex lifecycle
+  tests unchanged and passing (115/115 crate tests).

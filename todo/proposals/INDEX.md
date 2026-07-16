@@ -888,12 +888,16 @@ evidence verification. Ordered by expected leverage:
     module, mirroring `ReplicationFrameCodec`) gives the envelope one owner + round-trip/corrupt
     property tests. Keeps the shared `StagedCheckpoint` landing contract; stays deliberately
     separate from proposal 25's on-disk stager.
-57. [57-replica-session-streaming.md](57-replica-session-streaming.md) — **Proposed**: delete
-    verified-dead machinery (the write-only `connections` map, the never-sent `_frame_tx`, the
-    ~30-line dead `frame_rx` select arm duplicating the write branch); extract `forward_frame`
-    (timeout+error once) and a named lag-disconnect policy from the 180-line `start_streaming`;
-    trait diet for `ReplicationBroadcaster` (`extract_divergent_writes` off the hot-path trait —
-    one caller; untagged broadcast defaults collapsed into the `_on_shard` variants).
+57. [57-replica-session-streaming.md](57-replica-session-streaming.md) — **Implemented**
+    (2026-07-16, `5e259ff2`): deleted the verified-dead machinery (the write-only `connections`
+    map, `ReplicaConnectionHandle`/never-sent `_frame_tx`, the ~30-line dead `frame_rx` select
+    arm duplicating the write branch — the streaming loop is now a single `wal_rx` receive);
+    extracted `forward_frame` (write+timeout+error once) and the named `LagPolicy` from
+    `start_streaming`; ack *seeding* split from ack *ingestion* via
+    `tracker.seed_acked_position` (same monotonic atomic, no spurious WAIT-waiter
+    notification); trait diet for `ReplicationBroadcaster` (`extract_divergent_writes` moved to
+    the concrete primary handler; `broadcast_command_on_shard` is the sole required emit method
+    and `broadcast_transaction_on_shard` the single MULTI/EXEC framing).
 58. [58-offset-single-ownership.md](58-offset-single-ownership.md) — **Proposed** (follow-up to
     proposal 18: that unified offset *reads*; this unifies *ownership*): the offset atomic moves
     into `OffsetCoordinator` (tracker borrows; cluster-bus handle vended by the coordinator);
