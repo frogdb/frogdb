@@ -14,6 +14,95 @@ use tracing::Instrument;
 use crate::connection::ConnectionHandler;
 use crate::connection::conn_command::ConnectionCommand;
 
+/// The pre-dispatch gauntlet, in execution order. Reordering a guard means
+/// editing [`PRE_DISPATCH_ORDER`] (and the pinning test notices). Mirrors
+/// `WRITE_EFFECT_ORDER` (`core/src/shard/post_execution.rs`), the shard-side
+/// analogue: a load-bearing ordering encoded as a `const` array instead of the
+/// top-to-bottom layout of an `if`-ladder.
+///
+/// Two stage flavors:
+/// - **Guard stages** (`PreChecks`, `Arity`, `PubSubPing`, `TransactionQueue`,
+///   `ClusterSlotValidation`, `MigratingTryAgain`) are pure decisions over the
+///   socketless [`PreDispatchView`](crate::connection::guards::PreDispatchView).
+/// - **Dispatch stages** (`PreAuthIntercept`, `ResetIntercept`,
+///   `TransactionControl`, `PauseGate`, `ConnectionStateCommand`,
+///   `ConnectionCommand`, `PsyncIntercept`, `WaitIntercept`, `ServerWide`,
+///   `ClusterSlotSubcommand`, `Execute`) terminate into a command executor that
+///   needs the full handler; their arms are thin adapters over the unchanged
+///   executors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DispatchStage {
+    /// AUTH/HELLO, before the NOAUTH check.
+    PreAuthIntercept,
+    /// auth / replica / quorum / admin / ACL / pub-sub gate.
+    PreChecks,
+    /// RESET, never queued, never paused.
+    ResetIntercept,
+    /// `["pong", msg]` framing in pub/sub mode.
+    PubSubPing,
+    /// MULTI/EXEC/DISCARD/WATCH/UNWATCH.
+    TransactionControl,
+    /// queue if in MULTI (+ slot pre-validate).
+    TransactionQueue,
+    /// wrong-arg-count error, before pause.
+    Arity,
+    /// CLIENT PAUSE wait, after queuing.
+    PauseGate,
+    /// ASKING/READONLY/READWRITE (mutable seam).
+    ConnectionStateCommand,
+    /// CONFIG/CLIENT/INFO/… registry union.
+    ConnectionCommand,
+    /// PSYNC handoff signal.
+    PsyncIntercept,
+    /// WAIT → WaitCoordinator.
+    WaitIntercept,
+    /// SCAN/KEYS/FLUSHDB/MIGRATE/…
+    ServerWide,
+    /// CLUSTER GET/COUNTKEYSINSLOT slot routing.
+    ClusterSlotSubcommand,
+    /// MOVED/ASK/CROSSSLOT (consumes take_asking).
+    ClusterSlotValidation,
+    /// TRYAGAIN during multi-key slot migration.
+    MigratingTryAgain,
+    /// Terminal: bookkeeping + route_and_execute + post-execution tail.
+    Execute,
+}
+
+/// THE canonical pre-dispatch order. The single source of truth for the
+/// gauntlet's sequence; [`ConnectionHandler::route_and_execute_with_transaction`]
+/// iterates this array. `Execute` is last and is the only stage that never
+/// returns [`StageOutcome::Continue`], which is what makes the driver loop total.
+pub(crate) const PRE_DISPATCH_ORDER: [DispatchStage; 17] = [
+    DispatchStage::PreAuthIntercept,
+    DispatchStage::PreChecks,
+    DispatchStage::ResetIntercept,
+    DispatchStage::PubSubPing,
+    DispatchStage::TransactionControl,
+    DispatchStage::TransactionQueue,
+    DispatchStage::Arity,
+    DispatchStage::PauseGate,
+    DispatchStage::ConnectionStateCommand,
+    DispatchStage::ConnectionCommand,
+    DispatchStage::PsyncIntercept,
+    DispatchStage::WaitIntercept,
+    DispatchStage::ServerWide,
+    DispatchStage::ClusterSlotSubcommand,
+    DispatchStage::ClusterSlotValidation,
+    DispatchStage::MigratingTryAgain,
+    DispatchStage::Execute,
+];
+
+/// A pre-dispatch stage either lets the command proceed or ends dispatch with a
+/// reply. `Continue` is the hot-path common case and allocates nothing; the only
+/// allocation is the `ShortCircuit` `Vec`, exactly today's `Vec<Response>`
+/// return.
+pub(crate) enum StageOutcome {
+    /// Proceed to the next stage.
+    Continue,
+    /// End dispatch with these responses (one-or-many, as pub/sub returns).
+    ShortCircuit(Vec<Response>),
+}
+
 impl ConnectionHandler {
     /// Dispatch a command registered as [`frogdb_core::CommandImpl::Connection`]
     /// through its connection-level executor, returning `Some(responses)` if it
@@ -142,36 +231,6 @@ impl ConnectionHandler {
         }
     }
 
-    /// PING has bespoke framing while subscribed, so it cannot use the standard
-    /// shard PING path: in RESP2 a subscribed PING replies with an array
-    /// `["pong", <message>]`; in RESP3 it replies with the simple `PONG` (or the
-    /// message argument). Returns `Some` only for PING; every other command
-    /// (including RESET/ASKING/READONLY/READWRITE, now migrated behind the
-    /// ConnCtx seam) returns `None` and continues down the normal dispatch flow.
-    fn pubsub_mode_ping(&self, cmd_name: &str, args: &[Bytes]) -> Option<Vec<Response>> {
-        if cmd_name != "PING" {
-            return None;
-        }
-        let response = if self.state.protocol_version.is_resp3() {
-            if args.is_empty() {
-                Response::pong()
-            } else {
-                Response::bulk(args[0].clone())
-            }
-        } else {
-            let message = if args.is_empty() {
-                Bytes::from_static(b"")
-            } else {
-                args[0].clone()
-            };
-            Response::Array(vec![
-                Response::bulk(Bytes::from_static(b"pong")),
-                Response::bulk(message),
-            ])
-        };
-        Some(vec![response])
-    }
-
     /// Dispatch a connection-state command (ASKING/READONLY/READWRITE) migrated
     /// behind the ConnCtx seam. Unlike the read-only registry-union
     /// [`dispatch_connection_command`](Self::dispatch_connection_command), these
@@ -224,236 +283,332 @@ impl ConnectionHandler {
     /// Returns a Vec of responses since pub/sub commands can return multiple messages.
     ///
     /// `cmd_name` is the precomputed uppercase command name to avoid redundant allocations.
+    ///
+    /// This is the driver for the pre-dispatch gauntlet: it walks
+    /// [`PRE_DISPATCH_ORDER`] and runs each [`DispatchStage`] in turn, returning
+    /// as soon as a stage short-circuits. The ordering — the ~15 load-bearing
+    /// Redis interceptions (AUTH-before-NOAUTH, MULTI-queue-before-pause,
+    /// arity-before-pause, …) — is the `const` array, not the layout of an
+    /// `if`-ladder; the pinning test in this module's `tests` asserts the
+    /// invariants. Guard stages run over the socketless
+    /// [`PreDispatchView`](crate::connection::guards::PreDispatchView); dispatch
+    /// stages are thin adapters over the unchanged executors.
+    ///
+    /// The loop is a `match` over a `Copy` enum with directly-inlined `.await`s —
+    /// no trait objects, no boxed futures, no per-command allocation (`Continue`
+    /// is payload-free; the only allocation is the `ShortCircuit` `Vec`, exactly
+    /// what each `return vec![…]` built before). This is the hottest path in the
+    /// server, and the design monomorphizes to the same shape as the old
+    /// `if`-ladder.
     pub(crate) async fn route_and_execute_with_transaction(
         &mut self,
         cmd: &Arc<frogdb_protocol::ParsedCommand>,
         cmd_name: &str,
     ) -> Vec<Response> {
-        // AUTH and HELLO run *before* authentication is enforced: a
-        // not-yet-authenticated client must be able to authenticate / negotiate
-        // the protocol. They are migrated behind the ConnCtx seam (registered as
-        // CommandImpl::Connection executors) but intercepted here — before the
-        // NOAUTH pre-check and before transaction queuing — and dispatched
-        // through the *mutable* `conn_ctx_authmut` view (they change auth /
-        // protocol state). This preserves the historical pre-auth ordering.
-        if cmd_name == "AUTH" || cmd_name == "HELLO" {
-            let command = self
-                .core
-                .registry
-                .get_entry(cmd_name)
-                .and_then(|entry| entry.as_connection())
-                .expect("AUTH/HELLO are registered as connection commands");
-            return vec![
-                command
-                    .execute(&mut self.conn_ctx_authmut(), &cmd.args)
-                    .await,
-            ];
+        for stage in PRE_DISPATCH_ORDER {
+            match self.run_stage(stage, cmd, cmd_name).await {
+                StageOutcome::Continue => {}
+                StageOutcome::ShortCircuit(responses) => return responses,
+            }
         }
+        unreachable!("PRE_DISPATCH_ORDER ends in Execute, which never returns Continue")
+    }
 
-        // ACL is migrated behind the ConnCtx seam: after pre-checks it dispatches
-        // through the registry union (`dispatch_connection_command`) like CONFIG,
-        // rather than being intercepted early here.
+    /// Run a single pre-dispatch stage. A single `match` over the `Copy`
+    /// [`DispatchStage`] enum whose arms are the *former* inline bodies of
+    /// `route_and_execute_with_transaction`, moved verbatim. Guard arms build a
+    /// [`PreDispatchView`](crate::connection::guards::PreDispatchView) (dropped
+    /// before any executor re-borrows `self`); dispatch arms delegate to the
+    /// unchanged executors.
+    async fn run_stage(
+        &mut self,
+        stage: DispatchStage,
+        cmd: &Arc<frogdb_protocol::ParsedCommand>,
+        cmd_name: &str,
+    ) -> StageOutcome {
+        match stage {
+            // AUTH and HELLO run *before* authentication is enforced: a
+            // not-yet-authenticated client must be able to authenticate /
+            // negotiate the protocol. They are migrated behind the ConnCtx seam
+            // (registered as CommandImpl::Connection executors) but intercepted
+            // here — before the NOAUTH pre-check and before transaction queuing —
+            // and dispatched through the *mutable* `conn_ctx_authmut` view (they
+            // change auth / protocol state). This preserves the historical
+            // pre-auth ordering.
+            DispatchStage::PreAuthIntercept => {
+                if cmd_name == "AUTH" || cmd_name == "HELLO" {
+                    let command = self
+                        .core
+                        .registry
+                        .get_entry(cmd_name)
+                        .and_then(|entry| entry.as_connection())
+                        .expect("AUTH/HELLO are registered as connection commands");
+                    return StageOutcome::ShortCircuit(vec![
+                        command
+                            .execute(&mut self.conn_ctx_authmut(), &cmd.args)
+                            .await,
+                    ]);
+                }
+                StageOutcome::Continue
+            }
 
-        // Run pre-execution checks (auth, admin port, ACL, pub/sub mode)
-        if let Some(error_response) = self.run_pre_checks(cmd_name, &cmd.args) {
-            self.record_error_response(&error_response, true, cmd_name);
-            return vec![error_response];
-        }
+            // Pre-execution checks (auth, replica-readonly, quorum-fence,
+            // admin-port, ACL, pub/sub-mode gate) over the socketless view. ACL is
+            // migrated behind the ConnCtx seam: after pre-checks it dispatches
+            // through the registry union (`dispatch_connection_command`) like
+            // CONFIG, rather than being intercepted early here.
+            DispatchStage::PreChecks => {
+                let error_response = self.pre_dispatch_view().run_pre_checks(cmd_name, &cmd.args);
+                if let Some(error_response) = error_response {
+                    self.record_error_response(&error_response, true, cmd_name);
+                    return StageOutcome::ShortCircuit(vec![error_response]);
+                }
+                StageOutcome::Continue
+            }
 
-        // RESET is migrated behind the ConnCtx seam. It performs a full reset of
-        // the connection's server-side context and must dispatch directly —
-        // never queued in MULTI, never blocked by pause — in both normal and
-        // pub/sub mode. It is intercepted here (after pre-checks, like the old
-        // direct-dispatch path) and dispatched through the mutable seam plus the
-        // handler-local teardown the seam cannot reach.
-        if cmd_name == "RESET" {
-            return vec![self.execute_reset(&cmd.args).await];
-        }
+            // RESET is migrated behind the ConnCtx seam. It performs a full reset
+            // of the connection's server-side context and must dispatch directly —
+            // never queued in MULTI, never blocked by pause — in both normal and
+            // pub/sub mode. It is intercepted here (after pre-checks) and
+            // dispatched through the mutable seam plus the handler-local teardown
+            // the seam cannot reach.
+            DispatchStage::ResetIntercept => {
+                if cmd_name == "RESET" {
+                    return StageOutcome::ShortCircuit(vec![self.execute_reset(&cmd.args).await]);
+                }
+                StageOutcome::Continue
+            }
 
-        // In pub/sub mode, PING needs bespoke framing (RESP2 array ["pong",
-        // <message>]); it is registered as a Standard (shard) command so it
-        // cannot use the normal shard PING path. Every other command allowed in
-        // pub/sub mode (SUBSCRIBE/…, and the migrated ASKING/READONLY/READWRITE)
-        // continues down the normal dispatch flow below.
-        if self.state.in_pubsub_mode()
-            && let Some(responses) = self.pubsub_mode_ping(cmd_name, &cmd.args)
-        {
-            return responses;
-        }
+            // In pub/sub mode, PING needs bespoke framing (RESP2 array ["pong",
+            // <message>]); it is registered as a Standard (shard) command so it
+            // cannot use the normal shard PING path. The view predicate returns
+            // `Some` only when in pub/sub mode *and* the command is PING; every
+            // other command continues down the normal dispatch flow below.
+            DispatchStage::PubSubPing => {
+                let responses = self
+                    .pre_dispatch_view()
+                    .pubsub_mode_ping(cmd_name, &cmd.args);
+                match responses {
+                    Some(responses) => StageOutcome::ShortCircuit(responses),
+                    None => StageOutcome::Continue,
+                }
+            }
 
-        // Transaction control commands (MULTI/EXEC/DISCARD/WATCH/UNWATCH),
-        // migrated behind the ConnCtx seam, are always dispatched directly, never
-        // queued or blocked by pause. (RESET was in this set but is intercepted
-        // above.) MULTI/DISCARD/WATCH/UNWATCH run their `CommandImpl::Connection`
-        // executors over the mutable ConnCtx; EXEC's orchestration stays in
-        // `handle_exec` (see `dispatch_transaction_command`).
-        if let Some(responses) = self.dispatch_transaction_command(cmd_name, &cmd.args).await {
-            return responses;
-        }
+            // Transaction control commands (MULTI/EXEC/DISCARD/WATCH/UNWATCH),
+            // migrated behind the ConnCtx seam, are always dispatched directly,
+            // never queued or blocked by pause. (RESET was in this set but is
+            // intercepted above.) MULTI/DISCARD/WATCH/UNWATCH run their
+            // `CommandImpl::Connection` executors over the mutable ConnCtx; EXEC's
+            // orchestration stays in `handle_exec`.
+            DispatchStage::TransactionControl => {
+                match self.dispatch_transaction_command(cmd_name, &cmd.args).await {
+                    Some(responses) => StageOutcome::ShortCircuit(responses),
+                    None => StageOutcome::Continue,
+                }
+            }
 
-        // If in transaction mode, queue the command instead of executing.
-        // This must happen BEFORE connection-level dispatch so that commands like
-        // CLIENT PAUSE, EVAL, etc. are queued during MULTI (not executed immediately).
-        // Blocking commands (BLPOP, BRPOP, etc.) are also queued — at EXEC time they
-        // execute with timeout=0 (non-blocking), matching Redis semantics.
-        if self.state.in_transaction() {
-            // Validate cluster slot ownership before queuing — commands that would
-            // get MOVED should fail immediately rather than succeeding at EXEC time.
-            if let Some(cluster_error) = self.validate_cluster_slots(cmd) {
-                let error_msg = match &cluster_error {
-                    Response::Error(e) => Some(String::from_utf8_lossy(e).to_string()),
-                    _ => None,
+            // If in transaction mode, queue the command instead of executing (the
+            // view validates cluster slots before queuing and aborts on a
+            // cross-slot queued command). This runs BEFORE connection-level
+            // dispatch so commands like CLIENT PAUSE, EVAL, etc. are queued during
+            // MULTI (not executed immediately). Blocking commands are also queued —
+            // at EXEC time they run with timeout=0 (non-blocking), matching Redis.
+            DispatchStage::TransactionQueue => {
+                match self.pre_dispatch_view().try_queue_in_transaction(cmd) {
+                    Some(responses) => StageOutcome::ShortCircuit(responses),
+                    None => StageOutcome::Continue,
+                }
+            }
+
+            // Validate arity BEFORE the pause check so that commands with wrong
+            // argument counts return an immediate error even when paused (test:
+            // syntax errors bypass pause).
+            DispatchStage::Arity => {
+                let err = self.pre_dispatch_view().arity_check(cmd_name, &cmd.args);
+                if let Some(err) = err {
+                    self.record_error_response(&err, true, cmd_name);
+                    return StageOutcome::ShortCircuit(vec![err]);
+                }
+                StageOutcome::Continue
+            }
+
+            // Wait if the server is paused (CLIENT PAUSE). Checked AFTER
+            // transaction queuing so commands inside MULTI are queued without
+            // blocking. The pause *wait loop* mutates the client registry's paused
+            // state and sleeps, so it stays a thin call on the handler; only its
+            // predicate (`should_pause_command`) is a pure guard. Never
+            // short-circuits.
+            DispatchStage::PauseGate => {
+                self.wait_if_paused(cmd_name, &cmd.args).await;
+                StageOutcome::Continue
+            }
+
+            // Connection-state commands (ASKING/READONLY/READWRITE) migrated
+            // behind the ConnCtx seam MUTATE per-connection state, so they
+            // dispatch through the *mutable* `conn_ctx_authmut` view. This must
+            // run before the read-only registry union below, which would otherwise
+            // claim them and dispatch with `conn_state = None` (a no-op).
+            DispatchStage::ConnectionStateCommand => {
+                match self
+                    .dispatch_connection_state_command(cmd_name, &cmd.args)
+                    .await
+                {
+                    Some(responses) => StageOutcome::ShortCircuit(responses),
+                    None => StageOutcome::Continue,
+                }
+            }
+
+            // Registry-union dispatch: a command registered as
+            // `CommandImpl::Connection` (CONFIG, BGSAVE/LASTSAVE, CLIENT, DEBUG,
+            // MONITOR, ACL, INFO, HOTKEYS, FT.CURSOR, SLOWLOG, MEMORY, LATENCY,
+            // STATUS, the pub/sub family, and the scripting family) executes
+            // through its `ConnCtx` executor. This is the sole connection-command
+            // dispatch path.
+            DispatchStage::ConnectionCommand => {
+                match self.dispatch_connection_command(cmd_name, &cmd.args).await {
+                    Some(responses) => StageOutcome::ShortCircuit(responses),
+                    None => StageOutcome::Continue,
+                }
+            }
+
+            // Handle PSYNC command - validates args and returns handoff signal.
+            // The actual handoff happens in the run() loop when it detects
+            // PSYNC_HANDOFF.
+            DispatchStage::PsyncIntercept => {
+                if cmd_name == "PSYNC" {
+                    // Check if we have a primary replication handler.
+                    if self.cluster.primary_replication_handler.is_none() {
+                        return StageOutcome::ShortCircuit(vec![Response::error(
+                            "ERR PSYNC not supported - server is not running as primary",
+                        )]);
+                    }
+                    // Execute PSYNC command which will return PSYNC_HANDOFF signal.
+                    return StageOutcome::ShortCircuit(vec![
+                        self.route_and_execute(cmd, cmd_name).await,
+                    ]);
+                }
+                StageOutcome::Continue
+            }
+
+            // Handle WAIT at the connection level: it blocks on the replication
+            // WaitCoordinator (offset snapshot, GETACK solicitation, quorum wait),
+            // not on shard routing. Reached only outside MULTI — a queued WAIT
+            // executes on the shard at EXEC time, where `WaitCommand::execute`
+            // returns the acked count without blocking (Redis deny-blocking
+            // semantics). Same dispatch shape as PSYNC above.
+            DispatchStage::WaitIntercept => {
+                if cmd_name == "WAIT" {
+                    return StageOutcome::ShortCircuit(vec![
+                        self.handle_wait_command(&cmd.args).await,
+                    ]);
+                }
+                StageOutcome::Continue
+            }
+
+            // Server-wide commands (registry-driven: SCAN, KEYS, DBSIZE,
+            // RANDOMKEY, FLUSHDB, FLUSHALL, MIGRATE, SHUTDOWN, TS.*, FT.*, ES.ALL).
+            // The typed op is extracted from the registry entry's strategy before
+            // re-borrowing `self` mutably: `execution_strategy()` returns an owned
+            // `ExecutionStrategy`, so copying the `Copy` `ServerWideOp` out ends
+            // the registry borrow before `dispatch_server_wide` takes `&mut self`.
+            DispatchStage::ServerWide => {
+                let server_wide_op = self.core.registry.get_entry(cmd_name).and_then(|entry| {
+                    match entry.execution_strategy() {
+                        ExecutionStrategy::ServerWide(op) => Some(op),
+                        _ => None,
+                    }
+                });
+                if let Some(op) = server_wide_op {
+                    return StageOutcome::ShortCircuit(vec![
+                        self.dispatch_server_wide(op, &cmd.args).await,
+                    ]);
+                }
+                StageOutcome::Continue
+            }
+
+            // Route CLUSTER GETKEYSINSLOT / COUNTKEYSINSLOT to the correct shard.
+            // These subcommands query a specific slot's keys, but the CLUSTER
+            // command is keyless and would otherwise execute on the connection's
+            // assigned shard. Since all keys for a given slot live on shard
+            // (slot % num_shards), we must forward to that shard.
+            DispatchStage::ClusterSlotSubcommand => {
+                if cmd_name == "CLUSTER" && !cmd.args.is_empty() {
+                    let sub = cmd.args[0].to_ascii_uppercase();
+                    if (sub.as_slice() == b"GETKEYSINSLOT" || sub.as_slice() == b"COUNTKEYSINSLOT")
+                        && cmd.args.len() >= 2
+                        && let Ok(slot_str) = std::str::from_utf8(&cmd.args[1])
+                        && let Ok(slot) = slot_str.parse::<u16>()
+                    {
+                        let target_shard = slot as usize % self.num_shards;
+                        return StageOutcome::ShortCircuit(vec![
+                            self.execute_on_shard(target_shard, Arc::clone(cmd)).await,
+                        ]);
+                    }
+                }
+                StageOutcome::Continue
+            }
+
+            // Validate cluster slot ownership (returns CROSSSLOT/MOVED/ASK errors).
+            DispatchStage::ClusterSlotValidation => {
+                match self.pre_dispatch_view().validate_cluster_slots(cmd) {
+                    Some(cluster_error) => StageOutcome::ShortCircuit(vec![cluster_error]),
+                    None => StageOutcome::Continue,
+                }
+            }
+
+            // Check for TRYAGAIN during slot migration for multi-key commands.
+            DispatchStage::MigratingTryAgain => {
+                match self.pre_dispatch_view().check_migrating_multikey(cmd).await {
+                    Some(tryagain) => StageOutcome::ShortCircuit(vec![tryagain]),
+                    None => StageOutcome::Continue,
+                }
+            }
+
+            // Terminal: per-command tracking/no-touch bookkeeping, shard routing,
+            // and the post-execution ASK/internal-action/error-record tail. Always
+            // short-circuits (never returns `Continue`), which is what makes the
+            // driver loop total.
+            DispatchStage::Execute => {
+                // Client tracking: compute whether this command's reads should be
+                // tracked.
+                self.pending_track_reads = self.state.should_track_read();
+
+                // NO-TOUCH: check if this connection has NO_TOUCH flag set.
+                self.pending_no_touch = self
+                    .admin
+                    .client_registry
+                    .get(self.state.id)
+                    .map(|info| info.flags.contains(frogdb_core::ClientFlags::NO_TOUCH))
+                    .unwrap_or(false);
+
+                // Normal execution.
+                let response = if self
+                    .per_request_spans
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    self.route_and_execute(cmd, cmd_name)
+                        .instrument(tracing::info_span!("cmd_route"))
+                        .await
+                } else {
+                    self.route_and_execute(cmd, cmd_name).await
                 };
-                self.state.abort_transaction(error_msg);
-                return vec![cluster_error];
-            }
-            return vec![self.queue_command(cmd)];
-        }
 
-        // Validate arity BEFORE the pause check so that commands with wrong
-        // argument counts return an immediate error even when paused (test:
-        // syntax errors bypass pause).
-        if let Some(entry) = self.core.registry.get_entry(cmd_name)
-            && !entry.arity().check(cmd.args.len())
-        {
-            let err = Response::error(format!(
-                "ERR wrong number of arguments for '{}' command",
-                entry.name().to_ascii_lowercase()
-            ));
-            self.record_error_response(&err, true, cmd_name);
-            return vec![err];
-        }
+                // For MIGRATING slots: if the key doesn't exist locally (nil
+                // response), convert to ASK redirect so the client retries on the
+                // importing target.
+                if let Some(ask) = self.migrating_ask_for_nil(cmd, &response) {
+                    return StageOutcome::ShortCircuit(vec![ask]);
+                }
 
-        // Wait if server is paused (CLIENT PAUSE). This is checked AFTER transaction
-        // queuing so commands inside MULTI are queued without blocking.
-        self.wait_if_paused(cmd_name, &cmd.args).await;
+                // Handle internal action signals (blocking, raft, migrate).
+                let final_response = self.handle_internal_action(response).await;
 
-        // Connection-state commands (ASKING/READONLY/READWRITE) migrated behind
-        // the ConnCtx seam MUTATE per-connection state, so they dispatch through
-        // the *mutable* `conn_ctx_authmut` view. This must run before the
-        // read-only registry union below, which would otherwise claim them and
-        // dispatch with `conn_state = None` (a no-op). (RESET, the fourth
-        // connection-state command, is intercepted earlier via `execute_reset`.)
-        if let Some(responses) = self
-            .dispatch_connection_state_command(cmd_name, &cmd.args)
-            .await
-        {
-            return responses;
-        }
+                // Record failed call if execution returned an error.
+                self.record_error_response(&final_response, false, cmd_name);
 
-        // Registry-union dispatch: a command registered as
-        // `CommandImpl::Connection` (CONFIG, BGSAVE/LASTSAVE, CLIENT, DEBUG,
-        // MONITOR, ACL, INFO, HOTKEYS, FT.CURSOR, SLOWLOG, MEMORY, LATENCY,
-        // STATUS, the pub/sub family, and the scripting family) executes through
-        // its `ConnCtx` executor. This is the sole connection-command dispatch
-        // path: the legacy `ConnectionLevelHandler` router→handler machinery was
-        // removed once every connection group had migrated behind the seam.
-        if let Some(responses) = self.dispatch_connection_command(cmd_name, &cmd.args).await {
-            return responses;
-        }
-
-        // Handle PSYNC command - validates args and returns handoff signal
-        // The actual handoff happens in the run() loop when it detects PSYNC_HANDOFF
-        if cmd_name == "PSYNC" {
-            // Check if we have a primary replication handler (we're running as primary)
-            if self.cluster.primary_replication_handler.is_none() {
-                return vec![Response::error(
-                    "ERR PSYNC not supported - server is not running as primary",
-                )];
-            }
-            // Execute PSYNC command which will return PSYNC_HANDOFF signal
-            return vec![self.route_and_execute(cmd, cmd_name).await];
-        }
-
-        // Handle WAIT at the connection level: it blocks on the replication
-        // WaitCoordinator (offset snapshot, GETACK solicitation, quorum wait),
-        // not on shard routing. Reached only outside MULTI — a queued WAIT
-        // executes on the shard at EXEC time, where `WaitCommand::execute`
-        // returns the acked count without blocking (Redis deny-blocking
-        // semantics). Same dispatch shape as PSYNC above.
-        if cmd_name == "WAIT" {
-            return vec![self.handle_wait_command(&cmd.args).await];
-        }
-
-        // Server-wide commands (registry-driven: SCAN, KEYS, DBSIZE, RANDOMKEY,
-        // FLUSHDB, FLUSHALL, MIGRATE, SHUTDOWN, TS.*, FT.*, ES.ALL). The typed
-        // op is extracted from the registry entry's strategy before re-borrowing
-        // `self` mutably: `execution_strategy()` returns an owned
-        // `ExecutionStrategy`, so copying the `Copy` `ServerWideOp` out ends the
-        // registry borrow before `dispatch_server_wide` takes `&mut self`.
-        let server_wide_op = self.core.registry.get_entry(cmd_name).and_then(|entry| {
-            match entry.execution_strategy() {
-                ExecutionStrategy::ServerWide(op) => Some(op),
-                _ => None,
-            }
-        });
-        if let Some(op) = server_wide_op {
-            return vec![self.dispatch_server_wide(op, &cmd.args).await];
-        }
-
-        // Route CLUSTER GETKEYSINSLOT / COUNTKEYSINSLOT to the correct shard.
-        // These subcommands query a specific slot's keys, but the CLUSTER command
-        // is keyless and would otherwise execute on the connection's assigned shard.
-        // Since all keys for a given slot live on shard (slot % num_shards), we
-        // must forward to that shard.
-        if cmd_name == "CLUSTER" && !cmd.args.is_empty() {
-            let sub = cmd.args[0].to_ascii_uppercase();
-            if (sub.as_slice() == b"GETKEYSINSLOT" || sub.as_slice() == b"COUNTKEYSINSLOT")
-                && cmd.args.len() >= 2
-                && let Ok(slot_str) = std::str::from_utf8(&cmd.args[1])
-                && let Ok(slot) = slot_str.parse::<u16>()
-            {
-                let target_shard = slot as usize % self.num_shards;
-                return vec![self.execute_on_shard(target_shard, Arc::clone(cmd)).await];
+                StageOutcome::ShortCircuit(vec![final_response])
             }
         }
-
-        // Validate cluster slot ownership (returns CROSSSLOT/MOVED/ASK errors)
-        if let Some(cluster_error) = self.validate_cluster_slots(cmd) {
-            return vec![cluster_error];
-        }
-
-        // Check for TRYAGAIN during slot migration for multi-key commands
-        if let Some(tryagain) = self.check_migrating_multikey(cmd).await {
-            return vec![tryagain];
-        }
-
-        // Client tracking: compute whether this command's reads should be tracked
-        self.pending_track_reads = self.state.should_track_read();
-
-        // NO-TOUCH: check if this connection has NO_TOUCH flag set
-        self.pending_no_touch = self
-            .admin
-            .client_registry
-            .get(self.state.id)
-            .map(|info| info.flags.contains(frogdb_core::ClientFlags::NO_TOUCH))
-            .unwrap_or(false);
-
-        // Normal execution
-        let response = if self
-            .per_request_spans
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            self.route_and_execute(cmd, cmd_name)
-                .instrument(tracing::info_span!("cmd_route"))
-                .await
-        } else {
-            self.route_and_execute(cmd, cmd_name).await
-        };
-
-        // For MIGRATING slots: if the key doesn't exist locally (nil response),
-        // convert to ASK redirect so the client retries on the importing target.
-        if let Some(ask) = self.migrating_ask_for_nil(cmd, &response) {
-            return vec![ask];
-        }
-
-        // Handle internal action signals (blocking, raft, migrate)
-        let final_response = self.handle_internal_action(response).await;
-
-        // Record failed call if execution returned an error
-        self.record_error_response(&final_response, false, cmd_name);
-
-        vec![final_response]
     }
 
     /// Classify and record an error response for error statistics.
@@ -477,7 +632,87 @@ impl ConnectionHandler {
 
 #[cfg(test)]
 mod tests {
+    use super::{DispatchStage, PRE_DISPATCH_ORDER};
     use frogdb_core::{CommandRegistry, ExecutionStrategy, ServerWideOp};
+
+    /// Index of a stage in `PRE_DISPATCH_ORDER` (panics if absent).
+    fn order_index(stage: DispatchStage) -> usize {
+        PRE_DISPATCH_ORDER
+            .iter()
+            .position(|&s| s == stage)
+            .unwrap_or_else(|| panic!("{stage:?} missing from PRE_DISPATCH_ORDER"))
+    }
+
+    /// Every `DispatchStage` variant appears in `PRE_DISPATCH_ORDER` exactly
+    /// once, and the array length is pinned. Guards against a stage being
+    /// dropped from (or duplicated in) the canonical order. Model:
+    /// `WRITE_EFFECT_ORDER`'s `every_effect_appears_exactly_once`.
+    #[test]
+    fn every_stage_appears_exactly_once() {
+        use DispatchStage::*;
+        for stage in [
+            PreAuthIntercept,
+            PreChecks,
+            ResetIntercept,
+            PubSubPing,
+            TransactionControl,
+            TransactionQueue,
+            Arity,
+            PauseGate,
+            ConnectionStateCommand,
+            ConnectionCommand,
+            PsyncIntercept,
+            WaitIntercept,
+            ServerWide,
+            ClusterSlotSubcommand,
+            ClusterSlotValidation,
+            MigratingTryAgain,
+            Execute,
+        ] {
+            assert_eq!(
+                PRE_DISPATCH_ORDER.iter().filter(|&&s| s == stage).count(),
+                1,
+                "{stage:?} must appear exactly once in PRE_DISPATCH_ORDER"
+            );
+        }
+        assert_eq!(PRE_DISPATCH_ORDER.len(), 17);
+    }
+
+    /// The load-bearing relative orderings the module docs (and Redis's
+    /// `processCommand`) justify. These would catch a reorder that compiles but
+    /// breaks a correctness invariant.
+    #[test]
+    fn load_bearing_ordering_invariants() {
+        use DispatchStage::*;
+        // AUTH/HELLO are intercepted before the NOAUTH pre-check so a
+        // not-yet-authenticated client can authenticate.
+        assert!(
+            order_index(PreAuthIntercept) < order_index(PreChecks),
+            "PreAuthIntercept must precede PreChecks (pre-auth)"
+        );
+        // Arity runs before pause so syntax errors bypass CLIENT PAUSE.
+        assert!(
+            order_index(Arity) < order_index(PauseGate),
+            "Arity must precede PauseGate (syntax errors bypass pause)"
+        );
+        // Queued MULTI commands must not block on pause.
+        assert!(
+            order_index(TransactionQueue) < order_index(PauseGate),
+            "TransactionQueue must precede PauseGate (queued MULTI commands do not block)"
+        );
+        // Queued commands slot-validate at queue time; the standalone
+        // slot-validation stage runs later on the non-transaction path.
+        assert!(
+            order_index(ClusterSlotValidation) > order_index(TransactionQueue),
+            "ClusterSlotValidation must follow TransactionQueue"
+        );
+        // Execute is the non-returning terminal.
+        assert_eq!(
+            *PRE_DISPATCH_ORDER.last().unwrap(),
+            Execute,
+            "PRE_DISPATCH_ORDER must end in Execute (the driver loop is total only because of this)"
+        );
+    }
 
     /// Each `ServerWideOp` must be declared by at most one command spec.
     /// The exhaustive match in `dispatch_server_wide` already guarantees every

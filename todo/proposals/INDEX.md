@@ -860,13 +860,21 @@ acceptance → protocol decode → dispatch → shard execution → persistence 
 parallel explorations (front half, execution→persistence, replication) followed by per-proposal
 evidence verification. Ordered by expected leverage:
 
-53. [53-predispatch-stage-pipeline.md](53-predispatch-stage-pipeline.md) — **Proposed**: the
-    ~230-line `route_and_execute_with_transaction` gauntlet (~15 ordered interceptions whose
-    ordering is load-bearing Redis semantics, encoded only as control flow + prose) becomes a
-    static `PRE_DISPATCH_ORDER: [DispatchStage; 17]` array driven by an inlined match (no dyn
-    dispatch on the hot path), with guard stages over a socketless `PreDispatchView` — ordering
-    becomes pinned data (the `WRITE_EFFECT_ORDER` precedent), and pre-checks stop requiring a
-    loopback TCP listener to test.
+53. [53-predispatch-stage-pipeline.md](53-predispatch-stage-pipeline.md) — **Implemented**
+    (2026-07-16): the ~230-line `route_and_execute_with_transaction` gauntlet became a static
+    `PRE_DISPATCH_ORDER: [DispatchStage; 17]` array driven by an inlined `match` over a `Copy`
+    enum (`run_stage`) — no dyn dispatch, no boxed futures, no per-command allocation (`Continue`
+    is payload-free). Six guard stages (`PreChecks`, `Arity`, `PubSubPing`, `TransactionQueue`,
+    `ClusterSlotValidation`, `MigratingTryAgain`) moved onto a socketless `PreDispatchView`
+    (`guards.rs`): the four loopback-TCP `run_pre_checks` tests became plain struct tests + 5 new
+    socketless guard tests (replica-readonly, admin-port, arity, pub/sub-PING framing, NOAUTH).
+    Ordering is now pinned data — an order-pinning test (each stage once, `len == 17`) plus the
+    load-bearing relative-ordering assertions (PreAuth<PreChecks, Arity<PauseGate,
+    TransactionQueue<PauseGate, ClusterSlotValidation>TransactionQueue, Execute terminal), the
+    `WRITE_EFFECT_ORDER` precedent. Dispatch stages stay thin adapters over the unchanged
+    executors. `queue_command` moved from `handlers/transaction.rs` onto the view; `PauseGate`
+    kept as a thin `wait_if_paused` call (the pause loop mutates the client registry and sleeps —
+    documented, not forced). integration_transactions 25/25, integration_pubsub 94/94.
 54. [54-shard-persistence-bridge.md](54-shard-persistence-bridge.md) — **Proposed**: collapse the
     triplicated persist loops (`persist_by_strategy` / `persist_and_confirm` /
     `persist_transaction_to_wal` — one durability boolean expressed as three functions) into one

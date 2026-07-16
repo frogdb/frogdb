@@ -32,15 +32,30 @@ impl ConnectionHandler {
     /// is not enforced (a no-password instance, or pre-AUTH on an exempt
     /// command). The `client-info` recorded for any denial is `ip:port`.
     pub(crate) fn permission_guard(&self) -> Option<PermissionGuard<'_>> {
-        let user = self.state.authenticated_user()?;
-        let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
-        Some(PermissionGuard::new(
-            &self.core.acl_manager,
-            user,
-            client_info,
-            self.state.id,
-        ))
+        build_permission_guard(&self.core.acl_manager, &self.state)
     }
+}
+
+/// Build an ACL [`PermissionGuard`] from an ACL manager and connection state,
+/// independent of the [`ConnectionHandler`]. This is the single construction
+/// point shared by [`ConnectionHandler::permission_guard`] (key-access checks on
+/// the routing path) and the socketless pre-dispatch guard view
+/// (`PreDispatchView::permission_guard`), so both enforce with identical user /
+/// client-info binding.
+///
+/// Returns `None` when the connection is unauthenticated (ACL not enforced).
+pub(crate) fn build_permission_guard<'a>(
+    acl_manager: &'a AclManager,
+    state: &'a crate::connection::ConnectionState,
+) -> Option<PermissionGuard<'a>> {
+    let user = state.authenticated_user()?;
+    let client_info = format!("{}:{}", state.addr.ip(), state.addr.port());
+    Some(PermissionGuard::new(
+        acl_manager,
+        user,
+        client_info,
+        state.id,
+    ))
 }
 
 /// ACL enforcement bound to a single connection's authenticated user.
