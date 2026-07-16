@@ -607,6 +607,35 @@ impl ExpiryUnit {
 }
 
 // ============================================================================
+// Named Flag-Value Parsing
+// ============================================================================
+
+/// Consume and parse the value following a named option flag whose keyword the
+/// caller has already matched (e.g. after `parser.try_flag(b"CAPACITY")`).
+///
+/// A missing value produces the derived `"<flag> requires a value"` message; a
+/// non-UTF-8 or unparseable value produces `invalid_msg`. The invalid message
+/// is passed explicitly rather than derived from the flag token because the
+/// probabilistic-filter commands use bespoke human phrasings ("Invalid
+/// capacity", "Invalid bucket size", ...) that don't follow the token. Shared
+/// by the `BF.*` / `CF.*` option loops in `bloom.rs` and `cuckoo.rs`.
+pub fn flag_value_named<T: std::str::FromStr>(
+    parser: &mut ArgParser<'_>,
+    flag: &str,
+    invalid_msg: &str,
+) -> Result<T, CommandError> {
+    let val = parser.next().ok_or_else(|| CommandError::InvalidArgument {
+        message: format!("{flag} requires a value"),
+    })?;
+    std::str::from_utf8(val)
+        .ok()
+        .and_then(|s| s.parse::<T>().ok())
+        .ok_or_else(|| CommandError::InvalidArgument {
+            message: invalid_msg.to_string(),
+        })
+}
+
+// ============================================================================
 // Stream Trim Option Parsing Utilities
 // ============================================================================
 

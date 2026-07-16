@@ -10,6 +10,8 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
+use super::utils::flag_value_named;
+
 /// BF.RESERVE - Create a new bloom filter.
 ///
 /// BF.RESERVE key error_rate capacity [EXPANSION expansion] [NONSCALING]
@@ -71,17 +73,7 @@ impl Command for BfReserve {
         let mut parser = ArgParser::from_position(args, 3);
         while parser.has_more() {
             if parser.try_flag(b"EXPANSION") {
-                let val = parser.next().ok_or_else(|| CommandError::InvalidArgument {
-                    message: "EXPANSION requires a value".to_string(),
-                })?;
-                expansion = std::str::from_utf8(val)
-                    .map_err(|_| CommandError::InvalidArgument {
-                        message: "Invalid expansion".to_string(),
-                    })?
-                    .parse()
-                    .map_err(|_| CommandError::InvalidArgument {
-                        message: "Invalid expansion".to_string(),
-                    })?;
+                expansion = flag_value_named(&mut parser, "EXPANSION", "Invalid expansion")?;
             } else if parser.try_flag(b"NONSCALING") {
                 non_scaling = true;
             } else {
@@ -315,41 +307,11 @@ impl Command for BfInsert {
         let mut parser = ArgParser::from_position(args, 1);
         while parser.has_more() {
             if parser.try_flag(b"CAPACITY") {
-                let val = parser.next().ok_or_else(|| CommandError::InvalidArgument {
-                    message: "CAPACITY requires a value".to_string(),
-                })?;
-                capacity = std::str::from_utf8(val)
-                    .map_err(|_| CommandError::InvalidArgument {
-                        message: "Invalid capacity".to_string(),
-                    })?
-                    .parse()
-                    .map_err(|_| CommandError::InvalidArgument {
-                        message: "Invalid capacity".to_string(),
-                    })?;
+                capacity = flag_value_named(&mut parser, "CAPACITY", "Invalid capacity")?;
             } else if parser.try_flag(b"ERROR") {
-                let val = parser.next().ok_or_else(|| CommandError::InvalidArgument {
-                    message: "ERROR requires a value".to_string(),
-                })?;
-                error_rate = std::str::from_utf8(val)
-                    .map_err(|_| CommandError::InvalidArgument {
-                        message: "Invalid error rate".to_string(),
-                    })?
-                    .parse()
-                    .map_err(|_| CommandError::InvalidArgument {
-                        message: "Invalid error rate".to_string(),
-                    })?;
+                error_rate = flag_value_named(&mut parser, "ERROR", "Invalid error rate")?;
             } else if parser.try_flag(b"EXPANSION") {
-                let val = parser.next().ok_or_else(|| CommandError::InvalidArgument {
-                    message: "EXPANSION requires a value".to_string(),
-                })?;
-                expansion = std::str::from_utf8(val)
-                    .map_err(|_| CommandError::InvalidArgument {
-                        message: "Invalid expansion".to_string(),
-                    })?
-                    .parse()
-                    .map_err(|_| CommandError::InvalidArgument {
-                        message: "Invalid expansion".to_string(),
-                    })?;
+                expansion = flag_value_named(&mut parser, "EXPANSION", "Invalid expansion")?;
             } else if parser.try_flag(b"NOCREATE") {
                 nocreate = true;
             } else if parser.try_flag(b"NONSCALING") {
@@ -682,5 +644,95 @@ impl Command for BfLoadchunk {
         ctx.store.set(key.clone(), Value::BloomFilter(bf));
 
         Ok(Response::ok())
+    }
+}
+
+#[cfg(test)]
+mod flag_value_pin_tests {
+    //! Wire-compat pins for BF.RESERVE / BF.INSERT named-flag value parsing:
+    //! the derived `"<FLAG> requires a value"` message and the bespoke
+    //! `"Invalid <thing>"` parse-failure message per flag.
+    use super::*;
+    use frogdb_core::HashMapStore;
+    use frogdb_protocol::ProtocolVersion;
+    use std::sync::Arc;
+
+    fn ctx() -> CommandContext<'static> {
+        let store = Box::leak(Box::new(HashMapStore::new()));
+        let shard_senders = Box::leak(Box::new(Arc::new(Vec::new())));
+        CommandContext::new(store, shard_senders, 0, 1, 0, ProtocolVersion::Resp2)
+    }
+
+    fn args(parts: &[&str]) -> Vec<Bytes> {
+        parts.iter().map(|s| Bytes::from(s.to_string())).collect()
+    }
+
+    fn err_of<C: Command>(cmd: C, parts: &[&str]) -> String {
+        let mut c = ctx();
+        match cmd.execute(&mut c, &args(parts)) {
+            Err(CommandError::InvalidArgument { message }) => message,
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reserve_expansion_requires_value() {
+        assert_eq!(
+            err_of(BfReserve, &["k", "0.01", "100", "EXPANSION"]),
+            "EXPANSION requires a value"
+        );
+    }
+
+    #[test]
+    fn reserve_expansion_invalid() {
+        assert_eq!(
+            err_of(BfReserve, &["k", "0.01", "100", "EXPANSION", "abc"]),
+            "Invalid expansion"
+        );
+    }
+
+    #[test]
+    fn insert_capacity_requires_value() {
+        assert_eq!(
+            err_of(BfInsert, &["k", "CAPACITY"]),
+            "CAPACITY requires a value"
+        );
+    }
+
+    #[test]
+    fn insert_capacity_invalid() {
+        assert_eq!(
+            err_of(BfInsert, &["k", "CAPACITY", "abc"]),
+            "Invalid capacity"
+        );
+    }
+
+    #[test]
+    fn insert_error_requires_value() {
+        assert_eq!(err_of(BfInsert, &["k", "ERROR"]), "ERROR requires a value");
+    }
+
+    #[test]
+    fn insert_error_invalid() {
+        assert_eq!(
+            err_of(BfInsert, &["k", "ERROR", "notafloat"]),
+            "Invalid error rate"
+        );
+    }
+
+    #[test]
+    fn insert_expansion_requires_value() {
+        assert_eq!(
+            err_of(BfInsert, &["k", "EXPANSION"]),
+            "EXPANSION requires a value"
+        );
+    }
+
+    #[test]
+    fn insert_expansion_invalid() {
+        assert_eq!(
+            err_of(BfInsert, &["k", "EXPANSION", "abc"]),
+            "Invalid expansion"
+        );
     }
 }
