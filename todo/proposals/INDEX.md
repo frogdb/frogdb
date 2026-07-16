@@ -874,13 +874,16 @@ evidence verification. Ordered by expected leverage:
     (zero tests today; only reachable via full `ShardWorker`) is unit-testable — copying the
     `WriteSink` two-adapter pattern up one layer. Folds in: converge the 11 index-based
     `WalStrategy` destination variants onto the `Dynamic`/`keys_with_flags` key extraction.
-55. [55-write-outcome-return.md](55-write-outcome-return.md) — **Proposed**: `CommandContext`'s
-    eight loose deposit fields (`dirty_delta`, `write_was_noop`, `hll_wal_delta`,
-    `keyspace_events`, …) consolidate into one `CommandEffects` struct drained by exhaustive
-    destructure at the three real drain sites (execution.rs, script gate, cross-shard scripting) —
-    a new effect field becomes a compile error, and the no-op suppression rule gets one home
-    (`into_write_meta`). Keeps the 354 handler signatures unchanged; typed-return end state
-    documented as mechanical follow-up.
+55. [55-write-outcome-return.md](55-write-outcome-return.md) — **Implemented** (2026-07-16,
+    `dfdb588b`, Option B): the eight loose deposit fields consolidated into one
+    `CommandEffects` struct held as `ctx.effects`; the three drain sites (execution.rs, script
+    gate, cross-shard scripting) drain it as one value via `mem::take`, and the no-op
+    suppression rule has a single home — `CommandEffects::into_write_meta` (exhaustively
+    destructured, so a new effect field is a compile error), with `into_script_record` chaining
+    through it for both script sites. Handler deposit sites renamed mechanically
+    (`ctx.<field>` → `ctx.effects.<field>`); the 354 `impl Command` signatures unchanged. Unit
+    pins added for the suppression contract. Typed-return end state (Option C) remains a
+    documented mechanical follow-up.
 56. [56-checkpoint-stream-codec.md](56-checkpoint-stream-codec.md) — **Proposed**: the full-sync
     checkpoint wire format (`$FROGDB_CHECKPOINT` envelope) is hand-written in `stream_checkpoint`
     and hand-parsed across two receiver sites, defined only in prose; `receive_checkpoint` has

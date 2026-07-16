@@ -1,6 +1,6 @@
 # Proposal: Command Write Outcome as a Return Value
 
-Status: proposed
+Status: implemented
 Date: 2026-07-16
 
 ## Problem
