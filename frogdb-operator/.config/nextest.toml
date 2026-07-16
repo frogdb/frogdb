@@ -1,0 +1,29 @@
+# Nextest config for the frogdb-operator workspace (separate from the root
+# workspace's .config/nextest.toml). The operator's integration tests reuse
+# frogdb-test-harness, so they spin up the same port- and CPU-intensive
+# multi-shard servers and multi-node Raft clusters and need the same tuning.
+
+[profile.default]
+# Mark tests as slow after 5s, terminate after 15s (3 × 5s).
+slow-timeout = { period = "5s", terminate-after = 3 }
+# Run all tests even if some fail, so one flaky cluster test doesn't mask the
+# rest (notably the config-generation guard tests).
+fail-fast = false
+# Each server consumes ~10+ ephemeral ports; cap parallelism to avoid
+# exhausting the ephemeral port pool under TIME_WAIT (EADDRNOTAVAIL).
+test-threads = 8
+
+# Cluster tests spin up 3-7 node Raft clusters that are CPU- and port-intensive.
+# Limit concurrency so they don't starve each other or lighter tests.
+[test-groups.cluster]
+max-threads = 2
+
+# The operator's cluster integration tests (cluster_tests::*) need 5-80s solo
+# and longer under parallel load. Give them 30s slow / 120s hard kill, cap
+# concurrency via the cluster test group, and allow retries for transient
+# resource-contention failures (e.g. a leader not yet ready to accept writes).
+[[profile.default.overrides]]
+filter = "test(cluster_tests::)"
+slow-timeout = { period = "30s", terminate-after = 4 }
+test-group = "cluster"
+retries = 2
