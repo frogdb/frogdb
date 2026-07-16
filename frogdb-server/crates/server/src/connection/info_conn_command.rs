@@ -91,7 +91,6 @@ mod tests {
             ClientRegistry, CommandLatencyHistograms, KeyspaceStats, NoopInfoProvider,
             SharedHotkeySession, new_shared_hotkey_session,
         };
-        use frogdb_protocol::ProtocolVersion;
 
         // A ConnCtx whose `info` is the no-op provider: the executor must return
         // exactly what the provider yields (here, an empty bulk string), proving
@@ -112,33 +111,29 @@ mod tests {
             frogdb_debug::MemoryDiagConfig::default(),
         );
 
-        let mut ctx = ConnCtx {
-            config: &config,
-            client_registry: &client_registry,
-            latency_histograms: &latency_histograms,
-            keyspace_stats: &keyspace_stats,
-            shard_senders: &[],
-            snapshot_coordinator: &snapshot_coordinator,
-            hotkey_session: &hotkey_session,
-            hotkey_cluster: &cluster,
-            protocol_version: ProtocolVersion::Resp2,
-            cursor_store: &cursor_store,
-            metrics_recorder: &metrics_recorder,
-            memory_diag: &memory_diag,
-            num_shards: 0,
-            max_clients: 10000,
-            cluster_enabled: false,
-            acl_manager: acl_manager.as_ref(),
-            command_registry: &command_registry,
-            username: "default",
-            info: &info,
-            scripting: &frogdb_core::NoopScriptingProvider,
-            conn_state: None,
-            tracking: None,
-            pubsub: None,
-            debug: None,
-            monitor: None,
-        };
+        let mut ctx = ConnCtx::new(
+            &config,
+            &client_registry,
+            &latency_histograms,
+            &keyspace_stats,
+            &[],
+            &snapshot_coordinator,
+            &hotkey_session,
+            &cluster,
+            &cursor_store,
+            &metrics_recorder,
+            &memory_diag,
+            acl_manager.as_ref(),
+            &command_registry,
+            0,
+            10000,
+            false,
+        )
+        .with_username("default");
+        // Point `info` at this test's provider explicitly (it happens to match
+        // the `ConnCtx::new` no-op default, but the assertion below is about
+        // the executor delegating to *this* provider).
+        ctx.info = &info;
 
         let resp = InfoConnCommand.execute(&mut ctx, &[]).await;
         assert_eq!(resp, Response::bulk(Bytes::new()));

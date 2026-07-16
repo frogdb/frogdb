@@ -139,45 +139,26 @@ impl ConnectionHandler {
     /// `command` is the `'static` executor already resolved from the registry,
     /// so it does not conflict with the `&mut self` borrows the [`ConnCtx`]
     /// takes. The `ConnCtx` mirrors [`conn_ctx_authmut`](Self::conn_ctx_authmut):
-    /// MONITOR reads only `ConnCtx::monitor`, so every other field is a
-    /// placeholder.
+    /// MONITOR reads only `ConnCtx::monitor`, so the ambient view's defaults
+    /// stand for everything else.
     pub(crate) async fn execute_monitor(
         &mut self,
         command: &'static dyn ConnectionCommand,
         args: &[Bytes],
     ) -> Response {
-        static NOOP_INFO: frogdb_core::NoopInfoProvider = frogdb_core::NoopInfoProvider;
         let mut monitor_io = MonitorIo::new(
             &mut self.monitor_rx,
             self.observability.monitor_broadcaster.as_ref(),
         );
-        let mut ctx = ConnCtx {
-            config: self.admin.config_manager.as_ref(),
-            client_registry: self.admin.client_registry.as_ref(),
-            latency_histograms: self.observability.latency_histograms.as_ref(),
-            keyspace_stats: self.observability.keyspace_stats.as_ref(),
-            shard_senders: self.core.shard_senders.as_slice(),
-            snapshot_coordinator: self.admin.snapshot_coordinator.as_ref(),
-            hotkey_session: &self.observability.hotkey_session,
-            hotkey_cluster: &self.cluster,
-            protocol_version: frogdb_protocol::ProtocolVersion::default(),
-            cursor_store: self.admin.cursor_store.as_ref(),
-            metrics_recorder: self.observability.metrics_recorder.as_ref(),
-            memory_diag: &self.memory_diag,
-            num_shards: self.num_shards,
-            max_clients: self.admin.config_manager.max_clients(),
-            cluster_enabled: self.cluster.is_cluster_mode(),
-            acl_manager: self.core.acl_manager.as_ref(),
-            command_registry: self.core.registry.as_ref(),
-            username: "",
-            info: &NOOP_INFO,
-            scripting: &frogdb_core::NoopScriptingProvider,
-            conn_state: None,
-            tracking: None,
-            pubsub: None,
-            debug: None,
-            monitor: Some(&mut monitor_io),
-        };
+        let mut ctx = Self::base_ctx(
+            &self.admin,
+            &self.core,
+            &self.observability,
+            &self.cluster,
+            &self.memory_diag,
+            self.num_shards,
+        )
+        .with_monitor(&mut monitor_io);
         command.execute(&mut ctx, args).await
     }
 }

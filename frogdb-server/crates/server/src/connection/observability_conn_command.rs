@@ -1003,7 +1003,6 @@ mod tests {
         ClientRegistry, CommandLatencyHistograms, KeyspaceStats, NoopMetricsRecorder,
         SharedHotkeySession, new_shared_hotkey_session,
     };
-    use frogdb_protocol::ProtocolVersion;
 
     /// Build a `ConnCtx` over fixture dependencies — no socket, no
     /// `ConnectionHandler`. These commands run with no shards (`shard_senders`
@@ -1044,33 +1043,25 @@ mod tests {
         }
 
         fn ctx(&self) -> ConnCtx<'_> {
-            ConnCtx {
-                config: &self.config_manager,
-                client_registry: &self.client_registry,
-                latency_histograms: &self.latency_histograms,
-                keyspace_stats: &self.keyspace_stats,
-                shard_senders: &[],
-                snapshot_coordinator: &self.snapshot_coordinator,
-                hotkey_session: &self.hotkey_session,
-                hotkey_cluster: &self.cluster,
-                protocol_version: ProtocolVersion::Resp2,
-                cursor_store: &self.cursor_store,
-                metrics_recorder: &self.metrics_recorder,
-                memory_diag: &self.memory_diag,
-                num_shards: 0,
-                max_clients: 10000,
-                cluster_enabled: false,
-                acl_manager: self.acl_manager.as_ref(),
-                command_registry: &self.command_registry,
-                username: "default",
-                info: &frogdb_core::NoopInfoProvider,
-                scripting: &frogdb_core::NoopScriptingProvider,
-                conn_state: None,
-                tracking: None,
-                pubsub: None,
-                debug: None,
-                monitor: None,
-            }
+            ConnCtx::new(
+                &self.config_manager,
+                &self.client_registry,
+                &self.latency_histograms,
+                &self.keyspace_stats,
+                &[],
+                &self.snapshot_coordinator,
+                &self.hotkey_session,
+                &self.cluster,
+                &self.cursor_store,
+                &self.metrics_recorder,
+                &self.memory_diag,
+                self.acl_manager.as_ref(),
+                &self.command_registry,
+                0,
+                10000,
+                false,
+            )
+            .with_username("default")
         }
     }
 
