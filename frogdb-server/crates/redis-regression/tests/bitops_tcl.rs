@@ -359,7 +359,10 @@ async fn tcl_bitop_not_empty_string() {
 
     client.command(&["SET", "{t}s", ""]).await;
     client.command(&["BITOP", "NOT", "{t}dest", "{t}s"]).await;
-    assert_bulk_eq(&client.command(&["GET", "{t}dest"]).await, b"");
+    // The upstream TCL asserts `{}`, which matches nil as well as "": Redis
+    // deletes the destination when the BITOP result is empty (bitops.c), so
+    // GET returns nil. FrogDB matches since proposal 47's delete-on-empty.
+    assert_nil(&client.command(&["GET", "{t}dest"]).await);
 }
 
 #[tokio::test]
