@@ -506,7 +506,7 @@ impl Command for CopyCommand {
             flags: CommandFlags::WRITE,
             keys: KeySpec::FirstTwo,
             access: AccessSpec::Positional(&[KeyAccessFlag::R, KeyAccessFlag::OW]),
-            wal: WalStrategy::PersistDestination(1),
+            wal: WalStrategy::PersistDestination,
             wakes: WaiterWake::None,
             event: EventSpec::EmitsAt {
                 class: KeyspaceEventFlags::GENERIC,

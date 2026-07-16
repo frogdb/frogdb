@@ -1,6 +1,6 @@
 # Proposal: Shard Persistence Bridge
 
-Status: proposed
+Status: implemented
 Date: 2026-07-16
 
 ## Problem
@@ -239,3 +239,63 @@ every variant onto `Dynamic`.
   `WalPersistence` step. Move 1 must not re-open the effect-ordering question proposal 03 settled —
   it changes *how* the persist step runs, never *when* it runs relative to the other effects. The
   `WRITE_EFFECT_ORDER` pin (`post_execution.rs` tests) stays green untouched.
+
+## Implementation notes (2026-07-16)
+
+Landed as designed, reconciled with the branch's post-proposal shape (proposal 55's
+`ctx.effects`, proposal 59's metadata deletion — neither touches this bridge's callers).
+
+**Move 1 — one persist function.** `ShardWorker::persist(&[WriteRecord<'_>], Durability)` lives
+in `shard/persistence.rs` and absorbs all three former loops. `Durability::Confirm` snapshots
+`wal.sequence()` before the first write and `flush_through`s it once after the last (propagating
+failure via `?`); `Durability::FireAndForget` stages each action and logs on error, never calling
+`flush_through`. Callers: the effect path (`post_execution.rs` `WalPersistence` step) passes the
+whole `summary.writes` slice as `FireAndForget` (equivalent to the old per-record
+`persist_by_strategy` loop, no flush between records); the two rollback sites in `execution.rs`
+pass `Confirm` (single record via `slice::from_ref`, transaction batch via the whole slice).
+
+**Move 2 — `WalTarget` seam.** `execute_wal_action` is now a free `async fn` over
+`impl WalTarget` (probe `contains` + `write_set`/`write_delete`/`write_merge`/`write_clear`),
+so the `store.contains()`-relative probe ordering is unit-testable directly. `ShardWorker` is the
+production adapter (the former `persist_key_to_wal`/`persist_delete_to_wal`/`merge_hll_delta_to_wal`/
+`clear_shard_to_wal` helper bodies folded into it verbatim — `write_set`/`write_merge` still own the
+`get_hot`/`get_metadata` read and the `WalMergeOperands` metric, keeping the free function pure over
+*set-this-key*). An in-memory `TestTarget` (a `HashSet` for `contains`, a `RefCell<Vec<Write>>`
+recorder, an optional failure flag) backs 8 new `#[tokio::test]`s: one per action variant plus the
+probe-branch cases (`PersistOrDelete` present→set / absent→delete, `DeleteIfMissing` survived→no-op /
+gone→delete, `PersistIfExists` present→set / absent→no-op) and a failure-propagation test (the
+error a `Confirm` persist surfaces via `?`). Native `async fn` in traits was used (edition 2024);
+`execute_wal_action` takes `impl WalTarget` (static dispatch), so no `dyn` concerns.
+
+**Move 3 — flag-derived WAL destinations.** The 10 `PersistDestination(idx)` spec sites became the
+unit `WalStrategy::PersistDestination` (persist-if-exists over `write_access_keys` —
+`keys_with_flags` filtered to `W`/`OW`/`RW`); BITOP's `PersistOrDeleteDestination(1)` converged onto
+`Dynamic` (persist-or-delete over the same extraction), since `Dynamic` already emits
+persist-or-delete over write keys. Both index variants were deleted from the enum and
+`actions_with_delta` (which now routes `Dynamic | PersistDestination | NoOp` to the "resolved via
+`Command::wal_actions`" empty arm). The shared filter is a new `write_access_keys` default method on
+`Command` (returns a concrete `SmallVec`, **not** `impl Iterator`, to keep the trait dyn-compatible —
+it is used as `dyn Command`).
+
+The one non-obvious dependency the proposal glossed: most migrated store commands declared
+`AccessSpec::Uniform`, which marks **every** key write — so deriving the WAL destination from
+`keys_with_flags` would have emitted spurious actions for the read-only source keys. Preserving
+byte-for-byte WAL equivalence therefore required fixing nine commands' access flags to
+`Positional([OW, R])` (SINTERSTORE/SUNIONSTORE/SDIFFSTORE, ZUNIONSTORE/ZINTERSTORE/ZDIFFSTORE,
+ZRANGESTORE, GEOSEARCHSTORE, BITOP). This is strictly more correct — `COMMAND GETKEYSANDFLAGS` now
+reports sources as `R` (Redis parity), verified by the introspection regression suite. COPY already
+had `Positional([R, OW])`; XGROUP keeps `Uniform` (its single `Index(1)` key *is* the write
+destination). A new `SpecError::WalDestinationWithoutWriteKey` invariant in `CommandSpec::validate`
+rejects a `Dynamic`/`PersistDestination` strategy paired with a `Positional` list that names no write
+flag (silent-no-op guard); `Uniform`/`Dynamic` access derive the flag from `CommandFlags::WRITE` and
+cannot trip it.
+
+**Deviation from the sketch.** The proposal's `Durability` doc and testing section imagined the
+`Confirm`-vs-`FireAndForget` *flush* behavior as new unit tests. Kept `persist` on `ShardWorker`
+(reading the concrete `RocksWalWriter` for `sequence`/`flush_through`) exactly as the sketch's code
+block shows, rather than threading flush confirmation through the seam — so the flush-confirm axis
+stays covered by `integration_persistence.rs` (rollback pre-image, ack-doesn't-outrun-flush) and
+`wal/tests.rs`, while the new unit tests cover the genuinely-interesting layer the seam exposes
+(action resolution + store-probe ordering + write-error propagation). Threading `sequence`/`flush`
+through `WalTarget` too would let the durability axis be unit-tested without a `ShardWorker`, but it
+widens the seam past the two capabilities the proposal scoped it to; left as a possible follow-up.
