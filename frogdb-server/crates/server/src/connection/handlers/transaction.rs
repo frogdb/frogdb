@@ -11,9 +11,12 @@
 //!   (which re-enter the `ConnCtx` dispatch machinery — the meta-circularity)
 //!   and server-wide ones (which fan out to all shards via
 //!   `dispatch_server_wide`).
-//! - `queue_command` — validating and queuing a command while a MULTI is open.
 //!
-//! These are implemented as extension methods on `ConnectionHandler`.
+//! `handle_exec` is implemented as an extension method on `ConnectionHandler`.
+//! (Command *queuing* itself — `queue_command`, validating and queuing a command
+//! while a MULTI is open — has moved to
+//! [`PreDispatchView`](crate::connection::guards::PreDispatchView) in `guards.rs`
+//! and no longer lives here.)
 
 use bytes::Bytes;
 use frogdb_core::{

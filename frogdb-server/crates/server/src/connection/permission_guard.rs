@@ -6,8 +6,10 @@
 //! [`AclLog::log_*_denied`]), and the *`NOPERM` reply* (the canonical
 //! [`AclError`] `Display` string). Every execution path — `run_pre_checks`
 //! (command), `validate_channel_access` (channel), `route_and_execute` (key),
-//! and the transaction queue (`queue_command`, key + channel) — constructs a
-//! guard for the connection's current user and calls one method per check.
+//! and the transaction queue
+//! ([`PreDispatchView::queue_command`](crate::connection::guards::PreDispatchView::queue_command),
+//! key + channel) — constructs a guard for the connection's current user and
+//! calls one method per check.
 //!
 //! Keeping check + log + reply in one location is what makes audit-log
 //! completeness structural: a path either routes through the guard (and logs)

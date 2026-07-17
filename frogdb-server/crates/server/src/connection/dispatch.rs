@@ -678,33 +678,64 @@ mod tests {
         assert_eq!(PRE_DISPATCH_ORDER.len(), 17);
     }
 
-    /// The load-bearing relative orderings the module docs (and Redis's
-    /// `processCommand`) justify. These would catch a reorder that compiles but
-    /// breaks a correctness invariant.
+    /// The must-precede relation as data: each pair `(a, b)` asserts stage `a`
+    /// runs strictly before stage `b` in [`PRE_DISPATCH_ORDER`]. This is the
+    /// single written home of the load-bearing ordering constraints the module
+    /// docs (and Redis's `processCommand`) justify — validated against the
+    /// canonical order by [`load_bearing_ordering_invariants`], so a reorder
+    /// that compiles but breaks a correctness invariant fails here. Models
+    /// core's `WRITE_EFFECT_ORDER::MUST_PRECEDE` relation style (a const pair
+    /// list validated in a loop rather than N hand-written asserts).
+    ///
+    /// `PreAuthIntercept`-first and `Execute`-terminal are the two endpoint
+    /// invariants, checked directly rather than enumerated pairwise.
+    const MUST_PRECEDE: &[(DispatchStage, DispatchStage)] = {
+        use DispatchStage::*;
+        &[
+            // AUTH/HELLO are intercepted before the NOAUTH pre-check so a
+            // not-yet-authenticated client can authenticate.
+            (PreAuthIntercept, PreChecks),
+            // RESET runs after the pre-checks gate (it is never queued/paused,
+            // but pre-checks still front every dispatch/execute stage).
+            (PreChecks, ResetIntercept),
+            // Pre-checks (auth/replica/quorum/ACL) front every stage that
+            // dispatches to or executes a command.
+            (PreChecks, ConnectionStateCommand),
+            (PreChecks, ConnectionCommand),
+            (PreChecks, ServerWide),
+            (PreChecks, Execute),
+            // MULTI/EXEC/DISCARD control is recognized before the queuing stage
+            // that would otherwise swallow them as ordinary queued commands.
+            (TransactionControl, TransactionQueue),
+            // Arity runs before pause so syntax errors bypass CLIENT PAUSE.
+            (Arity, PauseGate),
+            // Queued MULTI commands must not block on pause.
+            (TransactionQueue, PauseGate),
+            // Mutable connection-state seam (ASKING/READONLY/READWRITE) is
+            // recognized before the general connection-command union.
+            (ConnectionStateCommand, ConnectionCommand),
+            // Queued commands slot-validate at queue time; the standalone
+            // slot-validation stage runs later on the non-transaction path.
+            (TransactionQueue, ClusterSlotValidation),
+            // Slot routing (MOVED/ASK/CROSSSLOT) precedes the multi-key
+            // TRYAGAIN check, which precedes the terminal execute stage.
+            (ClusterSlotValidation, MigratingTryAgain),
+            (MigratingTryAgain, Execute),
+        ]
+    };
+
+    /// Validates [`PRE_DISPATCH_ORDER`] against every declared constraint — the
+    /// endpoint invariants plus all [`MUST_PRECEDE`] pairs. Would catch a
+    /// reorder that compiles but breaks a correctness invariant.
     #[test]
     fn load_bearing_ordering_invariants() {
         use DispatchStage::*;
-        // AUTH/HELLO are intercepted before the NOAUTH pre-check so a
-        // not-yet-authenticated client can authenticate.
-        assert!(
-            order_index(PreAuthIntercept) < order_index(PreChecks),
-            "PreAuthIntercept must precede PreChecks (pre-auth)"
-        );
-        // Arity runs before pause so syntax errors bypass CLIENT PAUSE.
-        assert!(
-            order_index(Arity) < order_index(PauseGate),
-            "Arity must precede PauseGate (syntax errors bypass pause)"
-        );
-        // Queued MULTI commands must not block on pause.
-        assert!(
-            order_index(TransactionQueue) < order_index(PauseGate),
-            "TransactionQueue must precede PauseGate (queued MULTI commands do not block)"
-        );
-        // Queued commands slot-validate at queue time; the standalone
-        // slot-validation stage runs later on the non-transaction path.
-        assert!(
-            order_index(ClusterSlotValidation) > order_index(TransactionQueue),
-            "ClusterSlotValidation must follow TransactionQueue"
+        // PreAuthIntercept is first: a not-yet-authenticated client must be able
+        // to reach AUTH/HELLO before anything else can reject it.
+        assert_eq!(
+            *PRE_DISPATCH_ORDER.first().unwrap(),
+            PreAuthIntercept,
+            "PRE_DISPATCH_ORDER must begin with PreAuthIntercept (pre-auth)"
         );
         // Execute is the non-returning terminal.
         assert_eq!(
@@ -712,6 +743,12 @@ mod tests {
             Execute,
             "PRE_DISPATCH_ORDER must end in Execute (the driver loop is total only because of this)"
         );
+        for &(a, b) in MUST_PRECEDE {
+            assert!(
+                order_index(a) < order_index(b),
+                "{a:?} must run strictly before {b:?} in PRE_DISPATCH_ORDER"
+            );
+        }
     }
 
     /// Each `ServerWideOp` must be declared by at most one command spec.

@@ -713,9 +713,13 @@ impl ReplicaSession {
                         {
                             break;
                         }
-                        if lag_policy.should_disconnect(&lag_tracker, lag_replica_id) {
+                        if let Some(breach) =
+                            lag_policy.should_disconnect(&lag_tracker, lag_replica_id)
+                        {
                             tracing::warn!(
                                 replica_id = lag_replica_id,
+                                byte_exceeded = breach.byte_exceeded,
+                                time_exceeded = breach.time_exceeded,
                                 "Replica exceeded lag threshold, disconnecting for FULLRESYNC"
                             );
                             lag_tracker.record_lag_disconnect(lag_replica_id);
@@ -824,15 +828,21 @@ impl LagPolicy {
 
     /// Count one forwarded frame and, every [`LAG_CHECK_INTERVAL`] frames,
     /// decide whether this replica has exceeded a threshold and is out of
-    /// cooldown. On a `true` return the caller records the disconnect and
+    /// cooldown. Returns `Some(LagBreach)` naming which threshold(s) fired when
+    /// a proactive disconnect is warranted, or `None` otherwise. On a `Some`
+    /// return the caller records the disconnect (logging the breach detail) and
     /// breaks the streaming loop.
-    fn should_disconnect(&mut self, tracker: &ReplicationTrackerImpl, id: u64) -> bool {
+    fn should_disconnect(
+        &mut self,
+        tracker: &ReplicationTrackerImpl,
+        id: u64,
+    ) -> Option<LagBreach> {
         if !self.enabled() {
-            return false;
+            return None;
         }
         self.frames += 1;
         if !self.frames.is_multiple_of(LAG_CHECK_INTERVAL) {
-            return false;
+            return None;
         }
         let byte_exceeded = self.threshold_bytes > 0
             && tracker
@@ -842,8 +852,27 @@ impl LagPolicy {
             && tracker
                 .replica_lag_secs(id)
                 .is_some_and(|secs| secs >= self.threshold_secs as f64);
-        (byte_exceeded || time_exceeded) && !tracker.is_in_lag_cooldown(id, self.cooldown)
+        if (byte_exceeded || time_exceeded) && !tracker.is_in_lag_cooldown(id, self.cooldown) {
+            Some(LagBreach {
+                byte_exceeded,
+                time_exceeded,
+            })
+        } else {
+            None
+        }
     }
+}
+
+/// Which lag threshold(s) a proactive-disconnect decision tripped. Returned by
+/// [`LagPolicy::should_disconnect`] so the disconnect warning can name the
+/// specific threshold that fired (byte-lag vs. time-since-last-ACK) rather than
+/// logging a bare boolean.
+#[derive(Debug, Clone, Copy)]
+struct LagBreach {
+    /// The byte-lag threshold was met or exceeded.
+    byte_exceeded: bool,
+    /// The time-since-last-ACK threshold was met or exceeded.
+    time_exceeded: bool,
 }
 
 /// Build a minimal valid RDB suitable for empty databases or fallbacks.
@@ -1697,13 +1726,23 @@ mod tests {
         tracker: &ReplicationTrackerImpl,
         id: u64,
     ) -> bool {
-        let mut fired = false;
+        drive_one_interval_breach(policy, tracker, id).is_some()
+    }
+
+    /// Like [`drive_one_interval`] but returns the [`LagBreach`] detail from the
+    /// evaluating call so tests can assert *which* threshold fired.
+    fn drive_one_interval_breach(
+        policy: &mut LagPolicy,
+        tracker: &ReplicationTrackerImpl,
+        id: u64,
+    ) -> Option<LagBreach> {
+        let mut breach = None;
         for _ in 0..LAG_CHECK_INTERVAL {
-            if policy.should_disconnect(tracker, id) {
-                fired = true;
+            if let Some(b) = policy.should_disconnect(tracker, id) {
+                breach = Some(b);
             }
         }
-        fired
+        breach
     }
 
     #[test]
@@ -1718,7 +1757,7 @@ mod tests {
             frames: 0,
         };
         for _ in 0..(2 * LAG_CHECK_INTERVAL) {
-            assert!(!policy.should_disconnect(&tracker, session.id()));
+            assert!(policy.should_disconnect(&tracker, session.id()).is_none());
         }
     }
 
@@ -1733,7 +1772,13 @@ mod tests {
             cooldown: Duration::from_secs(60),
             frames: 0,
         };
-        assert!(drive_one_interval(&mut policy, &tracker, session.id()));
+        let breach = drive_one_interval_breach(&mut policy, &tracker, session.id())
+            .expect("byte threshold should fire a breach");
+        assert!(breach.byte_exceeded, "byte threshold must be flagged");
+        assert!(
+            !breach.time_exceeded,
+            "time threshold is disabled, must not be flagged"
+        );
     }
 
     #[test]
@@ -1763,7 +1808,13 @@ mod tests {
             cooldown: Duration::from_secs(60),
             frames: 0,
         };
-        assert!(drive_one_interval(&mut policy, &tracker, session.id()));
+        let breach = drive_one_interval_breach(&mut policy, &tracker, session.id())
+            .expect("time threshold should fire a breach");
+        assert!(breach.time_exceeded, "time threshold must be flagged");
+        assert!(
+            !breach.byte_exceeded,
+            "byte threshold is disabled, must not be flagged"
+        );
     }
 
     #[test]
