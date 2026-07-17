@@ -87,10 +87,13 @@ Keys are hashed to determine shard ownership:
 ```rust
 fn shard_for_key(key: &[u8], num_shards: usize) -> usize {
     let hash_key = extract_hash_tag(key).unwrap_or(key);
-    let hash = xxhash64(hash_key);
-    hash as usize % num_shards
+    let slot = crc16_xmodem(hash_key) as usize % 16384;
+    slot % num_shards
 }
 ```
+
+The internal shard is derived from the key's hash slot (CRC16, same XMODEM variant as Redis
+Cluster), reduced modulo the shard count — not from a separate hash function.
 
 ---
 
@@ -120,7 +123,10 @@ foo{}bar               (none)          hash("foo{}bar") - empty braces
 
 Hash tags guarantee colocation at **both** levels:
 - **Cluster level**: `CRC16(hash_tag) % 16384` determines slot/node
-- **Internal level**: `xxhash64(hash_tag) % num_shards` determines thread
+- **Internal level**: `CRC16(hash_tag) % 16384 % num_shards` determines thread
+
+Because the internal shard is derived from the hash slot, same-slot keys are automatically
+same-shard keys — colocation at the cluster level implies colocation at the thread level.
 
 This ensures hash-tagged keys are always on the same internal shard, enabling:
 - Atomic transactions across multiple keys

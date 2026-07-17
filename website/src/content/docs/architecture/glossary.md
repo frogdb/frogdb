@@ -17,7 +17,8 @@ A thread-local partition within a single FrogDB node. Each internal shard has it
 - Expiry index
 - WAL writer
 
-Keys are assigned to internal shards via: `internal_shard = hash(key) % num_shards`
+Keys are assigned to internal shards via: `internal_shard = CRC16(key) % 16384 % num_shards`
+(the key's hash slot, reduced modulo the shard count)
 
 **Not to be confused with:** Hash slot (cluster-level distribution).
 
@@ -37,7 +38,7 @@ See: [storage.md](/architecture/storage/), [clustering.md](/architecture/cluster
 | Term | Scope | Algorithm | Range | Purpose |
 |------|-------|-----------|-------|---------|
 | **Hash Slot** | Cluster (multi-node) | CRC16 | 0-16383 | Which node owns a key |
-| **Internal Shard** | Node (multi-thread) | xxhash64 | 0 to num_cpus | Which thread processes a key |
+| **Internal Shard** | Node (multi-thread) | CRC16 (via hash slot) | 0 to num_shards | Which thread processes a key |
 
 **Key distinctions:**
 - Transactions require same **internal shard** (all keys on same thread)
