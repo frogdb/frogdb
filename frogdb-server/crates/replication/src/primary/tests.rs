@@ -241,7 +241,7 @@ async fn wait_with_lagging_replica_broadcasts_a_stamped_getack() {
     // One streaming replica that has acked nothing while the stream is ahead.
     let session = tracker.register_replica("127.0.0.1:6380".parse().unwrap());
     session.force_phase_for_test(Phase::Streaming);
-    let target = handler.offsets.advance_broadcast(100);
+    let target = handler.offsets.advance(&Bytes::from(vec![b'x'; 100]));
 
     let mut frames = handler.wal_broadcast.subscribe();
 

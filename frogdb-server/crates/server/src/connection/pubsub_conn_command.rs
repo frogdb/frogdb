@@ -897,7 +897,6 @@ impl ConnectionHandler {
         command: &'static dyn ConnectionCommand,
         args: &[Bytes],
     ) -> Vec<Response> {
-        static NOOP_INFO: frogdb_core::NoopInfoProvider = frogdb_core::NoopInfoProvider;
         let mut pubsub_io = PubSubIo::new(
             &mut self.state,
             &mut self.pubsub_tx,
@@ -907,33 +906,15 @@ impl ConnectionHandler {
             self.num_shards,
             self.scatter_gather_timeout,
         );
-        let mut ctx = ConnCtx {
-            config: self.admin.config_manager.as_ref(),
-            client_registry: self.admin.client_registry.as_ref(),
-            latency_histograms: self.observability.latency_histograms.as_ref(),
-            keyspace_stats: self.observability.keyspace_stats.as_ref(),
-            shard_senders: self.core.shard_senders.as_slice(),
-            snapshot_coordinator: self.admin.snapshot_coordinator.as_ref(),
-            hotkey_session: &self.observability.hotkey_session,
-            hotkey_cluster: &self.cluster,
-            protocol_version: frogdb_protocol::ProtocolVersion::default(),
-            cursor_store: self.admin.cursor_store.as_ref(),
-            metrics_recorder: self.observability.metrics_recorder.as_ref(),
-            memory_diag: &self.memory_diag,
-            num_shards: self.num_shards,
-            max_clients: self.admin.config_manager.max_clients(),
-            cluster_enabled: self.cluster.is_cluster_mode(),
-            acl_manager: self.core.acl_manager.as_ref(),
-            command_registry: self.core.registry.as_ref(),
-            username: "",
-            info: &NOOP_INFO,
-            scripting: &frogdb_core::NoopScriptingProvider,
-            conn_state: None,
-            tracking: None,
-            pubsub: Some(&mut pubsub_io),
-            debug: None,
-            monitor: None,
-        };
+        let mut ctx = Self::base_ctx(
+            &self.admin,
+            &self.core,
+            &self.observability,
+            &self.cluster,
+            &self.memory_diag,
+            self.num_shards,
+        )
+        .with_pubsub(&mut pubsub_io);
         command.execute_multi(&mut ctx, args).await
     }
 

@@ -362,6 +362,13 @@ pub enum SpecError {
     /// [`EventSpec::EmitsAt`] (fixed destination) or [`EventSpec::Dynamic`]
     /// (runtime-resolved keys).
     MultiKeyBlanketEmits,
+    /// A flag-derived WAL strategy ([`WalStrategy::Dynamic`] or
+    /// [`WalStrategy::PersistDestination`]) paired with an
+    /// [`AccessSpec::Positional`] list that declares no write flag
+    /// (`W`/`OW`/`RW`). Such a command derives its WAL destination from its
+    /// write-access keys, so a positional access list with only read flags makes
+    /// the strategy a silent no-op — nothing is ever persisted.
+    WalDestinationWithoutWriteKey,
 }
 
 impl std::fmt::Display for SpecError {
@@ -407,6 +414,12 @@ impl std::fmt::Display for SpecError {
                 write!(
                     f,
                     "multi-key KeySpec with blanket EventSpec::Emits would over-emit on read-only keys; use EmitsAt or Dynamic (or add to the per-key allowlist)"
+                )
+            }
+            SpecError::WalDestinationWithoutWriteKey => {
+                write!(
+                    f,
+                    "flag-derived WAL strategy (Dynamic/PersistDestination) with a Positional access list declaring no write flag (W/OW/RW) persists nothing"
                 )
             }
         }
@@ -460,6 +473,23 @@ impl CommandSpec {
             && !matches!(self.wal, WalStrategy::NoOp)
         {
             return Err(SpecError::ConnectionLevelWithWal);
+        }
+
+        // A flag-derived WAL strategy derives its destination from the command's
+        // write-access keys (`keys_with_flags` filtered to W/OW/RW). With an
+        // explicit `Positional` access list that names no write flag, that
+        // extraction is always empty, so the strategy silently persists nothing —
+        // reject it at declaration time. (`Uniform`/`Dynamic` access derive a
+        // write flag from `CommandFlags::WRITE`, so they cannot hit this.)
+        if matches!(
+            self.wal,
+            WalStrategy::Dynamic | WalStrategy::PersistDestination
+        ) && let AccessSpec::Positional(flags) = self.access
+            && !flags
+                .iter()
+                .any(|f| matches!(f, KeyAccessFlag::W | KeyAccessFlag::OW | KeyAccessFlag::RW))
+        {
+            return Err(SpecError::WalDestinationWithoutWriteKey);
         }
 
         // `EmitsAt.key_index` must be statically provable in-bounds for the

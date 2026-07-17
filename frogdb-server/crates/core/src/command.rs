@@ -245,21 +245,28 @@ pub enum WalStrategy {
     /// Used by RPOPLPUSH, LMOVE.
     MoveKeys,
 
-    /// Persist destination key at the given arg index if it exists.
-    /// Used by SINTERSTORE (0), LMOVE dest (1), COPY dest (1), ZRANGESTORE (0).
-    PersistDestination(usize),
-
-    /// If the destination key at the given arg index still exists, persist it;
-    /// otherwise persist its deletion. Used by STORE-style commands that delete
-    /// the destination on an empty result (BITOP dest (1)): unlike
-    /// [`WalStrategy::PersistDestination`], a delete-on-empty must be written to
-    /// the WAL so the removal survives a restart, rather than leaving the stale
-    /// prior value authoritative on disk.
-    PersistOrDeleteDestination(usize),
+    /// Persist-if-exists over each write-access key the command declares, located
+    /// through `keys_with_flags` (filtered to `W`/`OW`/`RW`) rather than a fixed
+    /// arg index — the same key extraction the router uses. A store-style command
+    /// (SINTERSTORE, SUNIONSTORE, SDIFFSTORE, COPY, ZRANGESTORE, GEOSEARCHSTORE,
+    /// XGROUP, Z*STORE) declares its written destination once via its
+    /// [`KeySpec`](crate::command_spec::KeySpec) +
+    /// [`AccessSpec`](crate::command_spec::AccessSpec), so the WAL destination is
+    /// a derivation of the declared write keys and cannot silently point at the
+    /// wrong slot when an arg order changes.
+    ///
+    /// Like [`WalStrategy::Dynamic`], this is resolved by
+    /// [`Command::wal_actions`] against `keys_with_flags` (which
+    /// [`WalStrategy::actions`] lacks), not from raw args — so `actions_with_delta`
+    /// yields nothing for it. Distinct from `Dynamic` only in the action emitted:
+    /// `Dynamic` is persist-*or-delete* (delete-on-empty, e.g. SORT…STORE, BITOP);
+    /// this is persist-*if-exists* (no delete-on-empty), preserving the former
+    /// `PersistDestination(idx)` semantics exactly.
+    PersistDestination,
 
     /// Persist the first key (args[0]); but if the command deposited a
     /// HyperLogLog register delta on the context
-    /// ([`CommandContext::hll_wal_delta`]), emit a `Merge` operand carrying
+    /// ([`CommandEffects::hll_wal_delta`](crate::command::CommandEffects::hll_wal_delta)), emit a `Merge` operand carrying
     /// only the raised registers instead of a full `Put`. Used by PFADD on a
     /// dense existing HLL: the delta serializes far smaller than the 12 KiB
     /// dense value, and the CF merge operator folds it onto the base on replay.
@@ -383,9 +390,9 @@ impl<'a> WriteRecord<'a> {
 
     /// Resolve this record to its concrete WAL actions.
     ///
-    /// The single delta-vs-full routing decision, shared by both the write-effect
-    /// path ([`super::shard`] `persist_by_strategy`) and the rollback path
-    /// (`persist_and_confirm` / `persist_transaction_to_wal`), so the two can
+    /// The single delta-vs-full routing decision, shared by the effect path and
+    /// the rollback path — both funnel through [`super::shard`] `persist`
+    /// (`Durability::FireAndForget` vs `Durability::Confirm`) — so the two can
     /// never disagree on whether a dense PFADD becomes a `Merge` or a `Put`.
     pub fn wal_actions(&self) -> SmallVec<[WalAction<'_>; 2]> {
         self.handler
@@ -490,22 +497,17 @@ impl WalStrategy {
                     SmallVec::new()
                 }
             }
-            WalStrategy::PersistDestination(idx) => match args.get(*idx) {
-                Some(dest) => smallvec![WalAction::PersistIfExists(dest)],
-                None => SmallVec::new(),
-            },
-            WalStrategy::PersistOrDeleteDestination(idx) => match args.get(*idx) {
-                Some(dest) => smallvec![WalAction::PersistOrDelete(dest)],
-                None => SmallVec::new(),
-            },
             // Unconditional full-shard clear: one keyless action, independent of
             // args (FLUSHDB/FLUSHALL take no key arguments).
             WalStrategy::ClearShard => smallvec![WalAction::ClearShard],
-            // Dynamic is resolved against the command's extracted write keys by
-            // `Command::wal_actions`, which has access to `keys_with_flags`.
-            // Resolving it from raw args alone is impossible, so this yields
-            // nothing — callers must go through `Command::wal_actions`.
-            WalStrategy::Dynamic | WalStrategy::NoOp => SmallVec::new(),
+            // `Dynamic` and `PersistDestination` are resolved against the
+            // command's extracted write keys by `Command::wal_actions`, which has
+            // access to `keys_with_flags`. Resolving them from raw args alone is
+            // impossible, so this yields nothing — callers must go through
+            // `Command::wal_actions`.
+            WalStrategy::Dynamic | WalStrategy::PersistDestination | WalStrategy::NoOp => {
+                SmallVec::new()
+            }
         }
     }
 }
@@ -578,18 +580,39 @@ pub trait Command: Send + Sync {
         hll_delta: Option<&'a [(u16, u8)]>,
     ) -> SmallVec<[WalAction<'a>; 2]> {
         match self.wal_strategy() {
+            // Both derive their destinations from the same write-access key
+            // extraction the router uses (`keys_with_flags` filtered to
+            // `W`/`OW`/`RW`); they differ only in the action emitted per key.
             WalStrategy::Dynamic => self
-                .keys_with_flags(args)
+                .write_access_keys(args)
                 .into_iter()
-                .filter(|(_, flags)| {
-                    flags.iter().any(|f| {
-                        matches!(f, KeyAccessFlag::W | KeyAccessFlag::OW | KeyAccessFlag::RW)
-                    })
-                })
-                .map(|(key, _)| WalAction::PersistOrDelete(key))
+                .map(WalAction::PersistOrDelete)
+                .collect(),
+            WalStrategy::PersistDestination => self
+                .write_access_keys(args)
+                .into_iter()
+                .map(WalAction::PersistIfExists)
                 .collect(),
             other => other.actions_with_delta(args, hll_delta),
         }
+    }
+
+    /// The command's write-access keys: `keys_with_flags` filtered to keys
+    /// carrying a `W`/`OW`/`RW` flag. The shared extraction behind the
+    /// `keys_with_flags`-resolved WAL strategies ([`WalStrategy::Dynamic`],
+    /// [`WalStrategy::PersistDestination`]) — so the WAL destination is derived
+    /// from the same declared write keys the router uses. Returns a concrete
+    /// [`SmallVec`] (not `impl Iterator`) to keep [`Command`] dyn-compatible.
+    fn write_access_keys<'a>(&self, args: &'a [Bytes]) -> SmallVec<[&'a [u8]; 2]> {
+        self.keys_with_flags(args)
+            .into_iter()
+            .filter(|(_, flags)| {
+                flags
+                    .iter()
+                    .any(|f| matches!(f, KeyAccessFlag::W | KeyAccessFlag::OW | KeyAccessFlag::RW))
+            })
+            .map(|(key, _)| key)
+            .collect()
     }
 
     /// Extract key(s) from arguments for routing.
@@ -645,39 +668,6 @@ pub trait Command: Send + Sync {
     /// `allow_cross_slot_standalone` is enabled (e.g. MSETNX).
     fn requires_same_slot(&self) -> bool {
         self.spec().requires_same_slot
-    }
-}
-
-/// Metadata trait for commands that don't execute through the normal path.
-///
-/// This is used for commands like pub/sub and transaction commands where the
-/// connection handler intercepts them before normal routing. These commands
-/// need metadata for introspection (COMMAND INFO) but don't implement full execution.
-pub trait CommandMetadata: Send + Sync {
-    /// Command name (e.g., "SUBSCRIBE", "MULTI").
-    fn name(&self) -> &'static str;
-
-    /// Expected argument count.
-    fn arity(&self) -> Arity;
-
-    /// Command behavior flags.
-    fn flags(&self) -> CommandFlags;
-
-    /// How this command should be executed.
-    fn execution_strategy(&self) -> ExecutionStrategy;
-
-    /// Extract key(s) from arguments for routing.
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]>;
-
-    /// Extract key(s) with per-key access flags (default derives from command flags).
-    fn keys_with_flags<'a>(&self, args: &'a [Bytes]) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
-        let keys = self.keys(args);
-        let flag = if self.flags().contains(CommandFlags::WRITE) {
-            KeyAccessFlag::OW
-        } else {
-            KeyAccessFlag::R
-        };
-        keys.into_iter().map(|k| (k, vec![flag])).collect()
     }
 }
 
@@ -881,6 +871,124 @@ impl<'a> CommandContextCore<'a> {
 }
 
 // ============================================================================
+// CommandEffects
+// ============================================================================
+
+/// Everything a command execution *produces* besides its [`Response`] — the
+/// out-buffer half of [`CommandContext`], as one named value.
+///
+/// Handlers deposit into this struct (via [`CommandContext::notify_event`],
+/// [`CommandContext::record_lookup`], or direct `ctx.effects.…` assignment)
+/// and the execution seam drains it in one move —
+/// `std::mem::take(&mut ctx.effects)` — then consumes it exhaustively, so
+/// adding an effect field is a compile error at every drain site instead of a
+/// silent drop.
+///
+/// The no-op suppression rule ("a write that declared itself a no-op discards
+/// its whole effect payload") has a single home here: `into_write_meta` in
+/// `shard::execution` (which `into_script_record` chains through).
+#[derive(Default)]
+pub struct CommandEffects {
+    /// Number of dirty changes made by this command (for rdb_changes_since_last_save).
+    ///
+    /// Defaults to 0. Write commands that modify data should set this to indicate
+    /// how many logical changes were made. The shard uses this to track
+    /// `rdb_changes_since_last_save` in INFO persistence.
+    ///
+    /// Commands like SETBIT and BITFIELD SET should only set this when the value
+    /// actually changed.
+    pub dirty_delta: i64,
+
+    /// Number of objects freed via lazyfree operations (UNLINK, FLUSHALL ASYNC).
+    ///
+    /// Defaults to 0. The UNLINK command sets this to the number of keys deleted.
+    /// The shard adds this to its `lazyfreed_objects` counter after command execution.
+    pub lazyfreed_delta: u64,
+
+    /// Number of keyspace read lookups that hit an existing key.
+    ///
+    /// Only populated by [`LookupSpec::Reported`] commands, which call
+    /// [`CommandContext::record_lookup`]. `FirstKey` / `EveryKey` commands are
+    /// counted by the execution seam from actual key existence and never touch
+    /// these fields. Mirrors Redis's `lookupKeyReadWithFlags`, which increments
+    /// `keyspace_hits`/`keyspace_misses` based on whether the looked-up KEY
+    /// exists in the keyspace dictionary — not on the shape of the reply.
+    ///
+    /// [`LookupSpec::Reported`]: crate::command_spec::LookupSpec::Reported
+    pub keyspace_hits: u64,
+
+    /// Number of keyspace read lookups that missed (the key did not exist).
+    ///
+    /// See [`CommandEffects::keyspace_hits`].
+    pub keyspace_misses: u64,
+
+    /// A WRITE command sets this `true` to declare it verified it made NO
+    /// change (e.g. PFADD where no register moved), so the execution seam
+    /// skips the entire write-effect pipeline: WAL persist, replication
+    /// broadcast, version bump (WATCH), keyspace notification, and tracking
+    /// invalidation. Matches Redis, which does not propagate a no-op write.
+    ///
+    /// Distinct from `dirty_delta = -1`, which only suppresses the version
+    /// bump and dirty counter while the write still persists and replicates.
+    pub write_was_noop: bool,
+
+    /// HyperLogLog register delta deposited by a write for the
+    /// [`WalStrategy::MergeDeltaOrPersistFirstKey`] strategy.
+    ///
+    /// PFADD sets this to the `(register_index, new_value)` pairs it raised
+    /// **only when the post-add value is dense** — so the WAL persists a compact
+    /// `Merge` operand instead of the full ~12 KiB dense value. Left `None` for
+    /// sparse or newly-created values (which keep a full `Put`: sparse serializes
+    /// small already, and creation must establish the base on disk). Reset per
+    /// command (it lives on the per-command context).
+    pub hll_wal_delta: Option<SmallVec<[(u16, u8); 8]>>,
+
+    /// Keyspace events deposited by an
+    /// [`EventSpec::Dynamic`](crate::command_spec::EventSpec::Dynamic) command.
+    ///
+    /// Handlers must go through [`CommandContext::notify_event`]; the execution
+    /// seam drains the deposits and routes them to the notifications write
+    /// effect. A `write_was_noop` command discards its deposits wholesale (the
+    /// effect pipeline is skipped), same contract as `hll_wal_delta`.
+    pub keyspace_events: KeyspaceEventDeposits,
+
+    /// Effective writes performed by script sub-commands during an
+    /// EVAL/EVALSHA/FCALL running on this context.
+    ///
+    /// Populated by the scripting seam (`ScriptInvoker::run_local`) for each
+    /// `redis.call`/`redis.pcall` write that actually changed data; drained by
+    /// the shard worker after the script completes and routed through the same
+    /// `WRITE_EFFECT_ORDER` pipeline as direct commands (notifications, WATCH
+    /// bump, tracking invalidation, waiter wake, WAL, replication). Always
+    /// empty for ordinary (non-script) command executions.
+    pub script_writes: Vec<ScriptWriteRecord>,
+}
+
+impl CommandEffects {
+    /// Convert the drained effects of a script sub-command into the owned
+    /// [`ScriptWriteRecord`] the shard worker replays after the script.
+    ///
+    /// Returns `None` for a `write_was_noop` sub-command — the same no-op
+    /// suppression rule as the direct path, because this chains through
+    /// `into_write_meta` (the rule's single home, in `shard::execution`).
+    /// The caller still owns the "was it a successful WRITE command?" check;
+    /// this method owns only what the *effects* say.
+    pub(crate) fn into_script_record(
+        self,
+        handler: Arc<dyn Command>,
+        args: Vec<Bytes>,
+    ) -> Option<ScriptWriteRecord> {
+        self.into_write_meta(handler).map(|meta| ScriptWriteRecord {
+            handler: meta.handler,
+            args,
+            dirty_delta: meta.dirty_delta,
+            hll_wal_delta: meta.hll_wal_delta,
+            keyspace_events: meta.keyspace_events,
+        })
+    }
+}
+
+// ============================================================================
 // CommandContext
 // ============================================================================
 
@@ -983,78 +1091,10 @@ pub struct CommandContext<'a> {
     /// Primary port (set when running as a replica, for INFO replication).
     pub master_port: Option<u16>,
 
-    /// Number of dirty changes made by this command (for rdb_changes_since_last_save).
-    ///
-    /// Defaults to 0. Write commands that modify data should set this to indicate
-    /// how many logical changes were made. The shard uses this to track
-    /// `rdb_changes_since_last_save` in INFO persistence.
-    ///
-    /// Commands like SETBIT and BITFIELD SET should only set this when the value
-    /// actually changed.
-    pub dirty_delta: i64,
-
-    /// Number of objects freed via lazyfree operations (UNLINK, FLUSHALL ASYNC).
-    ///
-    /// Defaults to 0. The UNLINK command sets this to the number of keys deleted.
-    /// The shard adds this to its `lazyfreed_objects` counter after command execution.
-    pub lazyfreed_delta: u64,
-
-    /// Number of keyspace read lookups that hit an existing key.
-    ///
-    /// Only populated by [`LookupSpec::Reported`] commands, which call
-    /// [`CommandContext::record_lookup`]. `FirstKey` / `EveryKey` commands are
-    /// counted by the execution seam from actual key existence and never touch
-    /// these fields. Mirrors Redis's `lookupKeyReadWithFlags`, which increments
-    /// `keyspace_hits`/`keyspace_misses` based on whether the looked-up KEY
-    /// exists in the keyspace dictionary — not on the shape of the reply.
-    pub keyspace_hits: u64,
-
-    /// Number of keyspace read lookups that missed (the key did not exist).
-    ///
-    /// See [`CommandContext::keyspace_hits`].
-    pub keyspace_misses: u64,
-
-    /// A WRITE command sets this `true` to declare it verified it made NO
-    /// change (e.g. PFADD where no register moved), so the execution seam
-    /// skips the entire write-effect pipeline: WAL persist, replication
-    /// broadcast, version bump (WATCH), keyspace notification, and tracking
-    /// invalidation. Matches Redis, which does not propagate a no-op write.
-    ///
-    /// Distinct from `dirty_delta = -1`, which only suppresses the version
-    /// bump and dirty counter while the write still persists and replicates.
-    pub write_was_noop: bool,
-
-    /// HyperLogLog register delta deposited by a write for the
-    /// [`WalStrategy::MergeDeltaOrPersistFirstKey`] strategy.
-    ///
-    /// PFADD sets this to the `(register_index, new_value)` pairs it raised
-    /// **only when the post-add value is dense** — so the WAL persists a compact
-    /// `Merge` operand instead of the full ~12 KiB dense value. Left `None` for
-    /// sparse or newly-created values (which keep a full `Put`: sparse serializes
-    /// small already, and creation must establish the base on disk). Reset per
-    /// command (it lives on the per-command context).
-    pub hll_wal_delta: Option<SmallVec<[(u16, u8); 8]>>,
-
-    /// Keyspace events deposited by an
-    /// [`EventSpec::Dynamic`](crate::command_spec::EventSpec::Dynamic) command.
-    ///
-    /// Handlers must go through [`CommandContext::notify_event`]; the execution
-    /// seam drains the buffer via [`CommandContext::take_keyspace_events`] and
-    /// routes it to the notifications write effect. A `write_was_noop` command
-    /// discards its deposits wholesale (the effect pipeline is skipped), same
-    /// contract as `hll_wal_delta`.
-    pub keyspace_events: KeyspaceEventDeposits,
-
-    /// Effective writes performed by script sub-commands during an
-    /// EVAL/EVALSHA/FCALL running on this context.
-    ///
-    /// Populated by the scripting seam (`ScriptInvoker::run_local`) for each
-    /// `redis.call`/`redis.pcall` write that actually changed data; drained by
-    /// the shard worker after the script completes and routed through the same
-    /// `WRITE_EFFECT_ORDER` pipeline as direct commands (notifications, WATCH
-    /// bump, tracking invalidation, waiter wake, WAL, replication). Always
-    /// empty for ordinary (non-script) command executions.
-    pub script_writes: Vec<ScriptWriteRecord>,
+    /// Everything this execution *produces* besides the [`Response`] — the
+    /// command's out-buffer, drained as one value by the execution seam via
+    /// `std::mem::take(&mut ctx.effects)`. See [`CommandEffects`].
+    pub effects: CommandEffects,
 }
 
 impl<'a> CommandContext<'a> {
@@ -1085,14 +1125,7 @@ impl<'a> CommandContext<'a> {
             is_replica_flag: None,
             master_host: None,
             master_port: None,
-            dirty_delta: 0,
-            lazyfreed_delta: 0,
-            keyspace_hits: 0,
-            keyspace_misses: 0,
-            write_was_noop: false,
-            hll_wal_delta: None,
-            keyspace_events: SmallVec::new(),
-            script_writes: Vec::new(),
+            effects: CommandEffects::default(),
         }
     }
 
@@ -1106,16 +1139,18 @@ impl<'a> CommandContext<'a> {
     /// no-op paths so nothing is emitted.
     #[inline]
     pub fn notify_event(&mut self, key: Bytes, name: &'static str, class: KeyspaceEventFlags) {
-        self.keyspace_events.push((key, name, class));
+        self.effects.keyspace_events.push((key, name, class));
     }
 
-    /// Drain the deposited keyspace events (execution seam only).
+    /// Drain the deposited keyspace events.
     ///
     /// Leaves the buffer empty; the caller owns routing the events into the
     /// write-effect pipeline (or dropping them for a `write_was_noop` command).
+    /// The execution seam drains the whole [`CommandEffects`] value instead;
+    /// this remains for callers that only need the event deposits.
     #[inline]
     pub fn take_keyspace_events(&mut self) -> KeyspaceEventDeposits {
-        std::mem::take(&mut self.keyspace_events)
+        std::mem::take(&mut self.effects.keyspace_events)
     }
 
     /// Report a single keyspace lookup from a [`LookupSpec::Reported`] command.
@@ -1132,8 +1167,8 @@ impl<'a> CommandContext<'a> {
     #[inline]
     pub fn record_lookup(&mut self, outcome: crate::command_spec::LookupOutcome) {
         match outcome {
-            crate::command_spec::LookupOutcome::Hit => self.keyspace_hits += 1,
-            crate::command_spec::LookupOutcome::Miss => self.keyspace_misses += 1,
+            crate::command_spec::LookupOutcome::Hit => self.effects.keyspace_hits += 1,
+            crate::command_spec::LookupOutcome::Miss => self.effects.keyspace_misses += 1,
         }
     }
 
@@ -1408,42 +1443,97 @@ mod tests {
         assert!(WalStrategy::MoveKeys.actions(&one).is_empty());
     }
 
+    // ------------------------------------------------------------------------
+    // Move-3 convergence: index-based WAL destinations resolved through the
+    // declared write-access keys (`keys_with_flags`), not an arg index. Each
+    // mock pins that the flag-derived destination equals the old index-derived
+    // one for a migrated key layout, so the integration suite's implicit
+    // coverage becomes an explicit, cheap unit assertion.
+    // ------------------------------------------------------------------------
+
+    /// Declare a mock write command with a given key/access layout and WAL
+    /// strategy, so `wal_actions` can be exercised against the resolved
+    /// write-access keys.
+    macro_rules! wal_mock {
+        ($name:ident, $keys:expr, $access:expr, $wal:expr) => {
+            struct $name;
+            impl Command for $name {
+                fn spec(&self) -> &'static CommandSpec {
+                    static SPEC: CommandSpec = CommandSpec {
+                        name: "WALMOCK",
+                        arity: Arity::AtLeast(1),
+                        flags: CommandFlags::WRITE,
+                        keys: $keys,
+                        access: $access,
+                        wal: $wal,
+                        wakes: WaiterWake::None,
+                        event: crate::command_spec::EventSpec::Suppressed,
+                        requires_same_slot: false,
+                        lookup: crate::command_spec::LookupSpec::None,
+                        strategy: ExecutionStrategy::Standard,
+                    };
+                    &SPEC
+                }
+                fn execute(
+                    &self,
+                    _ctx: &mut CommandContext,
+                    _args: &[Bytes],
+                ) -> Result<Response, CommandError> {
+                    Ok(Response::ok())
+                }
+            }
+        };
+    }
+
+    // SINTERSTORE / SUNIONSTORE / SDIFFSTORE: dest at extracted-key 0, sources
+    // read-only. Former `PersistDestination(0)` → persist-if-exists over dest.
+    wal_mock!(
+        StoreDestFirst,
+        KeySpec::All,
+        AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
+        WalStrategy::PersistDestination
+    );
+    // COPY: source read, dest at extracted-key 1. Former `PersistDestination(1)`.
+    wal_mock!(
+        CopyLike,
+        KeySpec::FirstTwo,
+        AccessSpec::Positional(&[KeyAccessFlag::R, KeyAccessFlag::OW]),
+        WalStrategy::PersistDestination
+    );
+    // BITOP: dest at extracted-key 0 (KeySpec::Skip(1)), delete-on-empty. Former
+    // `PersistOrDeleteDestination(1)` → converged onto `Dynamic` (persist-or-delete
+    // over write keys).
+    wal_mock!(
+        BitopLike,
+        KeySpec::Skip(1),
+        AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
+        WalStrategy::Dynamic
+    );
+
     #[test]
-    fn wal_strategy_persist_destination() {
-        // Index 0 — SINTERSTORE-style.
-        let args = args(&[b"dest", b"src1", b"src2"]);
-        let actions = WalStrategy::PersistDestination(0).actions(&args);
+    fn wal_persist_destination_over_write_keys() {
+        // Dest-first store command: only the destination (OW) is persisted;
+        // the read-only sources emit nothing.
+        let store_args = args(&[b"dest", b"src1", b"src2"]);
+        let actions = StoreDestFirst.wal_actions(&store_args);
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], WalAction::PersistIfExists(k) if k == b"dest"));
 
-        // Index 1 — COPY-style.
-        let actions = WalStrategy::PersistDestination(1).actions(&args);
+        // COPY-style: destination is the second key.
+        let copy_args = args(&[b"src", b"dest"]);
+        let actions = CopyLike.wal_actions(&copy_args);
         assert_eq!(actions.len(), 1);
-        assert!(matches!(actions[0], WalAction::PersistIfExists(k) if k == b"src1"));
-
-        // Out-of-bounds index — yields nothing.
-        assert!(
-            WalStrategy::PersistDestination(99)
-                .actions(&args)
-                .is_empty()
-        );
+        assert!(matches!(actions[0], WalAction::PersistIfExists(k) if k == b"dest"));
     }
 
     #[test]
-    fn wal_strategy_persist_or_delete_destination() {
-        // BITOP-style: destination at index 1, persist-or-delete so a
-        // delete-on-empty reaches the WAL.
+    fn wal_dynamic_persist_or_delete_over_write_keys() {
+        // BITOP-style: destination persist-or-delete so a delete-on-empty
+        // reaches the WAL; the read-only sources emit nothing.
         let args = args(&[b"AND", b"dest", b"src1", b"src2"]);
-        let actions = WalStrategy::PersistOrDeleteDestination(1).actions(&args);
+        let actions = BitopLike.wal_actions(&args);
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], WalAction::PersistOrDelete(k) if k == b"dest"));
-
-        // Out-of-bounds index — yields nothing.
-        assert!(
-            WalStrategy::PersistOrDeleteDestination(99)
-                .actions(&args)
-                .is_empty()
-        );
     }
 
     #[test]

@@ -11,8 +11,8 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, BitOp, BitfieldEncoding, BitfieldOffset, BitfieldSubCommand,
     Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec, ExecutionStrategy,
-    KeySpec, KeyspaceEventFlags, LookupSpec, OverflowMode, StringValue, Value, WaiterWake,
-    WalStrategy, bitop,
+    KeyAccessFlag, KeySpec, KeyspaceEventFlags, LookupSpec, OverflowMode, StringValue, Value,
+    WaiterWake, WalStrategy, bitop,
 };
 use frogdb_protocol::Response;
 
@@ -81,7 +81,7 @@ impl Command for SetbitCommand {
 
         // Signal dirty state to the shard for rdb_changes_since_last_save tracking
         if !is_dirty {
-            ctx.dirty_delta = -1; // No actual change, suppress dirty increment
+            ctx.effects.dirty_delta = -1; // No actual change, suppress dirty increment
         }
 
         Ok(Response::Integer(old_bit as i64))
@@ -213,12 +213,16 @@ impl Command for BitopCommand {
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::Skip(1),
-            access: AccessSpec::Uniform,
-            // Persist-or-delete the destination (args[1]): a non-empty result
-            // stores, an empty result deletes (bitops.c bitopCommand). The
-            // deletion must reach the WAL so it survives a restart — a plain
-            // `PersistDestination` would leave the stale prior value on disk.
-            wal: WalStrategy::PersistOrDeleteDestination(1),
+            // Destination (key 0 of the `Skip(1)` extraction, args[1]) is
+            // overwritten; the source keys are read-only.
+            access: AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
+            // Persist-or-delete the destination: a non-empty result stores, an
+            // empty result deletes (bitops.c bitopCommand). The deletion must
+            // reach the WAL so it survives a restart — a plain persist-if-exists
+            // would leave the stale prior value on disk. `Dynamic` resolves the
+            // destination through the declared write-access key (the sole `OW`
+            // key above) and emits persist-or-delete over it.
+            wal: WalStrategy::Dynamic,
             wakes: WaiterWake::None,
             // Runtime-deposited (bitops.c bitopCommand): `set` under
             // NOTIFY_STRING on the destination when the result is non-empty,
@@ -525,10 +529,10 @@ fn execute_bitfield(
 
     // Signal dirty state to the shard for rdb_changes_since_last_save tracking
     if dirty_count > 0 {
-        ctx.dirty_delta = dirty_count;
+        ctx.effects.dirty_delta = dirty_count;
     } else if modified {
         // Modified but no dirty subcommands -> suppress dirty increment
-        ctx.dirty_delta = -1;
+        ctx.effects.dirty_delta = -1;
     }
 
     Ok(Response::Array(results))

@@ -4,7 +4,14 @@
 //! and internal control-flow responses:
 //!
 //! - [`WireResponse`] - Only contains types that can be serialized to RESP2/RESP3.
-//!   The `to_resp2_frame()` and `to_resp3_frame()` methods CANNOT panic.
+//!   The `to_resp2_frame()` and `to_resp3_frame()` methods cannot panic over the
+//!   frames they are asked to encode. RESP2 has two distinct null shapes:
+//!   `$-1\r\n` (a null bulk / nested null) and `*-1\r\n` (a top-level null
+//!   array). A `Resp2BytesFrame::Null` only encodes `$-1\r\n`, so the top-level
+//!   array-null is owned by the RESP2 codec (`Resp2Outbound::NullArray`) and
+//!   diverted before `to_resp2_frame()`. A *nested* [`WireResponse::NullArray`]
+//!   (inside an array/map/set) does reach `to_resp2_frame()` and encodes as the
+//!   nested null `$-1\r\n` — RESP2 has no `*-1` outside the top level.
 //!
 //! - [`InternalAction`] - Control-flow signals that must be intercepted before
 //!   serialization (blocking commands, Raft operations, migrations).
@@ -99,7 +106,11 @@ pub enum SlotMigrationKind {
 /// Response types that can be safely serialized to the wire protocol.
 ///
 /// This enum ONLY contains types that can be encoded as RESP2 or RESP3 frames.
-/// The `to_resp2_frame()` and `to_resp3_frame()` methods will NEVER panic.
+/// `to_resp3_frame()` never panics for any variant; `to_resp2_frame()` never
+/// panics for any variant. A *top-level* [`WireResponse::NullArray`] is diverted
+/// to the RESP2 codec (`Resp2Outbound::NullArray`, emitting `*-1\r\n`) before it
+/// reaches `to_resp2_frame()`; a *nested* one reaches `to_resp2_frame()` and
+/// encodes as the nested null `$-1\r\n`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WireResponse {
     // === RESP2 Types ===
@@ -203,7 +214,14 @@ impl WireResponse {
     /// - Null → Null bulk string
     /// - Push → Array
     ///
-    /// This method CANNOT panic - all variants are wire-serializable.
+    /// This method is total — and cannot panic — over every variant.
+    /// [`WireResponse::NullArray`] deserves a note: RESP2's top-level array-null
+    /// (`*-1\r\n`) is not representable as a single [`Resp2BytesFrame`]
+    /// (`redis-protocol`'s `Null` is always `$-1\r\n`), so at the *top level* it
+    /// is encoded by the RESP2 codec (`Resp2Outbound::NullArray`) and diverted
+    /// before reaching this method. But a NullArray *nested* inside an
+    /// array/map/set does reach the arm below — RESP2 has no `*-1` outside the
+    /// top level, so a nested null array is encoded as the nested null `$-1\r\n`.
     pub fn to_resp2_frame(self) -> Resp2BytesFrame {
         match self {
             WireResponse::Simple(s) => Resp2BytesFrame::SimpleString(s),
@@ -258,8 +276,13 @@ impl WireResponse {
                 Resp2BytesFrame::BulkString(n)
             }
             WireResponse::NullArray => {
-                // NullArray needs special handling at the connection layer to emit *-1\r\n.
-                // If it reaches here, fall back to Null ($-1\r\n) as best effort.
+                // A *top-level* array-null (`*-1\r\n`) is diverted to the RESP2
+                // codec (`Resp2Outbound::NullArray`) before reaching here, because
+                // `Resp2BytesFrame` cannot represent it (its `Null` is `$-1\r\n`).
+                // This arm is reached only for a NullArray *nested* inside an
+                // array/map/set (the recursive arms above call back into this
+                // method). RESP2 has no `*-1` outside the top level, so a nested
+                // null array is encoded as the nested null `$-1\r\n`.
                 Resp2BytesFrame::Null
             }
         }
@@ -1402,6 +1425,34 @@ mod tests {
             }
             _ => panic!("Expected array"),
         }
+    }
+
+    #[test]
+    fn test_nested_null_array_to_resp2_encodes_as_nested_null() {
+        // A top-level NullArray is diverted to the RESP2 codec, but a NullArray
+        // nested inside an Array reaches to_resp2_frame() via the recursive Array
+        // arm. It must encode as the nested null ($-1\r\n = Resp2BytesFrame::Null),
+        // NOT panic. Repro shape: EXEC over RESP2 wrapping a ZRANK ... WITHSCORE
+        // miss (Response::NullArray) inside Response::Array.
+        let wire = WireResponse::Array(vec![WireResponse::NullArray]);
+        let frame = wire.to_resp2_frame();
+        match frame {
+            Resp2BytesFrame::Array(items) => {
+                assert_eq!(items.len(), 1);
+                assert!(
+                    matches!(items[0], Resp2BytesFrame::Null),
+                    "nested NullArray must encode as RESP2 nested null ($-1), got {:?}",
+                    items[0]
+                );
+            }
+            _ => panic!("Expected outer Array frame, got {:?}", frame),
+        }
+
+        // Encode to bytes and assert the exact RESP2 shape: *1\r\n$-1\r\n.
+        let frame = WireResponse::Array(vec![WireResponse::NullArray]).to_resp2_frame();
+        let mut buf = bytes::BytesMut::new();
+        redis_protocol::resp2::encode::extend_encode(&mut buf, &frame, false).unwrap();
+        assert_eq!(buf.as_ref(), b"*1\r\n$-1\r\n");
     }
 
     #[test]

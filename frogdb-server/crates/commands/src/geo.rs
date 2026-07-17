@@ -151,7 +151,7 @@ impl Command for GeoaddCommand {
             ctx.store.delete(key);
         }
         if added == 0 && changed == 0 {
-            ctx.write_was_noop = true;
+            ctx.effects.write_was_noop = true;
         }
 
         let result = if ch { added + changed } else { added };
@@ -377,8 +377,9 @@ impl Command for GeosearchstoreCommand {
             arity: Arity::AtLeast(5),
             flags: CommandFlags::WRITE,
             keys: KeySpec::FirstTwo,
-            access: AccessSpec::Uniform,
-            wal: WalStrategy::PersistDestination(0),
+            // Destination (key 0) is overwritten; the source (key 1) is read-only.
+            access: AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
+            wal: WalStrategy::PersistDestination,
             wakes: WaiterWake::None,
             // Runtime-deposited (geo.c georadiusGeneric): `geosearchstore`
             // under NOTIFY_ZSET on the destination when the search stores

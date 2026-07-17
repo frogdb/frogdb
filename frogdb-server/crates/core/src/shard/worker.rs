@@ -219,14 +219,7 @@ impl ShardWorker {
             is_replica_flag: Some(self.identity.is_replica_flag().clone()),
             master_host: self.identity.master_host().cloned(),
             master_port: self.identity.master_port(),
-            dirty_delta: 0,
-            lazyfreed_delta: 0,
-            keyspace_hits: 0,
-            keyspace_misses: 0,
-            write_was_noop: false,
-            hll_wal_delta: None,
-            keyspace_events: Default::default(),
-            script_writes: Vec::new(),
+            effects: Default::default(),
         }
     }
 

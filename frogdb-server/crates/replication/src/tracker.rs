@@ -27,8 +27,11 @@ pub struct ReplicationTrackerImpl {
     /// Next replica id to allocate.
     next_replica_id: AtomicU64,
 
-    /// Current replication offset (primary's write position). Wrapped in `Arc`
-    /// so it can be shared with the cluster bus for HealthProbe responses.
+    /// Current replication offset (primary's write position). A *borrowed*
+    /// clone of the atomic owned by [`crate::offset_coordinator::OffsetCoordinator`]
+    /// (its canonical home, and the sole vendor of the cluster-bus handle). The
+    /// tracker keeps this handle only for its INFO/ROLE read + lag accessors;
+    /// the coordinator, not the tracker, advances it and hands it to the bus.
     current_offset: Arc<AtomicU64>,
 
     /// Channel for notifying WAIT waiters about new ACKs.
@@ -61,9 +64,14 @@ impl ReplicationTrackerImpl {
         Arc::new(Self::new())
     }
 
-    /// Get a shared handle to the replication offset atomic.
-    /// Used by the cluster bus to respond to HealthProbe RPCs.
-    pub fn shared_offset(&self) -> Arc<AtomicU64> {
+    /// Hand the offset atomic to the [`crate::offset_coordinator::OffsetCoordinator`]
+    /// so it can adopt it as its canonical `live` handle at construction.
+    ///
+    /// This is the ONLY place the tracker vends its offset atomic: the public
+    /// cluster-bus handle is vended by the coordinator
+    /// ([`crate::offset_coordinator::OffsetCoordinator::shared_offset`]), the
+    /// single owner, not here.
+    pub(crate) fn offset_handle(&self) -> Arc<AtomicU64> {
         self.current_offset.clone()
     }
 
@@ -130,16 +138,18 @@ impl ReplicationTrackerImpl {
     }
 
     /// Set the current replication offset.
+    ///
+    /// Used at wiring time to seed the offset from recovered state. The live
+    /// advance is owned by the coordinator's `advance` gate, which writes the
+    /// same (shared) atomic.
     pub fn set_offset(&self, offset: u64) {
         self.current_offset.store(offset, Ordering::Release);
     }
 
-    /// Increment the current replication offset, returning the new value.
-    pub fn increment_offset(&self, bytes: u64) -> u64 {
-        self.current_offset.fetch_add(bytes, Ordering::Release) + bytes
-    }
-
     /// Get the current replication offset.
+    ///
+    /// Reads the borrowed handle for INFO/ROLE reporting and lag; the
+    /// coordinator's `current()` reads the same atomic.
     pub fn current_offset(&self) -> u64 {
         self.current_offset.load(Ordering::Acquire)
     }
@@ -194,6 +204,21 @@ impl ReplicationTrackerImpl {
             self.lag_disconnect_times
                 .write()
                 .insert(session.address(), Instant::now());
+        }
+    }
+
+    /// Seed a replica's initial acked position when its session enters the
+    /// streaming phase — the offset it resumed from (its PSYNC offset for a
+    /// partial resync, or the checkpoint's `snapshot_offset` for a full resync).
+    ///
+    /// This is the primary recording where the replica *started*, not the
+    /// replica acknowledging an offset, so it never emits a WAIT-waiter
+    /// notification (unlike [`ReplicationTracker::record_ack`]). It shares the
+    /// session's monotonic `acked_offset` atomic, so no second source of truth
+    /// is introduced.
+    pub fn seed_acked_position(&self, replica_id: u64, offset: u64) {
+        if let Some(session) = self.replicas.read().get(&replica_id) {
+            session.seed_acked_position(offset);
         }
     }
 
@@ -304,6 +329,35 @@ mod tests {
         assert_eq!(tracker.replica_lag(session.id()), Some(200));
         tracker.record_ack(session.id(), 1000);
         assert_eq!(tracker.replica_lag(session.id()), Some(0));
+    }
+
+    /// Seeding regression (proposal 57): seeding the resume position advances
+    /// the acked offset (so WAIT quorum counting and the lag monitor start
+    /// from where the replica resumed) but does **not** emit a WAIT-waiter
+    /// notification — only a genuine replica ACK does.
+    #[test]
+    fn seed_acked_position_does_not_notify_wait_waiters() {
+        let tracker = ReplicationTrackerImpl::new();
+        let session = tracker.register_replica(test_addr());
+        session.force_phase_for_test(Phase::Streaming);
+        let mut acks = tracker.subscribe_acks();
+
+        // Seed: position advances, no notification.
+        tracker.seed_acked_position(session.id(), 100);
+        assert_eq!(session.acked_offset(), 100);
+        assert_eq!(tracker.count_acked(100), 1);
+        assert!(
+            acks.try_recv().is_err(),
+            "seeding must not notify WAIT waiters"
+        );
+
+        // Genuine ACK at a higher offset: notification fires.
+        tracker.record_ack(session.id(), 200);
+        assert_eq!(acks.try_recv().unwrap(), (session.id(), 200));
+
+        // A stale seed never regresses the monotonic offset.
+        tracker.seed_acked_position(session.id(), 50);
+        assert_eq!(session.acked_offset(), 200);
     }
 
     #[test]

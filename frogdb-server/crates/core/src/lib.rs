@@ -13,7 +13,6 @@ pub use frogdb_cluster as cluster;
 pub use frogdb_acl as acl;
 pub mod client_registry;
 pub mod command;
-pub mod command_macro;
 pub mod command_spec;
 pub mod conn_command;
 pub mod error;
@@ -67,9 +66,9 @@ pub use cluster::{
 pub use command::Command as ShardCommand;
 pub use command::{
     Arity, ClusterContextRef, Command, CommandContext, CommandContextCore, CommandFlags,
-    CommandMetadata, ConnectionLevelOp, ExecutionStrategy, KeyAccessFlag, ListpackConfig,
-    MergeStrategy, QuorumChecker, ReplicationContextRef, ServerWideOp, WaiterKind, WaiterWake,
-    WalAction, WalStrategy,
+    ConnectionLevelOp, ExecutionStrategy, KeyAccessFlag, ListpackConfig, MergeStrategy,
+    QuorumChecker, ReplicationContextRef, ServerWideOp, WaiterKind, WaiterWake, WalAction,
+    WalStrategy,
 };
 pub use command_spec::{
     AccessSpec, CommandSpec, EventSpec, KeySpec, LookupOutcome, LookupSpec, SpecError,

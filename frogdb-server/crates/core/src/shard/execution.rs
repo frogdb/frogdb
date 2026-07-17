@@ -11,7 +11,7 @@ use super::post_execution::{EffectScope, WalPhase, WriteSummary};
 use super::rollback::WriteSnapshot;
 use super::types::{PartialResult, TransactionResult};
 use super::worker::ShardWorker;
-use crate::command::{Command, WriteRecord};
+use crate::command::{Command, CommandEffects, WriteRecord};
 use crate::store::Store;
 use crate::types::{KeyMetadata, Value};
 
@@ -30,6 +30,48 @@ pub(crate) struct WriteCommandMeta {
     /// [`EventSpec::Dynamic`]: crate::command_spec::EventSpec::Dynamic
     /// [`CommandContext::notify_event`]: crate::command::CommandContext::notify_event
     pub keyspace_events: crate::command::KeyspaceEventDeposits,
+}
+
+impl CommandEffects {
+    /// The write-effect payload of a drained [`CommandEffects`], or `None` when
+    /// the write declared itself a no-op — the **single home** of the no-op
+    /// suppression rule documented on
+    /// [`CommandEffects::write_was_noop`](crate::command::CommandEffects::write_was_noop):
+    /// a no-op write's deposits (`keyspace_events`, `hll_wal_delta`,
+    /// `dirty_delta`) are discarded wholesale because the whole write-effect
+    /// pipeline is skipped. The script drain sites reuse the rule through
+    /// [`CommandEffects::into_script_record`], which chains here.
+    ///
+    /// The caller still owns the "is this a WRITE command?" classification —
+    /// this method owns only what the *effects* say. The destructure is
+    /// exhaustive on purpose: adding a `CommandEffects` field stops this from
+    /// compiling until the new effect's routing is decided.
+    pub(crate) fn into_write_meta(self, handler: Arc<dyn Command>) -> Option<WriteCommandMeta> {
+        let CommandEffects {
+            dirty_delta,
+            // Accounting scalars: consumed by the execution seam before the
+            // meta is built (lazyfree counter, keyspace hit/miss stats); a
+            // script sub-command drops them, matching the pre-consolidation
+            // drains. `script_writes` only ever populates on an outer
+            // EVAL/EVALSHA/FCALL context, never on a single command's.
+            lazyfreed_delta: _,
+            keyspace_hits: _,
+            keyspace_misses: _,
+            write_was_noop,
+            hll_wal_delta,
+            keyspace_events,
+            script_writes: _,
+        } = self;
+        if write_was_noop {
+            return None;
+        }
+        Some(WriteCommandMeta {
+            handler,
+            dirty_delta,
+            hll_wal_delta,
+            keyspace_events,
+        })
+    }
 }
 
 impl ShardWorker {
@@ -114,33 +156,34 @@ impl ShardWorker {
 
         // Create command context and execute. `command_context` is the single
         // builder that wires cluster + replica identity + registry from `self`.
-        let (
-            response,
-            dirty_delta,
-            keyspace_hits,
-            keyspace_misses,
-            lazyfreed_delta,
-            write_was_noop,
-            hll_wal_delta,
-            keyspace_events,
-        ) = {
+        // The deposits come back as ONE value: everything the handler produced
+        // besides the response.
+        let (response, effects) = {
             let mut ctx = self.command_context(conn_id, protocol_version);
 
             let response = match handler.execute(&mut ctx, &command.args) {
                 Ok(response) => response,
                 Err(err) => err.to_response(),
             };
-            (
-                response,
-                ctx.dirty_delta,
-                ctx.keyspace_hits,
-                ctx.keyspace_misses,
-                ctx.lazyfreed_delta,
-                ctx.write_was_noop,
-                ctx.hll_wal_delta.take(),
-                ctx.take_keyspace_events(),
-            )
+            (response, std::mem::take(&mut ctx.effects))
         };
+        // Exhaustive by-ref destructure of the drained effects: the accounting
+        // scalars are consumed here, the write payload below (via
+        // `into_write_meta`, which is itself exhaustive). Adding a
+        // `CommandEffects` field stops this site from compiling until its
+        // routing is decided.
+        let CommandEffects {
+            dirty_delta: _,
+            lazyfreed_delta,
+            keyspace_hits,
+            keyspace_misses,
+            write_was_noop: _,
+            hll_wal_delta: _,
+            keyspace_events: _,
+            script_writes: _,
+        } = &effects;
+        let (lazyfreed_delta, keyspace_hits, keyspace_misses) =
+            (*lazyfreed_delta, *keyspace_hits, *keyspace_misses);
         // Track lazyfreed objects (from UNLINK). Applied after the context is
         // dropped so `self` is no longer borrowed by it.
         if lazyfreed_delta > 0 {
@@ -175,18 +218,13 @@ impl ShardWorker {
             }
         }
 
-        // A write that declared itself a no-op gets no WriteCommandMeta, so
-        // the post-execution match runs the read path (no write effects) —
-        // this covers the single-command, rollback, and MULTI/EXEC paths in
-        // one place. Redis parity: no-op writes do not propagate, notify,
-        // or dirty WATCH.
-        let meta = if is_write && !write_was_noop {
-            Some(WriteCommandMeta {
-                handler,
-                dirty_delta,
-                hll_wal_delta,
-                keyspace_events,
-            })
+        // A write that declared itself a no-op gets no WriteCommandMeta
+        // (`into_write_meta` owns that rule), so the post-execution match runs
+        // the read path (no write effects) — this covers the single-command,
+        // rollback, and MULTI/EXEC paths in one place. Redis parity: no-op
+        // writes do not propagate, notify, or dirty WATCH.
+        let meta = if is_write {
+            effects.into_write_meta(handler)
         } else {
             None
         };
@@ -218,6 +256,69 @@ impl ShardWorker {
         if misses > 0 {
             KeyspaceMisses::inc_by(self.observability.metrics(), misses);
         }
+    }
+
+    /// Tally and record keyspace hit/miss accounting from a per-key existence
+    /// sequence — the single home of the *existence == hit* rule for the
+    /// cross-shard scatter path (the counterpart of the [`LookupSpec`] seam that
+    /// owns it for the single-shard path).
+    ///
+    /// Each `true` is a hit, each `false` a miss; the caller supplies the
+    /// existence verdict from *its own* lookup primitive (EXISTS/TOUCH probe
+    /// `exists_unexpired`; MGET uses the value it fetched), which is why this
+    /// takes booleans rather than keys — the accounting rule is shared even
+    /// though the existence test legitimately differs per command.
+    ///
+    /// [`LookupSpec`]: crate::command_spec::LookupSpec
+    pub(super) fn record_lookup_existence(&self, existed: impl IntoIterator<Item = bool>) {
+        let mut hits = 0u64;
+        let mut misses = 0u64;
+        for exists in existed {
+            if exists {
+                hits += 1;
+            } else {
+                misses += 1;
+            }
+        }
+        self.record_keyspace_lookups(hits, misses);
+    }
+
+    /// Serialize a key's current value into the self-describing transport frame
+    /// shared by DUMP/RESTORE, cross-shard COPY, and RDB — the **single
+    /// producer** of that frame in the scatter path. The value fetch, expiry
+    /// lookup, and persistence-codec call happen here once, so the COPY and DUMP
+    /// arms can no longer drift in how they build the frame or extract expiry.
+    ///
+    /// Returns the frame bytes plus the key's relative TTL in milliseconds (or
+    /// `None` when the key has no expiry / is absent). `expiry_in_header` selects
+    /// how the expiry travels: DUMP embeds it in the frame header (RESTORE reads
+    /// it back when no TTL override is supplied); cross-shard COPY writes an
+    /// expiry-free header and ships the TTL out-of-band via the returned value.
+    /// Either way the extraction lives in one place.
+    fn serialize_key_for_transport(
+        &mut self,
+        key: &[u8],
+        expiry_in_header: bool,
+    ) -> Option<(Bytes, Option<i64>)> {
+        let value = self.store.get(key)?;
+        let expires_at = self.store.get_expiry(key);
+        let mut metadata = KeyMetadata::new(value.memory_size());
+        if expiry_in_header {
+            metadata.expires_at = expires_at;
+        }
+        let frame = crate::persistence::serialize(&value, &metadata);
+        let ttl_ms = expires_at.map(|exp| exp.duration_since(Instant::now()).as_millis() as i64);
+        Some((Bytes::from(frame), ttl_ms))
+    }
+
+    /// Decode a self-describing transport frame produced by
+    /// [`ShardWorker::serialize_key_for_transport`] / DUMP — the single decode
+    /// site for the scatter path (the RESTORE side of cross-shard COPY), sharing
+    /// the persistence codec instead of reaching into it inline.
+    fn deserialize_transport_frame(
+        data: &[u8],
+    ) -> Result<(Value, KeyMetadata), crate::persistence::SerializationError> {
+        crate::persistence::deserialize(data)
     }
 
     /// Execute a command locally.
@@ -260,7 +361,13 @@ impl ShardWorker {
                     hll_wal_delta: write_meta.hll_wal_delta.as_deref(),
                     keyspace_events: write_meta.keyspace_events.as_slice(),
                 };
-                match self.persist_and_confirm(&record).await {
+                match self
+                    .persist(
+                        std::slice::from_ref(&record),
+                        super::persistence::Durability::Confirm,
+                    )
+                    .await
+                {
                     Ok(()) => {
                         self.run_write_effects(
                             WriteSummary {
@@ -399,7 +506,10 @@ impl ShardWorker {
 
             if rollback_mode {
                 // Batch WAL persistence with rollback on failure
-                if let Err(e) = self.persist_transaction_to_wal(&write_infos).await {
+                if let Err(e) = self
+                    .persist(&write_infos, super::persistence::Durability::Confirm)
+                    .await
+                {
                     tracing::error!(
                         error = %e,
                         "Transaction WAL persistence failed, rolling back"
@@ -461,38 +571,30 @@ impl ShardWorker {
                     .await
             }
             ScatterOp::Exists => {
-                // Keyspace hit/miss counted per key here (this cross-shard path
-                // bypasses the execution seam), consistent with the single-shard
-                // `LookupSpec::EveryKey` classification.
-                let mut hits = 0u64;
-                let mut misses = 0u64;
+                // Keyspace hit/miss counted per key through the shared accounting
+                // seam (this cross-shard path bypasses the single-shard LookupSpec
+                // seam), consistent with the `LookupSpec::EveryKey` rule: the
+                // unexpired-existence probe is the hit, independent of the reply's
+                // own `contains` test.
+                let mut existed = Vec::with_capacity(keys.len());
                 let mut results = Vec::with_capacity(keys.len());
                 for key in keys {
-                    if self.store.exists_unexpired(key) {
-                        hits += 1;
-                    } else {
-                        misses += 1;
-                    }
+                    existed.push(self.store.exists_unexpired(key));
                     let exists = self.store.contains(key);
                     results.push((key.clone(), Response::Integer(if exists { 1 } else { 0 })));
                 }
-                self.record_keyspace_lookups(hits, misses);
+                self.record_lookup_existence(existed);
                 results
             }
             ScatterOp::Touch => {
-                let mut hits = 0u64;
-                let mut misses = 0u64;
+                let mut existed = Vec::with_capacity(keys.len());
                 let mut results = Vec::with_capacity(keys.len());
                 for key in keys {
-                    if self.store.exists_unexpired(key) {
-                        hits += 1;
-                    } else {
-                        misses += 1;
-                    }
+                    existed.push(self.store.exists_unexpired(key));
                     let touched = self.store.touch(key);
                     results.push((key.clone(), Response::Integer(if touched { 1 } else { 0 })));
                 }
-                self.record_keyspace_lookups(hits, misses);
+                self.record_lookup_existence(existed);
                 results
             }
             ScatterOp::Keys { pattern } => {
@@ -538,25 +640,11 @@ impl ShardWorker {
             }
             ScatterOp::Copy { source_key } => {
                 // Get the value and expiry from source key for cross-shard copy.
-                // Returns an array with: [serialized_value, expiry_ms_or_nil]
-                match self.store.get(source_key) {
-                    Some(value) => {
-                        // Get expiry if any
-                        let expiry = self.store.get_expiry(source_key);
-                        let expiry_ms = expiry.map(|exp| {
-                            exp.duration_since(std::time::Instant::now()).as_millis() as i64
-                        });
-
-                        // Serialize the value through the shared persistence codec
-                        // — the same self-describing frame used by DUMP/RESTORE and
-                        // RDB snapshots — so cross-shard COPY can never drift from
-                        // persistence. Expiry travels separately (below), so the
-                        // header is written with fresh, expiry-free metadata.
-                        let serialized = crate::persistence::serialize(
-                            &value,
-                            &KeyMetadata::new(value.memory_size()),
-                        );
-
+                // Returns an array with: [serialized_value, expiry_ms_or_nil].
+                // COPY ships the expiry out-of-band (the array's second element),
+                // so the transport frame is produced with an expiry-free header.
+                match self.serialize_key_for_transport(source_key, false) {
+                    Some((serialized, expiry_ms)) => {
                         let expiry_resp = match expiry_ms {
                             Some(ms) if ms > 0 => Response::Integer(ms),
                             _ => Response::null(),
@@ -564,10 +652,7 @@ impl ShardWorker {
 
                         vec![(
                             source_key.clone(),
-                            Response::Array(vec![
-                                Response::bulk(Bytes::from(serialized)),
-                                expiry_resp,
-                            ]),
+                            Response::Array(vec![Response::bulk(serialized), expiry_resp]),
                         )]
                     }
                     None => {
@@ -595,28 +680,15 @@ impl ShardWorker {
                 }
             }
             ScatterOp::Dump => {
-                // Serialize keys with full metadata for MIGRATE.
-                // Returns serialized data in our internal format (compatible with RESTORE).
-                use crate::persistence::serialize;
-
+                // Serialize keys with full metadata for MIGRATE through the single
+                // transport-frame producer. DUMP embeds the expiry in the frame
+                // header (the format RESTORE reads back), so it requests
+                // `expiry_in_header` and ignores the returned out-of-band TTL.
                 keys.iter()
-                    .map(|key| {
-                        match self.store.get(key) {
-                            Some(value) => {
-                                // Get expiry if any
-                                let expires_at = self.store.get_expiry(key);
-                                let mut metadata = KeyMetadata::new(value.memory_size());
-                                metadata.expires_at = expires_at;
-
-                                // Serialize with full metadata
-                                let serialized = serialize(&value, &metadata);
-                                (key.clone(), Response::bulk(Bytes::from(serialized)))
-                            }
-                            None => {
-                                // Key doesn't exist
-                                (key.clone(), Response::null())
-                            }
-                        }
+                    .map(|key| match self.serialize_key_for_transport(key, true) {
+                        Some((serialized, _ttl_ms)) => (key.clone(), Response::bulk(serialized)),
+                        // Key doesn't exist
+                        None => (key.clone(), Response::null()),
                     })
                     .collect()
             }
@@ -698,12 +770,11 @@ impl ShardWorker {
         // non-string existing key still counts as a hit — the key lookup
         // succeeded even though the value is replied as nil.
         let mut results = Vec::with_capacity(keys.len());
-        let mut hits = 0u64;
-        let mut misses = 0u64;
+        let mut existed = Vec::with_capacity(keys.len());
         for key in keys {
             let response = match self.store.get(key) {
                 Some(value) => {
-                    hits += 1;
+                    existed.push(true);
                     if let Some(sv) = value.as_string() {
                         Response::bulk(sv.as_bytes())
                     } else {
@@ -711,13 +782,13 @@ impl ShardWorker {
                     }
                 }
                 None => {
-                    misses += 1;
+                    existed.push(false);
                     Response::null()
                 }
             };
             results.push((key.clone(), response));
         }
-        self.record_keyspace_lookups(hits, misses);
+        self.record_lookup_existence(existed);
         // Client tracking: record reads for MGET
         if self.tracking.has_tracking_clients() {
             for key in keys {
@@ -861,10 +932,10 @@ impl ShardWorker {
             return vec![(dest_key.clone(), Response::Integer(0))];
         }
 
-        // Deserialize the value through the shared persistence codec. The frame is
-        // self-describing (it carries its own type marker), so no separate type tag
-        // is needed. Expiry is applied from `expiry_ms` below, not the header.
-        match crate::persistence::deserialize(value_data.as_ref()) {
+        // Deserialize the value through the shared transport-frame seam. The frame
+        // is self-describing (it carries its own type marker), so no separate type
+        // tag is needed. Expiry is applied from `expiry_ms` below, not the header.
+        match Self::deserialize_transport_frame(value_data.as_ref()) {
             Ok((value, _metadata)) => {
                 // If REPLACE, delete existing first
                 if replace {
@@ -996,7 +1067,12 @@ mod scatter_effect_tests {
     }
 
     impl ReplicationBroadcaster for RecordingBroadcaster {
-        fn broadcast_command(&self, cmd_name: &str, args: &[Bytes]) -> u64 {
+        fn broadcast_command_on_shard(
+            &self,
+            _shard_id: u16,
+            cmd_name: &str,
+            args: &[Bytes],
+        ) -> u64 {
             let mut g = self.commands.lock().unwrap();
             g.push((cmd_name.to_string(), args.to_vec()));
             g.len() as u64
@@ -1006,9 +1082,6 @@ mod scatter_effect_tests {
         }
         fn current_offset(&self) -> u64 {
             self.commands.lock().unwrap().len() as u64
-        }
-        fn extract_divergent_writes(&self, _last: u64) -> Vec<(u64, Bytes)> {
-            Vec::new()
         }
     }
 
@@ -1242,5 +1315,291 @@ mod scatter_effect_tests {
             bc.commands.lock().unwrap().is_empty(),
             "nothing to replicate when nothing was deleted"
         );
+    }
+
+    // ------------------------------------------------------------------------
+    // Item D pins (proposal 62): the scatter path no longer reaches past the
+    // transport-codec seam (D1) or the keyspace-accounting seam (D2). These
+    // pin the behavior each helper now owns for exactly one place instead of
+    // three inline copies.
+    // ------------------------------------------------------------------------
+
+    /// D1: the transport frame has one producer. DUMP embeds the key's expiry in
+    /// the frame header (RESTORE reads it back when given no TTL override);
+    /// cross-shard COPY writes an expiry-free header and ships the TTL
+    /// out-of-band. The expiry extraction lives once, so the two variants can
+    /// only differ in that one documented way — asserted here — and both decode
+    /// back to the same value through the shared decode seam.
+    #[tokio::test]
+    async fn transport_frame_producer_dump_embeds_copy_omits_expiry() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = scatter_worker(bc as SharedBroadcaster);
+
+        worker.store.set(
+            Bytes::from_static(b"k"),
+            Value::string(Bytes::from_static(b"v")),
+        );
+        worker
+            .store
+            .set_expiry(b"k", Instant::now() + Duration::from_secs(100));
+
+        // DUMP variant: expiry embedded in header; COPY variant: expiry-free.
+        let (dump_bytes, dump_ttl) = worker
+            .serialize_key_for_transport(b"k", true)
+            .expect("key present");
+        let (copy_bytes, copy_ttl) = worker
+            .serialize_key_for_transport(b"k", false)
+            .expect("key present");
+
+        // Same out-of-band relative TTL from the same source expiry (~100s):
+        // the extraction is shared, so it cannot drift between the two.
+        assert_eq!(dump_ttl, copy_ttl);
+        let ttl = copy_ttl.expect("expiry present");
+        assert!((99_000..=100_000).contains(&ttl), "unexpected ttl {ttl}");
+
+        // The two frames differ only in the header expiry field.
+        assert_ne!(dump_bytes, copy_bytes);
+
+        let (dv, dmeta) = ShardWorker::deserialize_transport_frame(&dump_bytes).unwrap();
+        let (cv, cmeta) = ShardWorker::deserialize_transport_frame(&copy_bytes).unwrap();
+        assert_eq!(
+            dv.as_string().map(|s| s.as_bytes()),
+            Some(Bytes::from_static(b"v"))
+        );
+        assert_eq!(
+            cv.as_string().map(|s| s.as_bytes()),
+            Some(Bytes::from_static(b"v"))
+        );
+        assert!(dmeta.expires_at.is_some(), "DUMP frame must embed expiry");
+        assert!(cmeta.expires_at.is_none(), "COPY frame must omit expiry");
+    }
+
+    /// D1: the cross-shard COPY scatter arm ships the transport frame (decodable
+    /// through the shared seam) plus the relative TTL as the array's second
+    /// element — the arm keeps only its reply shaping, not its own serialize.
+    #[tokio::test]
+    async fn scatter_copy_arm_ships_frame_and_out_of_band_ttl() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = scatter_worker(bc as SharedBroadcaster);
+
+        worker.store.set(
+            Bytes::from_static(b"src"),
+            Value::string(Bytes::from_static(b"hello")),
+        );
+        worker
+            .store
+            .set_expiry(b"src", Instant::now() + Duration::from_secs(50));
+
+        let r = worker
+            .execute_scatter_part(
+                &[],
+                &ScatterOp::Copy {
+                    source_key: Bytes::from_static(b"src"),
+                },
+                1,
+            )
+            .await;
+        let arr = match &r.results[0].1 {
+            Response::Array(a) => a,
+            other => panic!("expected COPY array, got {other:?}"),
+        };
+        assert_eq!(arr.len(), 2);
+        let frame = match &arr[0] {
+            Response::Bulk(Some(b)) => b.clone(),
+            other => panic!("expected bulk frame, got {other:?}"),
+        };
+        let (val, meta) = ShardWorker::deserialize_transport_frame(&frame).unwrap();
+        assert_eq!(
+            val.as_string().map(|s| s.as_bytes()),
+            Some(Bytes::from_static(b"hello"))
+        );
+        assert!(
+            meta.expires_at.is_none(),
+            "COPY frame header is expiry-free"
+        );
+        match &arr[1] {
+            Response::Integer(ms) => {
+                assert!((49_000..=50_000).contains(ms), "unexpected ttl {ms}")
+            }
+            other => panic!("expected integer ttl, got {other:?}"),
+        }
+    }
+
+    /// D2: EXISTS, TOUCH, and MGET all route hit/miss accounting through the one
+    /// `record_lookup_existence` seam — *existence == hit*. Two present keys and
+    /// one absent key must record 2 hits + 1 miss for each op.
+    #[tokio::test]
+    async fn scatter_lookup_accounting_counts_existence_as_hits() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = scatter_worker(bc as SharedBroadcaster);
+
+        worker.store.set(
+            Bytes::from_static(b"a"),
+            Value::string(Bytes::from_static(b"1")),
+        );
+        worker.store.set(
+            Bytes::from_static(b"b"),
+            Value::string(Bytes::from_static(b"2")),
+        );
+        // "c" is absent.
+        let keys = [
+            Bytes::from_static(b"a"),
+            Bytes::from_static(b"b"),
+            Bytes::from_static(b"c"),
+        ];
+
+        // EXISTS: existence probe (unexpired) == hit.
+        let h0 = worker.observability.keyspace_stats().cumulative_hits();
+        let m0 = worker.observability.keyspace_stats().cumulative_misses();
+        worker
+            .execute_scatter_part(&keys, &ScatterOp::Exists, 1)
+            .await;
+        assert_eq!(
+            worker.observability.keyspace_stats().cumulative_hits() - h0,
+            2
+        );
+        assert_eq!(
+            worker.observability.keyspace_stats().cumulative_misses() - m0,
+            1
+        );
+
+        // MGET: the fetched value == hit (get-based existence).
+        let h1 = worker.observability.keyspace_stats().cumulative_hits();
+        let m1 = worker.observability.keyspace_stats().cumulative_misses();
+        let mg = worker.scatter_mget(&keys, 1);
+        assert_eq!(mg.len(), 3);
+        assert_eq!(
+            worker.observability.keyspace_stats().cumulative_hits() - h1,
+            2
+        );
+        assert_eq!(
+            worker.observability.keyspace_stats().cumulative_misses() - m1,
+            1
+        );
+
+        // TOUCH: existence probe (unexpired) == hit.
+        let h2 = worker.observability.keyspace_stats().cumulative_hits();
+        let m2 = worker.observability.keyspace_stats().cumulative_misses();
+        worker
+            .execute_scatter_part(&keys, &ScatterOp::Touch, 1)
+            .await;
+        assert_eq!(
+            worker.observability.keyspace_stats().cumulative_hits() - h2,
+            2
+        );
+        assert_eq!(
+            worker.observability.keyspace_stats().cumulative_misses() - m2,
+            1
+        );
+    }
+}
+
+#[cfg(test)]
+mod command_effects_tests {
+    //! Unit pins for the no-op suppression rule, stated once on
+    //! [`CommandEffects::into_write_meta`] (proposal 55): a `write_was_noop`
+    //! write drops its whole effect payload — `keyspace_events`,
+    //! `hll_wal_delta`, `dirty_delta` — instead of relying on each drain site
+    //! independently getting the gate right. `into_script_record` chains
+    //! through the same rule for the two script drain sites.
+    use super::*;
+
+    use crate::command::{
+        Arity, CommandContext, CommandEffects, CommandFlags, WaiterWake, WalStrategy,
+    };
+    use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec};
+    use crate::keyspace_event::KeyspaceEventFlags;
+
+    /// Minimal WRITE handler: the tests only need an `Arc<dyn Command>` to
+    /// thread through the constructors; it is never executed.
+    struct ProbeWrite;
+    impl Command for ProbeWrite {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "PROBEWRITE",
+                arity: Arity::AtLeast(1),
+                flags: CommandFlags::WRITE,
+                keys: KeySpec::First,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::PersistFirstKey,
+                wakes: WaiterWake::None,
+                event: EventSpec::Dynamic,
+                requires_same_slot: false,
+                lookup: LookupSpec::None,
+                strategy: crate::command::ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+        fn execute(
+            &self,
+            _ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            Ok(Response::ok())
+        }
+    }
+
+    /// A fully-loaded deposit set, as a PFADD-like dynamic-event write would
+    /// leave it on the context.
+    fn loaded_effects(write_was_noop: bool) -> CommandEffects {
+        CommandEffects {
+            dirty_delta: 3,
+            write_was_noop,
+            hll_wal_delta: Some(smallvec::smallvec![(7u16, 5u8)]),
+            keyspace_events: smallvec::smallvec![(
+                Bytes::from_static(b"k"),
+                "pfadd",
+                KeyspaceEventFlags::STRING,
+            )],
+            ..Default::default()
+        }
+    }
+
+    /// The exact contract documented on `CommandEffects::write_was_noop`: a
+    /// no-op write's deposits (including keyspace_events and hll_wal_delta)
+    /// are discarded wholesale — no `WriteCommandMeta` is built.
+    #[test]
+    fn into_write_meta_suppresses_noop_write_payload() {
+        let meta = loaded_effects(true).into_write_meta(Arc::new(ProbeWrite));
+        assert!(
+            meta.is_none(),
+            "a write_was_noop write must not produce a WriteCommandMeta"
+        );
+    }
+
+    /// A non-no-op write carries its payload through unchanged.
+    #[test]
+    fn into_write_meta_carries_effect_payload() {
+        let meta = loaded_effects(false)
+            .into_write_meta(Arc::new(ProbeWrite))
+            .expect("an effective write produces a WriteCommandMeta");
+        assert_eq!(meta.dirty_delta, 3);
+        assert_eq!(meta.hll_wal_delta.as_deref(), Some(&[(7u16, 5u8)][..]));
+        assert_eq!(meta.keyspace_events.len(), 1);
+        assert_eq!(meta.keyspace_events[0].0, Bytes::from_static(b"k"));
+        assert_eq!(meta.keyspace_events[0].1, "pfadd");
+        assert_eq!(meta.handler.name(), "PROBEWRITE");
+    }
+
+    /// The script drain sites reuse the same single-home rule: a no-op scripted
+    /// sub-command records nothing.
+    #[test]
+    fn into_script_record_applies_same_noop_rule() {
+        let args = vec![Bytes::from_static(b"k"), Bytes::from_static(b"v")];
+        assert!(
+            loaded_effects(true)
+                .into_script_record(Arc::new(ProbeWrite), args.clone())
+                .is_none(),
+            "a write_was_noop sub-command must not produce a ScriptWriteRecord"
+        );
+
+        let record = loaded_effects(false)
+            .into_script_record(Arc::new(ProbeWrite), args.clone())
+            .expect("an effective scripted write produces a ScriptWriteRecord");
+        assert_eq!(record.args, args);
+        assert_eq!(record.dirty_delta, 3);
+        assert_eq!(record.hll_wal_delta.as_deref(), Some(&[(7u16, 5u8)][..]));
+        assert_eq!(record.keyspace_events.len(), 1);
+        assert_eq!(record.keyspace_events[0].1, "pfadd");
     }
 }
