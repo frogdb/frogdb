@@ -273,22 +273,30 @@ impl ReplicaSession {
     /// Seed the initial acked position when the session enters streaming.
     ///
     /// Unlike [`Self::record_ack`], this is a *primary bookkeeping* fact — where
-    /// this replica resumed from — not a replica acknowledgement. It advances
-    /// the same monotonic `acked_offset` atomic (so there is exactly one source
-    /// of truth for the acked position) but does **not** signal a genuine ACK,
-    /// so the caller must not notify WAIT waiters from it. "The primary set the
-    /// initial position" and "the replica reported an offset" stop sharing one
-    /// entry point.
+    /// this replica resumed from (its PSYNC offset for a partial resync, or the
+    /// checkpoint's `snapshot_offset` for a full resync) — not a replica
+    /// acknowledgement read off the wire. It advances the same monotonic
+    /// `acked_offset` atomic (so there is exactly one source of truth for the
+    /// acked position) and shares `record_ack`'s "only advances forward, reports
+    /// whether it did" mechanics; the two entry points remain distinct call sites
+    /// only because the primary itself, not the replica, supplies this value.
     ///
     /// The lag clock (`last_ack_time`) is reset to the resume instant: the
     /// time-based lag threshold must measure from where streaming (re)started,
     /// not from registration — a long FULLRESYNC checkpoint stream would
     /// otherwise trip it immediately.
-    pub fn seed_acked_position(&self, offset: u64) {
+    ///
+    /// Returns `true` iff the offset advanced (`offset > prev`), mirroring
+    /// [`Self::record_ack`]'s return contract — callers use this to decide
+    /// whether to notify WAIT waiters via the broadcast channel.
+    pub fn seed_acked_position(&self, offset: u64) -> bool {
         self.inner.write().last_ack_time = Instant::now();
         let prev = self.acked_offset.load(Ordering::Acquire);
         if offset > prev {
             self.acked_offset.store(offset, Ordering::Release);
+            true
+        } else {
+            false
         }
     }
 
@@ -655,9 +663,11 @@ impl ReplicaSession {
         // Seed where the replica resumed, so WAIT waiters and the lag monitor
         // start from the resumed position. This is a primary bookkeeping fact
         // ("where this replica started"), not a replica ACK, so it uses the
-        // coordinator's `seed_replica_position` verb — it advances the same
-        // monotonic atomic but emits no WAIT-waiter notification (a genuine ACK
-        // from the read task still does, via `ingest_replica_ack`).
+        // coordinator's `seed_replica_position` verb rather than
+        // `ingest_replica_ack` — but it advances the same monotonic atomic and,
+        // if a reconnecting replica already resumed at/past a WAIT target, it
+        // notifies WAIT waiters exactly like a genuine ACK would (a stale/
+        // duplicate seed that doesn't advance the offset stays silent).
         handler
             .offsets
             .seed_replica_position(self.id, resume_offset);

@@ -212,13 +212,26 @@ impl ReplicationTrackerImpl {
     /// partial resync, or the checkpoint's `snapshot_offset` for a full resync).
     ///
     /// This is the primary recording where the replica *started*, not the
-    /// replica acknowledging an offset, so it never emits a WAIT-waiter
-    /// notification (unlike [`ReplicationTracker::record_ack`]). It shares the
-    /// session's monotonic `acked_offset` atomic, so no second source of truth
-    /// is introduced.
+    /// replica acknowledging an offset — the distinction from
+    /// [`ReplicationTracker::record_ack`] is the source of the value (primary
+    /// bookkeeping vs. a wire ACK), not the effect. It shares the session's
+    /// monotonic `acked_offset` atomic (so no second source of truth is
+    /// introduced) and, like `record_ack`, notifies WAIT waiters when the seed
+    /// actually advances that offset: a replica that reconnects via partial
+    /// resync already at/past a blocked WAIT's target must wake it immediately
+    /// rather than park for up to a spontaneous-ACK cadence. A stale/duplicate
+    /// seed (offset <= current) does not advance the offset and does not notify.
     pub fn seed_acked_position(&self, replica_id: u64, offset: u64) {
-        if let Some(session) = self.replicas.read().get(&replica_id) {
-            session.seed_acked_position(offset);
+        let Some(session) = self.replicas.read().get(&replica_id).cloned() else {
+            return;
+        };
+        if session.seed_acked_position(offset) {
+            let _ = self.ack_notify.send((replica_id, offset));
+            tracing::trace!(
+                replica_id = replica_id,
+                offset = offset,
+                "Seeded replica acked position (advance; notified WAIT waiters)"
+            );
         }
     }
 
@@ -331,33 +344,39 @@ mod tests {
         assert_eq!(tracker.replica_lag(session.id()), Some(0));
     }
 
-    /// Seeding regression (proposal 57): seeding the resume position advances
-    /// the acked offset (so WAIT quorum counting and the lag monitor start
-    /// from where the replica resumed) but does **not** emit a WAIT-waiter
-    /// notification — only a genuine replica ACK does.
+    /// Seeding regression (round-7 follow-up to proposal 57): seeding the
+    /// resume position advances the acked offset (so WAIT quorum counting and
+    /// the lag monitor start from where the replica resumed) AND notifies WAIT
+    /// waiters exactly like a genuine ACK, but only when the seed actually
+    /// advances the offset — a stale/duplicate seed stays silent.
     #[test]
-    fn seed_acked_position_does_not_notify_wait_waiters() {
+    fn seed_acked_position_notifies_wait_waiters_on_advance() {
         let tracker = ReplicationTrackerImpl::new();
         let session = tracker.register_replica(test_addr());
         session.force_phase_for_test(Phase::Streaming);
         let mut acks = tracker.subscribe_acks();
 
-        // Seed: position advances, no notification.
+        // Seed: position advances, notification fires.
         tracker.seed_acked_position(session.id(), 100);
         assert_eq!(session.acked_offset(), 100);
         assert_eq!(tracker.count_acked(100), 1);
-        assert!(
-            acks.try_recv().is_err(),
-            "seeding must not notify WAIT waiters"
+        assert_eq!(
+            acks.try_recv().unwrap(),
+            (session.id(), 100),
+            "an advancing seed must notify WAIT waiters"
         );
 
-        // Genuine ACK at a higher offset: notification fires.
+        // A stale seed never regresses the monotonic offset, and does not notify.
+        tracker.seed_acked_position(session.id(), 50);
+        assert_eq!(session.acked_offset(), 100);
+        assert!(
+            acks.try_recv().is_err(),
+            "a stale/duplicate seed must not notify WAIT waiters"
+        );
+
+        // Genuine ACK at a higher offset still notifies as before.
         tracker.record_ack(session.id(), 200);
         assert_eq!(acks.try_recv().unwrap(), (session.id(), 200));
-
-        // A stale seed never regresses the monotonic offset.
-        tracker.seed_acked_position(session.id(), 50);
-        assert_eq!(session.acked_offset(), 200);
     }
 
     #[test]
@@ -401,6 +420,35 @@ mod tests {
         tracker.record_ack(id, 100);
         let result = wait_handle.await.unwrap();
         assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 1);
+    }
+
+    /// Reconnect-during-WAIT regression (round-7 follow-up to proposal 57): a
+    /// replica that resumes via partial resync at/past a blocked WAIT's target
+    /// must wake the waiter immediately via `seed_acked_position`, not leave it
+    /// parked until the next spontaneous ACK (up to ~1s in production).
+    #[tokio::test]
+    async fn seed_acked_position_wakes_blocked_wait_for_acks() {
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let session = tracker.register_replica(test_addr());
+        session.force_phase_for_test(Phase::Streaming);
+        let tracker_clone = tracker.clone();
+        let id = session.id();
+        let wait_handle = tokio::spawn(async move {
+            tokio::time::timeout(
+                Duration::from_millis(100),
+                tracker_clone.wait_for_acks(100, 1),
+            )
+            .await
+        });
+        // Give the waiter time to park before seeding.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        tracker.seed_acked_position(id, 100);
+        let result = wait_handle.await.unwrap();
+        assert!(
+            result.is_ok(),
+            "seeding an advance must wake the blocked WAIT well within the timeout"
+        );
         assert_eq!(result.unwrap(), 1);
     }
 
