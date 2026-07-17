@@ -64,14 +64,19 @@ See: [storage.md](/architecture/storage/)
 **Error codes:**
 - `-CROSSSLOT` is always used (Redis compatibility), even for internal shard violations
 
-### Orchestrator
-An external control plane that manages FrogDB cluster topology. Responsibilities include:
-- Node health monitoring
+### Raft Metadata Plane
+FrogDB nodes self-coordinate cluster metadata via embedded Raft (openraft): topology, slot
+ownership, node roles, and the config epoch. Responsibilities include:
 - Failover decisions
 - Slot migration coordination
-- Configuration distribution
+- Topology versioning (config epoch)
 
-FrogDB uses an orchestrated model (like DragonflyDB) rather than gossip protocol (like Redis Cluster).
+FrogDB uses embedded consensus rather than gossip protocol (like Redis Cluster) or an external
+orchestrator service (like DragonflyDB). The data path never goes through Raft — consensus
+applies to metadata only.
+
+**Note:** older documents may refer to an external "Orchestrator"; that design was superseded
+by the embedded Raft metadata plane.
 
 See: [clustering.md](/architecture/clustering/)
 
@@ -85,7 +90,11 @@ See: [vll.md](/architecture/vll/)
 ## Persistence Terms
 
 ### WAL (Write-Ahead Log)
-A sequential log of all write operations, persisted to RocksDB. Enables durability and crash recovery.
+FrogDB's per-shard durability buffer. Despite the name, it is a redo-of-current-state buffer
+rather than a classic operation log: the shard serializes a key's *current* state, and a flush
+thread batches entries into RocksDB write batches. Crash durability underneath is provided by
+**RocksDB's own WAL** — a second, storage-engine-level log. When precision matters, qualify
+which one is meant: *FrogDB WAL* (shard flush buffer) vs *RocksDB WAL* (engine crash log).
 
 **Modes:**
 - `async`: WAL writes queued, fsync by OS
@@ -95,12 +104,14 @@ A sequential log of all write operations, persisted to RocksDB. Enables durabili
 See: [persistence.md](/architecture/persistence/)
 
 ### Snapshot
-A point-in-time capture of all key-value data, stored as an RDB-compatible file or RocksDB checkpoint.
+A point-in-time capture of all key-value data, stored as a RocksDB checkpoint (plus
+search-index sidecar and `metadata.json`). FrogDB does not write RDB files.
 
 **FrogDB approach:** Epoch-based (logical point-in-time) rather than fork-based (physical point-in-time).
 
-### Epoch
-A logical timestamp used for snapshot coordination. When a snapshot begins:
+### Snapshot Epoch
+A logical timestamp used for snapshot coordination. Distinct from the cluster's **config
+epoch** (topology version counter) — avoid bare "epoch". When a snapshot begins:
 1. Current epoch is recorded
 2. All shards iterate keys, writing values from epoch start
 3. Concurrent writes go to WAL (not snapshot)
