@@ -16,7 +16,7 @@ pub struct BundleListResponse {
     pub bundles: Vec<BundleInfo>,
 }
 
-/// HTTP client for the FrogDB diagnostic bundle API.
+/// HTTP client for the FrogDB debug bundle API.
 pub struct BundleClient {
     base_url: String,
     client: reqwest::Client,

@@ -13,7 +13,7 @@ use crate::util::{extract_command, extract_int, format_duration_us, format_unix_
 
 #[derive(Subcommand, Debug)]
 pub enum DebugCommand {
-    /// Collect a diagnostic bundle into a ZIP archive
+    /// Collect a debug bundle into a ZIP archive
     Zip {
         /// Collect from multiple nodes
         #[arg(long, num_args = 1..)]
@@ -391,7 +391,7 @@ impl Renderable for MemoryStatus {
 pub async fn run(cmd: &DebugCommand, ctx: &mut ConnectionContext) -> Result<i32> {
     match cmd {
         DebugCommand::Zip { .. } => {
-            anyhow::bail!("frog debug zip: not yet implemented")
+            anyhow::bail!("frogctl debug zip: not yet implemented")
         }
         DebugCommand::Latency {
             subcommand,
@@ -402,27 +402,27 @@ pub async fn run(cmd: &DebugCommand, ctx: &mut ConnectionContext) -> Result<i32>
         } => match subcommand {
             None => run_latency(*samples, *interval, *dist, ctx).await,
             Some(LatencySubcommand::Doctor) => {
-                anyhow::bail!("frog debug latency doctor: not yet implemented")
+                anyhow::bail!("frogctl debug latency doctor: not yet implemented")
             }
             Some(LatencySubcommand::Graph { .. }) => {
-                anyhow::bail!("frog debug latency graph: not yet implemented")
+                anyhow::bail!("frogctl debug latency graph: not yet implemented")
             }
             Some(LatencySubcommand::Histogram { .. }) => {
-                anyhow::bail!("frog debug latency histogram: not yet implemented")
+                anyhow::bail!("frogctl debug latency histogram: not yet implemented")
             }
         },
         DebugCommand::Memory { subcommand } => match subcommand {
             MemorySubcommand::Stats => run_memory_stats(ctx).await,
             MemorySubcommand::Doctor => run_memory_doctor(ctx).await,
             MemorySubcommand::Bigkeys { .. } => {
-                anyhow::bail!("frog debug memory bigkeys: not yet implemented")
+                anyhow::bail!("frogctl debug memory bigkeys: not yet implemented")
             }
             MemorySubcommand::Memkeys => {
-                anyhow::bail!("frog debug memory memkeys: not yet implemented")
+                anyhow::bail!("frogctl debug memory memkeys: not yet implemented")
             }
         },
         DebugCommand::Hotshards { .. } => {
-            anyhow::bail!("frog debug hotshards: not yet implemented")
+            anyhow::bail!("frogctl debug hotshards: not yet implemented")
         }
         DebugCommand::Slowlog {
             count,
@@ -431,7 +431,7 @@ pub async fn run(cmd: &DebugCommand, ctx: &mut ConnectionContext) -> Result<i32>
             ..
         } => run_slowlog(*count, *analyze, *reset, ctx).await,
         DebugCommand::Vll { .. } => {
-            anyhow::bail!("frog debug vll: not yet implemented")
+            anyhow::bail!("frogctl debug vll: not yet implemented")
         }
         DebugCommand::Connections { sort, filter } => {
             run_connections(sort.as_deref(), filter.as_deref(), ctx).await

@@ -30,8 +30,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Diagnostic bundle operations.
-    DiagnosticBundle {
+    /// Debug bundle operations.
+    DebugBundle {
         #[command(subcommand)]
         action: BundleAction,
     },
@@ -39,7 +39,7 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum BundleAction {
-    /// Generate and download a new diagnostic bundle.
+    /// Generate and download a new debug bundle.
     Generate {
         /// Collection duration in seconds (0 = instant snapshot).
         #[arg(long, default_value_t = 0)]
@@ -78,18 +78,18 @@ async fn run(cli: Cli) -> Result<()> {
     let client = BundleClient::new(&cli.host, cli.port)?;
 
     match cli.command {
-        Commands::DiagnosticBundle { action } => match action {
+        Commands::DebugBundle { action } => match action {
             BundleAction::Generate {
                 duration,
                 output_dir,
             } => {
                 if duration > 0 {
                     eprintln!(
-                        "Generating diagnostic bundle with {}s collection window...",
+                        "Generating debug bundle with {}s collection window...",
                         duration
                     );
                 } else {
-                    eprintln!("Generating diagnostic bundle (instant snapshot)...");
+                    eprintln!("Generating debug bundle (instant snapshot)...");
                 }
 
                 let (id, zip_bytes) = client.generate_bundle(duration).await?;
