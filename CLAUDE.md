@@ -55,6 +55,21 @@ just fmt-py                             # format Python code
   user: `sudo pkill syspolicyd` (launchd respawns it) or a reboot. Don't burn time on
   taskpolicy/renice/codesign once this signature is confirmed; probe with a freshly `cp`'d
   hello-world binary (new inode = fresh validation) to detect recovery.
+  Additional findings (2026-07-17):
+  - Probe correctly: the probe must be a freshly **compiled** binary (`clang hello.c`). A `cp` of
+    a platform binary (`/bin/echo`) is SIGKILLed in ms by the trust cache — false "still wedged".
+  - Orphaned requests: any process (test binary or `rustc`) whose validation request was in-flight
+    when `syspolicyd` died hangs at `_dyld_start`/0% CPU **forever**, even after a healthy daemon
+    respawns. Kill those processes and relaunch; incremental compile resumes cheaply.
+  - Working recovery recipe: kill the exec storm → `sudo pkill syspolicyd` → serially pre-validate
+    each test binary (`<bin> --list`, one at a time; enumerate them without exec via
+    `cargo test --no-run --message-format json | jq -r 'select(.profile.test==true) | .executable'`)
+    → then run nextest. Note nextest may still rebuild a few crates (feature unification) and
+    re-storm; per-crate `just test <crate>` runs are small enough to absorb.
+  - Symptom in results: wedge-frozen trivial unit tests die at exactly the 15s nextest cap
+    (`TIMEOUT [15.00Ns]`) — environmental, rerun the affected crates, don't debug the tests.
+  - Permanent machine-level fix (user action): add the terminal to System Settings → Privacy &
+    Security → Developer Tools (Gatekeeper exemption for processes it launches).
 - Run any command expected to take >2 minutes in the background with **raw output redirected to a
   log file** (`cmd > /path/to/log 2>&1`). Never pipe a long run through `grep`/`sort`/`tail` —
   filters buffer output and hide all progress.
