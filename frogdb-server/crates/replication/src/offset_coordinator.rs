@@ -4,9 +4,10 @@
 //! command stream have been produced/consumed" — but it has three backing
 //! homes:
 //!
-//! - the **live** primary write position (the tracker's atomic, advanced by
-//!   `broadcast_command`),
-//! - the **per-replica acked** positions (aggregated for WAIT / safety), and
+//! - the **live** primary write position (owned here as [`OffsetCoordinator`]'s
+//!   `live` atomic, advanced by the single [`OffsetCoordinator::advance`] gate),
+//! - the **per-replica acked** positions (the tracker's session registry,
+//!   aggregated for WAIT / safety), and
 //! - the **persisted** position (`ReplicationState::replication_offset`,
 //!   reconciled at save points).
 //!
@@ -17,7 +18,9 @@
 //! pulls those homes behind one seam so callers ask questions in the vocabulary
 //! of *replication*, never in the vocabulary of *which field*.
 
+use bytes::Bytes;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock;
 
 use frogdb_types::ReplicationTracker;
@@ -32,17 +35,25 @@ use crate::tracker::ReplicationTrackerImpl;
 /// **RESP command-stream bytes** — the bytes a replica would have to replay to
 /// reach this position. Transport framing (the 18-byte [`ReplicationFrame`]
 /// header) is NOT part of the offset. Primary and replica advance by the SAME
-/// unit (see [`Self::frame_advance`]), so an ACK is directly comparable to the
-/// live offset.
+/// unit ([`Self::advance_unit`], reached via [`Self::advance`] on the primary
+/// and [`Self::frame_advance`] on the replica), so an ACK is directly
+/// comparable to the live offset.
 ///
-/// The coordinator deepens the existing seam rather than adding an adapter
-/// layer: the [`ReplicationTrackerImpl`] already owns the live atomic and the
-/// per-replica ack registry, so the coordinator borrows it for both the live
-/// offset and ack aggregation, and additionally pulls the persisted
-/// [`ReplicationState`] under the same roof.
+/// The coordinator OWNS the live write position: the `live` atomic is its
+/// canonical home, and it is the single vendor of the shared handle the cluster
+/// bus reads for HealthProbe responses (see [`Self::shared_offset`]). The
+/// tracker holds a *borrowed* clone of the same atomic purely for its
+/// INFO/ROLE read + lag accessors; the coordinator, not the tracker, advances
+/// it and hands it to the bus.
 pub struct OffsetCoordinator {
-    /// Live write position + per-replica ack registry. The tracker owns the
-    /// `Arc<AtomicU64>` shared with the cluster bus for HealthProbe responses.
+    /// Live primary write position — the offset's canonical home. Advanced only
+    /// through [`Self::advance`]; vended to the cluster bus by
+    /// [`Self::shared_offset`]. The tracker borrows a clone of this Arc for its
+    /// read/lag accessors, but this type owns the advance and the vend.
+    live: Arc<AtomicU64>,
+    /// Per-replica acked offsets + the WAIT ack-notification channel. The
+    /// tracker's session registry; the coordinator borrows it for aggregation
+    /// and ack ingestion only.
     tracker: Arc<ReplicationTrackerImpl>,
     /// Persisted identity + offset, reconciled at save points.
     state: Arc<RwLock<ReplicationState>>,
@@ -50,34 +61,85 @@ pub struct OffsetCoordinator {
 
 impl OffsetCoordinator {
     /// Build a coordinator over an existing tracker and persisted state.
+    ///
+    /// The coordinator adopts the tracker's offset atomic as its canonical
+    /// `live` handle: from here on the coordinator owns the advance and vends
+    /// the cluster-bus handle, while the tracker retains a borrowed clone only
+    /// for its INFO/ROLE read + lag accessors.
     pub fn new(tracker: Arc<ReplicationTrackerImpl>, state: Arc<RwLock<ReplicationState>>) -> Self {
-        Self { tracker, state }
+        let live = tracker.offset_handle();
+        Self {
+            live,
+            tracker,
+            state,
+        }
     }
 
-    /// Canonical advance for one outbound/inbound frame. ONE definition of the
-    /// unit, shared by primary broadcast and replica ingest, so the two ends
-    /// can never drift. The header is transport, not stream.
+    /// The payload-bytes advance unit, defined EXACTLY ONCE. The offset counts
+    /// RESP command-stream bytes; the [`ReplicationFrame`] header is transport,
+    /// not stream. Both the primary advance gate ([`Self::advance`]) and the
+    /// replica ingest path ([`Self::frame_advance`]) measure by this, so the two
+    /// ends can never drift.
+    #[inline]
+    fn advance_unit(payload: &Bytes) -> u64 {
+        payload.len() as u64
+    }
+
+    /// The ONE advance gate. The primary calls this with the RESP payload it is
+    /// about to frame and broadcast; it advances the owned `live` atomic and
+    /// returns the new offset, which the caller stamps into the frame's sequence
+    /// field so every frame self-describes its end offset.
+    ///
+    /// The primary no longer hands a raw `.len()` to a `payload_len: u64`
+    /// parameter a caller could get wrong — the unit is applied here, once.
+    pub fn advance(&self, payload: &Bytes) -> u64 {
+        let n = Self::advance_unit(payload);
+        self.live.fetch_add(n, Ordering::Release) + n
+    }
+
+    /// Replica-side spelling of the advance *unit*. The replica advances its own
+    /// [`ReplicationState`] atomic (it has no [`OffsetCoordinator`] — that type
+    /// is primary-only), but must count by the SAME unit as [`Self::advance`].
+    /// A free function so the coordinator-less replica ingest path can call it;
+    /// defined in terms of [`Self::advance_unit`] so the two ends cannot use
+    /// different units.
     #[inline]
     pub fn frame_advance(frame: &ReplicationFrame) -> u64 {
-        frame.payload.len() as u64
-    }
-
-    /// Primary side: record that `payload_len` RESP bytes were broadcast and
-    /// return the new live offset. The frame's sequence field is stamped with
-    /// this value by the caller, so every frame self-describes its end offset.
-    pub fn advance_broadcast(&self, payload_len: u64) -> u64 {
-        self.tracker.increment_offset(payload_len)
+        Self::advance_unit(&frame.payload)
     }
 
     /// The one true live offset. Replaces every `tracker.current_offset()` AND
     /// every `state.replication_offset` read for "where is the stream now".
     pub fn current(&self) -> u64 {
-        self.tracker.current_offset()
+        self.live.load(Ordering::Acquire)
     }
 
-    /// Record an ACK from a replica (delegates to the registry, notifies WAIT).
-    pub fn record_replica_ack(&self, replica_id: u64, acked: u64) {
+    /// The cluster bus's HealthProbe handle, vended by the OWNER of the atomic.
+    /// The tracker no longer exposes a public `shared_offset()`; the shared
+    /// handle is vended here so there is a single vendor.
+    pub fn shared_offset(&self) -> Arc<AtomicU64> {
+        self.live.clone()
+    }
+
+    /// Genuine durability ACK from a replica's `REPLCONF ACK`. Notifies WAIT
+    /// waiters (delegates to the tracker's session registry + ack channel).
+    pub fn ingest_replica_ack(&self, replica_id: u64, acked: u64) {
         self.tracker.record_ack(replica_id, acked);
+    }
+
+    /// Seed a resumed replica's *stream position* after backlog replay. Same
+    /// monotonic session store as an ACK, but a distinct verb: this is
+    /// primary-side bookkeeping ("where this replica resumed"), not a durability
+    /// confirmation — [`Self::ingest_replica_ack`] is the only path driven by a
+    /// value the replica itself sent. Despite that distinction in provenance,
+    /// seeding notifies WAIT waiters exactly like a genuine ACK whenever it
+    /// advances the acked offset (round-7 follow-up to proposal 57): a replica
+    /// that reconnects via partial resync already at/past a blocked WAIT's
+    /// target must wake it immediately rather than park for up to a
+    /// spontaneous-ACK cadence (~1s). A stale/duplicate seed that does not
+    /// advance the offset does not notify.
+    pub fn seed_replica_position(&self, replica_id: u64, position: u64) {
+        self.tracker.seed_acked_position(replica_id, position);
     }
 
     /// Minimum acked offset across streaming replicas (for WAIT / safety).
@@ -122,6 +184,11 @@ mod tests {
         OffsetCoordinator::new(tracker, state)
     }
 
+    /// A RESP-ish payload of exactly `n` bytes, for driving the advance gate.
+    fn payload(n: usize) -> Bytes {
+        Bytes::from(vec![b'x'; n])
+    }
+
     #[test]
     fn frame_advance_counts_payload_not_header() {
         let payload = Bytes::from_static(b"*1\r\n$4\r\nPING\r\n");
@@ -139,13 +206,26 @@ mod tests {
     }
 
     #[test]
-    fn advance_broadcast_is_cumulative_and_visible_via_current() {
+    fn advance_is_cumulative_and_visible_via_current() {
         let coord = coordinator();
         assert_eq!(coord.current(), 0);
-        assert_eq!(coord.advance_broadcast(10), 10);
+        assert_eq!(coord.advance(&payload(10)), 10);
         assert_eq!(coord.current(), 10);
-        assert_eq!(coord.advance_broadcast(5), 15);
+        assert_eq!(coord.advance(&payload(5)), 15);
         assert_eq!(coord.current(), 15);
+    }
+
+    #[test]
+    fn advance_and_frame_advance_agree_on_the_single_unit() {
+        // The one gate: `advance(&payload)` and `frame_advance(&frame_of(payload))`
+        // must return the same count, pinning the payload-bytes unit to a single
+        // definition rather than two `.len()` sites that agree by convention.
+        let coord = coordinator();
+        let resp = serialize_command_to_resp("SET", &[Bytes::from("k"), Bytes::from("v")]);
+        let advanced = coord.advance(&resp);
+        let frame = ReplicationFrame::new(advanced, resp.clone());
+        assert_eq!(advanced, OffsetCoordinator::frame_advance(&frame));
+        assert_eq!(advanced, resp.len() as u64);
     }
 
     #[test]
@@ -154,9 +234,68 @@ mod tests {
         // advances by `frame_advance` of the frame it received. They must agree.
         let coord = coordinator();
         let resp = serialize_command_to_resp("SET", &[Bytes::from("k"), Bytes::from("v")]);
-        let primary_offset = coord.advance_broadcast(resp.len() as u64);
+        let primary_offset = coord.advance(&resp);
         let frame = ReplicationFrame::new(primary_offset, resp);
         assert_eq!(OffsetCoordinator::frame_advance(&frame), primary_offset);
+    }
+
+    #[test]
+    fn shared_offset_observes_advances_through_the_owner() {
+        // The cluster bus reads the handle vended by the coordinator (not the
+        // tracker). A read through that handle must observe every `advance`, so
+        // the bus can never see a stale or separate atomic.
+        let coord = coordinator();
+        let bus_handle = coord.shared_offset();
+        assert_eq!(bus_handle.load(Ordering::Acquire), 0);
+        coord.advance(&payload(42));
+        assert_eq!(bus_handle.load(Ordering::Acquire), 42);
+        assert_eq!(bus_handle.load(Ordering::Acquire), coord.current());
+    }
+
+    #[test]
+    fn ingest_replica_ack_advances_and_notifies_wait() {
+        let tracker = ReplicationTrackerImpl::new_arc();
+        let state = Arc::new(RwLock::new(ReplicationState::new()));
+        let coord = OffsetCoordinator::new(tracker.clone(), state);
+        let session = tracker.register_replica("127.0.0.1:6380".parse().unwrap());
+        session.force_phase_for_test(Phase::Streaming);
+        let mut acks = tracker.subscribe_acks();
+
+        coord.ingest_replica_ack(session.id(), 100);
+        assert_eq!(session.acked_offset(), 100);
+        // A genuine durability ACK notifies WAIT waiters.
+        assert_eq!(acks.try_recv().unwrap(), (session.id(), 100));
+    }
+
+    #[test]
+    fn seed_replica_position_notifies_wait_on_advance() {
+        let tracker = ReplicationTrackerImpl::new_arc();
+        let state = Arc::new(RwLock::new(ReplicationState::new()));
+        let coord = OffsetCoordinator::new(tracker.clone(), state);
+        let session = tracker.register_replica("127.0.0.1:6380".parse().unwrap());
+        session.force_phase_for_test(Phase::Streaming);
+        let mut acks = tracker.subscribe_acks();
+
+        // Seeding the resumed position advances the monotonic session store (so
+        // WAIT counting + the lag monitor start from the resumed position) AND
+        // notifies WAIT waiters exactly like a genuine ACK, since a reconnecting
+        // replica may already be at/past a blocked WAIT's target.
+        coord.seed_replica_position(session.id(), 100);
+        assert_eq!(session.acked_offset(), 100);
+        assert_eq!(tracker.count_acked(100), 1);
+        assert_eq!(
+            acks.try_recv().unwrap(),
+            (session.id(), 100),
+            "an advancing seed must notify WAIT waiters"
+        );
+
+        // A stale/duplicate seed does not advance the offset and does not notify.
+        coord.seed_replica_position(session.id(), 50);
+        assert_eq!(session.acked_offset(), 100);
+        assert!(
+            acks.try_recv().is_err(),
+            "a stale/duplicate seed must not notify WAIT waiters"
+        );
     }
 
     #[test]
@@ -170,8 +309,8 @@ mod tests {
         let s2 = tracker.register_replica("127.0.0.1:6381".parse().unwrap());
         s1.force_phase_for_test(Phase::Streaming);
         s2.force_phase_for_test(Phase::Streaming);
-        coord.record_replica_ack(s1.id(), 100);
-        coord.record_replica_ack(s2.id(), 250);
+        coord.ingest_replica_ack(s1.id(), 100);
+        coord.ingest_replica_ack(s2.id(), 250);
         assert_eq!(coord.min_acked(), Some(100));
     }
 
@@ -184,7 +323,7 @@ mod tests {
 
         // Advance the live offset through the coordinator; the window check must
         // read this value itself rather than receiving it as a parameter.
-        coord.advance_broadcast(1000);
+        coord.advance(&payload(1000));
 
         assert!(coord.can_serve_partial_sync(&repl_id, 500).await);
         assert!(coord.can_serve_partial_sync(&repl_id, 1000).await);
@@ -221,7 +360,7 @@ mod tests {
         let state = Arc::new(RwLock::new(ReplicationState::new()));
         let coord = OffsetCoordinator::new(tracker.clone(), state.clone());
 
-        coord.advance_broadcast(750);
+        coord.advance(&payload(750));
         let snapshot = coord.reconcile_for_persist().await;
         assert_eq!(snapshot.replication_offset, 750);
         // The persisted field was updated in place too.

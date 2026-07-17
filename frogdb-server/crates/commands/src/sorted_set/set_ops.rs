@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    EventSpec, ExecutionStrategy, KeySpec, KeyspaceEventFlags, LookupSpec, SortedSetValue, Value,
-    WaiterWake, WalStrategy, shard_for_key,
+    EventSpec, ExecutionStrategy, KeyAccessFlag, KeySpec, KeyspaceEventFlags, LookupSpec,
+    SortedSetValue, Value, WaiterWake, WalStrategy, shard_for_key,
 };
 use frogdb_protocol::Response;
 use std::collections::HashMap;
@@ -216,8 +216,9 @@ impl Command for ZunionstoreCommand {
                 numkeys: 1,
                 first: 2,
             },
-            access: AccessSpec::Uniform,
-            wal: WalStrategy::PersistDestination(0),
+            // Destination (key 0) is overwritten; the source keys are read-only.
+            access: AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
+            wal: WalStrategy::PersistDestination,
             wakes: WaiterWake::None,
             event: EventSpec::EmitsAt {
                 class: KeyspaceEventFlags::ZSET,
@@ -403,8 +404,9 @@ impl Command for ZinterstoreCommand {
                 numkeys: 1,
                 first: 2,
             },
-            access: AccessSpec::Uniform,
-            wal: WalStrategy::PersistDestination(0),
+            // Destination (key 0) is overwritten; the source keys are read-only.
+            access: AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
+            wal: WalStrategy::PersistDestination,
             wakes: WaiterWake::None,
             event: EventSpec::EmitsAt {
                 class: KeyspaceEventFlags::ZSET,
@@ -703,8 +705,9 @@ impl Command for ZdiffstoreCommand {
                 numkeys: 1,
                 first: 2,
             },
-            access: AccessSpec::Uniform,
-            wal: WalStrategy::PersistDestination(0),
+            // Destination (key 0) is overwritten; the source keys are read-only.
+            access: AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
+            wal: WalStrategy::PersistDestination,
             wakes: WaiterWake::None,
             event: EventSpec::EmitsAt {
                 class: KeyspaceEventFlags::ZSET,

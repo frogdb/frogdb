@@ -102,7 +102,7 @@ impl ShardWorker {
                 &registry,
                 effective_read_only,
             );
-            (result, std::mem::take(&mut ctx.script_writes))
+            (result, std::mem::take(&mut ctx.effects.script_writes))
         };
         self.scripting.set_executor(executor);
 

@@ -29,17 +29,19 @@ use bytes::{Buf, BytesMut};
 use parking_lot::RwLock;
 use sha2::Digest;
 use tokio::fs;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{broadcast, mpsc};
-
-use frogdb_types::ReplicationTracker;
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::sync::broadcast;
 
 use crate::BoxedStream;
 use crate::frame::ReplicationFrame;
-use crate::fullsync::{FullSyncMetadata, calculate_file_checksum, stream_file_to_writer};
-use crate::primary::{
-    LAG_CHECK_INTERVAL, PrimaryReplicationHandler, ReplicaConnectionHandle, parse_replconf_ack,
+use crate::fullsync::{
+    CheckpointFileHeader, CheckpointStreamCodec, FullSyncMetadata, calculate_file_checksum,
+    stream_file_to_writer,
 };
+use crate::primary::{
+    LAG_CHECK_INTERVAL, LagThresholdConfig, PrimaryReplicationHandler, parse_replconf_ack,
+};
+use crate::tracker::ReplicationTrackerImpl;
 
 // ============================================================================
 // RDB Format Constants (used by the minimal-RDB fallback)
@@ -268,6 +270,36 @@ impl ReplicaSession {
         }
     }
 
+    /// Seed the initial acked position when the session enters streaming.
+    ///
+    /// Unlike [`Self::record_ack`], this is a *primary bookkeeping* fact — where
+    /// this replica resumed from (its PSYNC offset for a partial resync, or the
+    /// checkpoint's `snapshot_offset` for a full resync) — not a replica
+    /// acknowledgement read off the wire. It advances the same monotonic
+    /// `acked_offset` atomic (so there is exactly one source of truth for the
+    /// acked position) and shares `record_ack`'s "only advances forward, reports
+    /// whether it did" mechanics; the two entry points remain distinct call sites
+    /// only because the primary itself, not the replica, supplies this value.
+    ///
+    /// The lag clock (`last_ack_time`) is reset to the resume instant: the
+    /// time-based lag threshold must measure from where streaming (re)started,
+    /// not from registration — a long FULLRESYNC checkpoint stream would
+    /// otherwise trip it immediately.
+    ///
+    /// Returns `true` iff the offset advanced (`offset > prev`), mirroring
+    /// [`Self::record_ack`]'s return contract — callers use this to decide
+    /// whether to notify WAIT waiters via the broadcast channel.
+    pub fn seed_acked_position(&self, offset: u64) -> bool {
+        self.inner.write().last_ack_time = Instant::now();
+        let prev = self.acked_offset.load(Ordering::Acquire);
+        if offset > prev {
+            self.acked_offset.store(offset, Ordering::Release);
+            true
+        } else {
+            false
+        }
+    }
+
     fn set_phase(&self, phase: Phase) {
         let mut inner = self.inner.write();
         let old = inner.phase;
@@ -310,10 +342,6 @@ impl ReplicaSession {
 
         // Single exit handler — runs regardless of which `?` returned.
         self.set_phase(Phase::Disconnecting);
-
-        // Remove the handle inserted during start_streaming (no-op for sessions
-        // that never reached the streaming phase, e.g. mid-handshake drops).
-        handler.connections.write().await.remove(&self.id);
 
         // Drop the session from the registry.
         handler.tracker.unregister_replica(self.id);
@@ -463,11 +491,9 @@ impl ReplicaSession {
 
     /// Stream checkpoint files to the replica.
     ///
-    /// Protocol:
-    /// 1. `$FROGDB_CHECKPOINT\r\n` header
-    /// 2. File count `<n>\r\n`
-    /// 3. For each file: filename bulk-string, size, raw bytes
-    /// 4. Metadata frame (replication_id:offset:checksum)
+    /// The on-wire grammar is owned by [`CheckpointStreamCodec`]; this method
+    /// drives it: prelude, then a per-file header + raw payload for each file,
+    /// then the trailing metadata frame.
     async fn stream_checkpoint(
         &self,
         stream: &mut BoxedStream,
@@ -504,20 +530,19 @@ impl ReplicaSession {
             "Streaming checkpoint to replica"
         );
 
-        // Header.
-        stream.write_all(b"$FROGDB_CHECKPOINT\r\n").await?;
-        stream
-            .write_all(format!("{}\r\n", files.len()).as_bytes())
-            .await?;
+        // Envelope prelude: marker + file count.
+        CheckpointStreamCodec::write_prelude(stream, files.len()).await?;
 
-        // Bodies.
+        // Bodies: per-file header via the codec, then the raw payload bytes.
         for (file_name, file_size, file_path) in &files {
-            stream
-                .write_all(format!("${}\r\n{}\r\n", file_name.len(), file_name).as_bytes())
-                .await?;
-            stream
-                .write_all(format!("${}\r\n", file_size).as_bytes())
-                .await?;
+            CheckpointStreamCodec::write_file_header(
+                stream,
+                &CheckpointFileHeader {
+                    name: file_name.clone(),
+                    size: *file_size,
+                },
+            )
+            .await?;
             let bytes_written =
                 stream_file_to_writer(file_path, stream, Some(&self.sync_bytes_transferred))
                     .await?;
@@ -546,12 +571,7 @@ impl ReplicaSession {
             replication_id: replication_id.to_string(),
             replication_offset,
         };
-        let metadata_bytes = metadata.to_bytes();
-        stream
-            .write_all(format!("${}\r\n", metadata_bytes.len()).as_bytes())
-            .await?;
-        stream.write_all(&metadata_bytes).await?;
-        stream.write_all(b"\r\n").await?;
+        CheckpointStreamCodec::write_metadata(stream, &metadata).await?;
 
         let elapsed = self
             .inner
@@ -626,7 +646,6 @@ impl ReplicaSession {
     ) -> io::Result<()> {
         self.set_phase(Phase::Streaming);
 
-        let (frame_tx, mut frame_rx) = mpsc::channel::<ReplicationFrame>(1000);
         // Subscribe BEFORE reading the head / extracting the backlog so the live
         // receiver and the replayed tail cannot leave a gap (step 1 above).
         let mut wal_rx = handler.wal_broadcast.subscribe();
@@ -641,24 +660,21 @@ impl ReplicaSession {
             stream.write_all(&encoded).await?;
             resume_offset = offset;
         }
-        // Seed the tracker with where the replica now is, so WAIT waiters and the
-        // lag monitor start from the resumed position (routes through the tracker
-        // so any newer ACK still notifies waiters).
-        handler.tracker.record_ack(self.id, resume_offset);
-
-        {
-            let handle = ReplicaConnectionHandle {
-                _replica_id: self.id,
-                _address: self.address,
-                _frame_tx: frame_tx,
-                _connected_at: self.connected_at,
-            };
-            handler.connections.write().await.insert(self.id, handle);
-        }
+        // Seed where the replica resumed, so WAIT waiters and the lag monitor
+        // start from the resumed position. This is a primary bookkeeping fact
+        // ("where this replica started"), not a replica ACK, so it uses the
+        // coordinator's `seed_replica_position` verb rather than
+        // `ingest_replica_ack` — but it advances the same monotonic atomic and,
+        // if a reconnecting replica already resumed at/past a WAIT target, it
+        // notifies WAIT waiters exactly like a genuine ACK would (a stale/
+        // duplicate seed that doesn't advance the offset stays silent).
+        handler
+            .offsets
+            .seed_replica_position(self.id, resume_offset);
 
         let (mut read_half, mut write_half) = tokio::io::split(stream);
 
-        let read_tracker = handler.tracker.clone();
+        let read_offsets = handler.offsets.clone();
         let read_replica_id = self.id;
         let read_task = tokio::spawn(async move {
             let mut buf = BytesMut::with_capacity(1024);
@@ -667,7 +683,7 @@ impl ReplicaSession {
                     Ok(0) => break,
                     Ok(_) => {
                         while let Some((ack_offset, consumed)) = parse_replconf_ack(&buf) {
-                            read_tracker.record_ack(read_replica_id, ack_offset);
+                            read_offsets.ingest_replica_ack(read_replica_id, ack_offset);
                             buf.advance(consumed);
                         }
                     }
@@ -679,12 +695,9 @@ impl ReplicaSession {
             }
         });
 
-        let lag_threshold_bytes = handler.lag_config.threshold_bytes;
-        let lag_threshold_secs = handler.lag_config.threshold_secs;
-        let lag_cooldown = handler.lag_config.cooldown;
         let lag_tracker = handler.tracker.clone();
         let lag_replica_id = self.id;
-        let lag_enabled = lag_threshold_bytes > 0 || lag_threshold_secs > 0;
+        let mut lag_policy = LagPolicy::from_config(&handler.lag_config);
         let write_timeout = if handler.write_timeout_ms > 0 {
             Some(Duration::from_millis(handler.write_timeout_ms))
         } else {
@@ -692,101 +705,45 @@ impl ReplicaSession {
         };
 
         let write_task = tokio::spawn(async move {
-            let mut frame_count: u64 = 0;
+            // Single live frame source: `wal_broadcast`. Subscribe, replay,
+            // forward-or-break.
             loop {
-                tokio::select! {
-                    frame = wal_rx.recv() => {
-                        match frame {
-                            Ok(frame) => {
-                                // Dedup the handoff overlap: frames already sent
-                                // via the backlog replay (sequence <= resume_offset)
-                                // must not be re-sent, or the replica double-applies.
-                                if frame.sequence <= resume_offset {
-                                    continue;
-                                }
-                                let encoded = frame.encode();
-                                let write_result = if let Some(timeout_dur) = write_timeout {
-                                    match tokio::time::timeout(timeout_dur, write_half.write_all(&encoded)).await {
-                                        Ok(r) => r,
-                                        Err(_) => {
-                                            tracing::warn!(
-                                                replica_id = lag_replica_id,
-                                                timeout_ms = timeout_dur.as_millis() as u64,
-                                                "Write to replica timed out, disconnecting"
-                                            );
-                                            break;
-                                        }
-                                    }
-                                } else {
-                                    write_half.write_all(&encoded).await
-                                };
-                                if let Err(e) = write_result {
-                                    tracing::warn!(error = %e, "Error writing to replica");
-                                    break;
-                                }
-                                if lag_enabled {
-                                    frame_count += 1;
-                                    if frame_count.is_multiple_of(LAG_CHECK_INTERVAL) {
-                                        let byte_exceeded = lag_threshold_bytes > 0
-                                            && lag_tracker
-                                                .replica_lag(lag_replica_id)
-                                                .is_some_and(|lag| lag >= lag_threshold_bytes);
-                                        let time_exceeded = lag_threshold_secs > 0
-                                            && lag_tracker
-                                                .replica_lag_secs(lag_replica_id)
-                                                .is_some_and(|secs| secs >= lag_threshold_secs as f64);
-                                        if (byte_exceeded || time_exceeded)
-                                            && !lag_tracker.is_in_lag_cooldown(lag_replica_id, lag_cooldown)
-                                        {
-                                            tracing::warn!(
-                                                replica_id = lag_replica_id,
-                                                byte_exceeded,
-                                                time_exceeded,
-                                                "Replica exceeded lag threshold, disconnecting for FULLRESYNC"
-                                            );
-                                            lag_tracker.record_lag_disconnect(lag_replica_id);
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                            Err(broadcast::error::RecvError::Closed) => break,
-                            Err(broadcast::error::RecvError::Lagged(n)) => {
-                                tracing::warn!(
-                                    replica_id = lag_replica_id,
-                                    lagged = n,
-                                    "Replica lagged in WAL stream, disconnecting for resync"
-                                );
-                                break;
-                            }
+                match wal_rx.recv().await {
+                    Ok(frame) => {
+                        // Dedup the handoff overlap: frames already sent via the
+                        // backlog replay (sequence <= resume_offset) must not be
+                        // re-sent, or the replica double-applies.
+                        if frame.sequence <= resume_offset {
+                            continue;
+                        }
+                        let encoded = frame.encode();
+                        if let Forward::Break =
+                            forward_frame(&mut write_half, &encoded, write_timeout, lag_replica_id)
+                                .await
+                        {
+                            break;
+                        }
+                        if let Some(breach) =
+                            lag_policy.should_disconnect(&lag_tracker, lag_replica_id)
+                        {
+                            tracing::warn!(
+                                replica_id = lag_replica_id,
+                                byte_exceeded = breach.byte_exceeded,
+                                time_exceeded = breach.time_exceeded,
+                                "Replica exceeded lag threshold, disconnecting for FULLRESYNC"
+                            );
+                            lag_tracker.record_lag_disconnect(lag_replica_id);
+                            break;
                         }
                     }
-                    frame = frame_rx.recv() => {
-                        match frame {
-                            Some(frame) => {
-                                let encoded = frame.encode();
-                                let write_result = if let Some(timeout_dur) = write_timeout {
-                                    match tokio::time::timeout(timeout_dur, write_half.write_all(&encoded)).await {
-                                        Ok(r) => r,
-                                        Err(_) => {
-                                            tracing::warn!(
-                                                replica_id = lag_replica_id,
-                                                timeout_ms = timeout_dur.as_millis() as u64,
-                                                "Write to replica timed out (direct channel), disconnecting"
-                                            );
-                                            break;
-                                        }
-                                    }
-                                } else {
-                                    write_half.write_all(&encoded).await
-                                };
-                                if let Err(e) = write_result {
-                                    tracing::warn!(error = %e, "Error writing to replica");
-                                    break;
-                                }
-                            }
-                            None => break,
-                        }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            replica_id = lag_replica_id,
+                            lagged = n,
+                            "Replica lagged in WAL stream, disconnecting for resync"
+                        );
+                        break;
                     }
                 }
             }
@@ -798,6 +755,134 @@ impl ReplicaSession {
         }
         Ok(())
     }
+}
+
+/// Outcome of a single frame write to a replica.
+enum Forward {
+    /// The frame was written; keep streaming.
+    Continue,
+    /// The session must end (write timeout or I/O error); the caller stops
+    /// streaming.
+    Break,
+}
+
+/// Write one encoded frame to the replica, honoring the optional write timeout.
+///
+/// This is the single home for "send a frame to a replica": with the dead
+/// per-replica frame channel removed there is one live frame source, so the
+/// write+timeout+error path is defined exactly once here instead of being
+/// duplicated across two `select!` arms.
+async fn forward_frame(
+    write_half: &mut (impl AsyncWrite + Unpin),
+    encoded: &[u8],
+    timeout: Option<Duration>,
+    replica_id: u64,
+) -> Forward {
+    match timeout {
+        Some(dur) => match tokio::time::timeout(dur, write_half.write_all(encoded)).await {
+            Ok(Ok(())) => Forward::Continue,
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "Error writing to replica");
+                Forward::Break
+            }
+            Err(_) => {
+                tracing::warn!(
+                    replica_id,
+                    timeout_ms = dur.as_millis() as u64,
+                    "Write to replica timed out, disconnecting"
+                );
+                Forward::Break
+            }
+        },
+        None => match write_half.write_all(encoded).await {
+            Ok(()) => Forward::Continue,
+            Err(e) => {
+                tracing::warn!(error = %e, "Error writing to replica");
+                Forward::Break
+            }
+        },
+    }
+}
+
+/// Proactive lag-disconnect policy for one streaming session.
+///
+/// Owns the forwarded-frame counter and the threshold comparison so the
+/// streaming loop consults "when do we proactively disconnect a lagging
+/// replica" as a value rather than inlining it. Checks fire every
+/// [`LAG_CHECK_INTERVAL`] frames (cadence unchanged by the extraction).
+struct LagPolicy {
+    /// Max replication lag in bytes before proactive disconnect. 0 = disabled.
+    threshold_bytes: u64,
+    /// Max replication lag in seconds (since last ACK) before disconnect. 0 = disabled.
+    threshold_secs: u64,
+    /// Cooldown after a proactive disconnect before allowing another.
+    cooldown: Duration,
+    /// Frames forwarded so far (the check cadence counter).
+    frames: u64,
+}
+
+impl LagPolicy {
+    fn from_config(config: &LagThresholdConfig) -> Self {
+        Self {
+            threshold_bytes: config.threshold_bytes,
+            threshold_secs: config.threshold_secs,
+            cooldown: config.cooldown,
+            frames: 0,
+        }
+    }
+
+    /// Whether any threshold is armed. A disabled policy never counts or fires.
+    fn enabled(&self) -> bool {
+        self.threshold_bytes > 0 || self.threshold_secs > 0
+    }
+
+    /// Count one forwarded frame and, every [`LAG_CHECK_INTERVAL`] frames,
+    /// decide whether this replica has exceeded a threshold and is out of
+    /// cooldown. Returns `Some(LagBreach)` naming which threshold(s) fired when
+    /// a proactive disconnect is warranted, or `None` otherwise. On a `Some`
+    /// return the caller records the disconnect (logging the breach detail) and
+    /// breaks the streaming loop.
+    fn should_disconnect(
+        &mut self,
+        tracker: &ReplicationTrackerImpl,
+        id: u64,
+    ) -> Option<LagBreach> {
+        if !self.enabled() {
+            return None;
+        }
+        self.frames += 1;
+        if !self.frames.is_multiple_of(LAG_CHECK_INTERVAL) {
+            return None;
+        }
+        let byte_exceeded = self.threshold_bytes > 0
+            && tracker
+                .replica_lag(id)
+                .is_some_and(|lag| lag >= self.threshold_bytes);
+        let time_exceeded = self.threshold_secs > 0
+            && tracker
+                .replica_lag_secs(id)
+                .is_some_and(|secs| secs >= self.threshold_secs as f64);
+        if (byte_exceeded || time_exceeded) && !tracker.is_in_lag_cooldown(id, self.cooldown) {
+            Some(LagBreach {
+                byte_exceeded,
+                time_exceeded,
+            })
+        } else {
+            None
+        }
+    }
+}
+
+/// Which lag threshold(s) a proactive-disconnect decision tripped. Returned by
+/// [`LagPolicy::should_disconnect`] so the disconnect warning can name the
+/// specific threshold that fired (byte-lag vs. time-since-last-ACK) rather than
+/// logging a bare boolean.
+#[derive(Debug, Clone, Copy)]
+struct LagBreach {
+    /// The byte-lag threshold was met or exceeded.
+    byte_exceeded: bool,
+    /// The time-since-last-ACK threshold was met or exceeded.
+    time_exceeded: bool,
 }
 
 /// Build a minimal valid RDB suitable for empty databases or fallbacks.
@@ -841,6 +926,7 @@ mod tests {
     use crate::tracker::ReplicationTrackerImpl;
     use bytes::Bytes;
     use frogdb_persistence::{RocksConfig, RocksStore};
+    use frogdb_types::ReplicationTracker;
     use std::net::SocketAddr;
     use tempfile::TempDir;
     use tokio::io::AsyncReadExt;
@@ -987,8 +1073,6 @@ mod tests {
     /// and this test would hang waiting for frames that never arrive.
     #[tokio::test]
     async fn full_sync_replays_writes_made_during_handoff() {
-        use crate::ReplicationBroadcaster;
-
         let dir = TempDir::new().unwrap();
         let tracker = Arc::new(ReplicationTrackerImpl::new());
         // No rocks store -> minimal-RDB full sync; backlog enabled so the
@@ -1064,8 +1148,6 @@ mod tests {
     /// fresh write streams once (no duplicate of the replayed frames).
     #[tokio::test]
     async fn handle_partial_replays_backlog_then_live_tail() {
-        use crate::ReplicationBroadcaster;
-
         let dir = TempDir::new().unwrap();
         let tracker = Arc::new(ReplicationTrackerImpl::new());
         let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
@@ -1079,7 +1161,6 @@ mod tests {
 
         let (mut client, server) = tokio::io::duplex(64 * 1024);
         let session = tracker.register_replica(addr());
-        let session_id = session.id();
 
         let task = tokio::spawn({
             let session = session.clone();
@@ -1125,12 +1206,11 @@ mod tests {
         drop(client);
         let _ = task.await.unwrap();
         assert_eq!(tracker.replica_count(), 0);
-        assert!(handler.connections.read().await.get(&session_id).is_none());
     }
 
     /// Streaming drop: a partial sync that completes and enters `Streaming`,
     /// then the replica disconnects. The exit handler must remove the session
-    /// from the tracker and clear the connection handle.
+    /// from the tracker.
     #[tokio::test]
     async fn run_cleans_up_on_streaming_drop_partial() {
         let dir = TempDir::new().unwrap();
@@ -1139,7 +1219,6 @@ mod tests {
 
         let (mut client, server) = tokio::io::duplex(1024);
         let session = tracker.register_replica(addr());
-        let session_id = session.id();
 
         let task = tokio::spawn({
             let session = session.clone();
@@ -1165,7 +1244,6 @@ mod tests {
         assert!(result.is_ok());
 
         assert_eq!(tracker.replica_count(), 0);
-        assert!(handler.connections.read().await.get(&session_id).is_none());
         assert_eq!(session.phase(), Phase::Disconnecting);
     }
 
@@ -1182,7 +1260,6 @@ mod tests {
         let (client, server) = tokio::io::duplex(1);
         drop(client);
         let session = tracker.register_replica(addr());
-        let session_id = session.id();
 
         let server: BoxedStream = Box::new(server);
         let result = session
@@ -1196,7 +1273,6 @@ mod tests {
 
         assert!(result.is_err(), "expected write_all to error after drop");
         assert_eq!(tracker.replica_count(), 0);
-        assert!(handler.connections.read().await.get(&session_id).is_none());
         assert_eq!(session.phase(), Phase::Disconnecting);
     }
 
@@ -1314,7 +1390,6 @@ mod tests {
         let _ = task.await.unwrap();
 
         assert_eq!(tracker.replica_count(), 0);
-        assert!(handler.connections.read().await.get(&session_id).is_none());
         assert_eq!(session.phase(), Phase::Disconnecting);
         assert!(
             !expected_checkpoint.exists(),
@@ -1476,8 +1551,6 @@ mod tests {
     /// — the gate is gone, partial resync is granted end to end.
     #[tokio::test]
     async fn partial_window_with_backlog_grants_continue() {
-        use crate::ReplicationBroadcaster;
-
         let dir = TempDir::new().unwrap();
         let tracker = Arc::new(ReplicationTrackerImpl::new());
         let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
@@ -1561,8 +1634,6 @@ mod tests {
     /// to FULLRESYNC — the lower bound guards against a truncated replay.
     #[tokio::test]
     async fn partial_falls_back_to_full_when_offset_evicted() {
-        use crate::ReplicationBroadcaster;
-
         let dir = TempDir::new().unwrap();
         let tracker = Arc::new(ReplicationTrackerImpl::new());
         // Tiny backlog (3 entries) so the early resume point is evicted.
@@ -1617,5 +1688,171 @@ mod tests {
 
         drop(client);
         let _ = task.await.unwrap();
+    }
+
+    // ------------------------------------------------------------------
+    // forward_frame: the single write+timeout+error path, no socket needed.
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn forward_frame_clean_write_continues() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+        let outcome = forward_frame(&mut server, b"hello", None, 1).await;
+        assert!(matches!(outcome, Forward::Continue));
+        let mut buf = [0u8; 5];
+        client.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"hello");
+    }
+
+    #[tokio::test]
+    async fn forward_frame_write_timeout_breaks() {
+        // 1-byte duplex buffer and nobody reading: write_all can never
+        // complete, so the timeout must fire. Keep `client` alive so the
+        // failure is a timeout, not an I/O error.
+        let (_client, mut server) = tokio::io::duplex(1);
+        let payload = vec![0u8; 64];
+        let outcome =
+            forward_frame(&mut server, &payload, Some(Duration::from_millis(20)), 1).await;
+        assert!(matches!(outcome, Forward::Break));
+    }
+
+    #[tokio::test]
+    async fn forward_frame_io_error_breaks() {
+        let (client, mut server) = tokio::io::duplex(64);
+        drop(client);
+        let outcome = forward_frame(&mut server, b"data", None, 1).await;
+        assert!(matches!(outcome, Forward::Break));
+    }
+
+    // ------------------------------------------------------------------
+    // LagPolicy: the proactive lag-disconnect decision, no live session.
+    // ------------------------------------------------------------------
+
+    /// Drive the policy through one full check interval and report whether it
+    /// fired (`should_disconnect` only evaluates thresholds every
+    /// `LAG_CHECK_INTERVAL` forwarded frames).
+    fn drive_one_interval(
+        policy: &mut LagPolicy,
+        tracker: &ReplicationTrackerImpl,
+        id: u64,
+    ) -> bool {
+        drive_one_interval_breach(policy, tracker, id).is_some()
+    }
+
+    /// Like [`drive_one_interval`] but returns the [`LagBreach`] detail from the
+    /// evaluating call so tests can assert *which* threshold fired.
+    fn drive_one_interval_breach(
+        policy: &mut LagPolicy,
+        tracker: &ReplicationTrackerImpl,
+        id: u64,
+    ) -> Option<LagBreach> {
+        let mut breach = None;
+        for _ in 0..LAG_CHECK_INTERVAL {
+            if let Some(b) = policy.should_disconnect(tracker, id) {
+                breach = Some(b);
+            }
+        }
+        breach
+    }
+
+    #[test]
+    fn lag_policy_disabled_never_fires() {
+        let tracker = ReplicationTrackerImpl::new();
+        let session = tracker.register_replica(addr());
+        tracker.set_offset(1_000_000); // enormous byte lag, but nothing armed
+        let mut policy = LagPolicy {
+            threshold_bytes: 0,
+            threshold_secs: 0,
+            cooldown: Duration::ZERO,
+            frames: 0,
+        };
+        for _ in 0..(2 * LAG_CHECK_INTERVAL) {
+            assert!(policy.should_disconnect(&tracker, session.id()).is_none());
+        }
+    }
+
+    #[test]
+    fn lag_policy_byte_threshold_triggers() {
+        let tracker = ReplicationTrackerImpl::new();
+        let session = tracker.register_replica(addr());
+        tracker.set_offset(10_000); // acked = 0 → lag = 10_000 bytes
+        let mut policy = LagPolicy {
+            threshold_bytes: 1_000,
+            threshold_secs: 0,
+            cooldown: Duration::from_secs(60),
+            frames: 0,
+        };
+        let breach = drive_one_interval_breach(&mut policy, &tracker, session.id())
+            .expect("byte threshold should fire a breach");
+        assert!(breach.byte_exceeded, "byte threshold must be flagged");
+        assert!(
+            !breach.time_exceeded,
+            "time threshold is disabled, must not be flagged"
+        );
+    }
+
+    #[test]
+    fn lag_policy_byte_threshold_not_exceeded_does_not_fire() {
+        let tracker = ReplicationTrackerImpl::new();
+        let session = tracker.register_replica(addr());
+        tracker.set_offset(500); // lag 500 < threshold 1_000
+        let mut policy = LagPolicy {
+            threshold_bytes: 1_000,
+            threshold_secs: 0,
+            cooldown: Duration::from_secs(60),
+            frames: 0,
+        };
+        assert!(!drive_one_interval(&mut policy, &tracker, session.id()));
+    }
+
+    #[test]
+    fn lag_policy_time_threshold_triggers() {
+        let tracker = ReplicationTrackerImpl::new();
+        let session = tracker.register_replica(addr());
+        // The smallest armable time threshold is 1s; age the last-ACK time
+        // past it.
+        std::thread::sleep(Duration::from_millis(1100));
+        let mut policy = LagPolicy {
+            threshold_bytes: 0,
+            threshold_secs: 1,
+            cooldown: Duration::from_secs(60),
+            frames: 0,
+        };
+        let breach = drive_one_interval_breach(&mut policy, &tracker, session.id())
+            .expect("time threshold should fire a breach");
+        assert!(breach.time_exceeded, "time threshold must be flagged");
+        assert!(
+            !breach.byte_exceeded,
+            "byte threshold is disabled, must not be flagged"
+        );
+    }
+
+    #[test]
+    fn lag_policy_cooldown_suppresses_retrigger() {
+        let tracker = ReplicationTrackerImpl::new();
+        let session = tracker.register_replica(addr());
+        tracker.set_offset(10_000);
+        // A prior proactive disconnect for this replica's address...
+        tracker.record_lag_disconnect(session.id());
+        // ...suppresses a re-trigger inside the cooldown window...
+        let mut in_cooldown = LagPolicy {
+            threshold_bytes: 1_000,
+            threshold_secs: 0,
+            cooldown: Duration::from_secs(60),
+            frames: 0,
+        };
+        assert!(!drive_one_interval(
+            &mut in_cooldown,
+            &tracker,
+            session.id()
+        ));
+        // ...but a zero cooldown (window already elapsed) fires again.
+        let mut expired = LagPolicy {
+            threshold_bytes: 1_000,
+            threshold_secs: 0,
+            cooldown: Duration::ZERO,
+            frames: 0,
+        };
+        assert!(drive_one_interval(&mut expired, &tracker, session.id()));
     }
 }

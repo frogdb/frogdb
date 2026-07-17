@@ -22,7 +22,9 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
-use crate::connection::util::{extract_subcommand, key_access_type_for_flags};
+use crate::connection::util::{
+    extract_subcommand, key_access_type_for_flags, required_access_for_key_flags,
+};
 
 /// The `CommandSpec` for ACL. Declared here alongside the executor (rather than
 /// in a stub `Command` impl) so the connection command is a single
@@ -262,12 +264,16 @@ fn acl_dryrun(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
     }
 
     // Check key permissions using the command's real key spec, so DRYRUN agrees
-    // with live enforcement: access type derived from flags (read-only commands
-    // check Read, not ReadWrite) and the actual key positions (incl. commands
-    // whose key is not the first argument).
+    // with live enforcement: each key checked with its *own* required access
+    // derived from the per-key access flags (read-only commands check Read, not
+    // ReadWrite; STORE-family checks write on the dest, read on the sources) and
+    // the actual key positions (incl. commands whose key is not the first
+    // argument). Shares `required_access_for_key_flags` with the live guard so
+    // DRYRUN verdicts and enforcement stay in lockstep.
     if let Some(entry) = ctx.command_registry.get_entry(&command) {
-        let access = key_access_type_for_flags(entry.flags());
-        for key in entry.keys(cmd_args) {
+        let fallback = key_access_type_for_flags(entry.flags());
+        for (key, flags) in entry.keys_with_flags(cmd_args) {
+            let access = required_access_for_key_flags(&flags, fallback);
             if !user.check_key_access(key, access) {
                 let msg = format!(
                     "This user has no permissions to access the '{}' key",
@@ -411,7 +417,6 @@ mod tests {
         AclManager, ClientRegistry, CommandLatencyHistograms, CommandRegistry, KeyspaceStats,
         SharedHotkeySession, new_shared_hotkey_session,
     };
-    use frogdb_protocol::ProtocolVersion;
 
     /// Build a `ConnCtx` over fixture dependencies — no socket, no
     /// `ConnectionHandler`. ACL exercises `acl_manager`, `command_registry`, and
@@ -458,33 +463,25 @@ mod tests {
         }
 
         fn ctx(&self) -> ConnCtx<'_> {
-            ConnCtx {
-                config: &self.config_manager,
-                client_registry: &self.client_registry,
-                latency_histograms: &self.latency_histograms,
-                keyspace_stats: &self.keyspace_stats,
-                shard_senders: &[],
-                snapshot_coordinator: &self.snapshot_coordinator,
-                hotkey_session: &self.hotkey_session,
-                hotkey_cluster: &self.cluster,
-                protocol_version: ProtocolVersion::Resp2,
-                cursor_store: &self.cursor_store,
-                acl_manager: self.acl_manager.as_ref(),
-                command_registry: &self.command_registry,
-                username: &self.username,
-                metrics_recorder: &self.metrics_recorder,
-                memory_diag: &self.memory_diag,
-                num_shards: 0,
-                max_clients: 10000,
-                cluster_enabled: false,
-                info: &frogdb_core::NoopInfoProvider,
-                scripting: &frogdb_core::NoopScriptingProvider,
-                conn_state: None,
-                tracking: None,
-                pubsub: None,
-                debug: None,
-                monitor: None,
-            }
+            ConnCtx::new(
+                &self.config_manager,
+                &self.client_registry,
+                &self.latency_histograms,
+                &self.keyspace_stats,
+                &[],
+                &self.snapshot_coordinator,
+                &self.hotkey_session,
+                &self.cluster,
+                &self.cursor_store,
+                &self.metrics_recorder,
+                &self.memory_diag,
+                self.acl_manager.as_ref(),
+                &self.command_registry,
+                0,
+                10000,
+                false,
+            )
+            .with_username(&self.username)
         }
     }
 

@@ -54,12 +54,16 @@ impl ConnectionHandler {
         let keys = handler.keys(&cmd.args);
 
         // Check key permissions through the unified enforcement seam. The command
-        // itself is already validated by run_pre_checks, so only key access is checked.
+        // itself is already validated by run_pre_checks, so only key access is
+        // checked. Each key is checked with its *own* required access (derived
+        // from the per-key access flags), so STORE-family commands enforce Redis
+        // semantics — write on the destination, read on the sources.
         if !keys.is_empty()
             && let Some(guard) = self.permission_guard()
         {
-            let access_type = key_access_type_for_flags(handler.flags());
-            if let Err(err) = guard.check_keys(&keys, access_type) {
+            let keyed_flags = handler.keys_with_flags(&cmd.args);
+            let fallback = key_access_type_for_flags(handler.flags());
+            if let Err(err) = guard.check_keys_with_flags(&keyed_flags, fallback) {
                 return err;
             }
         }

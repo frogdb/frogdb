@@ -4,34 +4,27 @@ use bytes::Bytes;
 use frogdb_core::InvalidationMessage;
 use frogdb_protocol::{ProtocolVersion, Response, WireResponse};
 use futures::SinkExt;
-use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio_util::codec::Framed;
+use tokio::io::AsyncWriteExt;
 
-use super::codec::FrogDbResp2;
+use super::codec::{RESP2_NULL_ARRAY, Resp2Outbound};
 use super::{ConnectionHandler, estimate_resp2_frame_size};
 
-/// The RESP2 array-null literal.
+/// Narrow a [`WireResponse`] to the RESP2 codec's outbound item, returning the
+/// item and its estimated encoded size for stats tracking.
 ///
-/// The `redis-protocol` crate cannot produce it — its `Null` is always
-/// `$-1\r\n` — so we manage these raw bytes ourselves. This literal lives here
-/// and nowhere else (proposal 26's seam).
-const NULL_ARRAY_BYTES: &[u8] = b"*-1\r\n";
-
-/// Queue the RESP2 array-null literal into the codec's write buffer, in feed
-/// order with the surrounding frames.
-///
-/// This MUST NOT write straight to the socket. Normal RESP2 frames are buffered
-/// in the codec's write buffer by [`Framed::feed`] and only reach the wire at
-/// flush time; a direct socket write here would jump *ahead* of those buffered
-/// replies and desynchronize a pipelined client (proposal 49). Writing into the
-/// same codec write buffer keeps the `*-1\r\n` interleaved in the correct order.
-fn queue_resp2_null_array<S>(framed: &mut Framed<S, FrogDbResp2>)
-where
-    S: AsyncWrite + Unpin,
-{
-    framed
-        .write_buffer_mut()
-        .extend_from_slice(NULL_ARRAY_BYTES);
+/// [`WireResponse::NullArray`] becomes [`Resp2Outbound::NullArray`] so the
+/// `*-1\r\n` bytes (which `redis-protocol` cannot produce — its `Null` is always
+/// `$-1\r\n`) are emitted by the codec in feed order with surrounding frames.
+/// Every other variant is encoded to an ordinary [`BytesFrame`] up front.
+fn narrow_to_resp2_outbound(response: WireResponse) -> (Resp2Outbound, usize) {
+    match response {
+        WireResponse::NullArray => (Resp2Outbound::NullArray, RESP2_NULL_ARRAY.len()),
+        other => {
+            let frame = other.to_resp2_frame();
+            let size = estimate_resp2_frame_size(&frame);
+            (Resp2Outbound::Frame(frame), size)
+        }
+    }
 }
 
 impl ConnectionHandler {
@@ -71,38 +64,6 @@ impl ConnectionHandler {
         self.send_wire_response(response).await
     }
 
-    /// Queue the protocol-correct array-null bytes in feed order, without
-    /// flushing. RESP2 queues the raw `*-1\r\n` (which the `redis-protocol`
-    /// crate cannot produce — its `Null` is always `$-1\r\n`) into the codec's
-    /// write buffer via [`queue_resp2_null_array`], so it stays interleaved with
-    /// surrounding buffered frames; RESP3 writes `_\r\n`. The protocol branch
-    /// lives here and nowhere else; each caller keeps its own flush/return policy.
-    async fn write_null_array(&mut self) -> std::io::Result<()> {
-        match self.state.protocol_version {
-            ProtocolVersion::Resp2 => {
-                self.state
-                    .local_stats
-                    .add_bytes_sent(NULL_ARRAY_BYTES.len() as u64);
-                queue_resp2_null_array(&mut self.framed);
-                Ok(())
-            }
-            ProtocolVersion::Resp3 => {
-                let frame = frogdb_protocol::WireResponse::NullArray.to_resp3_frame();
-                self.resp3_buf.clear();
-                redis_protocol::resp3::encode::complete::extend_encode(
-                    &mut self.resp3_buf,
-                    &frame,
-                    false,
-                )
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-                self.state
-                    .local_stats
-                    .add_bytes_sent(self.resp3_buf.len() as u64);
-                self.framed.get_mut().write_all(&self.resp3_buf).await
-            }
-        }
-    }
-
     /// Send a wire response to the client.
     ///
     /// This is the type-safe version that only accepts wire-serializable responses.
@@ -111,24 +72,18 @@ impl ConnectionHandler {
         &mut self,
         response: frogdb_protocol::WireResponse,
     ) -> std::io::Result<()> {
-        // NullArray needs the protocol-specific array-null shape; the one owner
-        // of that rule is write_null_array. `send` flushes after writing. On
-        // RESP2 the null-array bytes are now queued in the codec write buffer,
-        // so the flush must drain that buffer as well as the stream — use the
-        // two-level flush from flush_responses.
-        if matches!(response, frogdb_protocol::WireResponse::NullArray) {
-            self.write_null_array().await?;
-            return self.flush_responses().await;
-        }
-
         match self.state.protocol_version {
             ProtocolVersion::Resp2 => {
-                // Use RESP2 encoding via the Framed codec
-                let frame = response.to_resp2_frame();
-                // Estimate frame size for stats tracking
-                let frame_size = estimate_resp2_frame_size(&frame);
+                // Narrow to the codec's outbound item and send it through the
+                // Framed codec. NullArray rides `Resp2Outbound::NullArray` so its
+                // `*-1\r\n` bytes are queued in the codec write buffer in feed
+                // order; `send` flushes after buffering.
+                let (outbound, frame_size) = narrow_to_resp2_outbound(response);
                 self.state.local_stats.add_bytes_sent(frame_size as u64);
-                self.framed.send(frame).await.map_err(std::io::Error::other)
+                self.framed
+                    .send(outbound)
+                    .await
+                    .map_err(std::io::Error::other)
             }
             ProtocolVersion::Resp3 => {
                 // Manually encode RESP3 and write to socket
@@ -163,21 +118,18 @@ impl ConnectionHandler {
         &mut self,
         response: frogdb_protocol::WireResponse,
     ) -> std::io::Result<()> {
-        // NullArray needs the protocol-specific array-null shape; the one owner
-        // of that rule is write_null_array. `feed` buffers without flushing and
-        // resets the RESP3 accumulator for subsequent feeds.
-        if matches!(response, frogdb_protocol::WireResponse::NullArray) {
-            self.write_null_array().await?;
-            self.resp3_buf.clear();
-            return Ok(());
-        }
-
         match self.state.protocol_version {
             ProtocolVersion::Resp2 => {
-                let frame = response.to_resp2_frame();
-                let frame_size = estimate_resp2_frame_size(&frame);
+                // Narrow to the codec's outbound item and buffer it without
+                // flushing. NullArray rides `Resp2Outbound::NullArray` so its
+                // `*-1\r\n` bytes stay interleaved with surrounding buffered
+                // frames in the codec write buffer.
+                let (outbound, frame_size) = narrow_to_resp2_outbound(response);
                 self.state.local_stats.add_bytes_sent(frame_size as u64);
-                self.framed.feed(frame).await.map_err(std::io::Error::other)
+                self.framed
+                    .feed(outbound)
+                    .await
+                    .map_err(std::io::Error::other)
             }
             ProtocolVersion::Resp3 => {
                 let frame = response.to_resp3_frame();
@@ -247,38 +199,45 @@ impl ConnectionHandler {
 
 #[cfg(test)]
 mod tests {
+    use super::super::codec::FrogDbResp2;
     use super::*;
     use redis_protocol::resp2::types::BytesFrame as Resp2Frame;
     use tokio::io::AsyncReadExt;
+    use tokio_util::codec::Framed;
 
-    /// RESP2 pipelined ordering (proposal 49): a null-array reply queued between
+    /// RESP2 pipelined ordering (proposal 49): a null-array reply fed between
     /// two buffered bulk frames must reach the wire *between* them, not ahead of
     /// them. Drives the codec feed path over an in-memory duplex and asserts the
     /// exact byte stream.
     ///
-    /// Red before the fix (`write_null_array` wrote the raw `*-1\r\n` straight to
-    /// the socket via `get_mut().write_all`, jumping ahead of the two frames
-    /// buffered in the codec write buffer → `*-1\r\n$1\r\na\r\n$1\r\nb\r\n`);
-    /// green after (the literal is queued into the same write buffer in feed
-    /// order via [`queue_resp2_null_array`]).
+    /// The array-null now rides the codec's own outbound item
+    /// ([`Resp2Outbound::NullArray`], proposal 62-A) rather than a hand-poked
+    /// write buffer, so it is buffered by [`Framed::feed`] in feed order with the
+    /// surrounding frames. Red before proposal 49 (the raw `*-1\r\n` was written
+    /// straight to the socket, jumping ahead of the buffered frames →
+    /// `*-1\r\n$1\r\na\r\n$1\r\nb\r\n`); green now.
     #[tokio::test]
     async fn resp2_null_array_feed_order_is_preserved() {
         let (mut client, server) = tokio::io::duplex(1024);
         let mut framed = Framed::new(server, FrogDbResp2::default());
 
-        // Feed [Bulk("a"), NullArray, Bulk("b")] in order.
+        // Feed [Bulk("a"), NullArray, Bulk("b")] in order, all through the codec.
         framed
-            .feed(Resp2Frame::BulkString(Bytes::from_static(b"a")))
+            .feed(Resp2Outbound::Frame(Resp2Frame::BulkString(
+                Bytes::from_static(b"a"),
+            )))
             .await
             .unwrap();
-        queue_resp2_null_array(&mut framed);
+        framed.feed(Resp2Outbound::NullArray).await.unwrap();
         framed
-            .feed(Resp2Frame::BulkString(Bytes::from_static(b"b")))
+            .feed(Resp2Outbound::Frame(Resp2Frame::BulkString(
+                Bytes::from_static(b"b"),
+            )))
             .await
             .unwrap();
 
         // Two-level flush: drain the codec write buffer, then the stream.
-        SinkExt::<Resp2Frame>::flush(&mut framed).await.unwrap();
+        SinkExt::<Resp2Outbound>::flush(&mut framed).await.unwrap();
         framed.get_mut().flush().await.unwrap();
 
         let expected: &[u8] = b"$1\r\na\r\n*-1\r\n$1\r\nb\r\n";

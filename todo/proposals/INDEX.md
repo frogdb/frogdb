@@ -852,3 +852,116 @@ Found while writing proposals 29-40; grouped by proposal. All fixed by the round
   round-4's `5f288af2` made subscribe confirmations correctly Push-only, the harness's
   wait-for-non-Push loop timed out, failing 6 pubsub regression tests. A harness bug, not a server
   one.~~ Fixed by proposal 40 (subscribe-aware `command()`).
+
+## Round 7 — proposed (2026-07-16)
+
+A seventh deepening review on 2026-07-16, focused on the core request/response flow: connection
+acceptance → protocol decode → dispatch → shard execution → persistence → replication. Three
+parallel explorations (front half, execution→persistence, replication) followed by per-proposal
+evidence verification. Ordered by expected leverage:
+
+53. [53-predispatch-stage-pipeline.md](53-predispatch-stage-pipeline.md) — **Implemented**
+    (2026-07-16): the ~230-line `route_and_execute_with_transaction` gauntlet became a static
+    `PRE_DISPATCH_ORDER: [DispatchStage; 17]` array driven by an inlined `match` over a `Copy`
+    enum (`run_stage`) — no dyn dispatch, no boxed futures, no per-command allocation (`Continue`
+    is payload-free). Six guard stages (`PreChecks`, `Arity`, `PubSubPing`, `TransactionQueue`,
+    `ClusterSlotValidation`, `MigratingTryAgain`) moved onto a socketless `PreDispatchView`
+    (`guards.rs`): the four loopback-TCP `run_pre_checks` tests became plain struct tests + 5 new
+    socketless guard tests (replica-readonly, admin-port, arity, pub/sub-PING framing, NOAUTH).
+    Ordering is now pinned data — an order-pinning test (each stage once, `len == 17`) plus the
+    load-bearing relative-ordering assertions (PreAuth<PreChecks, Arity<PauseGate,
+    TransactionQueue<PauseGate, ClusterSlotValidation>TransactionQueue, Execute terminal), the
+    `WRITE_EFFECT_ORDER` precedent. Dispatch stages stay thin adapters over the unchanged
+    executors. `queue_command` moved from `handlers/transaction.rs` onto the view; `PauseGate`
+    kept as a thin `wait_if_paused` call (the pause loop mutates the client registry and sleeps —
+    documented, not forced). integration_transactions 25/25, integration_pubsub 94/94.
+54. [54-shard-persistence-bridge.md](54-shard-persistence-bridge.md) — **Implemented**
+    (2026-07-16): the three persist loops (`persist_by_strategy` / `persist_and_confirm` /
+    `persist_transaction_to_wal`) collapsed into one `ShardWorker::persist(&[WriteRecord],
+    Durability)` (`Confirm` snapshots the sequence + `flush_through`s once; `FireAndForget`
+    stages and logs). `execute_wal_action` became a free `async fn` over a narrow `WalTarget`
+    seam (probe + write_set/delete/merge/clear); `ShardWorker` is the production adapter (owns
+    the `get_hot`/`get_metadata` framing), an in-memory `TestTarget` records writes and answers
+    `contains` from a set — 8 new probe/routing unit tests, no RocksDB. The 4 `persist_*_to_wal`
+    helpers folded into the adapter. Move 3: the 10 `PersistDestination(idx)` sites → unit
+    `WalStrategy::PersistDestination` (persist-if-exists over the declared write-access keys),
+    BITOP's `PersistOrDeleteDestination(1)` → `Dynamic`; both index variants deleted. The nine
+    multi-key store commands' `AccessSpec::Uniform` → `Positional([OW, R])` so `keys_with_flags`
+    marks only the destination write (also correcting `COMMAND GETKEYSANDFLAGS`); a new
+    `validate()` invariant (`WalDestinationWithoutWriteKey`) rejects a flag-derived WAL strategy
+    whose positional access declares no write flag. WAL actions byte-for-byte preserved
+    (integration_persistence 24/24, core 714/714).
+55. [55-write-outcome-return.md](55-write-outcome-return.md) — **Implemented** (2026-07-16,
+    `dfdb588b`, Option B): the eight loose deposit fields consolidated into one
+    `CommandEffects` struct held as `ctx.effects`; the three drain sites (execution.rs, script
+    gate, cross-shard scripting) drain it as one value via `mem::take`, and the no-op
+    suppression rule has a single home — `CommandEffects::into_write_meta` (exhaustively
+    destructured, so a new effect field is a compile error), with `into_script_record` chaining
+    through it for both script sites. Handler deposit sites renamed mechanically
+    (`ctx.<field>` → `ctx.effects.<field>`); the 354 `impl Command` signatures unchanged. Unit
+    pins added for the suppression contract. Typed-return end state (Option C) remains a
+    documented mechanical follow-up.
+56. [56-checkpoint-stream-codec.md](56-checkpoint-stream-codec.md) — **Implemented**
+    (2026-07-16): the `$FROGDB_CHECKPOINT` envelope now has one owner — `CheckpointStreamCodec`
+    in `fullsync.rs`, mirroring `ReplicationFrameCodec` in `frame.rs`. Symmetric `write_prelude`/
+    `write_file_header`/`write_metadata` + inverse `read_*` (plus `parse_file_count` / `read_prelude`);
+    all three hand-rolled sites route through it (sender `stream_checkpoint`, receiver marker/count
+    detection in `psync`, body parse in `receive_checkpoint`). Wire bytes unchanged — golden-bytes
+    test pins them; the two-server `integration_replication` full-sync suite (11 tests) passes
+    untouched. The previously zero-test receive path gains 12 unit/property/corrupt-input tests
+    (round-trip, golden, bad marker, non-numeric/oversized/truncated lengths, wrong metadata field
+    count, zero-file prelude, proptest header-sequence). Length-prefix sanity bounds added so hostile
+    counts return `InvalidData` instead of a capacity panic. Kept the shared `StagedCheckpoint`
+    landing contract and proposal 25's on-disk `SnapshotStager` untouched.
+57. [57-replica-session-streaming.md](57-replica-session-streaming.md) — **Implemented**
+    (2026-07-16, `5e259ff2`): deleted the verified-dead machinery (the write-only `connections`
+    map, `ReplicaConnectionHandle`/never-sent `_frame_tx`, the ~30-line dead `frame_rx` select
+    arm duplicating the write branch — the streaming loop is now a single `wal_rx` receive);
+    extracted `forward_frame` (write+timeout+error once) and the named `LagPolicy` from
+    `start_streaming`; ack *seeding* split from ack *ingestion* via
+    `tracker.seed_acked_position` (same monotonic atomic, no spurious WAIT-waiter
+    notification); trait diet for `ReplicationBroadcaster` (`extract_divergent_writes` moved to
+    the concrete primary handler; `broadcast_command_on_shard` is the sole required emit method
+    and `broadcast_transaction_on_shard` the single MULTI/EXEC framing).
+58. [58-offset-single-ownership.md](58-offset-single-ownership.md) — **Proposed** (follow-up to
+    proposal 18: that unified offset *reads*; this unifies *ownership*): the offset atomic moves
+    into `OffsetCoordinator` (tracker borrows; cluster-bus handle vended by the coordinator);
+    both ends advance through one `advance(&payload)` gate so the payload-bytes unit is defined
+    once (primary currently uses `resp_bytes.len()` by convention); `record_ack` splits into
+    `ingest_replica_ack` (durability) vs `seed_replica_position` (resume bookkeeping).
+59. [59-delete-command-metadata.md](59-delete-command-metadata.md) — **Proposed**: pure deletion,
+    verified dead — `CommandMetadata` trait + `CommandImpl::MetadataOnly` + `register_metadata`
+    (zero production callers) + 9 registry match arms, **plus** the entire dead
+    `core/src/command_macro.rs` (209 lines) and `server/src/commands/metadata.rs` (157 lines —
+    proposal 40 §7 claimed these deleted; only the pub/sub subset was). `CommandImpl` becomes
+    two-way (Shard | Connection). Final cleanup of proposal 01's single-source migration.
+60. [60-connctx-builder-collapse.md](60-connctx-builder-collapse.md) — **Implemented**
+    (2026-07-16, `1f2e35dc`): the 25-field `ConnCtx` literal (hand-copied at 14 sites) collapsed
+    into one `ConnCtx::new` home in core + `.with_*` capability layering; the server's `base_ctx`
+    adapter takes the dep groups as explicit parameters (not `&self` — whole-handler borrows would
+    destroy the disjointness the mutable caps need). `NOOP_*` statics and the
+    `username: ""`/`protocol_version: default()` placeholder slots deleted; a core test pins the
+    defaults and the read-path override. All 11 provider traits **stay** — they are the
+    core↔server crate boundary, folding would cycle the dependency graph.
+61. [61-acceptor-dep-groups.md](61-acceptor-dep-groups.md) — **Proposed**: `Acceptor`'s ~40 flat
+    fields are a flatten/regroup pass-through (context → fields → 5 dep groups per connection);
+    hold one pre-assembled `ConnectionDeps` template (type already exists) cloned per connection
+    — Arc-cheap, "add a dependency" becomes a single-struct edit, and dep threading gets a
+    socket-free `Arc::ptr_eq` test. `current_connections` stays acceptor-local (maxclients gate).
+62. [62-small-seams-round7.md](62-small-seams-round7.md) — **Items C, D implemented**
+    (2026-07-16); A, B, E still **proposed**. Five independent small items: (A) RESP2 null-array
+    encoding moves into the encoder (finishes proposals 26/49; kills the silent best-effort branch
+    + connection-layer buffer poke); (B) table-driven unit tests for the zero-test RESP2 edge-case
+    codec (consume-on-error contract); **(C) implemented** — `WRITE_EFFECT_ORDER` must-precede
+    pairs declared as `MUST_PRECEDE`/`MUST_BE_ADJACENT` relation data, validated against the order
+    by `order_satisfies_all_declared_constraints` (subsumes the old hand-picked
+    `safety_ordering_invariants`); `every_effect_declares_a_constraint` forces a new effect to
+    declare its ordering; the previously-unencoded WalPersistence→ReplicationBroadcast and
+    WalPersistence→SearchIndex constraints now have a written home; **(D) implemented** — D1: one
+    `serialize_key_for_transport` producer (+ `deserialize_transport_frame` seam) so COPY/DUMP/
+    CopySet stop calling `persistence::serialize`/`deserialize` inline (DUMP embeds expiry in the
+    header, COPY ships it out-of-band, selected by one flag; expiry extraction lives once); D2:
+    one `record_lookup_existence` seam routes the EXISTS/TOUCH/MGET inline hit/miss copies through
+    the *existence == hit* rule; behavior byte-identical, pinned by 3 new unit tests + green
+    cross-shard keyspace/DUMP-TTL integration suites; (E) inline (telnet-style) command support:
+    decision item — regression suite explicitly excludes it today.

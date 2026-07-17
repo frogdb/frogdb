@@ -78,9 +78,7 @@ use crate::net::ConnectionStream;
 pub use crate::server::next_txid;
 
 // Re-export utility functions used by handler submodules and internally
-pub(crate) use util::{
-    estimate_command_size, estimate_resp2_frame_size, key_access_type_for_flags,
-};
+pub(crate) use util::{estimate_command_size, estimate_resp2_frame_size};
 
 /// Connection handler that processes client commands.
 pub struct ConnectionHandler {
@@ -639,7 +637,10 @@ impl ConnectionHandler {
                         Some(Ok(frame)) => frame,
                         Some(Err(e)) => {
                             debug!(conn_id = self.state.id, error = %e, "Frame error");
-                            let _ = self.send_response(WireResponse::error(format!("ERR {}", e))).await;
+                            // Use `details()` (not `Display`) so the wire form is
+                            // Redis's `-ERR Protocol error: ...` without the
+                            // upstream `Decode Error: ` kind prefix.
+                            let _ = self.send_response(WireResponse::error(format!("ERR {}", e.details()))).await;
                             continue;
                         }
                         None => {
@@ -668,7 +669,7 @@ impl ConnectionHandler {
                                 Err(e) => {
                                     debug!(conn_id = self.state.id, error = %e, "Frame error in drain");
                                     let _ = self.feed_response(
-                                        WireResponse::error(format!("ERR {}", e))
+                                        WireResponse::error(format!("ERR {}", e.details()))
                                     ).await;
                                     continue;
                                 }

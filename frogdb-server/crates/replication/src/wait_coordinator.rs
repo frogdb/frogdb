@@ -162,6 +162,7 @@ mod tests {
     use super::*;
     use crate::replica_session::Phase;
     use crate::state::ReplicationState;
+    use bytes::Bytes;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
     use tokio::sync::RwLock;
@@ -327,7 +328,7 @@ mod tests {
     async fn target_offset_reads_the_offset_coordinator() {
         let (coord, _tracker) = coordinator();
         assert_eq!(coord.target_offset(), 0);
-        coord.offsets.advance_broadcast(123);
+        coord.offsets.advance(&Bytes::from(vec![b'x'; 123]));
         assert_eq!(coord.target_offset(), 123);
     }
 }

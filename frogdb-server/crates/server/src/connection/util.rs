@@ -5,12 +5,15 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    CommandFlags, KeyAccessType, StreamId,
+    CommandFlags, KeyAccessFlag, KeyAccessType, StreamId,
     cluster::{ClusterCommand, NodeInfo, NodeRole, SlotRange},
 };
 use frogdb_protocol::{ParsedCommand, RaftClusterOp};
 
 /// Determine key access type from command flags.
+///
+/// Command-level fallback used when a key carries no per-key access flags (see
+/// [`required_access_for_key_flags`]).
 pub(crate) fn key_access_type_for_flags(flags: CommandFlags) -> KeyAccessType {
     if flags.contains(CommandFlags::READONLY) {
         KeyAccessType::Read
@@ -19,6 +22,52 @@ pub(crate) fn key_access_type_for_flags(flags: CommandFlags) -> KeyAccessType {
     } else {
         // Commands with neither flag (admin commands, etc.) - check both
         KeyAccessType::ReadWrite
+    }
+}
+
+/// Map a single key's per-key access flags to the [`KeyAccessType`] the ACL
+/// layer must satisfy for that key.
+///
+/// This is what lets STORE-family commands enforce Redis semantics: the
+/// destination key needs write access while the source keys need only read, so
+/// a `%R~src* %W~dst*` user can run e.g. `SINTERSTORE dst src…`. The
+/// command-level [`key_access_type_for_flags`] applied the same access to every
+/// key and would deny that user.
+///
+/// Flag → requirement: `R` reads, `W`/`OW` write, `RW` both. A key that both
+/// reads and writes maps to [`KeyAccessType::ReadWrite`].
+///
+/// `fallback` is the command-level derivation, used only when `flags` is empty.
+/// In practice every key produced by `keys_with_flags` carries exactly one flag
+/// (both [`AccessSpec::resolve`](frogdb_core::AccessSpec) and the dynamic hook
+/// always push a `vec![flag]`), so the empty case is unreachable today; the
+/// fallback keeps the mapping total and correct should a future spec declare
+/// keys without flags.
+pub(crate) fn required_access_for_key_flags(
+    flags: &[KeyAccessFlag],
+    fallback: KeyAccessType,
+) -> KeyAccessType {
+    if flags.is_empty() {
+        return fallback;
+    }
+    let mut read = false;
+    let mut write = false;
+    for flag in flags {
+        match flag {
+            KeyAccessFlag::R => read = true,
+            KeyAccessFlag::W | KeyAccessFlag::OW => write = true,
+            KeyAccessFlag::RW => {
+                read = true;
+                write = true;
+            }
+        }
+    }
+    match (read, write) {
+        (true, true) => KeyAccessType::ReadWrite,
+        (true, false) => KeyAccessType::Read,
+        (false, true) => KeyAccessType::Write,
+        // Unreachable: `flags` is non-empty and every variant sets a bit.
+        (false, false) => fallback,
     }
 }
 
@@ -227,5 +276,63 @@ pub(crate) fn extract_subcommand(command: &str, args: &[Bytes]) -> Option<String
             .map(|a| String::from_utf8_lossy(a).to_uppercase())
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use frogdb_core::KeyAccessFlag::{OW, R, RW, W};
+
+    #[test]
+    fn read_only_flag_maps_to_read() {
+        assert_eq!(
+            required_access_for_key_flags(&[R], KeyAccessType::ReadWrite),
+            KeyAccessType::Read
+        );
+    }
+
+    #[test]
+    fn write_flags_map_to_write() {
+        assert_eq!(
+            required_access_for_key_flags(&[W], KeyAccessType::Read),
+            KeyAccessType::Write
+        );
+        assert_eq!(
+            required_access_for_key_flags(&[OW], KeyAccessType::Read),
+            KeyAccessType::Write
+        );
+    }
+
+    #[test]
+    fn rw_flag_maps_to_readwrite() {
+        assert_eq!(
+            required_access_for_key_flags(&[RW], KeyAccessType::Read),
+            KeyAccessType::ReadWrite
+        );
+    }
+
+    #[test]
+    fn read_plus_write_flags_map_to_readwrite() {
+        assert_eq!(
+            required_access_for_key_flags(&[R, W], KeyAccessType::Read),
+            KeyAccessType::ReadWrite
+        );
+        assert_eq!(
+            required_access_for_key_flags(&[R, OW], KeyAccessType::Read),
+            KeyAccessType::ReadWrite
+        );
+    }
+
+    #[test]
+    fn empty_flags_fall_back_to_command_level() {
+        assert_eq!(
+            required_access_for_key_flags(&[], KeyAccessType::Write),
+            KeyAccessType::Write
+        );
+        assert_eq!(
+            required_access_for_key_flags(&[], KeyAccessType::Read),
+            KeyAccessType::Read
+        );
     }
 }
