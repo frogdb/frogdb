@@ -25,7 +25,7 @@ impl Command for MigrateCommand {
                 .union(CommandFlags::NOSCRIPT)
                 .union(CommandFlags::MOVABLEKEYS),
             keys: KeySpec::Dynamic,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::NoOp,
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,

@@ -24,7 +24,7 @@ impl Command for ZpopminCommand {
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
             event: EventSpec::Emits {
@@ -89,7 +89,7 @@ impl Command for ZpopmaxCommand {
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
             event: EventSpec::Emits {
@@ -157,7 +157,7 @@ impl Command for ZmpopCommand {
                 numkeys: 0,
                 first: 1,
             },
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
             // Runtime-deposited: the pop event fires on the one candidate key

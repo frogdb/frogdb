@@ -326,3 +326,144 @@ async fn acl_getuser_returns_selectors_field() {
         "GETUSER should include selectors field"
     );
 }
+
+// ---------------------------------------------------------------------------
+// ACL audit phase B: read-modify-write commands require read AND write.
+// ---------------------------------------------------------------------------
+
+/// Headline of the audit: a read-modify-write command (INCR) reads the stored
+/// value, so it needs read perm as well as write. A `%W~`-only principal must
+/// be DENIED INCR (previously allowed — the ACL bypass) yet still allowed a
+/// plain blind-overwrite SET on the same pattern.
+#[tokio::test]
+async fn acl_incr_requires_read_and_write() {
+    let server = TestServer::start_standalone().await;
+    let mut admin = server.connect().await;
+
+    admin
+        .command(&["ACL", "SETUSER", "wonly", "on", "nopass", "%W~k:*", "+@all"])
+        .await;
+
+    let mut user = server.connect().await;
+    assert_ok(&user.command(&["AUTH", "wonly", "password"]).await);
+
+    // Plain SET is a blind overwrite (write-only) → allowed with %W~.
+    assert_ok(&user.command(&["SET", "k:1", "1"]).await);
+    // INCR reads the old value then writes → needs read too → denied for %W~.
+    assert_error_prefix(&user.command(&["INCR", "k:1"]).await, "NOPERM");
+    // Same for the pop / GETDEL families.
+    assert_error_prefix(&user.command(&["GETDEL", "k:1"]).await, "NOPERM");
+
+    // A read+write grant on the same pattern allows INCR.
+    admin
+        .command(&["ACL", "SETUSER", "rwk", "on", "nopass", "%RW~k:*", "+@all"])
+        .await;
+    let mut rw = server.connect().await;
+    assert_ok(&rw.command(&["AUTH", "rwk", "password"]).await);
+    assert_integer_eq(&rw.command(&["INCR", "k:2"]).await, 1);
+}
+
+/// `SET … GET` reads the old value (VARIABLE_FLAGS → RW), so a `%W~`-only user
+/// can run plain SET but is denied `SET … GET`.
+#[tokio::test]
+async fn acl_set_get_option_requires_read() {
+    let server = TestServer::start_standalone().await;
+    let mut admin = server.connect().await;
+
+    admin
+        .command(&["ACL", "SETUSER", "sg", "on", "nopass", "%W~k:*", "+@all"])
+        .await;
+
+    let mut user = server.connect().await;
+    assert_ok(&user.command(&["AUTH", "sg", "password"]).await);
+
+    assert_ok(&user.command(&["SET", "k:1", "a"]).await);
+    // SET … GET returns the old value → read required → denied for write-only.
+    assert_error_prefix(&user.command(&["SET", "k:1", "b", "GET"]).await, "NOPERM");
+}
+
+/// LMOVE destination is INSERT-only (write, no read). A `%RW~src:* %W~dst:*`
+/// user can LMOVE: source needs read+write (pop), destination needs only write.
+#[tokio::test]
+async fn acl_lmove_dest_write_only_allowed() {
+    let server = TestServer::start_standalone().await;
+    let mut admin = server.connect().await;
+
+    admin
+        .command(&[
+            "ACL",
+            "SETUSER",
+            "mover",
+            "on",
+            "nopass",
+            "%RW~src:*",
+            "%W~dst:*",
+            "+@all",
+        ])
+        .await;
+    admin.command(&["RPUSH", "src:{g}:l", "a", "b", "c"]).await;
+
+    let mut user = server.connect().await;
+    assert_ok(&user.command(&["AUTH", "mover", "password"]).await);
+
+    // src needs RW (satisfied), dst needs only W (satisfied) → allowed.
+    let resp = user
+        .command(&["LMOVE", "src:{g}:l", "dst:{g}:l", "LEFT", "RIGHT"])
+        .await;
+    assert_bulk_eq(&resp, b"a");
+
+    // A read-only grant on the source is not enough — LMOVE pops (writes) it.
+    admin
+        .command(&[
+            "ACL", "SETUSER", "mover2", "on", "nopass", "%R~src:*", "%W~dst:*", "+@all",
+        ])
+        .await;
+    let mut user2 = server.connect().await;
+    assert_ok(&user2.command(&["AUTH", "mover2", "password"]).await);
+    assert_error_prefix(
+        &user2
+            .command(&["LMOVE", "src:{g}:l", "dst:{g}:l", "LEFT", "RIGHT"])
+            .await,
+        "NOPERM",
+    );
+}
+
+/// XREADGROUP: FrogDB requires read+write on the stream because the
+/// consumer-group PEL mutation is a real WAL write (documented divergence from
+/// Redis, which treats the stream as read-only for ACL — see ACL audit phase
+/// B, WAL write-set tension). A `%RW~` grant works; `%R~` alone is denied.
+#[tokio::test]
+async fn acl_xreadgroup_requires_read_write() {
+    let server = TestServer::start_standalone().await;
+    let mut admin = server.connect().await;
+
+    admin.command(&["XADD", "s:1", "1-1", "f", "v"]).await;
+    admin.command(&["XGROUP", "CREATE", "s:1", "g", "0"]).await;
+
+    // Read-only grant on the stream → denied (FrogDB needs write for the PEL).
+    admin
+        .command(&["ACL", "SETUSER", "sr", "on", "nopass", "%R~s:*", "+@all"])
+        .await;
+    let mut ro = server.connect().await;
+    assert_ok(&ro.command(&["AUTH", "sr", "password"]).await);
+    assert_error_prefix(
+        &ro.command(&["XREADGROUP", "GROUP", "g", "c", "STREAMS", "s:1", ">"])
+            .await,
+        "NOPERM",
+    );
+
+    // Read+write grant → allowed.
+    admin
+        .command(&["ACL", "SETUSER", "srw", "on", "nopass", "%RW~s:*", "+@all"])
+        .await;
+    let mut rw = server.connect().await;
+    assert_ok(&rw.command(&["AUTH", "srw", "password"]).await);
+    let resp = rw
+        .command(&["XREADGROUP", "GROUP", "g", "c", "STREAMS", "s:1", ">"])
+        .await;
+    // Delivered the pending entry (not a NOPERM error).
+    assert!(
+        !matches!(&resp, frogdb_protocol::Response::Error(_)),
+        "XREADGROUP with %RW~ should be allowed, got {resp:?}"
+    );
+}

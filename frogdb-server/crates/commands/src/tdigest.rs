@@ -6,8 +6,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    EventSpec, ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt, TDigestValue, Value,
-    WaiterWake, WalStrategy,
+    EventSpec, ExecutionStrategy, KeyAccessFlag, KeySpec, LookupSpec, StoreTypedFamilyExt,
+    TDigestValue, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -170,7 +170,7 @@ impl Command for TdMerge {
                 numkeys: 1,
                 first: 2,
             },
-            access: AccessSpec::Uniform,
+            access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::R]),
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,

@@ -163,7 +163,7 @@ impl Command for XreadgroupCommand {
             arity: Arity::AtLeast(6),
             flags: CommandFlags::WRITE.union(CommandFlags::MOVABLEKEYS),
             keys: KeySpec::Dynamic,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::Dynamic,
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,

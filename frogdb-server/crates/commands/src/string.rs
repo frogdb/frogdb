@@ -359,7 +359,7 @@ impl Command for GetdelCommand {
             arity: Arity::Fixed(1),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::DeleteKeys,
             wakes: WaiterWake::None,
             event: EventSpec::Emits {
@@ -404,7 +404,7 @@ impl Command for GetexCommand {
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
             event: EventSpec::Emits {
@@ -519,7 +519,7 @@ impl Command for IncrCommand {
             arity: Arity::Fixed(1),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
             event: EventSpec::Emits {
@@ -565,7 +565,7 @@ impl Command for DecrCommand {
             arity: Arity::Fixed(1),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
             event: EventSpec::Emits {
@@ -611,7 +611,7 @@ impl Command for IncrbyCommand {
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
             event: EventSpec::Emits {
@@ -658,7 +658,7 @@ impl Command for DecrbyCommand {
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
             event: EventSpec::Emits {
@@ -709,7 +709,7 @@ impl Command for IncrbyfloatCommand {
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
             event: EventSpec::Emits {
@@ -1156,7 +1156,7 @@ impl Command for GetsetCommand {
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
             event: EventSpec::Emits {

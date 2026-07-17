@@ -31,7 +31,7 @@ impl Command for SetbitCommand {
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
@@ -386,7 +386,12 @@ impl Command for BitfieldCommand {
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
-            access: AccessSpec::Uniform,
+            // VARIABLE_FLAGS in Redis: the required perm depends on the
+            // sub-operations. A `GET` sub-op reads (`ACCESS`), `SET`/`INCRBY`
+            // write (`UPDATE`). Resolved per-invocation in
+            // `dynamic_keys_with_flags`: `RW` when both present, `R` for a
+            // GET-only BITFIELD, `OW` for write-only sub-ops.
+            access: AccessSpec::Dynamic,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
@@ -399,6 +404,44 @@ impl Command for BitfieldCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         execute_bitfield(ctx, args, false)
+    }
+
+    /// Per-key access flags for `COMMAND GETKEYSANDFLAGS` / ACL, resolved from
+    /// the BITFIELD sub-operations (Redis `VARIABLE_FLAGS`): `GET` contributes
+    /// read, `SET`/`INCRBY` contribute write. `OVERFLOW` takes one argument
+    /// (`WRAP`/`SAT`/`FAIL`) and contributes nothing.
+    fn dynamic_keys_with_flags<'a>(
+        &self,
+        args: &'a [Bytes],
+    ) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
+        let Some(key) = args.first() else {
+            return Vec::new();
+        };
+        let mut has_read = false;
+        let mut has_write = false;
+        let mut i = 1;
+        while i < args.len() {
+            let tok = args[i].as_ref();
+            if tok.eq_ignore_ascii_case(b"GET") {
+                has_read = true;
+                i += 3; // GET type offset
+            } else if tok.eq_ignore_ascii_case(b"SET") || tok.eq_ignore_ascii_case(b"INCRBY") {
+                has_write = true;
+                i += 4; // SET/INCRBY type offset value
+            } else if tok.eq_ignore_ascii_case(b"OVERFLOW") {
+                i += 2; // OVERFLOW WRAP|SAT|FAIL
+            } else {
+                i += 1;
+            }
+        }
+        let flag = match (has_read, has_write) {
+            (true, true) => KeyAccessFlag::RW,
+            (true, false) => KeyAccessFlag::R,
+            // Write-only sub-ops, or a malformed/empty op list: default to the
+            // blind-overwrite flag a plain WRITE command would carry.
+            (false, _) => KeyAccessFlag::OW,
+        };
+        vec![(key.as_ref(), vec![flag])]
     }
 }
 

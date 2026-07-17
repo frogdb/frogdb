@@ -689,7 +689,8 @@ async fn tcl_command_getkeysandflags() {
     let flags = extract_bulk_strings(&pair[1]);
     assert_eq!(flags, vec!["R"], "GET key should have R flag");
 
-    // LMOVE src dest LEFT RIGHT: src should be RW, dest should be RW
+    // LMOVE src dest LEFT RIGHT: src is RW (pop reads+deletes), dest is W
+    // (INSERT-only; Redis `RW,INSERT` with no ACCESS — see ACL audit phase B).
     let resp = client
         .command(&[
             "COMMAND",
@@ -710,7 +711,119 @@ async fn tcl_command_getkeysandflags() {
     let pair1 = unwrap_array(items[1].clone());
     assert_eq!(unwrap_bulk(&pair1[0]), b"dest");
     let flags1 = extract_bulk_strings(&pair1[1]);
-    assert_eq!(flags1, vec!["RW"], "LMOVE dest should have RW flag");
+    assert_eq!(
+        flags1,
+        vec!["W"],
+        "LMOVE dest should have W flag (INSERT-only)"
+    );
+}
+
+/// `COMMAND GETKEYSANDFLAGS` per-key access flags corrected by the ACL audit
+/// (phase B). Pins the read-modify-write / STORE-family flags so an
+/// under-marking regression (e.g. INCR back to write-only `OW`) is caught: a
+/// wrong flag here is a live ACL bypass or false denial under per-key
+/// enforcement.
+#[tokio::test]
+async fn tcl_command_getkeysandflags_acl_audit_pins() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Assert `cmd args…` reports exactly `expected` (key, flags) pairs in order.
+    async fn assert_flags(
+        client: &mut frogdb_test_harness::server::TestClient,
+        cmd: &[&str],
+        expected: &[(&str, &[&str])],
+    ) {
+        let mut full = vec!["COMMAND", "GETKEYSANDFLAGS"];
+        full.extend_from_slice(cmd);
+        let resp = client.command(&full).await;
+        let items = unwrap_array(resp);
+        assert_eq!(
+            items.len(),
+            expected.len(),
+            "{cmd:?} should report {} keys",
+            expected.len()
+        );
+        for (item, (key, flags)) in items.into_iter().zip(expected) {
+            let pair = unwrap_array(item);
+            assert_eq!(unwrap_bulk(&pair[0]), key.as_bytes(), "{cmd:?} key");
+            let got = extract_bulk_strings(&pair[1]);
+            assert_eq!(&got, flags, "{cmd:?} flags for key {key}");
+        }
+    }
+
+    // Read-modify-write single-key commands are RW (read old value + write).
+    assert_flags(&mut client, &["INCR", "k"], &[("k", &["RW"])]).await;
+    assert_flags(&mut client, &["INCRBYFLOAT", "k", "1"], &[("k", &["RW"])]).await;
+    assert_flags(&mut client, &["GETDEL", "k"], &[("k", &["RW"])]).await;
+    assert_flags(&mut client, &["GETSET", "k", "v"], &[("k", &["RW"])]).await;
+    assert_flags(&mut client, &["HINCRBY", "k", "f", "1"], &[("k", &["RW"])]).await;
+    assert_flags(&mut client, &["ZINCRBY", "k", "1", "m"], &[("k", &["RW"])]).await;
+    assert_flags(&mut client, &["LPOP", "k"], &[("k", &["RW"])]).await;
+    assert_flags(&mut client, &["SPOP", "k"], &[("k", &["RW"])]).await;
+    assert_flags(&mut client, &["ZPOPMIN", "k"], &[("k", &["RW"])]).await;
+
+    // Multi-key pops: every popped key is RW.
+    assert_flags(
+        &mut client,
+        &["ZMPOP", "2", "k1", "k2", "MIN"],
+        &[("k1", &["RW"]), ("k2", &["RW"])],
+    )
+    .await;
+
+    // SET variable-flags: plain SET is OW, SET … GET reads the old value (RW).
+    assert_flags(&mut client, &["SET", "k", "v"], &[("k", &["OW"])]).await;
+    assert_flags(&mut client, &["SET", "k", "v", "GET"], &[("k", &["RW"])]).await;
+    assert_flags(
+        &mut client,
+        &["SET", "k", "v", "XX", "GET", "EX", "100"],
+        &[("k", &["RW"])],
+    )
+    .await;
+
+    // BITFIELD variable-flags: GET-only is R, a write sub-op makes it RW/OW.
+    assert_flags(
+        &mut client,
+        &["BITFIELD", "k", "GET", "u8", "0"],
+        &[("k", &["R"])],
+    )
+    .await;
+    assert_flags(
+        &mut client,
+        &["BITFIELD", "k", "SET", "u8", "0", "255"],
+        &[("k", &["OW"])],
+    )
+    .await;
+    assert_flags(
+        &mut client,
+        &["BITFIELD", "k", "GET", "u8", "0", "SET", "u8", "0", "1"],
+        &[("k", &["RW"])],
+    )
+    .await;
+
+    // STORE / move families: destination write-only, sources read-only.
+    assert_flags(
+        &mut client,
+        &["PFMERGE", "dst", "s1", "s2"],
+        &[("dst", &["RW"]), ("s1", &["R"]), ("s2", &["R"])],
+    )
+    .await;
+    assert_flags(
+        &mut client,
+        &["SMOVE", "src", "dst", "m"],
+        &[("src", &["RW"]), ("dst", &["W"])],
+    )
+    .await;
+
+    // XREADGROUP: FrogDB requires RW (the consumer-group PEL mutation is a real
+    // WAL write); Redis's ACL treats the stream as read-only. Documented
+    // divergence — see ACL audit phase B (WAL write-set tension).
+    assert_flags(
+        &mut client,
+        &["XREADGROUP", "GROUP", "g", "c", "STREAMS", "s", ">"],
+        &[("s", &["RW"])],
+    )
+    .await;
 }
 
 /// `COMMAND GETKEYSANDFLAGS invalid args`

@@ -104,15 +104,36 @@ parity), and the inverse still denied.
   `acl_v2_regression` integration (SINTERSTORE + ZUNIONSTORE split-access allow,
   per-key deny, DRYRUN agreement, MULTI/EXEC queue, single-key no-regression).
 
-**Phase B (spec-accuracy audit) PENDING.** The enforcement flip is only as correct
-as each command's `AccessSpec`. A full read-only audit of the 371-command catalog
-against Redis fine key-spec flags lives in the scratchpad
-(`acl_accessspec_audit.md`): **37 SEVERITY-BYPASS** (read-modify-write commands
-marked `OW`/write-only via `AccessSpec::Uniform` — pop/getdel/getset/incr/getex/
-setbit families — that Redis also requires *read* perm on), **2 SEVERITY-DENIAL**
-(over-strict), and **1 MIXED** (XREADGROUP). Root cause: `AccessSpec::Uniform`
-cannot express `RW`. These are per-command spec fixes (add `ACCESS`→R where Redis
-reads the value) and are independent of the enforcement mechanism landed here.
+**Phase B (spec-accuracy audit) DONE.** The full read-only audit of the catalog
+against Redis fine key-spec flags is at `todo/proposals/acl-accessspec-audit.md`
+(**37 SEVERITY-BYPASS**, **2 SEVERITY-DENIAL**, **1 MIXED** XREADGROUP, plus 2
+FrogDB-native merge mismatches). All fixed:
+
+- Root cause resolved by a new `AccessSpec::UniformRW` variant (uniform `RW` in a
+  single-token spec change), applied to the 32 single/multi-key read-modify-write
+  commands (INCR/DECR/pop/GETDEL/GETSET/GETEX/HINCRBY/ZINCRBY/… families, MIGRATE,
+  EVAL/EVALSHA/FCALL).
+- SET/BITFIELD `VARIABLE_FLAGS` implemented via `AccessSpec::Dynamic` +
+  `dynamic_keys_with_flags` (plain SET stays `OW`; `SET … GET` / BITFIELD `GET`
+  sub-ops add read).
+- LMOVE/RPOPLPUSH/BLMOVE/BRPOPLPUSH/SMOVE → `Positional(RW, W)`; PFMERGE →
+  `Positional(RW, R)`; CMS.MERGE → `Positional(OW, R)`; TDIGEST.MERGE →
+  `Positional(RW, R)`.
+- **XREADGROUP → `RW` (documented divergence, not Redis-parity `R`):** the stream
+  key must stay in the WAL write-set (`WalStrategy::Dynamic` derives destinations
+  from `write_access_keys`; the PEL mutation is a real write). `RW` closes the
+  write-only bypass and keeps WAL persistence intact; FrogDB requires write where
+  Redis requires read-only (stricter, not a bypass). See the audit doc header.
+- Tests: `introspection2_tcl::tcl_command_getkeysandflags_acl_audit_pins` (spec
+  pins) + `acl_v2_regression` enforcement tests (INCR needs read; SET…GET needs
+  read; LMOVE dest write-only; XREADGROUP needs RW).
+
+WAL note: every `OW`/`RW`→`R` demotion was checked against `write_access_keys`.
+PFMERGE / CMS.MERGE / TDIGEST.MERGE sources moved to `R`, but those commands use
+`WalStrategy::PersistFirstKey` (persists the dest only), and sources were never
+written — so dropping them from the write-set is correct. LMOVE-family use
+`WalStrategy::MoveKeys` (positional args, ignores access flags). Only XREADGROUP
+consumes `Dynamic`→`write_access_keys`, hence the `RW` choice above.
 
 ## 5. Smaller carried-over items
 

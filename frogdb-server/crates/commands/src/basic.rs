@@ -1,8 +1,9 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, Expiry, KeySpec, KeyspaceEventFlags, LookupSpec, MergeStrategy,
-    SetCondition, SetOptions, SetResult, StoreTypedFamilyExt, Value, WaiterWake, WalStrategy,
+    ExecutionStrategy, Expiry, KeyAccessFlag, KeySpec, KeyspaceEventFlags, LookupSpec,
+    MergeStrategy, SetCondition, SetOptions, SetResult, StoreTypedFamilyExt, Value, WaiterWake,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -477,7 +478,12 @@ impl Command for SetCommand {
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
-            access: AccessSpec::Uniform,
+            // VARIABLE_FLAGS in Redis: the `GET` option makes SET read the old
+            // value (key becomes `RW,ACCESS`), while a plain `SET k v` is a blind
+            // overwrite (`OW`). Resolved per-invocation in
+            // `dynamic_keys_with_flags` so a `%W~`-only principal can still
+            // `SET k v` but `SET k v GET` correctly requires read too.
+            access: AccessSpec::Dynamic,
             wal: WalStrategy::PersistFirstKey,
             wakes: // SET can overwrite any key type with a string value. Stream waiters
         // (XREADGROUP) need WRONGTYPE when their stream is replaced; other
@@ -618,6 +624,48 @@ impl Command for SetCommand {
             }
         }
     }
+
+    /// Per-key access flags for `COMMAND GETKEYSANDFLAGS` / ACL: `RW` when the
+    /// `GET` option is present (SET reads the old value), else `OW` (blind
+    /// overwrite). Redis models this with `VARIABLE_FLAGS` on the key-spec.
+    fn dynamic_keys_with_flags<'a>(
+        &self,
+        args: &'a [Bytes],
+    ) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
+        let Some(key) = args.first() else {
+            return Vec::new();
+        };
+        let flag = if set_has_get_option(args) {
+            KeyAccessFlag::RW
+        } else {
+            KeyAccessFlag::OW
+        };
+        vec![(key.as_ref(), vec![flag])]
+    }
+}
+
+/// Whether a SET invocation carries the `GET` option (it then reads the old
+/// value). Options begin after `key value` (index 2); `EX`/`PX`/`EXAT`/`PXAT`
+/// and the `IFxx` family each consume the following argument, which is skipped
+/// so a comparison/expiry value equal to `GET` is never mistaken for the flag.
+fn set_has_get_option(args: &[Bytes]) -> bool {
+    let mut i = 2;
+    while i < args.len() {
+        let tok = args[i].as_ref();
+        if tok.eq_ignore_ascii_case(b"GET") {
+            return true;
+        }
+        let consumes_value = tok.eq_ignore_ascii_case(b"EX")
+            || tok.eq_ignore_ascii_case(b"PX")
+            || tok.eq_ignore_ascii_case(b"EXAT")
+            || tok.eq_ignore_ascii_case(b"PXAT")
+            || tok.eq_ignore_ascii_case(b"IFEQ")
+            || tok.eq_ignore_ascii_case(b"IFNE")
+            || tok.eq_ignore_ascii_case(b"IFDEQ")
+            || tok.eq_ignore_ascii_case(b"IFDNE");
+        i += if consumes_value { 2 } else { 1 };
+    }
+    false
 }
 
 impl SetCommand {

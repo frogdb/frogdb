@@ -844,7 +844,7 @@ impl Command for SpopCommand {
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
             event: EventSpec::Emits {
@@ -917,7 +917,7 @@ impl Command for SmoveCommand {
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::FirstTwo,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::W]),
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
             // Runtime-deposited (proposal 44): SMOVE is SREM+SADD internally, so

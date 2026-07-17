@@ -82,7 +82,7 @@ static EVAL_SPEC: CommandSpec = CommandSpec {
         .union(CommandFlags::NONDETERMINISTIC)
         .union(CommandFlags::MOVABLEKEYS),
     keys: KeySpec::Dynamic,
-    access: AccessSpec::Uniform,
+    access: AccessSpec::UniformRW,
     wal: WalStrategy::NoOp,
     wakes: WaiterWake::None,
     event: EventSpec::NotApplicable,
@@ -161,7 +161,7 @@ static EVALSHA_SPEC: CommandSpec = CommandSpec {
         .union(CommandFlags::NONDETERMINISTIC)
         .union(CommandFlags::MOVABLEKEYS),
     keys: KeySpec::Dynamic,
-    access: AccessSpec::Uniform,
+    access: AccessSpec::UniformRW,
     wal: WalStrategy::NoOp,
     wakes: WaiterWake::None,
     event: EventSpec::NotApplicable,
@@ -285,7 +285,7 @@ static FCALL_SPEC: CommandSpec = CommandSpec {
         .union(CommandFlags::STALE)
         .union(CommandFlags::MOVABLEKEYS),
     keys: KeySpec::Dynamic,
-    access: AccessSpec::Uniform,
+    access: AccessSpec::UniformRW,
     wal: WalStrategy::NoOp,
     wakes: WaiterWake::None,
     event: EventSpec::NotApplicable,

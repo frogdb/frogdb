@@ -5,7 +5,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, HyperLogLogValue, KeySpec, KeyspaceEventFlags, LookupSpec,
+    ExecutionStrategy, HyperLogLogValue, KeyAccessFlag, KeySpec, KeyspaceEventFlags, LookupSpec,
     StoreTypedFamilyExt, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
@@ -161,7 +161,7 @@ impl Command for PfmergeCommand {
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE,
             keys: KeySpec::All,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::R]),
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
             // Redis fires `pfadd` under NOTIFY_STRING on the PFMERGE

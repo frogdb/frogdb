@@ -221,6 +221,18 @@ pub enum EventSpec {
 pub enum AccessSpec {
     /// Derive one flag from `CommandFlags`: `WRITE` → `OW`, otherwise `R`.
     Uniform,
+    /// Every key is read-and-write (`RW`), independent of `CommandFlags`.
+    ///
+    /// For read-modify-write commands that both *read* the stored value and
+    /// mutate it (INCR/DECR, the pop/GETDEL/GETSET/GETEX families, HINCRBY,
+    /// ZINCRBY, MIGRATE, …). Redis marks these key-specs `RW,ACCESS,UPDATE|
+    /// DELETE`, so ACL requires read **and** write. The flag-derived
+    /// [`AccessSpec::Uniform`] would collapse them to write-only `OW` and let a
+    /// `%W~`-only principal execute them and read back the stored value — an
+    /// ACL bypass once per-key enforcement is active. `RW` also keeps the key
+    /// in the WAL write-set (it passes the `W`/`OW`/`RW` filter), so
+    /// flag-derived WAL strategies still persist it.
+    UniformRW,
     /// Explicit flag per key position; the last entry repeats for any
     /// trailing keys.
     Positional(&'static [KeyAccessFlag]),
@@ -250,6 +262,10 @@ impl AccessSpec {
                 };
                 keys.into_iter().map(|k| (k, vec![flag])).collect()
             }
+            AccessSpec::UniformRW => keys
+                .into_iter()
+                .map(|k| (k, vec![KeyAccessFlag::RW]))
+                .collect(),
             AccessSpec::Positional(flags) => keys
                 .into_iter()
                 .enumerate()
@@ -709,6 +725,24 @@ mod tests {
                 (b"b", vec![KeyAccessFlag::R])
             ]
         );
+    }
+
+    #[test]
+    fn access_uniform_rw() {
+        // Every key resolves to RW regardless of the command's WRITE flag —
+        // the read-modify-write case (INCR, pops, GETDEL, …).
+        let keys = vec![b"a" as &[u8], b"b"];
+        for write in [true, false] {
+            let resolved = AccessSpec::UniformRW.resolve(keys.clone(), write);
+            assert_eq!(
+                resolved,
+                vec![
+                    (b"a" as &[u8], vec![KeyAccessFlag::RW]),
+                    (b"b", vec![KeyAccessFlag::RW])
+                ],
+                "UniformRW must be RW independent of write={write}"
+            );
+        }
     }
 
     #[test]

@@ -366,7 +366,7 @@ impl Command for ZincrbyCommand {
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistFirstKey,
             // ZINCRBY can create a new member (or a new sorted set), which must
             // wake a client blocked in BZPOPMIN/BZPOPMAX on the key. Previously
