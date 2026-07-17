@@ -108,7 +108,7 @@ pub async fn run(cmd: &ReplicationCommand, ctx: &mut ConnectionContext) -> Resul
     match cmd {
         ReplicationCommand::Status => run_status(ctx).await,
         ReplicationCommand::Lag { .. } => {
-            anyhow::bail!("frog replication lag: not yet implemented")
+            anyhow::bail!("frogctl replication lag: not yet implemented")
         }
         ReplicationCommand::Promote { addr } => run_promote(addr, ctx).await,
         ReplicationCommand::Topology => run_topology(ctx).await,

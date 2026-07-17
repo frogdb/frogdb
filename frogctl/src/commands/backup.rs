@@ -132,13 +132,13 @@ pub async fn run(cmd: &BackupCommand, ctx: &mut ConnectionContext) -> Result<i32
         BackupCommand::Trigger => run_trigger(ctx).await,
         BackupCommand::Status => run_status(ctx).await,
         BackupCommand::Export { .. } => {
-            anyhow::bail!("frog backup export: not yet implemented")
+            anyhow::bail!("frogctl backup export: not yet implemented")
         }
         BackupCommand::Import { .. } => {
-            anyhow::bail!("frog backup import: not yet implemented")
+            anyhow::bail!("frogctl backup import: not yet implemented")
         }
         BackupCommand::Verify { .. } => {
-            anyhow::bail!("frog backup verify: not yet implemented")
+            anyhow::bail!("frogctl backup verify: not yet implemented")
         }
     }
 }

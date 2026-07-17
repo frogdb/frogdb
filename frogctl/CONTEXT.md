@@ -49,8 +49,8 @@ One concept, one home. The `data` namespace keeps only its own concepts:
 - **bigkeys / memkeys** → `debug memory` (canonical)
 - **export / import** → `backup` (canonical)
 - `data keyspace`, `data pipe`, `data slot` → stay under `data` (not aliases)
-- The four `data` alias commands (`bigkeys`, `memkeys`, `export`, `import`) are slated for
-  removal — `.scratch/naming-cleanup/issues/03-frogctl-data-aliases.md`.
+- The four `data` alias commands (`bigkeys`, `memkeys`, `export`, `import`) were removed —
+  `.scratch/naming-cleanup/issues/03-frogctl-data-aliases.md`.
 
 ## Relationships
 
@@ -74,5 +74,5 @@ One concept, one home. The `data` namespace keeps only its own concepts:
   resolved: the **Client** subcommand always means server-side connections; say "frogctl"
   for the tool itself.
 - "topology" named two graphs — resolved: **Cluster Topology** vs **Replication Topology**.
-- One error message says `frog debug vll` instead of `frogctl` — typo, tracked in
+- An error message said `frog debug vll` instead of `frogctl` — typo, fixed; see
   `.scratch/naming-cleanup/issues/05-frog-binary-name-typo.md`.
