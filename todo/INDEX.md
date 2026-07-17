@@ -29,10 +29,12 @@
 
 ## Code Quality
 
-- [proposals/INDEX.md](proposals/INDEX.md) — Architecture proposals: 6 deepening refactors
-  (declarative command spec, typed store access, unified post-execution pipeline, ConnectionState
-  encapsulation, single routing decision, recovery orchestrator) + correctness flags found during
-  the review
+- [proposals/INDEX.md](proposals/INDEX.md) — Architecture proposals: 7 review rounds of deepening
+  refactors (rounds 1–7 implemented; round 7, 2026-07-16: request/response flow from connection
+  acceptance through persistence and replication) + correctness flags found during the reviews
+- [ROUND7_FOLLOWUPS.md](ROUND7_FOLLOWUPS.md) — Open items from round 7: WAIT resume-seed wake,
+  inline-command decision, scatter-MGET expired reads, per-key ACL enforcement, carried-over
+  smaller items
 - Sorted set parsing helper extraction (`parse_score_bound`, `parse_lex_bound`, `parse_set_op_options`)
 - Spec file audit for accuracy against implementation
 

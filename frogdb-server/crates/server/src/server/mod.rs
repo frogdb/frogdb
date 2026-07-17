@@ -256,6 +256,7 @@ impl Server {
             &infra.shard_senders,
             infra.num_shards,
             &repl.replication_broadcaster,
+            repl.primary_replication_handler.as_ref(),
             &repl.replication_tracker,
             &infra.metrics_recorder,
             #[cfg(not(feature = "turmoil"))]

@@ -23,6 +23,8 @@ use frogdb_protocol::Response;
 use tokio::sync::oneshot;
 
 use crate::connection::ConnectionHandler;
+use crate::connection::deps::{AdminDeps, ClusterDeps, CoreDeps, ObservabilityDeps};
+use crate::connection::observability_conn_command::MemoryDiag;
 use crate::cursor_store::AggregateCursorStore;
 use crate::runtime_config::ConfigManager;
 
@@ -73,92 +75,90 @@ impl CursorStoreProvider for AggregateCursorStore {
 }
 
 impl ConnectionHandler {
-    /// Build the narrow connection-command view over this handler's state.
+    /// The ambient connection-command view over the handler's subsystem dep
+    /// groups — the server-side wiring for [`ConnCtx::new`], which is the one
+    /// place the field list itself is authored.
+    ///
+    /// This is an associated function taking the dep groups as explicit
+    /// parameters instead of a `&self` method **on purpose**: a call site
+    /// borrows exactly the handler fields that are never a capability slot
+    /// (`admin`/`core`/`observability`/`cluster`/`memory_diag`), leaving
+    /// `self.state`, `self.tracking_io`, the pub/sub channels, and the monitor
+    /// receiver free for the `.with_*` capability layer's `&mut` borrows. Do
+    /// NOT "simplify" this to take `&self`: a whole-`self` borrow destroys the
+    /// disjointness and the mutable builders stop compiling.
+    pub(crate) fn base_ctx<'a>(
+        admin: &'a AdminDeps,
+        core: &'a CoreDeps,
+        observability: &'a ObservabilityDeps,
+        cluster: &'a ClusterDeps,
+        memory_diag: &'a MemoryDiag,
+        num_shards: usize,
+    ) -> ConnCtx<'a> {
+        ConnCtx::new(
+            admin.config_manager.as_ref(),
+            admin.client_registry.as_ref(),
+            observability.latency_histograms.as_ref(),
+            observability.keyspace_stats.as_ref(),
+            core.shard_senders.as_slice(),
+            admin.snapshot_coordinator.as_ref(),
+            &observability.hotkey_session,
+            cluster,
+            admin.cursor_store.as_ref(),
+            observability.metrics_recorder.as_ref(),
+            memory_diag,
+            core.acl_manager.as_ref(),
+            core.registry.as_ref(),
+            num_shards,
+            admin.config_manager.max_clients(),
+            cluster.is_cluster_mode(),
+        )
+    }
+
+    /// Build the read-only connection-command view over this handler's state:
+    /// the ambient view plus the live read providers — real INFO aggregation
+    /// and scripting entry points (`self`), the DEBUG capability, and the
+    /// connection's negotiated protocol version and authenticated username.
     pub(crate) fn conn_ctx(&self) -> ConnCtx<'_> {
-        ConnCtx {
-            config: self.admin.config_manager.as_ref(),
-            client_registry: self.admin.client_registry.as_ref(),
-            latency_histograms: self.observability.latency_histograms.as_ref(),
-            keyspace_stats: self.observability.keyspace_stats.as_ref(),
-            shard_senders: self.core.shard_senders.as_slice(),
-            snapshot_coordinator: self.admin.snapshot_coordinator.as_ref(),
-            hotkey_session: &self.observability.hotkey_session,
-            hotkey_cluster: &self.cluster,
-            protocol_version: self.state.protocol_version,
-            cursor_store: self.admin.cursor_store.as_ref(),
-            metrics_recorder: self.observability.metrics_recorder.as_ref(),
-            memory_diag: &self.memory_diag,
-            num_shards: self.num_shards,
-            max_clients: self.admin.config_manager.max_clients(),
-            cluster_enabled: self.cluster.is_cluster_mode(),
-            acl_manager: self.core.acl_manager.as_ref(),
-            command_registry: self.core.registry.as_ref(),
-            username: self.state.username(),
-            info: self,
-            scripting: self,
-            conn_state: None,
-            tracking: None,
-            pubsub: None,
+        Self::base_ctx(
+            &self.admin,
+            &self.core,
+            &self.observability,
+            &self.cluster,
+            &self.memory_diag,
+            self.num_shards,
+        )
+        .with_full_reads(
+            self,
+            self,
             // DEBUG dispatches through this read-only builder; wire its
             // handler-only capabilities (tracer, per-shard round-trips, bundle
             // generation, subscription counts, the debug-command gate).
-            debug: Some(self),
-            monitor: None,
-        }
+            Some(self),
+            self.state.protocol_version,
+            self.state.username(),
+        )
     }
 
     /// Build a connection-command view that carries the mutable connection-state
-    /// capability ([`ConnCtx::conn_state`] = `Some`), for the pre-auth mutating
-    /// commands AUTH and HELLO.
+    /// capability ([`ConnCtx::conn_state`] = `Some`), for the mutating
+    /// AUTH/HELLO and RESET/ASKING/READONLY/READWRITE dispatch paths.
     ///
-    /// This is a distinct builder from [`conn_ctx`](Self::conn_ctx) because the
-    /// mutable `&mut self.state` handle cannot coexist with the shared whole-`self`
-    /// borrow that [`conn_ctx`](Self::conn_ctx) takes for `info: self` (INFO
-    /// aggregation), nor with the `username` borrow of `self.state`. AUTH/HELLO
-    /// need neither: INFO is stubbed with a no-op provider and connection identity
-    /// is read through `conn_state`, so those two fields are placeholders here.
-    ///
-    /// The same builder is the template for the upcoming CLIENT and
-    /// connection-state (RESET/ASKING/READONLY/READWRITE) migrations, which will
-    /// likewise dispatch through a `Some(conn_state)` `ConnCtx`.
+    /// This is distinct from [`conn_ctx`](Self::conn_ctx) because the `&mut
+    /// self.state` handle cannot coexist with the shared whole-`self` borrows
+    /// that `conn_ctx` takes for `info: self`/`scripting: self`. These commands
+    /// need neither: they read connection identity through `conn_state`, so the
+    /// no-op/placeholder defaults from [`ConnCtx::new`] stand.
     pub(crate) fn conn_ctx_authmut(&mut self) -> ConnCtx<'_> {
-        // `'static` no-op INFO provider: AUTH/HELLO never render INFO, and
-        // `info: self` would take a conflicting shared borrow of the whole
-        // handler while `conn_state` holds `&mut self.state`.
-        static NOOP_INFO: frogdb_core::NoopInfoProvider = frogdb_core::NoopInfoProvider;
-        static NOOP_SCRIPTING: frogdb_core::NoopScriptingProvider =
-            frogdb_core::NoopScriptingProvider;
-        ConnCtx {
-            config: self.admin.config_manager.as_ref(),
-            client_registry: self.admin.client_registry.as_ref(),
-            latency_histograms: self.observability.latency_histograms.as_ref(),
-            keyspace_stats: self.observability.keyspace_stats.as_ref(),
-            shard_senders: self.core.shard_senders.as_slice(),
-            snapshot_coordinator: self.admin.snapshot_coordinator.as_ref(),
-            hotkey_session: &self.observability.hotkey_session,
-            hotkey_cluster: &self.cluster,
-            // Placeholder: AUTH/HELLO read the live protocol via `conn_state`
-            // (HELLO shapes its reply from the *post*-negotiation version).
-            protocol_version: frogdb_protocol::ProtocolVersion::default(),
-            cursor_store: self.admin.cursor_store.as_ref(),
-            metrics_recorder: self.observability.metrics_recorder.as_ref(),
-            memory_diag: &self.memory_diag,
-            num_shards: self.num_shards,
-            max_clients: self.admin.config_manager.max_clients(),
-            cluster_enabled: self.cluster.is_cluster_mode(),
-            acl_manager: self.core.acl_manager.as_ref(),
-            command_registry: self.core.registry.as_ref(),
-            // Placeholder: AUTH/HELLO read identity via `conn_state`, not this.
-            username: "",
-            info: &NOOP_INFO,
-            // Placeholder: AUTH/HELLO are not scripting commands.
-            scripting: &NOOP_SCRIPTING,
-            conn_state: Some(&mut self.state),
-            tracking: None,
-            pubsub: None,
-            debug: None,
-            monitor: None,
-        }
+        Self::base_ctx(
+            &self.admin,
+            &self.core,
+            &self.observability,
+            &self.cluster,
+            &self.memory_diag,
+            self.num_shards,
+        )
+        .with_conn_state(&mut self.state)
     }
 
     /// Build a connection-command view for CLIENT: it carries both the mutable
@@ -166,43 +166,21 @@ impl ConnectionHandler {
     /// client-tracking IO plumbing ([`ConnCtx::tracking`] = `Some`).
     ///
     /// The two `&mut` borrows are of disjoint handler fields (`self.state` and
-    /// `self.tracking_io`), so they coexist with each other and with the shared
-    /// subsystem borrows. As with [`conn_ctx_authmut`](Self::conn_ctx_authmut),
-    /// `info`/`username`/`protocol_version` are placeholders: CLIENT renders no
-    /// INFO and reads its identity through `conn_state`, and `info: self` would
-    /// conflict with the `&mut self.state` borrow.
+    /// `self.tracking_io`), so they coexist with each other and with
+    /// [`base_ctx`](Self::base_ctx)'s shared dep-group borrows. As with
+    /// [`conn_ctx_authmut`](Self::conn_ctx_authmut), CLIENT reads its identity
+    /// through `conn_state`, so the defaults stand.
     pub(crate) fn conn_ctx_clientmut(&mut self) -> ConnCtx<'_> {
-        static NOOP_INFO: frogdb_core::NoopInfoProvider = frogdb_core::NoopInfoProvider;
-        static NOOP_SCRIPTING: frogdb_core::NoopScriptingProvider =
-            frogdb_core::NoopScriptingProvider;
-        ConnCtx {
-            config: self.admin.config_manager.as_ref(),
-            client_registry: self.admin.client_registry.as_ref(),
-            latency_histograms: self.observability.latency_histograms.as_ref(),
-            keyspace_stats: self.observability.keyspace_stats.as_ref(),
-            shard_senders: self.core.shard_senders.as_slice(),
-            snapshot_coordinator: self.admin.snapshot_coordinator.as_ref(),
-            hotkey_session: &self.observability.hotkey_session,
-            hotkey_cluster: &self.cluster,
-            protocol_version: frogdb_protocol::ProtocolVersion::default(),
-            cursor_store: self.admin.cursor_store.as_ref(),
-            metrics_recorder: self.observability.metrics_recorder.as_ref(),
-            memory_diag: &self.memory_diag,
-            num_shards: self.num_shards,
-            max_clients: self.admin.config_manager.max_clients(),
-            cluster_enabled: self.cluster.is_cluster_mode(),
-            acl_manager: self.core.acl_manager.as_ref(),
-            command_registry: self.core.registry.as_ref(),
-            username: "",
-            info: &NOOP_INFO,
-            // Placeholder: CLIENT is not a scripting command.
-            scripting: &NOOP_SCRIPTING,
-            conn_state: Some(&mut self.state),
-            tracking: Some(&mut self.tracking_io),
-            pubsub: None,
-            debug: None,
-            monitor: None,
-        }
+        Self::base_ctx(
+            &self.admin,
+            &self.core,
+            &self.observability,
+            &self.cluster,
+            &self.memory_diag,
+            self.num_shards,
+        )
+        .with_conn_state(&mut self.state)
+        .with_tracking(&mut self.tracking_io)
     }
 }
 
@@ -484,7 +462,6 @@ mod tests {
         ClientRegistry, CommandLatencyHistograms, KeyspaceStats, NoopMetricsRecorder,
         SharedHotkeySession, new_shared_hotkey_session,
     };
-    use frogdb_protocol::ProtocolVersion;
 
     /// Build a `ConnCtx` over fixture dependencies — no socket, no
     /// `ConnectionHandler`. This is the point of the seam: a connection command
@@ -523,33 +500,25 @@ mod tests {
         }
 
         fn ctx(&self) -> ConnCtx<'_> {
-            ConnCtx {
-                config: &self.config_manager,
-                client_registry: &self.client_registry,
-                latency_histograms: &self.latency_histograms,
-                keyspace_stats: &self.keyspace_stats,
-                shard_senders: &[],
-                snapshot_coordinator: &self.snapshot_coordinator,
-                hotkey_session: &self.hotkey_session,
-                hotkey_cluster: &self.cluster,
-                protocol_version: ProtocolVersion::Resp2,
-                cursor_store: &self.cursor_store,
-                metrics_recorder: &self.metrics_recorder,
-                memory_diag: &self.memory_diag,
-                num_shards: 0,
-                max_clients: 10000,
-                cluster_enabled: false,
-                acl_manager: self.acl_manager.as_ref(),
-                command_registry: &self.command_registry,
-                username: "default",
-                info: &frogdb_core::NoopInfoProvider,
-                scripting: &frogdb_core::NoopScriptingProvider,
-                conn_state: None,
-                tracking: None,
-                pubsub: None,
-                debug: None,
-                monitor: None,
-            }
+            ConnCtx::new(
+                &self.config_manager,
+                &self.client_registry,
+                &self.latency_histograms,
+                &self.keyspace_stats,
+                &[],
+                &self.snapshot_coordinator,
+                &self.hotkey_session,
+                &self.cluster,
+                &self.cursor_store,
+                &self.metrics_recorder,
+                &self.memory_diag,
+                self.acl_manager.as_ref(),
+                &self.command_registry,
+                0,
+                10000,
+                false,
+            )
+            .with_username("default")
         }
     }
 

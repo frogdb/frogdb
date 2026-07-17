@@ -27,3 +27,4 @@ rand.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 tempfile.workspace = true
 serde_json.workspace = true
+proptest.workspace = true

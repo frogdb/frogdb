@@ -116,7 +116,7 @@ impl ShardWorker {
             let outcome = invoke(&mut executor, &mut ctx, &registry);
             // Drain the effective writes the script's `redis.call`s recorded
             // before the context drops; the pipeline below consumes them.
-            (outcome, std::mem::take(&mut ctx.script_writes))
+            (outcome, std::mem::take(&mut ctx.effects.script_writes))
         };
         self.scripting.set_executor(executor);
 
@@ -201,36 +201,27 @@ impl ShardWorker {
         }
         // Route through the shared builder so a cross-shard script sub-command
         // sees the same cluster + replica identity as any other command on this
-        // shard (previously it used the bare `new` constructor).
-        let (result, dirty_delta, write_was_noop, hll_wal_delta, keyspace_events) = {
+        // shard (previously it used the bare `new` constructor). The deposits
+        // are drained as one `CommandEffects` value.
+        let (result, effects) = {
             let mut ctx = self.command_context(conn_id, protocol_version);
             let result = handler.execute(&mut ctx, args);
-            (
-                result,
-                ctx.dirty_delta,
-                ctx.write_was_noop,
-                ctx.hll_wal_delta.take(),
-                ctx.take_keyspace_events(),
-            )
+            (result, std::mem::take(&mut ctx.effects))
         };
 
         // A cross-shard scripted write runs its effects on THIS shard — the
         // one that owns the key — through the same canonical pipeline as a
         // direct command (the local-shard analogue is the record accumulated
         // by `ScriptInvoker::run_local` and drained after the script).
-        let is_effective_write = result.is_ok()
+        // `into_script_record` owns the no-op suppression rule: a
+        // `write_was_noop` sub-command records nothing.
+        if result.is_ok()
             && handler
                 .flags()
                 .contains(crate::command::CommandFlags::WRITE)
-            && !write_was_noop;
-        if is_effective_write {
-            let record = crate::command::ScriptWriteRecord {
-                handler: std::sync::Arc::clone(&handler),
-                args: args.to_vec(),
-                dirty_delta,
-                hll_wal_delta,
-                keyspace_events,
-            };
+            && let Some(record) =
+                effects.into_script_record(std::sync::Arc::clone(&handler), args.to_vec())
+        {
             self.run_script_write_effects(vec![record], conn_id).await;
         }
 
