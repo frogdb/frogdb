@@ -780,9 +780,11 @@ lint-script-gate:
 #      confirmation in the pub/sub handlers (a `b"subscribe"`/`b"unsubscribe"`/…
 #      label literal) reintroduces the path-dependent shape bug the seam fixed.
 #   2. The `*-1\r\n` array-null literal (which redis-protocol cannot produce)
-#      belongs only in frame_io.rs::write_null_array; a second copy risks the two
-#      diverging. Clippy cannot express "this literal outside that function", so a
-#      grep gate is the honest tool.
+#      belongs only in codec.rs, where the RESP2 codec encodes
+#      `Resp2Outbound::NullArray` (proposal 62-A moved it down from the connection
+#      layer to sit beside the rest of the RESP2 wire encoding); a second copy
+#      risks the two diverging. Clippy cannot express "this literal outside that
+#      module", so a grep gate is the honest tool.
 lint-pubsub-confirmation-seam:
     #!/usr/bin/env bash
     set -uo pipefail
@@ -800,12 +802,12 @@ lint-pubsub-confirmation-seam:
         status=1
     fi
     null_array_pattern='b"\*-1'
-    if matches=$(grep -rEn --include='*.rs' --exclude='frame_io.rs' "$null_array_pattern" "{{server-dir}}/crates/server/src"); then
-        echo "ERROR: array-null (*-1) literal outside frame_io.rs::write_null_array:" >&2
+    if matches=$(grep -rEn --include='*.rs' --exclude='codec.rs' "$null_array_pattern" "{{server-dir}}/crates/server/src"); then
+        echo "ERROR: array-null (*-1) literal outside codec.rs:" >&2
         echo "$matches" >&2
         echo >&2
-        echo "       The RESP2 array-null wire shape lives only in write_null_array" >&2
-        echo "       (crates/server/src/connection/frame_io.rs)." >&2
+        echo "       The RESP2 array-null wire shape lives only in the RESP2 codec" >&2
+        echo "       (crates/server/src/connection/codec.rs, Resp2Outbound::NullArray)." >&2
         status=1
     fi
     if [ "$status" -ne 0 ]; then

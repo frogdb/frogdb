@@ -44,6 +44,7 @@ pub(super) async fn init_cluster(
     shard_senders: &Arc<Vec<ShardSender>>,
     num_shards: usize,
     replication_broadcaster: &SharedBroadcaster,
+    primary_replication_handler: Option<&Arc<crate::replication::PrimaryReplicationHandler>>,
     replication_tracker: &Option<Arc<ReplicationTrackerImpl>>,
     metrics_recorder: &Arc<dyn MetricsRecorder>,
     #[cfg(not(feature = "turmoil"))] tls_manager: &Option<Arc<crate::tls::TlsManager>>,
@@ -440,6 +441,11 @@ pub(super) async fn init_cluster(
         if let Some(mut demotion_rx) = demotion_rx {
             let data_dir = config.persistence.data_dir.clone();
             let broadcaster: SharedBroadcaster = replication_broadcaster.clone();
+            // Backlog introspection lives on the concrete primary handler, not
+            // the frame-emit broadcaster trait. Only a primary reaches the
+            // demotion path with divergent writes to extract; a replica's
+            // handler is `None` and yields nothing (matching the old Noop path).
+            let primary_handler = primary_replication_handler.cloned();
             let tracker = replication_tracker.clone();
             let metrics = metrics_recorder.clone();
             spawn(async move {
@@ -459,7 +465,10 @@ pub(super) async fn init_cluster(
                     let current = broadcaster.current_offset();
 
                     if current > min_acked {
-                        let divergent = broadcaster.extract_divergent_writes(min_acked);
+                        let divergent = primary_handler
+                            .as_ref()
+                            .map(|h| h.extract_divergent_writes(min_acked))
+                            .unwrap_or_default();
                         if !divergent.is_empty() {
                             let header = frogdb_replication::split_brain_log::SplitBrainLogHeader {
                                 timestamp: String::new(),

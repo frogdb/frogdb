@@ -747,7 +747,7 @@ impl Command for DelCommand {
         // Signal the post-execution pipeline that no data was modified so
         // it can skip incrementing the shard version (preserving WATCH state).
         if deleted == 0 {
-            ctx.dirty_delta = -1;
+            ctx.effects.dirty_delta = -1;
         }
         Ok(Response::Integer(deleted))
     }

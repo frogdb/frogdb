@@ -78,9 +78,7 @@ use crate::net::ConnectionStream;
 pub use crate::server::next_txid;
 
 // Re-export utility functions used by handler submodules and internally
-pub(crate) use util::{
-    estimate_command_size, estimate_resp2_frame_size, key_access_type_for_flags,
-};
+pub(crate) use util::{estimate_command_size, estimate_resp2_frame_size};
 
 /// Connection handler that processes client commands.
 pub struct ConnectionHandler {

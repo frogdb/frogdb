@@ -64,11 +64,6 @@ pub(super) fn init_replication(
         let tracker = Arc::new(frogdb_core::ReplicationTrackerImpl::new());
         tracker.set_offset(repl_state.replication_offset);
 
-        // Wire up shared replication offset for cluster bus HealthProbe
-        if config.cluster.enabled {
-            shared_replication_offset = Some(tracker.shared_offset());
-        }
-
         let handler = Arc::new(PrimaryReplicationHandler::new(
             repl_state,
             state_path,
@@ -87,6 +82,13 @@ pub(super) fn init_replication(
             },
             config.replication.replica_write_timeout_ms,
         ));
+
+        // Wire up shared replication offset for cluster bus HealthProbe. The
+        // handle is vended by the OffsetCoordinator (the offset's single owner),
+        // not the tracker, so the bus reads the atomic the advance gate writes.
+        if config.cluster.enabled {
+            shared_replication_offset = Some(handler.shared_offset());
+        }
 
         // Store a reference for PSYNC connection handoff
         primary_replication_handler = Some(handler.clone());

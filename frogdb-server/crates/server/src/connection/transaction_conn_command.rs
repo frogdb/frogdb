@@ -407,7 +407,6 @@ mod tests {
         AclManager, ClientRegistry, CommandLatencyHistograms, CommandRegistry, KeyspaceStats,
         SharedHotkeySession, new_shared_hotkey_session,
     };
-    use frogdb_protocol::ProtocolVersion;
 
     /// Build a mutable-`ConnCtx` over fixture dependencies (mirrors the
     /// connection-state fixture): the transaction commands exercise the mutable
@@ -456,34 +455,25 @@ mod tests {
         }
 
         fn ctx_mut(&mut self) -> ConnCtx<'_> {
-            static NOOP_INFO: frogdb_core::NoopInfoProvider = frogdb_core::NoopInfoProvider;
-            ConnCtx {
-                config: &self.config_manager,
-                client_registry: &self.client_registry,
-                latency_histograms: &self.latency_histograms,
-                keyspace_stats: &self.keyspace_stats,
-                shard_senders: &[],
-                snapshot_coordinator: &self.snapshot_coordinator,
-                hotkey_session: &self.hotkey_session,
-                hotkey_cluster: &self.cluster,
-                protocol_version: ProtocolVersion::default(),
-                cursor_store: &self.cursor_store,
-                acl_manager: self.acl_manager.as_ref(),
-                command_registry: &self.command_registry,
-                username: "",
-                metrics_recorder: &self.metrics_recorder,
-                memory_diag: &self.memory_diag,
-                num_shards: 0,
-                max_clients: 10000,
-                cluster_enabled: false,
-                info: &NOOP_INFO,
-                scripting: &frogdb_core::NoopScriptingProvider,
-                conn_state: Some(&mut self.state),
-                tracking: None,
-                pubsub: None,
-                debug: None,
-                monitor: None,
-            }
+            ConnCtx::new(
+                &self.config_manager,
+                &self.client_registry,
+                &self.latency_histograms,
+                &self.keyspace_stats,
+                &[],
+                &self.snapshot_coordinator,
+                &self.hotkey_session,
+                &self.cluster,
+                &self.cursor_store,
+                &self.metrics_recorder,
+                &self.memory_diag,
+                self.acl_manager.as_ref(),
+                &self.command_registry,
+                0,
+                10000,
+                false,
+            )
+            .with_conn_state(&mut self.state)
         }
     }
 
