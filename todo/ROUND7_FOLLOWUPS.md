@@ -170,7 +170,17 @@ consumes `Dynamic`→`write_access_keys`, hence the `RW` choice above.
   rescans the full buffer per `*`-prefixed decode; now pinned by table tests, so a bounded scan can
   be proven equivalence-preserving if profiling ever flags it.
 
-## Verification debt
+## Verification debt — CLEARED 2026-07-17
+
+Full workspace suite run at `39ad07f2` (all four follow-up fixes merged): 6329 tests,
+6153 passed, 1 skipped, 0 failures. 176 "timeouts" were environmental (macOS `syspolicyd`
+exec-validation wedge freezing trivial unit tests at the 15s nextest cap); all 176 reran green in
+targeted crate runs (frogdb-commands 105/105, frogctl 93/93, frogdb-acl 90/90,
+frogdb-config 94/94). Machine-level mitigation for the wedge: add the terminal to the
+Developer Tools Gatekeeper exemption, or `sudo pkill syspolicyd` when wedged (signature:
+fresh binaries hang at `_dyld_start`, syspolicyd CPU-bound, amfid freshly respawned).
+
+## Verification debt (historical note)
 
 Post-review-fix full workspace suite (`0324e2df`) did not complete locally — two runs wedged behind
 the macOS `syspolicyd` exec-validation queue and were stopped. Targeted coverage is green
