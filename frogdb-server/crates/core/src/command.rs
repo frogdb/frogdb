@@ -1544,6 +1544,43 @@ mod tests {
         assert!(WalStrategy::NoOp.actions(&empty).is_empty());
     }
 
+    /// ACL enforcement resolves per-key access positionally through
+    /// `keys_with_flags`; that key list MUST be exactly the one `keys()` returns
+    /// (same resolver), otherwise flags would attach to the wrong key. Pin it for
+    /// each representative key layout so enforcement and routing never diverge.
+    #[test]
+    fn keys_with_flags_key_order_matches_keys() {
+        for args in [
+            args(&[b"dest", b"src1", b"src2"]), // KeySpec::All (StoreDestFirst)
+            args(&[b"only"]),                   // single key
+        ] {
+            let plain = StoreDestFirst.keys(&args);
+            let flagged: Vec<&[u8]> = StoreDestFirst
+                .keys_with_flags(&args)
+                .into_iter()
+                .map(|(k, _)| k)
+                .collect();
+            assert_eq!(plain, flagged, "StoreDestFirst key order mismatch");
+        }
+
+        // COPY-style FirstTwo layout (destination is the second key).
+        let copy_args = args(&[b"src", b"dest"]);
+        let plain = CopyLike.keys(&copy_args);
+        let flagged: Vec<&[u8]> = CopyLike
+            .keys_with_flags(&copy_args)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        assert_eq!(plain, flagged, "CopyLike key order mismatch");
+
+        // The flags themselves follow the Positional spec: dest OW, sources R.
+        let flag_args = args(&[b"dest", b"s1", b"s2"]);
+        let flags = StoreDestFirst.keys_with_flags(&flag_args);
+        assert_eq!(flags[0].1, vec![KeyAccessFlag::OW]);
+        assert_eq!(flags[1].1, vec![KeyAccessFlag::R]);
+        assert_eq!(flags[2].1, vec![KeyAccessFlag::R]);
+    }
+
     #[test]
     fn wal_action_key_returns_target() {
         let key: &[u8] = b"k";

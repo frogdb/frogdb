@@ -22,7 +22,9 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
-use crate::connection::util::{extract_subcommand, key_access_type_for_flags};
+use crate::connection::util::{
+    extract_subcommand, key_access_type_for_flags, required_access_for_key_flags,
+};
 
 /// The `CommandSpec` for ACL. Declared here alongside the executor (rather than
 /// in a stub `Command` impl) so the connection command is a single
@@ -262,12 +264,16 @@ fn acl_dryrun(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
     }
 
     // Check key permissions using the command's real key spec, so DRYRUN agrees
-    // with live enforcement: access type derived from flags (read-only commands
-    // check Read, not ReadWrite) and the actual key positions (incl. commands
-    // whose key is not the first argument).
+    // with live enforcement: each key checked with its *own* required access
+    // derived from the per-key access flags (read-only commands check Read, not
+    // ReadWrite; STORE-family checks write on the dest, read on the sources) and
+    // the actual key positions (incl. commands whose key is not the first
+    // argument). Shares `required_access_for_key_flags` with the live guard so
+    // DRYRUN verdicts and enforcement stay in lockstep.
     if let Some(entry) = ctx.command_registry.get_entry(&command) {
-        let access = key_access_type_for_flags(entry.flags());
-        for key in entry.keys(cmd_args) {
+        let fallback = key_access_type_for_flags(entry.flags());
+        for (key, flags) in entry.keys_with_flags(cmd_args) {
+            let access = required_access_for_key_flags(&flags, fallback);
             if !user.check_key_access(key, access) {
                 let msg = format!(
                     "This user has no permissions to access the '{}' key",

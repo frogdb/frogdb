@@ -420,8 +420,11 @@ impl PreDispatchView<'_> {
         // (The command itself is already validated upstream by run_pre_checks.)
         if let Some(guard) = self.permission_guard() {
             if !keys.is_empty() {
-                let access_type = key_access_type_for_flags(entry.flags());
-                if let Err(err) = guard.check_keys(&keys, access_type) {
+                // Per-key access (STORE-family: write dest, read sources), so a
+                // MULTI-queued command's denial matches direct dispatch exactly.
+                let keyed_flags = entry.keys_with_flags(&cmd.args);
+                let fallback = key_access_type_for_flags(entry.flags());
+                if let Err(err) = guard.check_keys_with_flags(&keyed_flags, fallback) {
                     return err;
                 }
             }

@@ -19,13 +19,14 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    AclChecker, AclError, AclLog, AclManager, AuthenticatedUser, FullAclChecker, KeyAccessType,
-    PermissionResult,
+    AclChecker, AclError, AclLog, AclManager, AuthenticatedUser, FullAclChecker, KeyAccessFlag,
+    KeyAccessType, PermissionResult,
 };
 use frogdb_protocol::Response;
 use tracing::warn;
 
 use crate::connection::ConnectionHandler;
+use crate::connection::util::required_access_for_key_flags;
 
 impl ConnectionHandler {
     /// Build an ACL [`PermissionGuard`] for the connection's current user.
@@ -124,22 +125,42 @@ impl<'a> PermissionGuard<'a> {
         }
     }
 
-    /// Check access to every key. The first denied key is logged to `ACL LOG`
-    /// and its `NOPERM` reply returned; remaining keys are not checked.
+    /// Check access to every key using its *own* required access, derived from
+    /// the per-key access flags (`COMMAND GETKEYSANDFLAGS` semantics). This is
+    /// the Redis-accurate enforcement seam: a STORE-family command checks its
+    /// destination for write and its sources for read, rather than applying a
+    /// single command-level access to every key.
     ///
     /// The command itself is validated upstream by `run_pre_checks`, so only key
-    /// access is checked here.
+    /// access is checked here. `fallback` is the command-level access, consulted
+    /// only for a key whose flag list is empty (see
+    /// [`required_access_for_key_flags`]). The first denied key is logged to
+    /// `ACL LOG` and its `NOPERM` reply returned; remaining keys are not checked.
     #[allow(clippy::result_large_err)]
-    pub(crate) fn check_keys(&self, keys: &[&[u8]], access: KeyAccessType) -> Result<(), Response> {
-        for key in keys {
-            if let PermissionResult::Denied(err) =
-                self.checker.check_key_access(self.user, key, access)
-            {
-                let key_str = String::from_utf8_lossy(key);
-                self.log
-                    .log_key_denied(&self.user.username, &self.client_info, &key_str);
-                return Err(Self::error(err));
-            }
+    pub(crate) fn check_keys_with_flags(
+        &self,
+        keyed_flags: &[(&[u8], Vec<KeyAccessFlag>)],
+        fallback: KeyAccessType,
+    ) -> Result<(), Response> {
+        for (key, flags) in keyed_flags {
+            let access = required_access_for_key_flags(flags, fallback);
+            self.check_single_key(key, access)?;
+        }
+        Ok(())
+    }
+
+    /// Check a single key at `access`, logging + rendering a denial identically
+    /// to [`check_keys_with_flags`](Self::check_keys_with_flags), which is its
+    /// sole caller. Factored out so the audit-log entry and `NOPERM` reply have
+    /// exactly one construction site.
+    #[allow(clippy::result_large_err)]
+    fn check_single_key(&self, key: &[u8], access: KeyAccessType) -> Result<(), Response> {
+        if let PermissionResult::Denied(err) = self.checker.check_key_access(self.user, key, access)
+        {
+            let key_str = String::from_utf8_lossy(key);
+            self.log
+                .log_key_denied(&self.user.username, &self.client_info, &key_str);
+            return Err(Self::error(err));
         }
         Ok(())
     }
@@ -201,7 +222,10 @@ mod tests {
         assert!(guard.check_command("GET", None).is_ok());
         assert!(
             guard
-                .check_keys(&[b"allowed:x"], KeyAccessType::Read)
+                .check_keys_with_flags(
+                    &[(b"allowed:x", vec![KeyAccessFlag::R])],
+                    KeyAccessType::Read
+                )
                 .is_ok()
         );
         assert!(
@@ -255,7 +279,10 @@ mod tests {
         let guard = PermissionGuard::new(&manager, &user, INFO.into(), 1);
 
         let err = guard
-            .check_keys(&[b"denied:k"], KeyAccessType::Write)
+            .check_keys_with_flags(
+                &[(b"denied:k", vec![KeyAccessFlag::OW])],
+                KeyAccessType::Write,
+            )
             .expect_err("key denied");
         assert!(err_msg(&err).starts_with("NOPERM"));
 
@@ -288,12 +315,75 @@ mod tests {
 
         // First key denied: only it is logged, the later (also denied) key is not reached.
         let err = guard
-            .check_keys(&[b"denied:1", b"denied:2"], KeyAccessType::Read)
+            .check_keys_with_flags(
+                &[
+                    (b"denied:1", vec![KeyAccessFlag::R]),
+                    (b"denied:2", vec![KeyAccessFlag::R]),
+                ],
+                KeyAccessType::Read,
+            )
             .expect_err("first key denied");
         assert!(err_msg(&err).starts_with("NOPERM"));
 
         let entries = manager.log().get(None);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].object, "denied:1");
+    }
+
+    /// Redis parity for STORE-family commands: a `%R~src:* %W~dst:*` user is
+    /// allowed when the destination key needs only write and the source keys
+    /// need only read — the per-key flags decouple the two requirements. The
+    /// old command-level derivation applied `ReadWrite` (a WRITE command) to
+    /// every key and would have denied this.
+    #[test]
+    fn per_key_flags_allow_store_family_split_access() {
+        let (manager, user) = manager_with_user(&["+@all", "%R~src:*", "%W~dst:*"]);
+        let guard = PermissionGuard::new(&manager, &user, INFO.into(), 1);
+
+        // SINTERSTORE dst:x src:a src:b — dest overwritten, sources read.
+        assert!(
+            guard
+                .check_keys_with_flags(
+                    &[
+                        (b"dst:x", vec![KeyAccessFlag::OW]),
+                        (b"src:a", vec![KeyAccessFlag::R]),
+                        (b"src:b", vec![KeyAccessFlag::R]),
+                    ],
+                    KeyAccessType::ReadWrite,
+                )
+                .is_ok(),
+            "split R/W user should run a STORE command whose keys split R/W"
+        );
+        assert!(manager.log().is_empty(), "no denial => no ACL LOG entry");
+    }
+
+    /// Inverse: the same split-access user is denied when a source lacks read
+    /// (write on dst does not grant read on a src:) and when the dest is only
+    /// readable (read on dst does not grant the write it needs).
+    #[test]
+    fn per_key_flags_deny_when_a_key_lacks_its_required_access() {
+        let (manager, user) = manager_with_user(&["+@all", "%R~src:*", "%W~dst:*"]);
+        let guard = PermissionGuard::new(&manager, &user, INFO.into(), 1);
+
+        // Source without read grant (other:a) — read denied.
+        let err = guard
+            .check_keys_with_flags(
+                &[
+                    (b"dst:x", vec![KeyAccessFlag::OW]),
+                    (b"other:a", vec![KeyAccessFlag::R]),
+                ],
+                KeyAccessType::ReadWrite,
+            )
+            .expect_err("unreadable source denied");
+        assert!(err_msg(&err).starts_with("NOPERM"));
+
+        // Destination that only has read grant but the command needs write.
+        let err = guard
+            .check_keys_with_flags(
+                &[(b"src:a", vec![KeyAccessFlag::OW])],
+                KeyAccessType::ReadWrite,
+            )
+            .expect_err("read-only dest denied for write");
+        assert!(err_msg(&err).starts_with("NOPERM"));
     }
 }

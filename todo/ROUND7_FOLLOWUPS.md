@@ -84,6 +84,36 @@ catalog was never audited for per-key accuracy because nothing consumed it). ACL
 log must agree. Tests: user with read-only ACL on source + write on dest can SINTERSTORE (Redis
 parity), and the inverse still denied.
 
+**Status — phase C (enforcement flip) DONE.** Enforcement now consumes per-key
+`keys_with_flags()`:
+
+- New `required_access_for_key_flags(flags, fallback)` helper
+  (`connection/util.rs`) maps a key's `Vec<KeyAccessFlag>` → `KeyAccessType`
+  (R→Read, W/OW→Write, RW or R+W→ReadWrite; empty vec falls back to the
+  command-level derivation — unreachable today since every resolved key carries
+  exactly one flag).
+- New `PermissionGuard::check_keys_with_flags` replaces the uniform `check_keys`
+  at both live enforcement seams — `route_and_execute` (`routing.rs`) and the
+  MULTI queue (`guards.rs`) — and `ACL DRYRUN` (`acl_conn_command.rs`) shares the
+  same helper, so DRYRUN verdicts and live denials agree by construction. The
+  denial log entry + `NOPERM` reply shape are unchanged (single `check_single_key`
+  construction site). `key_access_type_for_flags` is retained only as the
+  empty-flags fallback.
+- Tests: `permission_guard` unit (split-access allow, per-key deny), `util` helper
+  table, a core `keys_with_flags`↔`keys()` order-parity assertion, and
+  `acl_v2_regression` integration (SINTERSTORE + ZUNIONSTORE split-access allow,
+  per-key deny, DRYRUN agreement, MULTI/EXEC queue, single-key no-regression).
+
+**Phase B (spec-accuracy audit) PENDING.** The enforcement flip is only as correct
+as each command's `AccessSpec`. A full read-only audit of the 371-command catalog
+against Redis fine key-spec flags lives in the scratchpad
+(`acl_accessspec_audit.md`): **37 SEVERITY-BYPASS** (read-modify-write commands
+marked `OW`/write-only via `AccessSpec::Uniform` — pop/getdel/getset/incr/getex/
+setbit families — that Redis also requires *read* perm on), **2 SEVERITY-DENIAL**
+(over-strict), and **1 MIXED** (XREADGROUP). Root cause: `AccessSpec::Uniform`
+cannot express `RW`. These are per-command spec fixes (add `ACCESS`→R where Redis
+reads the value) and are independent of the enforcement mechanism landed here.
+
 ## 5. Smaller carried-over items
 
 - **Proposal 54 follow-up:** thread flush-confirm (`Durability::Confirm`'s `sequence` +
