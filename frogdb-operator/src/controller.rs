@@ -5,16 +5,16 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use k8s_openapi::api::apps::v1::StatefulSet;
-use k8s_openapi::api::core::v1::{ConfigMap, Service};
+use k8s_openapi::api::core::v1::{ConfigMap, Pod, Service};
 use k8s_openapi::api::policy::v1::PodDisruptionBudget;
-use kube::api::{Api, Patch, PatchParams};
+use kube::api::{Api, ListParams, Patch, PatchParams};
 use kube::runtime::controller::{Action, Controller};
 use kube::runtime::watcher::Config as WatcherConfig;
 use kube::{Client, ResourceExt};
 use tracing::{error, info, warn};
 
-use crate::crd::{FrogDB, FrogDBCondition, FrogDBStatus};
-use crate::{config_gen, resources};
+use crate::crd::{FrogDB, FrogDBCondition, FrogDBSpec, FrogDBStatus};
+use crate::{config_gen, health, resources};
 
 /// Error types for the controller.
 #[derive(Debug, thiserror::Error)]
@@ -83,6 +83,7 @@ async fn reconcile(frogdb: Arc<FrogDB>, ctx: Arc<Context>) -> Result<Action, Err
                 current_version: None,
                 target_version: None,
             },
+            None,
         )
         .await?;
         return Err(Error::Validation(e));
@@ -212,6 +213,15 @@ async fn reconcile(frogdb: Arc<FrogDB>, ctx: Arc<Context>) -> Result<Action, Err
         ));
     }
 
+    // Detect the actual Primary pod by probing replication roles. Standalone-only:
+    // cluster mode has no fixed primary (Raft leadership moves), so the field is
+    // omitted there. A probe failure yields `None` and never fails the reconcile.
+    let primary_pod = if frogdb.spec.mode != "cluster" && frogdb.spec.replicas > 1 {
+        detect_primary_pod(&ctx.client, &namespace, &name, &frogdb.spec).await
+    } else {
+        None
+    };
+
     update_status(
         &ctx.client,
         &namespace,
@@ -228,6 +238,7 @@ async fn reconcile(frogdb: Arc<FrogDB>, ctx: Arc<Context>) -> Result<Action, Err
                 None
             },
         },
+        primary_pod,
     )
     .await?;
 
@@ -257,7 +268,53 @@ struct UpgradeState<'a> {
     target_version: Option<&'a str>,
 }
 
+/// Detect the actual Primary pod by probing each pod's replication role.
+///
+/// Standalone-mode only: lists the FrogDB's pods and queries the admin role
+/// endpoint on the metrics port, returning the name of the pod that reports the
+/// primary role. Returns `None` if metrics are disabled, the pod list cannot be
+/// fetched, no pod could be probed, or none reports itself Primary. All probe and
+/// listing failures are swallowed so role detection never fails reconciliation.
+async fn detect_primary_pod(
+    client: &Client,
+    namespace: &str,
+    name: &str,
+    spec: &FrogDBSpec,
+) -> Option<String> {
+    // The role endpoint is served on the observability/metrics port; without it
+    // there is no HTTP surface to probe, so leave the field unset rather than guess.
+    if !spec.config.metrics.enabled {
+        return None;
+    }
+    let metrics_port = spec.config.metrics.port;
+
+    let pods: Api<Pod> = Api::namespaced(client.clone(), namespace);
+    let lp = ListParams::default().labels(&format!(
+        "app.kubernetes.io/instance={name},app.kubernetes.io/managed-by=frogdb-operator"
+    ));
+    let list = match pods.list(&lp).await {
+        Ok(list) => list,
+        Err(e) => {
+            warn!(%name, error = %e, "Failed to list pods for primary detection");
+            return None;
+        }
+    };
+
+    for pod in list {
+        let pod_name = pod.name_any();
+        let Some(pod_ip) = pod.status.as_ref().and_then(|s| s.pod_ip.clone()) else {
+            continue;
+        };
+        if health::probe_pod_is_primary(&pod_ip, metrics_port).await == Some(true) {
+            return Some(pod_name);
+        }
+    }
+
+    None
+}
+
 /// Update the FrogDB status subresource.
+#[allow(clippy::too_many_arguments)]
 async fn update_status(
     client: &Client,
     namespace: &str,
@@ -266,6 +323,7 @@ async fn update_status(
     ready_replicas: i32,
     conditions: Vec<FrogDBCondition>,
     upgrade: UpgradeState<'_>,
+    primary_pod: Option<String>,
 ) -> Result<(), Error> {
     let api: Api<FrogDB> = Api::namespaced(client.clone(), namespace);
 
@@ -273,11 +331,7 @@ async fn update_status(
         replicas: frogdb.spec.replicas,
         ready_replicas,
         observed_generation: frogdb.metadata.generation.unwrap_or(0),
-        primary_pod: if frogdb.spec.replicas > 1 || frogdb.spec.mode == "cluster" {
-            Some(format!("{}-0", name))
-        } else {
-            None
-        },
+        primary_pod,
         upgrade_in_progress: upgrade.in_progress,
         current_version: upgrade.current_version.map(|s| s.to_string()),
         target_version: upgrade.target_version.map(|s| s.to_string()),

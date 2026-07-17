@@ -59,6 +59,7 @@
                         "default": 16379,
                         "description": "Cluster bus port for Raft communication.",
                         "format": "uint16",
+                        "maximum": 65535.0,
                         "minimum": 0.0,
                         "type": "integer"
                       },
@@ -153,6 +154,7 @@
                             "default": 9090,
                             "description": "Metrics port.",
                             "format": "uint16",
+                            "maximum": 65535.0,
                             "minimum": 0.0,
                             "type": "integer"
                           }
@@ -190,6 +192,7 @@
                         "default": 6379,
                         "description": "Server listen port.",
                         "format": "uint16",
+                        "maximum": 65535.0,
                         "minimum": 0.0,
                         "type": "integer"
                       }
@@ -251,7 +254,7 @@
                   },
                   "replicas": {
                     "default": 1,
-                    "description": "Number of replicas. - standalone mode: 1 = single instance, >1 = primary + replicas - cluster mode: must be odd and >= 3",
+                    "description": "Number of replicas.\n- standalone mode: 1 = single instance, >1 = primary + replicas\n- cluster mode: must be odd and >= 3",
                     "format": "int32",
                     "type": "integer"
                   },
@@ -343,6 +346,11 @@
                     },
                     "type": "array"
                   },
+                  "currentVersion": {
+                    "description": "The current image tag (version) running on the cluster.",
+                    "nullable": true,
+                    "type": "string"
+                  },
                   "observedGeneration": {
                     "default": 0,
                     "description": "Last observed generation.",
@@ -350,7 +358,7 @@
                     "type": "integer"
                   },
                   "primaryPod": {
-                    "description": "Name of the primary pod (standalone mode with replicas or cluster mode).",
+                    "description": "Name of the actual Primary pod, detected by probing each pod's replication\nrole (not an ordinal-0 assumption). Set only in standalone mode with\n`replicas > 1`; unset if the role could not be determined. Omitted entirely\nin cluster mode, where there is no fixed primary (Raft leadership moves).",
                     "nullable": true,
                     "type": "string"
                   },
@@ -365,6 +373,16 @@
                     "description": "Total desired replicas.",
                     "format": "int32",
                     "type": "integer"
+                  },
+                  "targetVersion": {
+                    "description": "The target image tag (version) being rolled out.",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "upgradeInProgress": {
+                    "default": false,
+                    "description": "Whether a rolling upgrade is in progress.",
+                    "type": "boolean"
                   }
                 },
                 "type": "object"
