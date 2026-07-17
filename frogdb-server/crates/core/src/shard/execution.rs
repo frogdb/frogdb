@@ -265,9 +265,11 @@ impl ShardWorker {
     ///
     /// Each `true` is a hit, each `false` a miss; the caller supplies the
     /// existence verdict from *its own* lookup primitive (EXISTS/TOUCH probe
-    /// `exists_unexpired`; MGET uses the value it fetched), which is why this
-    /// takes booleans rather than keys — the accounting rule is shared even
-    /// though the existence test legitimately differs per command.
+    /// `exists_unexpired`; MGET uses the expiry-aware value it fetched via
+    /// `get_with_expiry_check`, so a hot-but-expired key counts as a miss
+    /// exactly like the single-shard path), which is why this takes booleans
+    /// rather than keys — the accounting rule is shared even though the
+    /// existence test legitimately differs per command.
     ///
     /// [`LookupSpec`]: crate::command_spec::LookupSpec
     pub(super) fn record_lookup_existence(&self, existed: impl IntoIterator<Item = bool>) {
@@ -295,12 +297,17 @@ impl ShardWorker {
     /// it back when no TTL override is supplied); cross-shard COPY writes an
     /// expiry-free header and ships the TTL out-of-band via the returned value.
     /// Either way the extraction lives in one place.
+    ///
+    /// The value fetch is expiry-aware (`Store::get_with_expiry_check`), so a
+    /// hot key past its TTL but not yet lazily purged reads as absent here too
+    /// — COPY reports the source as missing and DUMP replies nil, matching
+    /// Redis (COPY/DUMP of an expired key behave as if the key never existed).
     fn serialize_key_for_transport(
         &mut self,
         key: &[u8],
         expiry_in_header: bool,
     ) -> Option<(Bytes, Option<i64>)> {
-        let value = self.store.get(key)?;
+        let value = self.store.get_with_expiry_check(key)?;
         let expires_at = self.store.get_expiry(key);
         let mut metadata = KeyMetadata::new(value.memory_size());
         if expiry_in_header {
@@ -772,7 +779,7 @@ impl ShardWorker {
         let mut results = Vec::with_capacity(keys.len());
         let mut existed = Vec::with_capacity(keys.len());
         for key in keys {
-            let response = match self.store.get(key) {
+            let response = match self.store.get_with_expiry_check(key) {
                 Some(value) => {
                     existed.push(true);
                     if let Some(sv) = value.as_string() {
@@ -1491,6 +1498,108 @@ mod scatter_effect_tests {
             worker.observability.keyspace_stats().cumulative_misses() - m2,
             1
         );
+    }
+
+    /// D3 (round-7 follow-up item 3): a hot key past its TTL but not yet
+    /// lazily purged must read as absent through scatter MGET — the hot
+    /// fast-path (`Store::get`) has no expiry check, so without routing
+    /// through `get_with_expiry_check` this would return the stale value.
+    /// Covers both the reply (nil) and the accounting (miss, not hit).
+    #[tokio::test]
+    async fn scatter_mget_treats_hot_expired_key_as_miss() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = scatter_worker(bc as SharedBroadcaster);
+
+        // Plain `set` lands the key hot; `set_expiry` with a past deadline
+        // makes it logically expired without triggering any purge.
+        worker.store.set(
+            Bytes::from_static(b"stale"),
+            Value::string(Bytes::from_static(b"old")),
+        );
+        worker
+            .store
+            .set_expiry(b"stale", Instant::now() - Duration::from_secs(60));
+        assert!(
+            worker.store.contains(b"stale"),
+            "key must still be physically present before the scatter read"
+        );
+
+        let h0 = worker.observability.keyspace_stats().cumulative_hits();
+        let m0 = worker.observability.keyspace_stats().cumulative_misses();
+
+        let keys = [Bytes::from_static(b"stale")];
+        let results = worker.scatter_mget(&keys, 1);
+
+        assert_eq!(results.len(), 1);
+        match &results[0].1 {
+            Response::Bulk(None) => {}
+            other => panic!("expected nil for a hot expired key, got {other:?}"),
+        }
+        assert_eq!(
+            worker.observability.keyspace_stats().cumulative_hits() - h0,
+            0,
+            "a hot expired key must not count as a hit"
+        );
+        assert_eq!(
+            worker.observability.keyspace_stats().cumulative_misses() - m0,
+            1,
+            "a hot expired key must count as a miss"
+        );
+        assert!(
+            !worker.store.contains(b"stale"),
+            "the expiry-aware read must have lazily purged the key"
+        );
+    }
+
+    /// D4 (round-7 follow-up item 3): the transport-frame producer shared by
+    /// scatter COPY and DUMP must treat a hot expired key as absent, matching
+    /// Redis (COPY/DUMP of an expired key behave as if the key never
+    /// existed) instead of shipping a stale payload.
+    #[tokio::test]
+    async fn scatter_copy_and_dump_of_hot_expired_key_report_missing() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = scatter_worker(bc as SharedBroadcaster);
+
+        worker.store.set(
+            Bytes::from_static(b"stale"),
+            Value::string(Bytes::from_static(b"old")),
+        );
+        worker
+            .store
+            .set_expiry(b"stale", Instant::now() - Duration::from_secs(60));
+        assert!(worker.store.contains(b"stale"));
+
+        let copy = worker
+            .execute_scatter_part(
+                &[],
+                &ScatterOp::Copy {
+                    source_key: Bytes::from_static(b"stale"),
+                },
+                1,
+            )
+            .await;
+        match &copy.results[0].1 {
+            Response::Bulk(None) => {}
+            other => panic!("expected COPY of an expired source to be nil, got {other:?}"),
+        }
+
+        // Re-arm the key for the DUMP half of the test (COPY's fetch already
+        // purged it above).
+        worker.store.set(
+            Bytes::from_static(b"stale2"),
+            Value::string(Bytes::from_static(b"old")),
+        );
+        worker
+            .store
+            .set_expiry(b"stale2", Instant::now() - Duration::from_secs(60));
+
+        let dump = worker
+            .execute_scatter_part(&[Bytes::from_static(b"stale2")], &ScatterOp::Dump, 1)
+            .await;
+        match &dump.results[0].1 {
+            Response::Bulk(None) => {}
+            other => panic!("expected DUMP of an expired key to be nil, got {other:?}"),
+        }
     }
 }
 

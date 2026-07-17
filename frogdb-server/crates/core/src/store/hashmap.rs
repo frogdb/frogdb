@@ -1661,6 +1661,41 @@ mod tests {
     }
 
     #[test]
+    fn hot_expired_key_get_vs_get_with_expiry_check_contract() {
+        // Pins the contract difference the scatter-path fix (round-7 follow-up
+        // item 3) depends on: `Store::get` is the raw hot fast-path with NO
+        // expiry check, so a hot key past its TTL but not yet lazily purged
+        // still comes back from `get`. `get_with_expiry_check` is the
+        // expiry-aware accessor (same one `get_typed`/single-key GET use) —
+        // it lazily purges the key and returns `None`. Callers that need
+        // Redis's "expired reads as absent" semantics (scatter MGET, COPY,
+        // DUMP) must use `get_with_expiry_check`, never raw `get`.
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from("k"), Value::string("v"));
+        let past = Instant::now() - Duration::from_secs(60);
+        assert!(store.set_expiry(b"k", past));
+
+        // The key is still hot and present in the map (no purge has run yet).
+        assert!(store.contains(b"k"));
+
+        // Raw `get` ignores expiry: the hot value is still handed back.
+        assert!(
+            store.get(b"k").is_some(),
+            "raw get must not filter expired-but-unpurged hot keys"
+        );
+
+        // `get_with_expiry_check` lazily purges and reports absent.
+        assert!(
+            store.get_with_expiry_check(b"k").is_none(),
+            "expiry-aware get must treat a hot expired key as absent"
+        );
+        assert!(
+            !store.contains(b"k"),
+            "expiry-aware get must have lazily deleted the expired key"
+        );
+    }
+
+    #[test]
     fn warm_tier_accessor_exposes_counters() {
         let mut store = HashMapStore::new();
         store.set(Bytes::from("k"), Value::string("v"));
