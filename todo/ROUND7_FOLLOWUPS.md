@@ -43,7 +43,16 @@ strings. Cap inline line length at `PROTO_INLINE_MAX_SIZE` (Redis: 64KB) with
 `ERR Protocol error: too big inline request`. Unlock the excluded TCL regression tests.
 **If documenting:** add divergence entry + a codec test pinning the error shape for inline input.
 
-## 3. Cross-shard MGET returns hot expired-but-unpurged values (pre-existing)
+## 3. Cross-shard MGET returns hot expired-but-unpurged values (pre-existing) — FIXED
+
+**Status:** fixed. `scatter_mget` and the shared `serialize_key_for_transport` producer (COPY/DUMP)
+now read through `Store::get_with_expiry_check` instead of raw `Store::get`, matching the
+single-shard GET/MGET path and lazily purging the key on read. `record_lookup_existence` picks up
+the corrected existence verdict automatically, so a hot-expired key now counts as a miss. TOUCH/
+EXISTS were already correct (`exists_unexpired`). Regression tests:
+`shard::execution::scatter_effect_tests::scatter_mget_treats_hot_expired_key_as_miss`,
+`scatter_copy_and_dump_of_hot_expired_key_report_missing`, and the store-level contract pin
+`store::hashmap::tests::hot_expired_key_get_vs_get_with_expiry_check_contract`.
 
 **Problem.** `scatter_mget` (`core/src/shard/execution.rs`, ~:767 region) reads via raw
 `store.get()`, whose hot path (`store/hashmap.rs` `hot_value()`, ~:676) does not check
