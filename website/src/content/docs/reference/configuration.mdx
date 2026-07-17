@@ -134,8 +134,8 @@ Memory management and eviction settings.
 | `volatile-lfu` | Evict LFU keys with TTL set. |
 | `volatile-random` | Evict random keys with TTL set. |
 | `volatile-ttl` | Evict keys with shortest TTL. |
-| `tiered-lru` | Demote LRU keys to warm tier (requires `tiered-storage.enabled`). |
-| `tiered-lfu` | Demote LFU keys to warm tier (requires `tiered-storage.enabled`). |
+| `tiered-lru` | Spill LRU keys to warm tier (requires `tiered-storage.enabled`). |
+| `tiered-lfu` | Spill LFU keys to warm tier (requires `tiered-storage.enabled`). |
 
 Example:
 
@@ -326,7 +326,7 @@ Limits for the JSON data type (JSON.SET, JSON.GET, etc.).
 
 ## Tiered Storage
 
-Two-tier hot/warm storage that demotes values to RocksDB instead of evicting.
+Two-tier hot/warm storage that spills values to RocksDB instead of evicting.
 
 ```toml
 [tiered-storage]

@@ -23,7 +23,7 @@ use super::warm_tier::WarmTier;
 enum ValueLocation {
     /// Value is in RAM (normal case).
     Hot(Arc<Value>),
-    /// Value has been demoted to RocksDB warm tier.
+    /// Value has been spilled to RocksDB warm tier.
     Warm,
 }
 
@@ -55,12 +55,12 @@ fn scan_cursor_hash(key: &[u8]) -> u64 {
 struct Entry {
     location: ValueLocation,
     metadata: KeyMetadata,
-    /// Cached key type so TYPE/SCAN work without promotion.
+    /// Cached key type so TYPE/SCAN work without unspilling.
     key_type: KeyType,
 }
 
 impl Entry {
-    /// Returns the in-memory value, or None if demoted to warm tier.
+    /// Returns the in-memory value, or None if spilled to warm tier.
     fn hot_value(&self) -> Option<&Arc<Value>> {
         match &self.location {
             ValueLocation::Hot(v) => Some(v),
@@ -84,9 +84,9 @@ impl Entry {
     }
 }
 
-/// Error returned by `demote_key()`.
+/// Error returned by `spill_key()`.
 #[derive(Debug, thiserror::Error)]
-pub enum DemotionError {
+pub enum SpillError {
     #[error("key not found")]
     KeyNotFound,
     #[error("key is already warm")]
@@ -109,7 +109,7 @@ pub struct HashMapStore {
     dirty: u64,
     /// Tiered warm-storage subsystem: the RocksDB handle (absent when tiered
     /// storage is disabled), the warm-key count, and the
-    /// demotion/promotion/expired-on-promote counters.
+    /// spill/unspill/expired-on-unspill counters.
     warm_tier: WarmTier,
     /// Total number of keys expired (lazy + active expiry).
     expired_keys: u64,
@@ -538,9 +538,9 @@ impl Default for HashMapStore {
 }
 
 impl HashMapStore {
-    /// Get a value only if it's hot (in-memory). Does not promote warm values.
+    /// Get a value only if it's hot (in-memory). Does not unspill warm values.
     ///
-    /// Use this for WAL persistence and diagnostics where promotion is unnecessary.
+    /// Use this for WAL persistence and diagnostics where unspilling is unnecessary.
     pub fn get_hot(&self, key: &[u8]) -> Option<Arc<Value>> {
         self.data.get(key).and_then(|e| e.hot_value().cloned())
     }
@@ -550,21 +550,21 @@ impl HashMapStore {
         self.warm_tier.configure(rocks, shard_id);
     }
 
-    /// Demote a key's value from hot (RAM) to warm (RocksDB).
+    /// Spill a key's value from hot (RAM) to warm (RocksDB).
     ///
     /// Returns the number of value bytes freed from RAM.
-    pub fn demote_key(&mut self, key: &[u8]) -> Result<usize, DemotionError> {
+    pub fn spill_key(&mut self, key: &[u8]) -> Result<usize, SpillError> {
         // Settle any deferred size reconciliation first so the accounted size
-        // reflects the live value about to be demoted (demotion runs from the
+        // reflects the live value about to be spilled (spill runs from the
         // event loop, so this is normally a no-op).
         self.flush_keysizes_refreshes();
 
         if !self.warm_tier.is_configured() {
-            return Err(DemotionError::NoWarmStore);
+            return Err(SpillError::NoWarmStore);
         }
 
-        let entry = self.data.get(key).ok_or(DemotionError::KeyNotFound)?;
-        let value = entry.hot_value().ok_or(DemotionError::AlreadyWarm)?;
+        let entry = self.data.get(key).ok_or(SpillError::KeyNotFound)?;
+        let value = entry.hot_value().ok_or(SpillError::AlreadyWarm)?;
 
         // Serialize using existing persistence format
         let serialized = serialize(value, &entry.metadata);
@@ -574,8 +574,8 @@ impl HashMapStore {
         // unconfigured, already handled above.
         match self.warm_tier.try_put(key, &serialized) {
             Some(Ok(())) => {}
-            Some(Err(e)) => return Err(DemotionError::Rocks(e)),
-            None => return Err(DemotionError::NoWarmStore),
+            Some(Err(e)) => return Err(SpillError::Rocks(e)),
+            None => return Err(SpillError::NoWarmStore),
         }
 
         // Replace location with Warm
@@ -587,28 +587,28 @@ impl HashMapStore {
         // exactly what remains charged.
         entry.metadata.memory_size = entry.metadata.memory_size.saturating_sub(value_bytes);
         self.memory_used = self.memory_used.saturating_sub(value_bytes);
-        self.warm_tier.record_demotion();
+        self.warm_tier.record_spill();
 
         Ok(value_bytes)
     }
 
-    /// Promote a key's value from warm (RocksDB) back to hot (RAM).
+    /// Unspill a key's value from warm (RocksDB) back to hot (RAM).
     ///
     /// Returns None if the key doesn't exist, isn't warm, or is expired.
-    fn promote_key(&mut self, key: &[u8]) -> Option<Arc<Value>> {
+    fn unspill_key(&mut self, key: &[u8]) -> Option<Arc<Value>> {
         // Check that entry exists and is warm
         let entry = self.data.get(key)?;
         if entry.is_hot() {
             return entry.hot_value().cloned();
         }
 
-        // Check TTL before promoting — don't waste work on expired keys
+        // Check TTL before unspilling — don't waste work on expired keys
         if entry.metadata.is_expired() {
-            debug!(key_len = key.len(), "Warm key expired during promotion");
+            debug!(key_len = key.len(), "Warm key expired during unspill");
             // Clean up: remove from RAM, warm CF, and expiry index. This bumps
-            // the expired-on-promote counter, deletes the warm CF entry, and
+            // the expired-on-unspill counter, deletes the warm CF entry, and
             // drops the warm-key count.
-            self.warm_tier.record_expired_on_promote(key);
+            self.warm_tier.record_expired_on_unspill(key);
             if let Some(entry) = self.data.remove(key) {
                 self.discard_pending_refresh(key);
                 self.memory_used = self.memory_used.saturating_sub(entry.metadata.memory_size);
@@ -620,7 +620,7 @@ impl HashMapStore {
         }
 
         // Read from warm CF. `try_get` returns `None` only when tiered storage
-        // is disabled — no warm value to promote.
+        // is disabled — no warm value to unspill.
         let data = match self.warm_tier.try_get(key)? {
             Ok(Some(data)) => data,
             Ok(None) => {
@@ -649,11 +649,11 @@ impl HashMapStore {
         let entry = self.data.get_mut(key).unwrap();
         entry.location = ValueLocation::Hot(value_arc.clone());
 
-        // Update memory accounting (accounted size in lockstep, see demote_key)
+        // Update memory accounting (accounted size in lockstep, see spill_key)
         entry.metadata.memory_size += value_bytes;
         self.memory_used += value_bytes;
-        // Drops the warm-key count and bumps the promotion counter.
-        self.warm_tier.record_promotion();
+        // Drops the warm-key count and bumps the unspill counter.
+        self.warm_tier.record_unspill();
 
         // Delete from warm CF
         self.warm_tier.delete(key);
@@ -664,8 +664,8 @@ impl HashMapStore {
     /// Access the warm (tiered) storage subsystem and its counters.
     ///
     /// The cohesive accessor concrete callers use in place of the old
-    /// `warm_key_count()` / `hot_key_count()` / `demotion_count()` /
-    /// `promotion_count()` / `expired_on_promote_count()` reach-throughs. Hot-key
+    /// `warm_key_count()` / `hot_key_count()` / `spill_count()` /
+    /// `unspill_count()` / `expired_on_unspill_count()` reach-throughs. Hot-key
     /// count is `len() - warm_tier().warm_keys()`.
     pub fn warm_tier(&self) -> &WarmTier {
         &self.warm_tier
@@ -680,8 +680,8 @@ impl Store for HashMapStore {
         {
             return Some(v.clone());
         }
-        // Slow path: promote from warm tier
-        self.promote_key(key)
+        // Slow path: unspill from warm tier
+        self.unspill_key(key)
     }
 
     fn set(&mut self, key: Bytes, value: Value) -> Option<Value> {
@@ -829,7 +829,7 @@ impl Store for HashMapStore {
         // Clear every value in this shard's warm CF with a single range
         // tombstone (best-effort; a no-op when the tier is unconfigured). This
         // runs synchronously on the shard thread — the warm CF's only writer —
-        // so it is ordered before any later demotion. The primary CF is cleared
+        // so it is ordered before any later spill. The primary CF is cleared
         // separately through the WAL flush pipeline (`WalStrategy::ClearShard`).
         // The two clears are NOT crash-atomic: a crash between them leaves the
         // warm CF cleared but the primary CF not yet (or vice versa never —
@@ -877,8 +877,8 @@ impl Store for HashMapStore {
             }
         }
 
-        // Slow path: promote from warm tier
-        let value = self.promote_key(key)?;
+        // Slow path: unspill from warm tier
+        let value = self.unspill_key(key)?;
         if let Some(entry) = self.data.get_mut(key)
             && !self.suppress_touch
         {
@@ -1014,11 +1014,11 @@ impl Store for HashMapStore {
             return None;
         }
 
-        // Promote warm values before returning mutable reference
+        // Unspill warm values before returning mutable reference
         if let Some(entry) = self.data.get(key)
             && !entry.is_hot()
         {
-            self.promote_key(key);
+            self.unspill_key(key);
         }
 
         // Snapshot size state before mutation for the deferred refresh
@@ -1190,7 +1190,7 @@ impl Store for HashMapStore {
         }
 
         let mut rng = rand::rng();
-        // Skip warm entries — they're already demoted
+        // Skip warm entries — they're already spilled
         self.data
             .iter()
             .filter(|(_, e)| e.is_hot())
@@ -1205,7 +1205,7 @@ impl Store for HashMapStore {
         }
 
         let mut rng = rand::rng();
-        // Skip warm entries — they're already demoted
+        // Skip warm entries — they're already spilled
         self.data
             .iter()
             .filter(|(_, e)| e.is_hot())
@@ -1667,9 +1667,9 @@ mod tests {
 
         // Inherent accessor (concrete callers).
         assert_eq!(store.warm_tier().warm_keys(), 0);
-        assert_eq!(store.warm_tier().demotions(), 0);
-        assert_eq!(store.warm_tier().promotions(), 0);
-        assert_eq!(store.warm_tier().expired_on_promote(), 0);
+        assert_eq!(store.warm_tier().spills(), 0);
+        assert_eq!(store.warm_tier().unspills(), 0);
+        assert_eq!(store.warm_tier().expired_on_unspill(), 0);
         // Hot-key count is derived: len() - warm_keys().
         assert_eq!(store.len() - store.warm_tier().warm_keys(), 1);
 

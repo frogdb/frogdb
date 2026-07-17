@@ -278,9 +278,9 @@ impl ShardInfoSnapshot {
         self.dirty += snap.dirty;
         self.tiered.hot_keys += snap.tiered.hot_keys;
         self.tiered.warm_keys += snap.tiered.warm_keys;
-        self.tiered.promotions += snap.tiered.promotions;
-        self.tiered.demotions += snap.tiered.demotions;
-        self.tiered.expired_on_promote += snap.tiered.expired_on_promote;
+        self.tiered.unspills += snap.tiered.unspills;
+        self.tiered.spills += snap.tiered.spills;
+        self.tiered.expired_on_unspill += snap.tiered.expired_on_unspill;
         self.keysizes.merge(&snap.keysizes);
         if let Some(lag) = snap.wal_lag {
             match &mut self.wal {
@@ -832,9 +832,9 @@ mod tests {
             tiered: TieredCounts {
                 hot_keys: 4,
                 warm_keys: 3,
-                promotions: 2,
-                demotions: 1,
-                expired_on_promote: 1,
+                unspills: 2,
+                spills: 1,
+                expired_on_unspill: 1,
             },
             keysizes: KeysizeHistograms::new(),
             wal_lag: None,
@@ -856,7 +856,7 @@ mod tests {
         assert_eq!(agg.lazyfreed_objects, 6);
         assert_eq!(agg.dirty, 10);
         assert_eq!(agg.tiered.hot_keys, 8);
-        assert_eq!(agg.tiered.demotions, 2);
+        assert_eq!(agg.tiered.spills, 2);
         assert!(agg.wal.is_none());
     }
 

@@ -89,9 +89,9 @@ impl ShardWorker {
                 TieredCounts {
                     hot_keys: self.store.len().saturating_sub(warm.warm_keys()),
                     warm_keys: warm.warm_keys(),
-                    promotions: warm.promotions(),
-                    demotions: warm.demotions(),
-                    expired_on_promote: warm.expired_on_promote(),
+                    unspills: warm.unspills(),
+                    spills: warm.spills(),
+                    expired_on_unspill: warm.expired_on_unspill(),
                 }
             },
             keysizes: self.store.keysizes().clone(),

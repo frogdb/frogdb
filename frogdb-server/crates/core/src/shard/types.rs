@@ -315,7 +315,7 @@ impl ShardEviction {
         self.pool.pop_worst()
     }
 
-    /// Drop a key from the sampling pool (it is being deleted/demoted).
+    /// Drop a key from the sampling pool (it is being deleted/spilled).
     pub(crate) fn forget_key(&mut self, key: &[u8]) {
         self.pool.remove(key);
     }
@@ -778,12 +778,12 @@ pub struct TieredCounts {
     pub hot_keys: usize,
     /// Number of keys resident in the warm tier.
     pub warm_keys: usize,
-    /// Total promotions (warm -> hot) performed.
-    pub promotions: u64,
-    /// Total demotions (hot -> warm) performed.
-    pub demotions: u64,
-    /// Keys found expired while being promoted.
-    pub expired_on_promote: u64,
+    /// Total unspills (warm -> hot) performed.
+    pub unspills: u64,
+    /// Total spills (hot -> warm) performed.
+    pub spills: u64,
+    /// Keys found expired while being unspilled.
+    pub expired_on_unspill: u64,
 }
 
 /// Everything INFO needs from a single shard, gathered in one fleet scatter.
