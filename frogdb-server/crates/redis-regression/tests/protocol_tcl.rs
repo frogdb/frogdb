@@ -3,8 +3,11 @@
 //! Excluded tests:
 //! - Protocol desync regression tests (complex multi-step desync simulation)
 //! - RESP3 attribute tests (require CLIENT TRACKING attribute-mode)
-//! - Inline command tests (require special inline parsing)
 //! - Regression for crash with blocking ops and pipelining (`needs:repl`)
+//!
+//! Inline (telnet-style) command tests ARE ported (see the "inline protocol"
+//! section below): raw `PING\r\n`, inline args, quoting/escapes, unbalanced
+//! quotes, oversized inline, pipelined inline, and ignored empty inline lines.
 //!
 //! ## Intentional exclusions
 //!
@@ -245,8 +248,141 @@ async fn tcl_unbalanced_number_of_quotes() {
     let n = stream.read(&mut buf).await.unwrap();
     let response = String::from_utf8_lossy(&buf[..n]);
     assert!(
-        response.contains("-ERR"),
-        "expected error for unbalanced quotes, got: {response}"
+        response.contains("Protocol error: unbalanced quotes in request"),
+        "expected unbalanced-quotes protocol error, got: {response}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Inline protocol (telnet-style commands)
+//
+// Ported from Redis `unit/protocol.tcl` "inline protocol" cases. Any line whose
+// first byte is not a RESP type prefix is parsed with `sdssplitargs` semantics
+// into a multibulk request.
+// ---------------------------------------------------------------------------
+
+/// Raw `PING\r\n` (no RESP framing) returns `+PONG`.
+#[tokio::test]
+async fn tcl_inline_ping() {
+    let server = TestServer::start_standalone().await;
+    let raw = server.send_raw(b"PING\r\n").await;
+    let response = String::from_utf8_lossy(&raw);
+    assert!(
+        response.starts_with("+PONG"),
+        "expected +PONG for inline PING, got: {response}"
+    );
+}
+
+/// Inline command with arguments: `SET foo bar` then `GET foo`.
+#[tokio::test]
+async fn tcl_inline_command_with_args() {
+    let server = TestServer::start_standalone().await;
+
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", server.port()))
+        .await
+        .unwrap();
+    stream
+        .write_all(b"SET foo bar\r\nGET foo\r\n")
+        .await
+        .unwrap();
+    let mut buf = vec![0u8; 4096];
+    let n = stream.read(&mut buf).await.unwrap();
+    let response = String::from_utf8_lossy(&buf[..n]);
+    assert!(
+        response.contains("+OK") && response.contains("$3\r\nbar\r\n"),
+        "expected +OK then bulk `bar`, got: {response}"
+    );
+}
+
+/// Inline quoted arguments with escapes: `SET k "a\x41b"` stores `aAb`.
+#[tokio::test]
+async fn tcl_inline_quoted_escapes() {
+    let server = TestServer::start_standalone().await;
+
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", server.port()))
+        .await
+        .unwrap();
+    stream
+        .write_all(b"SET k \"a\\x41b\"\r\nGET k\r\n")
+        .await
+        .unwrap();
+    let mut buf = vec![0u8; 4096];
+    let n = stream.read(&mut buf).await.unwrap();
+    let response = String::from_utf8_lossy(&buf[..n]);
+    assert!(
+        response.contains("+OK") && response.contains("$3\r\naAb\r\n"),
+        "expected stored value `aAb`, got: {response}"
+    );
+}
+
+/// Multiple inline commands pipelined in one write are all executed in order.
+#[tokio::test]
+async fn tcl_inline_pipelined() {
+    let server = TestServer::start_standalone().await;
+
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", server.port()))
+        .await
+        .unwrap();
+    stream.write_all(b"PING\r\nPING\r\nPING\r\n").await.unwrap();
+
+    // Read until we have three PONGs (responses may arrive in multiple reads).
+    let mut acc = Vec::new();
+    loop {
+        let mut buf = vec![0u8; 4096];
+        let n = stream.read(&mut buf).await.unwrap();
+        if n == 0 {
+            break;
+        }
+        acc.extend_from_slice(&buf[..n]);
+        if String::from_utf8_lossy(&acc).matches("+PONG").count() >= 3 {
+            break;
+        }
+    }
+    let response = String::from_utf8_lossy(&acc);
+    assert_eq!(
+        response.matches("+PONG").count(),
+        3,
+        "expected three PONGs for three pipelined inline PINGs, got: {response}"
+    );
+}
+
+/// An empty inline line (bare `\r\n`) is ignored; a following inline PING works.
+#[tokio::test]
+async fn tcl_inline_empty_line_ignored() {
+    let server = TestServer::start_standalone().await;
+
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", server.port()))
+        .await
+        .unwrap();
+    // Whitespace-only line, then a real inline command.
+    stream.write_all(b"   \r\nPING\r\n").await.unwrap();
+    let mut buf = vec![0u8; 4096];
+    let n = stream.read(&mut buf).await.unwrap();
+    let response = String::from_utf8_lossy(&buf[..n]);
+    assert!(
+        response.starts_with("+PONG"),
+        "expected +PONG after ignored empty inline line, got: {response}"
+    );
+}
+
+/// An oversized inline request (no newline within 64KB) returns
+/// `Protocol error: too big inline request`.
+#[tokio::test]
+async fn tcl_inline_too_big() {
+    let server = TestServer::start_standalone().await;
+
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", server.port()))
+        .await
+        .unwrap();
+    // 64KB + 1 non-newline bytes with no terminator.
+    let payload = vec![b'A'; 64 * 1024 + 1];
+    stream.write_all(&payload).await.unwrap();
+    let mut buf = vec![0u8; 4096];
+    let n = stream.read(&mut buf).await.unwrap();
+    let response = String::from_utf8_lossy(&buf[..n]);
+    assert!(
+        response.contains("Protocol error: too big inline request"),
+        "expected too-big-inline protocol error, got: {response}"
     );
 }
 
