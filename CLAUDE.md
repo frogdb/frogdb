@@ -91,3 +91,19 @@ just fmt-py                             # format Python code
   file/section.
 - Run `pwd` before starting and only search for code in the current directory. You may be in a
   worktree directory and not the main directory.
+
+## Agent skills
+
+### Issue tracker
+
+Issues + PRDs live as markdown under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical roles, default strings (`needs-triage`, `needs-info`, `ready-for-agent`,
+`ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Multi-context: `CONTEXT-MAP.md` at root points to a per-context `CONTEXT.md`
+(server / operator / cli). See `docs/agents/domain.md`.
