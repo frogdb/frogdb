@@ -406,7 +406,7 @@ enum KeyReady {
 ///
 /// The store is the only collaborator a strategy sees. It runs against the
 /// concrete [`HashMapStore`] (the only store the satisfaction path ever drives)
-/// so it can use the hot-only, no-promote read (`get_hot`) the satisfiability
+/// so it can use the hot-only, no-unspill read (`get_hot`) the satisfiability
 /// check needs.
 trait WaiterSatisfaction {
     /// Which waiter kind this strategy drives.

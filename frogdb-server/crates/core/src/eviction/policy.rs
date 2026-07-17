@@ -33,10 +33,10 @@ pub enum EvictionPolicy {
     /// Evict keys with the shortest remaining TTL first.
     VolatileTtl,
 
-    /// Demote least recently used values to warm tier instead of deleting.
+    /// Spill least recently used values to warm tier instead of deleting.
     TieredLru,
 
-    /// Demote least frequently used values to warm tier instead of deleting.
+    /// Spill least frequently used values to warm tier instead of deleting.
     TieredLfu,
 }
 
@@ -52,7 +52,7 @@ impl EvictionPolicy {
         )
     }
 
-    /// Returns true if this is a tiered policy (demotes instead of deletes).
+    /// Returns true if this is a tiered policy (spills instead of deletes).
     pub fn is_tiered(&self) -> bool {
         matches!(self, EvictionPolicy::TieredLru | EvictionPolicy::TieredLfu)
     }

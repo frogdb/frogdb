@@ -321,13 +321,13 @@ define_metrics! {
         labels: [shard: &str],
     }
 
-    /// Total keys demoted to the cold tier instead of evicted
-    counter TieredDemotions("frogdb_tiered_demotions_total") {
+    /// Total keys spilled to the cold tier instead of evicted
+    counter TieredSpills("frogdb_tiered_spills_total") {
         labels: [shard: &str, policy: &str],
     }
 
-    /// Total bytes freed by demoting keys to the cold tier
-    counter TieredBytesDemoted("frogdb_tiered_bytes_demoted_total") {
+    /// Total bytes freed by spilling keys to the cold tier
+    counter TieredBytesSpilled("frogdb_tiered_bytes_spilled_total") {
         labels: [shard: &str],
     }
 

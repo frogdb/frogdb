@@ -26,7 +26,7 @@ mod warm_tier;
 pub use typed::{StoreTypedExt, StoreTypedFamilyExt, TypedArc, WrongTypeError};
 
 // Re-export HashMapStore implementation
-pub use hashmap::{DemotionError, HashMapStore};
+pub use hashmap::{HashMapStore, SpillError};
 
 // Re-export the cohesive subsystems extracted out of HashMapStore so the
 // `Store` trait can expose them directly (`warm_tier()` / `ts_labels()`).
@@ -373,7 +373,7 @@ pub trait Store: Send {
     // Core CRUD
     // ========================================================================
 
-    /// Get a value by key. May promote warm values to hot (requires `&mut self`).
+    /// Get a value by key. May unspill warm values to hot (requires `&mut self`).
     ///
     /// Returns an `Arc<Value>` for zero-copy reads. The Arc ref-count bump
     /// is much cheaper than deep-cloning large values like hashes or lists.
@@ -696,7 +696,7 @@ pub trait Store: Send {
     ///
     /// The cohesive accessor for the warm-tier counters that used to be reached
     /// through the store as `warm_key_count()` / `hot_key_count()` /
-    /// `demotion_count()` / `promotion_count()` / `expired_on_promote_count()`.
+    /// `spill_count()` / `unspill_count()` / `expired_on_unspill_count()`.
     /// Hot-key count is `len() - warm_tier().map_or(0, WarmTier::warm_keys)`.
     fn warm_tier(&self) -> Option<&WarmTier> {
         None

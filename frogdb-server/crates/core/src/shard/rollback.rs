@@ -33,7 +33,7 @@ impl ShardWorker {
     /// Capture the current state of keys that a write command will modify.
     ///
     /// Must be called **before** the command execution block. Uses `&mut self`
-    /// because warm-key promotion (via `store.get()`) requires mutable access.
+    /// because warm-key unspilling (via `store.get()`) requires mutable access.
     pub(crate) fn capture_write_snapshot(
         &mut self,
         handler: &dyn Command,
@@ -56,7 +56,7 @@ impl ShardWorker {
         // Snapshot each key's current state.
         let mut keys: SmallVec<[(Bytes, KeyState); 2]> = SmallVec::new();
         for key in snapshot_keys {
-            // Use store.get() which promotes warm keys to hot tier.
+            // Use store.get() which unspills warm keys to hot tier.
             // This ensures the value is accessible for both snapshot and
             // subsequent command execution.
             let state = if let Some(value) = self.store.get(&key) {
