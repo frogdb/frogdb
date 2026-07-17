@@ -54,10 +54,6 @@ pub struct FrogDBSpec {
     /// Pod disruption budget configuration.
     #[serde(default)]
     pub pod_disruption_budget: PDBSpec,
-
-    /// Rolling upgrade configuration.
-    #[serde(default)]
-    pub upgrade: Option<UpgradeSpec>,
 }
 
 fn default_mode() -> String {
@@ -260,32 +256,6 @@ fn default_policy() -> String {
     "noeviction".to_string()
 }
 
-/// Rolling upgrade configuration.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct UpgradeSpec {
-    /// Minimum delay between pod restarts during rolling upgrade (seconds).
-    #[serde(default = "default_min_upgrade_delay")]
-    pub min_upgrade_delay_secs: u64,
-
-    /// Whether to auto-finalize after all pods are upgraded.
-    #[serde(default)]
-    pub auto_finalize: bool,
-}
-
-fn default_min_upgrade_delay() -> u64 {
-    30
-}
-
-impl Default for UpgradeSpec {
-    fn default() -> Self {
-        Self {
-            min_upgrade_delay_secs: default_min_upgrade_delay(),
-            auto_finalize: false,
-        }
-    }
-}
-
 /// Cluster-specific configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -411,7 +381,10 @@ pub struct FrogDBStatus {
     #[serde(default)]
     pub observed_generation: i64,
 
-    /// Name of the primary pod (standalone mode with replicas or cluster mode).
+    /// Name of the actual Primary pod, detected by probing each pod's replication
+    /// role (not an ordinal-0 assumption). Set only in standalone mode with
+    /// `replicas > 1`; unset if the role could not be determined. Omitted entirely
+    /// in cluster mode, where there is no fixed primary (Raft leadership moves).
     #[serde(default)]
     pub primary_pod: Option<String>,
 
@@ -503,7 +476,6 @@ mod tests {
         assert_eq!(spec.mode, "standalone");
         assert_eq!(spec.replicas, 1);
         assert_eq!(spec.image.repository, "ghcr.io/nathanjordan/frogdb");
-        assert!(spec.upgrade.is_none());
     }
 
     #[test]
@@ -576,30 +548,7 @@ mod tests {
             resources: None,
             storage: StorageSpec::default(),
             pod_disruption_budget: PDBSpec::default(),
-            upgrade: None,
         }
-    }
-
-    #[test]
-    fn test_upgrade_spec_defaults() {
-        let upgrade = UpgradeSpec::default();
-        assert_eq!(upgrade.min_upgrade_delay_secs, 30);
-        assert!(!upgrade.auto_finalize);
-    }
-
-    #[test]
-    fn test_spec_with_upgrade() {
-        let spec = FrogDBSpec {
-            upgrade: Some(UpgradeSpec {
-                min_upgrade_delay_secs: 60,
-                auto_finalize: true,
-            }),
-            ..default_spec()
-        };
-        assert!(spec.validate().is_ok());
-        let upgrade = spec.upgrade.unwrap();
-        assert_eq!(upgrade.min_upgrade_delay_secs, 60);
-        assert!(upgrade.auto_finalize);
     }
 
     #[test]
