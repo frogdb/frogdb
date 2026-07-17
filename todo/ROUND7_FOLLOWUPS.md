@@ -4,7 +4,7 @@ Open items from the round-7 architecture review (proposals 53–62, implemented 
 adversarial post-implementation review. Each is independently actionable. Evidence verified against
 the tree at `0324e2df`.
 
-## 1. WAIT wake-up on replica resume-seed (review finding 57-A)
+## 1. WAIT wake-up on replica resume-seed (review finding 57-A) — FIXED
 
 **Problem.** Proposal 57 split resume-seeding from ACK ingestion: `seed_replica_position` →
 `tracker.seed_acked_position` advances the monotonic acked offset **without** notifying WAIT
@@ -26,7 +26,13 @@ waiter instantly on seed; new code parks it until the next genuine ACK.
 **Recommendation:** (b) — one `ack_notify.send()` in `seed_acked_position`, plus a regression test
 "seed that satisfies a blocked WAIT wakes it immediately". Keeps the ingest/seed API split intact.
 
-## 2. Inline (telnet-style) command support (62-E, decision)
+**Status — FIXED** (option b): `ReplicaSession::seed_acked_position` returns the monotonic-advance
+bool; the tracker fires `ack_notify` only on a genuine advance (mirrors `record_ack`, no spurious
+wakes on stale seeds). Both pinning tests flipped, new regression test
+`seed_acked_position_wakes_blocked_wait_for_acks`, doc comments updated in `tracker.rs`,
+`offset_coordinator.rs`, `replica_session.rs`. 132/132 replication tests green.
+
+## 2. Inline (telnet-style) command support (62-E, decision) — IMPLEMENTED
 
 **Problem.** No inline-command path exists: non-`*` input fails in the upstream RESP2 decoder
 (`server/src/connection/codec.rs`); real Redis accepts `PING\r\n` from telnet/netcat.
@@ -42,6 +48,15 @@ quote rules (`sdssplitargs` semantics: single/double quotes, `\xHH` escapes, unb
 strings. Cap inline line length at `PROTO_INLINE_MAX_SIZE` (Redis: 64KB) with
 `ERR Protocol error: too big inline request`. Unlock the excluded TCL regression tests.
 **If documenting:** add divergence entry + a codec test pinning the error shape for inline input.
+
+**Status — IMPLEMENTED.** `parse_inline_command` in `FrogDbResp2::decode` with a faithful
+`sdssplitargs` port (quote rules, `\xHH` + control escapes, unbalanced-quote error), 64KB
+`PROTO_INLINE_MAX_SIZE`, whitespace-only lines skipped. Decode errors now surface as Redis-exact
+`-ERR Protocol error: …` (`connection.rs` uses `e.details()`). Inline TCL tests ported into
+`protocol_tcl.rs` (6 new); `tcl_unbalanced_number_of_quotes` asserts the specific message. One
+documented divergence: first bytes in `+ - : $` remain strict RESP (Redis treats any non-`*` as
+inline; real commands never start with those). Replication apply + migration decoders unaffected
+(separate strict decoders).
 
 ## 3. Cross-shard MGET returns hot expired-but-unpurged values (pre-existing) — FIXED
 
@@ -147,6 +162,10 @@ consumes `Dynamic`→`write_access_keys`, hence the `RW` choice above.
   round-7 final gate (pre-existing flake). Root-cause or add retry-tolerant synchronization.
 - **HFE expiry bound:** upstream Redis bounds hash-field TTL at `HFE_MAX_ABS_TIME_MSEC/1000`,
   tighter than ours (round-6 proposal 50 open item).
+- **SMOVE WAL gap (found during ACL phase B, pre-existing):** `SMOVE` uses
+  `WalStrategy::PersistFirstKey`, persisting only the source key — but the destination set also
+  gains a member. Looks like a genuine WAL/replication gap independent of ACL; verify and fix
+  (likely `MoveKeys` like LMOVE-family).
 - **`scan_for_oversized_bulk` O(n) rescan:** measured-before-optimizing note from 62-B — the codec
   rescans the full buffer per `*`-prefixed decode; now pinned by table tests, so a bounded scan can
   be proven equivalence-preserving if profiling ever flags it.
