@@ -916,3 +916,40 @@ async fn test_multi_exec_server_wide_reply_ordering() {
 
     server.shutdown().await;
 }
+
+/// Regression: a nested `Response::NullArray` inside an EXEC reply array must
+/// encode over RESP2 as a nested null (`$-1\r\n`), not panic the encoder.
+///
+/// `ZRANK nokey nomember WITHSCORE` on a missing key returns `Response::NullArray`
+/// (the `*-1` top-level shape). Wrapped in EXEC it becomes
+/// `Response::Array([NullArray])`, which `to_resp2_frame` must recurse into. The
+/// top-level codec diversion only fires at the outermost level, so the nested
+/// NullArray reaches `to_resp2_frame`'s arm — which previously `unreachable!`'d
+/// and panicked the connection. The correct RESP2 shape is `*1\r\n$-1\r\n`, i.e.
+/// a one-element array whose sole element is a null bulk.
+#[tokio::test]
+async fn test_exec_nested_null_array_encodes_as_nested_null_resp2() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    // ZRANK on a missing key WITHSCORE queues and yields Response::NullArray.
+    let response = client
+        .command(&["ZRANK", "nokey", "nomember", "WITHSCORE"])
+        .await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+
+    // EXEC wraps the reply in an array: Response::Array([NullArray]). The RESP2
+    // encoder must not panic; the wire shape `*1\r\n$-1\r\n` decodes to a
+    // one-element array containing a null bulk.
+    let response = client.command(&["EXEC"]).await;
+    assert_eq!(
+        response,
+        Response::Array(vec![Response::Bulk(None)]),
+        "nested NullArray must encode as RESP2 nested null ($-1), yielding *1\\r\\n$-1\\r\\n"
+    );
+
+    server.shutdown().await;
+}

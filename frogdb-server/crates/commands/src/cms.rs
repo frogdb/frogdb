@@ -5,8 +5,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    CountMinSketchValue, EventSpec, ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt,
-    Value, WaiterWake, WalStrategy,
+    CountMinSketchValue, EventSpec, ExecutionStrategy, KeyAccessFlag, KeySpec, LookupSpec,
+    StoreTypedFamilyExt, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -255,7 +255,7 @@ impl Command for CmsMerge {
                 numkeys: 1,
                 first: 2,
             },
-            access: AccessSpec::Uniform,
+            access: AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,

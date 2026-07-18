@@ -27,8 +27,11 @@ pub struct ReplicationTrackerImpl {
     /// Next replica id to allocate.
     next_replica_id: AtomicU64,
 
-    /// Current replication offset (primary's write position). Wrapped in `Arc`
-    /// so it can be shared with the cluster bus for HealthProbe responses.
+    /// Current replication offset (primary's write position). A *borrowed*
+    /// clone of the atomic owned by [`crate::offset_coordinator::OffsetCoordinator`]
+    /// (its canonical home, and the sole vendor of the cluster-bus handle). The
+    /// tracker keeps this handle only for its INFO/ROLE read + lag accessors;
+    /// the coordinator, not the tracker, advances it and hands it to the bus.
     current_offset: Arc<AtomicU64>,
 
     /// Channel for notifying WAIT waiters about new ACKs.
@@ -61,9 +64,14 @@ impl ReplicationTrackerImpl {
         Arc::new(Self::new())
     }
 
-    /// Get a shared handle to the replication offset atomic.
-    /// Used by the cluster bus to respond to HealthProbe RPCs.
-    pub fn shared_offset(&self) -> Arc<AtomicU64> {
+    /// Hand the offset atomic to the [`crate::offset_coordinator::OffsetCoordinator`]
+    /// so it can adopt it as its canonical `live` handle at construction.
+    ///
+    /// This is the ONLY place the tracker vends its offset atomic: the public
+    /// cluster-bus handle is vended by the coordinator
+    /// ([`crate::offset_coordinator::OffsetCoordinator::shared_offset`]), the
+    /// single owner, not here.
+    pub(crate) fn offset_handle(&self) -> Arc<AtomicU64> {
         self.current_offset.clone()
     }
 
@@ -130,16 +138,18 @@ impl ReplicationTrackerImpl {
     }
 
     /// Set the current replication offset.
+    ///
+    /// Used at wiring time to seed the offset from recovered state. The live
+    /// advance is owned by the coordinator's `advance` gate, which writes the
+    /// same (shared) atomic.
     pub fn set_offset(&self, offset: u64) {
         self.current_offset.store(offset, Ordering::Release);
     }
 
-    /// Increment the current replication offset, returning the new value.
-    pub fn increment_offset(&self, bytes: u64) -> u64 {
-        self.current_offset.fetch_add(bytes, Ordering::Release) + bytes
-    }
-
     /// Get the current replication offset.
+    ///
+    /// Reads the borrowed handle for INFO/ROLE reporting and lag; the
+    /// coordinator's `current()` reads the same atomic.
     pub fn current_offset(&self) -> u64 {
         self.current_offset.load(Ordering::Acquire)
     }
@@ -194,6 +204,34 @@ impl ReplicationTrackerImpl {
             self.lag_disconnect_times
                 .write()
                 .insert(session.address(), Instant::now());
+        }
+    }
+
+    /// Seed a replica's initial acked position when its session enters the
+    /// streaming phase — the offset it resumed from (its PSYNC offset for a
+    /// partial resync, or the checkpoint's `snapshot_offset` for a full resync).
+    ///
+    /// This is the primary recording where the replica *started*, not the
+    /// replica acknowledging an offset — the distinction from
+    /// [`ReplicationTracker::record_ack`] is the source of the value (primary
+    /// bookkeeping vs. a wire ACK), not the effect. It shares the session's
+    /// monotonic `acked_offset` atomic (so no second source of truth is
+    /// introduced) and, like `record_ack`, notifies WAIT waiters when the seed
+    /// actually advances that offset: a replica that reconnects via partial
+    /// resync already at/past a blocked WAIT's target must wake it immediately
+    /// rather than park for up to a spontaneous-ACK cadence. A stale/duplicate
+    /// seed (offset <= current) does not advance the offset and does not notify.
+    pub fn seed_acked_position(&self, replica_id: u64, offset: u64) {
+        let Some(session) = self.replicas.read().get(&replica_id).cloned() else {
+            return;
+        };
+        if session.seed_acked_position(offset) {
+            let _ = self.ack_notify.send((replica_id, offset));
+            tracing::trace!(
+                replica_id = replica_id,
+                offset = offset,
+                "Seeded replica acked position (advance; notified WAIT waiters)"
+            );
         }
     }
 
@@ -306,6 +344,41 @@ mod tests {
         assert_eq!(tracker.replica_lag(session.id()), Some(0));
     }
 
+    /// Seeding regression (round-7 follow-up to proposal 57): seeding the
+    /// resume position advances the acked offset (so WAIT quorum counting and
+    /// the lag monitor start from where the replica resumed) AND notifies WAIT
+    /// waiters exactly like a genuine ACK, but only when the seed actually
+    /// advances the offset — a stale/duplicate seed stays silent.
+    #[test]
+    fn seed_acked_position_notifies_wait_waiters_on_advance() {
+        let tracker = ReplicationTrackerImpl::new();
+        let session = tracker.register_replica(test_addr());
+        session.force_phase_for_test(Phase::Streaming);
+        let mut acks = tracker.subscribe_acks();
+
+        // Seed: position advances, notification fires.
+        tracker.seed_acked_position(session.id(), 100);
+        assert_eq!(session.acked_offset(), 100);
+        assert_eq!(tracker.count_acked(100), 1);
+        assert_eq!(
+            acks.try_recv().unwrap(),
+            (session.id(), 100),
+            "an advancing seed must notify WAIT waiters"
+        );
+
+        // A stale seed never regresses the monotonic offset, and does not notify.
+        tracker.seed_acked_position(session.id(), 50);
+        assert_eq!(session.acked_offset(), 100);
+        assert!(
+            acks.try_recv().is_err(),
+            "a stale/duplicate seed must not notify WAIT waiters"
+        );
+
+        // Genuine ACK at a higher offset still notifies as before.
+        tracker.record_ack(session.id(), 200);
+        assert_eq!(acks.try_recv().unwrap(), (session.id(), 200));
+    }
+
     #[test]
     fn test_min_acked_offset() {
         let tracker = ReplicationTrackerImpl::new();
@@ -347,6 +420,35 @@ mod tests {
         tracker.record_ack(id, 100);
         let result = wait_handle.await.unwrap();
         assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 1);
+    }
+
+    /// Reconnect-during-WAIT regression (round-7 follow-up to proposal 57): a
+    /// replica that resumes via partial resync at/past a blocked WAIT's target
+    /// must wake the waiter immediately via `seed_acked_position`, not leave it
+    /// parked until the next spontaneous ACK (up to ~1s in production).
+    #[tokio::test]
+    async fn seed_acked_position_wakes_blocked_wait_for_acks() {
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let session = tracker.register_replica(test_addr());
+        session.force_phase_for_test(Phase::Streaming);
+        let tracker_clone = tracker.clone();
+        let id = session.id();
+        let wait_handle = tokio::spawn(async move {
+            tokio::time::timeout(
+                Duration::from_millis(100),
+                tracker_clone.wait_for_acks(100, 1),
+            )
+            .await
+        });
+        // Give the waiter time to park before seeding.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        tracker.seed_acked_position(id, 100);
+        let result = wait_handle.await.unwrap();
+        assert!(
+            result.is_ok(),
+            "seeding an advance must wake the blocked WAIT well within the timeout"
+        );
         assert_eq!(result.unwrap(), 1);
     }
 

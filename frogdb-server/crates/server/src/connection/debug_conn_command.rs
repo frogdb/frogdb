@@ -839,10 +839,8 @@ mod tests_fixture {
     //! DEBUG executor can be exercised in isolation.
     use frogdb_core::{
         ClientRegistry, CommandLatencyHistograms, ConnCtx, DebugProvider, KeyspaceStats,
-        NoopInfoProvider, NoopMetricsRecorder, NoopScriptingProvider, SharedHotkeySession,
-        new_shared_hotkey_session,
+        NoopMetricsRecorder, SharedHotkeySession, new_shared_hotkey_session,
     };
-    use frogdb_protocol::ProtocolVersion;
 
     use crate::connection::ClusterDeps;
     use crate::connection::observability_conn_command::MemoryDiag;
@@ -883,33 +881,27 @@ mod tests_fixture {
         }
 
         pub(super) fn ctx<'a>(&'a self, debug: Option<&'a dyn DebugProvider>) -> ConnCtx<'a> {
-            ConnCtx {
-                config: &self.config_manager,
-                client_registry: &self.client_registry,
-                latency_histograms: &self.latency_histograms,
-                keyspace_stats: &self.keyspace_stats,
-                shard_senders: &[],
-                snapshot_coordinator: &self.snapshot_coordinator,
-                hotkey_session: &self.hotkey_session,
-                hotkey_cluster: &self.cluster,
-                protocol_version: ProtocolVersion::Resp2,
-                cursor_store: &self.cursor_store,
-                metrics_recorder: &self.metrics_recorder,
-                memory_diag: &self.memory_diag,
-                num_shards: 0,
-                max_clients: 10000,
-                cluster_enabled: false,
-                acl_manager: self.acl_manager.as_ref(),
-                command_registry: &self.command_registry,
-                username: "default",
-                info: &NoopInfoProvider,
-                scripting: &NoopScriptingProvider,
-                conn_state: None,
-                tracking: None,
-                pubsub: None,
-                debug,
-                monitor: None,
-            }
+            let mut ctx = ConnCtx::new(
+                &self.config_manager,
+                &self.client_registry,
+                &self.latency_histograms,
+                &self.keyspace_stats,
+                &[],
+                &self.snapshot_coordinator,
+                &self.hotkey_session,
+                &self.cluster,
+                &self.cursor_store,
+                &self.metrics_recorder,
+                &self.memory_diag,
+                self.acl_manager.as_ref(),
+                &self.command_registry,
+                0,
+                10000,
+                false,
+            )
+            .with_username("default");
+            ctx.debug = debug;
+            ctx
         }
     }
 }

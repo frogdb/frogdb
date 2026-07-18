@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    EventSpec, ExecutionStrategy, KeySpec, KeyspaceEventFlags, LookupSpec, SortedSetValue,
-    StoreTypedFamilyExt, Value, WaiterWake, WalStrategy, shard_for_key,
+    EventSpec, ExecutionStrategy, KeyAccessFlag, KeySpec, KeyspaceEventFlags, LookupSpec,
+    SortedSetValue, StoreTypedFamilyExt, Value, WaiterWake, WalStrategy, shard_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -21,8 +21,9 @@ impl Command for ZrangestoreCommand {
             arity: Arity::AtLeast(4),
             flags: CommandFlags::WRITE,
             keys: KeySpec::FirstTwo,
-            access: AccessSpec::Uniform,
-            wal: WalStrategy::PersistDestination(0),
+            // Destination (key 0) is overwritten; the source (key 1) is read-only.
+            access: AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
+            wal: WalStrategy::PersistDestination,
             wakes: WaiterWake::None,
             event: EventSpec::EmitsAt {
                 class: KeyspaceEventFlags::ZSET,

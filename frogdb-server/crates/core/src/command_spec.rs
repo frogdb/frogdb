@@ -221,6 +221,18 @@ pub enum EventSpec {
 pub enum AccessSpec {
     /// Derive one flag from `CommandFlags`: `WRITE` → `OW`, otherwise `R`.
     Uniform,
+    /// Every key is read-and-write (`RW`), independent of `CommandFlags`.
+    ///
+    /// For read-modify-write commands that both *read* the stored value and
+    /// mutate it (INCR/DECR, the pop/GETDEL/GETSET/GETEX families, HINCRBY,
+    /// ZINCRBY, MIGRATE, …). Redis marks these key-specs `RW,ACCESS,UPDATE|
+    /// DELETE`, so ACL requires read **and** write. The flag-derived
+    /// [`AccessSpec::Uniform`] would collapse them to write-only `OW` and let a
+    /// `%W~`-only principal execute them and read back the stored value — an
+    /// ACL bypass once per-key enforcement is active. `RW` also keeps the key
+    /// in the WAL write-set (it passes the `W`/`OW`/`RW` filter), so
+    /// flag-derived WAL strategies still persist it.
+    UniformRW,
     /// Explicit flag per key position; the last entry repeats for any
     /// trailing keys.
     Positional(&'static [KeyAccessFlag]),
@@ -250,6 +262,10 @@ impl AccessSpec {
                 };
                 keys.into_iter().map(|k| (k, vec![flag])).collect()
             }
+            AccessSpec::UniformRW => keys
+                .into_iter()
+                .map(|k| (k, vec![KeyAccessFlag::RW]))
+                .collect(),
             AccessSpec::Positional(flags) => keys
                 .into_iter()
                 .enumerate()
@@ -362,6 +378,13 @@ pub enum SpecError {
     /// [`EventSpec::EmitsAt`] (fixed destination) or [`EventSpec::Dynamic`]
     /// (runtime-resolved keys).
     MultiKeyBlanketEmits,
+    /// A flag-derived WAL strategy ([`WalStrategy::Dynamic`] or
+    /// [`WalStrategy::PersistDestination`]) paired with an
+    /// [`AccessSpec::Positional`] list that declares no write flag
+    /// (`W`/`OW`/`RW`). Such a command derives its WAL destination from its
+    /// write-access keys, so a positional access list with only read flags makes
+    /// the strategy a silent no-op — nothing is ever persisted.
+    WalDestinationWithoutWriteKey,
 }
 
 impl std::fmt::Display for SpecError {
@@ -407,6 +430,12 @@ impl std::fmt::Display for SpecError {
                 write!(
                     f,
                     "multi-key KeySpec with blanket EventSpec::Emits would over-emit on read-only keys; use EmitsAt or Dynamic (or add to the per-key allowlist)"
+                )
+            }
+            SpecError::WalDestinationWithoutWriteKey => {
+                write!(
+                    f,
+                    "flag-derived WAL strategy (Dynamic/PersistDestination) with a Positional access list declaring no write flag (W/OW/RW) persists nothing"
                 )
             }
         }
@@ -460,6 +489,23 @@ impl CommandSpec {
             && !matches!(self.wal, WalStrategy::NoOp)
         {
             return Err(SpecError::ConnectionLevelWithWal);
+        }
+
+        // A flag-derived WAL strategy derives its destination from the command's
+        // write-access keys (`keys_with_flags` filtered to W/OW/RW). With an
+        // explicit `Positional` access list that names no write flag, that
+        // extraction is always empty, so the strategy silently persists nothing —
+        // reject it at declaration time. (`Uniform`/`Dynamic` access derive a
+        // write flag from `CommandFlags::WRITE`, so they cannot hit this.)
+        if matches!(
+            self.wal,
+            WalStrategy::Dynamic | WalStrategy::PersistDestination
+        ) && let AccessSpec::Positional(flags) = self.access
+            && !flags
+                .iter()
+                .any(|f| matches!(f, KeyAccessFlag::W | KeyAccessFlag::OW | KeyAccessFlag::RW))
+        {
+            return Err(SpecError::WalDestinationWithoutWriteKey);
         }
 
         // `EmitsAt.key_index` must be statically provable in-bounds for the
@@ -679,6 +725,24 @@ mod tests {
                 (b"b", vec![KeyAccessFlag::R])
             ]
         );
+    }
+
+    #[test]
+    fn access_uniform_rw() {
+        // Every key resolves to RW regardless of the command's WRITE flag —
+        // the read-modify-write case (INCR, pops, GETDEL, …).
+        let keys = vec![b"a" as &[u8], b"b"];
+        for write in [true, false] {
+            let resolved = AccessSpec::UniformRW.resolve(keys.clone(), write);
+            assert_eq!(
+                resolved,
+                vec![
+                    (b"a" as &[u8], vec![KeyAccessFlag::RW]),
+                    (b"b", vec![KeyAccessFlag::RW])
+                ],
+                "UniformRW must be RW independent of write={write}"
+            );
+        }
     }
 
     #[test]

@@ -661,6 +661,131 @@ pub struct ConnCtx<'a> {
     pub monitor: Option<&'a mut dyn MonitorProvider>,
 }
 
+impl<'a> ConnCtx<'a> {
+    /// The one place the ambient-field list is authored: every production
+    /// dispatch path and every test fixture constructs its `ConnCtx` through
+    /// here, so adding a subsystem to the seam is a one-site edit (this
+    /// signature plus the struct field), not a lockstep sweep over hand-copied
+    /// literals.
+    ///
+    /// Capability slots (`conn_state`/`tracking`/`pubsub`/`debug`/`monitor`)
+    /// default to absent; `info`/`scripting` default to the no-op providers and
+    /// the connection identity (`protocol_version`/`username`) to placeholders.
+    /// The read-only dispatch path overrides all five via
+    /// [`with_full_reads`](Self::with_full_reads); a mutable dispatch path
+    /// leaves them — its command reads identity through `conn_state`, never
+    /// through the placeholder fields.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        config: &'a dyn ConfigProvider,
+        client_registry: &'a ClientRegistry,
+        latency_histograms: &'a CommandLatencyHistograms,
+        keyspace_stats: &'a KeyspaceStats,
+        shard_senders: &'a [ShardSender],
+        snapshot_coordinator: &'a dyn crate::persistence::SnapshotCoordinator,
+        hotkey_session: &'a SharedHotkeySession,
+        hotkey_cluster: &'a dyn HotkeyClusterProvider,
+        cursor_store: &'a dyn CursorStoreProvider,
+        metrics_recorder: &'a dyn crate::MetricsRecorder,
+        memory_diag: &'a dyn MemoryDiagProvider,
+        acl_manager: &'a AclManager,
+        command_registry: &'a CommandRegistry,
+        num_shards: usize,
+        max_clients: u64,
+        cluster_enabled: bool,
+    ) -> Self {
+        // The no-op defaults, authored once (both providers are zero-sized, so
+        // the references promote to `'static`).
+        const NOOP_INFO: &NoopInfoProvider = &NoopInfoProvider;
+        const NOOP_SCRIPTING: &NoopScriptingProvider = &NoopScriptingProvider;
+        ConnCtx {
+            config,
+            client_registry,
+            latency_histograms,
+            keyspace_stats,
+            shard_senders,
+            snapshot_coordinator,
+            hotkey_session,
+            hotkey_cluster,
+            cursor_store,
+            metrics_recorder,
+            memory_diag,
+            acl_manager,
+            command_registry,
+            num_shards,
+            max_clients,
+            cluster_enabled,
+            // Placeholders: a read-only caller overrides these via
+            // `with_full_reads`; a mutable caller reads identity through
+            // `conn_state` and never renders INFO or runs scripts.
+            protocol_version: ProtocolVersion::default(),
+            username: "",
+            info: NOOP_INFO,
+            scripting: NOOP_SCRIPTING,
+            conn_state: None,
+            tracking: None,
+            pubsub: None,
+            debug: None,
+            monitor: None,
+        }
+    }
+
+    /// Layer the mutable connection-state capability (AUTH/HELLO/CLIENT and the
+    /// RESET/ASKING/READONLY/READWRITE family) onto the ambient view.
+    pub fn with_conn_state(mut self, conn_state: &'a mut dyn ConnStateMut) -> Self {
+        self.conn_state = Some(conn_state);
+        self
+    }
+
+    /// Layer the client-tracking IO capability (CLIENT TRACKING) onto the
+    /// ambient view.
+    pub fn with_tracking(mut self, tracking: &'a mut dyn ClientTrackingProvider) -> Self {
+        self.tracking = Some(tracking);
+        self
+    }
+
+    /// Layer the pub/sub capability (SUBSCRIBE/UNSUBSCRIBE/PUBLISH family) onto
+    /// the ambient view.
+    pub fn with_pubsub(mut self, pubsub: &'a mut dyn PubSubProvider) -> Self {
+        self.pubsub = Some(pubsub);
+        self
+    }
+
+    /// Layer the MONITOR registration capability onto the ambient view.
+    pub fn with_monitor(mut self, monitor: &'a mut dyn MonitorProvider) -> Self {
+        self.monitor = Some(monitor);
+        self
+    }
+
+    /// Override the authenticated-username placeholder (fixtures for commands
+    /// that read identity without the `conn_state` capability, e.g. ACL WHOAMI).
+    pub fn with_username(mut self, username: &'a str) -> Self {
+        self.username = username;
+        self
+    }
+
+    /// Read-only dispatch path only: replace every identity/read placeholder
+    /// with the live values — the real INFO and scripting providers, the DEBUG
+    /// capability, and the connection's negotiated protocol version and
+    /// authenticated username. The placeholder defaults from [`new`](Self::new)
+    /// must never leak into the read path; this is the override point.
+    pub fn with_full_reads(
+        mut self,
+        info: &'a dyn InfoProvider,
+        scripting: &'a dyn ScriptingProvider,
+        debug: Option<&'a dyn DebugProvider>,
+        protocol_version: ProtocolVersion,
+        username: &'a str,
+    ) -> Self {
+        self.info = info;
+        self.scripting = scripting;
+        self.debug = debug;
+        self.protocol_version = protocol_version;
+        self.username = username;
+        self
+    }
+}
+
 /// A command handled at the connection level, executed against a narrow
 /// [`ConnCtx`] rather than `&mut ConnectionHandler`.
 ///
@@ -718,5 +843,178 @@ pub trait ConnectionCommand: Send + Sync {
         args: &'a [Bytes],
     ) -> BoxFuture<'a, Vec<Response>> {
         Box::pin(async move { vec![self.execute(ctx, args).await] })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{NoopMetricsRecorder, new_shared_hotkey_session};
+
+    struct StubConfig;
+    impl ConfigProvider for StubConfig {
+        fn get(&self, _pattern: &str) -> Vec<(String, String)> {
+            Vec::new()
+        }
+        fn set<'a>(&'a self, _name: &'a str, _value: &'a str) -> BoxFuture<'a, Result<(), String>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn rewrite(&self) -> Result<(), String> {
+            Ok(())
+        }
+        fn help(&self) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    struct StubCluster;
+    impl HotkeyClusterProvider for StubCluster {
+        fn is_cluster_mode(&self) -> bool {
+            false
+        }
+        fn node_handles_slot(&self, _slot: u16) -> bool {
+            true
+        }
+        fn node_slot_list(&self) -> Vec<u16> {
+            Vec::new()
+        }
+    }
+
+    struct StubCursorStore;
+    impl CursorStoreProvider for StubCursorStore {
+        fn read_cursor(
+            &self,
+            _id: u64,
+            _count: Option<usize>,
+            _expected_index: &str,
+        ) -> Option<CursorReadBatch> {
+            None
+        }
+        fn delete_cursor(&self, _id: u64) -> bool {
+            false
+        }
+    }
+
+    struct StubMemoryDiag;
+    impl MemoryDiagProvider for StubMemoryDiag {
+        fn doctor_report<'a>(&'a self, _shard_senders: &'a [ShardSender]) -> BoxFuture<'a, String> {
+            Box::pin(async { String::new() })
+        }
+    }
+
+    /// An [`InfoProvider`] whose render is distinguishable from the no-op
+    /// default, so the test can prove `with_full_reads` replaced it.
+    struct MarkerInfo;
+    impl InfoProvider for MarkerInfo {
+        fn render<'a>(&'a self, _args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+            Box::pin(async { Response::bulk(Bytes::from_static(b"marker")) })
+        }
+    }
+
+    /// Slot-filler for the `debug` capability; the test never invokes it.
+    struct StubDebug;
+    impl DebugProvider for StubDebug {
+        fn debug_command_enabled(&self) -> bool {
+            true
+        }
+        fn tracing_status(&self) -> Response {
+            unimplemented!()
+        }
+        fn tracing_recent(&self, _count: usize) -> Response {
+            unimplemented!()
+        }
+        fn gather_vll<'a>(
+            &'a self,
+            _shard_filter: Option<usize>,
+        ) -> BoxFuture<'a, Vec<crate::shard::VllQueueInfo>> {
+            unimplemented!()
+        }
+        fn pubsub_limits<'a>(&'a self) -> BoxFuture<'a, Response> {
+            unimplemented!()
+        }
+        fn bundle_generate<'a>(&'a self, _duration_secs: u64) -> BoxFuture<'a, Response> {
+            unimplemented!()
+        }
+        fn bundle_list(&self) -> Response {
+            unimplemented!()
+        }
+        fn set_active_expire<'a>(&'a self, _enabled: bool) -> BoxFuture<'a, ()> {
+            unimplemented!()
+        }
+        fn keysizes_snapshot<'a>(&'a self) -> BoxFuture<'a, crate::KeysizeHistograms> {
+            unimplemented!()
+        }
+        fn allocsize_in_slot<'a>(&'a self, _slot: u16) -> BoxFuture<'a, usize> {
+            unimplemented!()
+        }
+    }
+
+    /// The one targeted assertion from the builder collapse: `ConnCtx::new`
+    /// yields the documented placeholder/no-op/absent defaults, and the
+    /// read-only dispatch override (`with_full_reads`) replaces every one of
+    /// them — the placeholder defaults must never leak into the read path.
+    #[tokio::test]
+    async fn new_defaults_are_placeholders_and_with_full_reads_overrides_them() {
+        let client_registry = ClientRegistry::new();
+        let latency_histograms = CommandLatencyHistograms::new(true);
+        let keyspace_stats = KeyspaceStats::new();
+        let snapshot_coordinator = crate::persistence::NoopSnapshotCoordinator::new();
+        let hotkey_session = new_shared_hotkey_session();
+        let metrics_recorder = NoopMetricsRecorder::new();
+        let acl_manager = AclManager::new(Default::default());
+        let command_registry = CommandRegistry::new();
+
+        let ctx = ConnCtx::new(
+            &StubConfig,
+            &client_registry,
+            &latency_histograms,
+            &keyspace_stats,
+            &[],
+            &snapshot_coordinator,
+            &hotkey_session,
+            &StubCluster,
+            &StubCursorStore,
+            &metrics_recorder,
+            &StubMemoryDiag,
+            acl_manager.as_ref(),
+            &command_registry,
+            0,
+            10000,
+            false,
+        );
+
+        // Defaults: placeholder identity, no-op read providers, no capabilities.
+        assert_eq!(ctx.protocol_version, ProtocolVersion::default());
+        assert_eq!(ctx.username, "");
+        assert!(ctx.conn_state.is_none());
+        assert!(ctx.tracking.is_none());
+        assert!(ctx.pubsub.is_none());
+        assert!(ctx.debug.is_none());
+        assert!(ctx.monitor.is_none());
+        // The default `info` is the no-op provider: an empty bulk string.
+        assert_eq!(ctx.info.render(&[]).await, Response::bulk(Bytes::new()));
+        // The default `scripting` is the no-op provider: an error response.
+        assert_eq!(
+            ctx.scripting.script(&[]).await,
+            Response::error("ERR scripting unavailable")
+        );
+
+        // The read-only override replaces every placeholder.
+        let info = MarkerInfo;
+        let debug = StubDebug;
+        let ctx = ctx.with_full_reads(
+            &info,
+            &NoopScriptingProvider,
+            Some(&debug),
+            ProtocolVersion::Resp3,
+            "alice",
+        );
+        assert_eq!(ctx.protocol_version, ProtocolVersion::Resp3);
+        assert_eq!(ctx.username, "alice");
+        assert!(ctx.debug.is_some());
+        assert_eq!(
+            ctx.info.render(&[]).await,
+            Response::bulk(Bytes::from_static(b"marker"))
+        );
     }
 }

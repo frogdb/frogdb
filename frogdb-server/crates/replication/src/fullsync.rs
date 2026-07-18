@@ -5,6 +5,9 @@
 //! [`crate::replica::connection`] code path:
 //!
 //! - [`FullSyncMetadata`] — the per-snapshot metadata frame on the wire
+//! - [`CheckpointStreamCodec`] — the symmetric checkpoint envelope codec that
+//!   owns the on-wire grammar both the primary and the replica used to
+//!   hand-roll (marker + count prelude, per-file headers, trailing metadata)
 //! - File I/O helpers ([`stream_file_to_writer`], [`receive_to_file`])
 //! - Checksum helpers
 //!
@@ -17,7 +20,7 @@ use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::fs::{self, File};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufWriter};
 
 /// Maximum memory for full sync buffering (default: 512 MB).
 pub const DEFAULT_FULLSYNC_MAX_MEMORY_MB: usize = 512;
@@ -88,6 +91,191 @@ impl FullSyncMetadata {
             replication_offset,
         })
     }
+}
+
+/// Wire marker identifying a FrogDB checkpoint stream (as opposed to a plain
+/// RDB payload). Sent as `$FROGDB_CHECKPOINT\r\n` at the head of the envelope.
+pub const CHECKPOINT_MARKER: &str = "FROGDB_CHECKPOINT";
+
+/// Upper bounds on the length-prefixed counts in the envelope. These reject a
+/// malformed or hostile length *before* it drives an allocation, so a corrupt
+/// stream yields a clean [`io::ErrorKind::InvalidData`] instead of a capacity
+/// panic or a multi-gigabyte reservation. Legitimate checkpoints sit far below
+/// these bounds (dozens of short-named SST files, a ~150-byte metadata frame).
+const MAX_CHECKPOINT_FILE_COUNT: usize = 1_000_000;
+const MAX_CHECKPOINT_NAME_LEN: usize = 64 * 1024;
+const MAX_CHECKPOINT_METADATA_LEN: usize = 64 * 1024;
+
+/// One checkpoint file on the wire: `$<name_len>\r\n<name>\r\n$<size>\r\n<size bytes>`.
+///
+/// The codec owns the *header* (name + size); the `size` payload bytes still
+/// flow through [`stream_file_to_writer`] / [`receive_to_file`] (which also
+/// compute the per-file SHA256).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckpointFileHeader {
+    pub name: String,
+    pub size: u64,
+}
+
+/// The full-sync checkpoint envelope, as a symmetric codec.
+///
+/// This is the single definition of the on-wire grammar that the doc comment in
+/// `ReplicaSession::stream_checkpoint` used to describe only in prose and that
+/// was realized three times by hand (the sender, the PSYNC-reply marker/count
+/// detector, and the receiver body parser). The sender and both receiver stages
+/// now call these methods instead of re-encoding the bytes.
+///
+/// Framing only — the *bytes* of each file flow through the existing
+/// [`stream_file_to_writer`] / [`receive_to_file`] helpers. The codec owns the
+/// delimiters; the helpers own the payload. The combined checksum policy and the
+/// `StagedCheckpoint` landing contract stay in the caller by design.
+///
+/// The grammar, top to bottom:
+/// 1. Prelude: `$FROGDB_CHECKPOINT\r\n<count>\r\n`
+/// 2. For each of `count` files: `$<name_len>\r\n<name>\r\n$<size>\r\n<size bytes>`
+/// 3. Trailing metadata: `$<len>\r\n<FullSyncMetadata bytes>\r\n`
+pub struct CheckpointStreamCodec;
+
+impl CheckpointStreamCodec {
+    // --- encode ---
+
+    /// Write `$FROGDB_CHECKPOINT\r\n<count>\r\n`, ahead of the file bodies.
+    pub async fn write_prelude<W: AsyncWriteExt + Unpin>(
+        w: &mut W,
+        file_count: usize,
+    ) -> io::Result<()> {
+        w.write_all(format!("${CHECKPOINT_MARKER}\r\n").as_bytes())
+            .await?;
+        w.write_all(format!("{file_count}\r\n").as_bytes()).await?;
+        Ok(())
+    }
+
+    /// Write one per-file header: `$<name_len>\r\n<name>\r\n$<size>\r\n`. The
+    /// caller then streams `size` payload bytes via [`stream_file_to_writer`].
+    pub async fn write_file_header<W: AsyncWriteExt + Unpin>(
+        w: &mut W,
+        h: &CheckpointFileHeader,
+    ) -> io::Result<()> {
+        w.write_all(format!("${}\r\n{}\r\n", h.name.len(), h.name).as_bytes())
+            .await?;
+        w.write_all(format!("${}\r\n", h.size).as_bytes()).await?;
+        Ok(())
+    }
+
+    /// Write the trailing metadata frame: `$<len>\r\n<FullSyncMetadata bytes>\r\n`.
+    pub async fn write_metadata<W: AsyncWriteExt + Unpin>(
+        w: &mut W,
+        m: &FullSyncMetadata,
+    ) -> io::Result<()> {
+        let bytes = m.to_bytes();
+        w.write_all(format!("${}\r\n", bytes.len()).as_bytes())
+            .await?;
+        w.write_all(&bytes).await?;
+        w.write_all(b"\r\n").await?;
+        Ok(())
+    }
+
+    // --- inverses ---
+
+    /// Parse the file-count line (`<count>\r\n`) of the prelude.
+    ///
+    /// The marker line itself is detected one layer up, in the PSYNC reply
+    /// reader, because that reader must first distinguish `$FROGDB_CHECKPOINT`
+    /// from a plain `$<rdb_size>` RDB. Once it decides the stream is a
+    /// checkpoint it routes the count through this method so the parse rule
+    /// (including the sanity bound) lives with the rest of the grammar.
+    pub fn parse_file_count(line: &str) -> io::Result<usize> {
+        let count: usize = line.trim().parse().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid file count in checkpoint",
+            )
+        })?;
+        if count > MAX_CHECKPOINT_FILE_COUNT {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "checkpoint file count exceeds maximum",
+            ));
+        }
+        Ok(count)
+    }
+
+    /// Read the whole prelude — marker line then count line — returning the file
+    /// count. This is the symmetric inverse of [`write_prelude`](Self::write_prelude)
+    /// used by round-trip tests; the live receiver splits the marker detection
+    /// out (see [`parse_file_count`](Self::parse_file_count)) so the RDB-vs-checkpoint
+    /// decision is not entangled with the envelope.
+    pub async fn read_prelude<R: AsyncBufRead + Unpin>(r: &mut R) -> io::Result<usize> {
+        let mut marker_line = String::new();
+        r.read_line(&mut marker_line).await?;
+        let marker = marker_line.trim().strip_prefix('$').ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "expected checkpoint marker prefix",
+            )
+        })?;
+        if marker != CHECKPOINT_MARKER {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unexpected checkpoint marker",
+            ));
+        }
+        let mut count_line = String::new();
+        r.read_line(&mut count_line).await?;
+        Self::parse_file_count(&count_line)
+    }
+
+    /// Read one `$<name_len>\r\n<name>\r\n$<size>\r\n` header. The caller then
+    /// consumes `size` payload bytes via [`receive_to_file`].
+    pub async fn read_file_header<R: AsyncBufRead + Unpin>(
+        r: &mut R,
+    ) -> io::Result<CheckpointFileHeader> {
+        let mut line = String::new();
+        r.read_line(&mut line).await?;
+        let name_len = parse_dollar_len(&line, "invalid filename length", MAX_CHECKPOINT_NAME_LEN)?;
+        // `name_len + 2` also consumes the trailing `\r\n`.
+        let mut name_buf = vec![0u8; name_len + 2];
+        r.read_exact(&mut name_buf).await?;
+        let name = String::from_utf8_lossy(&name_buf[..name_len]).to_string();
+
+        let mut size_line = String::new();
+        r.read_line(&mut size_line).await?;
+        let size: u64 = size_line
+            .trim()
+            .trim_start_matches('$')
+            .parse()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid file size"))?;
+        Ok(CheckpointFileHeader { name, size })
+    }
+
+    /// Read the trailing `$<len>\r\n<bytes>\r\n` and parse a [`FullSyncMetadata`].
+    pub async fn read_metadata<R: AsyncBufRead + Unpin>(r: &mut R) -> io::Result<FullSyncMetadata> {
+        let mut line = String::new();
+        r.read_line(&mut line).await?;
+        let metadata_len = parse_dollar_len(
+            &line,
+            "invalid metadata length",
+            MAX_CHECKPOINT_METADATA_LEN,
+        )?;
+        // `metadata_len + 2` also consumes the trailing `\r\n`.
+        let mut buf = vec![0u8; metadata_len + 2];
+        r.read_exact(&mut buf).await?;
+        FullSyncMetadata::from_bytes(&buf[..metadata_len])
+    }
+}
+
+/// Parse a `$<n>\r\n` length line, rejecting a non-numeric value or one that
+/// exceeds `max` with a clean [`io::ErrorKind::InvalidData`].
+fn parse_dollar_len(line: &str, context: &'static str, max: usize) -> io::Result<usize> {
+    let n: usize = line
+        .trim()
+        .trim_start_matches('$')
+        .parse()
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, context))?;
+    if n > max {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, context));
+    }
+    Ok(n)
 }
 
 /// SHA256 checksum of a file's contents.
@@ -190,6 +378,7 @@ pub async fn receive_to_file<R: AsyncReadExt + Unpin>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::Strategy;
     use tempfile::tempdir;
 
     #[test]
@@ -276,5 +465,268 @@ mod tests {
         assert_eq!(received_checksum, expected_checksum);
         let on_disk = tokio::fs::read(&dst).await.unwrap();
         assert_eq!(on_disk, payload);
+    }
+
+    // ---- CheckpointStreamCodec ----
+
+    fn sample_metadata() -> FullSyncMetadata {
+        FullSyncMetadata {
+            rdb_size: 42,
+            checksum: [0xAB; 32],
+            replication_id: "repl-1".to_string(),
+            replication_offset: 99,
+        }
+    }
+
+    /// Encode a whole envelope (prelude + interleaved headers/payloads +
+    /// metadata) into a buffer, then decode it back and assert every field
+    /// survives. The checkpoint-stream analogue of `frame.rs`'s round-trip test
+    /// and the drift guard between the send and receive paths.
+    #[tokio::test]
+    async fn test_checkpoint_codec_round_trip() {
+        let files: Vec<(CheckpointFileHeader, Vec<u8>)> = vec![
+            (
+                CheckpointFileHeader {
+                    name: "CURRENT".to_string(),
+                    size: 4,
+                },
+                b"abcd".to_vec(),
+            ),
+            (
+                CheckpointFileHeader {
+                    name: "000042.sst".to_string(),
+                    size: 0,
+                },
+                Vec::new(),
+            ),
+            (
+                CheckpointFileHeader {
+                    name: "MANIFEST-000005".to_string(),
+                    size: 5,
+                },
+                b"hello".to_vec(),
+            ),
+        ];
+        let metadata = sample_metadata();
+
+        let mut buf: Vec<u8> = Vec::new();
+        CheckpointStreamCodec::write_prelude(&mut buf, files.len())
+            .await
+            .unwrap();
+        for (header, payload) in &files {
+            CheckpointStreamCodec::write_file_header(&mut buf, header)
+                .await
+                .unwrap();
+            buf.write_all(payload).await.unwrap();
+        }
+        CheckpointStreamCodec::write_metadata(&mut buf, &metadata)
+            .await
+            .unwrap();
+
+        let mut cursor = std::io::Cursor::new(buf);
+        let count = CheckpointStreamCodec::read_prelude(&mut cursor)
+            .await
+            .unwrap();
+        assert_eq!(count, files.len());
+        for (expected_header, expected_payload) in &files {
+            let header = CheckpointStreamCodec::read_file_header(&mut cursor)
+                .await
+                .unwrap();
+            assert_eq!(&header, expected_header);
+            let mut payload = vec![0u8; header.size as usize];
+            cursor.read_exact(&mut payload).await.unwrap();
+            assert_eq!(&payload, expected_payload);
+        }
+        let decoded = CheckpointStreamCodec::read_metadata(&mut cursor)
+            .await
+            .unwrap();
+        assert_eq!(decoded.rdb_size, metadata.rdb_size);
+        assert_eq!(decoded.checksum, metadata.checksum);
+        assert_eq!(decoded.replication_id, metadata.replication_id);
+        assert_eq!(decoded.replication_offset, metadata.replication_offset);
+    }
+
+    /// Golden-bytes assertion: for a fixed input the codec must emit exactly the
+    /// bytes today's hand-rolled sender emits (`$FROGDB_CHECKPOINT\r\n`, decimal
+    /// count, `$<name_len>\r\n<name>\r\n$<size>\r\n`, `$<meta_len>\r\n<bytes>\r\n`).
+    /// A round-trip test proves the two sides agree *with each other*; this
+    /// proves they still agree with the *old* wire, catching a reordering that
+    /// would otherwise pass by agreeing with itself.
+    #[tokio::test]
+    async fn test_checkpoint_codec_golden_bytes() {
+        let metadata = sample_metadata();
+        let meta_str = format!("42:{}:repl-1:99", hex::encode([0xAB; 32]));
+
+        let mut expected: Vec<u8> = Vec::new();
+        expected.extend_from_slice(b"$FROGDB_CHECKPOINT\r\n");
+        expected.extend_from_slice(b"1\r\n");
+        expected.extend_from_slice(b"$7\r\nCURRENT\r\n");
+        expected.extend_from_slice(b"$1\r\n");
+        expected.extend_from_slice(b"x");
+        expected.extend_from_slice(format!("${}\r\n", meta_str.len()).as_bytes());
+        expected.extend_from_slice(meta_str.as_bytes());
+        expected.extend_from_slice(b"\r\n");
+
+        let mut actual: Vec<u8> = Vec::new();
+        CheckpointStreamCodec::write_prelude(&mut actual, 1)
+            .await
+            .unwrap();
+        CheckpointStreamCodec::write_file_header(
+            &mut actual,
+            &CheckpointFileHeader {
+                name: "CURRENT".to_string(),
+                size: 1,
+            },
+        )
+        .await
+        .unwrap();
+        actual.write_all(b"x").await.unwrap();
+        CheckpointStreamCodec::write_metadata(&mut actual, &metadata)
+            .await
+            .unwrap();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
+    async fn test_checkpoint_codec_zero_file_prelude() {
+        let mut buf: Vec<u8> = Vec::new();
+        CheckpointStreamCodec::write_prelude(&mut buf, 0)
+            .await
+            .unwrap();
+        let metadata = sample_metadata();
+        CheckpointStreamCodec::write_metadata(&mut buf, &metadata)
+            .await
+            .unwrap();
+
+        let mut cursor = std::io::Cursor::new(buf);
+        let count = CheckpointStreamCodec::read_prelude(&mut cursor)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        let decoded = CheckpointStreamCodec::read_metadata(&mut cursor)
+            .await
+            .unwrap();
+        assert_eq!(decoded.replication_offset, metadata.replication_offset);
+    }
+
+    #[test]
+    fn test_parse_file_count_rejects_garbage() {
+        // Non-numeric.
+        let err = CheckpointStreamCodec::parse_file_count("not-a-number\r\n").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        // Oversized.
+        let err = CheckpointStreamCodec::parse_file_count("2000000\r\n").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        // Valid.
+        assert_eq!(CheckpointStreamCodec::parse_file_count("7\r\n").unwrap(), 7);
+    }
+
+    #[tokio::test]
+    async fn test_read_prelude_rejects_bad_marker() {
+        let mut cursor = std::io::Cursor::new(b"$NOT_A_CHECKPOINT\r\n1\r\n".to_vec());
+        let err = CheckpointStreamCodec::read_prelude(&mut cursor)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+
+        // Missing `$` prefix.
+        let mut cursor = std::io::Cursor::new(b"FROGDB_CHECKPOINT\r\n1\r\n".to_vec());
+        let err = CheckpointStreamCodec::read_prelude(&mut cursor)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn test_read_file_header_non_numeric_len() {
+        let mut cursor = std::io::Cursor::new(b"$xyz\r\nname\r\n$0\r\n".to_vec());
+        let err = CheckpointStreamCodec::read_file_header(&mut cursor)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn test_read_file_header_oversized_name_len() {
+        // Larger than MAX_CHECKPOINT_NAME_LEN — rejected before allocation.
+        let mut cursor = std::io::Cursor::new(b"$999999\r\n".to_vec());
+        let err = CheckpointStreamCodec::read_file_header(&mut cursor)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn test_read_file_header_truncated_name() {
+        // Declares an 8-byte name but only supplies part of it: the length
+        // overruns the buffer, so read_exact must report UnexpectedEof.
+        let mut cursor = std::io::Cursor::new(b"$8\r\nabc".to_vec());
+        let err = CheckpointStreamCodec::read_file_header(&mut cursor)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[tokio::test]
+    async fn test_read_metadata_wrong_field_count() {
+        // Payload with too few `:`-separated fields must be InvalidData.
+        let mut cursor = std::io::Cursor::new(b"$3\r\nabc\r\n".to_vec());
+        let err = CheckpointStreamCodec::read_metadata(&mut cursor)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn test_read_metadata_oversized_len() {
+        let mut cursor = std::io::Cursor::new(b"$99999999\r\n".to_vec());
+        let err = CheckpointStreamCodec::read_metadata(&mut cursor)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn test_read_metadata_truncated_body() {
+        // Declares a 71-byte metadata frame but supplies far fewer bytes.
+        let mut cursor = std::io::Cursor::new(b"$71\r\n1:0:x".to_vec());
+        let err = CheckpointStreamCodec::read_metadata(&mut cursor)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    proptest::proptest! {
+        /// For an arbitrary list of file headers, encoding then decoding the
+        /// header sequence yields the same list — pinning the per-file framing
+        /// against future format edits (proposal 56's property test).
+        #[test]
+        fn prop_file_header_sequence_round_trips(
+            headers in proptest::collection::vec(
+                ("[a-zA-Z0-9._-]{0,64}", proptest::prelude::any::<u64>()).prop_map(
+                    |(name, size)| CheckpointFileHeader { name, size },
+                ),
+                0..8usize,
+            )
+        ) {
+            let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+            rt.block_on(async {
+                let mut buf: Vec<u8> = Vec::new();
+                for header in &headers {
+                    CheckpointStreamCodec::write_file_header(&mut buf, header)
+                        .await
+                        .unwrap();
+                }
+                let mut cursor = std::io::Cursor::new(buf);
+                for expected in &headers {
+                    let got = CheckpointStreamCodec::read_file_header(&mut cursor)
+                        .await
+                        .unwrap();
+                    proptest::prop_assert_eq!(&got, expected);
+                }
+                Ok(())
+            })?;
+        }
     }
 }

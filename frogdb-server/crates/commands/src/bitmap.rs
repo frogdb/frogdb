@@ -11,8 +11,8 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, BitOp, BitfieldEncoding, BitfieldOffset, BitfieldSubCommand,
     Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec, ExecutionStrategy,
-    KeySpec, KeyspaceEventFlags, LookupSpec, OverflowMode, StringValue, Value, WaiterWake,
-    WalStrategy, bitop,
+    KeyAccessFlag, KeySpec, KeyspaceEventFlags, LookupSpec, OverflowMode, StringValue, Value,
+    WaiterWake, WalStrategy, bitop,
 };
 use frogdb_protocol::Response;
 
@@ -31,7 +31,7 @@ impl Command for SetbitCommand {
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
@@ -81,7 +81,7 @@ impl Command for SetbitCommand {
 
         // Signal dirty state to the shard for rdb_changes_since_last_save tracking
         if !is_dirty {
-            ctx.dirty_delta = -1; // No actual change, suppress dirty increment
+            ctx.effects.dirty_delta = -1; // No actual change, suppress dirty increment
         }
 
         Ok(Response::Integer(old_bit as i64))
@@ -213,12 +213,16 @@ impl Command for BitopCommand {
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::Skip(1),
-            access: AccessSpec::Uniform,
-            // Persist-or-delete the destination (args[1]): a non-empty result
-            // stores, an empty result deletes (bitops.c bitopCommand). The
-            // deletion must reach the WAL so it survives a restart — a plain
-            // `PersistDestination` would leave the stale prior value on disk.
-            wal: WalStrategy::PersistOrDeleteDestination(1),
+            // Destination (key 0 of the `Skip(1)` extraction, args[1]) is
+            // overwritten; the source keys are read-only.
+            access: AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
+            // Persist-or-delete the destination: a non-empty result stores, an
+            // empty result deletes (bitops.c bitopCommand). The deletion must
+            // reach the WAL so it survives a restart — a plain persist-if-exists
+            // would leave the stale prior value on disk. `Dynamic` resolves the
+            // destination through the declared write-access key (the sole `OW`
+            // key above) and emits persist-or-delete over it.
+            wal: WalStrategy::Dynamic,
             wakes: WaiterWake::None,
             // Runtime-deposited (bitops.c bitopCommand): `set` under
             // NOTIFY_STRING on the destination when the result is non-empty,
@@ -382,7 +386,12 @@ impl Command for BitfieldCommand {
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
-            access: AccessSpec::Uniform,
+            // VARIABLE_FLAGS in Redis: the required perm depends on the
+            // sub-operations. A `GET` sub-op reads (`ACCESS`), `SET`/`INCRBY`
+            // write (`UPDATE`). Resolved per-invocation in
+            // `dynamic_keys_with_flags`: `RW` when both present, `R` for a
+            // GET-only BITFIELD, `OW` for write-only sub-ops.
+            access: AccessSpec::Dynamic,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
@@ -395,6 +404,44 @@ impl Command for BitfieldCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         execute_bitfield(ctx, args, false)
+    }
+
+    /// Per-key access flags for `COMMAND GETKEYSANDFLAGS` / ACL, resolved from
+    /// the BITFIELD sub-operations (Redis `VARIABLE_FLAGS`): `GET` contributes
+    /// read, `SET`/`INCRBY` contribute write. `OVERFLOW` takes one argument
+    /// (`WRAP`/`SAT`/`FAIL`) and contributes nothing.
+    fn dynamic_keys_with_flags<'a>(
+        &self,
+        args: &'a [Bytes],
+    ) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
+        let Some(key) = args.first() else {
+            return Vec::new();
+        };
+        let mut has_read = false;
+        let mut has_write = false;
+        let mut i = 1;
+        while i < args.len() {
+            let tok = args[i].as_ref();
+            if tok.eq_ignore_ascii_case(b"GET") {
+                has_read = true;
+                i += 3; // GET type offset
+            } else if tok.eq_ignore_ascii_case(b"SET") || tok.eq_ignore_ascii_case(b"INCRBY") {
+                has_write = true;
+                i += 4; // SET/INCRBY type offset value
+            } else if tok.eq_ignore_ascii_case(b"OVERFLOW") {
+                i += 2; // OVERFLOW WRAP|SAT|FAIL
+            } else {
+                i += 1;
+            }
+        }
+        let flag = match (has_read, has_write) {
+            (true, true) => KeyAccessFlag::RW,
+            (true, false) => KeyAccessFlag::R,
+            // Write-only sub-ops, or a malformed/empty op list: default to the
+            // blind-overwrite flag a plain WRITE command would carry.
+            (false, _) => KeyAccessFlag::OW,
+        };
+        vec![(key.as_ref(), vec![flag])]
     }
 }
 
@@ -525,10 +572,10 @@ fn execute_bitfield(
 
     // Signal dirty state to the shard for rdb_changes_since_last_save tracking
     if dirty_count > 0 {
-        ctx.dirty_delta = dirty_count;
+        ctx.effects.dirty_delta = dirty_count;
     } else if modified {
         // Modified but no dirty subcommands -> suppress dirty increment
-        ctx.dirty_delta = -1;
+        ctx.effects.dirty_delta = -1;
     }
 
     Ok(Response::Array(results))

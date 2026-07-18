@@ -192,7 +192,7 @@ impl Command for LpopCommand {
             arity: Arity::Range { min: 1, max: 2 },
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
             event: EventSpec::Emits {
@@ -272,7 +272,7 @@ impl Command for RpopCommand {
             arity: Arity::Range { min: 1, max: 2 },
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
             event: EventSpec::Emits {
@@ -769,7 +769,7 @@ impl Command for RpoplpushCommand {
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::FirstTwo,
-            access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::RW]),
+            access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::W]),
             wal: WalStrategy::MoveKeys,
             wakes: // Pushes onto the destination list, so a client blocked in
         // BLPOP/BRPOP/BLMOVE on the destination key must be woken.
@@ -841,7 +841,7 @@ impl Command for LmoveCommand {
             arity: Arity::Fixed(4),
             flags: CommandFlags::WRITE,
             keys: KeySpec::FirstTwo,
-            access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::RW]),
+            access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::W]),
             wal: WalStrategy::MoveKeys,
             wakes: // Pushes onto the destination list, so a client blocked in
         // BLPOP/BRPOP/BLMOVE on the destination key must be woken.
@@ -942,7 +942,7 @@ impl Command for LmpopCommand {
                 numkeys: 0,
                 first: 1,
             },
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
             // Runtime-deposited (t_list.c listElementsRemoved): `lpop`/`rpop`

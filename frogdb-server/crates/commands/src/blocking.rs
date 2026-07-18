@@ -6,7 +6,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    EventSpec, ExecutionStrategy, KeySpec, KeyspaceEventFlags, LookupSpec, WaiterWake, WalStrategy,
+    EventSpec, ExecutionStrategy, KeyAccessFlag, KeySpec, KeyspaceEventFlags, LookupSpec,
+    WaiterWake, WalStrategy,
 };
 use frogdb_protocol::{BlockingOp, Direction, Response};
 
@@ -31,7 +32,7 @@ impl Command for BlpopCommand {
                 .union(CommandFlags::BLOCKING)
                 .union(CommandFlags::FAST),
             keys: KeySpec::AllButLast,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
             // Runtime-deposited: `lpop` on the one candidate key actually
@@ -116,7 +117,7 @@ impl Command for BrpopCommand {
                 .union(CommandFlags::BLOCKING)
                 .union(CommandFlags::FAST),
             keys: KeySpec::AllButLast,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
             // Runtime-deposited: `rpop` on the popped key (see BLPOP).
@@ -194,7 +195,7 @@ impl Command for BlmoveCommand {
             arity: Arity::Fixed(5),
             flags: CommandFlags::WRITE.union(CommandFlags::BLOCKING),
             keys: KeySpec::FirstTwo,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::W]),
             wal: WalStrategy::MoveKeys,
             wakes: WaiterWake::None,
             // Runtime-deposited (proposal 44): direction-resolved Redis names —
@@ -315,7 +316,7 @@ impl Command for BlmpopCommand {
                 numkeys: 1,
                 first: 2,
             },
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
             // Runtime-deposited: `lpop`/`rpop` by direction on the one candidate
@@ -450,7 +451,7 @@ impl Command for BzpopminCommand {
                 .union(CommandFlags::BLOCKING)
                 .union(CommandFlags::FAST),
             keys: KeySpec::AllButLast,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
             // Runtime-deposited: `zpopmin` on the popped key (see BLPOP).
@@ -533,7 +534,7 @@ impl Command for BzpopmaxCommand {
                 .union(CommandFlags::BLOCKING)
                 .union(CommandFlags::FAST),
             keys: KeySpec::AllButLast,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
             // Runtime-deposited: `zpopmax` on the popped key (see BLPOP).
@@ -616,7 +617,7 @@ impl Command for BzmpopCommand {
                 numkeys: 1,
                 first: 2,
             },
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
             // Runtime-deposited: `zpopmin`/`zpopmax` by direction on the one
@@ -756,7 +757,7 @@ impl Command for BrpoplpushCommand {
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE.union(CommandFlags::BLOCKING),
             keys: KeySpec::FirstTwo,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::W]),
             wal: WalStrategy::MoveKeys,
             wakes: WaiterWake::None,
             // Runtime-deposited (proposal 44): BRPOPLPUSH is BLMOVE RIGHT LEFT,

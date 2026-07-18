@@ -12,8 +12,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    EventSpec, ExecutionStrategy, KeySpec, KeyspaceEventFlags, ListpackThresholds, LookupSpec,
-    SetValue, StoreTypedFamilyExt, Value, WaiterWake, WalStrategy,
+    EventSpec, ExecutionStrategy, KeyAccessFlag, KeySpec, KeyspaceEventFlags, ListpackThresholds,
+    LookupSpec, SetValue, StoreTypedFamilyExt, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -480,8 +480,9 @@ impl Command for SunionstoreCommand {
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::All,
-            access: AccessSpec::Uniform,
-            wal: WalStrategy::PersistDestination(0),
+            // Destination (key 0) is overwritten; the source keys are read-only.
+            access: AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
+            wal: WalStrategy::PersistDestination,
             wakes: WaiterWake::None,
             event: EventSpec::EmitsAt {
                 class: KeyspaceEventFlags::SET,
@@ -540,8 +541,9 @@ impl Command for SinterstoreCommand {
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::All,
-            access: AccessSpec::Uniform,
-            wal: WalStrategy::PersistDestination(0),
+            // Destination (key 0) is overwritten; the source keys are read-only.
+            access: AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
+            wal: WalStrategy::PersistDestination,
             wakes: WaiterWake::None,
             event: EventSpec::EmitsAt {
                 class: KeyspaceEventFlags::SET,
@@ -612,8 +614,9 @@ impl Command for SdiffstoreCommand {
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::All,
-            access: AccessSpec::Uniform,
-            wal: WalStrategy::PersistDestination(0),
+            // Destination (key 0) is overwritten; the source keys are read-only.
+            access: AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
+            wal: WalStrategy::PersistDestination,
             wakes: WaiterWake::None,
             event: EventSpec::EmitsAt {
                 class: KeyspaceEventFlags::SET,
@@ -841,7 +844,7 @@ impl Command for SpopCommand {
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
             event: EventSpec::Emits {
@@ -914,7 +917,7 @@ impl Command for SmoveCommand {
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::FirstTwo,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::W]),
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
             // Runtime-deposited (proposal 44): SMOVE is SREM+SADD internally, so
@@ -954,7 +957,7 @@ impl Command for SmoveCommand {
                 .store
                 .get_set(source)?
                 .is_some_and(|set| set.contains(member));
-            ctx.write_was_noop = true;
+            ctx.effects.write_was_noop = true;
             return Ok(Response::Integer(if is_member { 1 } else { 0 }));
         }
 

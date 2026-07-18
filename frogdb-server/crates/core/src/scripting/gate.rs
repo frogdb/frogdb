@@ -277,7 +277,7 @@ pub(crate) struct ScriptInvoker<'a> {
     /// so the shard worker can run the canonical write-effect pipeline
     /// (notifications, WATCH bump, tracking, waiter wake, WAL, replication)
     /// after the script completes. Borrowed from the outer
-    /// [`CommandContext::script_writes`] so the records outlive this invoker.
+    /// [`CommandEffects::script_writes`](crate::command::CommandEffects::script_writes) so the records outlive this invoker.
     /// Behind a `RefCell` for the same reason as `store`: the Lua callbacks
     /// that reach it are shared `Fn` closures.
     script_writes: RefCell<&'a mut Vec<ScriptWriteRecord>>,
@@ -304,9 +304,9 @@ impl<'a> ScriptInvoker<'a> {
             master_port: ctx.master_port,
             // Reborrow last, after every scalar field is read, so the mutable
             // borrows of the two written-to fields do not shadow the disjoint
-            // scalar reads. `store` and `script_writes` are distinct fields of
-            // `ctx`, so the two `&mut` borrows are disjoint.
-            script_writes: RefCell::new(&mut ctx.script_writes),
+            // scalar reads. `store` and `effects.script_writes` are distinct
+            // fields of `ctx`, so the two `&mut` borrows are disjoint.
+            script_writes: RefCell::new(&mut ctx.effects.script_writes),
             store: RefCell::new(&mut *ctx.store),
         }
     }
@@ -421,24 +421,19 @@ impl CommandInvoker for ScriptInvoker<'_> {
         // canonical write-effect pipeline (keyspace notifications, WATCH bump,
         // tracking invalidation, waiter wake, WAL, replication) after the
         // script completes — a scripted write must have the same side effects
-        // as a direct one. A `write_was_noop` write is dropped wholesale (same
-        // contract as the direct path), and a failed sub-command recorded
-        // nothing effective. Deposited state (`keyspace_events`,
-        // `hll_wal_delta`) is drained off the throwaway sub-command context
-        // into the owned record.
+        // as a direct one. The deposits are drained off the throwaway
+        // sub-command context as one `CommandEffects` value;
+        // `into_script_record` owns the no-op suppression rule (a
+        // `write_was_noop` write is dropped wholesale, same contract as the
+        // direct path), and a failed sub-command recorded nothing effective.
+        let effects = std::mem::take(&mut ctx.effects);
         if result.is_ok()
             && handler
                 .flags()
                 .contains(crate::command::CommandFlags::WRITE)
-            && !ctx.write_was_noop
+            && let Some(record) = effects.into_script_record(Arc::clone(&handler), args.to_vec())
         {
-            self.script_writes.borrow_mut().push(ScriptWriteRecord {
-                handler: Arc::clone(&handler),
-                args: args.to_vec(),
-                dirty_delta: ctx.dirty_delta,
-                hll_wal_delta: ctx.hll_wal_delta.take(),
-                keyspace_events: ctx.take_keyspace_events(),
-            });
+            self.script_writes.borrow_mut().push(record);
         }
 
         match result {

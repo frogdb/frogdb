@@ -5,7 +5,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, HyperLogLogValue, KeySpec, KeyspaceEventFlags, LookupSpec,
+    ExecutionStrategy, HyperLogLogValue, KeyAccessFlag, KeySpec, KeyspaceEventFlags, LookupSpec,
     StoreTypedFamilyExt, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
@@ -27,7 +27,7 @@ impl Command for PfaddCommand {
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             // On a dense existing HLL, execute deposits the raised registers on
-            // `ctx.hll_wal_delta` and this strategy persists them as a compact
+            // `ctx.effects.hll_wal_delta` and this strategy persists them as a compact
             // `Merge` operand; sparse/new values fall back to a full `Persist`.
             wal: WalStrategy::MergeDeltaOrPersistFirstKey,
             wakes: WaiterWake::None,
@@ -67,7 +67,7 @@ impl Command for PfaddCommand {
                     // No register moved: declare a no-op so the shard skips WAL
                     // persist, replication, version bump, and notifications
                     // (Redis does the same for an unchanged PFADD).
-                    ctx.write_was_noop = true;
+                    ctx.effects.write_was_noop = true;
                 } else if !hll.is_sparse() {
                     // Dense value: persist just the raised registers as a WAL
                     // `Merge` operand (the strategy resolves this delta) rather
@@ -77,7 +77,7 @@ impl Command for PfaddCommand {
                     // always the pre-PFADD full value (creation and every
                     // sparse-ending PFADD write it), so folding this delta onto
                     // it reconstructs the post-PFADD state exactly on replay.
-                    ctx.hll_wal_delta = Some(pairs);
+                    ctx.effects.hll_wal_delta = Some(pairs);
                 }
                 any_changed
             }
@@ -161,7 +161,7 @@ impl Command for PfmergeCommand {
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE,
             keys: KeySpec::All,
-            access: AccessSpec::Uniform,
+            access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::R]),
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
             // Redis fires `pfadd` under NOTIFY_STRING on the PFMERGE
@@ -209,7 +209,7 @@ impl Command for PfmergeCommand {
                     // WAL persist, replication, version bump, and notifications.
                     // (Deliberately stricter than Redis, which dirties PFMERGE
                     // unconditionally.)
-                    ctx.write_was_noop = true;
+                    ctx.effects.write_was_noop = true;
                 }
             }
             None => {

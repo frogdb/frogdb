@@ -23,7 +23,7 @@ impl Command for XgroupCommand {
             flags: CommandFlags::WRITE,
             keys: KeySpec::Index(1),
             access: AccessSpec::Uniform,
-            wal: WalStrategy::PersistDestination(1),
+            wal: WalStrategy::PersistDestination,
             wakes: WaiterWake::Kind(WaiterKind::Stream),
             event: EventSpec::Emits {
                 class: KeyspaceEventFlags::STREAM,
