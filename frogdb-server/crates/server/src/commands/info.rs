@@ -479,20 +479,20 @@ fn build_tiered_info(ctx: &mut CommandContext) -> String {
     let warm = ctx.store.warm_tier();
     let warm_keys = warm.map_or(0, |w| w.warm_keys());
     let hot_keys = ctx.store.len().saturating_sub(warm_keys);
-    let promotions = warm.map_or(0, |w| w.promotions());
-    let demotions = warm.map_or(0, |w| w.demotions());
-    let expired_on_promote = warm.map_or(0, |w| w.expired_on_promote());
-    let enabled = if warm_keys > 0 || demotions > 0 { 1 } else { 0 };
+    let unspills = warm.map_or(0, |w| w.unspills());
+    let spills = warm.map_or(0, |w| w.spills());
+    let expired_on_unspill = warm.map_or(0, |w| w.expired_on_unspill());
+    let enabled = if warm_keys > 0 || spills > 0 { 1 } else { 0 };
 
     format!(
         "# Tiered\r\n\
          tiered_enabled:{}\r\n\
          tiered_hot_keys:{}\r\n\
          tiered_warm_keys:{}\r\n\
-         tiered_promotions:{}\r\n\
-         tiered_demotions:{}\r\n\
-         tiered_expired_on_promote:{}\r\n\r\n",
-        enabled, hot_keys, warm_keys, promotions, demotions, expired_on_promote,
+         tiered_unspills:{}\r\n\
+         tiered_spills:{}\r\n\
+         tiered_expired_on_unspill:{}\r\n\r\n",
+        enabled, hot_keys, warm_keys, unspills, spills, expired_on_unspill,
     )
 }
 

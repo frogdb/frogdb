@@ -160,7 +160,7 @@ FrogDB uses two different hash algorithms for different purposes:
 | Purpose | Algorithm | Range | Description |
 |---------|-----------|-------|-------------|
 | **Cluster slot** | CRC16 | 0-16383 | Redis-compatible, determines which node owns a key |
-| **Internal shard** | xxhash64 | 0 to num_shards | Determines which thread within a node processes a key |
+| **Internal shard** | CRC16 (XMODEM) | 0 to num_shards | Determines which thread within a node processes a key (`CRC16(key) % 16384 % num_shards`) |
 
 Both algorithms use the same `extract_hash_tag` function. Keys with the same hash tag will be colocated on both the same cluster slot AND the same internal shard.
 

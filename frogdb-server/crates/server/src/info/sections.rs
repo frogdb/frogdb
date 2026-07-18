@@ -626,14 +626,14 @@ impl InfoSection for TieredSection {
 
     fn render(&self, src: &InfoSources) -> String {
         let t = &src.shards().tiered;
-        let enabled = t.warm_keys > 0 || t.demotions > 0;
+        let enabled = t.warm_keys > 0 || t.spills > 0;
         let mut w = SectionWriter::new("Tiered");
         w.field("tiered_enabled", u8::from(enabled))
             .field("tiered_hot_keys", t.hot_keys)
             .field("tiered_warm_keys", t.warm_keys)
-            .field("tiered_promotions", t.promotions)
-            .field("tiered_demotions", t.demotions)
-            .field("tiered_expired_on_promote", t.expired_on_promote);
+            .field("tiered_unspills", t.unspills)
+            .field("tiered_spills", t.spills)
+            .field("tiered_expired_on_unspill", t.expired_on_unspill);
         w.finish()
     }
 }
@@ -999,7 +999,7 @@ mod tests {
         let mut src = sources();
         src.shards.tiered.hot_keys = 5;
         src.shards.tiered.warm_keys = 2;
-        src.shards.tiered.demotions = 1;
+        src.shards.tiered.spills = 1;
         let out = render(&TieredSection, &src);
         assert!(out.contains("tiered_enabled:1\r\n"), "{out}");
         assert!(out.contains("tiered_hot_keys:5\r\n"), "{out}");

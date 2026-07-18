@@ -124,7 +124,7 @@ pub async fn run(cmd: &UpgradeCommand, ctx: &mut ConnectionContext) -> Result<i3
         UpgradeCommand::Check { target_version } => run_check(ctx, target_version).await,
         UpgradeCommand::Plan { target_version } => run_plan(ctx, target_version).await,
         UpgradeCommand::Node { .. } => {
-            anyhow::bail!("frog upgrade node: not yet implemented")
+            anyhow::bail!("frogctl upgrade node: not yet implemented")
         }
         UpgradeCommand::Rollback => run_rollback(ctx).await,
         UpgradeCommand::Finalize { version, yes } => run_finalize(ctx, version, *yes).await,
@@ -281,11 +281,11 @@ async fn run_plan(ctx: &mut ConnectionContext, target_version: &str) -> Result<i
             if status.nodes.is_empty() {
                 println!("  Mode: Standalone");
                 println!();
-                println!("  1. Create a snapshot (BGSAVE or frog backup trigger)");
+                println!("  1. Create a snapshot (BGSAVE or frogctl backup trigger)");
                 println!("  2. Stop the server");
                 println!("  3. Replace the binary with {}", target_version);
                 println!("  4. Start the server");
-                println!("  5. Verify health (frog health)");
+                println!("  5. Verify health (frogctl health)");
                 println!();
                 println!("  No finalization needed for standalone mode.");
             } else {
@@ -304,11 +304,11 @@ async fn run_plan(ctx: &mut ConnectionContext, target_version: &str) -> Result<i
                 }
                 let step = status.nodes.len() + 1;
                 println!(
-                    "  {:<5} {:<30} {:<25} frog upgrade status",
+                    "  {:<5} {:<30} {:<25} frogctl upgrade status",
                     step, "Verify all nodes upgraded", ""
                 );
                 println!(
-                    "  {:<5} {:<30} {:<25} frog upgrade finalize --version {}",
+                    "  {:<5} {:<30} {:<25} frogctl upgrade finalize --version {}",
                     step + 1,
                     "Finalize",
                     "",
@@ -375,7 +375,7 @@ async fn run_finalize(ctx: &mut ConnectionContext, version: &str, yes: bool) -> 
             "  ✗ Cluster version {} does not match target {}",
             info.cluster_version, version
         );
-        println!("    Not all nodes may be upgraded yet. Run `frog upgrade status` to check.");
+        println!("    Not all nodes may be upgraded yet. Run `frogctl upgrade status` to check.");
         return Ok(1);
     }
 

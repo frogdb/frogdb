@@ -73,9 +73,9 @@ snapshot; counted toward `maxmemory`.
 The per-shard RocksDB column family holding values spilled out of RAM.
 
 **Spill / Unspill**:
-Moving a value hot→warm (spill) or warm→hot (unspill). Canonical terms; current code says
-`demote_key`/"promotion" — legacy naming, tracked in
-`.scratch/naming-cleanup/issues/01-warm-tier-spill-rename.md`.
+Moving a value hot→warm (spill) or warm→hot (unspill). Canonical terms; code uses
+`spill_key`/`unspill_key` (renamed from `demote_key`/"promotion" per
+`.scratch/naming-cleanup/issues/01-warm-tier-spill-rename.md`).
 _Avoid_: demote/promote for tiering (reserved for cluster roles)
 
 **Durability Mode**:
@@ -162,7 +162,7 @@ _Avoid_: diagnostic bundle
 - "epoch" was used for both snapshot coordination and topology versioning — resolved:
   **Snapshot Epoch** vs **Config Epoch**; bare "epoch" avoided.
 - "demotion" was used for both role changes and tiering — resolved: **role demotion** vs
-  **spill** (code rename pending, issue 01).
+  **spill** (code renamed per issue 01).
 - "WAL" names two different layers — resolved: always qualify **FrogDB WAL** vs **RocksDB WAL**.
 - "Orchestrator" (external control plane) is a superseded design — resolved: the **Raft
   Metadata Plane** is current; website glossary updated, `clustering.md` rewrite tracked in

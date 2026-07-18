@@ -64,7 +64,7 @@ FrogDB uses two hash algorithms for different purposes:
 
 | Purpose | Algorithm | Range | Reference |
 |---------|-----------|-------|-----------|
-| Internal shard routing | xxhash64 | `hash % num_shards` | [concurrency.md](/architecture/concurrency/#key-hashing) |
+| Internal shard routing | CRC16 (XMODEM) | `CRC16(key) % 16384 % num_shards` | [concurrency.md](/architecture/concurrency/#key-hashing) |
 | Cluster slot assignment | CRC16 | `hash % 16384` | [storage.md](/architecture/storage/#hash-algorithms) |
 
 Both use the same hash tag extraction logic (`{tag}` syntax) for colocation.

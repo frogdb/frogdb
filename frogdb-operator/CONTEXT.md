@@ -72,20 +72,28 @@ The server support archive, fetched by `frogdb-admin`. Canonical term per the co
 
 ## Example dialogue
 
-> **Dev:** "After a failover in **Cluster Mode**, is `status.primaryPod` still pod-0?"
-> **Domain expert:** "Today yes — it's an ordinal-0 heuristic, not the **Raft Leader**, and
-> that's a known inaccuracy (issue 02). Don't build tooling that trusts it."
+> **Dev:** "After a failover in **Standalone Mode**, does `status.primaryPod` follow the new
+> Primary?"
+> **Domain expert:** "Yes — the reconciler probes each pod's replication role (`/admin/role`)
+> and reports the pod that actually answers as Primary, so a promoted higher ordinal shows up
+> correctly. If the probe can't reach the pods it leaves the field unset rather than guessing. In
+> **Cluster Mode** the field is omitted entirely — there's no fixed primary; the **Raft Leader**
+> moves independently (issue 02)."
 
 ## Flagged ambiguities
 
 - "cluster" had five senses — resolved: **Kubernetes cluster** (always spelled out), **Cluster
   Mode** (`spec.mode`), **Cluster Tuning Block** (`spec.cluster`), the server's `[cluster]`
   TOML section (server vocabulary), and `ClusterTestHarness` (test-only).
-- `status.primaryPod` conflates "ordinal-0 pod" with "actual Primary/Raft Leader" — flagged
-  as known-inaccurate; fix tracked in `.scratch/naming-cleanup/issues/02-primary-pod-status.md`.
+- `status.primaryPod` used to hardcode the ordinal-0 pod, conflating it with the actual
+  Primary — resolved (issue 02): the reconciler now probes each pod's replication role via
+  `/admin/role` on the metrics port and reports the real Primary in **Standalone Mode**, leaving
+  the field unset if the role can't be determined; in **Cluster Mode** the field is omitted
+  entirely because Raft leadership has no fixed primary.
 - "replica" is dual-purpose by mode (async-replication follower vs Raft member count) —
   resolved by always naming the mode when count semantics matter.
-- `spec.upgrade.autoFinalize` is documented but dead (no reconcile path reads it) — tracked in
-  `.scratch/naming-cleanup/issues/04-dead-auto-finalize.md`.
+- `spec.upgrade.autoFinalize` was documented but dead (no reconcile path read it) — resolved
+  (issue 04): `frogctl upgrade` drives finalization, so the entire `spec.upgrade` block
+  (`UpgradeSpec`, including the also-unread `minUpgradeDelaySecs`) was removed from the CRD.
 - Client port is named `frogdb` in the operator's StatefulSet but `redis` in the Helm chart —
   same port, unreconciled label naming.

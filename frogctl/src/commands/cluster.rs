@@ -120,37 +120,37 @@ pub async fn run(
 ) -> anyhow::Result<i32> {
     match cmd {
         ClusterCommand::Create { .. } => {
-            anyhow::bail!("frog cluster create: not yet implemented")
+            anyhow::bail!("frogctl cluster create: not yet implemented")
         }
         ClusterCommand::Info => {
-            anyhow::bail!("frog cluster info: not yet implemented")
+            anyhow::bail!("frogctl cluster info: not yet implemented")
         }
         ClusterCommand::Check => {
-            anyhow::bail!("frog cluster check: not yet implemented")
+            anyhow::bail!("frogctl cluster check: not yet implemented")
         }
         ClusterCommand::Fix => {
-            anyhow::bail!("frog cluster fix: not yet implemented")
+            anyhow::bail!("frogctl cluster fix: not yet implemented")
         }
         ClusterCommand::AddNode { .. } => {
-            anyhow::bail!("frog cluster add-node: not yet implemented")
+            anyhow::bail!("frogctl cluster add-node: not yet implemented")
         }
         ClusterCommand::DelNode { .. } => {
-            anyhow::bail!("frog cluster del-node: not yet implemented")
+            anyhow::bail!("frogctl cluster del-node: not yet implemented")
         }
         ClusterCommand::Reshard { .. } => {
-            anyhow::bail!("frog cluster reshard: not yet implemented")
+            anyhow::bail!("frogctl cluster reshard: not yet implemented")
         }
         ClusterCommand::Rebalance { .. } => {
-            anyhow::bail!("frog cluster rebalance: not yet implemented")
+            anyhow::bail!("frogctl cluster rebalance: not yet implemented")
         }
         ClusterCommand::Failover { .. } => {
-            anyhow::bail!("frog cluster failover: not yet implemented")
+            anyhow::bail!("frogctl cluster failover: not yet implemented")
         }
         ClusterCommand::Topology => {
-            anyhow::bail!("frog cluster topology: not yet implemented")
+            anyhow::bail!("frogctl cluster topology: not yet implemented")
         }
         ClusterCommand::Slots { .. } => {
-            anyhow::bail!("frog cluster slots: not yet implemented")
+            anyhow::bail!("frogctl cluster slots: not yet implemented")
         }
     }
 }

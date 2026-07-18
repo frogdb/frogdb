@@ -81,12 +81,20 @@ Acknowledged writes eventually appear on all replicas. During failover, writes m
 
 ### Split-Brain Window
 
-During failover, there is a window (up to `fencing_timeout_ms`, default 10s) where both old and new primary may accept writes. Old primary's divergent writes are **discarded** when it receives demotion topology.
+During failover there can be a window where a partitioned old primary still accepts writes while a
+successor is promoted. FrogDB narrows this two ways:
+
+- **Self-fencing:** once a primary has had a streaming replica, it rejects writes with
+  `-CLUSTERDOWN` when it loses its replica quorum (no replica has ACKed within the freshness
+  timeout). A primary isolated from its replicas therefore stops accepting writes.
+- **Config Epoch:** the promoted successor claims a higher Config Epoch in the same Raft
+  transition that transfers slot ownership. The old primary's lower-epoch view is stale, and its
+  divergent writes are **discarded** when it is demoted to a Replica and re-syncs from the new
+  primary.
 
 **Reducing Split-Brain Risk:**
-1. Lower `fencing_timeout_ms`
-2. Use `min_replicas_to_write = 1`
-3. Client-side epoch validation
+1. Use `min_replicas_to_write = 1` so writes require replica acknowledgement
+2. Keep replicas well-connected so self-fencing engages promptly on partition
 
 ### Guarantees NOT Provided
 - **Linearizability**: Cross-node operations are not linearizable

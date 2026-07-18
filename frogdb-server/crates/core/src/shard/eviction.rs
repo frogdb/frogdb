@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use frogdb_types::metrics::definitions::{
     EvictionBytesTotal, EvictionKeysTotal, EvictionOomTotal, EvictionSamplesTotal,
-    TieredBytesDemoted, TieredDemotions,
+    TieredBytesSpilled, TieredSpills,
 };
 
 use crate::error::CommandError;
@@ -124,8 +124,8 @@ impl ShardWorker {
             EvictionPolicy::AllkeysLfu => self.evict_with_ranker(false, &LfuRanker),
             EvictionPolicy::VolatileLfu => self.evict_with_ranker(true, &LfuRanker),
             EvictionPolicy::VolatileTtl => self.evict_with_ranker(true, &TtlRanker),
-            EvictionPolicy::TieredLru => self.demote_with_ranker(false, &LruRanker),
-            EvictionPolicy::TieredLfu => self.demote_with_ranker(false, &LfuRanker),
+            EvictionPolicy::TieredLru => self.spill_with_ranker(false, &LruRanker),
+            EvictionPolicy::TieredLfu => self.spill_with_ranker(false, &LfuRanker),
         }
     }
 
@@ -198,35 +198,35 @@ impl ShardWorker {
         }
     }
 
-    /// Demote the worst key for the given ranker to the warm tier.
-    fn demote_with_ranker<R: EvictionRanker>(&mut self, volatile_only: bool, ranker: &R) -> bool {
+    /// Spill the worst key for the given ranker to the warm tier.
+    fn spill_with_ranker<R: EvictionRanker>(&mut self, volatile_only: bool, ranker: &R) -> bool {
         self.sample_with_ranker(volatile_only, ranker);
 
         // Get worst candidate from pool
         if let Some(candidate) = self.eviction.take_worst_candidate() {
-            self.demote_for_eviction(&candidate.key)
+            self.spill_for_eviction(&candidate.key)
         } else {
             false
         }
     }
 
-    /// Demote a key to warm tier for eviction (updates metrics and pool).
-    fn demote_for_eviction(&mut self, key: &[u8]) -> bool {
+    /// Spill a key to warm tier for eviction (updates metrics and pool).
+    fn spill_for_eviction(&mut self, key: &[u8]) -> bool {
         // Remove from eviction pool
         self.eviction.forget_key(key);
 
-        // Try to demote
-        match self.store.demote_key(key) {
+        // Try to spill
+        match self.store.spill_key(key) {
             Ok(bytes_freed) => {
                 self.increment_version();
 
-                // Emit evicted keyspace notification for demotions too
+                // Emit evicted keyspace notification for spills too
                 self.emit_keyspace_notification(key, "evicted", KeyspaceEventFlags::EVICTED);
 
                 let shard_label = self.shard_id().to_string();
                 let policy_label = self.eviction.policy_label();
-                TieredDemotions::inc(self.observability.metrics(), &shard_label, &policy_label);
-                TieredBytesDemoted::inc_by(
+                TieredSpills::inc(self.observability.metrics(), &shard_label, &policy_label);
+                TieredBytesSpilled::inc_by(
                     self.observability.metrics(),
                     bytes_freed as u64,
                     &shard_label,
@@ -244,7 +244,7 @@ impl ShardWorker {
                     key = %String::from_utf8_lossy(key),
                     bytes_freed,
                     policy = %self.eviction.policy(),
-                    "Demoted key to warm tier"
+                    "Spilled key to warm tier"
                 );
 
                 true
@@ -254,7 +254,7 @@ impl ShardWorker {
                     shard_id = self.shard_id(),
                     key = %String::from_utf8_lossy(key),
                     error = %e,
-                    "Failed to demote key"
+                    "Failed to spill key"
                 );
                 // Fall back to deletion
                 self.delete_for_eviction(key)

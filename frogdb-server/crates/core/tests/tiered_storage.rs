@@ -20,7 +20,7 @@ fn store_with_warm() -> (HashMapStore, Arc<RocksStore>, TempDir) {
 }
 
 #[test]
-fn test_demote_and_promote_cycle() {
+fn test_spill_and_unspill_cycle() {
     let (mut store, _rocks, _tmp) = store_with_warm();
 
     // SET a key
@@ -31,16 +31,16 @@ fn test_demote_and_promote_cycle() {
     let mem_before = store.memory_used();
     assert!(mem_before > 0);
 
-    // Demote the key
-    let bytes_freed = store.demote_key(b"key1").unwrap();
+    // Spill the key
+    let bytes_freed = store.spill_key(b"key1").unwrap();
     assert!(bytes_freed > 0);
     assert_eq!(store.len(), 1); // Key still exists (metadata in RAM)
     assert_eq!((store.len() - store.warm_tier().warm_keys()), 0);
     assert_eq!(store.warm_tier().warm_keys(), 1);
-    assert_eq!(store.warm_tier().demotions(), 1);
+    assert_eq!(store.warm_tier().spills(), 1);
     assert!(store.memory_used() < mem_before); // Value bytes freed
 
-    // GET promotes the key back
+    // GET unspills the key back
     let value = store.get(b"key1").unwrap();
     assert_eq!(
         value.as_string().unwrap().as_bytes().as_ref(),
@@ -48,20 +48,20 @@ fn test_demote_and_promote_cycle() {
     );
     assert_eq!((store.len() - store.warm_tier().warm_keys()), 1);
     assert_eq!(store.warm_tier().warm_keys(), 0);
-    assert_eq!(store.warm_tier().promotions(), 1);
+    assert_eq!(store.warm_tier().unspills(), 1);
 }
 
 #[test]
-fn test_get_hot_does_not_promote() {
+fn test_get_hot_does_not_unspill() {
     let (mut store, _rocks, _tmp) = store_with_warm();
 
     store.set(Bytes::from("key1"), Value::string("value"));
-    store.demote_key(b"key1").unwrap();
+    store.spill_key(b"key1").unwrap();
 
     // get_hot returns None for warm keys
     assert!(store.get_hot(b"key1").is_none());
     assert_eq!(store.warm_tier().warm_keys(), 1);
-    assert_eq!(store.warm_tier().promotions(), 0);
+    assert_eq!(store.warm_tier().unspills(), 0);
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn test_set_overwrites_warm_key() {
     let (mut store, _rocks, _tmp) = store_with_warm();
 
     store.set(Bytes::from("key1"), Value::string("old"));
-    store.demote_key(b"key1").unwrap();
+    store.spill_key(b"key1").unwrap();
     assert_eq!(store.warm_tier().warm_keys(), 1);
 
     // SET on a warm key replaces it with a hot value
@@ -86,7 +86,7 @@ fn test_delete_warm_key() {
     let (mut store, _rocks, _tmp) = store_with_warm();
 
     store.set(Bytes::from("key1"), Value::string("value"));
-    store.demote_key(b"key1").unwrap();
+    store.spill_key(b"key1").unwrap();
     assert_eq!(store.len(), 1);
     assert_eq!(store.warm_tier().warm_keys(), 1);
 
@@ -101,7 +101,7 @@ fn test_get_and_delete_warm_key() {
     let (mut store, _rocks, _tmp) = store_with_warm();
 
     store.set(Bytes::from("key1"), Value::string("getdel_value"));
-    store.demote_key(b"key1").unwrap();
+    store.spill_key(b"key1").unwrap();
 
     // GETDEL on warm key reads from RocksDB and deletes
     let value = store.get_and_delete(b"key1").unwrap();
@@ -118,11 +118,11 @@ fn test_contains_works_for_warm_keys() {
     let (mut store, _rocks, _tmp) = store_with_warm();
 
     store.set(Bytes::from("key1"), Value::string("value"));
-    store.demote_key(b"key1").unwrap();
+    store.spill_key(b"key1").unwrap();
 
-    // EXISTS should work without promotion
+    // EXISTS should work without unspilling
     assert!(store.contains(b"key1"));
-    assert_eq!(store.warm_tier().promotions(), 0); // No promotion happened
+    assert_eq!(store.warm_tier().unspills(), 0); // No unspill happened
 }
 
 #[test]
@@ -131,32 +131,32 @@ fn test_key_type_works_for_warm_keys() {
 
     store.set(Bytes::from("str"), Value::string("v"));
     store.set(Bytes::from("list"), Value::list());
-    store.demote_key(b"str").unwrap();
-    store.demote_key(b"list").unwrap();
+    store.spill_key(b"str").unwrap();
+    store.spill_key(b"list").unwrap();
 
-    // TYPE should work without promotion
+    // TYPE should work without unspilling
     assert_eq!(store.key_type(b"str"), KeyType::String);
     assert_eq!(store.key_type(b"list"), KeyType::List);
-    assert_eq!(store.warm_tier().promotions(), 0);
+    assert_eq!(store.warm_tier().unspills(), 0);
 }
 
 #[test]
-fn test_get_mut_promotes_warm_key() {
+fn test_get_mut_unspills_warm_key() {
     let (mut store, _rocks, _tmp) = store_with_warm();
 
     store.set(Bytes::from("key1"), Value::string("initial"));
-    store.demote_key(b"key1").unwrap();
+    store.spill_key(b"key1").unwrap();
 
-    // get_mut should promote and return mutable reference
+    // get_mut should unspill and return mutable reference
     let value = store.get_mut(b"key1").unwrap();
     // Verify it's a string
     assert!(value.as_string().is_some());
-    assert_eq!(store.warm_tier().promotions(), 1);
+    assert_eq!(store.warm_tier().unspills(), 1);
     assert_eq!(store.warm_tier().warm_keys(), 0);
 }
 
 #[test]
-fn test_expired_warm_key_cleaned_on_promote() {
+fn test_expired_warm_key_cleaned_on_unspill() {
     let (mut store, _rocks, _tmp) = store_with_warm();
 
     store.set(Bytes::from("key1"), Value::string("value"));
@@ -164,13 +164,13 @@ fn test_expired_warm_key_cleaned_on_promote() {
     // Set expiry in the past
     store.set_expiry(b"key1", Instant::now() - Duration::from_secs(1));
 
-    store.demote_key(b"key1").unwrap();
+    store.spill_key(b"key1").unwrap();
     assert_eq!(store.warm_tier().warm_keys(), 1);
 
     // GET should find it expired and clean up
     assert!(store.get(b"key1").is_none());
     assert_eq!(store.warm_tier().warm_keys(), 0);
-    assert_eq!(store.warm_tier().expired_on_promote(), 1);
+    assert_eq!(store.warm_tier().expired_on_unspill(), 1);
     assert_eq!(store.len(), 0);
 }
 
@@ -186,9 +186,9 @@ fn test_warm_keys_not_in_eviction_sample() {
         );
     }
 
-    // Demote half
+    // Spill half
     for i in 0..10 {
-        store.demote_key(format!("key{}", i).as_bytes()).unwrap();
+        store.spill_key(format!("key{}", i).as_bytes()).unwrap();
     }
 
     assert_eq!((store.len() - store.warm_tier().warm_keys()), 10);
@@ -206,12 +206,12 @@ fn test_warm_keys_not_in_eviction_sample() {
 fn test_clear_cleans_warm_tier() {
     let (mut store, rocks, _tmp) = store_with_warm();
 
-    // Two demoted keys land in the warm CF; a third stays hot.
+    // Two spilled keys land in the warm CF; a third stays hot.
     store.set(Bytes::from("key1"), Value::string("v1"));
     store.set(Bytes::from("key2"), Value::string("v2"));
     store.set(Bytes::from("key3"), Value::string("v3"));
-    store.demote_key(b"key1").unwrap();
-    store.demote_key(b"key2").unwrap();
+    store.spill_key(b"key1").unwrap();
+    store.spill_key(b"key2").unwrap();
     assert_eq!(store.warm_tier().warm_keys(), 2);
 
     // FLUSHDB clears the store and range-deletes the warm CF.
@@ -220,7 +220,7 @@ fn test_clear_cleans_warm_tier() {
     assert_eq!(store.warm_tier().warm_keys(), 0);
     assert_eq!(store.memory_used(), 0);
 
-    // Every demoted key is gone from the warm CF...
+    // Every spilled key is gone from the warm CF...
     assert!(rocks.get_warm(0, b"key1").unwrap().is_none());
     assert!(rocks.get_warm(0, b"key2").unwrap().is_none());
     // ...and the CF is entirely empty, so a recovery scan (which iterates the
@@ -242,7 +242,7 @@ fn test_memory_accounting_warm_keys() {
     );
     let mem_hot = store.memory_used();
 
-    store.demote_key(b"key1").unwrap();
+    store.spill_key(b"key1").unwrap();
     let mem_warm = store.memory_used();
 
     // Warm entry should use less memory (no value bytes)
@@ -253,33 +253,33 @@ fn test_memory_accounting_warm_keys() {
         mem_hot
     );
 
-    // Promote back
+    // Unspill back
     store.get(b"key1");
-    let mem_promoted = store.memory_used();
+    let mem_unspilled = store.memory_used();
 
     // Should be back to roughly same memory
-    assert_eq!(mem_promoted, mem_hot);
+    assert_eq!(mem_unspilled, mem_hot);
 }
 
 #[test]
-fn test_demote_errors() {
+fn test_spill_errors() {
     let (mut store, _rocks, _tmp) = store_with_warm();
 
     // Key not found
-    assert!(store.demote_key(b"nonexistent").is_err());
+    assert!(store.spill_key(b"nonexistent").is_err());
 
     // Already warm
     store.set(Bytes::from("key1"), Value::string("v"));
-    store.demote_key(b"key1").unwrap();
-    assert!(store.demote_key(b"key1").is_err());
+    store.spill_key(b"key1").unwrap();
+    assert!(store.spill_key(b"key1").is_err());
 }
 
 #[test]
-fn test_demote_no_warm_store() {
+fn test_spill_no_warm_store() {
     let mut store = HashMapStore::new(); // No warm store configured
 
     store.set(Bytes::from("key1"), Value::string("v"));
-    assert!(store.demote_key(b"key1").is_err());
+    assert!(store.spill_key(b"key1").is_err());
 }
 
 #[test]
@@ -288,7 +288,7 @@ fn test_scan_includes_warm_keys() {
 
     store.set(Bytes::from("hot1"), Value::string("v"));
     store.set(Bytes::from("warm1"), Value::string("v"));
-    store.demote_key(b"warm1").unwrap();
+    store.spill_key(b"warm1").unwrap();
 
     // SCAN should include both hot and warm keys
     let (_, keys) = store.scan(0, 100, None);

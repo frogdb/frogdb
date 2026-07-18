@@ -99,13 +99,13 @@ impl Renderable for ConfigResult {
 pub async fn run(cmd: &ConfigCommand, ctx: &mut ConnectionContext) -> Result<i32> {
     match cmd {
         ConfigCommand::Generate { .. } => {
-            anyhow::bail!("frog config generate: not yet implemented")
+            anyhow::bail!("frogctl config generate: not yet implemented")
         }
         ConfigCommand::Validate { .. } => {
-            anyhow::bail!("frog config validate: not yet implemented")
+            anyhow::bail!("frogctl config validate: not yet implemented")
         }
         ConfigCommand::Diff { .. } => {
-            anyhow::bail!("frog config diff: not yet implemented")
+            anyhow::bail!("frogctl config diff: not yet implemented")
         }
         ConfigCommand::Show { section, .. } => run_show(section.as_deref(), ctx).await,
     }
