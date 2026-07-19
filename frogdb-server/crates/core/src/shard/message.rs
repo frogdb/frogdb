@@ -620,6 +620,12 @@ pub enum ShardMessage {
         response_tx: oneshot::Sender<super::types::MemoryCheckInfo>,
     },
 
+    /// Cross-check the expiry index against entry deadlines (DEBUG EXPIRY-INDEX-CHECK).
+    ExpiryIndexCheck {
+        /// Channel to send the response.
+        response_tx: oneshot::Sender<super::types::ExpiryIndexCheckInfo>,
+    },
+
     /// Get pub/sub limits info from this shard.
     GetPubSubLimitsInfo {
         /// Channel to send the response.
@@ -695,6 +701,7 @@ impl ShardMessage {
             ShardMessage::GetLockTableInfo { .. } => "GetLockTableInfo",
             ShardMessage::GetWaitQueueInfo { .. } => "GetWaitQueueInfo",
             ShardMessage::MemoryCheck { .. } => "MemoryCheck",
+            ShardMessage::ExpiryIndexCheck { .. } => "ExpiryIndexCheck",
             ShardMessage::GetPubSubLimitsInfo { .. } => "GetPubSubLimitsInfo",
             ShardMessage::FlushSearchIndexes { .. } => "FlushSearchIndexes",
             ShardMessage::Shutdown => "Shutdown",

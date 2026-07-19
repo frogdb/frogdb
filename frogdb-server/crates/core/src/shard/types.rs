@@ -13,6 +13,7 @@ use crate::registry::CommandRegistry;
 use crate::replication::{ReplicationTrackerImpl, SharedBroadcaster};
 use crate::scripting::{ScriptExecutor, ScriptingConfig};
 use crate::slowlog::SlowLog;
+use crate::store::ExpiryIndexAnomaly;
 use bytes::Bytes;
 use frogdb_protocol::Response;
 
@@ -921,6 +922,17 @@ pub struct MemoryCheckInfo {
     pub tracked_bytes: usize,
     /// Recomputed live sum over all entries.
     pub recomputed_bytes: usize,
+}
+
+/// Response for `DEBUG EXPIRY-INDEX-CHECK` — index-vs-entry inconsistencies.
+#[derive(Debug, Clone, Default)]
+pub struct ExpiryIndexCheckInfo {
+    /// Shard identifier.
+    pub shard_id: usize,
+    /// Number of key-level expiry-index entries examined.
+    pub total_entries: usize,
+    /// Inconsistencies found (empty = consistent).
+    pub anomalies: Vec<ExpiryIndexAnomaly>,
 }
 
 /// Pub/Sub limits info for a shard.

@@ -111,3 +111,27 @@ async fn debug_memory_check_consistent_after_writes() {
 
     server.shutdown().await;
 }
+
+#[tokio::test]
+async fn debug_expiry_index_check_consistent_after_expire() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // A persistent key and a key with a long TTL: the index must be consistent.
+    assert!(matches!(
+        client.command(&["SET", "persistent", "v"]).await,
+        Response::Simple(_)
+    ));
+    assert!(matches!(
+        client.command(&["SET", "ttl", "v", "EX", "3600"]).await,
+        Response::Simple(_)
+    ));
+
+    let resp = client.command(&["DEBUG", "EXPIRY-INDEX-CHECK"]).await;
+    match resp {
+        Response::Bulk(Some(b)) => assert_eq!(&b[..], b"# expiry index is consistent"),
+        other => panic!("expected consistent-sentinel bulk, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}

@@ -73,8 +73,8 @@ pub use search::lifecycle::{
     IndexLifecycleManager, LifecycleError, RecoveryOutcome, RecoveryResult,
 };
 pub use types::{
-    BigKeyInfo, BigKeysScanResponse, InfoShardSnapshot, LockTableInfo, MemoryCheckInfo,
-    PartialResult, PubSubLimitsInfo, ShardClusterDeps, ShardConfig, ShardCoreDeps,
+    BigKeyInfo, BigKeysScanResponse, ExpiryIndexCheckInfo, InfoShardSnapshot, LockTableInfo,
+    MemoryCheckInfo, PartialResult, PubSubLimitsInfo, ShardClusterDeps, ShardConfig, ShardCoreDeps,
     ShardMemoryStats, ShardPersistenceDeps, TieredCounts, TransactionResult,
     VllContinuationLockInfo, VllKeyIntentInfo, VllPendingOpInfo, VllQueueInfo, WaitQueueInfo,
     WaitQueueKeyInfo, WaitQueueWaiterInfo, WalLagStatsResponse,

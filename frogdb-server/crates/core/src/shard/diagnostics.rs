@@ -11,9 +11,10 @@ use crate::store::Store;
 use super::counters::HotShardStatsResponse;
 use super::message::ScatterOp;
 use super::types::{
-    BigKeyInfo, BigKeysScanResponse, InfoShardSnapshot, LockTableInfo, MemoryCheckInfo,
-    ShardMemoryStats, TieredCounts, VllContinuationLockInfo, VllKeyIntentInfo, VllPendingOpInfo,
-    VllQueueInfo, WaitQueueInfo, WaitQueueKeyInfo, WaitQueueWaiterInfo, WalLagStatsResponse,
+    BigKeyInfo, BigKeysScanResponse, ExpiryIndexCheckInfo, InfoShardSnapshot, LockTableInfo,
+    MemoryCheckInfo, ShardMemoryStats, TieredCounts, VllContinuationLockInfo, VllKeyIntentInfo,
+    VllPendingOpInfo, VllQueueInfo, WaitQueueInfo, WaitQueueKeyInfo, WaitQueueWaiterInfo,
+    WalLagStatsResponse,
 };
 use super::worker::ShardWorker;
 
@@ -257,6 +258,15 @@ impl ShardWorker {
             shard_id: self.shard_id(),
             tracked_bytes: self.store.memory_used(),
             recomputed_bytes: self.store.recompute_memory_used(),
+        }
+    }
+
+    /// Collect the expiry-index cross-check for `DEBUG EXPIRY-INDEX-CHECK`.
+    pub(crate) fn collect_expiry_index_check(&self) -> ExpiryIndexCheckInfo {
+        ExpiryIndexCheckInfo {
+            shard_id: self.shard_id(),
+            total_entries: self.store.keys_with_expiry_count(),
+            anomalies: self.store.audit_expiry_index(),
         }
     }
 
@@ -535,5 +545,26 @@ mod introspection_tests {
         assert_eq!(info.shard_id, 0);
         assert_eq!(info.tracked_bytes, info.recomputed_bytes);
         assert!(info.tracked_bytes > 0);
+    }
+
+    #[test]
+    fn expiry_index_check_clean_after_expire() {
+        use crate::store::Store;
+        use crate::types::Value;
+        use bytes::Bytes;
+        use std::time::{Duration, Instant};
+
+        let mut worker = test_worker();
+        worker
+            .store
+            .set(Bytes::from("k"), Value::string(Bytes::from("v")));
+        worker
+            .store
+            .set_expiry(b"k", Instant::now() + Duration::from_secs(3600));
+
+        let info = worker.collect_expiry_index_check();
+        assert_eq!(info.shard_id, 0);
+        assert_eq!(info.total_entries, 1);
+        assert!(info.anomalies.is_empty());
     }
 }

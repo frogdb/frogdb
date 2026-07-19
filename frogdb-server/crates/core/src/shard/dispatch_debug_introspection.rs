@@ -21,6 +21,9 @@ impl ShardWorker {
             ShardMessage::MemoryCheck { response_tx } => {
                 let _ = response_tx.send(self.collect_memory_check());
             }
+            ShardMessage::ExpiryIndexCheck { response_tx } => {
+                let _ = response_tx.send(self.collect_expiry_index_check());
+            }
             _ => unreachable!("dispatch_debug_introspection got a non-introspection message"),
         }
     }

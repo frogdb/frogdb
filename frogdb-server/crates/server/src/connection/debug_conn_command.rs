@@ -149,6 +149,9 @@ impl ConnectionCommand for DebugConnCommand {
                 b"LOCKTABLE" => format_locktable_response(debug.gather_lock_table().await),
                 b"WAITQUEUE" => format_waitqueue_response(debug.gather_wait_queue().await),
                 b"MEMORY-CHECK" => format_memory_check_response(debug.memory_check().await),
+                b"EXPIRY-INDEX-CHECK" => {
+                    format_expiry_index_check_response(debug.expiry_index_check().await)
+                }
                 b"PUBSUB" => {
                     if args.len() > 1 && args[1].eq_ignore_ascii_case(b"LIMITS") {
                         debug.pubsub_limits().await
@@ -253,6 +256,8 @@ fn debug_help() -> Response {
         "    Show blocked waiters by key/connection, in registration order.",
         "DEBUG MEMORY-CHECK",
         "    Recompute live memory and report the diff vs the tracked counter.",
+        "DEBUG EXPIRY-INDEX-CHECK",
+        "    Cross-check the expiry index against entry deadlines.",
         "DEBUG PUBSUB LIMITS",
         "    Show pub/sub subscription usage vs limits.",
         "DEBUG BUNDLE GENERATE [DURATION <seconds>]",
@@ -627,6 +632,44 @@ fn format_memory_check_response(infos: Vec<frogdb_core::shard::MemoryCheckInfo>)
     Response::Map(shards)
 }
 
+/// Format `DEBUG EXPIRY-INDEX-CHECK` — sentinel when every shard is clean, else
+/// a RESP map of `shard:<id>` → {total_entries, anomalies:[{key, kind}]}.
+fn format_expiry_index_check_response(
+    infos: Vec<frogdb_core::shard::ExpiryIndexCheckInfo>,
+) -> Response {
+    if infos.iter().all(|i| i.anomalies.is_empty()) {
+        return Response::Bulk(Some(Bytes::from("# expiry index is consistent")));
+    }
+    let mut shards = Vec::new();
+    for info in infos {
+        let anomalies = Response::Array(
+            info.anomalies
+                .iter()
+                .map(|a| {
+                    Response::Map(vec![
+                        (Response::bulk("key"), Response::bulk(a.key.clone())),
+                        (
+                            Response::bulk("kind"),
+                            Response::bulk(format!("{:?}", a.kind)),
+                        ),
+                    ])
+                })
+                .collect(),
+        );
+        shards.push((
+            Response::bulk(format!("shard:{}", info.shard_id)),
+            Response::Map(vec![
+                (
+                    Response::bulk("total_entries"),
+                    Response::Integer(info.total_entries as i64),
+                ),
+                (Response::bulk("anomalies"), anomalies),
+            ]),
+        ));
+    }
+    Response::Map(shards)
+}
+
 /// Parse the optional `DURATION <seconds>` of DEBUG BUNDLE GENERATE. The `Err`
 /// string is the raw `ERR …` message the caller wraps in [`Response::error`].
 fn parse_bundle_duration(args: &[Bytes]) -> Result<u64, String> {
@@ -934,6 +977,11 @@ mod tests {
             Box::pin(async { Vec::new() })
         }
         fn memory_check<'a>(&'a self) -> BoxFuture<'a, Vec<frogdb_core::shard::MemoryCheckInfo>> {
+            Box::pin(async { Vec::new() })
+        }
+        fn expiry_index_check<'a>(
+            &'a self,
+        ) -> BoxFuture<'a, Vec<frogdb_core::shard::ExpiryIndexCheckInfo>> {
             Box::pin(async { Vec::new() })
         }
         fn pubsub_limits<'a>(&'a self) -> BoxFuture<'a, Response> {

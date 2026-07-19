@@ -534,6 +534,9 @@ pub trait DebugProvider: Send + Sync {
     /// DEBUG MEMORY-CHECK — per-shard tracked-vs-recomputed memory (all shards).
     fn memory_check<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::MemoryCheckInfo>>;
 
+    /// DEBUG EXPIRY-INDEX-CHECK — per-shard index-vs-deadline audit (all shards).
+    fn expiry_index_check<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::ExpiryIndexCheckInfo>>;
+
     /// DEBUG PUBSUB LIMITS — this connection's and the fleet's subscription usage
     /// against the configured maxima (a whole-reply subcommand: it reads
     /// connection-local subscription counts the executor cannot see).
@@ -945,6 +948,11 @@ mod tests {
             unimplemented!()
         }
         fn memory_check<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::MemoryCheckInfo>> {
+            unimplemented!()
+        }
+        fn expiry_index_check<'a>(
+            &'a self,
+        ) -> BoxFuture<'a, Vec<crate::shard::ExpiryIndexCheckInfo>> {
             unimplemented!()
         }
         fn pubsub_limits<'a>(&'a self) -> BoxFuture<'a, Response> {
