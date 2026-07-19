@@ -17,7 +17,9 @@ use super::sim_helpers::{
     real_frogdb_server_fake_persistence,
 };
 
-type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
+// Matches turmoil's `Result` error type exactly, so `?` needs no conversion
+// between the client-future closures and the helper fns.
+type BoxError = Box<dyn std::error::Error>;
 
 /// Execute `workload` against a real server inside a seeded turmoil sim and
 /// return the recorded, canonicalized [`frogdb_testing::History`].
