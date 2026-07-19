@@ -758,6 +758,13 @@ impl Store for HashMapStore {
         self.memory_used
     }
 
+    fn recompute_memory_used(&self) -> usize {
+        // `Entry::memory_size` returns the live size (key + value + metadata +
+        // Entry overhead; warm values contribute zero value bytes). Summing it
+        // over every entry is the ground truth the running counter tracks.
+        self.data.iter().map(|(k, e)| e.memory_size(k)).sum()
+    }
+
     fn scan(&self, cursor: u64, count: usize, pattern: Option<&[u8]>) -> (u64, Vec<Bytes>) {
         self.scan_filtered(cursor, count, pattern, None)
     }
@@ -1298,6 +1305,41 @@ impl Store for HashMapStore {
 mod tests {
     use super::*;
     use crate::glob::glob_match;
+
+    #[test]
+    fn recompute_matches_tracked_after_inserts() {
+        let mut store = HashMapStore::new();
+        assert_eq!(store.recompute_memory_used(), store.memory_used());
+        store.set(Bytes::from("a"), Value::string(Bytes::from("hello")));
+        store.set(Bytes::from("b"), Value::string(Bytes::from("world")));
+        assert_eq!(store.recompute_memory_used(), store.memory_used());
+        store.delete(b"a");
+        assert_eq!(store.recompute_memory_used(), store.memory_used());
+    }
+
+    #[test]
+    fn recompute_reveals_unflushed_inplace_growth() {
+        // In-place growth via get_mut is invisible to the tracked counter until
+        // flush_keysizes_refreshes runs; recompute (live) reveals the drift, and
+        // flushing reconciles it. This is exactly what DEBUG MEMORY-CHECK detects.
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from("l"), Value::list());
+        let before = store.recompute_memory_used();
+        assert_eq!(before, store.memory_used());
+
+        if let Some(v) = store.get_mut(b"l")
+            && let Some(list) = v.as_list_mut()
+        {
+            for i in 0..100u32 {
+                list.push_back(Bytes::from(format!("element-{i}")));
+            }
+        }
+        // Live recompute now exceeds the still-unreconciled tracked counter.
+        assert!(store.recompute_memory_used() > store.memory_used());
+
+        store.flush_keysizes_refreshes();
+        assert_eq!(store.recompute_memory_used(), store.memory_used());
+    }
 
     #[test]
     fn test_store_set_get() {

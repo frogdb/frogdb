@@ -414,6 +414,17 @@ pub trait Store: Send {
     /// Memory used by store (bytes).
     fn memory_used(&self) -> usize;
 
+    /// Recompute the live memory footprint by summing every entry's current
+    /// size, independent of the running [`Store::memory_used`] counter.
+    ///
+    /// Used by `DEBUG MEMORY-CHECK`: at quiesce (deferred size refreshes
+    /// flushed) this must equal `memory_used()`; a difference is an accounting
+    /// leak. The default returns `memory_used()` (trivially consistent) for
+    /// stores that do not track per-entry sizes.
+    fn recompute_memory_used(&self) -> usize {
+        self.memory_used()
+    }
+
     /// Clear all keys from the store.
     fn clear(&mut self);
 
