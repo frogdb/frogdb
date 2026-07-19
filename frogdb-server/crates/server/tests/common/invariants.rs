@@ -256,4 +256,67 @@ mod tests {
         let report = check_all(&h, &Default::default());
         assert!(!report.quiescence_checked);
     }
+
+    // ---- Harness self-tests (silent-green guard) ----
+    //
+    // A deliberately broken shim must be caught by the pipeline, proving the
+    // checkers are not silently passing everything.
+
+    #[test]
+    fn lost_element_is_flagged() {
+        // Push a unique element, never deliver it, and leave final_elements
+        // empty: exactly-once must report a LostElement violation.
+        let mut h = History::new();
+        let p = h.invoke(1, "rpush", vec![Bytes::from("{t}L"), Bytes::from("zzz")]);
+        h.respond(p, Some(Bytes::from("1")));
+        let report = check_all(&h, &Default::default());
+        assert!(!report.passed(), "a lost element must fail the report");
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("exactly-once") || v.to_lowercase().contains("lost")),
+            "expected a lost-element violation, got {:?}",
+            report.violations
+        );
+    }
+
+    #[test]
+    fn never_written_get_is_nonlinearizable() {
+        // GET returns a value nobody wrote -> the WGL checker must flag it.
+        let mut h = History::new();
+        let g = h.invoke(1, "get", vec![Bytes::from("{t}g")]);
+        h.respond(g, Some(Bytes::from("phantom")));
+        let report = check_all(&h, &Default::default());
+        assert!(
+            !report.passed(),
+            "a phantom read must fail the report: {:?}",
+            report.violations
+        );
+    }
+
+    #[test]
+    fn assert_write_order_catches_out_of_order() {
+        use frogdb_core::persistence::{FakeWalLog, RecordedWalEffect, WalEffectKind};
+        let log = FakeWalLog::default();
+        {
+            let mut guard = log.0.lock().unwrap();
+            guard.push(RecordedWalEffect {
+                order: 5,
+                kind: WalEffectKind::Set,
+                key: Some(b"a".to_vec()),
+                seq: 1,
+            });
+            guard.push(RecordedWalEffect {
+                order: 2, // decreasing -> out of order
+                kind: WalEffectKind::Set,
+                key: Some(b"b".to_vec()),
+                seq: 2,
+            });
+        }
+        assert!(
+            log.assert_write_order().is_err(),
+            "an out-of-order WAL log must be rejected"
+        );
+    }
 }
