@@ -35,6 +35,7 @@
 //! ```
 
 pub mod checker;
+pub mod conservation;
 pub mod history;
 pub mod models;
 pub mod partition;
