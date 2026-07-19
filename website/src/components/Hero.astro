@@ -1,35 +1,24 @@
 ---
 /**
- * Hero override: eyebrow label, large tight-tracked headline, lede, pill tags,
- * actions. `eyebrow`/`pills` come from the docsSchema extension in
- * src/content.config.ts. Only renders on `template: splash` pages.
+ * Hero override: large tight-tracked headline with an inline logo, lede,
+ * actions. Only renders on `template: splash` pages.
  */
 import { Image } from 'astro:assets';
 import { LinkButton } from '@astrojs/starlight/components';
 
 const { data } = Astro.locals.starlightRoute.entry;
 const { title = data.title, tagline, image, actions = [] } = data.hero || {};
-const eyebrow = data.eyebrow;
-const pills = data.pills ?? [];
 
 const logo = image && 'file' in image ? image.file : undefined;
 const logoAlt = (image && 'alt' in image && image.alt) || '';
 ---
 
 <div class="frog-hero">
-	{logo && <Image src={logo} width={144} alt={logoAlt} class="frog-hero-logo" />}
-	{eyebrow && <p class="frog-eyebrow">{eyebrow}</p>}
-	<h1 id="_top" data-page-title set:html={title} />
+	<div class="frog-hero-row">
+		{logo && <Image src={logo} width={144} alt={logoAlt} class="frog-hero-logo" />}
+		<h1 id="_top" data-page-title set:html={title} />
+	</div>
 	{tagline && <p class="frog-lede" set:html={tagline} />}
-	{
-		pills.length > 0 && (
-			<ul class="frog-pills">
-				{pills.map((pill) => (
-					<li>{pill}</li>
-				))}
-			</ul>
-		)
-	}
 	{
 		actions.length > 0 && (
 			<div class="frog-actions">
@@ -55,24 +44,22 @@ const logoAlt = (image && 'alt' in image && image.alt) || '';
 		padding-block: clamp(2.5rem, 8vw, 5.5rem) 1.5rem;
 		text-align: left;
 	}
-	.frog-hero-logo {
-		width: 4.5rem;
-		height: auto;
+	.frog-hero-row {
+		display: flex;
+		align-items: center;
+		gap: 1.5rem;
 	}
-	.frog-eyebrow {
-		margin: 0;
-		font-size: 0.75rem;
-		font-weight: 600;
-		letter-spacing: 0.15em;
-		text-transform: uppercase;
-		color: var(--sl-color-gray-3);
+	.frog-hero-logo {
+		width: clamp(4rem, 8vw, 6.5rem);
+		height: auto;
+		flex-shrink: 0;
 	}
 	.frog-hero h1 {
 		margin: 0;
 		max-width: 60rem;
 		font-size: clamp(2.5rem, 6.5vw, 4.5rem);
 		font-weight: 800;
-		letter-spacing: -0.02em;
+		letter-spacing: -0.035em;
 		line-height: 1.05;
 		color: var(--sl-color-white);
 	}
@@ -86,21 +73,6 @@ const logoAlt = (image && 'alt' in image && image.alt) || '';
 		max-width: 46rem;
 		font-size: clamp(1.05rem, 1.6vw, 1.3rem);
 		line-height: 1.6;
-		color: var(--sl-color-gray-2);
-	}
-	.frog-pills {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.6rem;
-		margin: 0;
-		padding: 0;
-		list-style: none;
-	}
-	.frog-pills li {
-		border: 1px solid var(--sl-color-hairline);
-		border-radius: 999px;
-		padding: 0.4rem 1rem;
-		font-size: 0.85rem;
 		color: var(--sl-color-gray-2);
 	}
 	.frog-actions {

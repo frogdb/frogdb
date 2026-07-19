@@ -30,15 +30,15 @@
 	--sl-color-hairline-shade: rgba(255, 255, 255, 0.05);
 
 	/* Electric lime accent (frog-adjacent) */
-	--sl-color-accent-low: #2c3a10;
-	--sl-color-accent: #8fbe27;
+	--sl-color-accent-low: #1f2a0a;
+	--sl-color-accent: #a8d92e;
 	--sl-color-accent-high: #c3f53c;
 	--sl-color-text-accent: #c3f53c;
 
 	/* Caution accent */
 	--frog-amber: #e0a43b;
 
-	/* Rapide UI chrome tokens (verify names against theme.css in Step 3) */
+	/* Rapide UI chrome tokens */
 	--sl-rapide-ui-bg-color: #0f0f0e;
 	--sl-rapide-ui-header-bg-color: rgba(10, 10, 10, 0.85);
 	--sl-rapide-ui-border-color: rgba(255, 255, 255, 0.08);
@@ -121,15 +121,11 @@ ul.starlight-sidebar-topics a:is(.starlight-sidebar-topics-current, :hover, :foc
 
 .sl-markdown-content :is(h1, h2, h3),
 h1[data-page-title] {
-	letter-spacing: -0.02em;
+	letter-spacing: -0.035em;
 }
 
 h1[data-page-title] {
 	font-weight: 800;
-}
-
-.tabular-nums {
-	font-variant-numeric: tabular-nums;
 }
 
 /* ---------------------------------------------------------------------------
@@ -148,6 +144,17 @@ h1[data-page-title] {
 .sl-link-card:hover,
 .sl-link-card:focus-within {
 	border-color: var(--sl-color-gray-4);
+}
+
+.sl-link-button.primary {
+	background: var(--sl-color-accent-high);
+	border-color: var(--sl-color-accent-high);
+	color: var(--sl-color-black);
+}
+
+.sl-link-button.primary:hover {
+	background: var(--sl-color-accent);
+	border-color: var(--sl-color-accent);
 }
 
 /* ---------------------------------------------------------------------------
