@@ -76,11 +76,6 @@
 	--sl-rapide-ui-border-color: rgba(0, 0, 0, 0.08);
 }
 
-/* Code block background follows the page surface */
-:root[data-theme='dark'] .expressive-code {
-	--ec-codeBg: #101010;
-}
-
 /* Add spacing around compatibility badges on command reference */
 .sl-markdown-content > .sl-badge {
 	display: inline-block;
@@ -121,7 +116,7 @@ ul.starlight-sidebar-topics a:is(.starlight-sidebar-topics-current, :hover, :foc
 
 .sl-markdown-content :is(h1, h2, h3),
 h1[data-page-title] {
-	letter-spacing: -0.035em;
+	letter-spacing: -0.05em;
 }
 
 h1[data-page-title] {

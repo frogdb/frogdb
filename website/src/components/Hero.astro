@@ -15,7 +15,7 @@ const logoAlt = (image && 'alt' in image && image.alt) || '';
 
 <div class="frog-hero">
 	<div class="frog-hero-row">
-		{logo && <Image src={logo} width={144} alt={logoAlt} class="frog-hero-logo" />}
+		{logo && <Image src={logo} width={512} alt={logoAlt} class="frog-hero-logo" />}
 		<h1 id="_top" data-page-title set:html={title} />
 	</div>
 	{tagline && <p class="frog-lede" set:html={tagline} />}
@@ -46,12 +46,14 @@ const logoAlt = (image && 'alt' in image && image.alt) || '';
 	}
 	.frog-hero-row {
 		display: flex;
-		align-items: center;
+		align-items: stretch;
 		gap: 1.5rem;
 	}
 	.frog-hero-logo {
-		width: clamp(4rem, 8vw, 6.5rem);
-		height: auto;
+		width: auto;
+		height: 100%;
+		max-height: 100%;
+		object-fit: contain;
 		flex-shrink: 0;
 	}
 	.frog-hero h1 {
@@ -59,7 +61,7 @@ const logoAlt = (image && 'alt' in image && image.alt) || '';
 		max-width: 60rem;
 		font-size: clamp(2.5rem, 6.5vw, 4.5rem);
 		font-weight: 800;
-		letter-spacing: -0.035em;
+		letter-spacing: -0.05em;
 		line-height: 1.05;
 		color: var(--sl-color-white);
 	}
