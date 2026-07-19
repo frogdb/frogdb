@@ -42,6 +42,8 @@ mod dispatch_vll;
 mod event_loop;
 mod eviction;
 mod execution;
+#[cfg(any(test, feature = "fake-wal"))]
+pub mod fake_wal_registry;
 mod functions;
 mod helpers;
 mod keyspace_coordinator;
@@ -62,9 +64,11 @@ mod wait_queue;
 mod worker;
 
 pub use active_expiry::{ActiveExpiryCoordinator, ExpiryResult};
-pub use builder::{ShardBuilderError, ShardWorkerBuilder};
+pub use builder::{ShardBuilderError, ShardWorkerBuilder, WalMode};
 pub use connection::NewConnection;
 pub use counters::{HotShardStatsResponse, OperationBucket, OperationCounters};
+#[cfg(any(test, feature = "fake-wal"))]
+pub use fake_wal_registry::FakeWalRegistry;
 pub use helpers::REPLICA_INTERNAL_CONN_ID;
 pub use message::{Envelope, ScatterOp, ShardMessage, ShardReceiver, ShardSender};
 pub use partition::{REDIS_CLUSTER_SLOTS, extract_hash_tag, shard_for_key, slot_for_key};

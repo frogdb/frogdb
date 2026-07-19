@@ -13,6 +13,12 @@ pub struct PersistenceConfig {
     #[serde(default = "default_persistence_enabled")]
     pub enabled: bool,
 
+    /// WAL implementation to use: `"rocksdb"` (default, production) or `"fake"`
+    /// (deterministic in-process sink for simulation tests). `"fake"` requires
+    /// `enabled = true`.
+    #[serde(default = "default_persistence_mode")]
+    pub mode: String,
+
     /// Directory for data files.
     #[serde(default = "default_data_dir")]
     pub data_dir: PathBuf,
@@ -73,6 +79,10 @@ fn default_persistence_enabled() -> bool {
     true
 }
 
+fn default_persistence_mode() -> String {
+    "rocksdb".to_string()
+}
+
 fn default_data_dir() -> PathBuf {
     PathBuf::from("./frogdb-data")
 }
@@ -92,6 +102,12 @@ pub const DURABILITY_MODES: &[&str] = &["async", "periodic", "sync"];
 /// Single source of truth shared by [`PersistenceConfig::validate`] and the
 /// runtime `wal-failure-policy` CONFIG SET setter, so the two cannot drift apart.
 pub const WAL_FAILURE_POLICIES: &[&str] = &["continue", "rollback"];
+
+/// Valid WAL implementations accepted by the `mode` parameter.
+///
+/// `"rocksdb"` is the production default; `"fake"` selects the deterministic
+/// in-process WAL sink used by simulation tests.
+pub const PERSISTENCE_MODES: &[&str] = &["rocksdb", "fake"];
 
 pub const DEFAULT_SYNC_INTERVAL_MS: u64 = 1000;
 pub const DEFAULT_WRITE_BUFFER_SIZE_MB: usize = 64;
@@ -151,6 +167,7 @@ impl Default for PersistenceConfig {
     fn default() -> Self {
         Self {
             enabled: default_persistence_enabled(),
+            mode: default_persistence_mode(),
             data_dir: default_data_dir(),
             durability_mode: default_durability_mode(),
             sync_interval_ms: default_sync_interval_ms(),
@@ -173,6 +190,14 @@ impl PersistenceConfig {
     pub fn validate(&self) -> Result<()> {
         if !self.enabled {
             return Ok(());
+        }
+
+        if !PERSISTENCE_MODES.contains(&self.mode.to_lowercase().as_str()) {
+            anyhow::bail!(
+                "invalid persistence mode '{}', expected one of: {}",
+                self.mode,
+                PERSISTENCE_MODES.join(", ")
+            );
         }
 
         let valid_compressions = ["none", "snappy", "lz4", "zstd"];
@@ -369,5 +394,22 @@ mod tests {
     fn test_default_wal_failure_policy() {
         let config = PersistenceConfig::default();
         assert_eq!(config.wal_failure_policy, "continue");
+    }
+
+    #[test]
+    fn mode_defaults_to_rocksdb_and_validates() {
+        let c = PersistenceConfig::default();
+        assert_eq!(c.mode, "rocksdb");
+        assert!(c.validate().is_ok());
+        let fake = PersistenceConfig {
+            mode: "fake".into(),
+            ..Default::default()
+        };
+        assert!(fake.validate().is_ok());
+        let bad = PersistenceConfig {
+            mode: "bogus".into(),
+            ..Default::default()
+        };
+        assert!(bad.validate().is_err());
     }
 }
