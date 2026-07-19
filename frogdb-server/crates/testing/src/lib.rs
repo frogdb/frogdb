@@ -36,6 +36,7 @@
 
 pub mod checker;
 pub mod conservation;
+pub mod fault_injection;
 pub mod history;
 pub mod models;
 pub mod partition;
