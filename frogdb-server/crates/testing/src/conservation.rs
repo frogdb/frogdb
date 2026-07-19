@@ -80,6 +80,13 @@ pub enum ConservationViolation {
 /// Every pushed element is delivered to exactly one popper XOR present at
 /// quiesce; no element delivered twice or lost. `final_elements` maps each key
 /// to the elements remaining in its list after the workload drains.
+///
+/// Accounting is by element *value* across all keys combined, not per-key:
+/// count conservation (pushed == delivered + left-over) is checked, but an
+/// element that gets misrouted to the wrong key (e.g. via a buggy `lmove`)
+/// is not detected as long as the total counts still balance. This is a
+/// deliberate tradeoff — it catches loss and duplication cheaply without
+/// needing per-key push/delivery bookkeeping.
 pub fn check_exactly_once_delivery(
     history: &History,
     final_elements: &HashMap<Bytes, Vec<Bytes>>,
@@ -320,7 +327,57 @@ fn is_write(function: &str) -> bool {
             | "zrem"
             | "mset"
             | "xadd"
+            | "lmove"
+            | "blmove"
+            | "blpop"
+            | "brpop"
+            | "bzpopmin"
+            | "bzpopmax"
     )
+}
+
+/// Keys actually *written* by a completed op, as opposed to the keys it
+/// merely touched/watched (`default_keys_of`). Two corrections matter here:
+///
+/// - Pop/move ops (`lpop`/`rpop`/`blpop`/`brpop`/`bzpopmin`/`bzpopmax`/
+///   `lmove`/`blmove`) only mutate state when they actually served an
+///   element; a nil/timeout result (`result == None`) is a no-op and must
+///   not count as a write.
+/// - For the blocking multi-key pops, the key that was actually served is
+///   encoded in the result (`"served_key|elem"` / `"served_key|member|score"`)
+///   and need not be `args[0]` — mirrors the parsing
+///   [`check_fifo_wake_order`] uses to group waiters by served key, rather
+///   than by the full watched-key list `default_keys_of` would return.
+/// - `lmove`/`blmove` write *both* the source (pop) and destination (push)
+///   keys once they've actually served (non-nil result).
+fn written_keys_of(function: &str, args: &[Bytes], result: Option<&Bytes>) -> Vec<Bytes> {
+    match function {
+        "lpop" | "rpop" => {
+            if result.is_some() {
+                args.first().cloned().into_iter().collect()
+            } else {
+                Vec::new()
+            }
+        }
+        "blpop" | "brpop" | "bzpopmin" | "bzpopmax" => {
+            let Some(r) = result else {
+                return Vec::new();
+            };
+            let served = String::from_utf8_lossy(r);
+            match served.split_once('|') {
+                Some((key, _)) => vec![Bytes::from(key.to_string())],
+                None => Vec::new(),
+            }
+        }
+        "lmove" | "blmove" => {
+            if result.is_some() {
+                args.iter().take(2).cloned().collect()
+            } else {
+                Vec::new()
+            }
+        }
+        _ => default_keys_of(function, args),
+    }
 }
 
 /// Find a completed write to `key` by a client other than `exclude_client`
@@ -359,7 +416,7 @@ fn writer_between(
             continue;
         }
         if is_write(&op.function)
-            && default_keys_of(&op.function, &op.args)
+            && written_keys_of(&op.function, &op.args, op.result.as_ref())
                 .iter()
                 .any(|k| k == key)
         {
@@ -482,10 +539,10 @@ mod tests {
         // A second, illegal delivery of "a".
         let q = h.invoke(3, "lpop", vec![b("k")]);
         h.respond(q, Some(b("a")));
-        assert!(matches!(
-            check_exactly_once_delivery(&h, &HashMap::new()),
-            Err(ConservationViolation::MultipleDelivery { .. })
-        ));
+        match check_exactly_once_delivery(&h, &HashMap::new()) {
+            Err(ConservationViolation::MultipleDelivery { times, .. }) => assert_eq!(times, 2),
+            other => panic!("expected MultipleDelivery, got {other:?}"),
+        }
     }
 
     #[test]
@@ -731,6 +788,44 @@ mod tests {
             check_watch_no_false_negative(&h),
             Err(ConservationViolation::WatchFalseNegative { .. })
         ));
+    }
+
+    #[test]
+    fn watch_blpop_writer_flagged() {
+        // Watcher WATCHes k; another client's BLPOP (fully contained in the
+        // watch->exec gap) serves "k|x" -- a mutating pop of the watched key
+        // -- yet the watcher's EXEC still commits -> false negative. BLPOP
+        // is not in the historical write vocabulary, so pre-fix this write
+        // is invisible to the checker.
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k")]);
+        h.respond(w, Some(b("OK")));
+        let other = h.invoke(2, "blpop", vec![b("k"), b("0")]);
+        h.respond(other, Some(b("k|x")));
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
+        h.respond(e, Some(b("OK")));
+        assert!(matches!(
+            check_watch_no_false_negative(&h),
+            Err(ConservationViolation::WatchFalseNegative { .. })
+        ));
+    }
+
+    #[test]
+    fn watch_nil_pop_not_flagged() {
+        // Another client's LPOP on the watched key times out/misses (nil
+        // result -- no mutation occurred), fully contained in the gap. The
+        // watcher's EXEC still commits, which is correct: a non-mutating
+        // pop is not a write and must not be flagged. Pre-fix, lpop/rpop
+        // were treated as unconditional writers regardless of result, so
+        // this legal history was incorrectly flagged.
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k")]);
+        h.respond(w, Some(b("OK")));
+        let other = h.invoke(2, "lpop", vec![b("k")]);
+        h.respond(other, None);
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
+        h.respond(e, Some(b("OK")));
+        assert!(check_watch_no_false_negative(&h).is_ok());
     }
 
     #[test]

@@ -36,8 +36,8 @@ pub trait Model: Clone + Default {
 
     /// Execute an operation on the current state.
     ///
-    /// Returns `Some((new_state, expected_result))` if the operation is valid,
-    /// or `None` if the operation cannot be applied to this state.
+    /// Returns `Some(new_state)` if the operation and its recorded result are
+    /// valid, else `None`.
     fn step(
         state: &Self::State,
         function: &str,

@@ -11,6 +11,14 @@
 //!   silent-green checker bugs
 //! - Strict per-type models: lists, hashes, sorted sets, streams
 //!
+//! # Encoding convention
+//!
+//! Pipe (`|`) is the reserved multi-value delimiter used across the
+//! result encodings in this crate (e.g. blocking-pop hits as
+//! `"served_key|elem"`, `HGETALL`/`LRANGE` field/value joins). Generated
+//! keys and values must not themselves contain `|` — a value that does can
+//! silently false-accept by being misparsed as an extra delimited field.
+//!
 //! # Linearizability Checking
 //!
 //! Linearizability is a correctness criterion for concurrent systems.

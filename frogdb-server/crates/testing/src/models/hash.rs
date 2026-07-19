@@ -36,7 +36,7 @@ impl Model for HashModel {
                 let mut i = 1;
                 while i + 1 < args.len() {
                     if h.insert(args[i].clone(), args[i + 1].clone()).is_none() {
-                        added += 1;
+                        added = added.checked_add(1)?;
                     }
                     i += 2;
                 }
@@ -56,7 +56,7 @@ impl Model for HashModel {
                 if let Some(h) = new.hashes.get_mut(key) {
                     for f in &args[1..] {
                         if h.remove(f).is_some() {
-                            removed += 1;
+                            removed = removed.checked_add(1)?;
                         }
                     }
                     if h.is_empty() {
@@ -86,6 +86,9 @@ impl Model for HashModel {
                 }
                 let (key, field) = (&args[0], &args[1]);
                 let delta: i64 = String::from_utf8_lossy(&args[2]).parse().ok()?;
+                // DIVERGENCE: a non-numeric stored value is treated as 0
+                // here; real Redis errors ("hash value is not an integer")
+                // instead of silently coercing it.
                 let cur = state
                     .hashes
                     .get(key)
