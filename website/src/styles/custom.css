@@ -106,7 +106,8 @@ ul.starlight-sidebar-topics a:is(.starlight-sidebar-topics-current, :hover, :foc
 
 /* Logo and title styling */
 .site-title {
-	font-weight: 700;
+	font-weight: 800;
+	letter-spacing: -0.03em;
 	gap: 0.4rem; /* Reduce gap between logo and title */
 }
 
@@ -116,7 +117,7 @@ ul.starlight-sidebar-topics a:is(.starlight-sidebar-topics-current, :hover, :foc
 
 .sl-markdown-content :is(h1, h2, h3),
 h1[data-page-title] {
-	letter-spacing: -0.05em;
+	letter-spacing: -0.06em;
 }
 
 h1[data-page-title] {

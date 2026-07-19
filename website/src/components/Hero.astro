@@ -76,7 +76,7 @@ const logoAlt = (image && 'alt' in image && image.alt) || '';
 		max-width: 60rem;
 		font-size: var(--hero-h1-size);
 		font-weight: 800;
-		letter-spacing: -0.05em;
+		letter-spacing: -0.06em;
 		line-height: 1.05;
 		color: var(--sl-color-white);
 	}
@@ -87,6 +87,11 @@ const logoAlt = (image && 'alt' in image && image.alt) || '';
 	}
 	.frog-lede {
 		margin: 0;
+		/* Neutralize starlight-theme-rapide's `.content-panel:first-of-type p:not(...)`
+		   "notice" rule (@layer rapide, node_modules/starlight-theme-rapide/styles/base.css),
+		   which otherwise matches this paragraph and adds padding: 1rem (all sides),
+		   misaligning it against the logo box/actions row and adding stray vertical gap. */
+		padding: 0;
 		max-width: 46rem;
 		font-size: clamp(1.05rem, 1.6vw, 1.3rem);
 		line-height: 1.6;

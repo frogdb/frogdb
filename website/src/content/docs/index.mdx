@@ -1,5 +1,5 @@
 ---
-title: FrogDB
+title: 'Redis 8.x compatible, memory-first database'
 description: A Redis 8.x-compatible, memory-first database built in Rust
 template: splash
 hero:
@@ -45,6 +45,25 @@ import Card from 'starlight-plugin-icons/components/Card.astro';
 	</Card>
 </CardGrid>
 
+## Clustering & Replication
+
+FrogDB scales horizontally with hash-slot sharding across a cluster of nodes, coordinated by an external orchestrator rather than a Redis-style gossip protocol.
+
+- **16384 hash slots** (`CRC16(key) % 16384`), with slot ranges assigned to nodes and rebalanced by the orchestrator
+- **Raft consensus** for cluster state — deterministic leader election, no split-brain
+- **Read replicas** — full copies of a primary's dataset that can serve stale reads and are promoted on automatic failover
+- **Online slot migration** — nodes serve `-ASK`/`-MOVED` redirects during rebalancing, so the cluster keeps handling traffic
+- **Cross-shard transactions** via [VLL](/architecture/vll/) — atomic multi-key operations across internal shards without a two-phase commit protocol
+
+:::note[Kubernetes — coming soon]
+A custom Kubernetes controller for FrogDB is in development: declarative cluster provisioning, scaling, failover, and rolling upgrades managed natively from Kubernetes.
+:::
+
+<CardGrid>
+	<LinkCard title="Clustering Architecture" description="Slot routing, orchestrator protocol, and Raft consensus internals" href="/architecture/clustering/" />
+	<LinkCard title="Clustering Operations" description="Setting up and operating a FrogDB cluster" href="/operations/clustering/" />
+</CardGrid>
+
 ## Redis 8.x Data Structures
 
 FrogDB supports the full Redis 8.x feature set:
@@ -59,6 +78,15 @@ FrogDB supports the full Redis 8.x feature set:
 - **Pub/Sub** — Channel and pattern-based publish/subscribe, event sourcing
 - **Scripting & Transactions** — Lua scripting, MULTI/EXEC
 - **Search** — Full text search, secondary indexing, vector search, aggregations
+
+## Testing
+
+FrogDB is verified with deterministic concurrency simulation, distributed-systems testing, and a ported Redis regression suite that runs on every commit.
+
+- **Shuttle and Turmoil** for deterministic concurrency and distributed simulation testing
+- **Jepsen verification** of linearizability and serializability
+- **Fuzz testing** (`cargo-fuzz`) and property-based tests (`proptest`)
+- **2,232 ported Redis regression tests** from the Redis 8.6.0 TCL suite — see the [Redis Test Suite compatibility report](/compatibility/redis-test-suite/)
 
 ## Quick Example
 
