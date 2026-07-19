@@ -10,12 +10,14 @@ mod hash;
 mod kv;
 mod list;
 mod register;
+mod stream;
 mod zset;
 
 pub use hash::{HashModel, HashState};
 pub use kv::{KVModel, KVState};
 pub use list::{ListModel, ListState};
 pub use register::{RegisterModel, RegisterState};
+pub use stream::{StreamData, StreamId, StreamModel, StreamState};
 pub use zset::{ZSetModel, ZSetState};
 
 /// A sequential specification model.
