@@ -124,3 +124,51 @@ ul.starlight-sidebar-topics a:is(.starlight-sidebar-topics-current, :hover, :foc
 	font-weight: 700;
 	gap: 0.4rem; /* Reduce gap between logo and title */
 }
+
+/* ---------------------------------------------------------------------------
+ * Typography polish
+ * ------------------------------------------------------------------------- */
+
+.sl-markdown-content :is(h1, h2, h3),
+h1[data-page-title] {
+	letter-spacing: -0.02em;
+}
+
+h1[data-page-title] {
+	font-weight: 800;
+}
+
+.tabular-nums {
+	font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------------------
+ * Cards: rounded, faint fill, hairline border
+ * ------------------------------------------------------------------------- */
+
+.card,
+.sl-link-card {
+	border-radius: 1rem;
+	border: 1px solid var(--sl-color-hairline);
+	background-color: var(--sl-color-gray-6);
+	transition: border-color 0.15s ease;
+}
+
+.sl-link-card:hover,
+.sl-link-card:focus-within {
+	border-color: var(--sl-color-gray-4);
+	background-color: var(--sl-color-gray-6);
+}
+
+/* ---------------------------------------------------------------------------
+ * Asides: left-border callouts; caution goes amber
+ * ------------------------------------------------------------------------- */
+
+.starlight-aside {
+	border-radius: 0.5rem;
+	border-inline-start-width: 3px;
+}
+
+.starlight-aside--caution {
+	border-inline-start-color: var(--frog-amber);
+}
