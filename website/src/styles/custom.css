@@ -1,22 +1,84 @@
 /* FrogDB Custom Styles */
 
-/* Override accent colors with frog-inspired lime green (matches logo) */
+/* ---------------------------------------------------------------------------
+ * Design tokens — dark-first "data report" theme.
+ * Loaded after rapide's @layer rapide, so these un-layered rules always win.
+ * ------------------------------------------------------------------------- */
+
 :root {
-	--sl-color-accent-low: #3d5c2a;    /* Dark lime for backgrounds */
-	--sl-color-accent: #6BAA3D;         /* Medium lime (matches frog stripes) */
-	--sl-color-accent-high: #8DC63F;    /* Bright lime (matches frog body) */
+	--sl-font: 'Inter Variable';
 }
 
-/* Dark mode as default - make it feel native */
 :root[data-theme='dark'] {
-	--sl-color-bg: #0d1117;
-	--sl-color-bg-nav: #161b22;
-	--sl-color-bg-sidebar: #0d1117;
+	/* Grayscale (white = brightest text, black = page bg) */
+	--sl-color-white: #e8e6e3;
+	--sl-color-gray-1: #d8d6d3;
+	--sl-color-gray-2: #c2c0bd;
+	--sl-color-gray-3: #8a8a8a;
+	--sl-color-gray-4: #585856;
+	--sl-color-gray-5: #2e2e2c;
+	--sl-color-gray-6: #161614;
+	--sl-color-gray-7: #101010;
+	--sl-color-black: #0a0a0a;
+
+	/* Surfaces */
+	--sl-color-bg: #0a0a0a;
+	--sl-color-bg-nav: #0d0d0c;
+	--sl-color-bg-sidebar: #0a0a0a;
+	--sl-color-hairline: rgba(255, 255, 255, 0.08);
+	--sl-color-hairline-light: rgba(255, 255, 255, 0.08);
+	--sl-color-hairline-shade: rgba(255, 255, 255, 0.05);
+
+	/* Electric lime accent (frog-adjacent) */
+	--sl-color-accent-low: #2c3a10;
+	--sl-color-accent: #8fbe27;
+	--sl-color-accent-high: #c3f53c;
+	--sl-color-text-accent: #c3f53c;
+
+	/* Caution accent */
+	--frog-amber: #e0a43b;
+
+	/* Rapide UI chrome tokens (verify names against theme.css in Step 3) */
+	--sl-rapide-ui-bg-color: #0f0f0e;
+	--sl-rapide-ui-header-bg-color: rgba(10, 10, 10, 0.85);
+	--sl-rapide-ui-border-color: rgba(255, 255, 255, 0.08);
 }
 
-/* Code block styling */
-.expressive-code {
-	--ec-codeBg: #161b22;
+:root[data-theme='light'] {
+	/* Grayscale flips: white = darkest text, black = page bg */
+	--sl-color-white: #1a1a17;
+	--sl-color-gray-1: #2e2e2a;
+	--sl-color-gray-2: #45453f;
+	--sl-color-gray-3: #6f6f68;
+	--sl-color-gray-4: #9c9c94;
+	--sl-color-gray-5: #dedcd6;
+	--sl-color-gray-6: #f3f2ee;
+	--sl-color-gray-7: #faf9f6;
+	--sl-color-black: #fdfcfa;
+
+	--sl-color-bg: #fdfcfa;
+	--sl-color-bg-nav: #faf9f6;
+	--sl-color-bg-sidebar: #fdfcfa;
+	--sl-color-hairline: rgba(0, 0, 0, 0.1);
+	--sl-color-hairline-light: rgba(0, 0, 0, 0.08);
+	--sl-color-hairline-shade: rgba(0, 0, 0, 0.05);
+
+	/* Lime darkened for AA contrast on white */
+	--sl-color-accent-low: #e9f5c7;
+	--sl-color-accent: #55761a;
+	--sl-color-accent-high: #3f5a11;
+	--sl-color-text-accent: #55761a;
+
+	--frog-amber: #b07a1a;
+
+	--sl-rapide-ui-bg-color: #f6f5f1;
+	--sl-rapide-ui-header-bg-color: rgba(253, 252, 250, 0.85);
+	--sl-rapide-ui-border-color: rgba(0, 0, 0, 0.08);
+}
+
+/* Code block background follows the page surface */
+:root[data-theme='dark'] .expressive-code {
+	--ec-codeBg: #101010;
 }
 
 /* Hero section customization */

@@ -129,6 +129,7 @@ starlightSidebarTopics([
 				baseUrl: 'https://github.com/frogdb/frogdb/edit/main/website/',
 			},
 			customCss: [
+				'@fontsource-variable/inter',
 				'./src/styles/custom.css',
 			],
 		}),
