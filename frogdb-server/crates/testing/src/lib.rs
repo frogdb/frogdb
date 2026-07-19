@@ -37,6 +37,7 @@
 pub mod checker;
 pub mod history;
 pub mod models;
+pub mod partition;
 
 pub use checker::{LinearizabilityResult, check_linearizability};
 pub use history::{History, OpKind, Operation};
