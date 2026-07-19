@@ -1,6 +1,7 @@
 //! Whole-history conservation checkers (pure scans, not WGL-based).
 
-use crate::history::History;
+use crate::history::{CompletedOperation, History};
+use crate::partition::{default_keys_of, parse_exec_commands};
 use bytes::Bytes;
 use std::collections::{HashMap, HashSet};
 
@@ -238,6 +239,159 @@ pub fn check_fifo_wake_order(history: &History) -> Result<(), ConservationViolat
     Ok(())
 }
 
+/// Net integer delta a single command applies to keys in `keyset`.
+fn cmd_delta(name: &str, args: &[Bytes], keyset: &HashSet<Bytes>) -> i64 {
+    if args.is_empty() || !keyset.contains(&args[0]) {
+        return 0;
+    }
+    let by = || {
+        args.get(1)
+            .and_then(|a| String::from_utf8_lossy(a).parse::<i64>().ok())
+            .unwrap_or(0)
+    };
+    match name {
+        "incr" => 1,
+        "decr" => -1,
+        "incrby" => by(),
+        "decrby" => -by(),
+        _ => 0,
+    }
+}
+
+/// Bank-transfer conservation: the total over `keys` must not change, so the
+/// final sum equals `expected_sum`. Sums INCR/DECR(BY) deltas from committed
+/// EXECs and standalone counter ops; a nonzero net delta is a violation.
+pub fn check_tx_sum_conservation(
+    history: &History,
+    keys: &[Bytes],
+    expected_sum: i64,
+) -> Result<(), ConservationViolation> {
+    let keyset: HashSet<Bytes> = keys.iter().cloned().collect();
+    let mut delta: i64 = 0;
+    for op in history.completed_operations() {
+        match op.function.as_str() {
+            "exec" => {
+                if op.result.is_none() {
+                    continue; // aborted
+                }
+                for (name, cargs) in parse_exec_commands(&op.args).unwrap_or_default() {
+                    delta += cmd_delta(&name, &cargs, &keyset);
+                }
+            }
+            "incr" | "decr" | "incrby" | "decrby" => {
+                delta += cmd_delta(&op.function, &op.args, &keyset);
+            }
+            _ => {}
+        }
+    }
+    if delta != 0 {
+        return Err(ConservationViolation::SumMismatch {
+            keys: keys
+                .iter()
+                .map(|k| String::from_utf8_lossy(k).to_string())
+                .collect(),
+            expected: expected_sum,
+            computed: expected_sum + delta,
+        });
+    }
+    Ok(())
+}
+
+fn is_write(function: &str) -> bool {
+    matches!(
+        function,
+        "set"
+            | "write"
+            | "del"
+            | "delete"
+            | "incr"
+            | "incrby"
+            | "decr"
+            | "decrby"
+            | "lpush"
+            | "rpush"
+            | "lpop"
+            | "rpop"
+            | "hset"
+            | "hdel"
+            | "hincrby"
+            | "zadd"
+            | "zrem"
+            | "mset"
+    )
+}
+
+/// Find a completed write to `key` by a client other than `exclude_client`
+/// whose return time falls strictly within `(lo, hi)`.
+fn writer_between(
+    ops: &[CompletedOperation],
+    key: &Bytes,
+    lo: u64,
+    hi: u64,
+    exclude_client: u64,
+) -> Option<u64> {
+    for op in ops {
+        if op.client_id == exclude_client || !is_write(&op.function) {
+            continue;
+        }
+        if !default_keys_of(&op.function, &op.args)
+            .iter()
+            .any(|k| k == key)
+        {
+            continue;
+        }
+        if op.return_time > lo && op.return_time < hi {
+            return Some(op.id);
+        }
+    }
+    None
+}
+
+/// WATCH no-false-negative: a committed EXEC must not have ignored another
+/// client's write to a watched key that completed between the WATCH and the
+/// EXEC invoke. (Over-abort is legal and not checked here.)
+pub fn check_watch_no_false_negative(history: &History) -> Result<(), ConservationViolation> {
+    let ops = history.completed_operations();
+    let mut by_client: HashMap<u64, Vec<&CompletedOperation>> = HashMap::new();
+    for op in &ops {
+        by_client.entry(op.client_id).or_default().push(op);
+    }
+    for (_client, mut cops) in by_client {
+        cops.sort_by_key(|o| o.invoke_time);
+        // (key, watch_time, watch_op_id)
+        let mut watched: Vec<(Bytes, u64, u64)> = Vec::new();
+        for op in cops {
+            match op.function.as_str() {
+                "watch" => {
+                    if let Some(k) = op.args.first() {
+                        watched.push((k.clone(), op.invoke_time, op.id));
+                    }
+                }
+                "exec" => {
+                    if op.result.is_some() {
+                        for (k, wt, wid) in &watched {
+                            if let Some(writer) =
+                                writer_between(&ops, k, *wt, op.invoke_time, op.client_id)
+                            {
+                                return Err(ConservationViolation::WatchFalseNegative {
+                                    exec_op: op.id,
+                                    watch_op: *wid,
+                                    writer_op: writer,
+                                    key: k.to_vec(),
+                                });
+                            }
+                        }
+                    }
+                    watched.clear();
+                }
+                "discard" | "reset" | "unwatch" => watched.clear(),
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,5 +547,86 @@ mod tests {
             check_fifo_wake_order(&h),
             Err(ConservationViolation::FifoViolation { .. })
         ));
+    }
+
+    fn transfer(h: &mut History, client: u64, from: &str, to: &str, amt: i64) {
+        // EXEC: DECRBY from amt, INCRBY to amt -> two integer replies.
+        let op = h.invoke(
+            client,
+            "exec",
+            vec![
+                b("2"),
+                b("decrby"),
+                b("2"),
+                b(from),
+                Bytes::from(amt.to_string()),
+                b("incrby"),
+                b("2"),
+                b(to),
+                Bytes::from(amt.to_string()),
+            ],
+        );
+        h.respond(op, Some(b("0|0")));
+    }
+
+    #[test]
+    fn tx_sum_conserved_under_transfers() {
+        let mut h = History::new();
+        transfer(&mut h, 1, "a", "b", 5);
+        transfer(&mut h, 2, "b", "a", 3);
+        let keys = vec![b("a"), b("b")];
+        assert!(check_tx_sum_conservation(&h, &keys, 100).is_ok());
+    }
+
+    #[test]
+    fn tx_sum_detects_leak() {
+        let mut h = History::new();
+        // Only credit b, never debit a -> +5 net, not conserved.
+        let op = h.invoke(1, "exec", vec![b("1"), b("incrby"), b("2"), b("b"), b("5")]);
+        h.respond(op, Some(b("0")));
+        let keys = vec![b("a"), b("b")];
+        assert!(matches!(
+            check_tx_sum_conservation(&h, &keys, 100),
+            Err(ConservationViolation::SumMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn watch_ok_when_no_interfering_write() {
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k")]);
+        h.respond(w, Some(b("OK")));
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
+        h.respond(e, Some(b("OK")));
+        assert!(check_watch_no_false_negative(&h).is_ok());
+    }
+
+    #[test]
+    fn watch_detects_false_negative() {
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k")]);
+        h.respond(w, Some(b("OK")));
+        // Another client writes the watched key after the WATCH...
+        let other = h.invoke(2, "set", vec![b("k"), b("z")]);
+        h.respond(other, Some(b("OK")));
+        // ...yet this client's EXEC commits -> false negative.
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
+        h.respond(e, Some(b("OK")));
+        assert!(matches!(
+            check_watch_no_false_negative(&h),
+            Err(ConservationViolation::WatchFalseNegative { .. })
+        ));
+    }
+
+    #[test]
+    fn watch_aborted_exec_is_fine() {
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k")]);
+        h.respond(w, Some(b("OK")));
+        let other = h.invoke(2, "set", vec![b("k"), b("z")]);
+        h.respond(other, Some(b("OK")));
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
+        h.respond(e, None); // aborted -> correct behavior
+        assert!(check_watch_no_false_negative(&h).is_ok());
     }
 }
