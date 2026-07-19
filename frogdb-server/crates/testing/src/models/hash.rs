@@ -92,7 +92,7 @@ impl Model for HashModel {
                     .and_then(|h| h.get(field))
                     .and_then(|v| String::from_utf8_lossy(v).parse::<i64>().ok())
                     .unwrap_or(0);
-                let nv = cur + delta;
+                let nv = cur.checked_add(delta)?;
                 let mut new = state.clone();
                 new.hashes
                     .entry(key.clone())
@@ -205,6 +205,30 @@ mod tests {
     fn hash_wrong_result_rejected() {
         let s = HashState::default();
         assert!(HashModel::step(&s, "hset", &[b("h"), b("f"), b("v")], Some(&b("0"))).is_none());
+    }
+
+    #[test]
+    fn hincrby_overflow_rejected_not_panic() {
+        let s = HashState::default();
+        let s = HashModel::step(
+            &s,
+            "hincrby",
+            &[b("h"), b("n"), b(&i64::MAX.to_string())],
+            Some(&b(&i64::MAX.to_string())),
+        )
+        .unwrap();
+        // Any claimed result for an overflowing increment must be rejected, not panic.
+        assert!(HashModel::step(&s, "hincrby", &[b("h"), b("n"), b("1")], Some(&b("0"))).is_none());
+    }
+
+    #[test]
+    fn hdel_last_field_prunes_key() {
+        let s = HashState::default();
+        let s = HashModel::step(&s, "hset", &[b("h"), b("f1"), b("v1")], Some(&b("1"))).unwrap();
+        let s = HashModel::step(&s, "hdel", &[b("h"), b("f1")], Some(&b("1"))).unwrap();
+        assert!(!s.hashes.contains_key(&b("h")));
+        assert!(HashModel::step(&s, "hgetall", &[b("h")], None).is_some());
+        assert!(HashModel::step(&s, "hlen", &[b("h")], Some(&b("0"))).is_some());
     }
 
     #[test]
