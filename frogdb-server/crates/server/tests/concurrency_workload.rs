@@ -88,3 +88,23 @@ fn replay_repro() {
         report.violations
     );
 }
+
+/// Pinned regressions: one named test per confirmed bug, carrying its
+/// hardcoded failing seed so it can never silently regress. See
+/// `docs/superpowers/plans/concurrency-phase3-bug-workflow.md`.
+mod regressions {
+    use super::*;
+
+    /// Template. When the sweep trips a real bug, copy this, name it for the
+    /// bug, hardcode the failing seed/profile/config, and land it alongside the
+    /// fix. It must FAIL before the fix and PASS after.
+    #[test]
+    fn regression_template_seed_0() {
+        let report = run_and_check(0, Profile::Mixed, 4, 30, 2);
+        assert!(
+            report.passed(),
+            "pinned seed regressed: {:?}",
+            report.violations
+        );
+    }
+}
