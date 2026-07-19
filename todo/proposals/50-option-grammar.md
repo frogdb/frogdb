@@ -83,4 +83,10 @@ messages with tests **before** migrating each site.
   only; `t_hash.c parseExpireTime`). PSETEX and all PX/PXAT arms stay unguarded, matching
   upstream. Noted divergence left open: upstream hash-field expiry uses the tighter
   `HFE_MAX_ABS_TIME_MSEC/1000` bound; FrogDB uses `i64::MAX/1000`.
+- Parity fix (round-6 item 50, now closed): all six HFE commands (HEXPIRE/HPEXPIRE/HEXPIREAT/
+  HPEXPIREAT and the HGETEX/HSETEX EX/PX/EXAT/PXAT arms) now bound their resolved absolute
+  deadline at `HFE_MAX_ABS_TIME_MSEC` (`0x3FFF_FFFF_FFFF` = 70368744177663 ms, `EB_EXPIRE_TIME_MAX
+  >> 2`) via a shared `hfe_resolve_abs_ms` helper mirroring `t_hash.c parseExpireTime` check order,
+  rejecting over-bound values with the quoted `invalid expire time in '<cmd>' command` shape; the
+  SET family keeps its looser `i64::MAX/1000` bound untouched.
 - `just test frogdb-commands`: 105 passed. `just check` + `just lint frogdb-commands`: clean.

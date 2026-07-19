@@ -570,6 +570,56 @@ pub fn checked_expire_value(
     Ok(raw as u64)
 }
 
+/// Absolute cap for hash-field-expiration (HFE) deadlines, in Unix milliseconds.
+///
+/// Upstream `t_hash.c` derives it as `HFE_MAX_ABS_TIME_MSEC =
+/// EB_EXPIRE_TIME_MAX >> 2`, where `EB_EXPIRE_TIME_MAX = 0x0000FFFFFFFFFFFF`
+/// (2^48 - 1) is the widest deadline the ebuckets field-expiry index can hold.
+/// Shifting off the two reserved high bits leaves `0x3FFF_FFFF_FFFF` =
+/// 70368744177663 ms, the largest absolute deadline any HFE command may set.
+pub const HFE_MAX_ABS_TIME_MSEC: i64 = 0x3FFF_FFFF_FFFF;
+
+/// Current wall-clock time as Unix milliseconds, used as the `basetime` for the
+/// relative hash-field-expiry arms (mirrors upstream `commandTimeSnapshot()`).
+pub fn now_unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Bound an HFE expire operand and resolve it to an absolute Unix-ms deadline,
+/// mirroring upstream `t_hash.c parseExpireTime` (shared by HEXPIRE, HPEXPIRE,
+/// HEXPIREAT, HPEXPIREAT, and the HGETEX/HSETEX EX/PX/EXAT/PXAT arms).
+///
+/// `is_seconds` selects the seconds units (`HEXPIRE`/`HEXPIREAT`, `EX`/`EXAT`),
+/// which are range-checked before being scaled to milliseconds. `basetime` is
+/// added to relative operands — current Unix ms for `HEXPIRE`/`HPEXPIRE` and the
+/// `EX`/`PX` arms — and is `0` for the absolute `*AT`/`EXAT`/`PXAT` arms. `cmd`
+/// is the lowercase command name embedded in the `invalid expire time in
+/// '<cmd>' command` rejection.
+///
+/// Only the upper bound is enforced here; callers retain their existing
+/// zero/negative handling, so non-positive `val` passes through unchanged.
+pub fn hfe_resolve_abs_ms(
+    val: i64,
+    is_seconds: bool,
+    basetime: i64,
+    cmd: &str,
+) -> Result<i64, CommandError> {
+    let mut val = val;
+    if is_seconds {
+        if val > HFE_MAX_ABS_TIME_MSEC / 1000 {
+            return Err(ExpiryErr::Named(cmd).build());
+        }
+        val *= 1000;
+    }
+    if val > HFE_MAX_ABS_TIME_MSEC - basetime {
+        return Err(ExpiryErr::Named(cmd).build());
+    }
+    Ok(val + basetime)
+}
+
 /// The four positive-expiry units (`EX`, `PX`, `EXAT`, `PXAT`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExpiryUnit {

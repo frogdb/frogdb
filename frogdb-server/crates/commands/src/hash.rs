@@ -21,7 +21,8 @@ use super::expiry::{
     unix_ms_to_instant, unix_secs_to_instant,
 };
 use super::utils::{
-    ExpiryErr, checked_expire_value, format_float, parse_f64, parse_i64, reject_non_finite_delta,
+    ExpiryErr, checked_expire_value, format_float, hfe_resolve_abs_ms, now_unix_ms, parse_f64,
+    parse_i64, reject_non_finite_delta,
 };
 use std::time::{Duration, Instant};
 
@@ -942,7 +943,9 @@ fn parse_hexpire_read_args(args: &[Bytes]) -> Result<&[Bytes], CommandError> {
 fn execute_hexpire_common(
     ctx: &mut CommandContext,
     args: &[Bytes],
-    _command_name: &str,
+    command_name: &str,
+    is_seconds: bool,
+    is_relative: bool,
     time_converter: impl Fn(i64) -> Option<Instant>,
     is_past_or_zero: impl Fn(i64) -> bool,
 ) -> Result<Response, CommandError> {
@@ -955,6 +958,13 @@ fn execute_hexpire_common(
             message: "invalid expire time, must be >= 0".to_string(),
         });
     }
+
+    // Bound the resulting deadline at upstream's HFE_MAX_ABS_TIME_MSEC
+    // (t_hash.c parseExpireTime). Non-positive operands mean "delete
+    // immediately" and stay well under the cap, so this only rejects
+    // over-large future deadlines.
+    let basetime = if is_relative { now_unix_ms() } else { 0 };
+    hfe_resolve_abs_ms(time_val, is_seconds, basetime, command_name)?;
 
     let (condition_args, field_args) = parse_hexpire_args(args, 2)?;
     let conditions = parse_expire_conditions_from_slice(condition_args)?;
@@ -1179,6 +1189,8 @@ impl Command for HexpireCommand {
             ctx,
             args,
             "hexpire",
+            true,
+            true,
             |secs| {
                 if secs <= 0 {
                     return None;
@@ -1219,6 +1231,8 @@ impl Command for HpexpireCommand {
             ctx,
             args,
             "hpexpire",
+            false,
+            true,
             |ms| {
                 if ms <= 0 {
                     return None;
@@ -1259,6 +1273,8 @@ impl Command for HexpireatCommand {
             ctx,
             args,
             "hexpireat",
+            true,
+            false,
             |ts| {
                 if ts < 0 {
                     return None;
@@ -1299,6 +1315,8 @@ impl Command for HpexpireatCommand {
             ctx,
             args,
             "hpexpireat",
+            false,
+            false,
             |ts| {
                 if ts < 0 {
                     return None;
@@ -1549,6 +1567,7 @@ enum FieldExpiryAction {
 fn parse_field_expiry_option(
     args: &[Bytes],
     offset: usize,
+    cmd: &str,
     allow_persist: bool,
     allow_keepttl: bool,
 ) -> Result<(FieldExpiryAction, usize), CommandError> {
@@ -1560,28 +1579,31 @@ fn parse_field_expiry_option(
     match keyword.as_slice() {
         b"EX" => {
             let val = args.get(offset + 1).ok_or(CommandError::SyntaxError)?;
-            // Field-expiry commands use the name-less message shape. The
-            // seconds units (EX/EXAT) guard the secs*1000 conversion, matching
-            // Redis's t_hash.c parseExpireTime(UNIT_SECONDS) rejection.
-            let secs = checked_expire_value(parse_i64(val)?, true, ExpiryErr::Unnamed)?;
+            // Zero/negative keep the name-less legacy shape; the upper bound
+            // uses the quoted '<cmd>' shape from t_hash.c parseExpireTime.
+            let secs = checked_expire_value(parse_i64(val)?, false, ExpiryErr::Unnamed)?;
+            hfe_resolve_abs_ms(secs as i64, true, now_unix_ms(), cmd)?;
             let instant = Instant::now() + Duration::from_secs(secs);
             Ok((FieldExpiryAction::SetExpiry(instant), 2))
         }
         b"PX" => {
             let val = args.get(offset + 1).ok_or(CommandError::SyntaxError)?;
             let ms = checked_expire_value(parse_i64(val)?, false, ExpiryErr::Unnamed)?;
+            hfe_resolve_abs_ms(ms as i64, false, now_unix_ms(), cmd)?;
             let instant = Instant::now() + Duration::from_millis(ms);
             Ok((FieldExpiryAction::SetExpiry(instant), 2))
         }
         b"EXAT" => {
             let val = args.get(offset + 1).ok_or(CommandError::SyntaxError)?;
-            let ts = checked_expire_value(parse_i64(val)?, true, ExpiryErr::Unnamed)?;
+            let ts = checked_expire_value(parse_i64(val)?, false, ExpiryErr::Unnamed)?;
+            hfe_resolve_abs_ms(ts as i64, true, 0, cmd)?;
             let instant = unix_secs_to_instant(ts).ok_or(CommandError::NotInteger)?;
             Ok((FieldExpiryAction::SetExpiry(instant), 2))
         }
         b"PXAT" => {
             let val = args.get(offset + 1).ok_or(CommandError::SyntaxError)?;
             let ts = checked_expire_value(parse_i64(val)?, false, ExpiryErr::Unnamed)?;
+            hfe_resolve_abs_ms(ts as i64, false, 0, cmd)?;
             let instant = unix_ms_to_instant(ts).ok_or(CommandError::NotInteger)?;
             Ok((FieldExpiryAction::SetExpiry(instant), 2))
         }
@@ -1751,7 +1773,7 @@ impl Command for HgetexCommand {
         let key = &args[0];
 
         // Parse optional expiry option before FIELDS keyword
-        let (expiry_action, consumed) = parse_field_expiry_option(args, 1, true, false)?;
+        let (expiry_action, consumed) = parse_field_expiry_option(args, 1, "hgetex", true, false)?;
 
         // Parse: FIELDS numfields field [field ...]
         let fields_offset = 1 + consumed;
@@ -1878,7 +1900,8 @@ impl Command for HsetexCommand {
         }
 
         // Parse optional expiry option
-        let (expiry_action, consumed) = parse_field_expiry_option(args, offset, false, true)?;
+        let (expiry_action, consumed) =
+            parse_field_expiry_option(args, offset, "hsetex", false, true)?;
         offset += consumed;
 
         // Parse: FIELDS numfields field value [field value ...]
@@ -1984,9 +2007,12 @@ impl Command for HsetexCommand {
 
 #[cfg(test)]
 mod expiry_grammar_pin_tests {
-    //! Wire-compat pins for HGETEX / HSETEX field-expiry grammar. These use the
-    //! name-less `invalid expire time in command` message shape (distinct from
-    //! the SET family's quoted form) and carry no secs*1000 overflow guard.
+    //! Wire-compat pins for the hash field-expiry grammar. The zero/negative
+    //! lower bound keeps HGETEX/HSETEX's name-less `invalid expire time in
+    //! command` shape (distinct from the SET family's quoted form), while the
+    //! shared HFE upper bound (`HFE_MAX_ABS_TIME_MSEC`, mirroring t_hash.c
+    //! `parseExpireTime`) uses the quoted `invalid expire time in '<cmd>'
+    //! command` shape for all six commands.
     use super::*;
     use frogdb_core::HashMapStore;
     use frogdb_protocol::ProtocolVersion;
@@ -2060,14 +2086,14 @@ mod expiry_grammar_pin_tests {
 
     #[test]
     fn hgetex_ex_secs_overflow_rejected() {
-        // Redis parity: t_hash.c parseExpireTime rejects over-large seconds
-        // values for the seconds units (EX/EXAT), keeping the name-less shape.
+        // Redis parity: t_hash.c parseExpireTime bounds the seconds units at
+        // HFE_MAX_ABS_TIME_MSEC / 1000, rejecting with the quoted '<cmd>' shape.
         assert_eq!(
             invalid_msg(
                 HgetexCommand,
                 &["h", "EX", "18446744073709551", "FIELDS", "1", "f"]
             ),
-            "invalid expire time in command"
+            "invalid expire time in 'hgetex' command"
         );
     }
 
@@ -2078,7 +2104,7 @@ mod expiry_grammar_pin_tests {
                 HgetexCommand,
                 &["h", "EXAT", "18446744073709551", "FIELDS", "1", "f"]
             ),
-            "invalid expire time in command"
+            "invalid expire time in 'hgetex' command"
         );
     }
 
@@ -2089,20 +2115,130 @@ mod expiry_grammar_pin_tests {
                 HsetexCommand,
                 &["h", "EX", "18446744073709551", "FIELDS", "1", "f", "v"]
             ),
-            "invalid expire time in command"
+            "invalid expire time in 'hsetex' command"
         );
     }
 
     #[test]
-    fn hsetex_px_large_value_accepted() {
-        // PX is a milliseconds unit: no *1000 guard applies.
+    fn hsetex_px_large_value_rejected() {
+        // HFE parity: even the milliseconds units are now capped at
+        // HFE_MAX_ABS_TIME_MSEC. A relative PX this large exceeds the bound.
+        assert_eq!(
+            invalid_msg(
+                HsetexCommand,
+                &["h", "PX", "18446744073709551", "FIELDS", "1", "f", "v"]
+            ),
+            "invalid expire time in 'hsetex' command"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // HFE upper-bound pins (HFE_MAX_ABS_TIME_MSEC = 70368744177663 ms).
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn hexpire_above_bound_rejected() {
+        // Relative seconds: secs > HFE_MAX_ABS_TIME_MSEC / 1000.
+        assert_eq!(
+            invalid_msg(HexpireCommand, &["h", "70368744178", "FIELDS", "1", "f"]),
+            "invalid expire time in 'hexpire' command"
+        );
+    }
+
+    #[test]
+    fn hpexpire_above_bound_rejected() {
+        // Relative ms: now_ms + ms > HFE_MAX_ABS_TIME_MSEC.
+        assert_eq!(
+            invalid_msg(
+                HpexpireCommand,
+                &["h", "70368744177663", "FIELDS", "1", "f"]
+            ),
+            "invalid expire time in 'hpexpire' command"
+        );
+    }
+
+    #[test]
+    fn hexpireat_above_bound_rejected() {
+        // Absolute seconds: secs > HFE_MAX_ABS_TIME_MSEC / 1000.
+        assert_eq!(
+            invalid_msg(HexpireatCommand, &["h", "70368744178", "FIELDS", "1", "f"]),
+            "invalid expire time in 'hexpireat' command"
+        );
+    }
+
+    #[test]
+    fn hpexpireat_above_bound_rejected() {
+        // Absolute ms: ms > HFE_MAX_ABS_TIME_MSEC.
+        assert_eq!(
+            invalid_msg(
+                HpexpireatCommand,
+                &["h", "70368744177664", "FIELDS", "1", "f"]
+            ),
+            "invalid expire time in 'hpexpireat' command"
+        );
+    }
+
+    #[test]
+    fn hpexpireat_boundary_accepted_and_rejected() {
+        // Exactly HFE_MAX_ABS_TIME_MSEC is accepted; one past it is rejected.
+        // The key does not exist, so acceptance surfaces as an Ok(-2) array
+        // rather than an InvalidArgument error.
         let mut c = ctx();
-        let r = HsetexCommand
-            .execute(
-                &mut c,
-                &args(&["h", "PX", "18446744073709551", "FIELDS", "1", "f", "v"]),
-            )
+        let r = HpexpireatCommand
+            .execute(&mut c, &args(&["h", "70368744177663", "FIELDS", "1", "f"]))
             .unwrap();
-        assert_eq!(r, Response::Integer(1));
+        assert_eq!(r, Response::Array(vec![Response::Integer(-2)]));
+
+        assert_eq!(
+            invalid_msg(
+                HpexpireatCommand,
+                &["h", "70368744177664", "FIELDS", "1", "f"]
+            ),
+            "invalid expire time in 'hpexpireat' command"
+        );
+    }
+
+    #[test]
+    fn hgetex_px_above_bound_rejected() {
+        assert_eq!(
+            invalid_msg(
+                HgetexCommand,
+                &["h", "PX", "70368744177663", "FIELDS", "1", "f"]
+            ),
+            "invalid expire time in 'hgetex' command"
+        );
+    }
+
+    #[test]
+    fn hgetex_pxat_above_bound_rejected() {
+        assert_eq!(
+            invalid_msg(
+                HgetexCommand,
+                &["h", "PXAT", "70368744177664", "FIELDS", "1", "f"]
+            ),
+            "invalid expire time in 'hgetex' command"
+        );
+    }
+
+    #[test]
+    fn hsetex_exat_above_bound_rejected() {
+        assert_eq!(
+            invalid_msg(
+                HsetexCommand,
+                &["h", "EXAT", "70368744178", "FIELDS", "1", "f", "v"]
+            ),
+            "invalid expire time in 'hsetex' command"
+        );
+    }
+
+    #[test]
+    fn hsetex_pxat_above_bound_rejected() {
+        assert_eq!(
+            invalid_msg(
+                HsetexCommand,
+                &["h", "PXAT", "70368744177664", "FIELDS", "1", "f", "v"]
+            ),
+            "invalid expire time in 'hsetex' command"
+        );
     }
 }

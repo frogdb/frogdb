@@ -99,6 +99,67 @@ async fn tcl_hexpire_overflow_validation() {
 }
 
 // ---------------------------------------------------------------------------
+// HEXPIRE family — positive over-bound validation (HFE_MAX_ABS_TIME_MSEC)
+//
+// Redis t_hash.c parseExpireTime caps every field-expiry deadline at
+// HFE_MAX_ABS_TIME_MSEC = 0x3FFFFFFFFFFF = 70368744177663 ms and rejects
+// anything larger with `invalid expire time in '<cmd>' command`.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_hexpire_family_above_bound_validation() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "myhash"]).await;
+    client.command(&["HSET", "myhash", "f1", "v1"]).await;
+
+    // HEXPIRE / HEXPIREAT are seconds units: bounded at HFE_MAX / 1000.
+    let resp = client
+        .command(&["HEXPIRE", "myhash", "70368744178", "FIELDS", "1", "f1"])
+        .await;
+    assert_error_prefix(&resp, "ERR invalid expire time in 'hexpire' command");
+
+    let resp = client
+        .command(&["HEXPIREAT", "myhash", "70368744178", "FIELDS", "1", "f1"])
+        .await;
+    assert_error_prefix(&resp, "ERR invalid expire time in 'hexpireat' command");
+
+    // HPEXPIRE is relative ms: now_ms + ms exceeds the cap.
+    let resp = client
+        .command(&["HPEXPIRE", "myhash", "70368744177663", "FIELDS", "1", "f1"])
+        .await;
+    assert_error_prefix(&resp, "ERR invalid expire time in 'hpexpire' command");
+
+    // HPEXPIREAT is absolute ms: exactly the cap is accepted, one past rejected.
+    let resp = client
+        .command(&[
+            "HPEXPIREAT",
+            "myhash",
+            "70368744177664",
+            "FIELDS",
+            "1",
+            "f1",
+        ])
+        .await;
+    assert_error_prefix(&resp, "ERR invalid expire time in 'hpexpireat' command");
+
+    let resp = client
+        .command(&[
+            "HPEXPIREAT",
+            "myhash",
+            "70368744177663",
+            "FIELDS",
+            "1",
+            "f1",
+        ])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_eq!(arr.len(), 1);
+    assert_integer_eq(&arr[0], 1);
+}
+
+// ---------------------------------------------------------------------------
 // NX flag
 // ---------------------------------------------------------------------------
 
