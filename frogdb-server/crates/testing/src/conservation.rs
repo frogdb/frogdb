@@ -302,6 +302,7 @@ fn is_write(function: &str) -> bool {
         function,
         "set"
             | "write"
+            | "cas"
             | "del"
             | "delete"
             | "incr"
@@ -318,11 +319,29 @@ fn is_write(function: &str) -> bool {
             | "zadd"
             | "zrem"
             | "mset"
+            | "xadd"
     )
 }
 
 /// Find a completed write to `key` by a client other than `exclude_client`
-/// whose return time falls strictly within `(lo, hi)`.
+/// that is *definitely between* the WATCH and the EXEC invoke: invoked
+/// strictly after `lo` (the WATCH's return time) and returned strictly
+/// before `hi` (the EXEC's invoke time), i.e. fully contained in the
+/// `(lo, hi)` window rather than merely overlapping it.
+///
+/// This containment requirement matters: a writer that merely *overlaps*
+/// the window — e.g. one that invoked before the WATCH returned, or
+/// returned after the EXEC was invoked — is concurrent with the WATCH's
+/// snapshot point (or the EXEC's), and a real Redis server is free to
+/// linearize it on either side. Flagging such an overlapping writer as a
+/// false negative would reject legal histories; only a writer with no
+/// possible linearization outside the gap proves the EXEC should have
+/// aborted.
+///
+/// A committed `exec` by another client is also treated as a writer: its
+/// sub-commands are parsed via [`parse_exec_commands`] and checked against
+/// the write vocabulary and per-command key extraction, so an interfering
+/// write hidden inside another client's transaction is not invisible here.
 fn writer_between(
     ops: &[CompletedOperation],
     key: &Bytes,
@@ -331,16 +350,28 @@ fn writer_between(
     exclude_client: u64,
 ) -> Option<u64> {
     for op in ops {
-        if op.client_id == exclude_client || !is_write(&op.function) {
+        if op.client_id == exclude_client {
             continue;
         }
-        if !default_keys_of(&op.function, &op.args)
-            .iter()
-            .any(|k| k == key)
+        // Definitely-between: fully contained in the (lo, hi) gap, not just
+        // overlapping it.
+        if !(op.invoke_time > lo && op.return_time < hi) {
+            continue;
+        }
+        if is_write(&op.function)
+            && default_keys_of(&op.function, &op.args)
+                .iter()
+                .any(|k| k == key)
         {
-            continue;
+            return Some(op.id);
         }
-        if op.return_time > lo && op.return_time < hi {
+        if op.function == "exec"
+            && op.result.is_some()
+            && let Some(cmds) = parse_exec_commands(&op.args)
+            && cmds
+                .iter()
+                .any(|(name, cargs)| is_write(name) && default_keys_of(name, cargs).contains(key))
+        {
             return Some(op.id);
         }
     }
@@ -348,8 +379,21 @@ fn writer_between(
 }
 
 /// WATCH no-false-negative: a committed EXEC must not have ignored another
-/// client's write to a watched key that completed between the WATCH and the
-/// EXEC invoke. (Over-abort is legal and not checked here.)
+/// client's write to a watched key that was *definitely* concurrent with the
+/// watch window, i.e. invoked after the WATCH returned (so it could not have
+/// been visible to the WATCH's snapshot) and returned before the EXEC was
+/// invoked (so it could not have been ordered after the EXEC's dirty-key
+/// check). A writer that merely overlaps either endpoint may legally
+/// linearize on either side of the WATCH snapshot and is not checked here
+/// (see [`writer_between`]). Over-abort is legal and not checked here.
+///
+/// Deliberate narrowing: this only considers writes by *other* clients.
+/// Real Redis also dirties a key's watch when the *same* client writes it
+/// before its own MULTI/EXEC (a self-write between WATCH and EXEC aborts the
+/// transaction too), but that case is excluded here. This is conservative —
+/// it can only miss violations, never manufacture a false one — so it does
+/// not compromise the no-false-negative soundness claim; it merely means
+/// same-client dirtying is not yet covered by this checker.
 pub fn check_watch_no_false_negative(history: &History) -> Result<(), ConservationViolation> {
     let ops = history.completed_operations();
     let mut by_client: HashMap<u64, Vec<&CompletedOperation>> = HashMap::new();
@@ -358,13 +402,13 @@ pub fn check_watch_no_false_negative(history: &History) -> Result<(), Conservati
     }
     for (_client, mut cops) in by_client {
         cops.sort_by_key(|o| o.invoke_time);
-        // (key, watch_time, watch_op_id)
+        // (key, watch_return_time, watch_op_id)
         let mut watched: Vec<(Bytes, u64, u64)> = Vec::new();
         for op in cops {
             match op.function.as_str() {
                 "watch" => {
-                    if let Some(k) = op.args.first() {
-                        watched.push((k.clone(), op.invoke_time, op.id));
+                    for k in &op.args {
+                        watched.push((k.clone(), op.return_time, op.id));
                     }
                 }
                 "exec" => {
@@ -628,5 +672,84 @@ mod tests {
         let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
         h.respond(e, None); // aborted -> correct behavior
         assert!(check_watch_no_false_negative(&h).is_ok());
+    }
+
+    // --- Definitely-between window soundness ---------------------------
+
+    #[test]
+    fn watch_overlapping_writer_not_flagged() {
+        // The other client's writer INVOKES before the WATCH RETURNS (so it
+        // overlaps the WATCH itself, rather than being fully contained in
+        // the watch->exec gap), but it RETURNS before the EXEC is invoked.
+        // This writer is concurrent with the WATCH's snapshot point and can
+        // legally linearize on either side of it, so a sound checker must
+        // not flag it. Pre-fix, the old code used the WATCH's invoke_time
+        // as the lower bound and only checked the writer's return_time,
+        // so it incorrectly flagged this legal history.
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k")]);
+        let other = h.invoke(2, "set", vec![b("k"), b("z")]); // invoked before watch returns
+        h.respond(w, Some(b("OK"))); // watch returns after the writer's invoke
+        h.respond(other, Some(b("OK"))); // writer returns before exec is invoked
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
+        h.respond(e, Some(b("OK")));
+        assert!(check_watch_no_false_negative(&h).is_ok());
+    }
+
+    #[test]
+    fn watch_contained_writer_flagged() {
+        // The other client's writer invokes and returns entirely inside the
+        // watch.return -> exec.invoke gap: definitely between, so a
+        // committed EXEC that ignored it is a genuine false negative.
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k")]);
+        h.respond(w, Some(b("OK")));
+        let other = h.invoke(2, "set", vec![b("k"), b("z")]);
+        h.respond(other, Some(b("OK")));
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
+        h.respond(e, Some(b("OK")));
+        assert!(matches!(
+            check_watch_no_false_negative(&h),
+            Err(ConservationViolation::WatchFalseNegative { .. })
+        ));
+    }
+
+    #[test]
+    fn watch_multi_key_second_key_flagged() {
+        // WATCH k1 k2; another client's write to k2 (the *second* watched
+        // key) is fully contained in the gap; the EXEC only touches k1 but
+        // still commits -> violation. Pre-fix, only args.first() (k1) was
+        // registered, so the interfering write to k2 was invisible.
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k1"), b("k2")]);
+        h.respond(w, Some(b("OK")));
+        let other = h.invoke(2, "set", vec![b("k2"), b("z")]);
+        h.respond(other, Some(b("OK")));
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k1"), b("v")]);
+        h.respond(e, Some(b("OK")));
+        assert!(matches!(
+            check_watch_no_false_negative(&h),
+            Err(ConservationViolation::WatchFalseNegative { .. })
+        ));
+    }
+
+    #[test]
+    fn watch_exec_writer_flagged() {
+        // Another client's committed EXEC contains a `set` on the watched
+        // key, fully contained in the gap; the watcher's own EXEC still
+        // commits -> violation. Pre-fix, `is_write` did not recognize
+        // "exec", so a write hidden inside another client's transaction
+        // was invisible.
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k")]);
+        h.respond(w, Some(b("OK")));
+        let other = h.invoke(2, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("z")]);
+        h.respond(other, Some(b("OK")));
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
+        h.respond(e, Some(b("OK")));
+        assert!(matches!(
+            check_watch_no_false_negative(&h),
+            Err(ConservationViolation::WatchFalseNegative { .. })
+        ));
     }
 }
