@@ -479,6 +479,101 @@ async fn test_sort_store_destination_survives_restart() {
     server.shutdown().await;
 }
 
+/// SMOVE mutates two keys (SREM on the source, SADD on the destination) but
+/// its spec previously declared `WalStrategy::PersistFirstKey`, which only
+/// persisted the source. The destination add never reached the WAL and was
+/// lost on restart. This pins the fix (`WalStrategy::MoveKeys`, the same
+/// strategy RPOPLPUSH uses for its identical `[source, dest, ...]` shape):
+/// the destination must survive, and — since the move empties the
+/// single-member source — the source key must be gone too.
+#[tokio::test]
+async fn test_smove_destination_survives_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    assert_eq!(
+        client.command(&["SADD", "src", "a"]).await,
+        Response::Integer(1)
+    );
+    assert_eq!(
+        client.command(&["SMOVE", "src", "dest", "a"]).await,
+        Response::Integer(1)
+    );
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    assert_eq!(
+        client.command(&["SISMEMBER", "dest", "a"]).await,
+        Response::Integer(1),
+        "SMOVE destination must survive a restart"
+    );
+    assert_eq!(
+        client.command(&["SISMEMBER", "src", "a"]).await,
+        Response::Integer(0)
+    );
+    assert_eq!(
+        client.command(&["EXISTS", "src"]).await,
+        Response::Integer(0),
+        "source emptied by SMOVE must not be recreated on recovery"
+    );
+
+    server.shutdown().await;
+}
+
+/// Same fix, but with a pre-existing destination set: recovery must not clobber
+/// the destination's other members when replaying the moved element.
+#[tokio::test]
+async fn test_smove_destination_survives_restart_with_existing_members() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    assert_eq!(
+        client.command(&["SADD", "dest", "b"]).await,
+        Response::Integer(1)
+    );
+    assert_eq!(
+        client.command(&["SADD", "src", "a"]).await,
+        Response::Integer(1)
+    );
+    assert_eq!(
+        client.command(&["SMOVE", "src", "dest", "a"]).await,
+        Response::Integer(1)
+    );
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    assert_eq!(
+        client.command(&["SISMEMBER", "dest", "a"]).await,
+        Response::Integer(1),
+        "SMOVE destination must survive a restart"
+    );
+    assert_eq!(
+        client.command(&["SISMEMBER", "dest", "b"]).await,
+        Response::Integer(1),
+        "pre-existing destination member must be unaffected"
+    );
+    assert_eq!(
+        client.command(&["EXISTS", "src"]).await,
+        Response::Integer(0)
+    );
+
+    server.shutdown().await;
+}
+
 // ============================================================================
 // HyperLogLog dense-delta WAL persistence (Tier 2 merge path)
 //

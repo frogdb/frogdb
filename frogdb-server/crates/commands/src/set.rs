@@ -918,7 +918,7 @@ impl Command for SmoveCommand {
             flags: CommandFlags::WRITE,
             keys: KeySpec::FirstTwo,
             access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::W]),
-            wal: WalStrategy::PersistFirstKey,
+            wal: WalStrategy::MoveKeys,
             wakes: WaiterWake::None,
             // Runtime-deposited (proposal 44): SMOVE is SREM+SADD internally, so
             // Redis emits `srem` on the source and `sadd` on the destination
