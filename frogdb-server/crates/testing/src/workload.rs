@@ -242,15 +242,15 @@ fn pick<'a>(items: &'a [Bytes], rng: &mut StdRng) -> &'a Bytes {
     &items[rng.random_range(0..items.len())]
 }
 
-/// A small finite blocking timeout (seconds, as the wire expects). Finite so a
-/// client that never gets served still completes its script (turmoil sims have
-/// a bounded duration); the FIFO/exactly-once checkers cover served vs timed
-/// out. Values: "1" or "2".
+/// A small finite blocking timeout (fractional seconds, as the wire expects).
+/// Finite AND short so a client whose blocking ops all time out still finishes
+/// its script well within the bounded turmoil sim window; the FIFO/exactly-once
+/// checkers cover served vs timed out. Values: "0.1" or "0.2".
 fn block_timeout(rng: &mut StdRng) -> Bytes {
     Bytes::from(if rng.random_range(0..2) == 0 {
-        "1"
+        "0.1"
     } else {
-        "2"
+        "0.2"
     })
 }
 
