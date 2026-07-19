@@ -70,9 +70,10 @@ pub fn duplicate_delivery(history: &History) -> History {
     rebuild(&recs)
 }
 
-/// Corruption: remove the first push entirely (a lost write). The element it
-/// introduced either never existed for its later delivery (PhantomDelivery) or
-/// unbalances the counts. Trips `check_exactly_once_delivery`.
+/// Corruption: remove the first push entirely (a lost write). The pop that
+/// later delivers the removed element's value now has no matching push, so
+/// it registers as a phantom delivery. Trips `check_exactly_once_delivery`
+/// (PhantomDelivery).
 pub fn lose_element(history: &History) -> History {
     let mut recs: Vec<Operation> = history.operations().to_vec();
     let target = recs
@@ -111,7 +112,9 @@ pub fn reorder_completions(history: &History) -> History {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conservation::{check_exactly_once_delivery, check_fifo_wake_order};
+    use crate::conservation::{
+        ConservationViolation, check_exactly_once_delivery, check_fifo_wake_order,
+    };
     use crate::history::History;
     use bytes::Bytes;
     use std::collections::HashMap;
@@ -150,19 +153,28 @@ mod tests {
     #[test]
     fn drop_delivery_is_caught() {
         let corrupt = drop_delivery(&valid_delivery_history());
-        assert!(check_exactly_once_delivery(&corrupt, &HashMap::new()).is_err());
+        assert!(matches!(
+            check_exactly_once_delivery(&corrupt, &HashMap::new()),
+            Err(ConservationViolation::LostElement { .. })
+        ));
     }
 
     #[test]
     fn duplicate_delivery_is_caught() {
         let corrupt = duplicate_delivery(&valid_delivery_history());
-        assert!(check_exactly_once_delivery(&corrupt, &HashMap::new()).is_err());
+        assert!(matches!(
+            check_exactly_once_delivery(&corrupt, &HashMap::new()),
+            Err(ConservationViolation::MultipleDelivery { .. })
+        ));
     }
 
     #[test]
     fn lose_element_is_caught() {
         let corrupt = lose_element(&valid_delivery_history());
-        assert!(check_exactly_once_delivery(&corrupt, &HashMap::new()).is_err());
+        assert!(matches!(
+            check_exactly_once_delivery(&corrupt, &HashMap::new()),
+            Err(ConservationViolation::PhantomDelivery { .. })
+        ));
     }
 
     #[test]
@@ -173,6 +185,9 @@ mod tests {
     #[test]
     fn reorder_completions_is_caught() {
         let corrupt = reorder_completions(&valid_fifo_history());
-        assert!(check_fifo_wake_order(&corrupt).is_err());
+        assert!(matches!(
+            check_fifo_wake_order(&corrupt),
+            Err(ConservationViolation::FifoViolation { .. })
+        ));
     }
 }
