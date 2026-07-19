@@ -100,8 +100,14 @@ pub fn check_exactly_once_delivery(
     for op in history.completed_operations() {
         match op.function.as_str() {
             "lpush" | "rpush" => {
-                for v in op.args.iter().skip(1) {
-                    record_push(v.clone(), op.id, &mut pushed, &mut push_op);
+                // A push with no result is a failed/indeterminate op: it
+                // never observably introduced its elements, so counting it
+                // as pushed would make any later non-delivery of those
+                // elements register as a false LostElement.
+                if op.result.is_some() {
+                    for v in op.args.iter().skip(1) {
+                        record_push(v.clone(), op.id, &mut pushed, &mut push_op);
+                    }
                 }
             }
             "lpop" | "rpop" => {
@@ -160,7 +166,10 @@ pub fn check_exactly_once_delivery(
             return Err(ConservationViolation::MultipleDelivery {
                 element: v.to_vec(),
                 pushed_by: push_op.get(&v).copied().unwrap_or(0),
-                times: d as usize,
+                // Total observed count, not just deliveries: when final-
+                // state duplication contributes to the over-count,
+                // reporting `d` alone would understate what was observed.
+                times: (d + f) as usize,
             });
         }
         if d + f < p {
@@ -174,19 +183,44 @@ pub fn check_exactly_once_delivery(
 }
 
 /// Blocked poppers (BLPOP/BRPOP hits) on a key are served in invoke order.
+///
+/// Waiters are grouped by the key each was actually *served* from — parsed
+/// out of the hit-encoding `"served_key|elem"` in the op result — rather
+/// than by `op.args.first()`. For multi-key blocking pops (e.g.
+/// `blpop k1 k2 0`), the first watched key need not be the key that ended
+/// up serving the op, so grouping by it can silently split one logical
+/// wake-order queue across multiple key buckets and hide real violations.
+/// Ops that timed out (`result == None`) are skipped: they were never
+/// served and carry no wake-order information.
+///
+/// Known limitation: this check uses invoke-time order as a proxy for the
+/// server's actual registration order. Two waiters with near-simultaneous,
+/// overlapping invokes can legitimately register with the server in either
+/// order, so this can flag a false FIFO violation in that narrow race
+/// window. Phase 2's `DEBUG WAITQUEUE` registration-order dumps will let
+/// this check use exact registration order instead of invoke order;
+/// phase 3's generator will stagger blocking invokes to keep generated
+/// histories out of that window.
 pub fn check_fifo_wake_order(history: &History) -> Result<(), ConservationViolation> {
-    // key -> [(invoke_time, return_time, op_id)] for served blocking pops.
+    // served_key -> [(invoke_time, return_time, op_id)] for served blocking
+    // pops, grouped by the key each waiter was actually served from.
     let mut by_key: HashMap<Bytes, Vec<(u64, u64, u64)>> = HashMap::new();
     for op in history.completed_operations() {
-        if matches!(op.function.as_str(), "blpop" | "brpop")
-            && op.result.is_some()
-            && let Some(key) = op.args.first()
-        {
-            by_key
-                .entry(key.clone())
-                .or_default()
-                .push((op.invoke_time, op.return_time, op.id));
+        if !matches!(op.function.as_str(), "blpop" | "brpop") {
+            continue;
         }
+        let Some(result) = &op.result else {
+            // Timed out: never served, no ordering information to check.
+            continue;
+        };
+        let result_str = String::from_utf8_lossy(result);
+        let Some((served_key, _)) = result_str.split_once('|') else {
+            continue;
+        };
+        by_key
+            .entry(Bytes::from(served_key.to_string()))
+            .or_default()
+            .push((op.invoke_time, op.return_time, op.id));
     }
     for (key, mut served) in by_key {
         served.sort_by_key(|x| x.1); // by serve (return) order
@@ -286,6 +320,75 @@ mod tests {
         // w2 (later waiter) served before w1 (earlier waiter).
         h.respond(w2, Some(b("k|b")));
         h.respond(w1, Some(b("k|a")));
+        assert!(matches!(
+            check_fifo_wake_order(&h),
+            Err(ConservationViolation::FifoViolation { .. })
+        ));
+    }
+
+    #[test]
+    fn delivery_lmove_double_role() {
+        let mut h = History::new();
+        let p = h.invoke(1, "rpush", vec![b("a"), b("x")]);
+        h.respond(p, Some(b("1")));
+        let m = h.invoke(2, "lmove", vec![b("a"), b("b"), b("left"), b("right")]);
+        h.respond(m, Some(b("x")));
+
+        // "x" ends up in b's final list: pushed once (rpush), moved once
+        // (lmove counts as both a delivery from "a" and a push to "b"), and
+        // present once at quiesce -> conserved.
+        let mut final_state = HashMap::new();
+        final_state.insert(b("b"), vec![b("x")]);
+        assert!(check_exactly_once_delivery(&h, &final_state).is_ok());
+
+        // Same history, but "x" never actually landed in "b"'s final list
+        // -> the lmove's push-side contribution is unaccounted for, so the
+        // element is lost overall.
+        assert!(matches!(
+            check_exactly_once_delivery(&h, &HashMap::new()),
+            Err(ConservationViolation::LostElement { .. })
+        ));
+    }
+
+    #[test]
+    fn delivery_blpop_hit_parsed() {
+        let mut h = History::new();
+        let p = h.invoke(1, "rpush", vec![b("k"), b("x")]);
+        h.respond(p, Some(b("1")));
+        let bl = h.invoke(2, "blpop", vec![b("k"), b("0")]);
+        h.respond(bl, Some(b("k|x")));
+
+        assert!(check_exactly_once_delivery(&h, &HashMap::new()).is_ok());
+    }
+
+    #[test]
+    fn delivery_phantom_pop() {
+        let mut h = History::new();
+        let p = h.invoke(1, "lpop", vec![b("k")]);
+        h.respond(p, Some(b("ghost")));
+
+        assert!(matches!(
+            check_exactly_once_delivery(&h, &HashMap::new()),
+            Err(ConservationViolation::PhantomDelivery { .. })
+        ));
+    }
+
+    #[test]
+    fn fifo_multikey_served_key_grouping() {
+        let mut h = History::new();
+        // waiter1 invokes first, watching two keys (k1 and k2).
+        let w1 = h.invoke(1, "blpop", vec![b("k1"), b("k2"), b("0")]);
+        // waiter2 invokes later, watching only k2.
+        let w2 = h.invoke(2, "blpop", vec![b("k2"), b("0")]);
+        // waiter2 (later invoke) is served from k2 first...
+        h.respond(w2, Some(b("k2|a")));
+        // ...and waiter1 (earlier invoke) is served from k2 second: this is
+        // a FIFO violation, but only detectable when both waiters are
+        // grouped by the *served* key (k2), not by op.args.first() (which
+        // would put waiter1 under k1 and waiter2 under k2, hiding the
+        // violation).
+        h.respond(w1, Some(b("k2|b")));
+
         assert!(matches!(
             check_fifo_wake_order(&h),
             Err(ConservationViolation::FifoViolation { .. })
