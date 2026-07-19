@@ -6,10 +6,12 @@
 
 use bytes::Bytes;
 
+mod hash;
 mod kv;
 mod list;
 mod register;
 
+pub use hash::{HashModel, HashState};
 pub use kv::{KVModel, KVState};
 pub use list::{ListModel, ListState};
 pub use register::{RegisterModel, RegisterState};
