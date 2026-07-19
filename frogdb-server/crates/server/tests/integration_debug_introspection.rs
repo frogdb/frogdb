@@ -30,3 +30,46 @@ async fn debug_locktable_unknown_still_errors_are_isolated() {
     assert!(matches!(resp, Response::Error(_)));
     server.shutdown().await;
 }
+
+#[tokio::test]
+async fn debug_waitqueue_empty_on_idle_server() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+    let resp = client.command(&["DEBUG", "WAITQUEUE"]).await;
+    match resp {
+        Response::Bulk(Some(b)) => assert_eq!(&b[..], b"# wait queue is empty"),
+        other => panic!("expected empty-sentinel bulk, got {other:?}"),
+    }
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn debug_waitqueue_reports_blocked_client() {
+    let server = TestServer::start_standalone().await;
+
+    // A second connection blocks on BLPOP with an infinite timeout.
+    let mut blocker = server.connect().await;
+    let handle = tokio::spawn(async move {
+        // Never resolves within the test; the task is dropped at shutdown.
+        blocker.command(&["BLPOP", "waitq-key", "0"]).await
+    });
+
+    // Poll DEBUG WAITQUEUE until the waiter appears (bounded). When waiters are
+    // present the server replies with a structured RESP map; over the default
+    // RESP2 client that arrives as a (non-empty) Array. The empty case is the
+    // `# wait queue is empty` bulk sentinel, so an Array reply means "seen".
+    let mut probe = server.connect().await;
+    let mut seen = false;
+    for _ in 0..50 {
+        let resp = probe.command(&["DEBUG", "WAITQUEUE"]).await;
+        if matches!(resp, Response::Array(ref items) if !items.is_empty()) {
+            seen = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(seen, "DEBUG WAITQUEUE never reported the blocked BLPOP");
+
+    handle.abort();
+    server.shutdown().await;
+}

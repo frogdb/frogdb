@@ -608,6 +608,12 @@ pub enum ShardMessage {
         response_tx: oneshot::Sender<super::types::LockTableInfo>,
     },
 
+    /// Get the blocking-waiter snapshot from this shard (DEBUG WAITQUEUE).
+    GetWaitQueueInfo {
+        /// Channel to send the response.
+        response_tx: oneshot::Sender<super::types::WaitQueueInfo>,
+    },
+
     /// Get pub/sub limits info from this shard.
     GetPubSubLimitsInfo {
         /// Channel to send the response.
@@ -681,6 +687,7 @@ impl ShardMessage {
             ShardMessage::RaftCommand { .. } => "RaftCommand",
             ShardMessage::GetVllQueueInfo { .. } => "GetVllQueueInfo",
             ShardMessage::GetLockTableInfo { .. } => "GetLockTableInfo",
+            ShardMessage::GetWaitQueueInfo { .. } => "GetWaitQueueInfo",
             ShardMessage::GetPubSubLimitsInfo { .. } => "GetPubSubLimitsInfo",
             ShardMessage::FlushSearchIndexes { .. } => "FlushSearchIndexes",
             ShardMessage::Shutdown => "Shutdown",

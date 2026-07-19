@@ -15,6 +15,9 @@ impl ShardWorker {
             ShardMessage::GetLockTableInfo { response_tx } => {
                 let _ = response_tx.send(self.collect_lock_table_info());
             }
+            ShardMessage::GetWaitQueueInfo { response_tx } => {
+                let _ = response_tx.send(self.collect_wait_queue_info());
+            }
             _ => unreachable!("dispatch_debug_introspection got a non-introspection message"),
         }
     }

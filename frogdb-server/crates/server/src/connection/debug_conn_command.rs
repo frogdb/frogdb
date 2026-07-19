@@ -147,6 +147,7 @@ impl ConnectionCommand for DebugConnCommand {
                     format_vll_response(infos)
                 }
                 b"LOCKTABLE" => format_locktable_response(debug.gather_lock_table().await),
+                b"WAITQUEUE" => format_waitqueue_response(debug.gather_wait_queue().await),
                 b"PUBSUB" => {
                     if args.len() > 1 && args[1].eq_ignore_ascii_case(b"LIMITS") {
                         debug.pubsub_limits().await
@@ -247,6 +248,8 @@ fn debug_help() -> Response {
         "    Show VLL queue info.",
         "DEBUG LOCKTABLE",
         "    Show the per-shard VLL lock table (intents, grants, continuation locks).",
+        "DEBUG WAITQUEUE",
+        "    Show blocked waiters by key/connection, in registration order.",
         "DEBUG PUBSUB LIMITS",
         "    Show pub/sub subscription usage vs limits.",
         "DEBUG BUNDLE GENERATE [DURATION <seconds>]",
@@ -532,6 +535,61 @@ fn format_locktable_response(infos: Vec<frogdb_core::shard::LockTableInfo>) -> R
             Response::Map(vec![
                 (Response::bulk("continuation_lock"), continuation_lock),
                 (Response::bulk("intents"), intents),
+            ]),
+        ));
+    }
+    Response::Map(shards)
+}
+
+/// Format `DEBUG WAITQUEUE` — a RESP map of `shard:<id>` → detail, preserving
+/// per-waiter registration order. Empty across all shards -> sentinel bulk.
+fn format_waitqueue_response(infos: Vec<frogdb_core::shard::WaitQueueInfo>) -> Response {
+    if infos.iter().all(|i| i.total_waiters == 0) {
+        return Response::Bulk(Some(Bytes::from("# wait queue is empty")));
+    }
+    let mut shards = Vec::new();
+    for info in infos {
+        let keys = Response::Array(
+            info.keys
+                .iter()
+                .map(|k| {
+                    let waiters = Response::Array(
+                        k.waiters
+                            .iter()
+                            .map(|w| {
+                                Response::Map(vec![
+                                    (
+                                        Response::bulk("conn_id"),
+                                        Response::Integer(w.conn_id as i64),
+                                    ),
+                                    (Response::bulk("op"), Response::bulk(w.op.clone())),
+                                    (
+                                        Response::bulk("registration_seq"),
+                                        Response::Integer(w.registration_seq as i64),
+                                    ),
+                                    (
+                                        Response::bulk("has_deadline"),
+                                        Response::Integer(i64::from(w.has_deadline)),
+                                    ),
+                                ])
+                            })
+                            .collect(),
+                    );
+                    Response::Map(vec![
+                        (Response::bulk("key"), Response::bulk(k.key.clone())),
+                        (Response::bulk("waiters"), waiters),
+                    ])
+                })
+                .collect(),
+        );
+        shards.push((
+            Response::bulk(format!("shard:{}", info.shard_id)),
+            Response::Map(vec![
+                (
+                    Response::bulk("total_waiters"),
+                    Response::Integer(info.total_waiters as i64),
+                ),
+                (Response::bulk("keys"), keys),
             ]),
         ));
     }
@@ -837,6 +895,11 @@ mod tests {
         fn gather_lock_table<'a>(
             &'a self,
         ) -> BoxFuture<'a, Vec<frogdb_core::shard::LockTableInfo>> {
+            Box::pin(async { Vec::new() })
+        }
+        fn gather_wait_queue<'a>(
+            &'a self,
+        ) -> BoxFuture<'a, Vec<frogdb_core::shard::WaitQueueInfo>> {
             Box::pin(async { Vec::new() })
         }
         fn pubsub_limits<'a>(&'a self) -> BoxFuture<'a, Response> {

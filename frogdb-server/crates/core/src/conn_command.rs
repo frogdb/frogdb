@@ -528,6 +528,9 @@ pub trait DebugProvider: Send + Sync {
     /// DEBUG LOCKTABLE — the per-shard VLL lock-table snapshots (all shards).
     fn gather_lock_table<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::LockTableInfo>>;
 
+    /// DEBUG WAITQUEUE — the per-shard blocking-waiter snapshots (all shards).
+    fn gather_wait_queue<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::WaitQueueInfo>>;
+
     /// DEBUG PUBSUB LIMITS — this connection's and the fleet's subscription usage
     /// against the configured maxima (a whole-reply subcommand: it reads
     /// connection-local subscription counts the executor cannot see).
@@ -933,6 +936,9 @@ mod tests {
             unimplemented!()
         }
         fn gather_lock_table<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::LockTableInfo>> {
+            unimplemented!()
+        }
+        fn gather_wait_queue<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::WaitQueueInfo>> {
             unimplemented!()
         }
         fn pubsub_limits<'a>(&'a self) -> BoxFuture<'a, Response> {

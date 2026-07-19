@@ -879,6 +879,39 @@ pub struct LockTableInfo {
     pub continuation_lock: Option<VllContinuationLockInfo>,
 }
 
+/// Response for `DEBUG WAITQUEUE` — a per-shard blocking-waiter snapshot.
+#[derive(Debug, Clone, Default)]
+pub struct WaitQueueInfo {
+    /// Shard identifier.
+    pub shard_id: usize,
+    /// Total active waiters on this shard.
+    pub total_waiters: usize,
+    /// Waiters grouped by key (keys sorted; waiters in registration order).
+    pub keys: Vec<WaitQueueKeyInfo>,
+}
+
+/// Waiters blocked on one key.
+#[derive(Debug, Clone)]
+pub struct WaitQueueKeyInfo {
+    /// The key (lossy UTF-8 for display).
+    pub key: String,
+    /// Waiters in registration (FIFO) order.
+    pub waiters: Vec<WaitQueueWaiterInfo>,
+}
+
+/// One blocked waiter's view.
+#[derive(Debug, Clone)]
+pub struct WaitQueueWaiterInfo {
+    /// Connection id of the blocked client.
+    pub conn_id: u64,
+    /// Blocking command name (e.g. "BLPOP").
+    pub op: String,
+    /// Queue-wide monotonic registration ordinal (smaller = earlier).
+    pub registration_seq: u64,
+    /// Whether the waiter has a finite deadline.
+    pub has_deadline: bool,
+}
+
 /// Pub/Sub limits info for a shard.
 #[derive(Debug, Clone, Default)]
 pub struct PubSubLimitsInfo {

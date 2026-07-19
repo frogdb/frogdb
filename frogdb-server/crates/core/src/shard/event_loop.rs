@@ -279,7 +279,7 @@ impl ShardWorker {
             | VllAbort { .. }
             | VllContinuationLock { .. }
             | GetVllQueueInfo { .. } => self.dispatch_vll(msg).await,
-            GetLockTableInfo { .. } => {
+            GetLockTableInfo { .. } | GetWaitQueueInfo { .. } => {
                 self.dispatch_debug_introspection(msg);
                 false
             }

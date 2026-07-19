@@ -13,7 +13,7 @@ use super::message::ScatterOp;
 use super::types::{
     BigKeyInfo, BigKeysScanResponse, InfoShardSnapshot, LockTableInfo, ShardMemoryStats,
     TieredCounts, VllContinuationLockInfo, VllKeyIntentInfo, VllPendingOpInfo, VllQueueInfo,
-    WalLagStatsResponse,
+    WaitQueueInfo, WaitQueueKeyInfo, WaitQueueWaiterInfo, WalLagStatsResponse,
 };
 use super::worker::ShardWorker;
 
@@ -222,6 +222,32 @@ impl ShardWorker {
             shard_id: self.shard_id(),
             intents,
             continuation_lock,
+        }
+    }
+
+    /// Collect the blocking-waiter snapshot for `DEBUG WAITQUEUE`.
+    pub(crate) fn collect_wait_queue_info(&self) -> WaitQueueInfo {
+        let keys = self
+            .wait_queue
+            .dump()
+            .into_iter()
+            .map(|(key, waiters)| WaitQueueKeyInfo {
+                key: Self::format_key_for_display(&key),
+                waiters: waiters
+                    .into_iter()
+                    .map(|w| WaitQueueWaiterInfo {
+                        conn_id: w.conn_id,
+                        op: w.op.to_string(),
+                        registration_seq: w.registration_seq,
+                        has_deadline: w.has_deadline,
+                    })
+                    .collect(),
+            })
+            .collect();
+        WaitQueueInfo {
+            shard_id: self.shard_id(),
+            total_waiters: self.wait_queue.waiter_count(),
+            keys,
         }
     }
 
@@ -449,5 +475,36 @@ mod introspection_tests {
         assert_eq!(info.shard_id, 0);
         assert!(info.intents.is_empty());
         assert!(info.continuation_lock.is_none());
+    }
+
+    #[test]
+    fn wait_queue_info_reports_registered_waiter() {
+        use crate::shard::WaitEntry;
+        use crate::types::BlockingOp;
+        use bytes::Bytes;
+        use frogdb_protocol::ProtocolVersion;
+        use tokio::sync::oneshot;
+
+        let mut worker = test_worker();
+        let (tx, _rx) = oneshot::channel();
+        worker
+            .wait_queue
+            .register(WaitEntry {
+                conn_id: 7,
+                keys: vec![Bytes::from("k")],
+                op: BlockingOp::BLPop,
+                response_tx: tx,
+                deadline: None,
+                protocol_version: ProtocolVersion::default(),
+            })
+            .unwrap();
+
+        let info = worker.collect_wait_queue_info();
+        assert_eq!(info.shard_id, 0);
+        assert_eq!(info.total_waiters, 1);
+        assert_eq!(info.keys.len(), 1);
+        assert_eq!(info.keys[0].key, "k");
+        assert_eq!(info.keys[0].waiters[0].conn_id, 7);
+        assert_eq!(info.keys[0].waiters[0].op, "BLPOP");
     }
 }
