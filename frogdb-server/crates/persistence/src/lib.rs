@@ -30,5 +30,6 @@ pub use snapshot::{
     SnapshotCoordinator, SnapshotError, SnapshotHandle, SnapshotMetadata, SnapshotMetadataFile,
 };
 pub use wal::{
-    DurabilityMode, RocksWalWriter, WalConfig, WalFailurePolicy, WalLagStats, spawn_periodic_sync,
+    DurabilityMode, FakeFailure, FakeWalLog, FakeWalSink, RecordedWalEffect, RocksWalWriter,
+    WalConfig, WalEffectKind, WalFailurePolicy, WalLagStats, WalSink, spawn_periodic_sync,
 };
