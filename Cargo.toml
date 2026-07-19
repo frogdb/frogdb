@@ -44,6 +44,7 @@ repository = "https://github.com/nathanjordan/frogdb"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros", "signal", "io-util", "time", "fs"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 futures = "0.3"
+async-trait = "0.1"
 
 # Protocol
 bytes = "1"

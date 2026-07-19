@@ -10,7 +10,7 @@ use crate::eviction::EvictionConfig;
 use crate::functions::SharedFunctionRegistry;
 use crate::persistence::{
     NoopSnapshotCoordinator, RocksStore, RocksWalWriter, SnapshotCoordinator, WalConfig,
-    WalFailurePolicy,
+    WalFailurePolicy, WalSink,
 };
 use crate::pubsub::ShardSubscriptions;
 use crate::registry::CommandRegistry;
@@ -345,12 +345,12 @@ impl ShardWorkerBuilder {
                         std::sync::atomic::Ordering::Relaxed,
                     );
                 }
-                Some(RocksWalWriter::new(
+                Some(Box::new(RocksWalWriter::new(
                     rocks.clone(),
                     shard_id,
                     wal_config.clone(),
                     metrics_recorder.clone(),
-                ))
+                )) as Box<dyn WalSink>)
             }
             _ => None,
         };

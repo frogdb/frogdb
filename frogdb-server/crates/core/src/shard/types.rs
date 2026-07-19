@@ -8,7 +8,7 @@ use crate::eviction::{
 };
 use crate::functions::SharedFunctionRegistry;
 use crate::latency::LatencyMonitor;
-use crate::persistence::{RocksStore, RocksWalWriter, SnapshotCoordinator, WalFailurePolicy};
+use crate::persistence::{RocksStore, SnapshotCoordinator, WalFailurePolicy, WalSink};
 use crate::registry::CommandRegistry;
 use crate::replication::{ReplicationTrackerImpl, SharedBroadcaster};
 use crate::scripting::{ScriptExecutor, ScriptingConfig};
@@ -324,10 +324,11 @@ impl ShardEviction {
 /// WAL writer + snapshot coordinator for this shard.
 ///
 /// The shard's RocksDB handle is not stored here: it is captured by the
-/// [`RocksWalWriter`] and the [`SnapshotCoordinator`], and wired into the store
+/// [`RocksWalWriter`](crate::persistence::RocksWalWriter) and the
+/// [`SnapshotCoordinator`], and wired into the store
 /// as a warm tier at spawn time, so a separate copy would be write-only.
 pub(crate) struct ShardPersistence {
-    wal_writer: Option<RocksWalWriter>,
+    wal_writer: Option<Box<dyn WalSink>>,
     snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
     /// WAL failure policy, encoded via [`WalFailurePolicy::as_u8`]. Shared
     /// with ConfigManager for runtime CONFIG SET support.
@@ -336,7 +337,7 @@ pub(crate) struct ShardPersistence {
 
 impl ShardPersistence {
     pub(crate) fn new(
-        wal_writer: Option<RocksWalWriter>,
+        wal_writer: Option<Box<dyn WalSink>>,
         snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
         failure_policy: Arc<std::sync::atomic::AtomicU8>,
     ) -> Self {
@@ -348,8 +349,8 @@ impl ShardPersistence {
     }
 
     /// The WAL writer for this shard, if persistence is enabled.
-    pub(crate) fn wal_writer(&self) -> Option<&RocksWalWriter> {
-        self.wal_writer.as_ref()
+    pub(crate) fn wal_writer(&self) -> Option<&dyn WalSink> {
+        self.wal_writer.as_deref()
     }
 
     /// Returns true if a WAL writer is configured for this shard.

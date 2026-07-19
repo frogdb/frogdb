@@ -258,3 +258,60 @@ impl Drop for RocksWalWriter {
         }
     }
 }
+
+#[async_trait::async_trait]
+impl super::WalSink for RocksWalWriter {
+    async fn write_set(
+        &self,
+        key: &[u8],
+        value: &Value,
+        metadata: &KeyMetadata,
+    ) -> std::io::Result<u64> {
+        RocksWalWriter::write_set(self, key, value, metadata).await
+    }
+    async fn write_merge(
+        &self,
+        key: &[u8],
+        pairs: &[(u16, u8)],
+        metadata: &KeyMetadata,
+    ) -> std::io::Result<u64> {
+        RocksWalWriter::write_merge(self, key, pairs, metadata).await
+    }
+    async fn write_delete(&self, key: &[u8]) -> std::io::Result<u64> {
+        RocksWalWriter::write_delete(self, key).await
+    }
+    async fn write_clear(&self) -> std::io::Result<u64> {
+        RocksWalWriter::write_clear(self).await
+    }
+    async fn flush_async(&self) -> std::io::Result<()> {
+        RocksWalWriter::flush_async(self).await
+    }
+    async fn flush_through(&self, after_seq: u64) -> std::io::Result<()> {
+        RocksWalWriter::flush_through(self, after_seq).await
+    }
+    fn sequence(&self) -> u64 {
+        RocksWalWriter::sequence(self)
+    }
+    fn durable_sequence(&self) -> u64 {
+        RocksWalWriter::durable_sequence(self)
+    }
+    fn lag_stats(&self) -> WalLagStats {
+        RocksWalWriter::lag_stats(self)
+    }
+    fn shard_id(&self) -> usize {
+        RocksWalWriter::shard_id(self)
+    }
+}
+
+#[cfg(test)]
+mod sink_tests {
+    use super::*;
+
+    #[test]
+    fn rocks_wal_writer_is_a_wal_sink() {
+        fn assert_wal_sink<T: super::super::WalSink>() {}
+        assert_wal_sink::<RocksWalWriter>();
+        // Object-safety: the trait must be usable as a boxed trait object.
+        fn _accepts_dyn(_: Box<dyn super::super::WalSink>) {}
+    }
+}
