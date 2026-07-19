@@ -147,6 +147,7 @@ h1[data-page-title] {
  * ------------------------------------------------------------------------- */
 
 .card,
+.starlight-card,
 .sl-link-card {
 	border-radius: 1rem;
 	border: 1px solid var(--sl-color-hairline);
@@ -157,7 +158,6 @@ h1[data-page-title] {
 .sl-link-card:hover,
 .sl-link-card:focus-within {
 	border-color: var(--sl-color-gray-4);
-	background-color: var(--sl-color-gray-6);
 }
 
 /* ---------------------------------------------------------------------------
