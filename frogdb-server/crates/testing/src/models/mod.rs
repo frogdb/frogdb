@@ -10,11 +10,13 @@ mod hash;
 mod kv;
 mod list;
 mod register;
+mod zset;
 
 pub use hash::{HashModel, HashState};
 pub use kv::{KVModel, KVState};
 pub use list::{ListModel, ListState};
 pub use register::{RegisterModel, RegisterState};
+pub use zset::{ZSetModel, ZSetState};
 
 /// A sequential specification model.
 ///
@@ -58,4 +60,13 @@ pub trait Model: Clone + Default {
 /// Shared helper: true iff `result` is an integer reply equal to `expected`.
 pub(crate) fn expect_int(result: Option<&Bytes>, expected: i64) -> bool {
     result.is_some_and(|r| String::from_utf8_lossy(r).parse::<i64>().ok() == Some(expected))
+}
+
+/// Format a zset score the way integer-valued scores render (no trailing `.0`).
+pub(crate) fn fmt_score(s: f64) -> String {
+    if s.is_finite() && s.fract() == 0.0 {
+        format!("{}", s as i64)
+    } else {
+        format!("{s}")
+    }
 }
