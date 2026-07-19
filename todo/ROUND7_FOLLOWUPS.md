@@ -152,20 +152,42 @@ consumes `Dynamic`→`write_access_keys`, hence the `RW` choice above.
 
 ## 5. Smaller carried-over items
 
-- **Proposal 54 follow-up:** thread flush-confirm (`Durability::Confirm`'s `sequence` +
-  `flush_through`) through the `WalTarget` seam instead of reading the concrete `RocksWalWriter`,
-  so confirm-path failure injection becomes unit-testable (noted in proposal 54 implementation
-  notes).
+- **Proposal 54 follow-up — DONE (2026-07-19):** flush-confirm now threaded through the
+  `WalTarget` seam: trait gained `wal_sequence()` (`None` = no WAL, preserving the early-return)
+  and `flush_through(after_seq)`; `persist` body extracted to a seam-generic `persist_records`
+  free fn (byte-identical behavior); `TestTarget` gained independent flush-failure injection.
+  Five new unit tests in `shard/persistence.rs` (snapshot-then-flush-once, FireAndForget
+  never-flushes/log-and-continue, flush-error propagation, write-error aborts before flush,
+  no-WAL short-circuit). frogdb-core persistence suite 89/89 green; proposal 54 deviation note
+  updated.
 - **Proposal 56 follow-up:** move combined-SHA256 ownership into `CheckpointStreamCodec` so
   checksum coverage is part of the codec contract (open question in proposal 56).
 - **Flaky test:** `integration_cluster::test_info_gate_active_after_finalize` passed 2/3 in the
   round-7 final gate (pre-existing flake). Root-cause or add retry-tolerant synchronization.
-- **HFE expiry bound:** upstream Redis bounds hash-field TTL at `HFE_MAX_ABS_TIME_MSEC/1000`,
-  tighter than ours (round-6 proposal 50 open item).
-- **SMOVE WAL gap (found during ACL phase B, pre-existing):** `SMOVE` uses
-  `WalStrategy::PersistFirstKey`, persisting only the source key — but the destination set also
-  gains a member. Looks like a genuine WAL/replication gap independent of ACL; verify and fix
-  (likely `MoveKeys` like LMOVE-family).
+- **HFE expiry bound — DONE (2026-07-19):** ported upstream's bound verified against redis/redis
+  unstable source: `HFE_MAX_ABS_TIME_MSEC = EB_EXPIRE_TIME_MAX >> 2 = 0x3FFF_FFFF_FFFF`
+  (70368744177663 ms). New `hfe_resolve_abs_ms(val, is_seconds, basetime, cmd)` helper in
+  `commands/src/utils.rs` mirrors upstream `parseExpireTime` check order (seconds pre-scale
+  check, then absolute-ms bound vs basetime = now for relative arms, 0 for `*AT` arms) with
+  upstream-exact `invalid expire time in '<cmd>' command` errors; wired into
+  `execute_hexpire_common` (all four H*EXPIRE* commands) and HGETEX/HSETEX EX/PX/EXAT/PXAT.
+  SET-family bounds untouched. 9 new unit pins + boundary accept/reject pin,
+  `hsetex_px_large_value_accepted` flipped to `_rejected`, new TCL
+  `tcl_hexpire_family_above_bound_validation`. frogdb-commands 114/114,
+  hash_field_expire TCL 39/39 green. Known remaining divergence (report-only): upstream allows
+  `val == 0` through the parser and uses the name-less negative message for HGETEX/HSETEX;
+  FrogDB keeps its existing pinned zero/negative shapes. Proposal 50 notes updated.
+- **SMOVE WAL gap (found during ACL phase B, pre-existing) — VERIFIED + FIXED (2026-07-19):**
+  confirmed real: `PersistFirstKey` WAL'd only the source, so the destination-set mutation was
+  unconditionally lost on WAL-driven restart (recovery reads only RocksDB/WAL CFs; no command-log
+  fallback). Live replication was unaffected (command-level broadcast re-executes SMOVE on
+  replicas), but every node had the same local crash exposure. Fix: spec flipped to
+  `WalStrategy::MoveKeys` (`PersistOrDelete(source)` + `Persist(dest)`, identical shape to
+  RPOPLPUSH). Regression tests `test_smove_destination_survives_restart` (also pins
+  emptied-source deletion surviving restart) and
+  `test_smove_destination_survives_restart_with_existing_members` in
+  `integration_persistence.rs`; 6/6 SMOVE server tests green. No spec-pin tests asserted the old
+  strategy.
 - **`scan_for_oversized_bulk` O(n) rescan:** measured-before-optimizing note from 62-B — the codec
   rescans the full buffer per `*`-prefixed decode; now pinned by table tests, so a bounded scan can
   be proven equivalence-preserving if profiling ever flags it.
