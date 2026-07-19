@@ -4,6 +4,12 @@
 //! - Operation history recording
 //! - Linearizability checking using the WGL algorithm
 //! - Sequential specification models for key-value operations
+//! - Per-key history partitioning (`partition`) for scalable checking
+//! - Conservation checkers (`conservation`): exactly-once delivery, FIFO wake
+//!   order, transaction-sum conservation, WATCH no-false-negative
+//! - Fault-injection self-tests (`fault_injection`) guarding against
+//!   silent-green checker bugs
+//! - Strict per-type models: lists, hashes, sorted sets, streams
 //!
 //! # Linearizability Checking
 //!
@@ -41,6 +47,14 @@ pub mod history;
 pub mod models;
 pub mod partition;
 
-pub use checker::{LinearizabilityResult, check_linearizability};
+pub use checker::{LinearizabilityResult, check_linearizability, check_linearizability_bounded};
+pub use conservation::{
+    ConservationViolation, check_exactly_once_delivery, check_fifo_wake_order,
+    check_tx_sum_conservation, check_watch_no_false_negative,
+};
 pub use history::{History, OpKind, Operation};
-pub use models::{KVModel, KVState, Model, RegisterModel};
+pub use models::{
+    HashModel, HashState, KVModel, KVState, ListModel, ListState, Model, RegisterModel,
+    RegisterState, StreamData, StreamId, StreamModel, StreamState, ZSetModel, ZSetState,
+};
+pub use partition::{default_keys_of, partition_by_key};
