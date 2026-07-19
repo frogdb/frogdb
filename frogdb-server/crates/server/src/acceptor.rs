@@ -412,6 +412,10 @@ mod tests {
     /// The same `AcceptorContext` is shared by every port; only the
     /// `PortSpec` should differ per listener. Verify `is_admin` threads
     /// through correctly and shared fields stay identical across ports.
+    // Hardcodes `tokio::net::TcpListener`, which is incompatible with the
+    // turmoil-typed `PortSpec.listener` under the `turmoil` feature (and a
+    // turmoil listener cannot bind outside a sim World). Not a simulation test.
+    #[cfg(not(feature = "turmoil"))]
     #[tokio::test]
     async fn bind_threads_is_admin_per_port() {
         let ctx = test_context();
@@ -458,6 +462,9 @@ mod tests {
     /// receives" inspectable without accepting a socket. Two ports built from
     /// the same context must *share* their Arc dep members (pointer-equal), not
     /// copy them — while `config.is_admin` still tracks the per-port `PortSpec`.
+    // See `bind_threads_is_admin_per_port`: tokio-listener bind is incompatible
+    // with the turmoil-typed `PortSpec.listener`. Not a simulation test.
+    #[cfg(not(feature = "turmoil"))]
     #[tokio::test]
     async fn bind_shares_deps_across_ports() {
         let ctx = test_context();
