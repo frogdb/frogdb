@@ -35,7 +35,10 @@ impl Model for ZSetModel {
                 let mut added = 0i64;
                 let mut i = 1;
                 while i + 1 < args.len() {
-                    let score: f64 = String::from_utf8_lossy(&args[i]).parse().ok()?;
+                    let score: f64 = String::from_utf8_lossy(&args[i])
+                        .parse()
+                        .ok()
+                        .filter(|s: &f64| !s.is_nan())?;
                     let member = args[i + 1].clone();
                     if z.insert(member, score).is_none() {
                         added = added.checked_add(1)?;
@@ -209,6 +212,38 @@ mod tests {
     fn zset_strict_rejects_unknown() {
         let s = ZSetState::default();
         assert!(ZSetModel::step(&s, "sadd", &[b("z"), b("a")], Some(&b("1"))).is_none());
+    }
+
+    #[test]
+    fn zadd_nan_score_rejected() {
+        let s = ZSetState::default();
+        assert!(ZSetModel::step(&s, "zadd", &[b("z"), b("nan"), b("a")], Some(&b("1"))).is_none());
+    }
+
+    #[test]
+    fn bzpop_tie_break_lex_smallest() {
+        let s = ZSetState::default();
+        let s = ZSetModel::step(
+            &s,
+            "zadd",
+            &[b("z"), b("1"), b("a"), b("1"), b("b")],
+            Some(&b("2")),
+        )
+        .unwrap();
+        // BZPOPMIN: equal scores -> lexicographically smallest member (a) wins.
+        assert!(ZSetModel::step(&s, "bzpopmin", &[b("z"), b("0")], Some(&b("z|a|1"))).is_some());
+        assert!(ZSetModel::step(&s, "bzpopmin", &[b("z"), b("0")], Some(&b("z|b|1"))).is_none());
+        // BZPOPMAX: per documented divergence, ties also resolve to the
+        // lexicographically smallest member (a), not the largest.
+        assert!(ZSetModel::step(&s, "bzpopmax", &[b("z"), b("0")], Some(&b("z|a|1"))).is_some());
+        assert!(ZSetModel::step(&s, "bzpopmax", &[b("z"), b("0")], Some(&b("z|b|1"))).is_none());
+    }
+
+    #[test]
+    fn zscore_fractional() {
+        let s = ZSetState::default();
+        let s = ZSetModel::step(&s, "zadd", &[b("z"), b("1.5"), b("a")], Some(&b("1"))).unwrap();
+        assert!(ZSetModel::step(&s, "zscore", &[b("z"), b("a")], Some(&b("1.5"))).is_some());
     }
 
     #[test]
