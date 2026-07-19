@@ -74,6 +74,15 @@ pub(crate) trait WalTarget {
     async fn write_merge(&self, key: &[u8], pairs: &[(u16, u8)]) -> std::io::Result<()>;
     /// Persist a full-shard clear as a keyless range-tombstone entry.
     async fn write_clear(&self) -> std::io::Result<()>;
+    /// The WAL's current highest assigned sequence, or `None` when no WAL is
+    /// configured. `Confirm` snapshots this *before* its first write so the lone
+    /// [`WalTarget::flush_through`] below confirms every entry the batch
+    /// produced; a `None` short-circuits the whole persist (no writes, no flush).
+    fn wal_sequence(&self) -> Option<u64>;
+    /// Confirm every entry assigned after `after_seq` is durable, propagating a
+    /// flush failure (or a swallowed background flush that carried these entries)
+    /// so an acked write can never outrun it. Only `Confirm` calls this.
+    async fn flush_through(&self, after_seq: u64) -> std::io::Result<()>;
 }
 
 /// Resolve one [`WalAction`] against a target. Pure over the seam (no `self`),
@@ -173,6 +182,61 @@ impl WalTarget for ShardWorker {
         }
         Ok(())
     }
+
+    fn wal_sequence(&self) -> Option<u64> {
+        self.persistence.wal_writer().map(|wal| wal.sequence())
+    }
+
+    async fn flush_through(&self, after_seq: u64) -> std::io::Result<()> {
+        match self.persistence.wal_writer() {
+            Some(wal) => wal.flush_through(after_seq).await,
+            // Unreachable via `persist_records` (it only flushes when
+            // `wal_sequence` returned `Some`); inert if a future caller reaches it.
+            None => Ok(()),
+        }
+    }
+}
+
+/// The one place a batch of [`WriteRecord`]s becomes WAL writes, expressed over
+/// the [`WalTarget`] seam. Pure over the seam (no `self`, mirroring
+/// [`execute_wal_action`]) so the confirm path's sequence-snapshot ordering and
+/// `flush_through` failure injection are unit-testable without a [`ShardWorker`]
+/// or RocksDB.
+///
+/// `Confirm` snapshots the sequence *before* the first write, stages every
+/// action with `?` propagation, then `flush_through`s the snapshot exactly once.
+/// `FireAndForget` logs each action error and continues, and never flushes. No
+/// WAL configured ([`WalTarget::wal_sequence`] is `None`) short-circuits to
+/// `Ok(())` with no writes.
+async fn persist_records(
+    t: &impl WalTarget,
+    records: &[WriteRecord<'_>],
+    durability: Durability,
+) -> std::io::Result<()> {
+    let Some(current_seq) = t.wal_sequence() else {
+        return Ok(());
+    };
+    // Snapshot the sequence *before* the first write in Confirm mode, so the
+    // single `flush_through` below confirms every entry this batch produced.
+    let start_seq = matches!(durability, Durability::Confirm).then_some(current_seq);
+
+    for record in records {
+        for action in record.wal_actions() {
+            match durability {
+                Durability::Confirm => execute_wal_action(t, &action).await?,
+                Durability::FireAndForget => {
+                    let _ = execute_wal_action(t, &action)
+                        .await
+                        .inspect_err(|e| tracing::error!(error = %e, "WAL persist failed"));
+                }
+            }
+        }
+    }
+
+    match start_seq {
+        Some(seq) => t.flush_through(seq).await, // Confirm
+        None => Ok(()),                          // FireAndForget
+    }
 }
 
 impl ShardWorker {
@@ -193,30 +257,7 @@ impl ShardWorker {
         records: &[WriteRecord<'_>],
         durability: Durability,
     ) -> std::io::Result<()> {
-        let Some(wal) = self.persistence.wal_writer() else {
-            return Ok(());
-        };
-        // Snapshot the sequence *before* the first write in Confirm mode, so the
-        // single `flush_through` below confirms every entry this batch produced.
-        let start_seq = matches!(durability, Durability::Confirm).then(|| wal.sequence());
-
-        for record in records {
-            for action in record.wal_actions() {
-                match durability {
-                    Durability::Confirm => execute_wal_action(self, &action).await?,
-                    Durability::FireAndForget => {
-                        let _ = execute_wal_action(self, &action)
-                            .await
-                            .inspect_err(|e| tracing::error!(error = %e, "WAL persist failed"));
-                    }
-                }
-            }
-        }
-
-        match start_seq {
-            Some(seq) => wal.flush_through(seq).await, // Confirm
-            None => Ok(()),                            // FireAndForget
-        }
+        persist_records(self, records, durability).await
     }
 }
 
@@ -224,8 +265,15 @@ impl ShardWorker {
 mod tests {
     use super::*;
 
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::collections::HashSet;
+
+    use bytes::Bytes;
+
+    use crate::command::{
+        Arity, Command, CommandFlags, ExecutionStrategy, WaiterWake, WalStrategy,
+    };
+    use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec};
 
     /// A recorded write against the [`TestTarget`]: the WAL-write surface as
     /// observed, in call order.
@@ -245,6 +293,20 @@ mod tests {
         present: HashSet<Vec<u8>>,
         writes: RefCell<Vec<Write>>,
         fail: bool,
+        /// Injects a `flush_through` failure independently of the write `fail`
+        /// gate, so the `Confirm` flush-failure path is exercisable on its own.
+        flush_fail: bool,
+        /// Monotonic WAL sequence: each successful write bumps it, so a test can
+        /// assert the `Confirm` snapshot was taken *before* the first write
+        /// advanced it.
+        seq: Cell<u64>,
+        /// The `after_seq` of each `flush_through` call, in order.
+        flushes: RefCell<Vec<u64>>,
+        /// Every write attempt, bumped *before* the fail gate — so a swallowed
+        /// `FireAndForget` failure is still visible as an attempt that ran.
+        attempts: Cell<u64>,
+        /// Whether a WAL is configured — `false` models the no-WAL short-circuit.
+        has_wal: bool,
     }
 
     impl TestTarget {
@@ -253,6 +315,11 @@ mod tests {
                 present: present.iter().map(|k| k.to_vec()).collect(),
                 writes: RefCell::new(Vec::new()),
                 fail: false,
+                flush_fail: false,
+                seq: Cell::new(0),
+                flushes: RefCell::new(Vec::new()),
+                attempts: Cell::new(0),
+                has_wal: true,
             }
         }
 
@@ -263,11 +330,38 @@ mod tests {
             }
         }
 
+        /// A target whose writes succeed but whose `flush_through` fails.
+        fn flush_failing(present: &[&[u8]]) -> Self {
+            Self {
+                flush_fail: true,
+                ..Self::new(present)
+            }
+        }
+
+        /// A target with no WAL configured (the persist short-circuit).
+        fn no_wal() -> Self {
+            Self {
+                has_wal: false,
+                ..Self::new(&[])
+            }
+        }
+
         fn recorded(&self) -> Vec<Write> {
             self.writes.take()
         }
 
+        /// The `after_seq` of each `flush_through` call, in order.
+        fn flushed(&self) -> Vec<u64> {
+            self.flushes.take()
+        }
+
+        /// Number of write attempts (counted before the fail gate).
+        fn attempts(&self) -> u64 {
+            self.attempts.get()
+        }
+
         fn gate(&self) -> std::io::Result<()> {
+            self.attempts.set(self.attempts.get() + 1);
             if self.fail {
                 Err(std::io::Error::other("injected WAL failure"))
             } else {
@@ -282,16 +376,19 @@ mod tests {
         }
         async fn write_set(&self, key: &[u8]) -> std::io::Result<()> {
             self.gate()?;
+            self.seq.set(self.seq.get() + 1);
             self.writes.borrow_mut().push(Write::Set(key.to_vec()));
             Ok(())
         }
         async fn write_delete(&self, key: &[u8]) -> std::io::Result<()> {
             self.gate()?;
+            self.seq.set(self.seq.get() + 1);
             self.writes.borrow_mut().push(Write::Delete(key.to_vec()));
             Ok(())
         }
         async fn write_merge(&self, key: &[u8], pairs: &[(u16, u8)]) -> std::io::Result<()> {
             self.gate()?;
+            self.seq.set(self.seq.get() + 1);
             self.writes
                 .borrow_mut()
                 .push(Write::Merge(key.to_vec(), pairs.to_vec()));
@@ -299,7 +396,18 @@ mod tests {
         }
         async fn write_clear(&self) -> std::io::Result<()> {
             self.gate()?;
+            self.seq.set(self.seq.get() + 1);
             self.writes.borrow_mut().push(Write::Clear);
+            Ok(())
+        }
+        fn wal_sequence(&self) -> Option<u64> {
+            self.has_wal.then(|| self.seq.get())
+        }
+        async fn flush_through(&self, after_seq: u64) -> std::io::Result<()> {
+            if self.flush_fail {
+                return Err(std::io::Error::other("injected flush failure"));
+            }
+            self.flushes.borrow_mut().push(after_seq);
             Ok(())
         }
     }
@@ -418,5 +526,145 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    // A minimal `PersistFirstKey` command: one write record over args `[key]`
+    // resolves to a single `WalAction::Persist(key)` -> `Write::Set(key)`, so the
+    // `persist_records` flow can be exercised without a real command handler.
+    struct MockPersistCommand;
+
+    impl Command for MockPersistCommand {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "SET",
+                arity: Arity::Fixed(2),
+                flags: CommandFlags::WRITE,
+                keys: KeySpec::First,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::PersistFirstKey,
+                wakes: WaiterWake::None,
+                event: EventSpec::Suppressed,
+                requires_same_slot: false,
+                lookup: LookupSpec::None,
+                strategy: ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+
+        fn execute(
+            &self,
+            _ctx: &mut crate::command::CommandContext,
+            _args: &[Bytes],
+        ) -> Result<frogdb_protocol::Response, frogdb_types::CommandError> {
+            Ok(frogdb_protocol::Response::ok())
+        }
+    }
+
+    // Build a one-key `PersistFirstKey` write record over `key`.
+    fn record_args(key: &[u8]) -> [Bytes; 1] {
+        [Bytes::copy_from_slice(key)]
+    }
+
+    // Confirm snapshots the sequence *before* the first write and calls
+    // `flush_through` exactly once, with that snapshot, after every write.
+    #[tokio::test]
+    async fn confirm_snapshots_sequence_then_flushes_once() {
+        let cmd = MockPersistCommand;
+        let a = record_args(b"a");
+        let b = record_args(b"b");
+        let records = [WriteRecord::new(&cmd, &a), WriteRecord::new(&cmd, &b)];
+
+        let t = TestTarget::new(&[]);
+        persist_records(&t, &records, Durability::Confirm)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            t.recorded(),
+            vec![Write::Set(b"a".to_vec()), Write::Set(b"b".to_vec())]
+        );
+        // Snapshot was 0 (before any write), and exactly one flush was issued
+        // after both writes advanced the sequence to 2.
+        assert_eq!(t.flushed(), vec![0]);
+    }
+
+    // FireAndForget never flushes, and a failing write is logged and does not
+    // abort the writes that follow it (pins the effect-path swallow behavior).
+    #[tokio::test]
+    async fn fire_and_forget_never_flushes_and_continues_on_error() {
+        let cmd = MockPersistCommand;
+        let a = record_args(b"a");
+        let b = record_args(b"b");
+        let records = [WriteRecord::new(&cmd, &a), WriteRecord::new(&cmd, &b)];
+
+        // Every write fails, yet the batch still returns Ok and attempts both.
+        let t = TestTarget::failing();
+        persist_records(&t, &records, Durability::FireAndForget)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            t.attempts(),
+            2,
+            "both records attempted despite the first failing"
+        );
+        assert!(t.flushed().is_empty(), "FireAndForget must never flush");
+    }
+
+    // Confirm propagates an injected `flush_through` failure even though every
+    // write succeeded.
+    #[tokio::test]
+    async fn confirm_propagates_flush_failure() {
+        let cmd = MockPersistCommand;
+        let a = record_args(b"a");
+        let records = [WriteRecord::new(&cmd, &a)];
+
+        let t = TestTarget::flush_failing(&[]);
+        let result = persist_records(&t, &records, Durability::Confirm).await;
+
+        assert!(result.is_err(), "flush failure must propagate");
+        assert_eq!(t.recorded(), vec![Write::Set(b"a".to_vec())]);
+    }
+
+    // Confirm propagates a write failure via `?` and never reaches the flush.
+    #[tokio::test]
+    async fn confirm_write_failure_aborts_before_flush() {
+        let cmd = MockPersistCommand;
+        let a = record_args(b"a");
+        let b = record_args(b"b");
+        let records = [WriteRecord::new(&cmd, &a), WriteRecord::new(&cmd, &b)];
+
+        let t = TestTarget::failing();
+        let result = persist_records(&t, &records, Durability::Confirm).await;
+
+        assert!(result.is_err(), "write failure must propagate");
+        // First write failed -> `?` aborted before the second write and the flush.
+        assert_eq!(t.attempts(), 1, "aborted after the first failing write");
+        assert!(
+            t.flushed().is_empty(),
+            "no flush after a failed Confirm write"
+        );
+    }
+
+    // No WAL configured -> no writes, no flush, Ok(()) — for both durabilities.
+    #[tokio::test]
+    async fn no_wal_short_circuits() {
+        let cmd = MockPersistCommand;
+        let a = record_args(b"a");
+        let records = [WriteRecord::new(&cmd, &a)];
+
+        for durability in [Durability::Confirm, Durability::FireAndForget] {
+            let t = TestTarget::no_wal();
+            persist_records(&t, &records, durability).await.unwrap();
+            assert!(
+                t.recorded().is_empty(),
+                "{durability:?}: no writes without a WAL"
+            );
+            assert!(
+                t.flushed().is_empty(),
+                "{durability:?}: no flush without a WAL"
+            );
+            assert_eq!(t.attempts(), 0, "{durability:?}: no attempts without a WAL");
+        }
     }
 }

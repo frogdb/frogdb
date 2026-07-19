@@ -299,3 +299,11 @@ stays covered by `integration_persistence.rs` (rollback pre-image, ack-doesn't-o
 (action resolution + store-probe ordering + write-error propagation). Threading `sequence`/`flush`
 through `WalTarget` too would let the durability axis be unit-tested without a `ShardWorker`, but it
 widens the seam past the two capabilities the proposal scoped it to; left as a possible follow-up.
+
+**Follow-up landed.** Flush-confirm is now threaded through the seam: `WalTarget` gained
+`wal_sequence()` (`None` = no WAL configured, replacing the concrete `wal_writer()` early-return) and
+`flush_through(after_seq)`, the persist body moved to a free `persist_records(&impl WalTarget, …)`
+(with `ShardWorker::persist` a thin delegator), and the durability axis is unit-tested against
+`TestTarget` (sequence counter + flush-failure injection): Confirm's before-first-write snapshot and
+single flush, FireAndForget's log-and-continue/never-flush, flush- and write-error propagation, and
+the no-WAL short-circuit.
