@@ -54,6 +54,7 @@ pub mod fault_injection;
 pub mod history;
 pub mod models;
 pub mod partition;
+pub mod workload;
 
 pub use checker::{LinearizabilityResult, check_linearizability, check_linearizability_bounded};
 pub use conservation::{
@@ -66,3 +67,4 @@ pub use models::{
     RegisterState, StreamData, StreamId, StreamModel, StreamState, ZSetModel, ZSetState,
 };
 pub use partition::{default_keys_of, partition_by_key};
+pub use workload::{ClientScript, Profile, ScriptedOp, Workload};

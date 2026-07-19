@@ -74,6 +74,34 @@ mod bytes_vec_serde {
     }
 }
 
+/// Public `Vec<Bytes>` <-> `Vec<String>` codec, reused by the workload
+/// generator's `ScriptedOp::args`. Same lossy-UTF-8 encoding as the private
+/// [`bytes_vec_serde`]; safe because generated args never contain non-UTF-8 or
+/// the reserved `|` delimiter.
+pub mod bytes_vec_serde_pub {
+    use bytes::Bytes;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(bytes: &[Bytes], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let strings: Vec<String> = bytes
+            .iter()
+            .map(|b| String::from_utf8_lossy(b).to_string())
+            .collect();
+        strings.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Bytes>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let strings: Vec<String> = Vec::deserialize(deserializer)?;
+        Ok(strings.into_iter().map(Bytes::from).collect())
+    }
+}
+
 /// Custom serialization for Option<Bytes>.
 mod bytes_option_serde {
     use bytes::Bytes;
