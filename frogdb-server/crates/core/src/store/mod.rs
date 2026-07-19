@@ -361,6 +361,28 @@ impl ValueType for VectorSetValue {
 // Store trait - Combined interface
 // ============================================================================
 
+/// One inconsistency found by [`Store::audit_expiry_index`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpiryIndexAnomaly {
+    /// The offending key (lossy UTF-8 for display/transport).
+    pub key: String,
+    /// What is wrong.
+    pub kind: ExpiryIndexAnomalyKind,
+}
+
+/// Classes of expiry-index inconsistency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpiryIndexAnomalyKind {
+    /// Index references a key that no longer exists in the store.
+    KeyMissing,
+    /// Index references a key whose entry has no deadline (persistent).
+    KeyPersistent,
+    /// Index deadline disagrees with the entry's `expires_at`.
+    DeadlineMismatch,
+    /// Entry has a deadline but is absent from the index.
+    IndexMissing,
+}
+
 /// Storage trait for key-value operations.
 ///
 /// The single storage abstraction a shard operates through: CRUD, TTL/expiry,
@@ -423,6 +445,14 @@ pub trait Store: Send {
     /// stores that do not track per-entry sizes.
     fn recompute_memory_used(&self) -> usize {
         self.memory_used()
+    }
+
+    /// Cross-check the key-level expiry index against actual entry deadlines,
+    /// returning every inconsistency. Used by `DEBUG EXPIRY-INDEX-CHECK`; at
+    /// quiesce this must be empty. The default returns empty for stores without
+    /// an expiry index.
+    fn audit_expiry_index(&self) -> Vec<ExpiryIndexAnomaly> {
+        Vec::new()
     }
 
     /// Clear all keys from the store.
