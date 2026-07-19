@@ -868,6 +868,17 @@ pub struct VllKeyIntentInfo {
     pub lock_state: String,
 }
 
+/// Response for `DEBUG LOCKTABLE` — a per-shard VLL lock-table snapshot.
+#[derive(Debug, Clone, Default)]
+pub struct LockTableInfo {
+    /// Shard identifier.
+    pub shard_id: usize,
+    /// Per-key intents (txids + grant state), reusing the VLL intent view.
+    pub intents: Vec<VllKeyIntentInfo>,
+    /// The continuation lock, if one is held.
+    pub continuation_lock: Option<VllContinuationLockInfo>,
+}
+
 /// Pub/Sub limits info for a shard.
 #[derive(Debug, Clone, Default)]
 pub struct PubSubLimitsInfo {

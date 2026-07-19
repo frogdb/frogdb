@@ -11,8 +11,9 @@ use crate::store::Store;
 use super::counters::HotShardStatsResponse;
 use super::message::ScatterOp;
 use super::types::{
-    BigKeyInfo, BigKeysScanResponse, InfoShardSnapshot, ShardMemoryStats, TieredCounts,
-    VllContinuationLockInfo, VllKeyIntentInfo, VllPendingOpInfo, VllQueueInfo, WalLagStatsResponse,
+    BigKeyInfo, BigKeysScanResponse, InfoShardSnapshot, LockTableInfo, ShardMemoryStats,
+    TieredCounts, VllContinuationLockInfo, VllKeyIntentInfo, VllPendingOpInfo, VllQueueInfo,
+    WalLagStatsResponse,
 };
 use super::worker::ShardWorker;
 
@@ -197,6 +198,33 @@ impl ShardWorker {
         info
     }
 
+    /// Collect the VLL lock-table snapshot for `DEBUG LOCKTABLE`.
+    pub(crate) fn collect_lock_table_info(&self) -> LockTableInfo {
+        let intents = self
+            .vll
+            .intent_snapshots()
+            .into_iter()
+            .map(|snap| VllKeyIntentInfo {
+                key: Self::format_key_for_display(&snap.key),
+                txids: snap.txids,
+                lock_state: snap.lock_state,
+            })
+            .collect();
+        let continuation_lock =
+            self.vll
+                .continuation_lock_snapshot()
+                .map(|lock| VllContinuationLockInfo {
+                    txid: lock.txid,
+                    conn_id: lock.conn_id,
+                    age_ms: lock.age_ms,
+                });
+        LockTableInfo {
+            shard_id: self.shard_id(),
+            intents,
+            continuation_lock,
+        }
+    }
+
     /// Format a ScatterOp for display.
     fn format_scatter_op(op: &ScatterOp) -> String {
         match op {
@@ -379,5 +407,47 @@ impl ShardWorker {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod introspection_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
+
+    use tokio::sync::mpsc;
+
+    use crate::eviction::EvictionConfig;
+    use crate::noop::NoopMetricsRecorder;
+    use crate::registry::CommandRegistry;
+    use crate::replication::NoopBroadcaster;
+    use crate::shard::ShardWorker;
+    use crate::shard::message::{ShardReceiver, ShardSender};
+
+    fn test_worker() -> ShardWorker {
+        let (msg_tx, msg_rx) = mpsc::channel(16);
+        let (_, conn_rx) = mpsc::channel(16);
+        let shard_senders = Arc::new(vec![ShardSender::new(msg_tx)]);
+        ShardWorker::with_eviction(
+            0,
+            1,
+            ShardReceiver::new(msg_rx),
+            conn_rx,
+            shard_senders,
+            Arc::new(CommandRegistry::new()),
+            EvictionConfig::default(),
+            Arc::new(NoopMetricsRecorder::new()),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(NoopBroadcaster),
+        )
+    }
+
+    #[test]
+    fn lock_table_info_empty_on_idle_worker() {
+        let worker = test_worker();
+        let info = worker.collect_lock_table_info();
+        assert_eq!(info.shard_id, 0);
+        assert!(info.intents.is_empty());
+        assert!(info.continuation_lock.is_none());
     }
 }

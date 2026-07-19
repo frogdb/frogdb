@@ -11,7 +11,7 @@
 //! subcommand's wire output is byte-for-byte unchanged.
 
 use bytes::Bytes;
-use frogdb_core::shard::VllQueueInfo;
+use frogdb_core::shard::{LockTableInfo, VllQueueInfo};
 use frogdb_core::{BoxFuture, DebugProvider, KeysizeHistograms};
 use frogdb_protocol::Response;
 
@@ -106,6 +106,36 @@ impl DebugProvider for ConnectionHandler {
                 }
             }
 
+            results
+        })
+    }
+
+    /// DEBUG LOCKTABLE — gather the VLL lock-table snapshot from every shard.
+    fn gather_lock_table<'a>(&'a self) -> BoxFuture<'a, Vec<LockTableInfo>> {
+        Box::pin(async move {
+            use tokio::sync::oneshot;
+
+            let mut results = Vec::new();
+            let timeout = std::time::Duration::from_secs(5);
+
+            for shard_id in 0..self.core.shard_senders.len() {
+                let (response_tx, response_rx) = oneshot::channel();
+                if self.core.shard_senders[shard_id]
+                    .send(frogdb_core::shard::ShardMessage::GetLockTableInfo { response_tx })
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!(shard_id, "Failed to send GetLockTableInfo message");
+                    continue;
+                }
+                match tokio::time::timeout(timeout, response_rx).await {
+                    Ok(Ok(info)) => results.push(info),
+                    Ok(Err(_)) => {
+                        tracing::warn!(shard_id, "Channel closed while waiting for lock-table info")
+                    }
+                    Err(_) => tracing::warn!(shard_id, "Timeout waiting for lock-table info"),
+                }
+            }
             results
         })
     }

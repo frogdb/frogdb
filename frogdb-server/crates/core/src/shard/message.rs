@@ -602,6 +602,12 @@ pub enum ShardMessage {
         response_tx: oneshot::Sender<VllQueueInfo>,
     },
 
+    /// Get the VLL lock-table snapshot from this shard (DEBUG LOCKTABLE).
+    GetLockTableInfo {
+        /// Channel to send the response.
+        response_tx: oneshot::Sender<super::types::LockTableInfo>,
+    },
+
     /// Get pub/sub limits info from this shard.
     GetPubSubLimitsInfo {
         /// Channel to send the response.
@@ -674,6 +680,7 @@ impl ShardMessage {
             ShardMessage::SlotMigrated { .. } => "SlotMigrated",
             ShardMessage::RaftCommand { .. } => "RaftCommand",
             ShardMessage::GetVllQueueInfo { .. } => "GetVllQueueInfo",
+            ShardMessage::GetLockTableInfo { .. } => "GetLockTableInfo",
             ShardMessage::GetPubSubLimitsInfo { .. } => "GetPubSubLimitsInfo",
             ShardMessage::FlushSearchIndexes { .. } => "FlushSearchIndexes",
             ShardMessage::Shutdown => "Shutdown",

@@ -146,6 +146,7 @@ impl ConnectionCommand for DebugConnCommand {
                     let infos = debug.gather_vll(shard_filter).await;
                     format_vll_response(infos)
                 }
+                b"LOCKTABLE" => format_locktable_response(debug.gather_lock_table().await),
                 b"PUBSUB" => {
                     if args.len() > 1 && args[1].eq_ignore_ascii_case(b"LIMITS") {
                         debug.pubsub_limits().await
@@ -244,6 +245,8 @@ fn debug_help() -> Response {
         "    Show recent trace entries.",
         "DEBUG VLL [shard_id]",
         "    Show VLL queue info.",
+        "DEBUG LOCKTABLE",
+        "    Show the per-shard VLL lock table (intents, grants, continuation locks).",
         "DEBUG PUBSUB LIMITS",
         "    Show pub/sub subscription usage vs limits.",
         "DEBUG BUNDLE GENERATE [DURATION <seconds>]",
@@ -479,6 +482,60 @@ fn format_vll_response(infos: Vec<frogdb_core::shard::VllQueueInfo>) -> Response
     }
 
     Response::Bulk(Some(Bytes::from(lines.join("\n"))))
+}
+
+/// Format `DEBUG LOCKTABLE` — a RESP map of `shard:<id>` → per-shard detail.
+/// Empty across all shards returns a recognizable sentinel bulk string.
+fn format_locktable_response(infos: Vec<frogdb_core::shard::LockTableInfo>) -> Response {
+    let all_empty = infos
+        .iter()
+        .all(|i| i.intents.is_empty() && i.continuation_lock.is_none());
+    if all_empty {
+        return Response::Bulk(Some(Bytes::from("# lock table is empty")));
+    }
+
+    let mut shards = Vec::new();
+    for info in infos {
+        let intents = Response::Array(
+            info.intents
+                .iter()
+                .map(|intent| {
+                    Response::Map(vec![
+                        (Response::bulk("key"), Response::bulk(intent.key.clone())),
+                        (
+                            Response::bulk("txids"),
+                            Response::Array(
+                                intent
+                                    .txids
+                                    .iter()
+                                    .map(|t| Response::Integer(*t as i64))
+                                    .collect(),
+                            ),
+                        ),
+                        (
+                            Response::bulk("lock_state"),
+                            Response::bulk(intent.lock_state.clone()),
+                        ),
+                    ])
+                })
+                .collect(),
+        );
+        let continuation_lock = match &info.continuation_lock {
+            Some(l) => Response::bulk(format!(
+                "txid:{} conn_id:{} age_ms:{}",
+                l.txid, l.conn_id, l.age_ms
+            )),
+            None => Response::Bulk(None),
+        };
+        shards.push((
+            Response::bulk(format!("shard:{}", info.shard_id)),
+            Response::Map(vec![
+                (Response::bulk("continuation_lock"), continuation_lock),
+                (Response::bulk("intents"), intents),
+            ]),
+        ));
+    }
+    Response::Map(shards)
 }
 
 /// Parse the optional `DURATION <seconds>` of DEBUG BUNDLE GENERATE. The `Err`
@@ -775,6 +832,11 @@ mod tests {
             &'a self,
             _shard_filter: Option<usize>,
         ) -> BoxFuture<'a, Vec<frogdb_core::shard::VllQueueInfo>> {
+            Box::pin(async { Vec::new() })
+        }
+        fn gather_lock_table<'a>(
+            &'a self,
+        ) -> BoxFuture<'a, Vec<frogdb_core::shard::LockTableInfo>> {
             Box::pin(async { Vec::new() })
         }
         fn pubsub_limits<'a>(&'a self) -> BoxFuture<'a, Response> {
