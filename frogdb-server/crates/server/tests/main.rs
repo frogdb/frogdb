@@ -1,5 +1,7 @@
 mod common;
 
+#[cfg(feature = "turmoil")]
+mod concurrency_workload;
 mod functions;
 mod integration_acl;
 mod integration_admin;

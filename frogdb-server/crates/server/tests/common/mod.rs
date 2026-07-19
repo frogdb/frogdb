@@ -6,6 +6,8 @@ pub mod chaos_configs;
 #[cfg(feature = "turmoil")]
 pub mod invariants;
 pub mod replication_helpers;
+#[cfg(feature = "turmoil")]
+pub mod repro;
 pub mod response_helpers;
 #[cfg(feature = "turmoil")]
 pub mod sim_harness;

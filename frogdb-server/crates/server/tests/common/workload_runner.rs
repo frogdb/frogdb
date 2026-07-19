@@ -30,6 +30,26 @@ pub fn run_workload(
     num_shards: usize,
     fake_persistence: bool,
 ) -> frogdb_testing::History {
+    run_workload_capturing(workload, num_shards, fake_persistence).0
+}
+
+/// Sim-time (ms) the drainer waits before reading final list state — long
+/// enough for every client script (short think delays + sub-second blocking
+/// timeouts) to finish, well under the 60s sim duration cap.
+const DRAIN_SETTLE_MS: u64 = 30_000;
+
+/// Like [`run_workload`], but also captures the final list contents (via
+/// LRANGE readback after all clients finish) as `final_elements` for the
+/// exactly-once conservation checker. Non-list keys reply WRONGTYPE and are
+/// skipped; the readback ops are NOT recorded into the returned history.
+pub fn run_workload_capturing(
+    workload: &Workload,
+    num_shards: usize,
+    fake_persistence: bool,
+) -> (
+    frogdb_testing::History,
+    std::collections::HashMap<Bytes, Vec<Bytes>>,
+) {
     // Isolate the process-global fake-WAL registry from previous runs.
     frogdb_core::shard::FakeWalRegistry::clear();
 
@@ -69,10 +89,42 @@ pub fn run_workload(
         });
     }
 
+    // Drainer: after all clients finish, read final list contents for every
+    // key (LRANGE); non-list keys reply WRONGTYPE and are skipped.
+    let final_elements: Arc<Mutex<std::collections::HashMap<Bytes, Vec<Bytes>>>> =
+        Arc::new(Mutex::new(std::collections::HashMap::new()));
+    let drain_out = final_elements.clone();
+    let keys = Workload::key_space(workload.seed);
+    sim.client("drainer", async move {
+        tokio::time::sleep(Duration::from_millis(DRAIN_SETTLE_MS)).await;
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 65536];
+        let mut acc: Vec<u8> = Vec::with_capacity(4096);
+        for key in &keys {
+            use tokio::io::AsyncWriteExt;
+            let parts: Vec<&[u8]> = vec![b"LRANGE", key.as_ref(), b"0", b"-1"];
+            stream.write_all(&encode_command(&parts)).await?;
+            let reply = read_reply(&mut stream, &mut buf, &mut acc).await?;
+            if let OperationResult::Array(items) = reply {
+                let elems: Vec<Bytes> = items
+                    .into_iter()
+                    .filter_map(|it| match it {
+                        OperationResult::String(b) => Some(b),
+                        _ => None,
+                    })
+                    .collect();
+                drain_out.lock().unwrap().insert(key.clone(), elems);
+            }
+        }
+        Ok::<(), Box<dyn std::error::Error>>(())
+    });
+
     sim.run().expect("turmoil sim run failed");
 
-    let history = history.lock().unwrap();
-    history.to_testing_history()
+    let history = history.lock().unwrap().to_testing_history();
+    let final_elements = final_elements.lock().unwrap().clone();
+    (history, final_elements)
 }
 
 /// Execute a single scripted op on `stream`, recording invoke/return.
