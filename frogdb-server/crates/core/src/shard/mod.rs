@@ -77,5 +77,5 @@ pub use types::{
     TieredCounts, TransactionResult, VllContinuationLockInfo, VllKeyIntentInfo, VllPendingOpInfo,
     VllQueueInfo, WalLagStatsResponse,
 };
-pub use wait_queue::{ShardWaitQueue, WaitEntry};
+pub use wait_queue::{ShardWaitQueue, WaitEntry, WaiterDump};
 pub use worker::ShardWorker;
