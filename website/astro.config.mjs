@@ -132,6 +132,9 @@ starlightSidebarTopics([
 				'@fontsource-variable/inter',
 				'./src/styles/custom.css',
 			],
+			components: {
+				Hero: './src/components/Hero.astro',
+			},
 		}),
 	],
 });

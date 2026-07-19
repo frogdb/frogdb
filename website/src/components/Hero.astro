@@ -1,0 +1,112 @@
+---
+/**
+ * Hero override: eyebrow label, large tight-tracked headline, lede, pill tags,
+ * actions. `eyebrow`/`pills` come from the docsSchema extension in
+ * src/content.config.ts. Only renders on `template: splash` pages.
+ */
+import { Image } from 'astro:assets';
+import { LinkButton } from '@astrojs/starlight/components';
+
+const { data } = Astro.locals.starlightRoute.entry;
+const { title = data.title, tagline, image, actions = [] } = data.hero || {};
+const eyebrow = data.eyebrow;
+const pills = data.pills ?? [];
+
+const logo = image && 'file' in image ? image.file : undefined;
+const logoAlt = (image && 'alt' in image && image.alt) || '';
+---
+
+<div class="frog-hero">
+	{logo && <Image src={logo} width={144} alt={logoAlt} class="frog-hero-logo" />}
+	{eyebrow && <p class="frog-eyebrow">{eyebrow}</p>}
+	<h1 id="_top" data-page-title set:html={title} />
+	{tagline && <p class="frog-lede" set:html={tagline} />}
+	{
+		pills.length > 0 && (
+			<ul class="frog-pills">
+				{pills.map((pill) => (
+					<li>{pill}</li>
+				))}
+			</ul>
+		)
+	}
+	{
+		actions.length > 0 && (
+			<div class="frog-actions">
+				{actions.map(
+					({ attrs: { class: className, ...attrs } = {}, icon, link: href, text, variant }) => (
+						<LinkButton {href} {variant} icon={icon?.name} class:list={[className]} {...attrs}>
+							{text}
+							{icon?.html && <Fragment set:html={icon.html} />}
+						</LinkButton>
+					)
+				)}
+			</div>
+		)
+	}
+</div>
+
+<style>
+	.frog-hero {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 1.25rem;
+		padding-block: clamp(2.5rem, 8vw, 5.5rem) 1.5rem;
+		text-align: left;
+	}
+	.frog-hero-logo {
+		width: 4.5rem;
+		height: auto;
+	}
+	.frog-eyebrow {
+		margin: 0;
+		font-size: 0.75rem;
+		font-weight: 600;
+		letter-spacing: 0.15em;
+		text-transform: uppercase;
+		color: var(--sl-color-gray-3);
+	}
+	.frog-hero h1 {
+		margin: 0;
+		max-width: 60rem;
+		font-size: clamp(2.5rem, 6.5vw, 4.5rem);
+		font-weight: 800;
+		letter-spacing: -0.02em;
+		line-height: 1.05;
+		color: var(--sl-color-white);
+	}
+	/* `hero.title` frontmatter HTML is injected via set:html, so it escapes
+	   Astro's scoping — target it with :global. */
+	.frog-hero h1 :global(.accent) {
+		color: var(--sl-color-accent-high);
+	}
+	.frog-lede {
+		margin: 0;
+		max-width: 46rem;
+		font-size: clamp(1.05rem, 1.6vw, 1.3rem);
+		line-height: 1.6;
+		color: var(--sl-color-gray-2);
+	}
+	.frog-pills {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.6rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	.frog-pills li {
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 999px;
+		padding: 0.4rem 1rem;
+		font-size: 0.85rem;
+		color: var(--sl-color-gray-2);
+	}
+	.frog-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+		margin-top: 0.5rem;
+	}
+</style>

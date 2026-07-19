@@ -81,16 +81,6 @@
 	--ec-codeBg: #101010;
 }
 
-/* Hero section customization */
-.hero {
-	padding-block: 3rem;
-}
-
-/* Hero image sizing */
-.hero > img {
-	width: min(100%, 22.5rem);
-}
-
 /* Add spacing around compatibility badges on command reference */
 .sl-markdown-content > .sl-badge {
 	display: inline-block;
