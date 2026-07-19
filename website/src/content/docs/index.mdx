@@ -1,12 +1,20 @@
 ---
-title: FrogDB Documentation
+title: FrogDB
 description: A Redis 8.x-compatible, memory-first database built in Rust
 template: splash
+eyebrow: 'FrogDB · Memory-first database · Built in Rust'
+pills:
+  - RESP2 / RESP3
+  - Single binary
+  - RocksDB persistence
+  - Raft clustering
+  - Lua scripting
 hero:
   image:
     file: ../../assets/frogdb-logo.png
     alt: FrogDB Logo
-  tagline: A Redis 8.x-compatible, memory-first database built in Rust.
+  title: '<span class="accent">Redis 8.x</span> compatible. Memory-first. Built in Rust.'
+  tagline: FrogDB implements the Redis 8.x command surface — core types, JSON, time series, vector sets, search, and more — on a memory-first Rust core with RocksDB-backed persistence, Raft clustering, and replication.
   actions:
     - text: Get Started
       link: /getting-started/quickstart/
@@ -19,6 +27,9 @@ hero:
 
 import { CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Card from 'starlight-plugin-icons/components/Card.astro';
+import MetricTiles from '../../components/MetricTiles.astro';
+
+<MetricTiles />
 
 ## Features
 

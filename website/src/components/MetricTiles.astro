@@ -1,0 +1,58 @@
+---
+/**
+ * Homepage metric tiles. Dynamic numbers come from the auto-generated Redis
+ * test-suite data (just compat-gen); static ones mirror claims already made
+ * in the docs (commands.mdx, index feature list).
+ */
+import data from '../data/compat-exclusions.json';
+
+const { total_tests, upstream_version } = data.summary;
+
+const tiles = [
+	{ value: '250+', label: 'Redis-compatible commands' },
+	{ value: total_tests.toLocaleString('en-US'), label: 'ported Redis test cases' },
+	{ value: upstream_version.replace('Redis ', ''), label: 'upstream Redis target' },
+	{ value: '10', label: 'data structure families' },
+];
+---
+
+<div class="frog-metrics">
+	{
+		tiles.map((tile) => (
+			<div class="frog-metric">
+				<span class="frog-metric-value">{tile.value}</span>
+				<span class="frog-metric-label">{tile.label}</span>
+			</div>
+		))
+	}
+</div>
+
+<style>
+	.frog-metrics {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+		gap: 1rem;
+		margin-block: 2rem;
+	}
+	.frog-metric {
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+		padding: 1.5rem 1.25rem;
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 1rem;
+		background-color: var(--sl-color-gray-6);
+	}
+	.frog-metric-value {
+		font-size: clamp(1.75rem, 3vw, 2.5rem);
+		font-weight: 800;
+		letter-spacing: -0.02em;
+		line-height: 1.1;
+		font-variant-numeric: tabular-nums;
+		color: var(--sl-color-white);
+	}
+	.frog-metric-label {
+		font-size: 0.85rem;
+		color: var(--sl-color-gray-3);
+	}
+</style>
