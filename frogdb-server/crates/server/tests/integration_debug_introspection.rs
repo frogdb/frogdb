@@ -73,3 +73,41 @@ async fn debug_waitqueue_reports_blocked_client() {
     handle.abort();
     server.shutdown().await;
 }
+
+#[tokio::test]
+async fn debug_memory_check_consistent_after_writes() {
+    use crate::common::response_helpers::unwrap_integer;
+
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+    for i in 0..64 {
+        let key = format!("mc-{i}");
+        let resp = client.command(&["SET", &key, "some-value"]).await;
+        assert!(matches!(resp, Response::Simple(_)));
+    }
+
+    // MEMORY-CHECK always replies with a per-shard map. Over the default RESP2
+    // client a server map arrives as a flat array of alternating key/detail
+    // entries; each detail is itself a flat array of alternating field/value.
+    let resp = client.command(&["DEBUG", "MEMORY-CHECK"]).await;
+    let Response::Array(entries) = resp else {
+        panic!("expected array (RESP2-flattened map), got {resp:?}");
+    };
+    assert!(!entries.is_empty());
+    // Details are the odd-indexed entries (values of the outer map).
+    let details: Vec<&Response> = entries.iter().skip(1).step_by(2).collect();
+    assert!(!details.is_empty(), "no per-shard detail entries");
+    for detail in details {
+        let Response::Array(fields) = detail else {
+            panic!("expected per-shard detail array, got {detail:?}");
+        };
+        let consistent = fields
+            .chunks_exact(2)
+            .find(|pair| matches!(&pair[0], Response::Bulk(Some(b)) if &b[..] == b"consistent"))
+            .map(|pair| unwrap_integer(&pair[1]))
+            .expect("consistent field present");
+        assert_eq!(consistent, 1, "memory accounting drifted at quiesce");
+    }
+
+    server.shutdown().await;
+}

@@ -148,6 +148,7 @@ impl ConnectionCommand for DebugConnCommand {
                 }
                 b"LOCKTABLE" => format_locktable_response(debug.gather_lock_table().await),
                 b"WAITQUEUE" => format_waitqueue_response(debug.gather_wait_queue().await),
+                b"MEMORY-CHECK" => format_memory_check_response(debug.memory_check().await),
                 b"PUBSUB" => {
                     if args.len() > 1 && args[1].eq_ignore_ascii_case(b"LIMITS") {
                         debug.pubsub_limits().await
@@ -250,6 +251,8 @@ fn debug_help() -> Response {
         "    Show the per-shard VLL lock table (intents, grants, continuation locks).",
         "DEBUG WAITQUEUE",
         "    Show blocked waiters by key/connection, in registration order.",
+        "DEBUG MEMORY-CHECK",
+        "    Recompute live memory and report the diff vs the tracked counter.",
         "DEBUG PUBSUB LIMITS",
         "    Show pub/sub subscription usage vs limits.",
         "DEBUG BUNDLE GENERATE [DURATION <seconds>]",
@@ -596,6 +599,34 @@ fn format_waitqueue_response(infos: Vec<frogdb_core::shard::WaitQueueInfo>) -> R
     Response::Map(shards)
 }
 
+/// Format `DEBUG MEMORY-CHECK` — RESP map of `shard:<id>` → {tracked, recomputed,
+/// diff, consistent}. `diff` is recomputed − tracked (may be negative).
+fn format_memory_check_response(infos: Vec<frogdb_core::shard::MemoryCheckInfo>) -> Response {
+    let mut shards = Vec::new();
+    for info in infos {
+        let diff = info.recomputed_bytes as i64 - info.tracked_bytes as i64;
+        shards.push((
+            Response::bulk(format!("shard:{}", info.shard_id)),
+            Response::Map(vec![
+                (
+                    Response::bulk("tracked_bytes"),
+                    Response::Integer(info.tracked_bytes as i64),
+                ),
+                (
+                    Response::bulk("recomputed_bytes"),
+                    Response::Integer(info.recomputed_bytes as i64),
+                ),
+                (Response::bulk("diff"), Response::Integer(diff)),
+                (
+                    Response::bulk("consistent"),
+                    Response::Integer(i64::from(diff == 0)),
+                ),
+            ]),
+        ));
+    }
+    Response::Map(shards)
+}
+
 /// Parse the optional `DURATION <seconds>` of DEBUG BUNDLE GENERATE. The `Err`
 /// string is the raw `ERR …` message the caller wraps in [`Response::error`].
 fn parse_bundle_duration(args: &[Bytes]) -> Result<u64, String> {
@@ -900,6 +931,9 @@ mod tests {
         fn gather_wait_queue<'a>(
             &'a self,
         ) -> BoxFuture<'a, Vec<frogdb_core::shard::WaitQueueInfo>> {
+            Box::pin(async { Vec::new() })
+        }
+        fn memory_check<'a>(&'a self) -> BoxFuture<'a, Vec<frogdb_core::shard::MemoryCheckInfo>> {
             Box::pin(async { Vec::new() })
         }
         fn pubsub_limits<'a>(&'a self) -> BoxFuture<'a, Response> {

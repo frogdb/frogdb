@@ -11,9 +11,9 @@ use crate::store::Store;
 use super::counters::HotShardStatsResponse;
 use super::message::ScatterOp;
 use super::types::{
-    BigKeyInfo, BigKeysScanResponse, InfoShardSnapshot, LockTableInfo, ShardMemoryStats,
-    TieredCounts, VllContinuationLockInfo, VllKeyIntentInfo, VllPendingOpInfo, VllQueueInfo,
-    WaitQueueInfo, WaitQueueKeyInfo, WaitQueueWaiterInfo, WalLagStatsResponse,
+    BigKeyInfo, BigKeysScanResponse, InfoShardSnapshot, LockTableInfo, MemoryCheckInfo,
+    ShardMemoryStats, TieredCounts, VllContinuationLockInfo, VllKeyIntentInfo, VllPendingOpInfo,
+    VllQueueInfo, WaitQueueInfo, WaitQueueKeyInfo, WaitQueueWaiterInfo, WalLagStatsResponse,
 };
 use super::worker::ShardWorker;
 
@@ -248,6 +248,15 @@ impl ShardWorker {
             shard_id: self.shard_id(),
             total_waiters: self.wait_queue.waiter_count(),
             keys,
+        }
+    }
+
+    /// Collect the memory-accounting cross-check for `DEBUG MEMORY-CHECK`.
+    pub(crate) fn collect_memory_check(&self) -> MemoryCheckInfo {
+        MemoryCheckInfo {
+            shard_id: self.shard_id(),
+            tracked_bytes: self.store.memory_used(),
+            recomputed_bytes: self.store.recompute_memory_used(),
         }
     }
 
@@ -506,5 +515,25 @@ mod introspection_tests {
         assert_eq!(info.keys[0].key, "k");
         assert_eq!(info.keys[0].waiters[0].conn_id, 7);
         assert_eq!(info.keys[0].waiters[0].op, "BLPOP");
+    }
+
+    #[test]
+    fn memory_check_consistent_after_writes() {
+        use crate::store::Store;
+        use crate::types::Value;
+        use bytes::Bytes;
+
+        let mut worker = test_worker();
+        worker
+            .store
+            .set(Bytes::from("a"), Value::string(Bytes::from("hello")));
+        worker
+            .store
+            .set(Bytes::from("b"), Value::string(Bytes::from("world")));
+
+        let info = worker.collect_memory_check();
+        assert_eq!(info.shard_id, 0);
+        assert_eq!(info.tracked_bytes, info.recomputed_bytes);
+        assert!(info.tracked_bytes > 0);
     }
 }

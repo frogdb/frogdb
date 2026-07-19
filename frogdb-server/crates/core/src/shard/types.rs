@@ -912,6 +912,17 @@ pub struct WaitQueueWaiterInfo {
     pub has_deadline: bool,
 }
 
+/// Response for `DEBUG MEMORY-CHECK` — tracked vs recomputed live footprint.
+#[derive(Debug, Clone, Default)]
+pub struct MemoryCheckInfo {
+    /// Shard identifier.
+    pub shard_id: usize,
+    /// The running `memory_used` counter.
+    pub tracked_bytes: usize,
+    /// Recomputed live sum over all entries.
+    pub recomputed_bytes: usize,
+}
+
 /// Pub/Sub limits info for a shard.
 #[derive(Debug, Clone, Default)]
 pub struct PubSubLimitsInfo {

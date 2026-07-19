@@ -531,6 +531,9 @@ pub trait DebugProvider: Send + Sync {
     /// DEBUG WAITQUEUE — the per-shard blocking-waiter snapshots (all shards).
     fn gather_wait_queue<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::WaitQueueInfo>>;
 
+    /// DEBUG MEMORY-CHECK — per-shard tracked-vs-recomputed memory (all shards).
+    fn memory_check<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::MemoryCheckInfo>>;
+
     /// DEBUG PUBSUB LIMITS — this connection's and the fleet's subscription usage
     /// against the configured maxima (a whole-reply subcommand: it reads
     /// connection-local subscription counts the executor cannot see).
@@ -939,6 +942,9 @@ mod tests {
             unimplemented!()
         }
         fn gather_wait_queue<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::WaitQueueInfo>> {
+            unimplemented!()
+        }
+        fn memory_check<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::MemoryCheckInfo>> {
             unimplemented!()
         }
         fn pubsub_limits<'a>(&'a self) -> BoxFuture<'a, Response> {

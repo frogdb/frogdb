@@ -18,6 +18,9 @@ impl ShardWorker {
             ShardMessage::GetWaitQueueInfo { response_tx } => {
                 let _ = response_tx.send(self.collect_wait_queue_info());
             }
+            ShardMessage::MemoryCheck { response_tx } => {
+                let _ = response_tx.send(self.collect_memory_check());
+            }
             _ => unreachable!("dispatch_debug_introspection got a non-introspection message"),
         }
     }

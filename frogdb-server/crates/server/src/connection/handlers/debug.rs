@@ -11,7 +11,7 @@
 //! subcommand's wire output is byte-for-byte unchanged.
 
 use bytes::Bytes;
-use frogdb_core::shard::{LockTableInfo, VllQueueInfo, WaitQueueInfo};
+use frogdb_core::shard::{LockTableInfo, MemoryCheckInfo, VllQueueInfo, WaitQueueInfo};
 use frogdb_core::{BoxFuture, DebugProvider, KeysizeHistograms};
 use frogdb_protocol::Response;
 
@@ -164,6 +164,39 @@ impl DebugProvider for ConnectionHandler {
                         tracing::warn!(shard_id, "Channel closed while waiting for wait-queue info")
                     }
                     Err(_) => tracing::warn!(shard_id, "Timeout waiting for wait-queue info"),
+                }
+            }
+            results
+        })
+    }
+
+    /// DEBUG MEMORY-CHECK — gather tracked-vs-recomputed memory from every shard.
+    fn memory_check<'a>(&'a self) -> BoxFuture<'a, Vec<MemoryCheckInfo>> {
+        Box::pin(async move {
+            use tokio::sync::oneshot;
+
+            let mut results = Vec::new();
+            let timeout = std::time::Duration::from_secs(5);
+
+            for shard_id in 0..self.core.shard_senders.len() {
+                let (response_tx, response_rx) = oneshot::channel();
+                if self.core.shard_senders[shard_id]
+                    .send(frogdb_core::shard::ShardMessage::MemoryCheck { response_tx })
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!(shard_id, "Failed to send MemoryCheck message");
+                    continue;
+                }
+                match tokio::time::timeout(timeout, response_rx).await {
+                    Ok(Ok(info)) => results.push(info),
+                    Ok(Err(_)) => {
+                        tracing::warn!(
+                            shard_id,
+                            "Channel closed while waiting for memory-check info"
+                        )
+                    }
+                    Err(_) => tracing::warn!(shard_id, "Timeout waiting for memory-check info"),
                 }
             }
             results

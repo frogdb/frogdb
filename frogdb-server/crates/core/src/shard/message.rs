@@ -614,6 +614,12 @@ pub enum ShardMessage {
         response_tx: oneshot::Sender<super::types::WaitQueueInfo>,
     },
 
+    /// Recompute live memory and report tracked vs recomputed (DEBUG MEMORY-CHECK).
+    MemoryCheck {
+        /// Channel to send the response.
+        response_tx: oneshot::Sender<super::types::MemoryCheckInfo>,
+    },
+
     /// Get pub/sub limits info from this shard.
     GetPubSubLimitsInfo {
         /// Channel to send the response.
@@ -688,6 +694,7 @@ impl ShardMessage {
             ShardMessage::GetVllQueueInfo { .. } => "GetVllQueueInfo",
             ShardMessage::GetLockTableInfo { .. } => "GetLockTableInfo",
             ShardMessage::GetWaitQueueInfo { .. } => "GetWaitQueueInfo",
+            ShardMessage::MemoryCheck { .. } => "MemoryCheck",
             ShardMessage::GetPubSubLimitsInfo { .. } => "GetPubSubLimitsInfo",
             ShardMessage::FlushSearchIndexes { .. } => "FlushSearchIndexes",
             ShardMessage::Shutdown => "Shutdown",
