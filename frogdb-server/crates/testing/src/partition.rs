@@ -1,8 +1,36 @@
 //! Per-key history partitioning for scalable linearizability checking.
+//!
+//! # Cross-key op projection semantics
+//!
+//! Some ops touch multiple keys *atomically* (`mset`, `mget`, committed `exec`)
+//! while others touch multiple keys *non-atomically from a per-key point of
+//! view* — a blocking pop watches several keys and is served by whichever one
+//! has data first (`blpop k1 k2 timeout`), and `lmove`/`blmove` atomically move
+//! an element from a source list to a (possibly different) destination list.
+//!
+//! For atomic multi-key ops we explode the op into one atomic sub-op per key
+//! (see the `mset`/`mget`/`exec` arms of [`project_for_key`]) — this is sound
+//! because the whole op really did apply to every touched key at once.
+//!
+//! For the non-atomic multi-key ops, naively replicating the *whole* op into
+//! every touched key's sub-history is unsound: `lmove src dst left right ->
+//! "x"` landing whole in `dst`'s partition claims `dst` popped `"x"` *from
+//! itself*, which the per-key `ListModel` correctly rejects — a spurious
+//! non-linearizable verdict caused by the projection, not a real bug in the
+//! system under test. Likewise `blpop k1 k2 timeout -> "k1|x"` landing in
+//! `k2`'s partition claims `k2` served a value under `k1`'s name, which no
+//! per-key model can make sense of.
+//!
+//! So these ops are instead attributed only to the single key that can
+//! soundly claim them, or dropped from every per-key partition when no single
+//! key can claim them soundly. In the drop case, cross-key conservation
+//! checkers (not per-key linearizability) are responsible for catching bugs
+//! involving the op — see the `blpop`/`brpop`/`bzpopmin`/`bzpopmax`/`lmove`/
+//! `blmove` arms of [`project_for_key`] for the exact rules.
 
 use crate::history::{History, OpKind};
 use bytes::Bytes;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Parse the `exec` argument encoding into `(command_name, command_args)` pairs.
 ///
@@ -31,6 +59,9 @@ fn exec_keys(args: &[Bytes]) -> Vec<Bytes> {
     let mut keys = Vec::new();
     if let Some(cmds) = parse_exec_commands(args) {
         for (_name, cargs) in cmds {
+            // Assumes the phase-1 KVModel exec vocabulary is single-key
+            // (set/get/incr/del): the sub-command's key is always its first
+            // argument. Revisit if exec ever wraps a multi-key command.
             if let Some(k) = cargs.first()
                 && !keys.contains(k)
             {
@@ -57,8 +88,11 @@ pub fn default_keys_of(function: &str, args: &[Bytes]) -> Vec<Bytes> {
         "exec" => exec_keys(args),
         "get" | "set" | "read" | "write" | "cas" | "del" | "delete" | "incr" | "lpush"
         | "rpush" | "lpop" | "rpop" | "llen" | "lrange" | "hset" | "hdel" | "hget" | "hincrby"
-        | "hgetall" | "hlen" | "zadd" | "zrem" | "zscore" | "zcard" | "xadd" | "xlen" | "xread"
-        | "watch" => args.first().cloned().into_iter().collect(),
+        | "hgetall" | "hlen" | "zadd" | "zrem" | "zscore" | "zcard" | "xadd" | "xlen" | "xread" => {
+            args.first().cloned().into_iter().collect()
+        }
+        // `watch key1 key2 ...` can watch any number of keys; all of them are keys.
+        "watch" => args.to_vec(),
         _ => Vec::new(),
     }
 }
@@ -73,18 +107,82 @@ fn project_for_key(
 ) -> Option<(String, Vec<Bytes>, Option<Bytes>)> {
     match function {
         "mset" => {
+            // Redis `mset` is last-wins when a key appears more than once
+            // (e.g. `MSET a 1 a 2` leaves `a` = 2), so scan the whole
+            // argument list and keep the last matching pair rather than
+            // returning on the first match.
             let mut i = 0;
+            let mut last_match: Option<(Bytes, Bytes)> = None;
             while i + 1 < args.len() {
                 if args[i] == *key {
-                    return Some((
-                        "set".to_string(),
-                        vec![args[i].clone(), args[i + 1].clone()],
-                        Some(Bytes::from_static(b"OK")),
-                    ));
+                    last_match = Some((args[i].clone(), args[i + 1].clone()));
                 }
                 i += 2;
             }
-            None
+            last_match.map(|(k, v)| {
+                (
+                    "set".to_string(),
+                    vec![k, v],
+                    Some(Bytes::from_static(b"OK")),
+                )
+            })
+        }
+        "blpop" | "brpop" | "bzpopmin" | "bzpopmax" => {
+            // Blocking pops watch N keys but are non-atomic across them: only
+            // the single key that actually served the result (or, for a
+            // single-watched-key op, the lone key itself) can soundly claim
+            // the op. See the module doc comment for why.
+            if args.len() < 2 {
+                return None;
+            }
+            let timeout = args.last().expect("checked len >= 2").clone();
+            match result {
+                None => {
+                    // Timed out: single-key ops keep their exact (already
+                    // sound) semantics; multi-key timeouts are dropped from
+                    // every per-key partition because no single key can
+                    // individually claim "I timed out" when it was racing
+                    // against sibling keys. Cross-key conservation checkers
+                    // cover this case instead.
+                    if args.len() == 2 {
+                        Some((function.to_string(), args.to_vec(), None))
+                    } else {
+                        None
+                    }
+                }
+                Some(r) => {
+                    // Hit: result is encoded "served_key|elem" (or
+                    // "served_key|member" for the sorted-set variants).
+                    let s = String::from_utf8_lossy(r);
+                    let served_key = s.split('|').next().unwrap_or("");
+                    if served_key.as_bytes() == key.as_ref() {
+                        Some((
+                            function.to_string(),
+                            vec![key.clone(), timeout],
+                            Some(r.clone()),
+                        ))
+                    } else {
+                        None
+                    }
+                }
+            }
+        }
+        "lmove" | "blmove" => {
+            // `lmove src dst ... -> elem` atomically removes from src and
+            // pushes to dst. When src == dst it is effectively a single-key
+            // op and is kept as-is. When src != dst, no single key's
+            // sub-history can soundly represent "popped from a different
+            // list, pushed to this one" under a per-key ListModel, so the op
+            // is dropped from both partitions; element-conservation across
+            // src/dst is left to cross-key conservation checkers (a future
+            // phase may explode this into a paired pop/push sub-op instead).
+            let src = args.first()?;
+            let dst = args.get(1)?;
+            if src == dst {
+                Some((function.to_string(), args.to_vec(), result.cloned()))
+            } else {
+                None
+            }
         }
         "mget" => {
             let idx = args.iter().position(|a| a == key)?;
@@ -131,6 +229,9 @@ fn explode_exec_for_key(
     let mut sub_cmds: Vec<(String, Vec<Bytes>)> = Vec::new();
     let mut sub_results: Vec<String> = Vec::new();
     for (i, (name, cargs)) in cmds.iter().enumerate() {
+        // Assumes the phase-1 KVModel exec vocabulary is single-key
+        // (set/get/incr/del): the sub-command's key is always its first
+        // argument. Revisit if exec ever wraps a multi-key command.
         if cargs.first() == Some(key) {
             sub_cmds.push((name.clone(), cargs.clone()));
             if let Some(res) = results.get(i) {
@@ -174,7 +275,17 @@ pub fn partition_by_key(
         let Some(result) = results.get(&op.id) else {
             continue;
         };
-        for key in keys_of(&op.function, &op.args) {
+        // Dedup first-seen order: a keys_of impl may report the same key
+        // more than once for one op (e.g. `MGET a a`, `MSET a 1 a 2`, or
+        // `lmove a a left right` before the src==dst collapse). Without
+        // this, the per-key loop below would invoke/respond twice against
+        // the same sub_ids slot, and the second `sub.respond` would panic
+        // (History::respond's `.expect` fires because the first respond
+        // already removed the pending entry).
+        let mut keys = keys_of(&op.function, &op.args);
+        let mut seen_keys: HashSet<Bytes> = HashSet::new();
+        keys.retain(|k| seen_keys.insert(k.clone()));
+        for key in keys {
             let Some((f, a, r)) = project_for_key(&op.function, &op.args, result.as_ref(), &key)
             else {
                 continue;
@@ -203,7 +314,7 @@ mod tests {
     use super::*;
     use crate::checker::check_linearizability;
     use crate::history::History;
-    use crate::models::KVModel;
+    use crate::models::{KVModel, ListModel};
     use bytes::Bytes;
 
     fn b(s: &str) -> Bytes {
@@ -319,5 +430,126 @@ mod tests {
         h.respond(e, None); // aborted (nil)
         let parts = partition_by_key(&h, default_keys_of);
         assert!(!parts.contains_key(&b("a")) || parts[&b("a")].completed_operations().is_empty());
+    }
+
+    #[test]
+    fn mget_duplicate_keys_no_panic() {
+        // MGET a a: the duplicate key must not double-invoke/respond a's
+        // sub-history (previously panicked in History::respond).
+        let mut h = History::new();
+        let s = h.invoke(1, "set", vec![b("a"), b("1")]);
+        h.respond(s, Some(b("OK")));
+        let m = h.invoke(2, "mget", vec![b("a"), b("a")]);
+        h.respond(m, Some(b("1|1")));
+
+        let parts = partition_by_key(&h, default_keys_of);
+        assert!(check_linearizability::<KVModel>(&parts[&b("a")]).is_linearizable);
+    }
+
+    #[test]
+    fn mset_duplicate_key_last_wins() {
+        // MSET a 1 a 2: Redis semantics are last-wins, so a's projected
+        // sub-op must be `set a 2`, not `set a 1`.
+        let mut h = History::new();
+        let m = h.invoke(1, "mset", vec![b("a"), b("1"), b("a"), b("2")]);
+        h.respond(m, Some(b("OK")));
+
+        let parts = partition_by_key(&h, default_keys_of);
+        let ops = parts[&b("a")].completed_operations();
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].function, "set");
+        assert_eq!(ops[0].args, vec![b("a"), b("2")]);
+    }
+
+    #[test]
+    fn multikey_blpop_hit_attributed_to_serving_key() {
+        // BLPOP k1 k2 0 -> "k1|x": only k1 (the key that actually served the
+        // value) may claim the op; k2 must see nothing from it.
+        let mut h = History::new();
+        let push = h.invoke(1, "rpush", vec![b("k1"), b("x")]);
+        h.respond(push, Some(b("1")));
+        let blk = h.invoke(2, "blpop", vec![b("k1"), b("k2"), b("0")]);
+        h.respond(blk, Some(b("k1|x")));
+
+        let parts = partition_by_key(&h, default_keys_of);
+        assert!(check_linearizability::<ListModel>(&parts[&b("k1")]).is_linearizable);
+        assert_eq!(
+            parts
+                .get(&b("k2"))
+                .map(|p| p.completed_operations().len())
+                .unwrap_or(0),
+            0
+        );
+    }
+
+    #[test]
+    fn multikey_blpop_timeout_dropped() {
+        // BLPOP k1 k2 0 -> nil: no single key can soundly claim a multi-key
+        // timeout, so it must be dropped from every per-key partition.
+        let mut h = History::new();
+        let blk = h.invoke(1, "blpop", vec![b("k1"), b("k2"), b("0")]);
+        h.respond(blk, None);
+
+        let parts = partition_by_key(&h, default_keys_of);
+        assert!(
+            parts
+                .get(&b("k1"))
+                .map(|p| p.completed_operations().is_empty())
+                .unwrap_or(true)
+        );
+        assert!(
+            parts
+                .get(&b("k2"))
+                .map(|p| p.completed_operations().is_empty())
+                .unwrap_or(true)
+        );
+    }
+
+    #[test]
+    fn cross_key_lmove_dropped() {
+        // LMOVE a b left right -> x, with a != b, cannot be attributed
+        // soundly to either partition and must be dropped from both.
+        let mut h = History::new();
+        let push = h.invoke(1, "rpush", vec![b("a"), b("x")]);
+        h.respond(push, Some(b("1")));
+        let mv = h.invoke(2, "lmove", vec![b("a"), b("b"), b("left"), b("right")]);
+        h.respond(mv, Some(b("x")));
+
+        let parts = partition_by_key(&h, default_keys_of);
+        let a_ops = parts[&b("a")].completed_operations();
+        assert_eq!(a_ops.len(), 1);
+        assert_eq!(a_ops[0].function, "rpush");
+        assert!(check_linearizability::<ListModel>(&parts[&b("a")]).is_linearizable);
+        assert!(
+            parts
+                .get(&b("b"))
+                .map(|p| p.completed_operations().is_empty())
+                .unwrap_or(true)
+        );
+    }
+
+    #[test]
+    fn same_key_lmove_kept() {
+        // LMOVE a a left right -> x is effectively single-key and must be
+        // kept in a's partition.
+        let mut h = History::new();
+        let push = h.invoke(1, "rpush", vec![b("a"), b("x")]);
+        h.respond(push, Some(b("1")));
+        let mv = h.invoke(2, "lmove", vec![b("a"), b("a"), b("left"), b("right")]);
+        h.respond(mv, Some(b("x")));
+
+        let parts = partition_by_key(&h, default_keys_of);
+        let ops = parts[&b("a")].completed_operations();
+        assert_eq!(ops.len(), 2);
+        assert_eq!(ops[1].function, "lmove");
+        assert!(check_linearizability::<ListModel>(&parts[&b("a")]).is_linearizable);
+    }
+
+    #[test]
+    fn watch_multi_key() {
+        assert_eq!(
+            default_keys_of("watch", &[b("k1"), b("k2")]),
+            vec![b("k1"), b("k2")]
+        );
     }
 }
