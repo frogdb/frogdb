@@ -1,32 +1,79 @@
 /* FrogDB Custom Styles */
 
-/* Override accent colors with frog-inspired lime green (matches logo) */
+/* ---------------------------------------------------------------------------
+ * Design tokens — dark-first "data report" theme.
+ * Loaded after rapide's @layer rapide, so these un-layered rules always win.
+ * ------------------------------------------------------------------------- */
+
 :root {
-	--sl-color-accent-low: #3d5c2a;    /* Dark lime for backgrounds */
-	--sl-color-accent: #6BAA3D;         /* Medium lime (matches frog stripes) */
-	--sl-color-accent-high: #8DC63F;    /* Bright lime (matches frog body) */
+	--sl-font: 'Inter Variable';
 }
 
-/* Dark mode as default - make it feel native */
 :root[data-theme='dark'] {
-	--sl-color-bg: #0d1117;
-	--sl-color-bg-nav: #161b22;
-	--sl-color-bg-sidebar: #0d1117;
+	/* Grayscale (white = brightest text, black = page bg) */
+	--sl-color-white: #e8e6e3;
+	--sl-color-gray-1: #d8d6d3;
+	--sl-color-gray-2: #c2c0bd;
+	--sl-color-gray-3: #8a8a8a;
+	--sl-color-gray-4: #585856;
+	--sl-color-gray-5: #2e2e2c;
+	--sl-color-gray-6: #161614;
+	--sl-color-gray-7: #101010;
+	--sl-color-black: #0a0a0a;
+
+	/* Surfaces */
+	--sl-color-bg: #0a0a0a;
+	--sl-color-bg-nav: #0d0d0c;
+	--sl-color-bg-sidebar: #0a0a0a;
+	--sl-color-hairline: rgba(255, 255, 255, 0.08);
+	--sl-color-hairline-light: rgba(255, 255, 255, 0.08);
+	--sl-color-hairline-shade: rgba(255, 255, 255, 0.05);
+
+	/* Electric lime accent (frog-adjacent) */
+	--sl-color-accent-low: #1f2a0a;
+	--sl-color-accent: #a8d92e;
+	--sl-color-accent-high: #c3f53c;
+	--sl-color-text-accent: #c3f53c;
+
+	/* Caution accent */
+	--frog-amber: #e0a43b;
+
+	/* Rapide UI chrome tokens */
+	--sl-rapide-ui-bg-color: #0f0f0e;
+	--sl-rapide-ui-header-bg-color: rgba(10, 10, 10, 0.85);
+	--sl-rapide-ui-border-color: rgba(255, 255, 255, 0.08);
 }
 
-/* Code block styling */
-.expressive-code {
-	--ec-codeBg: #161b22;
-}
+:root[data-theme='light'] {
+	/* Grayscale flips: white = darkest text, black = page bg */
+	--sl-color-white: #1a1a17;
+	--sl-color-gray-1: #2e2e2a;
+	--sl-color-gray-2: #45453f;
+	--sl-color-gray-3: #6f6f68;
+	--sl-color-gray-4: #9c9c94;
+	--sl-color-gray-5: #dedcd6;
+	--sl-color-gray-6: #f3f2ee;
+	--sl-color-gray-7: #faf9f6;
+	--sl-color-black: #fdfcfa;
 
-/* Hero section customization */
-.hero {
-	padding-block: 3rem;
-}
+	--sl-color-bg: #fdfcfa;
+	--sl-color-bg-nav: #faf9f6;
+	--sl-color-bg-sidebar: #fdfcfa;
+	--sl-color-hairline: rgba(0, 0, 0, 0.1);
+	--sl-color-hairline-light: rgba(0, 0, 0, 0.08);
+	--sl-color-hairline-shade: rgba(0, 0, 0, 0.05);
 
-/* Hero image sizing */
-.hero > img {
-	width: min(100%, 22.5rem);
+	/* Lime darkened for AA contrast on white */
+	--sl-color-accent-low: #e9f5c7;
+	--sl-color-accent: #55761a;
+	--sl-color-accent-high: #3f5a11;
+	--sl-color-text-accent: #55761a;
+
+	--frog-amber: #b07a1a;
+
+	--sl-rapide-ui-bg-color: #f6f5f1;
+	--sl-rapide-ui-header-bg-color: rgba(253, 252, 250, 0.85);
+	--sl-rapide-ui-border-color: rgba(0, 0, 0, 0.08);
 }
 
 /* Add spacing around compatibility badges on command reference */
@@ -59,6 +106,63 @@ ul.starlight-sidebar-topics a:is(.starlight-sidebar-topics-current, :hover, :foc
 
 /* Logo and title styling */
 .site-title {
-	font-weight: 700;
+	font-weight: 800;
+	letter-spacing: -0.06em;
 	gap: 0.4rem; /* Reduce gap between logo and title */
+	font-size: var(--sl-text-h1);
+}
+
+/* ---------------------------------------------------------------------------
+ * Typography polish
+ * ------------------------------------------------------------------------- */
+
+.sl-markdown-content :is(h1, h2, h3),
+h1[data-page-title] {
+	letter-spacing: -0.06em;
+}
+
+h1[data-page-title] {
+	font-weight: 800;
+}
+
+/* ---------------------------------------------------------------------------
+ * Cards: rounded, faint fill, hairline border
+ * ------------------------------------------------------------------------- */
+
+.card,
+.starlight-card,
+.sl-link-card {
+	border-radius: 1rem;
+	border: 1px solid var(--sl-color-hairline);
+	background-color: var(--sl-color-gray-6);
+	transition: border-color 0.15s ease;
+}
+
+.sl-link-card:hover,
+.sl-link-card:focus-within {
+	border-color: var(--sl-color-gray-4);
+}
+
+.sl-link-button.primary {
+	background: var(--sl-color-accent-high);
+	border-color: var(--sl-color-accent-high);
+	color: var(--sl-color-black);
+}
+
+.sl-link-button.primary:hover {
+	background: var(--sl-color-accent);
+	border-color: var(--sl-color-accent);
+}
+
+/* ---------------------------------------------------------------------------
+ * Asides: left-border callouts; caution goes amber
+ * ------------------------------------------------------------------------- */
+
+.starlight-aside {
+	border-radius: 0.5rem;
+	border-inline-start-width: 3px;
+}
+
+.starlight-aside--caution {
+	border-inline-start-color: var(--frog-amber);
 }
