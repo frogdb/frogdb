@@ -252,22 +252,29 @@ impl OperationHistory {
     pub fn to_testing_history(&self) -> frogdb_testing::History {
         let mut history = frogdb_testing::History::new();
 
-        // Group operations by ID to pair invoke/return
-        let mut invokes: HashMap<u64, &Operation> = HashMap::new();
+        // Replay BOTH record streams in recorded order so the real invoke/return
+        // interleaving is preserved. Emitting invoke()+respond() only at each
+        // Return record (the previous behavior) collapsed every operation into a
+        // zero-width point ordered by completion time, manufacturing wholesale
+        // false non-linearizability under genuine concurrency. Instead: at each
+        // Invoke record call `invoke()` and remember the sim-op-id → testing-op-id
+        // mapping; at each Return record call `respond()` on the mapped id. Since
+        // `History::invoke`/`respond` assign monotonic timestamps at call time,
+        // this reconstructs the recorder's true overlap.
+        let mut id_map: HashMap<u64, u64> = HashMap::new();
 
         for op in &self.operations {
             match op.kind {
                 OpKind::Invoke => {
-                    invokes.insert(op.op_id, op);
+                    // Convert command name to lowercase for model matching.
+                    let function = op.command.to_lowercase();
+                    let tid = history.invoke(op.client_id, &function, op.args.clone());
+                    id_map.insert(op.op_id, tid);
                 }
                 OpKind::Return => {
-                    if let Some(invoke) = invokes.remove(&op.op_id) {
-                        // Convert command name to lowercase for model matching
-                        let function = invoke.command.to_lowercase();
-                        let op_id =
-                            history.invoke(invoke.client_id, &function, invoke.args.clone());
+                    if let Some(&tid) = id_map.get(&op.op_id) {
                         let result = self.convert_result(&op.result);
-                        history.respond(op_id, result);
+                        history.respond(tid, result);
                     }
                 }
             }
@@ -624,6 +631,53 @@ mod tests {
         h.record_return_canonical(op, 1, "XREAD", reply);
         let th = h.to_testing_history();
         assert_eq!(last_return_result(&th).unwrap().as_ref(), b"1-1,f,v");
+    }
+
+    #[test]
+    fn to_testing_history_preserves_overlap() {
+        // Two overlapping ops: invoke A, invoke B, respond B, respond A.
+        // A is invoked first but returns last; B is nested strictly inside A.
+        // The converted testing::History must preserve that real interleaving:
+        // A.invoke < B.invoke, B.return < A.return, and the two are concurrent.
+        let mut h = OperationHistory::new();
+        let a = h.record_invoke(1, "SET", vec![Bytes::from("ka"), Bytes::from("va")]);
+        let b = h.record_invoke(2, "SET", vec![Bytes::from("kb"), Bytes::from("vb")]);
+        h.record_return(b, 2, OperationResult::Ok);
+        h.record_return(a, 1, OperationResult::Ok);
+
+        let th = h.to_testing_history();
+        let completed = th.completed_operations();
+        let op_a = completed
+            .iter()
+            .find(|o| o.args.first().map(|x| x.as_ref()) == Some(&b"ka"[..]))
+            .expect("op A present");
+        let op_b = completed
+            .iter()
+            .find(|o| o.args.first().map(|x| x.as_ref()) == Some(&b"kb"[..]))
+            .expect("op B present");
+
+        // Real interleaving preserved.
+        assert!(
+            op_a.invoke_time < op_b.invoke_time,
+            "A must be invoked before B (a.invoke={}, b.invoke={})",
+            op_a.invoke_time,
+            op_b.invoke_time
+        );
+        assert!(
+            op_b.return_time < op_a.return_time,
+            "B must return before A (b.return={}, a.return={})",
+            op_b.return_time,
+            op_a.return_time
+        );
+        // The windows overlap: neither op could_precede the other.
+        assert!(
+            op_a.is_concurrent_with(op_b),
+            "A and B must be concurrent (a=[{},{}], b=[{},{}])",
+            op_a.invoke_time,
+            op_a.return_time,
+            op_b.invoke_time,
+            op_b.return_time
+        );
     }
 
     #[test]
