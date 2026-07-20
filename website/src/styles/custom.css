@@ -151,6 +151,33 @@ ul.starlight-sidebar-topics a:is(.starlight-sidebar-topics-current, :hover, :foc
 }
 
 /* ---------------------------------------------------------------------------
+ * Code blocks: drop Expressive Code's faux terminal titlebar (the macOS
+ * traffic-light "menu bar"). No code fence uses a title, so nothing is lost.
+ * ------------------------------------------------------------------------- */
+
+.expressive-code .frame.is-terminal .header {
+	display: none;
+}
+
+/* Flat, bordered code frames — a hairline border instead of the default drop
+ * shadow. `inherit` tracks Expressive Code's own corner radius. */
+.expressive-code .frame {
+	box-shadow: none;
+}
+
+.expressive-code .frame.is-terminal pre {
+	border: 1px solid var(--sl-color-hairline);
+	border-radius: inherit;
+}
+
+/* Header removed, so re-anchor the copy button to the code area's top-right
+ * (its default offset assumed the ~35px titlebar). */
+.expressive-code .frame.is-terminal .copy {
+	inset-block-start: 0.5rem;
+	top: 0.5rem;
+}
+
+/* ---------------------------------------------------------------------------
  * Typography polish
  * ------------------------------------------------------------------------- */
 

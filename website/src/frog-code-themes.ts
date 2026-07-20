@@ -56,6 +56,33 @@ const frogDark: ThemeInput = {
 			scope: ['entity.other.attribute-name'],
 			settings: { foreground: '#ffaaa1' }, // coral
 		},
+		// --- Shell: keep most tokens at the default foreground so bash reads
+		// calmly. Only quoted strings, expansions/subshells, and escapes (below,
+		// via the global rules) stay colored. Scopes are qualified with
+		// `source.shell` so other languages keep their full highlighting. ---
+		{
+			scope: [
+				'source.shell entity.name.function',
+				'source.shell entity.name.command',
+				'source.shell support.function',
+				'source.shell string.unquoted.argument',
+				'source.shell constant.numeric',
+				'source.shell constant.other.option',
+				'source.shell storage.modifier',
+				'source.shell keyword.operator.assignment',
+				'source.shell variable.other.assignment',
+			],
+			settings: { foreground: '#e8e6e3' }, // default fg
+		},
+		{
+			scope: [
+				'source.shell variable.other.normal',
+				'source.shell punctuation.definition.variable',
+				'source.shell punctuation.definition.subshell',
+				'source.shell keyword.operator.expansion',
+			],
+			settings: { foreground: '#e0a43b' }, // amber — $vars / ${…} / $(…)
+		},
 	],
 };
 
@@ -105,6 +132,30 @@ const frogLight: ThemeInput = {
 		{
 			scope: ['entity.other.attribute-name'],
 			settings: { foreground: '#c1584a' }, // coral
+		},
+		// Shell: mirror the dark theme — mostly foreground, colored exceptions.
+		{
+			scope: [
+				'source.shell entity.name.function',
+				'source.shell entity.name.command',
+				'source.shell support.function',
+				'source.shell string.unquoted.argument',
+				'source.shell constant.numeric',
+				'source.shell constant.other.option',
+				'source.shell storage.modifier',
+				'source.shell keyword.operator.assignment',
+				'source.shell variable.other.assignment',
+			],
+			settings: { foreground: '#1a1a17' }, // default fg
+		},
+		{
+			scope: [
+				'source.shell variable.other.normal',
+				'source.shell punctuation.definition.variable',
+				'source.shell punctuation.definition.subshell',
+				'source.shell keyword.operator.expansion',
+			],
+			settings: { foreground: '#b07a1a' }, // amber — $vars / ${…} / $(…)
 		},
 	],
 };
