@@ -13,17 +13,12 @@
 //! Each handler module provides functions that take the connection state
 //! and arguments, returning a Response.
 
-pub mod admin;
 pub mod blocking;
-pub mod cluster;
 pub mod debug;
 pub mod hotkeys;
 pub mod info;
-pub mod persistence;
 pub mod pubsub;
-pub mod scatter;
 pub mod scripting;
 pub mod search;
 pub mod slowlog;
-pub mod timeseries_scatter;
 pub mod transaction;
