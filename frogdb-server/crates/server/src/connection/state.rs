@@ -825,19 +825,6 @@ impl ConnectionState {
         }
         self.transaction.queue = Some(Vec::new());
         self.transaction.slots = TxnSlotAccumulator::default();
-        // Re-fold each pre-MULTI watch's shard back into the fresh accumulator.
-        // Watches set before MULTI already folded their shard via
-        // `fold_transaction_shard` (WATCH), but resetting `slots` above discards
-        // those folds. Without this, a WATCH set spanning shards would leave the
-        // target determined solely by the queued command keys, so EXEC could
-        // resolve to `Single(<cmd shard>)` and version-check only that shard —
-        // silently ignoring a concurrent write to a watched key on another shard
-        // (a false-negative commit). Re-folding makes a cross-shard watch set
-        // promote the target to `Multi`, so EXEC CROSSSLOT-rejects it, matching
-        // the codebase's cross-shard-transaction discipline.
-        for &(shard_id, _) in self.transaction.watches.values() {
-            self.transaction.slots.fold_shard(shard_id);
-        }
         self.transaction.exec_abort = false;
         self.transaction.queued_errors.clear();
         self.transaction.start_time = Some(std::time::Instant::now());
@@ -896,6 +883,17 @@ impl ConnectionState {
     /// state clean. Returns `None` for EXEC without MULTI.
     pub fn take_transaction(&mut self) -> Option<TxnSummary> {
         self.transaction.queue.as_ref()?;
+        // Fold every *live* watch's shard into the target now, at EXEC time.
+        // Doing it here (rather than at WATCH or MULTI) keeps the fold in sync
+        // with the current watch set: a cross-shard watch set promotes the
+        // target to `Multi` (EXEC CROSSSLOT-rejects, so a concurrent write to a
+        // watched key on another shard can't be silently missed — a
+        // false-negative commit), while an UNWATCH inside MULTI that cleared the
+        // watches contributes nothing, leaving no stale fold to spuriously
+        // CROSSSLOT an otherwise single-shard EXEC.
+        for &(shard_id, _) in self.transaction.watches.values() {
+            self.transaction.slots.fold_shard(shard_id);
+        }
         let txn = std::mem::take(&mut self.transaction);
         Some(TxnSummary {
             queue: txn.queue.expect("queue presence checked above"),
@@ -1375,27 +1373,25 @@ mod tests {
     }
 
     #[test]
-    fn begin_transaction_refolds_cross_shard_watch_set_to_multi() {
-        // A pre-MULTI WATCH set spanning two shards must make the transaction's
-        // target `Multi` so EXEC CROSSSLOT-rejects, rather than silently
-        // version-checking only one shard (a false-negative commit).
+    fn take_transaction_folds_cross_shard_watch_set_to_multi() {
+        // A WATCH set spanning two shards must make the transaction's target
+        // `Multi` so EXEC CROSSSLOT-rejects, rather than silently version-checking
+        // only one shard (a false-negative commit). The fold happens at EXEC time
+        // (`take_transaction`), from the live watch set — WATCH itself records no
+        // fold, and MULTI does not re-fold.
         let mut s = state();
 
-        // WATCH before MULTI: each WATCH records the key and folds its shard,
-        // exactly as `handle_watch` does. Two watches on different shards.
+        // WATCH before MULTI: each WATCH only records the key + shard (no fold).
         s.watch_key(Bytes::from_static(b"{t0}kv0"), 0, 11);
-        s.fold_transaction_shard(0);
         s.watch_key(Bytes::from_static(b"{t1}kv1"), 1, 22);
-        s.fold_transaction_shard(1);
 
-        // MULTI resets `slots`, then re-folds each watched shard.
         s.begin_transaction().expect("MULTI after WATCH");
         // Queue a single-shard command (shard 1), as seed 8 does (DEL {t1}kv1).
         s.push_queued_command(cmd(b"DEL"));
         s.fold_transaction_shard(1);
 
         let summary = s.take_transaction().expect("in transaction");
-        // Cross-shard watch set → Multi → EXEC resolves to CROSSSLOT.
+        // Live cross-shard watch set folded at EXEC → Multi → CROSSSLOT.
         assert!(
             matches!(summary.target, TransactionTarget::Multi(_)),
             "cross-shard WATCH set must promote target to Multi, got {:?}",
@@ -1404,6 +1400,37 @@ mod tests {
         assert!(
             summary.target.resolve().is_err(),
             "Multi target must resolve to a CROSSSLOT rejection"
+        );
+    }
+
+    #[test]
+    fn take_transaction_unwatch_drops_stale_cross_shard_watch_fold() {
+        // Reviewer's regression: WATCH a key on shard 0, MULTI, UNWATCH (which
+        // clears the watch set), then queue a single-shard command on shard 1.
+        // UNWATCH inside MULTI executes immediately, so at EXEC the live watch set
+        // is empty and must contribute *no* fold — the transaction stays
+        // `Single(1)` and commits, rather than being spuriously CROSSSLOT-rejected
+        // by a stale shard-0 watch fold.
+        let mut s = state();
+
+        s.watch_key(Bytes::from_static(b"{t0}kv0"), 0, 11);
+        s.begin_transaction().expect("MULTI after WATCH");
+        // UNWATCH inside MULTI clears the live watch set (dispatched immediately).
+        s.unwatch_all();
+        // Queue a single-shard command on a *different* shard than the old watch.
+        s.push_queued_command(cmd(b"SET"));
+        s.fold_transaction_shard(1);
+
+        let summary = s.take_transaction().expect("in transaction");
+        assert!(summary.watches.is_empty(), "UNWATCH cleared the watch set");
+        assert!(
+            matches!(summary.target, TransactionTarget::Single(1)),
+            "UNWATCH must leave no stale fold: target should stay Single(1), got {:?}",
+            summary.target
+        );
+        assert!(
+            summary.target.resolve().is_ok(),
+            "single-shard EXEC after UNWATCH must not CROSSSLOT"
         );
     }
 

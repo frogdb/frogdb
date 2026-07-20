@@ -431,11 +431,9 @@ pub trait ConnStateMut: Send + Sync {
     fn is_in_multi(&self) -> bool;
 
     /// Record a watched key with its watch-time version and owning shard (WATCH).
+    /// The watched shards are folded into the transaction target at EXEC time
+    /// (see `take_transaction`), from the live post-UNWATCH watch set.
     fn watch_key(&mut self, key: Bytes, shard_id: usize, version: u64);
-
-    /// Fold an already-validated shard into the transaction target (WATCH — all
-    /// watched keys are same-shard).
-    fn fold_transaction_shard(&mut self, shard_id: usize);
 
     /// Forget all watched keys (UNWATCH).
     fn unwatch(&mut self);

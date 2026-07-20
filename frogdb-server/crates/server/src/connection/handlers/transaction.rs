@@ -229,11 +229,11 @@ impl ConnectionHandler {
 
         // Get target shard. If no command keys determined a target, fall back to
         // the watched-key shard. All watches resolve to a single shard here: each
-        // WATCH is same-shard-validated (SlotValidator::same_shard), and MULTI
-        // re-folds every watched shard into the transaction target
-        // (begin_transaction), so a watch set spanning shards promotes the target
-        // to `Multi` and is CROSSSLOT-rejected below — it never reaches this
-        // single-shard fallback. Thus `watches.first()`'s shard is the only shard.
+        // WATCH is same-shard-validated (SlotValidator::same_shard), and
+        // `take_transaction` folds every live watched shard into the transaction
+        // target, so a watch set spanning shards promotes the target to `Multi`
+        // and is CROSSSLOT-rejected below — it never reaches this single-shard
+        // fallback. Thus `watches.first()`'s shard is the only shard.
         let watched_shard = watches
             .first()
             .map(|(key, _)| shard_for_key(key, self.num_shards));

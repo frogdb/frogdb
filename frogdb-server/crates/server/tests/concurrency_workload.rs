@@ -136,9 +136,10 @@ fn quiescence_stage_runs_and_is_clean() {
 // a client accumulating a WATCH set spanning two shards (WATCH {t0}kv0 then
 // WATCH {t1}kv1) then EXECing a single-shard transaction would wrongly commit,
 // because `handle_exec` version-checked only the command-target shard. Fixed in
-// `ConnectionState::begin_transaction`: MULTI re-folds every watched shard into
-// the transaction target, so a cross-shard WATCH set promotes to `Multi` and
-// EXEC CROSSSLOT-rejects (a model no-op). Pinned as
+// `ConnectionState::take_transaction`: EXEC folds every *live* watched shard
+// into the transaction target, so a cross-shard WATCH set promotes to `Multi`
+// and EXEC CROSSSLOT-rejects (a model no-op), while an UNWATCH inside MULTI
+// leaves no stale fold. Pinned as
 // `regressions::regression_crossshard_watch_false_negative_seed_8`.
 #[test]
 fn seed_sweep_txheavy() {
@@ -207,11 +208,11 @@ mod regressions {
     /// shard's watched key was never version-checked and the EXEC wrongly
     /// committed — a WATCH false-negative caught by `check_watch_no_false_negative`.
     ///
-    /// Fix (`ConnectionState::begin_transaction`): MULTI now re-folds every
-    /// pre-MULTI watched shard into the transaction target, so a cross-shard
-    /// WATCH set promotes the target to `Multi` and EXEC CROSSSLOT-rejects it
-    /// (recorded "ERR:", a model no-op). This test must FAIL before that fix and
-    /// PASS after.
+    /// Fix (`ConnectionState::take_transaction`): EXEC now folds every live
+    /// watched shard into the transaction target, so a cross-shard WATCH set
+    /// promotes the target to `Multi` and EXEC CROSSSLOT-rejects it (recorded
+    /// "ERR:", a model no-op). This test must FAIL before that fix and PASS
+    /// after.
     #[test]
     fn regression_crossshard_watch_false_negative_seed_8() {
         let report = run_and_check(8, Profile::TxHeavy, 4, 30, 2);

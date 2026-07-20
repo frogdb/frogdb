@@ -348,6 +348,63 @@ async fn test_unwatch() {
     server.shutdown().await;
 }
 
+// Regression (reviewer, fix round 2): UNWATCH inside MULTI clears the live watch
+// set, so it must leave no stale cross-shard watch fold that would spuriously
+// CROSSSLOT-reject an otherwise single-shard EXEC. The watch shards are folded at
+// EXEC time (`ConnectionState::take_transaction`) from the *live* watch set, so a
+// cleared set contributes nothing. `{t0}kv0` and `{t1}kv1` own different shards
+// (4-shard standalone); the control case below proves it by CROSSSLOT-rejecting
+// the same setup without the UNWATCH, which also pins the a2f3eef9 cross-shard
+// WATCH false-negative protection.
+#[tokio::test]
+async fn test_unwatch_in_multi_clears_stale_cross_shard_watch_fold() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // --- Control: cross-shard WATCH set + single-shard EXEC must CROSSSLOT. ---
+    // (Confirms the two keys really are on different shards AND that a live
+    // cross-shard watch set still promotes the target to Multi.)
+    let response = client.command(&["WATCH", "{t0}kv0"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    let response = client.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    let response = client.command(&["SET", "{t1}kv1", "v"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    let response = client.command(&["EXEC"]).await;
+    match response {
+        Response::Error(e) => assert!(
+            e.starts_with(b"CROSSSLOT"),
+            "cross-shard WATCH set must CROSSSLOT at EXEC, got {:?}",
+            String::from_utf8_lossy(&e)
+        ),
+        other => panic!("expected CROSSSLOT error, got {other:?}"),
+    }
+
+    // --- Regression: same setup but UNWATCH inside MULTI must let EXEC commit. ---
+    let response = client.command(&["WATCH", "{t0}kv0"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    let response = client.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    // UNWATCH inside MULTI executes immediately, clearing the watch set.
+    let response = client.command(&["UNWATCH"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    let response = client.command(&["SET", "{t1}kv1", "v"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    let response = client.command(&["EXEC"]).await;
+    match response {
+        Response::Array(results) => {
+            assert_eq!(results.len(), 1, "one queued command");
+            assert_eq!(results[0], Response::Simple(Bytes::from("OK")));
+        }
+        other => panic!("EXEC after UNWATCH must commit (no stale CROSSSLOT fold), got {other:?}"),
+    }
+    // The write actually landed.
+    let response = client.command(&["GET", "{t1}kv1"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("v"))));
+
+    server.shutdown().await;
+}
+
 #[tokio::test]
 async fn test_transaction_with_error() {
     let server = TestServer::start_standalone().await;

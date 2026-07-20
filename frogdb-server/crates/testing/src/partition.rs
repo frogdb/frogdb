@@ -353,12 +353,17 @@ pub fn partition_by_key(
 /// WATCH-abort is instead recorded as `None`. Callers treat both as no-ops.
 ///
 /// Known edge: a *committed* EXEC whose first sub-command itself errored
-/// (e.g. `INCR` on a non-integer) would also encode as `"ERR:…|…"` and be
-/// misread as rejected here. The phase-1 generator's exec vocabulary
-/// (set/get/incr/del over numeric values) cannot produce that sub-command
-/// type error, so this is currently unreachable; if it ever becomes
-/// reachable, a misread surfaces as a noisy WGL failure (state advanced but
-/// the model treated it as a no-op), never as a silent pass.
+/// (e.g. `INCR` on a non-integer) would also start with `"ERR:…"` and be
+/// misread as rejected here — so `explode_exec_for_key` drops the whole
+/// committed EXEC from every per-key partition as a no-op (its `None`-on-error
+/// guard fires on `is_errored_exec_result`). The phase-1 generator's exec
+/// vocabulary (set/get/incr/del over numeric values) cannot produce that
+/// sub-command type error, so this is currently unreachable. If the vocabulary
+/// ever grows error-capable sub-commands, the net is the cross-key conservation
+/// checkers: the dropped write is invisible to per-key WGL, but conservation
+/// (which reconciles effects across sibling keys) still catches the missing
+/// mutation. Revisit both this gate and the explode drop before adding such a
+/// sub-command.
 pub fn is_errored_exec_result(result: &Bytes) -> bool {
     result.starts_with(b"ERR:")
 }

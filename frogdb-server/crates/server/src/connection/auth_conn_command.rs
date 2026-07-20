@@ -167,10 +167,6 @@ impl ConnStateMut for ConnectionState {
         ConnectionState::watch_key(self, key, shard_id, version);
     }
 
-    fn fold_transaction_shard(&mut self, shard_id: usize) {
-        ConnectionState::fold_transaction_shard(self, shard_id);
-    }
-
     fn unwatch(&mut self) {
         ConnectionState::unwatch_all(self);
     }
