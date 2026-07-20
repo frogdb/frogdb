@@ -17,6 +17,9 @@ use frogdb_core::{
     WalLagAggregate, WalLagStatsResponse,
 };
 
+use crate::definitions::{
+    CommandsTotal, SnapshotInProgress, SnapshotLastTimestamp, WalBytes, WalWrites,
+};
 use crate::health::HealthChecker;
 use crate::prometheus_recorder::PrometheusRecorder;
 
@@ -289,10 +292,20 @@ pub struct KeyspaceStatus {
 /// Command statistics.
 #[derive(Debug, Clone, Serialize)]
 pub struct CommandsStatus {
-    /// Total commands processed since startup.
+    /// Total commands processed since startup, from the same
+    /// `frogdb_commands_total` counter Prometheus scrapes.
     pub total_processed: u64,
-    /// Current operations per second.
-    pub ops_per_sec: f64,
+    /// Instantaneous operations per second.
+    ///
+    /// Omitted (`None`) rather than faked: FrogDB has no server-wide
+    /// instantaneous-rate sampler on the status path (per-shard windowed rates
+    /// exist only in the debug hot-shard report), so there is no accurate value
+    /// to report here. Consumers derive a rate from `total_processed` deltas or
+    /// scrape the Prometheus counter. Reporting a lifetime average under an
+    /// "instantaneous" name would be misleading. See INFO's
+    /// `instantaneous_ops_per_sec`, which is stubbed for the same reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ops_per_sec: Option<f64>,
 }
 
 /// Collects status information from various server components.
@@ -301,7 +314,9 @@ pub struct StatusCollector {
     health_checker: HealthChecker,
     shard_senders: Arc<Vec<ShardSender>>,
     client_registry: Arc<ClientRegistry>,
-    _recorder: Arc<PrometheusRecorder>,
+    /// Metrics recorder — the single source of truth shared with `/metrics` and
+    /// INFO, so all three views of a counter can never disagree.
+    recorder: Arc<PrometheusRecorder>,
     start_time: Instant,
     // Configuration values needed for status
     max_clients: Arc<AtomicU64>,
@@ -332,7 +347,7 @@ impl StatusCollector {
             health_checker,
             shard_senders,
             client_registry,
-            _recorder: recorder,
+            recorder,
             start_time,
             max_clients,
             maxmemory,
@@ -378,6 +393,37 @@ impl StatusCollector {
 
         // Calculate totals
         let total_keys: usize = shard_stats.iter().map(|s| s.keys).sum();
+        // Sum per-shard expired-key counts — the *same* accumulator INFO's
+        // `expired_keys` aggregates (active + lazy expiry). The Prometheus
+        // `frogdb_keys_expired_total` counter is deliberately NOT used here: it
+        // is only incremented on the active-expiry cycle, so it under-counts
+        // lazy (on-access) expirations and would disagree with INFO.
+        let expired_keys_total: u64 = shard_stats.iter().map(|s| s.expired_keys).sum();
+
+        // Recorder-sourced counters/gauges — the shared source of truth with
+        // `/metrics` and INFO. Absent families (nothing emitted yet) read as 0.
+        let wal_total_writes = self
+            .recorder
+            .get_counter_value(WalWrites::NAME)
+            .unwrap_or(0.0) as u64;
+        let wal_total_bytes = self
+            .recorder
+            .get_counter_value(WalBytes::NAME)
+            .unwrap_or(0.0) as u64;
+        let commands_total_processed = self
+            .recorder
+            .get_counter_value(CommandsTotal::NAME)
+            .unwrap_or(0.0) as u64;
+        let snapshot_in_progress = self
+            .recorder
+            .get_gauge_value(SnapshotInProgress::NAME)
+            .is_some_and(|v| v > 0.5);
+        // Last successful-snapshot unix timestamp; 0/absent means "never".
+        let snapshot_last_timestamp = self
+            .recorder
+            .get_gauge_value(SnapshotLastTimestamp::NAME)
+            .filter(|v| *v > 0.0)
+            .map(|v| v as u64);
 
         // Get timestamp
         let now = SystemTime::now();
@@ -409,16 +455,16 @@ impl StatusCollector {
                 },
                 snapshot: if self.persistence_enabled {
                     Some(SnapshotStatus {
-                        in_progress: false,   // Would need snapshot coordinator integration
-                        last_timestamp: None, // Would need snapshot coordinator integration
+                        in_progress: snapshot_in_progress,
+                        last_timestamp: snapshot_last_timestamp,
                     })
                 } else {
                     None
                 },
                 wal: if self.persistence_enabled {
                     Some(WalStatus {
-                        total_writes: 0, // Would need WAL integration
-                        total_bytes: 0,  // Would need WAL integration
+                        total_writes: wal_total_writes,
+                        total_bytes: wal_total_bytes,
                         lag: wal_lag_stats,
                     })
                 } else {
@@ -428,11 +474,12 @@ impl StatusCollector {
             shards,
             keyspace: KeyspaceStatus {
                 total_keys,
-                expired_keys_total: 0, // Would need metrics integration
+                expired_keys_total,
             },
             commands: CommandsStatus {
-                total_processed: 0, // Would need metrics integration
-                ops_per_sec: 0.0,   // Would need metrics integration
+                total_processed: commands_total_processed,
+                // No accurate instantaneous-rate source on the status path.
+                ops_per_sec: None,
             },
         }
     }
@@ -844,5 +891,158 @@ mod tests {
         assert!(!is_leap_year(1900)); // Divisible by 100 but not 400
         assert!(is_leap_year(2024)); // Divisible by 4 but not 100
         assert!(!is_leap_year(2023)); // Not divisible by 4
+    }
+
+    // ------------------------------------------------------------------------
+    // Live-source wiring tests: prove each formerly-hardcoded `/status` field
+    // now reflects its real source (the shared PrometheusRecorder and the
+    // per-shard stats INFO also reads), not a stub.
+    // ------------------------------------------------------------------------
+
+    use frogdb_core::{ClientRegistry, Envelope, ShardMemoryStats, ShardMessage, ShardSender};
+
+    /// Build a collector over the given shard senders and recorder.
+    fn test_collector(
+        recorder: Arc<PrometheusRecorder>,
+        shard_senders: Vec<ShardSender>,
+        persistence_enabled: bool,
+    ) -> StatusCollector {
+        StatusCollector::new(
+            StatusCollectorConfig::default(),
+            HealthChecker::new(),
+            Arc::new(shard_senders),
+            Arc::new(ClientRegistry::new()),
+            recorder,
+            Instant::now(),
+            Arc::new(AtomicU64::new(0)),
+            0,
+            persistence_enabled,
+            "async".to_string(),
+            "standalone".to_string(),
+        )
+    }
+
+    /// Spawn a mock shard that answers `MemoryStats` with `stats` and drops any
+    /// other message (its response channel closes, yielding defaults).
+    fn spawn_mock_shard(stats: ShardMemoryStats) -> ShardSender {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Envelope>(8);
+        tokio::spawn(async move {
+            while let Some(env) = rx.recv().await {
+                if let ShardMessage::MemoryStats { response_tx } = env.message {
+                    let _ = response_tx.send(stats.clone());
+                }
+            }
+        });
+        ShardSender::new(tx)
+    }
+
+    #[tokio::test]
+    async fn test_wal_and_command_counters_sourced_from_recorder() {
+        let recorder = Arc::new(PrometheusRecorder::new());
+        // Emit through the same typed handles INFO / `/metrics` use.
+        WalWrites::inc_by(&*recorder, 7, "0");
+        WalWrites::inc_by(&*recorder, 3, "1");
+        WalBytes::inc_by(&*recorder, 4096, "0");
+        CommandsTotal::inc_by(&*recorder, 5, "GET");
+        CommandsTotal::inc_by(&*recorder, 2, "SET");
+
+        let collector = test_collector(recorder.clone(), vec![], true);
+        let status = collector.collect().await;
+
+        let wal = status.persistence.wal.expect("wal present");
+        assert_eq!(wal.total_writes, 10, "sum across shard labels");
+        assert_eq!(wal.total_bytes, 4096);
+        assert_eq!(
+            status.commands.total_processed, 7,
+            "sum across command labels"
+        );
+        // Must agree with what INFO would read from the same counters.
+        assert_eq!(
+            wal.total_writes,
+            recorder.get_counter_value(WalWrites::NAME).unwrap() as u64
+        );
+        assert_eq!(
+            status.commands.total_processed,
+            recorder.get_counter_value(CommandsTotal::NAME).unwrap() as u64
+        );
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_status_sourced_from_recorder() {
+        let recorder = Arc::new(PrometheusRecorder::new());
+        SnapshotInProgress::set(&*recorder, 1.0);
+        SnapshotLastTimestamp::set(&*recorder, 1_706_280_000.0);
+
+        let collector = test_collector(recorder.clone(), vec![], true);
+        let snap = collector
+            .collect()
+            .await
+            .persistence
+            .snapshot
+            .expect("snapshot present");
+        assert!(snap.in_progress, "in_progress gauge = 1 -> true");
+        assert_eq!(snap.last_timestamp, Some(1_706_280_000));
+
+        // Flip in_progress off and clear timestamp -> false / None.
+        SnapshotInProgress::set(&*recorder, 0.0);
+        let recorder2 = Arc::new(PrometheusRecorder::new());
+        let idle = test_collector(recorder2, vec![], true)
+            .collect()
+            .await
+            .persistence
+            .snapshot
+            .expect("snapshot present");
+        assert!(!idle.in_progress, "no gauge emitted -> false");
+        assert_eq!(idle.last_timestamp, None, "never snapshotted -> None");
+    }
+
+    #[tokio::test]
+    async fn test_expired_keys_total_sums_shard_stats() {
+        // expired_keys_total is sourced from the same per-shard accumulator INFO
+        // aggregates (active + lazy expiry), NOT the active-only Prometheus
+        // counter — so the two views agree.
+        let recorder = Arc::new(PrometheusRecorder::new());
+        let shard0 = spawn_mock_shard(ShardMemoryStats {
+            shard_id: 0,
+            expired_keys: 12,
+            keys: 3,
+            ..Default::default()
+        });
+        let shard1 = spawn_mock_shard(ShardMemoryStats {
+            shard_id: 1,
+            expired_keys: 8,
+            keys: 5,
+            ..Default::default()
+        });
+        let collector = test_collector(recorder, vec![shard0, shard1], false);
+        let status = collector.collect().await;
+        assert_eq!(status.keyspace.expired_keys_total, 20);
+        assert_eq!(status.keyspace.total_keys, 8);
+    }
+
+    #[tokio::test]
+    async fn test_ops_per_sec_omitted_not_faked() {
+        // No instantaneous-rate source exists; the field is omitted rather than
+        // reported as a misleading zero/average.
+        let recorder = Arc::new(PrometheusRecorder::new());
+        let collector = test_collector(recorder, vec![], true);
+        let status = collector.collect().await;
+        assert_eq!(status.commands.ops_per_sec, None);
+        let json = collector.to_json(&status);
+        assert!(
+            !json.contains("ops_per_sec"),
+            "ops_per_sec must be absent, got:\n{json}"
+        );
+    }
+
+    #[test]
+    fn test_commands_status_serde_round_trip_omits_ops_per_sec() {
+        let status = CommandsStatus {
+            total_processed: 42,
+            ops_per_sec: None,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("\"total_processed\":42"));
+        assert!(!json.contains("ops_per_sec"));
     }
 }

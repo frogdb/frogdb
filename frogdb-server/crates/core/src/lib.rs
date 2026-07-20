@@ -134,7 +134,7 @@ pub use scripting::{
     CachedScript, LuaVm, ScriptCache, ScriptError, ScriptExecutor, ScriptingConfig,
 };
 pub use shard::{
-    BigKeyInfo, BigKeysScanResponse, HotShardStatsResponse, IndexLifecycleManager,
+    BigKeyInfo, BigKeysScanResponse, Envelope, HotShardStatsResponse, IndexLifecycleManager,
     InfoShardSnapshot, LifecycleError, PartialResult, REDIS_CLUSTER_SLOTS,
     REPLICA_INTERNAL_CONN_ID, RecoveryOutcome, RecoveryResult, ScatterOp, ShardBuilderError,
     ShardClusterDeps, ShardConfig, ShardCoreDeps, ShardMemoryStats, ShardMessage,
