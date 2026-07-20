@@ -1,10 +1,11 @@
 //! Replica connection state machine.
 
 use crate::frame::serialize_command_to_resp;
-use crate::fullsync::{CHECKPOINT_MARKER, CheckpointStreamCodec, receive_to_file};
+use crate::fullsync::{
+    CHECKPOINT_MARKER, CheckpointChecksum, CheckpointStreamCodec, receive_to_file,
+};
 use crate::state::{ReplicationState, StagedReplicationMetadata};
 use bytes::Bytes;
-use sha2::{Digest, Sha256};
 use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -234,7 +235,9 @@ impl ReplicaConnection {
         fs::create_dir_all(&checkpoint_dir).await?;
         let mut total_bytes = 0u64;
         let mut reader = BufReader::new(&mut self.stream);
-        let mut file_checksums: Vec<(String, [u8; 32])> = Vec::with_capacity(file_count);
+        // The combined checksum's coverage is owned by `CheckpointChecksum`: fold
+        // each file in as it lands, in the same order the codec framed it.
+        let mut combined = CheckpointChecksum::new();
         for i in 0..file_count {
             // Framing (per-file header) via the codec; the payload bytes still
             // flow through `receive_to_file`, which computes the per-file hash.
@@ -242,17 +245,12 @@ impl ReplicaConnection {
             let file_path = checkpoint_dir.join(&header.name);
             let checksum = receive_to_file(&mut reader, &file_path, header.size, None).await?;
             total_bytes += header.size;
-            file_checksums.push((header.name.clone(), checksum));
+            combined.update_file(&header.name, &checksum);
             tracing::debug!(file = i + 1, filename = %header.name, size = header.size, checksum = %hex::encode(&checksum[..8]), "Received checkpoint file");
         }
         let metadata = CheckpointStreamCodec::read_metadata(&mut reader).await?;
         tracing::info!(total_bytes = total_bytes, files = file_count, replication_id = %metadata.replication_id, offset = metadata.replication_offset, "Checkpoint received successfully");
-        let mut combined_hash = Sha256::new();
-        for (file_name, file_checksum) in &file_checksums {
-            Digest::update(&mut combined_hash, file_name.as_bytes());
-            Digest::update(&mut combined_hash, file_checksum);
-        }
-        let computed: [u8; 32] = Digest::finalize(combined_hash).into();
+        let computed = combined.finalize();
         if computed != metadata.checksum {
             tracing::error!(expected = %hex::encode(metadata.checksum), actual = %hex::encode(computed), "Checkpoint checksum mismatch");
             let _ = fs::remove_dir_all(&checkpoint_dir).await;

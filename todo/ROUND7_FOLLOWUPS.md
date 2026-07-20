@@ -160,10 +160,41 @@ consumes `Dynamic`→`write_access_keys`, hence the `RW` choice above.
   never-flushes/log-and-continue, flush-error propagation, write-error aborts before flush,
   no-WAL short-circuit). frogdb-core persistence suite 89/89 green; proposal 54 deviation note
   updated.
-- **Proposal 56 follow-up:** move combined-SHA256 ownership into `CheckpointStreamCodec` so
-  checksum coverage is part of the codec contract (open question in proposal 56).
-- **Flaky test:** `integration_cluster::test_info_gate_active_after_finalize` passed 2/3 in the
-  round-7 final gate (pre-existing flake). Root-cause or add retry-tolerant synchronization.
+- **Proposal 56 follow-up — DONE (2026-07-20):** combined-SHA256 ownership moved into
+  `fullsync.rs` beside the codec as a `CheckpointChecksum` accumulator (`new` / `update_file` /
+  `finalize`). It owns the coverage — `SHA256( name_0 || hash_0 || name_1 || hash_1 || … )`, UTF-8
+  filename bytes then the raw 32-byte per-file SHA256, in wire order, no delimiters/metadata — so
+  the sender and receiver can no longer drift on *what the checksum covers*. Both sides fold each
+  file in as it is streamed/received (sender's second file-hash pass collapsed into the streaming
+  loop; receiver's `file_checksums` Vec removed); no hand-rolled `Sha256::new()` combined hash
+  remains in `replica_session.rs` or `connection.rs` (their `sha2` imports dropped). Wire bytes
+  unchanged — the 12 existing codec tests incl. golden-bytes stay green; two new tests
+  (`test_checkpoint_checksum_agreement` end-to-end coverage drift guard,
+  `test_checkpoint_checksum_tamper_detected` payload+filename tamper). Verified: `just check` /
+  `just test` / `just lint frogdb-replication` clean; `integration_replication` full-sync subset
+  green.
+- **Flaky test — DONE (2026-07-20):** root-caused a family of load-dependent cluster flakes
+  (`test_info_gate_active_after_finalize`, `test_frogdb_finalize_success`,
+  `test_auto_failover_selects_most_caught_up_replica`), all in `integration_cluster.rs`.
+  Reproduced under 4× parallel worker contention (`--retries 0`); solo runs stay 10/10 green.
+  Two distinct test-synchronization gaps (no product bug):
+  1. **Version-fake clobber (both finalize tests).** Each node self-registers its real
+     address+version (`CARGO_PKG_VERSION` = `0.1.0`) via a one-shot Raft `AddNode` after startup;
+     `AddNode` apply replaces the whole `NodeInfo`. `wait_for_cluster_convergence` returns before
+     those entries commit (it only checks known-node count + slots, satisfied by the initial
+     guessed-port adds). So `fake_all_node_versions("0.2.0")` could be clobbered back to `0.1.0`
+     by a late self-registration, and FINALIZE rejected the cluster as mixed-version
+     (`Error("...node <id> is at version 0.1.0 but finalization requires 0.2.0")`). Fix: wait for
+     `wait_for_address_convergence` (holds only once every self-registration `AddNode` has applied,
+     making the fake the last writer) before faking; then replaced the fixed 500ms
+     post-FINALIZE sleep with a bounded deadline poll (10s / 20ms) on `active_version` — followers
+     apply the replicated finalize entry asynchronously after the leader's OK.
+  2. **Post-election read race (failover test).** `wait_for_new_leader` only guarantees a Raft
+     leader exists; the failover state machine that flips `CLUSTER INFO` back to
+     `cluster_state:ok` lands a beat later, so the single immediate read saw `cluster_state:fail`.
+     Fix: bounded deadline poll (10s / 20ms) for `cluster_state == "ok"`.
+  Files: `frogdb-server/crates/server/tests/integration_cluster.rs`. Verified 20+ consecutive
+  green per test under load with `--retries 0`; whole `integration_cluster` file green.
 - **HFE expiry bound — DONE (2026-07-19):** ported upstream's bound verified against redis/redis
   unstable source: `HFE_MAX_ABS_TIME_MSEC = EB_EXPIRE_TIME_MAX >> 2 = 0x3FFF_FFFF_FFFF`
   (70368744177663 ms). New `hfe_resolve_abs_ms(val, is_seconds, basetime, cmd)` helper in
@@ -188,9 +219,29 @@ consumes `Dynamic`→`write_access_keys`, hence the `RW` choice above.
   `test_smove_destination_survives_restart_with_existing_members` in
   `integration_persistence.rs`; 6/6 SMOVE server tests green. No spec-pin tests asserted the old
   strategy.
-- **`scan_for_oversized_bulk` O(n) rescan:** measured-before-optimizing note from 62-B — the codec
-  rescans the full buffer per `*`-prefixed decode; now pinned by table tests, so a bounded scan can
-  be proven equivalence-preserving if profiling ever flags it.
+- **`scan_for_oversized_bulk` O(n) rescan — MEASURED + FIXED (2026-07-20):** the 62-B note flagged
+  that the codec rescanned the *whole* read buffer on every `*`-prefixed decode. Measured it (release
+  micro-bench over the real `FrogDbResp2::decode`, baseline = upstream `Resp2` decoder alone):
+  - _Realistic pipeline_ (N fixed 51-byte `SET` frames in one buffer, decoded to drain): baseline is
+    linear and fast (~0.3 µs/frame → 32k frames in 3.7 ms). With the old scan, decode was
+    **quadratic** — 4k frames: 1.3 ms → **1568 ms** (~1200×); 32k frames: 3.7 ms → **13 736 ms**
+    (~3600×). Scan was >90% of decode time.
+  - _Adversarial drip_ (4 MB legal bulk fed in K chunks): O(payload·K) quadratic — K=1024:
+    **4550 ms** of pure prefix rescans.
+  Verdict: not negligible — dominant and quadratic at plausible sizes → optimized. Replaced the flat
+  byte-scan with a **bounded, structural scan** of only the first frame's element headers, skipping
+  each bulk payload by its declared length (mirrors Redis `processMultibulkBuffer`). Now linear:
+  pipeline 4k frames **1568 → 0.54 ms** (~2900×), 32k **13 736 → 4.27 ms** (~3200×), tracking the
+  baseline within ~20%; drip K=1024 **4550 → 0.16 ms** (~28 000×). All existing codec table tests
+  pass unchanged (observable decode contract preserved); added `scan_bounded_structural` plus
+  end-to-end tests for the two beneficial divergences the structural scan introduces (an oversized
+  bulk in a *later* pipelined frame is now rejected on its own frame instead of discarding a
+  preceding good frame; binary bulk *data* containing the byte sequence `$<huge>\r\n` is no longer
+  false-rejected — Redis accepts it). Known residual (out of original scope, bandwidth-bounded): a
+  single maximal multibulk drip-fed one element-header per packet still re-walks the current
+  incomplete frame's headers; a resume-offset would close it but adds cross-call state through every
+  `split_to` site — deferred unless profiling flags it.
+  Files: `frogdb-server/crates/server/src/connection/codec.rs`.
 
 ## Verification debt — CLEARED 2026-07-17
 
