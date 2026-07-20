@@ -1,14 +1,14 @@
 //! No-op snapshot coordinator.
 use super::handle::SnapshotHandle;
 use super::metadata::SnapshotMetadata;
-use super::{SnapshotCoordinator, SnapshotError};
-use std::sync::RwLock;
+use super::{SnapshotCoordinator, SnapshotError, SnapshotRequest};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime};
 
 pub struct NoopSnapshotCoordinator {
     last_save: RwLock<Option<Instant>>,
-    in_progress: AtomicBool,
+    in_progress: Arc<AtomicBool>,
     epoch: AtomicU64,
     scheduled: AtomicBool,
 }
@@ -21,7 +21,7 @@ impl NoopSnapshotCoordinator {
     pub fn new() -> Self {
         Self {
             last_save: RwLock::new(None),
-            in_progress: AtomicBool::new(false),
+            in_progress: Arc::new(AtomicBool::new(false)),
             epoch: AtomicU64::new(0),
             scheduled: AtomicBool::new(false),
         }
@@ -38,11 +38,9 @@ impl SnapshotCoordinator for NoopSnapshotCoordinator {
         }
         let epoch = self.epoch.fetch_add(1, Ordering::SeqCst) + 1;
         *self.last_save.write().unwrap() = Some(Instant::now());
-        let in_progress = &self.in_progress as *const AtomicBool as usize;
-        let handle = SnapshotHandle::new(epoch, move || {
-            let ip = unsafe { &*(in_progress as *const AtomicBool) };
-            ip.store(false, Ordering::SeqCst);
-        });
+        // The handle releases `in_progress` on drop/complete — modelling an
+        // instant, forkless completion without a background loop.
+        let handle = SnapshotHandle::completing(epoch, self.in_progress.clone());
         tracing::info!(
             epoch = epoch,
             "Noop snapshot started (no actual data saved)"
@@ -76,5 +74,21 @@ impl SnapshotCoordinator for NoopSnapshotCoordinator {
     }
     fn is_scheduled(&self) -> bool {
         self.scheduled.load(Ordering::SeqCst)
+    }
+    fn request_snapshot(&self) -> SnapshotRequest {
+        if self.in_progress() {
+            self.scheduled.store(true, Ordering::SeqCst);
+            return SnapshotRequest::Coalesced;
+        }
+        match self.start_snapshot() {
+            // The no-op save completes instantly: drop the handle to release
+            // `in_progress` immediately, mirroring the Rocks run loop's release.
+            Ok(handle) => {
+                let epoch = handle.epoch();
+                drop(handle);
+                SnapshotRequest::Started(epoch)
+            }
+            Err(_) => SnapshotRequest::Coalesced,
+        }
     }
 }

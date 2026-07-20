@@ -1,8 +1,9 @@
 //! RocksDB-backed snapshot coordinator using the Checkpoint API.
 use super::handle::SnapshotHandle;
 use super::metadata::{SnapshotConfig, SnapshotMetadata, SnapshotMetadataFile};
+use super::scheduler::SnapshotScheduler;
 use super::stager::SnapshotStager;
-use super::{SnapshotCoordinator, SnapshotError};
+use super::{SnapshotCoordinator, SnapshotError, SnapshotRequest};
 use crate::rocks::RocksStore;
 use frogdb_types::metrics::definitions::{
     PersistenceErrors, SnapshotDuration, SnapshotEpoch, SnapshotInProgress, SnapshotLastTimestamp,
@@ -13,18 +14,16 @@ use frogdb_types::traits::MetricsRecorder;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use tokio::task::JoinError;
 use tracing::Instrument;
 pub type PreSnapshotHook = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 pub struct RocksSnapshotCoordinator {
     rocks_store: Arc<RocksStore>,
     snapshot_dir: PathBuf,
     num_shards: usize,
-    epoch: Arc<AtomicU64>,
-    in_progress: Arc<AtomicBool>,
-    scheduled: Arc<AtomicBool>,
+    scheduler: Arc<SnapshotScheduler>,
     last_save_time: Arc<RwLock<Option<Instant>>>,
     last_metadata: Arc<RwLock<Option<SnapshotMetadataFile>>>,
     max_snapshots: usize,
@@ -51,9 +50,7 @@ impl RocksSnapshotCoordinator {
             rocks_store: rs,
             snapshot_dir: config.snapshot_dir,
             num_shards: ns,
-            epoch: Arc::new(AtomicU64::new(ie)),
-            in_progress: Arc::new(AtomicBool::new(false)),
-            scheduled: Arc::new(AtomicBool::new(false)),
+            scheduler: Arc::new(SnapshotScheduler::with_epoch(ie)),
             last_save_time: Arc::new(RwLock::new(lst)),
             last_metadata: Arc::new(RwLock::new(lm)),
             max_snapshots: config.max_snapshots,
@@ -90,60 +87,43 @@ impl RocksSnapshotCoordinator {
         Ok((m.epoch, Some(m)))
     }
 }
+impl RocksSnapshotCoordinator {
+    /// Emit the "started" metrics/log for `epoch` and spawn the background
+    /// [`run_loop`]. Called once the scheduler has already claimed the slot for
+    /// `epoch` (via `try_begin` / `request`).
+    fn spawn_run(&self, epoch: u64) {
+        SnapshotInProgress::set(&*self.metrics_recorder, 1.0);
+        SnapshotEpoch::set(&*self.metrics_recorder, epoch as f64);
+        tracing::info!(epoch, "Snapshot started");
+        let run = SnapshotRun {
+            scheduler: self.scheduler.clone(),
+            rocks_store: self.rocks_store.clone(),
+            snapshot_dir: self.snapshot_dir.clone(),
+            data_dir: self.data_dir.clone(),
+            last_save_time: self.last_save_time.clone(),
+            last_metadata: self.last_metadata.clone(),
+            metrics: self.metrics_recorder.clone(),
+            pre_snapshot_hook: self.pre_snapshot_hook.clone(),
+            num_shards: self.num_shards,
+            max_snapshots: self.max_snapshots,
+        };
+        tokio::spawn(run_loop(run, epoch).instrument(tracing::info_span!("snapshot_create")));
+    }
+}
 impl SnapshotCoordinator for RocksSnapshotCoordinator {
     fn start_snapshot(&self) -> Result<SnapshotHandle, SnapshotError> {
-        if self
-            .in_progress
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            return Err(SnapshotError::AlreadyInProgress);
-        }
-        let ie = self.epoch.fetch_add(1, Ordering::SeqCst) + 1;
-        SnapshotInProgress::set(&*self.metrics_recorder, 1.0);
-        SnapshotEpoch::set(&*self.metrics_recorder, ie as f64);
-        tracing::info!(epoch = ie, "Snapshot started");
-        let rs = self.rocks_store.clone();
-        let sd = self.snapshot_dir.clone();
-        let ip = self.in_progress.clone();
-        let sc = self.scheduled.clone();
-        let ec = self.epoch.clone();
-        let lst = self.last_save_time.clone();
-        let lm = self.last_metadata.clone();
-        let mt = self.metrics_recorder.clone();
-        let ms = self.max_snapshots;
-        let ns = self.num_shards;
-        let psh = self.pre_snapshot_hook.clone();
-        let dd = self.data_dir.clone();
-        tokio::spawn(async move { let mut ce = ie; let mut start = Instant::now(); loop {
-            { let h = psh.read().unwrap().clone(); if let Some(h) = h { h().await; } }
-            let rs2 = rs.clone(); let sd2 = sd.clone(); let dd2 = dd.clone(); let se = ce;
-            let result = tokio::task::spawn_blocking(move || {
-                SnapshotStager {
-                    tmp: sd2.join(format!(".snapshot_{:05}.tmp", se)),
-                    final_dir: sd2.join(format!("snapshot_{:05}", se)),
-                    name: format!("snapshot_{:05}", se),
-                    snapshot_dir: sd2,
-                    data_dir: dd2,
-                    epoch: se,
-                    num_shards: ns,
-                    max_snapshots: ms,
-                }
-                .run(&rs2)
-            }).await;
-            match result { Ok(Ok(md)) => { let el = start.elapsed(); let seq = md.sequence_number; let sp = sd.join(format!("snapshot_{:05}", ce)); *lst.write().unwrap() = Some(Instant::now()); *lm.write().unwrap() = Some(md.clone()); SnapshotDuration::observe(&*mt, el.as_secs_f64()); SnapshotSizeBytes::set(&*mt, md.size_bytes as f64); SnapshotLastTimestamp::set(&*mt, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64()); tracing::info!(epoch = ce, sequence = seq, path = %sp.display(), size_bytes = md.size_bytes, duration_ms = el.as_millis(), "Snapshot completed"); } Ok(Err(e)) => { PersistenceErrors::inc(&*mt, PersistenceErrorType::Snapshot); tracing::error!(epoch = ce, error = %e, "Snapshot failed"); } Err(e) => { PersistenceErrors::inc(&*mt, PersistenceErrorType::Snapshot); tracing::error!(epoch = ce, error = %e, "Snapshot task panicked"); } }
-            ip.store(false, Ordering::SeqCst);
-            if !sc.swap(false, Ordering::SeqCst) { SnapshotInProgress::set(&*mt, 0.0); break; }
-            if ip.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() { SnapshotInProgress::set(&*mt, 0.0); break; }
-            ce = ec.fetch_add(1, Ordering::SeqCst) + 1; start = Instant::now(); SnapshotEpoch::set(&*mt, ce as f64); tracing::info!(epoch = ce, "Starting scheduled snapshot");
-        } }.instrument(tracing::info_span!("snapshot_create")));
-        Ok(SnapshotHandle::new(ie, || {}))
+        let epoch = self
+            .scheduler
+            .try_begin()
+            .ok_or(SnapshotError::AlreadyInProgress)?;
+        self.spawn_run(epoch);
+        Ok(SnapshotHandle::new(epoch))
     }
     fn last_save_time(&self) -> Option<Instant> {
         *self.last_save_time.read().unwrap()
     }
     fn in_progress(&self) -> bool {
-        self.in_progress.load(Ordering::SeqCst)
+        self.scheduler.in_progress()
     }
     fn last_snapshot_metadata(&self) -> Option<SnapshotMetadata> {
         self.last_metadata
@@ -153,13 +133,133 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
             .map(|m| m.to_metadata())
     }
     fn schedule_snapshot(&self) -> bool {
-        if !self.in_progress() {
-            return false;
-        }
-        self.scheduled.store(true, Ordering::SeqCst);
-        true
+        self.scheduler.schedule()
     }
     fn is_scheduled(&self) -> bool {
-        self.scheduled.load(Ordering::SeqCst)
+        self.scheduler.is_scheduled()
+    }
+    fn request_snapshot(&self) -> SnapshotRequest {
+        match self.scheduler.request() {
+            SnapshotRequest::Started(epoch) => {
+                self.spawn_run(epoch);
+                SnapshotRequest::Started(epoch)
+            }
+            SnapshotRequest::Coalesced => SnapshotRequest::Coalesced,
+        }
+    }
+}
+
+/// Everything one background save needs, with real field names (replaces the
+/// twelve two-letter move-captures of the old inline `tokio::spawn` closure).
+struct SnapshotRun {
+    scheduler: Arc<SnapshotScheduler>,
+    rocks_store: Arc<RocksStore>,
+    snapshot_dir: PathBuf,
+    data_dir: PathBuf,
+    last_save_time: Arc<RwLock<Option<Instant>>>,
+    last_metadata: Arc<RwLock<Option<SnapshotMetadataFile>>>,
+    metrics: Arc<dyn MetricsRecorder>,
+    pre_snapshot_hook: Arc<RwLock<Option<PreSnapshotHook>>>,
+    num_shards: usize,
+    max_snapshots: usize,
+}
+impl SnapshotRun {
+    /// Run the pre-snapshot hook (if any), then stage + install one checkpoint on
+    /// a blocking thread. Returns the joined stager result.
+    async fn execute(
+        &self,
+        epoch: u64,
+    ) -> Result<Result<SnapshotMetadataFile, SnapshotError>, JoinError> {
+        // Clone out of the lock into a local first, so the read guard is dropped
+        // before the `.await` (guards are not `Send`).
+        let hook = self.pre_snapshot_hook.read().unwrap().clone();
+        if let Some(hook) = hook {
+            hook().await;
+        }
+        let snapshot_dir = self.snapshot_dir.clone();
+        let data_dir = self.data_dir.clone();
+        let rocks_store = self.rocks_store.clone();
+        let num_shards = self.num_shards;
+        let max_snapshots = self.max_snapshots;
+        tokio::task::spawn_blocking(move || {
+            SnapshotStager {
+                tmp: snapshot_dir.join(format!(".snapshot_{epoch:05}.tmp")),
+                final_dir: snapshot_dir.join(format!("snapshot_{epoch:05}")),
+                name: format!("snapshot_{epoch:05}"),
+                snapshot_dir,
+                data_dir,
+                epoch,
+                num_shards,
+                max_snapshots,
+            }
+            .run(&rocks_store)
+        })
+        .await
+    }
+
+    /// Record the outcome of one save: metrics, `last_*` state, and the log line.
+    fn record(
+        &self,
+        epoch: u64,
+        started: Instant,
+        result: Result<Result<SnapshotMetadataFile, SnapshotError>, JoinError>,
+    ) {
+        match result {
+            Ok(Ok(md)) => {
+                let elapsed = started.elapsed();
+                let sequence = md.sequence_number;
+                let path = self.snapshot_dir.join(format!("snapshot_{epoch:05}"));
+                *self.last_save_time.write().unwrap() = Some(Instant::now());
+                *self.last_metadata.write().unwrap() = Some(md.clone());
+                SnapshotDuration::observe(&*self.metrics, elapsed.as_secs_f64());
+                SnapshotSizeBytes::set(&*self.metrics, md.size_bytes as f64);
+                SnapshotLastTimestamp::set(
+                    &*self.metrics,
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs_f64(),
+                );
+                tracing::info!(
+                    epoch,
+                    sequence,
+                    path = %path.display(),
+                    size_bytes = md.size_bytes,
+                    duration_ms = elapsed.as_millis(),
+                    "Snapshot completed"
+                );
+            }
+            Ok(Err(e)) => {
+                PersistenceErrors::inc(&*self.metrics, PersistenceErrorType::Snapshot);
+                tracing::error!(epoch, error = %e, "Snapshot failed");
+            }
+            Err(e) => {
+                PersistenceErrors::inc(&*self.metrics, PersistenceErrorType::Snapshot);
+                tracing::error!(epoch, error = %e, "Snapshot task panicked");
+            }
+        }
+    }
+}
+
+/// One background save, then coalesced re-runs, until the scheduler reports idle.
+/// The reschedule handshake lives entirely in
+/// [`SnapshotScheduler::finish_and_maybe_rebegin`].
+async fn run_loop(run: SnapshotRun, mut epoch: u64) {
+    loop {
+        let started = Instant::now();
+        let result = run.execute(epoch).await;
+        run.record(epoch, started, result);
+
+        match run.scheduler.finish_and_maybe_rebegin() {
+            None => {
+                SnapshotInProgress::set(&*run.metrics, 0.0);
+                break;
+            }
+            Some(next) => {
+                epoch = next;
+                SnapshotEpoch::set(&*run.metrics, epoch as f64);
+                tracing::info!(epoch, "Starting scheduled snapshot");
+            }
+        }
     }
 }
