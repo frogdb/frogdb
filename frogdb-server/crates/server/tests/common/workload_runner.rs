@@ -71,13 +71,33 @@ pub fn run_workload_capturing(
 
     let history = Arc::new(Mutex::new(OperationHistory::new()));
 
+    /// Connect with retry: under `enable_random_order()` a seeded schedule can
+    /// run a client's connect before the server host has bound its listener,
+    /// yielding ConnectionRefused. Retry over sim-time until the server is up.
+    async fn connect_with_retry(
+        addr: std::net::IpAddr,
+    ) -> Result<TcpStream, Box<dyn std::error::Error>> {
+        let mut last_err: Option<std::io::Error> = None;
+        for _ in 0..50 {
+            match TcpStream::connect((addr, SERVER_PORT)).await {
+                Ok(s) => return Ok(s),
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+                    last_err = Some(e);
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Err(last_err.expect("retry loop ran at least once").into())
+    }
+
     for script in &workload.clients {
         let h = history.clone();
         let script = script.clone();
         let client_name = format!("client{}", script.client_id);
         sim.client(client_name, async move {
             let addr = turmoil::lookup(SERVER_HOST);
-            let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+            let mut stream = connect_with_retry(addr).await?;
             let mut buf = vec![0u8; 65536];
             let mut acc: Vec<u8> = Vec::with_capacity(4096);
 
@@ -100,7 +120,7 @@ pub fn run_workload_capturing(
     sim.client("drainer", async move {
         tokio::time::sleep(Duration::from_millis(DRAIN_SETTLE_MS)).await;
         let addr = turmoil::lookup(SERVER_HOST);
-        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut stream = connect_with_retry(addr).await?;
         let mut buf = vec![0u8; 65536];
         let mut acc: Vec<u8> = Vec::with_capacity(4096);
         for key in &keys {
