@@ -19,16 +19,20 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tokio::sync::oneshot;
 
 use crate::bundle::{BundleConfig, BundleGenerator, BundleInfo, BundleStore, DiagnosticCollector};
 use frogdb_core::{
-    ClientRegistry, InfoShardSnapshot, LatencyEvent, LatencySample, ShardMessage, ShardSender,
-    SlowLogEntry,
+    ClientRegistry, LatencyEvent, LatencySample, ShardMessage, ShardSender, SlowLogEntry,
 };
-use frogdb_telemetry::SharedTracer;
+use frogdb_telemetry::{NodeStateSnapshot, ShardState, SharedTracer};
+
+/// Deadline for the debug UI's single node-state scatter. The debug panels are
+/// best-effort: a shard that misses this deadline yields an empty snapshot
+/// rather than blocking the page.
+const DEBUG_SCATTER_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A configuration entry for display in the debug UI.
 #[derive(Clone, Debug, serde::Serialize)]
@@ -128,6 +132,9 @@ pub struct LatencyData {
 }
 
 /// Statistics for a single internal shard.
+///
+/// A pure render view over one [`ShardState`] row from the shared
+/// [`NodeStateSnapshot`]; it carries no aggregation of its own.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ShardStats {
     /// Shard ID.
@@ -142,6 +149,19 @@ pub struct ShardStats {
     pub hot_keys: u64,
     /// Keys resident in the warm (spilled) tier.
     pub warm_keys: u64,
+}
+
+impl From<&ShardState> for ShardStats {
+    fn from(s: &ShardState) -> Self {
+        ShardStats {
+            shard_id: s.shard_id,
+            keys: s.keys as u64,
+            memory_bytes: s.data_memory as u64,
+            peak_memory_bytes: s.peak_memory,
+            hot_keys: s.hot_keys as u64,
+            warm_keys: s.warm_keys as u64,
+        }
+    }
 }
 
 /// A snapshot of a connected client for display in the debug UI.
@@ -402,41 +422,19 @@ impl DebugState {
     // On-demand shard scatter queries
     // =========================================================================
 
-    /// Scatter an `InfoSnapshot` request to every shard and gather the replies.
-    async fn gather_info_snapshots(&self) -> Vec<InfoShardSnapshot> {
+    /// Query per-shard statistics (keys, memory, tiered counts) from all shards.
+    ///
+    /// Reads the shared [`NodeStateSnapshot`] — the same single-scatter gather
+    /// INFO and telemetry `/status` render from — and projects its per-shard
+    /// rows into the debug panel's [`ShardStats`] view.
+    pub async fn get_shard_stats(&self) -> Vec<ShardStats> {
         let Some(senders) = self.shard_senders.as_ref() else {
             return Vec::new();
         };
-        let mut snapshots = Vec::with_capacity(senders.len());
-        for sender in senders.iter() {
-            let (response_tx, response_rx) = oneshot::channel();
-            if sender
-                .send(ShardMessage::InfoSnapshot { response_tx })
-                .await
-                .is_ok()
-                && let Ok(snapshot) = response_rx.await
-            {
-                snapshots.push(snapshot);
-            }
-        }
-        snapshots
-    }
-
-    /// Query per-shard statistics (keys, memory, tiered counts) from all shards.
-    pub async fn get_shard_stats(&self) -> Vec<ShardStats> {
-        let mut stats: Vec<ShardStats> = self
-            .gather_info_snapshots()
+        let snapshot = NodeStateSnapshot::collect(senders, DEBUG_SCATTER_TIMEOUT)
             .await
-            .into_iter()
-            .map(|snap| ShardStats {
-                shard_id: snap.shard_id,
-                keys: snap.memory.keys as u64,
-                memory_bytes: snap.memory.data_memory as u64,
-                peak_memory_bytes: snap.memory.peak_memory,
-                hot_keys: snap.tiered.hot_keys as u64,
-                warm_keys: snap.tiered.warm_keys as u64,
-            })
-            .collect();
+            .unwrap_or_default();
+        let mut stats: Vec<ShardStats> = snapshot.per_shard.iter().map(ShardStats::from).collect();
         stats.sort_by_key(|s| s.shard_id);
         stats
     }
@@ -680,7 +678,7 @@ fn slowlog_entry_from_core(entry: SlowLogEntry) -> SlowlogEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use frogdb_core::{Envelope, LatencySample, ShardMemoryStats, TieredCounts};
+    use frogdb_core::{Envelope, InfoShardSnapshot, LatencySample, ShardMemoryStats, TieredCounts};
     use tokio::sync::mpsc;
 
     /// Spawn a mock shard worker over the real `ShardMessage` protocol.
