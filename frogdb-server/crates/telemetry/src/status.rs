@@ -963,6 +963,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn status_shards_and_totals_render_from_node_state_snapshot() {
+        // Prove the /status surface renders per-shard rows and node-wide totals
+        // from the single NodeStateSnapshot scatter — the same rows and sums INFO
+        // and the debug UI read, so the three surfaces cannot disagree.
+        let recorder = Arc::new(PrometheusRecorder::new());
+        let shard0 = spawn_mock_shard(ShardMemoryStats {
+            shard_id: 0,
+            keys: 3,
+            data_memory: 300,
+            peak_memory: 600,
+            ..Default::default()
+        });
+        let shard1 = spawn_mock_shard(ShardMemoryStats {
+            shard_id: 1,
+            keys: 5,
+            data_memory: 500,
+            peak_memory: 1000,
+            ..Default::default()
+        });
+        let status = test_collector(recorder, vec![shard0, shard1], false)
+            .collect()
+            .await;
+
+        // Per-shard rows come straight off the snapshot's per_shard rows.
+        assert_eq!(status.shards.len(), 2);
+        assert_eq!(status.shards[0].id, 0);
+        assert_eq!(status.shards[0].keys, 3);
+        assert_eq!(status.shards[0].memory_bytes, 300);
+        assert_eq!(status.shards[1].keys, 5);
+        assert_eq!(status.shards[1].peak_memory_bytes, 1000);
+
+        // Node-wide aggregates are the sum INFO's memory/keyspace sections report.
+        assert_eq!(status.memory.used_bytes, 800);
+        assert_eq!(status.memory.peak_bytes, 1600);
+        assert_eq!(status.keyspace.total_keys, 8);
+    }
+
+    #[tokio::test]
     async fn test_expired_keys_total_sums_shard_stats() {
         // expired_keys_total is sourced from the same per-shard accumulator INFO
         // aggregates (active + lazy expiry), NOT the active-only Prometheus

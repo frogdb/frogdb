@@ -751,6 +751,31 @@ mod tests {
         DebugState::new(ServerInfo::default(), Vec::new()).with_shard_senders(Arc::new(senders))
     }
 
+    /// Cross-surface agreement: the telemetry `/status` `ShardStatus` view and
+    /// the debug UI `ShardStats` view are both pure renderers over one shared
+    /// [`ShardState`] row, so they can never report a different id/keys/memory
+    /// for the same shard.
+    #[test]
+    fn shard_views_agree_across_surfaces() {
+        use frogdb_telemetry::status::ShardStatus;
+
+        let row = ShardState {
+            shard_id: 2,
+            keys: 15,
+            data_memory: 4096,
+            peak_memory: 8192,
+            hot_keys: 10,
+            warm_keys: 5,
+        };
+        let status: ShardStatus = (&row).into();
+        let debug: ShardStats = (&row).into();
+
+        assert_eq!(status.id, debug.shard_id);
+        assert_eq!(status.keys as u64, debug.keys);
+        assert_eq!(status.memory_bytes, debug.memory_bytes);
+        assert_eq!(status.peak_memory_bytes, debug.peak_memory_bytes);
+    }
+
     #[tokio::test]
     async fn shard_stats_returns_real_rows() {
         let state = state_with_shards(&[3, 7]);
