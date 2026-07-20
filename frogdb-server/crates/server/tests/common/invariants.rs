@@ -12,9 +12,10 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use frogdb_testing::{
-    HashModel, History, KVModel, ListModel, StreamModel, ZSetModel, check_exactly_once_delivery,
-    check_fifo_wake_order, check_linearizability_bounded, check_watch_no_false_negative,
-    default_keys_of, is_errored_exec_result, partition_by_key,
+    HashModel, History, KVModel, ListModel, StreamGroupModel, ZSetModel,
+    check_exactly_once_delivery, check_fifo_wake_order, check_linearizability_bounded,
+    check_pel_conservation, check_watch_no_false_negative, default_keys_of, is_errored_exec_result,
+    partition_by_key,
 };
 
 use super::quiescence_probe::{QuiescenceSnapshots, check_quiescence};
@@ -63,7 +64,8 @@ fn family_of(function: &str) -> Option<Family> {
         | "blmove" | "lmove_push" => Some(Family::List),
         "hset" | "hdel" | "hget" | "hincrby" | "hgetall" | "hlen" => Some(Family::Hash),
         "zadd" | "zrem" | "zscore" | "zcard" | "bzpopmin" | "bzpopmax" => Some(Family::ZSet),
-        "xadd" | "xlen" | "xread" => Some(Family::Stream),
+        "xadd" | "xlen" | "xread" | "xgroup" | "xreadgroup" | "xack" | "xpending" | "xclaim"
+        | "xautoclaim" => Some(Family::Stream),
         _ => None,
     }
 }
@@ -155,6 +157,9 @@ pub fn check_all_with(
     if let Err(e) = check_watch_no_false_negative(history) {
         report.violations.push(format!("WATCH false-negative: {e}"));
     }
+    if let Err(e) = check_pel_conservation(history) {
+        report.violations.push(format!("PEL conservation: {e}"));
+    }
 
     // Stage 4: quiescence. Fed the Phase-2 DEBUG LOCKTABLE / WAITQUEUE /
     // MEMORY-CHECK / EXPIRY-INDEX-CHECK snapshots gathered after the workload
@@ -181,7 +186,7 @@ fn run_bounded(
         Family::List => check_linearizability_bounded::<ListModel>(sub, max_states),
         Family::Hash => check_linearizability_bounded::<HashModel>(sub, max_states),
         Family::ZSet => check_linearizability_bounded::<ZSetModel>(sub, max_states),
-        Family::Stream => check_linearizability_bounded::<StreamModel>(sub, max_states),
+        Family::Stream => check_linearizability_bounded::<StreamGroupModel>(sub, max_states),
     }
 }
 
