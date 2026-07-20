@@ -8,6 +8,9 @@
 //! - [`CheckpointStreamCodec`] — the symmetric checkpoint envelope codec that
 //!   owns the on-wire grammar both the primary and the replica used to
 //!   hand-roll (marker + count prelude, per-file headers, trailing metadata)
+//! - [`CheckpointChecksum`] — the combined-SHA256 accumulator that owns *what
+//!   bytes the checkpoint checksum covers*, so the sender and receiver cannot
+//!   drift on coverage
 //! - File I/O helpers ([`stream_file_to_writer`], [`receive_to_file`])
 //! - Checksum helpers
 //!
@@ -261,6 +264,51 @@ impl CheckpointStreamCodec {
         let mut buf = vec![0u8; metadata_len + 2];
         r.read_exact(&mut buf).await?;
         FullSyncMetadata::from_bytes(&buf[..metadata_len])
+    }
+}
+
+/// Accumulator for the full-sync checkpoint's *combined* checksum — the single
+/// SHA256 carried by [`FullSyncMetadata::checksum`] and verified by the receiver
+/// after every file lands.
+///
+/// The coverage is part of the checkpoint codec's contract, so it lives here
+/// beside the framing rather than being hand-rolled on each side. Both the
+/// primary and the replica fold every checkpoint file through
+/// [`update_file`](Self::update_file) — in the same order the codec frames them
+/// on the wire — then call [`finalize`](Self::finalize). A future coverage
+/// change (an added field, a reordering) is a single edit here instead of two
+/// independent `Sha256::new()` loops that must be kept byte-identical by
+/// inspection.
+///
+/// Coverage, byte-for-byte:
+/// `SHA256( name_0 || hash_0 || name_1 || hash_1 || … )`, where `name_i` is the
+/// UTF-8 filename bytes and `hash_i` is that file's raw 32-byte SHA256, in wire
+/// order, with no delimiters, length prefixes, or metadata mixed in.
+#[derive(Debug, Default)]
+pub struct CheckpointChecksum {
+    hasher: Sha256,
+}
+
+impl CheckpointChecksum {
+    /// A fresh accumulator covering no files yet.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Fold one checkpoint file into the combined checksum: the filename bytes
+    /// followed by that file's raw 32-byte SHA256. Call once per file, in the
+    /// order the files appear on the wire.
+    pub fn update_file(&mut self, name: &str, file_hash: &[u8; 32]) {
+        self.hasher.update(name.as_bytes());
+        self.hasher.update(file_hash);
+    }
+
+    /// Finalize into the 32-byte combined checksum carried by
+    /// [`FullSyncMetadata::checksum`].
+    pub fn finalize(self) -> [u8; 32] {
+        let mut checksum = [0u8; 32];
+        checksum.copy_from_slice(&self.hasher.finalize());
+        checksum
     }
 }
 
@@ -544,6 +592,98 @@ mod tests {
         assert_eq!(decoded.checksum, metadata.checksum);
         assert_eq!(decoded.replication_id, metadata.replication_id);
         assert_eq!(decoded.replication_offset, metadata.replication_offset);
+    }
+
+    /// End-to-end checksum agreement: drive the *whole* checkpoint the way the
+    /// sender and receiver do — frame each file, fold it into a
+    /// [`CheckpointChecksum`], carry the finalized hash in the trailing
+    /// [`FullSyncMetadata`], then on the read side re-fold each decoded file and
+    /// assert the recomputed combined checksum matches the one on the wire. This
+    /// is the drift guard for checksum *coverage*: the two sides can only agree
+    /// because they share one accumulator definition.
+    #[tokio::test]
+    async fn test_checkpoint_checksum_agreement() {
+        let files: Vec<(String, Vec<u8>)> = vec![
+            ("CURRENT".to_string(), b"MANIFEST-000005\n".to_vec()),
+            ("000042.sst".to_string(), (0u8..=200).collect()),
+            ("MANIFEST-000005".to_string(), Vec::new()),
+        ];
+
+        // --- sender side ---
+        let mut buf: Vec<u8> = Vec::new();
+        CheckpointStreamCodec::write_prelude(&mut buf, files.len())
+            .await
+            .unwrap();
+        let mut send_checksum = CheckpointChecksum::new();
+        for (name, payload) in &files {
+            CheckpointStreamCodec::write_file_header(
+                &mut buf,
+                &CheckpointFileHeader {
+                    name: name.clone(),
+                    size: payload.len() as u64,
+                },
+            )
+            .await
+            .unwrap();
+            buf.write_all(payload).await.unwrap();
+            send_checksum.update_file(name, &calculate_bytes_checksum(payload));
+        }
+        let metadata = FullSyncMetadata {
+            rdb_size: files.iter().map(|(_, p)| p.len() as u64).sum(),
+            checksum: send_checksum.finalize(),
+            replication_id: "repl-agreement".to_string(),
+            replication_offset: 7,
+        };
+        CheckpointStreamCodec::write_metadata(&mut buf, &metadata)
+            .await
+            .unwrap();
+
+        // --- receiver side ---
+        let mut cursor = std::io::Cursor::new(buf);
+        let count = CheckpointStreamCodec::read_prelude(&mut cursor)
+            .await
+            .unwrap();
+        assert_eq!(count, files.len());
+        let mut recv_checksum = CheckpointChecksum::new();
+        for _ in 0..count {
+            let header = CheckpointStreamCodec::read_file_header(&mut cursor)
+                .await
+                .unwrap();
+            let mut payload = vec![0u8; header.size as usize];
+            cursor.read_exact(&mut payload).await.unwrap();
+            recv_checksum.update_file(&header.name, &calculate_bytes_checksum(&payload));
+        }
+        let decoded = CheckpointStreamCodec::read_metadata(&mut cursor)
+            .await
+            .unwrap();
+        let computed = recv_checksum.finalize();
+        assert_eq!(computed, decoded.checksum, "combined checksum must agree");
+    }
+
+    /// A single flipped payload byte must change the combined checksum, so the
+    /// receiver's recomputed hash no longer matches the one the primary framed.
+    #[tokio::test]
+    async fn test_checkpoint_checksum_tamper_detected() {
+        let mut sender = CheckpointChecksum::new();
+        sender.update_file("CURRENT", &calculate_bytes_checksum(b"MANIFEST-000005\n"));
+        sender.update_file("000042.sst", &calculate_bytes_checksum(b"payload-bytes"));
+        let wire_checksum = sender.finalize();
+
+        // Receiver re-hashes, but one file arrived corrupted.
+        let mut receiver = CheckpointChecksum::new();
+        receiver.update_file("CURRENT", &calculate_bytes_checksum(b"MANIFEST-000005\n"));
+        receiver.update_file("000042.sst", &calculate_bytes_checksum(b"payload-bytesX"));
+        assert_ne!(
+            receiver.finalize(),
+            wire_checksum,
+            "a tampered file must break the combined checksum"
+        );
+
+        // The filename is part of the coverage too: a renamed file diverges.
+        let mut renamed = CheckpointChecksum::new();
+        renamed.update_file("CURRENT", &calculate_bytes_checksum(b"MANIFEST-000005\n"));
+        renamed.update_file("000043.sst", &calculate_bytes_checksum(b"payload-bytes"));
+        assert_ne!(renamed.finalize(), wire_checksum);
     }
 
     /// Golden-bytes assertion: for a fixed input the codec must emit exactly the

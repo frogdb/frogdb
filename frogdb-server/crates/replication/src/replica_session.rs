@@ -27,7 +27,6 @@ use std::time::{Duration, Instant};
 
 use bytes::{Buf, BytesMut};
 use parking_lot::RwLock;
-use sha2::Digest;
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::broadcast;
@@ -35,8 +34,8 @@ use tokio::sync::broadcast;
 use crate::BoxedStream;
 use crate::frame::ReplicationFrame;
 use crate::fullsync::{
-    CheckpointFileHeader, CheckpointStreamCodec, FullSyncMetadata, calculate_file_checksum,
-    stream_file_to_writer,
+    CheckpointChecksum, CheckpointFileHeader, CheckpointStreamCodec, FullSyncMetadata,
+    calculate_file_checksum, stream_file_to_writer,
 };
 use crate::primary::{
     LAG_CHECK_INTERVAL, LagThresholdConfig, PrimaryReplicationHandler, parse_replconf_ack,
@@ -534,6 +533,9 @@ impl ReplicaSession {
         CheckpointStreamCodec::write_prelude(stream, files.len()).await?;
 
         // Bodies: per-file header via the codec, then the raw payload bytes.
+        // The combined checksum (owned by `CheckpointChecksum`) is fed one file
+        // at a time, in the same order the codec frames them.
+        let mut combined = CheckpointChecksum::new();
         for (file_name, file_size, file_path) in &files {
             CheckpointStreamCodec::write_file_header(
                 stream,
@@ -546,6 +548,8 @@ impl ReplicaSession {
             let bytes_written =
                 stream_file_to_writer(file_path, stream, Some(&self.sync_bytes_transferred))
                     .await?;
+            let file_hash = calculate_file_checksum(file_path).await?;
+            combined.update_file(file_name, &file_hash);
             tracing::debug!(
                 file = %file_name,
                 size = bytes_written,
@@ -553,17 +557,7 @@ impl ReplicaSession {
                 "Streamed checkpoint file"
             );
         }
-
-        // Combined checksum: hash of (filename, file-hash) pairs.
-        let mut combined_hash = sha2::Sha256::new();
-        for (file_name, _, file_path) in &files {
-            let file_hash = calculate_file_checksum(file_path).await?;
-            combined_hash.update(file_name.as_bytes());
-            combined_hash.update(file_hash);
-        }
-        let final_hash = Digest::finalize(combined_hash);
-        let mut checksum = [0u8; 32];
-        checksum.copy_from_slice(&final_hash);
+        let checksum = combined.finalize();
 
         let metadata = FullSyncMetadata {
             rdb_size: total_size,

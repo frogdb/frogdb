@@ -4,6 +4,7 @@ import { presetStarlightIcons } from 'starlight-plugin-icons/uno'
 export default defineConfig({
 	presets: [presetStarlightIcons()],
 	safelist: [
+		// Sidebar topic icons
 		'i-tabler:rocket',
 		'i-tabler:plug-connected',
 		'i-tabler:book',
