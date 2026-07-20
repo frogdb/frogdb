@@ -26,7 +26,6 @@ pub mod keyspace_stats;
 pub mod latency;
 pub mod metrics;
 pub mod noop;
-pub mod observability;
 pub mod persistence;
 pub mod probes;
 pub mod pubsub;
