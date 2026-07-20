@@ -14,7 +14,7 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
     EventSpec, ExecutionStrategy, Expiry, KeyAccessFlag, KeySpec, KeyspaceEventFlags,
-    LookupOutcome, LookupSpec, MergeStrategy, SetCondition, SetOptions, SetResult,
+    LookupOutcome, LookupSpec, ScatterGatherOp, SetCondition, SetOptions, SetResult,
     StoreTypedFamilyExt, StringValue, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
@@ -775,9 +775,7 @@ impl Command for MgetCommand {
             // One lookup per key, counted at the seam from key existence. The
             // cross-shard scatter path counts its own subset in `scatter_mget`.
             lookup: LookupSpec::EveryKey,
-            strategy: ExecutionStrategy::ScatterGather {
-                merge: MergeStrategy::OrderedArray,
-            },
+            strategy: ExecutionStrategy::ScatterGather(ScatterGatherOp::MGet),
         };
         &SPEC
     }
@@ -825,9 +823,7 @@ impl Command for MsetCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ScatterGather {
-                merge: MergeStrategy::AllOk,
-            },
+            strategy: ExecutionStrategy::ScatterGather(ScatterGatherOp::MSet),
         };
         &SPEC
     }

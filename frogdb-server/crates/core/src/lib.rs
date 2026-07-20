@@ -26,6 +26,7 @@ pub mod keyspace_stats;
 pub mod latency;
 pub mod metrics;
 pub mod noop;
+pub mod observability;
 pub mod persistence;
 pub mod probes;
 pub mod pubsub;
@@ -66,8 +67,8 @@ pub use cluster::{
 pub use command::Command as ShardCommand;
 pub use command::{
     Arity, ClusterContextRef, Command, CommandContext, CommandContextCore, CommandFlags,
-    ConnectionLevelOp, ExecutionStrategy, KeyAccessFlag, ListpackConfig, MergeStrategy,
-    QuorumChecker, ReplicationContextRef, RoleController, ServerWideOp, WaiterKind, WaiterWake,
+    ConnectionLevelOp, ExecutionStrategy, KeyAccessFlag, ListpackConfig, QuorumChecker,
+    ReplicationContextRef, RoleController, ScatterGatherOp, ServerWideOp, WaiterKind, WaiterWake,
     WalAction, WalStrategy,
 };
 pub use command_spec::{
@@ -107,6 +108,7 @@ pub use metrics::{
     ObservabilityConfig,
 };
 pub use noop::ExpiryIndex;
+pub use observability::{ShardWalLag, WalLagAggregate};
 pub use persistence::{
     CompressionType, DurabilityMode, HEADER_SIZE, NoopSnapshotCoordinator, RecoveryStats,
     RocksConfig, RocksSnapshotCoordinator, RocksStore, RocksWalWriter, SerializationError,

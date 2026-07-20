@@ -2,7 +2,7 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
     ExecutionStrategy, Expiry, KeyAccessFlag, KeySpec, KeyspaceEventFlags, LookupSpec,
-    MergeStrategy, SetCondition, SetOptions, SetResult, StoreTypedFamilyExt, Value, WaiterWake,
+    ScatterGatherOp, SetCondition, SetOptions, SetResult, StoreTypedFamilyExt, Value, WaiterWake,
     WalStrategy,
 };
 use frogdb_protocol::Response;
@@ -772,7 +772,7 @@ impl Command for DelCommand {
             event: EventSpec::Emits { class: KeyspaceEventFlags::GENERIC, name: "del" },
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ScatterGather { merge: MergeStrategy::SumIntegers, },
+            strategy: ExecutionStrategy::ScatterGather(ScatterGatherOp::Del),
         };
         &SPEC
     }
@@ -836,9 +836,7 @@ impl Command for ExistsCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::EveryKey,
-            strategy: ExecutionStrategy::ScatterGather {
-                merge: MergeStrategy::SumIntegers,
-            },
+            strategy: ExecutionStrategy::ScatterGather(ScatterGatherOp::Exists),
         };
         &SPEC
     }

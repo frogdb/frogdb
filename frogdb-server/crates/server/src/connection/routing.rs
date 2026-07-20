@@ -11,14 +11,17 @@ use std::sync::Arc;
 use crate::config::ChaosConfigExt;
 
 use bytes::Bytes;
-use frogdb_core::{ScatterOp, ShardMessage, shard_for_key};
+use frogdb_core::{ExecutionStrategy, ScatterGatherOp, ScatterOp, ShardMessage, shard_for_key};
 use frogdb_protocol::{ParsedCommand, Response};
 use tokio::sync::oneshot;
 use tracing::Instrument;
 
 use crate::connection::ConnectionHandler;
 use crate::connection::util::key_access_type_for_flags;
-use crate::scatter::{ScatterGatherExecutor, strategy_for_op};
+use crate::scatter::{
+    DelStrategy, ExistsStrategy, MGetStrategy, MSetStrategy, ScatterGatherExecutor,
+    ScatterGatherStrategy, TouchStrategy, UnlinkStrategy,
+};
 use crate::server::next_txid;
 use crate::slot_migration::{SlotValidator, redirect};
 
@@ -125,51 +128,65 @@ impl ConnectionHandler {
             return self.execute_cross_shard_copy(&cmd.args).await;
         }
 
-        // Determine the scatter operation based on command name
-        let scatter_op = match cmd_name {
-            "MGET" => Some(ScatterOp::MGet),
-            "MSET" => {
-                // Build pairs from args
-                let pairs: Vec<(Bytes, Bytes)> = cmd
-                    .args
+        // Keys span shards and cross-slot is allowed. Derive the scatter op from
+        // the command's *declared* strategy — the single source of truth — not
+        // from its name. A command that is not a scatter command has no
+        // cross-shard plan, so it gets `-CROSSSLOT`.
+        let op = match handler.execution_strategy() {
+            ExecutionStrategy::ScatterGather(op) => op,
+            _ => return redirect::crossslot(),
+        };
+        self.dispatch_scatter(op, &cmd.args).await
+    }
+
+    /// The single dispatch point for keyed cross-shard (scatter-gather)
+    /// commands. The `match op` is exhaustive: adding a [`ScatterGatherOp`]
+    /// variant without an arm here is a **compile error**, so a spec-declared
+    /// scatter command can never silently fall through to `-CROSSSLOT` the way
+    /// the old name-keyed table allowed.
+    ///
+    /// Adding a scatter command is now two compiler-linked steps: (1) add a
+    /// `ScatterGatherOp` variant, and (2) declare
+    /// `ExecutionStrategy::ScatterGather(ScatterGatherOp::…)` on the spec. The
+    /// compiler then forces the arm below; the merge behavior it selects lives
+    /// in the [`ScatterGatherStrategy`] impl, not in a second name-keyed table.
+    async fn dispatch_scatter(&self, op: ScatterGatherOp, args: &[Bytes]) -> Response {
+        // Select the merge strategy from the typed op. Any arg-derived payload
+        // (MSET's pair-chunking, previously inline in the name match) is built
+        // here at construction.
+        let strategy: Box<dyn ScatterGatherStrategy> = match op {
+            ScatterGatherOp::MGet => Box::new(MGetStrategy),
+            ScatterGatherOp::MSet => {
+                let pairs: Vec<(Bytes, Bytes)> = args
                     .chunks(2)
                     .map(|chunk| (chunk[0].clone(), chunk[1].clone()))
                     .collect();
-                Some(ScatterOp::MSet { pairs })
+                Box::new(MSetStrategy::new(pairs))
             }
-            "DEL" => Some(ScatterOp::Del),
-            "EXISTS" => Some(ScatterOp::Exists),
-            "TOUCH" => Some(ScatterOp::Touch),
-            "UNLINK" => Some(ScatterOp::Unlink),
-            _ => None,
+            ScatterGatherOp::Del => Box::new(DelStrategy),
+            ScatterGatherOp::Exists => Box::new(ExistsStrategy),
+            ScatterGatherOp::Touch => Box::new(TouchStrategy),
+            ScatterGatherOp::Unlink => Box::new(UnlinkStrategy),
         };
 
-        match scatter_op.and_then(|op| strategy_for_op(&op)) {
-            Some(strategy) => {
-                let executor = ScatterGatherExecutor::new(
-                    self.core.shard_senders.clone(),
-                    self.scatter_gather_timeout,
-                    self.observability.metrics_recorder.clone(),
-                    self.state.id,
-                    #[cfg(feature = "turmoil")]
-                    self.chaos_config.clone(),
-                );
-                if self
-                    .per_request_spans
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                {
-                    executor
-                        .execute(strategy.as_ref(), &cmd.args)
-                        .instrument(tracing::info_span!("scatter_gather"))
-                        .await
-                } else {
-                    executor.execute(strategy.as_ref(), &cmd.args).await
-                }
-            }
-            None => {
-                // Command doesn't support scatter-gather
-                redirect::crossslot()
-            }
+        let executor = ScatterGatherExecutor::new(
+            self.core.shard_senders.clone(),
+            self.scatter_gather_timeout,
+            self.observability.metrics_recorder.clone(),
+            self.state.id,
+            #[cfg(feature = "turmoil")]
+            self.chaos_config.clone(),
+        );
+        if self
+            .per_request_spans
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            executor
+                .execute(strategy.as_ref(), args)
+                .instrument(tracing::info_span!("scatter_gather"))
+                .await
+        } else {
+            executor.execute(strategy.as_ref(), args).await
         }
     }
 
