@@ -384,7 +384,11 @@ impl Model for StreamGroupModel {
                 // COUNT exceeding any achievable PEL size for this to hold — if the
                 // real server ever has more matching entries than COUNT, it legally
                 // returns a non-zero cursor to continue the scan on a later call,
-                // and this model would spuriously reject that (correct) reply.
+                // and this model would spuriously reject that (correct) reply. This
+                // matches the server: when a scan drains the PEL, it reports
+                // `StreamId::default()` ("0-0") as the cursor, same as this model's
+                // hardcoded terminal cursor, under the generator's COUNT 1000
+                // single-shot scan.
                 let justid = args.iter().any(|a| a.eq_ignore_ascii_case(b"JUSTID"));
                 if args.len() < 5 || !justid {
                     return None; // bounded set uses JUSTID only

@@ -68,10 +68,12 @@ fn write_repro_for(
 // rejecting nil aborts), so the List/Stream/Hash/ZSet/plain-KV vocabulary now
 // linearizes correctly.
 //
-// TxHeavy is intentionally excluded here and deferred to the `#[ignore]`d
-// `seed_sweep_txheavy` below — see its comment for the specific remaining
-// blocker (a server-side cross-shard WATCH validation bug; the earlier
-// errored-EXEC model gap is fixed).
+// TxHeavy is intentionally excluded here and covered separately by
+// `seed_sweep_txheavy` below, which is live (not `#[ignore]`d): the
+// server-side cross-shard WATCH false-negative bug it previously tripped is
+// fixed (EXEC now folds every live watched shard at `take_transaction` time),
+// and that fix is pinned by
+// `regressions::regression_crossshard_watch_false_negative_seed_8`.
 #[test]
 fn seed_sweep_short_workloads() {
     // ~20 seeds x short workloads (CI per-PR tier), alternating the two

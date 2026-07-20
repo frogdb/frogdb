@@ -863,12 +863,6 @@ impl ConnectionState {
             .add_keys(keys, num_shards, is_cluster);
     }
 
-    /// Fold a single already-validated shard into the transaction target
-    /// (WATCH's watched keys are all same-shard).
-    pub fn fold_transaction_shard(&mut self, shard_id: usize) {
-        self.transaction.slots.fold_shard(shard_id);
-    }
-
     /// Record a watched key with its watch-time version and shard.
     pub fn watch_key(&mut self, key: Bytes, shard_id: usize, version: u64) {
         self.transaction.watches.insert(key, (shard_id, version));
@@ -1358,7 +1352,7 @@ mod tests {
 
         s.push_queued_command(cmd(b"GET"));
         s.push_queued_command(cmd(b"SET"));
-        s.fold_transaction_shard(2);
+        s.transaction.slots.fold_shard(2);
         s.watch_key(Bytes::from_static(b"k"), 2, 7);
 
         let summary = s.take_transaction().expect("in transaction");
@@ -1388,7 +1382,7 @@ mod tests {
         s.begin_transaction().expect("MULTI after WATCH");
         // Queue a single-shard command (shard 1), as seed 8 does (DEL {t1}kv1).
         s.push_queued_command(cmd(b"DEL"));
-        s.fold_transaction_shard(1);
+        s.transaction.slots.fold_shard(1);
 
         let summary = s.take_transaction().expect("in transaction");
         // Live cross-shard watch set folded at EXEC → Multi → CROSSSLOT.
@@ -1419,7 +1413,7 @@ mod tests {
         s.unwatch_all();
         // Queue a single-shard command on a *different* shard than the old watch.
         s.push_queued_command(cmd(b"SET"));
-        s.fold_transaction_shard(1);
+        s.transaction.slots.fold_shard(1);
 
         let summary = s.take_transaction().expect("in transaction");
         assert!(summary.watches.is_empty(), "UNWATCH cleared the watch set");

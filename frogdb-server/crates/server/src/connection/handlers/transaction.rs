@@ -19,9 +19,7 @@
 //! and no longer lives here.)
 
 use bytes::Bytes;
-use frogdb_core::{
-    RateLimitExceeded, ServerWideOp, ShardMessage, TransactionResult, shard_for_key,
-};
+use frogdb_core::{RateLimitExceeded, ServerWideOp, ShardMessage, TransactionResult};
 use frogdb_protocol::{ParsedCommand, Response};
 use tokio::sync::oneshot;
 use tracing::debug;
@@ -227,21 +225,17 @@ impl ConnectionHandler {
             }
         }
 
-        // Get target shard. If no command keys determined a target, fall back to
-        // the watched-key shard. All watches resolve to a single shard here: each
-        // WATCH is same-shard-validated (SlotValidator::same_shard), and
-        // `take_transaction` folds every live watched shard into the transaction
-        // target, so a watch set spanning shards promotes the target to `Multi`
-        // and is CROSSSLOT-rejected below — it never reaches this single-shard
-        // fallback. Thus `watches.first()`'s shard is the only shard.
-        let watched_shard = watches
-            .first()
-            .map(|(key, _)| shard_for_key(key, self.num_shards));
+        // Get target shard. `take_transaction` folds both queued-command keys and
+        // every live watched shard into the transaction target at EXEC time, so
+        // `None` here means there were neither keys nor watches to fold — fall
+        // back to this connection's own shard. A watch set spanning shards
+        // promotes the target to `Multi` and is CROSSSLOT-rejected below, so a
+        // non-empty watch set never resolves to `None`.
         // A `Multi` target is a cross-slot transaction: resolve() returns the
-        // CROSSSLOT reply from the redirect seam. `None` falls back to the
-        // watched-key shard (or local); `Single` routes directly.
+        // CROSSSLOT reply from the redirect seam. `None` falls back to this
+        // connection's shard; `Single` routes directly.
         let target_shard = match target.resolve() {
-            Ok(TransactionTarget::None) => watched_shard.unwrap_or(self.shard_id),
+            Ok(TransactionTarget::None) => self.shard_id,
             Ok(TransactionTarget::Single(shard)) => shard,
             Ok(TransactionTarget::Multi(_)) => unreachable!("resolve() maps Multi to Err"),
             Err(crossslot) => return (TransactionOutcome::CrossSlot, vec![crossslot]),
