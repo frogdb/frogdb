@@ -279,6 +279,13 @@ impl ShardWorker {
             | VllAbort { .. }
             | VllContinuationLock { .. }
             | GetVllQueueInfo { .. } => self.dispatch_vll(msg).await,
+            GetLockTableInfo { .. }
+            | GetWaitQueueInfo { .. }
+            | MemoryCheck { .. }
+            | ExpiryIndexCheck { .. } => {
+                self.dispatch_debug_introspection(msg);
+                false
+            }
             SlotMigrated { .. } | RaftCommand { .. } => self.dispatch_cluster(msg).await,
             FlushSearchIndexes { .. } | GetPubSubLimitsInfo { .. } => {
                 self.dispatch_search(msg);

@@ -602,6 +602,30 @@ pub enum ShardMessage {
         response_tx: oneshot::Sender<VllQueueInfo>,
     },
 
+    /// Get the VLL lock-table snapshot from this shard (DEBUG LOCKTABLE).
+    GetLockTableInfo {
+        /// Channel to send the response.
+        response_tx: oneshot::Sender<super::types::LockTableInfo>,
+    },
+
+    /// Get the blocking-waiter snapshot from this shard (DEBUG WAITQUEUE).
+    GetWaitQueueInfo {
+        /// Channel to send the response.
+        response_tx: oneshot::Sender<super::types::WaitQueueInfo>,
+    },
+
+    /// Recompute live memory and report tracked vs recomputed (DEBUG MEMORY-CHECK).
+    MemoryCheck {
+        /// Channel to send the response.
+        response_tx: oneshot::Sender<super::types::MemoryCheckInfo>,
+    },
+
+    /// Cross-check the expiry index against entry deadlines (DEBUG EXPIRY-INDEX-CHECK).
+    ExpiryIndexCheck {
+        /// Channel to send the response.
+        response_tx: oneshot::Sender<super::types::ExpiryIndexCheckInfo>,
+    },
+
     /// Get pub/sub limits info from this shard.
     GetPubSubLimitsInfo {
         /// Channel to send the response.
@@ -674,6 +698,10 @@ impl ShardMessage {
             ShardMessage::SlotMigrated { .. } => "SlotMigrated",
             ShardMessage::RaftCommand { .. } => "RaftCommand",
             ShardMessage::GetVllQueueInfo { .. } => "GetVllQueueInfo",
+            ShardMessage::GetLockTableInfo { .. } => "GetLockTableInfo",
+            ShardMessage::GetWaitQueueInfo { .. } => "GetWaitQueueInfo",
+            ShardMessage::MemoryCheck { .. } => "MemoryCheck",
+            ShardMessage::ExpiryIndexCheck { .. } => "ExpiryIndexCheck",
             ShardMessage::GetPubSubLimitsInfo { .. } => "GetPubSubLimitsInfo",
             ShardMessage::FlushSearchIndexes { .. } => "FlushSearchIndexes",
             ShardMessage::Shutdown => "Shutdown",

@@ -33,6 +33,7 @@ mod diagnostics;
 mod dispatch_blocking;
 mod dispatch_cluster;
 mod dispatch_core;
+mod dispatch_debug_introspection;
 mod dispatch_observability;
 mod dispatch_pubsub;
 mod dispatch_scripting;
@@ -76,10 +77,11 @@ pub use search::lifecycle::{
     IndexLifecycleManager, LifecycleError, RecoveryOutcome, RecoveryResult,
 };
 pub use types::{
-    BigKeyInfo, BigKeysScanResponse, InfoShardSnapshot, PartialResult, PubSubLimitsInfo,
-    ShardClusterDeps, ShardConfig, ShardCoreDeps, ShardMemoryStats, ShardPersistenceDeps,
-    TieredCounts, TransactionResult, VllContinuationLockInfo, VllKeyIntentInfo, VllPendingOpInfo,
-    VllQueueInfo, WalLagStatsResponse,
+    BigKeyInfo, BigKeysScanResponse, ExpiryIndexCheckInfo, InfoShardSnapshot, LockTableInfo,
+    MemoryCheckInfo, PartialResult, PubSubLimitsInfo, ShardClusterDeps, ShardConfig, ShardCoreDeps,
+    ShardMemoryStats, ShardPersistenceDeps, TieredCounts, TransactionResult,
+    VllContinuationLockInfo, VllKeyIntentInfo, VllPendingOpInfo, VllQueueInfo, WaitQueueInfo,
+    WaitQueueKeyInfo, WaitQueueWaiterInfo, WalLagStatsResponse,
 };
-pub use wait_queue::{ShardWaitQueue, WaitEntry};
+pub use wait_queue::{ShardWaitQueue, WaitEntry, WaiterDump};
 pub use worker::ShardWorker;

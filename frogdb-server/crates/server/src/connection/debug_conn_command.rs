@@ -146,6 +146,12 @@ impl ConnectionCommand for DebugConnCommand {
                     let infos = debug.gather_vll(shard_filter).await;
                     format_vll_response(infos)
                 }
+                b"LOCKTABLE" => format_locktable_response(debug.gather_lock_table().await),
+                b"WAITQUEUE" => format_waitqueue_response(debug.gather_wait_queue().await),
+                b"MEMORY-CHECK" => format_memory_check_response(debug.memory_check().await),
+                b"EXPIRY-INDEX-CHECK" => {
+                    format_expiry_index_check_response(debug.expiry_index_check().await)
+                }
                 b"PUBSUB" => {
                     if args.len() > 1 && args[1].eq_ignore_ascii_case(b"LIMITS") {
                         debug.pubsub_limits().await
@@ -244,6 +250,14 @@ fn debug_help() -> Response {
         "    Show recent trace entries.",
         "DEBUG VLL [shard_id]",
         "    Show VLL queue info.",
+        "DEBUG LOCKTABLE",
+        "    Show the per-shard VLL lock table (intents, grants, continuation locks).",
+        "DEBUG WAITQUEUE",
+        "    Show blocked waiters by key/connection, in registration order.",
+        "DEBUG MEMORY-CHECK",
+        "    Recompute live memory and report the diff vs the tracked counter.",
+        "DEBUG EXPIRY-INDEX-CHECK",
+        "    Cross-check the expiry index against entry deadlines.",
         "DEBUG PUBSUB LIMITS",
         "    Show pub/sub subscription usage vs limits.",
         "DEBUG BUNDLE GENERATE [DURATION <seconds>]",
@@ -479,6 +493,181 @@ fn format_vll_response(infos: Vec<frogdb_core::shard::VllQueueInfo>) -> Response
     }
 
     Response::Bulk(Some(Bytes::from(lines.join("\n"))))
+}
+
+/// Format `DEBUG LOCKTABLE` — a RESP map of `shard:<id>` → per-shard detail.
+/// Empty across all shards returns a recognizable sentinel bulk string.
+fn format_locktable_response(infos: Vec<frogdb_core::shard::LockTableInfo>) -> Response {
+    let all_empty = infos
+        .iter()
+        .all(|i| i.intents.is_empty() && i.continuation_lock.is_none());
+    if all_empty {
+        return Response::Bulk(Some(Bytes::from("# lock table is empty")));
+    }
+
+    let mut shards = Vec::new();
+    for info in infos {
+        let intents = Response::Array(
+            info.intents
+                .iter()
+                .map(|intent| {
+                    Response::Map(vec![
+                        (Response::bulk("key"), Response::bulk(intent.key.clone())),
+                        (
+                            Response::bulk("txids"),
+                            Response::Array(
+                                intent
+                                    .txids
+                                    .iter()
+                                    .map(|t| Response::Integer(*t as i64))
+                                    .collect(),
+                            ),
+                        ),
+                        (
+                            Response::bulk("lock_state"),
+                            Response::bulk(intent.lock_state.clone()),
+                        ),
+                    ])
+                })
+                .collect(),
+        );
+        let continuation_lock = match &info.continuation_lock {
+            Some(l) => Response::bulk(format!(
+                "txid:{} conn_id:{} age_ms:{}",
+                l.txid, l.conn_id, l.age_ms
+            )),
+            None => Response::Bulk(None),
+        };
+        shards.push((
+            Response::bulk(format!("shard:{}", info.shard_id)),
+            Response::Map(vec![
+                (Response::bulk("continuation_lock"), continuation_lock),
+                (Response::bulk("intents"), intents),
+            ]),
+        ));
+    }
+    Response::Map(shards)
+}
+
+/// Format `DEBUG WAITQUEUE` — a RESP map of `shard:<id>` → detail, preserving
+/// per-waiter registration order. Empty across all shards -> sentinel bulk.
+fn format_waitqueue_response(infos: Vec<frogdb_core::shard::WaitQueueInfo>) -> Response {
+    if infos.iter().all(|i| i.total_waiters == 0) {
+        return Response::Bulk(Some(Bytes::from("# wait queue is empty")));
+    }
+    let mut shards = Vec::new();
+    for info in infos {
+        let keys = Response::Array(
+            info.keys
+                .iter()
+                .map(|k| {
+                    let waiters = Response::Array(
+                        k.waiters
+                            .iter()
+                            .map(|w| {
+                                Response::Map(vec![
+                                    (
+                                        Response::bulk("conn_id"),
+                                        Response::Integer(w.conn_id as i64),
+                                    ),
+                                    (Response::bulk("op"), Response::bulk(w.op.clone())),
+                                    (
+                                        Response::bulk("registration_seq"),
+                                        Response::Integer(w.registration_seq as i64),
+                                    ),
+                                    (
+                                        Response::bulk("has_deadline"),
+                                        Response::Integer(i64::from(w.has_deadline)),
+                                    ),
+                                ])
+                            })
+                            .collect(),
+                    );
+                    Response::Map(vec![
+                        (Response::bulk("key"), Response::bulk(k.key.clone())),
+                        (Response::bulk("waiters"), waiters),
+                    ])
+                })
+                .collect(),
+        );
+        shards.push((
+            Response::bulk(format!("shard:{}", info.shard_id)),
+            Response::Map(vec![
+                (
+                    Response::bulk("total_waiters"),
+                    Response::Integer(info.total_waiters as i64),
+                ),
+                (Response::bulk("keys"), keys),
+            ]),
+        ));
+    }
+    Response::Map(shards)
+}
+
+/// Format `DEBUG MEMORY-CHECK` — RESP map of `shard:<id>` → {tracked, recomputed,
+/// diff, consistent}. `diff` is recomputed − tracked (may be negative).
+fn format_memory_check_response(infos: Vec<frogdb_core::shard::MemoryCheckInfo>) -> Response {
+    let mut shards = Vec::new();
+    for info in infos {
+        let diff = info.recomputed_bytes as i64 - info.tracked_bytes as i64;
+        shards.push((
+            Response::bulk(format!("shard:{}", info.shard_id)),
+            Response::Map(vec![
+                (
+                    Response::bulk("tracked_bytes"),
+                    Response::Integer(info.tracked_bytes as i64),
+                ),
+                (
+                    Response::bulk("recomputed_bytes"),
+                    Response::Integer(info.recomputed_bytes as i64),
+                ),
+                (Response::bulk("diff"), Response::Integer(diff)),
+                (
+                    Response::bulk("consistent"),
+                    Response::Integer(i64::from(diff == 0)),
+                ),
+            ]),
+        ));
+    }
+    Response::Map(shards)
+}
+
+/// Format `DEBUG EXPIRY-INDEX-CHECK` — sentinel when every shard is clean, else
+/// a RESP map of `shard:<id>` → {total_entries, anomalies:[{key, kind}]}.
+fn format_expiry_index_check_response(
+    infos: Vec<frogdb_core::shard::ExpiryIndexCheckInfo>,
+) -> Response {
+    if infos.iter().all(|i| i.anomalies.is_empty()) {
+        return Response::Bulk(Some(Bytes::from("# expiry index is consistent")));
+    }
+    let mut shards = Vec::new();
+    for info in infos {
+        let anomalies = Response::Array(
+            info.anomalies
+                .iter()
+                .map(|a| {
+                    Response::Map(vec![
+                        (Response::bulk("key"), Response::bulk(a.key.clone())),
+                        (
+                            Response::bulk("kind"),
+                            Response::bulk(format!("{:?}", a.kind)),
+                        ),
+                    ])
+                })
+                .collect(),
+        );
+        shards.push((
+            Response::bulk(format!("shard:{}", info.shard_id)),
+            Response::Map(vec![
+                (
+                    Response::bulk("total_entries"),
+                    Response::Integer(info.total_entries as i64),
+                ),
+                (Response::bulk("anomalies"), anomalies),
+            ]),
+        ));
+    }
+    Response::Map(shards)
 }
 
 /// Parse the optional `DURATION <seconds>` of DEBUG BUNDLE GENERATE. The `Err`
@@ -775,6 +964,24 @@ mod tests {
             &'a self,
             _shard_filter: Option<usize>,
         ) -> BoxFuture<'a, Vec<frogdb_core::shard::VllQueueInfo>> {
+            Box::pin(async { Vec::new() })
+        }
+        fn gather_lock_table<'a>(
+            &'a self,
+        ) -> BoxFuture<'a, Vec<frogdb_core::shard::LockTableInfo>> {
+            Box::pin(async { Vec::new() })
+        }
+        fn gather_wait_queue<'a>(
+            &'a self,
+        ) -> BoxFuture<'a, Vec<frogdb_core::shard::WaitQueueInfo>> {
+            Box::pin(async { Vec::new() })
+        }
+        fn memory_check<'a>(&'a self) -> BoxFuture<'a, Vec<frogdb_core::shard::MemoryCheckInfo>> {
+            Box::pin(async { Vec::new() })
+        }
+        fn expiry_index_check<'a>(
+            &'a self,
+        ) -> BoxFuture<'a, Vec<frogdb_core::shard::ExpiryIndexCheckInfo>> {
             Box::pin(async { Vec::new() })
         }
         fn pubsub_limits<'a>(&'a self) -> BoxFuture<'a, Response> {

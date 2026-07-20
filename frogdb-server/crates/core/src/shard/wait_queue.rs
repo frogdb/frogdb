@@ -55,6 +55,12 @@ pub struct ShardWaitQueue {
     max_waiters_per_key: usize,
     /// Maximum total blocked connections (0 = unlimited).
     max_blocked_connections: usize,
+    /// Monotonic registration counter; each `register` stamps the next value.
+    next_seq: u64,
+    /// Registration ordinal per entry slot (parallel to `entries`). Only the
+    /// slots of live entries are ever read (via `dump`); reused slots are
+    /// overwritten on the next `register`, so stale ordinals are never observed.
+    seq_by_slot: Vec<u64>,
 }
 
 impl ShardWaitQueue {
@@ -73,6 +79,8 @@ impl ShardWaitQueue {
             waiter_count: 0,
             max_waiters_per_key,
             max_blocked_connections,
+            next_seq: 0,
+            seq_by_slot: Vec::new(),
         }
     }
 
@@ -99,13 +107,19 @@ impl ShardWaitQueue {
         let conn_id = entry.conn_id;
         let keys = entry.keys.clone();
 
-        // Allocate a slot for the entry
+        let seq = self.next_seq;
+        self.next_seq += 1;
+
+        // Allocate a slot for the entry, keeping `seq_by_slot` in lock-step
+        // with `entries` so `seq_by_slot[slot_idx]` is always valid.
         let slot_idx = if let Some(idx) = self.free_slots.pop() {
             self.entries[idx] = Some(entry);
+            self.seq_by_slot[idx] = seq;
             idx
         } else {
             let idx = self.entries.len();
             self.entries.push(Some(entry));
+            self.seq_by_slot.push(seq);
             idx
         };
 
@@ -497,6 +511,64 @@ impl ShardWaitQueue {
     pub fn blocked_keys_count(&self) -> usize {
         self.waiters_by_key.len()
     }
+
+    /// Read-only per-key dump of all waiters, in registration (FIFO) order
+    /// within each key. Keys are returned sorted lexicographically for a
+    /// deterministic snapshot. Used by DEBUG WAITQUEUE.
+    pub fn dump(&self) -> Vec<(Bytes, Vec<WaiterDump>)> {
+        let mut keys: Vec<&Bytes> = self.waiters_by_key.keys().collect();
+        keys.sort();
+        keys.into_iter()
+            .map(|key| {
+                let waiters = self
+                    .waiters_by_key
+                    .get(key)
+                    .map(|deque| {
+                        deque
+                            .iter()
+                            .filter_map(|&idx| {
+                                let entry = self.entries[idx].as_ref()?;
+                                Some(WaiterDump {
+                                    conn_id: entry.conn_id,
+                                    op: blocking_op_name(&entry.op),
+                                    registration_seq: self.seq_by_slot[idx],
+                                    has_deadline: entry.deadline.is_some(),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (key.clone(), waiters)
+            })
+            .collect()
+    }
+}
+
+/// One waiter's read-only diagnostic view (DEBUG WAITQUEUE). `op` is the
+/// blocking-command name; `registration_seq` is the queue-wide monotonic
+/// registration ordinal (smaller = registered earlier), enabling exact FIFO
+/// wake-fairness checking.
+#[derive(Debug, Clone)]
+pub struct WaiterDump {
+    pub conn_id: u64,
+    pub op: &'static str,
+    pub registration_seq: u64,
+    pub has_deadline: bool,
+}
+
+/// Static name for a blocking op (DEBUG WAITQUEUE display).
+fn blocking_op_name(op: &BlockingOp) -> &'static str {
+    match op {
+        BlockingOp::BLPop => "BLPOP",
+        BlockingOp::BRPop => "BRPOP",
+        BlockingOp::BLMove { .. } => "BLMOVE",
+        BlockingOp::BLMPop { .. } => "BLMPOP",
+        BlockingOp::BZPopMin => "BZPOPMIN",
+        BlockingOp::BZPopMax => "BZPOPMAX",
+        BlockingOp::BZMPop { .. } => "BZMPOP",
+        BlockingOp::XRead { .. } => "XREAD",
+        BlockingOp::XReadGroup { .. } => "XREADGROUP",
+    }
 }
 
 #[cfg(test)]
@@ -521,6 +593,47 @@ mod tests {
             deadline: None,
             protocol_version: ProtocolVersion::default(),
         }
+    }
+
+    #[test]
+    fn dump_reports_fifo_order_and_registration_seq() {
+        let mut queue = ShardWaitQueue::new();
+        // Two waiters on "k" (conn 1 then conn 2), one on "j" (conn 3).
+        queue.register(make_entry(1, vec!["k"])).unwrap();
+        queue.register(make_entry(2, vec!["k"])).unwrap();
+        queue.register(make_entry(3, vec!["j"])).unwrap();
+
+        let dump = queue.dump();
+        // Keys sorted lexicographically: "j" before "k".
+        let keys: Vec<Bytes> = dump.iter().map(|(k, _)| k.clone()).collect();
+        assert_eq!(keys, vec![Bytes::from("j"), Bytes::from("k")]);
+
+        let k_waiters = &dump.iter().find(|(k, _)| k == "k").unwrap().1;
+        // FIFO within the key: conn 1 registered before conn 2.
+        assert_eq!(k_waiters[0].conn_id, 1);
+        assert_eq!(k_waiters[1].conn_id, 2);
+        assert!(k_waiters[0].registration_seq < k_waiters[1].registration_seq);
+        assert_eq!(k_waiters[0].op, "BLPOP");
+        assert!(!k_waiters[0].has_deadline);
+    }
+
+    #[test]
+    fn dump_empty_when_no_waiters() {
+        let queue = ShardWaitQueue::new();
+        assert!(queue.dump().is_empty());
+    }
+
+    #[test]
+    fn dump_reflects_registration_seq_across_keys() {
+        let mut queue = ShardWaitQueue::new();
+        queue.register(make_entry(1, vec!["k"])).unwrap();
+        queue.register(make_entry(2, vec!["j"])).unwrap();
+        let dump = queue.dump();
+        let k_seq = dump.iter().find(|(k, _)| k == "k").unwrap().1[0].registration_seq;
+        let j_seq = dump.iter().find(|(k, _)| k == "j").unwrap().1[0].registration_seq;
+        // "k" was registered before "j" — its ordinal is strictly smaller even
+        // though "j" sorts first in the dump output.
+        assert!(k_seq < j_seq);
     }
 
     #[test]
