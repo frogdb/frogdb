@@ -18,6 +18,17 @@ pub struct LockTableSnapshot {
 pub struct WaitQueueSnapshot {
     pub shard_id: usize,
     pub total_waiters: usize,
+    pub waiters: Vec<WaiterOrdinal>,
+}
+
+/// One parked waiter's registration ordinal, from a mid-run DEBUG WAITQUEUE
+/// observation. `registration_seq` is the queue-wide monotonic ordinal (smaller
+/// = registered earlier), enabling exact FIFO wake-order checking.
+#[derive(Debug, Clone)]
+pub struct WaiterOrdinal {
+    pub key: Vec<u8>,
+    pub conn_id: u64,
+    pub registration_seq: u64,
 }
 
 /// Parsed `DEBUG MEMORY-CHECK` snapshot for one shard.
@@ -177,20 +188,46 @@ mod tests {
         assert!(
             check_waitqueue_empty(&[WaitQueueSnapshot {
                 shard_id: 0,
-                total_waiters: 0
+                total_waiters: 0,
+                waiters: Vec::new(),
             }])
             .is_ok()
         );
         assert!(matches!(
             check_waitqueue_empty(&[WaitQueueSnapshot {
                 shard_id: 2,
-                total_waiters: 1
+                total_waiters: 1,
+                waiters: Vec::new(),
             }]),
             Err(QuiescenceViolation::WaitQueueNotEmpty {
                 shard_id: 2,
                 waiters: 1
             })
         ));
+    }
+
+    #[test]
+    fn waitqueue_snapshot_carries_ordinals() {
+        let s = WaitQueueSnapshot {
+            shard_id: 0,
+            total_waiters: 2,
+            waiters: vec![
+                WaiterOrdinal {
+                    key: b"k".to_vec(),
+                    conn_id: 7,
+                    registration_seq: 3,
+                },
+                WaiterOrdinal {
+                    key: b"k".to_vec(),
+                    conn_id: 9,
+                    registration_seq: 5,
+                },
+            ],
+        };
+        assert_eq!(s.waiters.len(), 2);
+        assert!(s.waiters[0].registration_seq < s.waiters[1].registration_seq);
+        // Non-empty still trips the emptiness checker.
+        assert!(check_waitqueue_empty(&[s]).is_err());
     }
 
     #[test]

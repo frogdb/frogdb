@@ -1,7 +1,7 @@
 //! Whole-history conservation checkers (pure scans, not WGL-based).
 
 use crate::history::{CompletedOperation, History};
-use crate::partition::{default_keys_of, parse_exec_commands};
+use crate::partition::{default_keys_of, is_errored_exec_result, parse_exec_commands};
 use bytes::Bytes;
 use std::collections::{HashMap, HashSet};
 
@@ -75,6 +75,37 @@ pub enum ConservationViolation {
         /// The earlier waiter it jumped ahead of.
         waiter: u64,
     },
+    /// A stream entry is reported pending for two different consumers at once.
+    #[error("PEL entry {id:?} double-owned: consumers {a:?} and {b:?} (op {op})")]
+    PelDoubleOwned {
+        /// The double-owned entry id.
+        id: String,
+        /// One reported owner.
+        a: String,
+        /// The other reported owner.
+        b: String,
+        /// The op id of the XPENDING summary that exposed the contradiction.
+        op: u64,
+    },
+    /// A stream entry was acked yet later reported still pending.
+    #[error("PEL entry {id:?} acked by op {ack_op} but reported pending by op {pending_op}")]
+    PelAckedButPending {
+        /// The entry id.
+        id: String,
+        /// Op id of the XACK.
+        ack_op: u64,
+        /// Op id of the later read that still reported it pending.
+        pending_op: u64,
+    },
+    /// An XADD'd stream entry was skipped over: a later `>` read delivered a
+    /// higher id while this entry was never delivered, PEL'd, or acked.
+    #[error("stream entry {id:?} (added by op {added_by}) was lost (skipped by a later '>' read)")]
+    StreamEntryLost {
+        /// The lost entry id.
+        id: String,
+        /// Op id of the XADD that introduced it.
+        added_by: u64,
+    },
 }
 
 /// Every pushed element is delivered to exactly one popper XOR present at
@@ -107,7 +138,10 @@ pub fn check_exactly_once_delivery(
 
     for op in history.completed_operations() {
         match op.function.as_str() {
-            "lpush" | "rpush" => {
+            // Plain pushes plus the list-effect script pseudo-ops, which
+            // LPUSH/RPUSH `ARGV[1]` (`op.args[1]`) and return the new LLEN —
+            // observably introducing exactly one element, same as a bare push.
+            "lpush" | "rpush" | "script_lpush_llen" | "script_rpush_llen" => {
                 // A push with no result is a failed/indeterminate op: it
                 // never observably introduced its elements, so counting it
                 // as pushed would make any later non-delivery of those
@@ -246,6 +280,132 @@ pub fn check_fifo_wake_order(history: &History) -> Result<(), ConservationViolat
     Ok(())
 }
 
+/// Observed true registration order: `(served_key, client_id) -> registration_seq`,
+/// built from mid-run `DEBUG WAITQUEUE` observations.
+///
+/// Soundness constraint (binding on callers): this joins strictly on
+/// `(key, client_id)` and keeps the *smallest* observed ordinal per pair.
+/// That collapse is sound only because the multi-waiter generator path
+/// guarantees **at most one blocking pop per key per client** across a
+/// script — a client that parked twice on the same key would have two
+/// distinct registrations collapsed into one ordinal (its first), which
+/// can silently misjudge the second wait. Per-operation matching (using a
+/// prober observation's timestamp against each op's `[invoke, return]`
+/// interval, rather than joining on client identity alone) is the phase-4b
+/// lift that removes this constraint.
+#[derive(Debug, Default, Clone)]
+pub struct WaiterRegistrationOrder {
+    map: std::collections::HashMap<(Bytes, u64), u64>,
+}
+
+impl WaiterRegistrationOrder {
+    /// Record an observed registration ordinal for `client_id` waiting on
+    /// `key`. If multiple observations exist for the same `(key, client_id)`
+    /// pair (e.g. re-probed mid-run), the smallest ordinal wins — see the
+    /// struct-level soundness note for why that's safe.
+    pub fn insert(&mut self, key: Bytes, client_id: u64, registration_seq: u64) {
+        self.map
+            .entry((key, client_id))
+            .and_modify(|e| *e = (*e).min(registration_seq))
+            .or_insert(registration_seq);
+    }
+
+    fn get(&self, key: &Bytes, client_id: u64) -> Option<u64> {
+        self.map.get(&(key.clone(), client_id)).copied()
+    }
+
+    /// Number of distinct `(key, client_id)` registrations recorded. A run's
+    /// smoke test asserts this is non-zero so a silent CLIENT ID ↔ WAITQUEUE
+    /// join mismatch (which would empty the map and silently disable the exact
+    /// checker via the all-known guard) fails loudly instead.
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    /// True when no registration was recorded (no successful join).
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+}
+
+/// Exact FIFO wake-order: for each key whose served blocking pops *all* have
+/// a known registration ordinal, serve (return-time) order must equal
+/// ascending `registration_seq`. Keys missing one or more ordinals fall back
+/// to the invoke-time proxy used by [`check_fifo_wake_order`], applied only
+/// to that key's served waiters.
+///
+/// A key with complete ordinals is judged **only** by ordinals, never also
+/// by the invoke-time proxy: the proxy is known to false-positive on
+/// overlapping invokes (two waiters can legitimately register in either
+/// order relative to their invoke timestamps), so re-running it over a key
+/// this function already validated exactly would risk flagging a spurious
+/// violation on a provably-correct history. This function therefore
+/// replicates the proxy's per-key logic inline (scoped to the residual,
+/// ordinal-incomplete keys) rather than delegating to
+/// `check_fifo_wake_order(history)` over the whole history afterward.
+pub fn check_fifo_wake_order_exact(
+    history: &History,
+    order: &WaiterRegistrationOrder,
+) -> Result<(), ConservationViolation> {
+    // served_key -> [(invoke_time, return_time, client_id, op_id)] for served
+    // blocking pops, grouped by the key each waiter was actually served from
+    // (mirrors check_fifo_wake_order's grouping, with client_id carried
+    // through for the ordinal lookup).
+    let mut by_key: HashMap<Bytes, Vec<(u64, u64, u64, u64)>> = HashMap::new();
+    for op in history.completed_operations() {
+        if !matches!(op.function.as_str(), "blpop" | "brpop") {
+            continue;
+        }
+        let Some(result) = &op.result else {
+            // Timed out: never served, no ordering information to check.
+            continue;
+        };
+        let result_str = String::from_utf8_lossy(result);
+        let Some((served_key, _)) = result_str.split_once('|') else {
+            continue;
+        };
+        by_key
+            .entry(Bytes::from(served_key.to_string()))
+            .or_default()
+            .push((op.invoke_time, op.return_time, op.client_id, op.id));
+    }
+
+    for (key, mut served) in by_key {
+        served.sort_by_key(|x| x.1); // by serve (return) order
+        let all_known = served
+            .iter()
+            .all(|(_, _, client_id, _)| order.get(&key, *client_id).is_some());
+        if all_known {
+            // Exact path: compare ascending registration_seq.
+            for w in served.windows(2) {
+                let seq0 = order.get(&key, w[0].2).unwrap();
+                let seq1 = order.get(&key, w[1].2).unwrap();
+                if seq0 > seq1 {
+                    return Err(ConservationViolation::FifoViolation {
+                        key: key.to_vec(),
+                        served: w[0].3,
+                        waiter: w[1].3,
+                    });
+                }
+            }
+        } else {
+            // Residual (ordinal-incomplete) key: fall back to the
+            // invoke-time proxy, scoped to this key alone.
+            for w in served.windows(2) {
+                if w[0].0 > w[1].0 {
+                    // Served earlier but invoked later -> jumped an earlier waiter.
+                    return Err(ConservationViolation::FifoViolation {
+                        key: key.to_vec(),
+                        served: w[0].3,
+                        waiter: w[1].3,
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Net integer delta a single command applies to keys in `keyset`.
 fn cmd_delta(name: &str, args: &[Bytes], keyset: &HashSet<Bytes>) -> i64 {
     if args.is_empty() || !keyset.contains(&args[0]) {
@@ -278,8 +438,8 @@ pub fn check_tx_sum_conservation(
     for op in history.completed_operations() {
         match op.function.as_str() {
             "exec" => {
-                if op.result.is_none() {
-                    continue; // aborted
+                if !exec_committed(op.result.as_ref()) {
+                    continue; // aborted or CROSSSLOT-rejected: applied no deltas
                 }
                 for (name, cargs) in parse_exec_commands(&op.args).unwrap_or_default() {
                     delta += cmd_delta(&name, &cargs, &keyset);
@@ -302,6 +462,13 @@ pub fn check_tx_sum_conservation(
         });
     }
     Ok(())
+}
+
+/// True iff an `exec` op's recorded result denotes a committed transaction (a
+/// non-nil, non-errored result). A `None` (WATCH-abort) or an `"ERR:…"`
+/// (CROSSSLOT/EXECABORT) result is NOT a commit.
+fn exec_committed(result: Option<&Bytes>) -> bool {
+    result.is_some_and(|r| !is_errored_exec_result(r))
 }
 
 fn is_write(function: &str) -> bool {
@@ -423,7 +590,7 @@ fn writer_between(
             return Some(op.id);
         }
         if op.function == "exec"
-            && op.result.is_some()
+            && exec_committed(op.result.as_ref())
             && let Some(cmds) = parse_exec_commands(&op.args)
             && cmds
                 .iter()
@@ -469,7 +636,7 @@ pub fn check_watch_no_false_negative(history: &History) -> Result<(), Conservati
                     }
                 }
                 "exec" => {
-                    if op.result.is_some() {
+                    if exec_committed(op.result.as_ref()) {
                         for (k, wt, wid) in &watched {
                             if let Some(writer) =
                                 writer_between(&ops, k, *wt, op.invoke_time, op.client_id)
@@ -490,6 +657,247 @@ pub fn check_watch_no_false_negative(history: &History) -> Result<(), Conservati
             }
         }
     }
+    Ok(())
+}
+
+/// PEL conservation for consumer-group streams. Scans the whole history:
+/// (i) no entry pending for two consumers at once (partial — see note below);
+/// (ii) no entry both acked and later reported pending; (iii) no entry skipped:
+/// a `>` read that starts after an entry's XADD completes and delivers a
+/// HIGHER id must have delivered (or previously delivered/acked) that entry —
+/// `>` delivers in id order, so a higher id with the entry absent everywhere
+/// means the server lost it. Entries added after the last read are
+/// legitimately undelivered and are NOT flagged. Delivery-count monotonicity
+/// is unobservable with summary-form XPENDING; deferred to Phase-4b's
+/// extended-form vocabulary.
+///
+/// Double-ownership detection is necessarily partial: XPENDING's summary
+/// form (`total|min|max|consumer:n,…`) gives a total count, an id *range*,
+/// and per-consumer counts, but never the full id list, so most
+/// double-ownership is invisible to it. The one self-contradiction it can
+/// expose is a degenerate range (`min == max`, i.e. exactly one distinct id
+/// in range) whose total exceeds 1: that single id cannot legitimately be
+/// pending more than once, so such a summary is direct proof it is
+/// multiply-owned.
+pub fn check_pel_conservation(history: &History) -> Result<(), ConservationViolation> {
+    let ops = history.completed_operations();
+
+    // Parse "id,f,v|..." into the entry ids it delivered.
+    fn delivered_ids(r: &Bytes) -> Vec<String> {
+        String::from_utf8_lossy(r)
+            .split('|')
+            .filter(|e| !e.is_empty())
+            .filter_map(|e| e.split(',').next().map(str::to_string))
+            .collect()
+    }
+
+    // "ms-seq" -> (ms, seq) for order comparison.
+    fn id_tuple(s: &str) -> Option<(u64, u64)> {
+        let (ms, seq) = s.split_once('-')?;
+        Some((ms.parse().ok()?, seq.parse().ok()?))
+    }
+
+    // A "c:n" consumer:count token -> just the consumer name.
+    fn consumer_name(tok: &str) -> String {
+        tok.rsplit_once(':')
+            .map_or(tok, |(name, _)| name)
+            .to_string()
+    }
+
+    // XADD's stream key is args[0]; it has no group.
+    fn xadd_stream(args: &[Bytes]) -> Option<String> {
+        Some(String::from_utf8_lossy(args.first()?).to_string())
+    }
+
+    // XACK / XPENDING / XCLAIM all start "key group ...".
+    fn stream_group_prefix(args: &[Bytes]) -> Option<(String, String)> {
+        Some((
+            String::from_utf8_lossy(args.first()?).to_string(),
+            String::from_utf8_lossy(args.get(1)?).to_string(),
+        ))
+    }
+
+    // XREADGROUP's group and stream key are positional after the GROUP and
+    // STREAMS keywords respectively: "GROUP g c [COUNT n] STREAMS key id".
+    fn xreadgroup_stream_group(args: &[Bytes]) -> Option<(String, String)> {
+        let gi = args.iter().position(|a| a.eq_ignore_ascii_case(b"GROUP"))?;
+        let group = String::from_utf8_lossy(args.get(gi + 1)?).to_string();
+        let si = args
+            .iter()
+            .position(|a| a.eq_ignore_ascii_case(b"STREAMS"))?;
+        let stream = String::from_utf8_lossy(args.get(si + 1)?).to_string();
+        Some((stream, group))
+    }
+
+    // (stream, id) -> add op. XADD has no group: an added entry is visible
+    // to every group on its stream, so it is scoped by stream only.
+    let mut added: HashMap<(String, String), u64> = HashMap::new();
+    // (stream, id) -> ever observed delivered/PEL'd in ANY group of that
+    // stream. Used only for the lost-check (iii), which is inherently a
+    // per-stream property ("readable via `>`, PEL'd, or acked" somewhere),
+    // not a per-group one — a group that hasn't read up to an id yet is not
+    // "losing" it, so group identity is deliberately erased here.
+    let mut ever_pending: HashSet<(String, String)> = HashSet::new();
+    // (stream, group, id) -> ever observed pending in that EXACT group.
+    // Used to gate XACK legitimacy (i) and scoped acked lookups (ii): PELs
+    // are per (stream, group), so a delivery/pending observation in one
+    // group must never satisfy a check about a different group.
+    let mut pel_pending: HashSet<(String, String, String)> = HashSet::new();
+    // (stream, group, id) -> ack op, only for ids gated as genuinely
+    // pending at ack time (see the "xack" arm below).
+    let mut acked: HashMap<(String, String, String), u64> = HashMap::new();
+
+    for op in &ops {
+        match op.function.as_str() {
+            "xadd" => {
+                if let (Some(stream), Some(r)) = (xadd_stream(&op.args), &op.result) {
+                    added
+                        .entry((stream, String::from_utf8_lossy(r).to_string()))
+                        .or_insert(op.id);
+                }
+            }
+            "xreadgroup" => {
+                if let (Some((stream, group)), Some(r)) =
+                    (xreadgroup_stream_group(&op.args), &op.result)
+                {
+                    for id in delivered_ids(r) {
+                        ever_pending.insert((stream.clone(), id.clone()));
+                        pel_pending.insert((stream.clone(), group.clone(), id));
+                    }
+                }
+            }
+            "xclaim" => {
+                if let (Some((stream, group)), Some(r)) =
+                    (stream_group_prefix(&op.args), &op.result)
+                {
+                    for id in delivered_ids(r) {
+                        ever_pending.insert((stream.clone(), id.clone()));
+                        pel_pending.insert((stream.clone(), group.clone(), id));
+                    }
+                }
+            }
+            "xack" => {
+                if let Some((stream, group)) = stream_group_prefix(&op.args) {
+                    for id_arg in op.args.iter().skip(2) {
+                        let id = String::from_utf8_lossy(id_arg).to_string();
+                        // Only a genuine ack: the id must have already been
+                        // observed pending in this EXACT (stream, group)
+                        // earlier in the scan. A no-op XACK of an id never
+                        // delivered to this group (returns 0) must not
+                        // register as an ack — otherwise the id's later,
+                        // legitimate first delivery would look like
+                        // "delivered after ack".
+                        let key = (stream.clone(), group.clone(), id);
+                        if pel_pending.contains(&key) {
+                            acked.entry(key).or_insert(op.id);
+                        }
+                    }
+                }
+            }
+            "xpending" => {
+                if let (Some((stream, group)), Some(r)) =
+                    (stream_group_prefix(&op.args), &op.result)
+                {
+                    let s = String::from_utf8_lossy(r);
+                    if s != "0" {
+                        let fields: Vec<&str> = s.split('|').collect();
+                        if fields.len() >= 4 {
+                            let total: usize = fields[0].parse().unwrap_or(0);
+                            let (min, max) = (fields[1], fields[2]);
+                            if min == max && total > 1 {
+                                let mut names = fields[3].split(',').map(consumer_name);
+                                let a = names.next().unwrap_or_default();
+                                let b = names.next().unwrap_or_else(|| a.clone());
+                                return Err(ConservationViolation::PelDoubleOwned {
+                                    id: min.to_string(),
+                                    a,
+                                    b,
+                                    op: op.id,
+                                });
+                            }
+                            // Summary form only exposes the range endpoints,
+                            // not the full pending set, so only min/max are
+                            // known to be pending as of this observation.
+                            ever_pending.insert((stream.clone(), min.to_string()));
+                            ever_pending.insert((stream.clone(), max.to_string()));
+                            pel_pending.insert((stream.clone(), group.clone(), min.to_string()));
+                            pel_pending.insert((stream.clone(), group.clone(), max.to_string()));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // (ii) acked-but-pending: an id present in a re-read AFTER its ack, in
+    // the SAME (stream, group) as the ack — an ack in one group's PEL says
+    // nothing about a different group's independent copy of the entry.
+    for op in &ops {
+        if op.function == "xreadgroup"
+            && let Some((stream, group)) = xreadgroup_stream_group(&op.args)
+            && let Some(r) = &op.result
+        {
+            for id in delivered_ids(r) {
+                let key = (stream.clone(), group.clone(), id.clone());
+                if let Some(&ack_op) = acked.get(&key) {
+                    let ack_return = ops
+                        .iter()
+                        .find(|o| o.id == ack_op)
+                        .map_or(u64::MAX, |o| o.return_time);
+                    if op.invoke_time > ack_return {
+                        return Err(ConservationViolation::PelAckedButPending {
+                            id,
+                            ack_op,
+                            pending_op: op.id,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // (iii) nothing skipped: an entry absent from every delivery/PEL/ack on
+    // its stream while a `>` read on THAT SAME STREAM, started after its
+    // add completed, delivered a HIGHER id. Restricted to `>` reads: a "0"
+    // re-read shows old PEL entries whose delivery may predate this add,
+    // which implies nothing about a skip. Restricted to the same stream key
+    // (extracted from XREADGROUP's STREAMS clause): id order only holds
+    // within a single stream, so a read on an unrelated stream delivering a
+    // numerically higher id is not evidence that this stream lost anything.
+    //
+    // Note: a `>` read with COUNT truncates the *tail* of the in-order
+    // delivery, never the middle, so COUNT cannot cause a false skip.
+    // Entries added after the last `>` read on their stream are never
+    // flagged (no later read exists to compare against).
+    for ((stream, id), add_op) in &added {
+        if ever_pending.contains(&(stream.clone(), id.clone())) {
+            continue;
+        }
+        let Some(eid) = id_tuple(id) else { continue };
+        let add_return = ops
+            .iter()
+            .find(|o| o.id == *add_op)
+            .map_or(u64::MAX, |o| o.return_time);
+        let skipped = ops.iter().any(|o| {
+            o.function == "xreadgroup"
+                && o.args.last().is_some_and(|a| a.as_ref() == b">")
+                && xreadgroup_stream_group(&o.args).is_some_and(|(s, _)| s == *stream)
+                && o.invoke_time > add_return
+                && o.result.as_ref().is_some_and(|r| {
+                    delivered_ids(r)
+                        .iter()
+                        .any(|d| id_tuple(d).is_some_and(|dt| dt > eid))
+                })
+        });
+        if skipped {
+            return Err(ConservationViolation::StreamEntryLost {
+                id: id.clone(),
+                added_by: *add_op,
+            });
+        }
+    }
+
     Ok(())
 }
 
@@ -530,6 +938,24 @@ mod tests {
         h.respond(p, Some(b("1")));
         let mut final_state = HashMap::new();
         final_state.insert(b("k"), vec![b("x")]);
+        assert!(check_exactly_once_delivery(&h, &final_state).is_ok());
+    }
+
+    #[test]
+    fn delivery_counts_list_effect_scripts_as_pushes() {
+        // script_lpush_llen / script_rpush_llen push ARGV[1] and return LLEN;
+        // the checker must count them as pushes so a later pop of that element
+        // is not a PhantomDelivery.
+        let mut h = History::new();
+        let p1 = h.invoke(1, "script_rpush_llen", vec![b("k"), b("a")]);
+        h.respond(p1, Some(b("1")));
+        let p2 = h.invoke(1, "script_lpush_llen", vec![b("k"), b("b")]);
+        h.respond(p2, Some(b("2")));
+        // Deliver "a" via a plain pop; "b" remains in final state.
+        let q = h.invoke(2, "lpop", vec![b("k")]);
+        h.respond(q, Some(b("a")));
+        let mut final_state = HashMap::new();
+        final_state.insert(b("k"), vec![b("b")]);
         assert!(check_exactly_once_delivery(&h, &final_state).is_ok());
     }
 
@@ -646,6 +1072,37 @@ mod tests {
 
         assert!(matches!(
             check_fifo_wake_order(&h),
+            Err(ConservationViolation::FifoViolation { .. })
+        ));
+    }
+
+    #[test]
+    fn exact_fifo_uses_registration_order_not_invoke_order() {
+        // Two waiters whose INVOKE order is w1 (client 1) then w2 (client 2),
+        // but whose true REGISTRATION order (per DEBUG WAITQUEUE) is REVERSED.
+        // Serving in registration order (w2 first) is legal exactly; the
+        // invoke-proxy would wrongly flag it.
+        let mut h = History::new();
+        let w1 = h.invoke(1, "blpop", vec![b("k"), b("0")]);
+        let w2 = h.invoke(2, "blpop", vec![b("k"), b("0")]);
+        h.respond(w2, Some(b("k|b"))); // served first
+        h.respond(w1, Some(b("k|a"))); // served second
+        let mut order = WaiterRegistrationOrder::default();
+        order.insert(b("k"), 2, 3); // client 2 registered first (seq 3)
+        order.insert(b("k"), 1, 8); // client 1 registered later (seq 8)
+        assert!(
+            check_fifo_wake_order_exact(&h, &order).is_ok(),
+            "serving in true registration order must be legal"
+        );
+
+        // Now flip: serve w1 (registered later) before w2 -> violation.
+        let mut h2 = History::new();
+        let a = h2.invoke(1, "blpop", vec![b("k"), b("0")]);
+        let bb = h2.invoke(2, "blpop", vec![b("k"), b("0")]);
+        h2.respond(a, Some(b("k|a")));
+        h2.respond(bb, Some(b("k|b")));
+        assert!(matches!(
+            check_fifo_wake_order_exact(&h2, &order),
             Err(ConservationViolation::FifoViolation { .. })
         ));
     }
@@ -826,6 +1283,175 @@ mod tests {
         let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
         h.respond(e, Some(b("OK")));
         assert!(check_watch_no_false_negative(&h).is_ok());
+    }
+
+    #[test]
+    fn watch_errored_exec_is_not_a_commit() {
+        // Watcher's EXEC is CROSSSLOT-rejected (ERR:) despite an interfering
+        // write: a rejected transaction did not commit, so it is NOT a false
+        // negative.
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k")]);
+        h.respond(w, Some(b("OK")));
+        let other = h.invoke(2, "set", vec![b("k"), b("z")]);
+        h.respond(other, Some(b("OK")));
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
+        h.respond(
+            e,
+            Some(b(
+                "ERR:EXECABORT Transaction discarded because of previous errors.",
+            )),
+        );
+        assert!(check_watch_no_false_negative(&h).is_ok());
+    }
+
+    #[test]
+    fn tx_sum_ignores_errored_exec() {
+        // An errored EXEC applied no deltas; counting them would falsely leak.
+        let mut h = History::new();
+        let op = h.invoke(1, "exec", vec![b("1"), b("incrby"), b("2"), b("b"), b("5")]);
+        h.respond(
+            op,
+            Some(b(
+                "ERR:CROSSSLOT Keys in request don't hash to the same slot",
+            )),
+        );
+        let keys = vec![b("a"), b("b")];
+        assert!(check_tx_sum_conservation(&h, &keys, 100).is_ok());
+    }
+
+    #[test]
+    fn watch_errored_other_exec_not_a_writer() {
+        // Another client's EXEC that was CROSSSLOT-rejected is not an
+        // interfering write, so the watcher's committed EXEC is fine.
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k")]);
+        h.respond(w, Some(b("OK")));
+        let other = h.invoke(2, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("z")]);
+        h.respond(
+            other,
+            Some(b(
+                "ERR:CROSSSLOT Keys in request don't hash to the same slot",
+            )),
+        );
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
+        h.respond(e, Some(b("OK")));
+        assert!(check_watch_no_false_negative(&h).is_ok());
+    }
+
+    fn group_history() -> History {
+        // XADD 1-1 ; XGROUP CREATE ; XREADGROUP > (c1 owns 1-1, dc=1) ; XACK 1-1
+        let mut h = History::new();
+        let a = h.invoke(1, "xadd", vec![b("st"), b("1-1"), b("f"), b("v")]);
+        h.respond(a, Some(b("1-1")));
+        let g = h.invoke(1, "xgroup", vec![b("CREATE"), b("st"), b("g"), b("0")]);
+        h.respond(g, Some(b("OK")));
+        let r = h.invoke(
+            2,
+            "xreadgroup",
+            vec![b("GROUP"), b("g"), b("c1"), b("STREAMS"), b("st"), b(">")],
+        );
+        h.respond(r, Some(b("1-1,f,v")));
+        h
+    }
+
+    #[test]
+    fn pel_ok_when_delivered_then_acked() {
+        let mut h = group_history();
+        let ack = h.invoke(2, "xack", vec![b("st"), b("g"), b("1-1")]);
+        h.respond(ack, Some(b("1")));
+        assert!(check_pel_conservation(&h).is_ok());
+    }
+
+    #[test]
+    fn pel_detects_acked_but_still_pending() {
+        let mut h = group_history();
+        let ack = h.invoke(2, "xack", vec![b("st"), b("g"), b("1-1")]);
+        h.respond(ack, Some(b("1")));
+        // A later re-read reports 1-1 still pending for c1 -> both acked & pending.
+        let rr = h.invoke(
+            2,
+            "xreadgroup",
+            vec![b("GROUP"), b("g"), b("c1"), b("STREAMS"), b("st"), b("0")],
+        );
+        h.respond(rr, Some(b("1-1,f,v")));
+        assert!(matches!(
+            check_pel_conservation(&h),
+            Err(ConservationViolation::PelAckedButPending { .. })
+        ));
+    }
+
+    #[test]
+    fn pel_detects_double_owned() {
+        // 1-1 claimed to two consumers concurrently reported as pending for both.
+        let mut h = group_history();
+        let c1 = h.invoke(2, "xpending", vec![b("st"), b("g")]);
+        h.respond(c1, Some(b("1|1-1|1-1|c1:1")));
+        // A claim moves 1-1 to c2, but a stale reader still sees c1 owning it too.
+        let cl = h.invoke(
+            3,
+            "xclaim",
+            vec![b("st"), b("g"), b("c2"), b("0"), b("1-1")],
+        );
+        h.respond(cl, Some(b("1-1,f,v")));
+        let p2 = h.invoke(3, "xpending", vec![b("st"), b("g")]);
+        h.respond(p2, Some(b("2|1-1|1-1|c1:1,c2:1"))); // two owners of the same id
+        assert!(matches!(
+            check_pel_conservation(&h),
+            Err(ConservationViolation::PelDoubleOwned { .. })
+        ));
+    }
+
+    #[test]
+    fn pel_noop_xack_not_treated_as_ack() {
+        // A no-op XACK of an id that hasn't been delivered to this group
+        // yet (returns 0) must NOT register as a real ack: the id's first
+        // genuine delivery, which happens later, must not be mistaken for
+        // "delivered after ack".
+        let mut h = History::new();
+        let a = h.invoke(1, "xadd", vec![b("st"), b("5-0"), b("f"), b("v")]);
+        h.respond(a, Some(b("5-0")));
+        let g = h.invoke(1, "xgroup", vec![b("CREATE"), b("st"), b("g"), b("0")]);
+        h.respond(g, Some(b("OK")));
+        // No-op ack: 5-0 has never been delivered to this group.
+        let ack = h.invoke(2, "xack", vec![b("st"), b("g"), b("5-0")]);
+        h.respond(ack, Some(b("0")));
+        // First real delivery of 5-0 happens AFTER the no-op ack.
+        let r = h.invoke(
+            2,
+            "xreadgroup",
+            vec![b("GROUP"), b("g"), b("c1"), b("STREAMS"), b("st"), b(">")],
+        );
+        h.respond(r, Some(b("5-0,f,v")));
+        assert!(check_pel_conservation(&h).is_ok());
+    }
+
+    #[test]
+    fn pel_cross_stream_not_contaminated() {
+        // Two independent stream+group pairs. Stream A's entry is never
+        // read by stream A's own group; stream B's group delivers a HIGHER
+        // id on an unrelated `>` read. Id-order delivery only holds within
+        // a single (stream, group), so stream B's read must not be treated
+        // as evidence that stream A's entry was skipped.
+        let mut h = History::new();
+        let a1 = h.invoke(1, "xadd", vec![b("stA"), b("1-1"), b("f"), b("v")]);
+        h.respond(a1, Some(b("1-1")));
+        let ga = h.invoke(1, "xgroup", vec![b("CREATE"), b("stA"), b("g"), b("0")]);
+        h.respond(ga, Some(b("OK")));
+        let a2 = h.invoke(1, "xadd", vec![b("stB"), b("9-9"), b("f"), b("w")]);
+        h.respond(a2, Some(b("9-9")));
+        let gb = h.invoke(1, "xgroup", vec![b("CREATE"), b("stB"), b("g"), b("0")]);
+        h.respond(gb, Some(b("OK")));
+        let r = h.invoke(
+            2,
+            "xreadgroup",
+            vec![b("GROUP"), b("g"), b("c1"), b("STREAMS"), b("stB"), b(">")],
+        );
+        h.respond(r, Some(b("9-9,f,w")));
+        // stA's 1-1 was never read by stA's own group -> must NOT be
+        // flagged as lost just because stB's unrelated group delivered a
+        // higher id.
+        assert!(check_pel_conservation(&h).is_ok());
     }
 
     #[test]

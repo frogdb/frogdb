@@ -8,7 +8,7 @@
 //! [`ConnectionHandler::conn_ctx_for`](crate::connection::ConnectionHandler))
 //! and drive their transitions through the transaction methods on
 //! [`frogdb_core::ConnStateMut`] (`begin_multi`, `is_in_multi`, `watch_key`,
-//! `fold_transaction_shard`, `unwatch`, `discard`).
+//! `unwatch`, `discard`).
 //!
 //! * **MULTI / DISCARD / UNWATCH** are pure state transitions. DISCARD
 //!   additionally records the `discarded` transaction metric via
@@ -311,12 +311,14 @@ async fn handle_watch(ctx: &mut ConnCtx<'_>, args: &[Bytes]) -> Response {
         Err(_) => return Response::error("ERR shard dropped request"),
     };
 
-    // Store watched keys with their versions, then fold the shard into the
-    // transaction target.
+    // Store watched keys with their versions. The shard is *not* folded into
+    // the transaction target here: WATCH always precedes MULTI (WATCH inside
+    // MULTI errors), and MULTI resets the accumulator, so any fold recorded now
+    // would be discarded. The watch set's shards are folded at EXEC time in
+    // `take_transaction`, from the live (post-UNWATCH) watch set.
     for key in args {
         state.watch_key(key.clone(), shard, version);
     }
-    state.fold_transaction_shard(shard);
 
     Response::ok()
 }

@@ -88,11 +88,26 @@ pub fn default_keys_of(function: &str, args: &[Bytes]) -> Vec<Bytes> {
         "exec" => exec_keys(args),
         "get" | "set" | "read" | "write" | "cas" | "del" | "delete" | "incr" | "lpush"
         | "rpush" | "lpop" | "rpop" | "llen" | "lrange" | "hset" | "hdel" | "hget" | "hincrby"
-        | "hgetall" | "hlen" | "zadd" | "zrem" | "zscore" | "zcard" | "xadd" | "xlen" | "xread" => {
-            args.first().cloned().into_iter().collect()
-        }
+        | "hgetall" | "hlen" | "zadd" | "zrem" | "zscore" | "zcard" | "xadd" | "xlen" | "xread"
+        | "script_getset" | "script_cincr" | "script_setnx_get" | "script_lpush_llen"
+        | "script_rpush_llen" => args.first().cloned().into_iter().collect(),
         // `watch key1 key2 ...` can watch any number of keys; all of them are keys.
         "watch" => args.to_vec(),
+        // Consumer-group ops route to their single stream key. Full pipeline
+        // routing (model dispatch, canonicalization) lands in a later task;
+        // this keeps the generator's own routability self-tests green now
+        // that `Family::StreamGroup` emits these commands.
+        "xgroup" => args.get(1).cloned().into_iter().collect(), // CREATE key group ...
+        "xack" | "xpending" | "xclaim" | "xautoclaim" => {
+            args.first().cloned().into_iter().collect()
+        }
+        "xreadgroup" => args
+            .iter()
+            .position(|a| a.eq_ignore_ascii_case(b"STREAMS"))
+            .and_then(|p| args.get(p + 1))
+            .cloned()
+            .into_iter()
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -242,9 +257,18 @@ fn explode_exec_for_key(
     key: &Bytes,
 ) -> Option<(String, Vec<Bytes>, Option<Bytes>)> {
     let cmds = parse_exec_commands(args)?;
-    // Aborted exec (nil) has no committed per-key effect.
+    // A rejected transaction has no committed per-key effect: an aborted exec
+    // (nil → `None`) and an errored exec (CROSSSLOT/EXECABORT → `Some("ERR:…")`)
+    // are both no-ops. They must be dropped from every per-key partition *before*
+    // the split-by-`|` explode below — otherwise the `"ERR:…"` marker would be
+    // re-encoded as a sub-result and, worse, only the sub-command at index 0
+    // would inherit it while every other touched key would get an empty result,
+    // which `KVModel::exec` misreads as a committed-but-wrong EXEC (manufacturing
+    // false non-linearizability). `KVModel::exec` also treats these as no-ops, but
+    // that guard never sees them once they are exploded, so we must gate here too.
     let results: Vec<String> = match result {
         None => return None,
+        Some(r) if is_errored_exec_result(r) => return None,
         Some(r) => {
             let s = String::from_utf8_lossy(r);
             if s.is_empty() {
@@ -337,6 +361,28 @@ pub fn partition_by_key(
     subs
 }
 
+/// True iff a recorded EXEC/transaction result denotes an aborted or rejected
+/// transaction rather than a committed one. The turmoil recorder encodes a
+/// server error reply (CROSSSLOT / EXECABORT / …) as the pipe-safe marker
+/// `"ERR:<message>"` (see `OperationHistory::encode_array_result`); a
+/// WATCH-abort is instead recorded as `None`. Callers treat both as no-ops.
+///
+/// Known edge: a *committed* EXEC whose first sub-command itself errored
+/// (e.g. `INCR` on a non-integer) would also start with `"ERR:…"` and be
+/// misread as rejected here — so `explode_exec_for_key` drops the whole
+/// committed EXEC from every per-key partition as a no-op (its `None`-on-error
+/// guard fires on `is_errored_exec_result`). The phase-1 generator's exec
+/// vocabulary (set/get/incr/del over numeric values) cannot produce that
+/// sub-command type error, so this is currently unreachable. If the vocabulary
+/// ever grows error-capable sub-commands, the net is the cross-key conservation
+/// checkers: the dropped write is invisible to per-key WGL, but conservation
+/// (which reconciles effects across sibling keys) still catches the missing
+/// mutation. Revisit both this gate and the explode drop before adding such a
+/// sub-command.
+pub fn is_errored_exec_result(result: &Bytes) -> bool {
+    result.starts_with(b"ERR:")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,6 +413,61 @@ mod tests {
         assert_eq!(
             default_keys_of("lmove", &[b("s"), b("d"), b("left"), b("right")]),
             vec![b("s"), b("d")]
+        );
+    }
+
+    #[test]
+    fn default_keys_of_script_pseudo_ops() {
+        assert_eq!(
+            default_keys_of("script_getset", &[b("k"), b("v")]),
+            vec![b("k")]
+        );
+        assert_eq!(default_keys_of("script_cincr", &[b("k")]), vec![b("k")]);
+        assert_eq!(
+            default_keys_of("script_setnx_get", &[b("k"), b("v")]),
+            vec![b("k")]
+        );
+        assert_eq!(
+            default_keys_of("script_lpush_llen", &[b("k"), b("v")]),
+            vec![b("k")]
+        );
+        assert_eq!(
+            default_keys_of("script_rpush_llen", &[b("k"), b("v")]),
+            vec![b("k")]
+        );
+    }
+
+    #[test]
+    fn default_keys_of_stream_group_ops() {
+        assert_eq!(
+            default_keys_of("xgroup", &[b("CREATE"), b("st"), b("g"), b("0")]),
+            vec![b("st")]
+        );
+        assert_eq!(
+            default_keys_of("xack", &[b("st"), b("g"), b("1-1")]),
+            vec![b("st")]
+        );
+        assert_eq!(
+            default_keys_of("xpending", &[b("st"), b("g")]),
+            vec![b("st")]
+        );
+        assert_eq!(
+            default_keys_of("xclaim", &[b("st"), b("g"), b("c"), b("0"), b("1-1")]),
+            vec![b("st")]
+        );
+        assert_eq!(
+            default_keys_of(
+                "xautoclaim",
+                &[b("st"), b("g"), b("c"), b("0"), b("0"), b("JUSTID")]
+            ),
+            vec![b("st")]
+        );
+        assert_eq!(
+            default_keys_of(
+                "xreadgroup",
+                &[b("GROUP"), b("g"), b("c"), b("STREAMS"), b("st"), b(">")]
+            ),
+            vec![b("st")]
         );
     }
 
@@ -458,6 +559,55 @@ mod tests {
         h.respond(e, None); // aborted (nil)
         let parts = partition_by_key(&h, default_keys_of);
         assert!(!parts.contains_key(&b("a")) || parts[&b("a")].completed_operations().is_empty());
+    }
+
+    #[test]
+    fn partition_skips_errored_exec() {
+        // A CROSSSLOT/EXECABORT-rejected EXEC is recorded as `Some("ERR:…")`.
+        // It committed nothing, so every touched key must see a no-op — NOT an
+        // exploded sub-op. Regression: the old explode split the "ERR:…" marker
+        // by `|`, gave it only to the sub-command at index 0, and left every
+        // other key with an empty result that `KVModel::exec` misread as a
+        // committed-but-wrong EXEC (false non-linearizability). Here the erroring
+        // key `b` sits at index 1 — the position that used to be poisoned.
+        let mut h = History::new();
+        // Establish a real value for `b` so a later read is only explicable if
+        // the errored EXEC left `b` untouched.
+        let s = h.invoke(1, "set", vec![b("b"), b("7")]);
+        h.respond(s, Some(b("OK")));
+        let e = h.invoke(
+            2,
+            "exec",
+            vec![
+                b("2"),
+                b("set"),
+                b("2"),
+                b("a"),
+                b("1"),
+                b("set"),
+                b("2"),
+                b("b"),
+                b("9"),
+            ],
+        );
+        h.respond(
+            e,
+            Some(b(
+                "ERR:CROSSSLOT Keys in request don't hash to the same slot",
+            )),
+        );
+        let g = h.invoke(3, "get", vec![b("b")]);
+        h.respond(g, Some(b("7"))); // still 7: the errored EXEC never wrote 9
+        let parts = partition_by_key(&h, default_keys_of);
+        // Neither key carries an exploded sub-op from the rejected EXEC.
+        assert!(!parts.contains_key(&b("a")) || parts[&b("a")].completed_operations().is_empty());
+        let b_ops = parts[&b("b")].completed_operations();
+        assert!(
+            b_ops.iter().all(|op| op.function != "exec"),
+            "rejected EXEC must not explode into a per-key sub-op: {b_ops:?}"
+        );
+        // And `b`'s sub-history (set 7; get 7) stays linearizable.
+        assert!(check_linearizability::<KVModel>(&parts[&b("b")]).is_linearizable);
     }
 
     #[test]

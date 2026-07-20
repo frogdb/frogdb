@@ -267,6 +267,25 @@ impl Model for ListModel {
                     None
                 }
             }
+            "script_lpush_llen" | "script_rpush_llen" => {
+                if args.len() < 2 {
+                    return None;
+                }
+                let key = &args[0];
+                let mut new = state.clone();
+                let list = new.lists.entry(key.clone()).or_default();
+                if function == "script_lpush_llen" {
+                    list.push_front(args[1].clone());
+                } else {
+                    list.push_back(args[1].clone());
+                }
+                let len = list.len() as i64;
+                if expect_int(result, len) {
+                    Some(new)
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }
@@ -397,6 +416,20 @@ mod tests {
         let s = ListModel::step(&s, "rpush", &[b("k"), b("x")], Some(&b("1"))).unwrap();
         let s = ListModel::step(&s, "lmove_push", &[b("k"), b("y"), b("L")], None).unwrap();
         assert!(ListModel::step(&s, "lpop", &[b("k")], Some(&b("y"))).is_some());
+    }
+
+    #[test]
+    fn script_lpush_llen_returns_new_length() {
+        let s = ListState::default();
+        let s = ListModel::step(&s, "script_lpush_llen", &[b("k"), b("a")], Some(&b("1"))).unwrap();
+        let s2 =
+            ListModel::step(&s, "script_rpush_llen", &[b("k"), b("b")], Some(&b("2"))).unwrap();
+        // Head is still "a" (lpush) then tail push of "b" -> a, b in order.
+        assert!(ListModel::step(&s2, "lpop", &[b("k")], Some(&b("a"))).is_some());
+        // Wrong recorded length is rejected (strict model, not permissive).
+        assert!(
+            ListModel::step(&s, "script_rpush_llen", &[b("k"), b("b")], Some(&b("99"))).is_none()
+        );
     }
 
     use proptest::prelude::*;

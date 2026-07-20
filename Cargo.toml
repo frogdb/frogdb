@@ -50,6 +50,7 @@ async-trait = "0.1"
 bytes = "1"
 bytes-utils = "0.1"
 redis-protocol = { version = "6", features = ["bytes", "codec", "resp3"] }
+base64 = "0.22"
 
 # Float formatting
 ryu = "1"

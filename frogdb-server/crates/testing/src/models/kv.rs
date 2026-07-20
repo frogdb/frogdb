@@ -299,6 +299,12 @@ impl Model for KVModel {
                     // `check_watch_no_false_negative`.)
                     None => Some(state.clone()),
                     Some(result_bytes) => {
+                        // A CROSSSLOT/EXECABORT error EXEC (recorder marker
+                        // "ERR:...") is a rejected transaction: also a legal
+                        // no-op that leaves state unchanged.
+                        if crate::partition::is_errored_exec_result(result_bytes) {
+                            return Some(state.clone());
+                        }
                         let result_str = String::from_utf8_lossy(result_bytes);
                         if result_str == expected {
                             Some(current_state)
@@ -306,6 +312,61 @@ impl Model for KVModel {
                             None
                         }
                     }
+                }
+            }
+            "script_getset" => {
+                if args.len() < 2 {
+                    return None;
+                }
+                let key = &args[0];
+                let old = state.store.get(key).cloned();
+                if result == old.as_ref() {
+                    let mut new = state.clone();
+                    new.store.insert(key.clone(), args[1].clone());
+                    Some(new)
+                } else {
+                    None
+                }
+            }
+            "script_cincr" => {
+                if args.is_empty() {
+                    return None;
+                }
+                let key = &args[0];
+                if let Some(cur) = state.store.get(key) {
+                    let n = String::from_utf8_lossy(cur)
+                        .parse::<i64>()
+                        .ok()?
+                        .checked_add(1)?;
+                    if result
+                        .is_some_and(|r| String::from_utf8_lossy(r).parse::<i64>().ok() == Some(n))
+                    {
+                        let mut new = state.clone();
+                        new.store.insert(key.clone(), Bytes::from(n.to_string()));
+                        Some(new)
+                    } else {
+                        None
+                    }
+                } else if result.is_some_and(|r| r.as_ref() == b"-1") {
+                    Some(state.clone())
+                } else {
+                    None
+                }
+            }
+            "script_setnx_get" => {
+                if args.len() < 2 {
+                    return None;
+                }
+                let key = &args[0];
+                let mut new = state.clone();
+                if !new.store.contains_key(key) {
+                    new.store.insert(key.clone(), args[1].clone());
+                }
+                let cur = new.store.get(key).cloned();
+                if result == cur.as_ref() {
+                    Some(new)
+                } else {
+                    None
                 }
             }
             _ => {
@@ -320,6 +381,33 @@ impl Model for KVModel {
 mod tests {
     use super::*;
     use bytes::Bytes;
+
+    #[test]
+    fn test_kv_exec_errored_is_legal_and_unchanged() {
+        // A CROSSSLOT/EXECABORT EXEC lands in the history as Some("ERR:...").
+        // It is a rejected transaction: legal, state unchanged (like a nil abort).
+        let mut state = KVState::default();
+        state.store.insert(Bytes::from("k"), Bytes::from("orig"));
+        let new_state = KVModel::step(
+            &state,
+            "exec",
+            &[
+                Bytes::from("1"),
+                Bytes::from("set"),
+                Bytes::from("2"),
+                Bytes::from("k"),
+                Bytes::from("new"),
+            ],
+            Some(&Bytes::from(
+                "ERR:EXECABORT Transaction discarded because of previous errors.",
+            )),
+        )
+        .expect("errored EXEC must be accepted as a no-op");
+        assert_eq!(
+            new_state.store.get(&Bytes::from("k")),
+            Some(&Bytes::from("orig"))
+        );
+    }
 
     #[test]
     fn test_kv_read_write() {
@@ -532,6 +620,170 @@ mod tests {
         assert_eq!(
             new_state.store.get(&Bytes::from("key")),
             Some(&Bytes::from("val"))
+        );
+    }
+
+    #[test]
+    fn script_getset_returns_old_sets_new() {
+        let mut s = KVState::default();
+        s.store.insert(Bytes::from("k"), Bytes::from("old"));
+        let new_state = KVModel::step(
+            &s,
+            "script_getset",
+            &[Bytes::from("k"), Bytes::from("new")],
+            Some(&Bytes::from("old")),
+        )
+        .unwrap();
+        assert_eq!(
+            new_state.store.get(&Bytes::from("k")),
+            Some(&Bytes::from("new"))
+        );
+        // Absent key -> old is nil.
+        let s2 = KVState::default();
+        assert!(
+            KVModel::step(
+                &s2,
+                "script_getset",
+                &[Bytes::from("x"), Bytes::from("v")],
+                None
+            )
+            .is_some()
+        );
+        // Wrong recorded "old" value is rejected (strict, not the permissive
+        // `_ => Some(state.clone())` fallthrough).
+        assert!(
+            KVModel::step(
+                &s,
+                "script_getset",
+                &[Bytes::from("k"), Bytes::from("new")],
+                Some(&Bytes::from("wrong")),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn script_cincr_only_when_present() {
+        let mut s = KVState::default();
+        s.store.insert(Bytes::from("k"), Bytes::from("5"));
+        let new_state = KVModel::step(
+            &s,
+            "script_cincr",
+            &[Bytes::from("k")],
+            Some(&Bytes::from("6")),
+        )
+        .unwrap();
+        assert_eq!(
+            new_state.store.get(&Bytes::from("k")),
+            Some(&Bytes::from("6"))
+        );
+        // Wrong recorded result is rejected.
+        assert!(
+            KVModel::step(
+                &s,
+                "script_cincr",
+                &[Bytes::from("k")],
+                Some(&Bytes::from("7"))
+            )
+            .is_none()
+        );
+        // Absent -> -1, unchanged.
+        let s2 = KVState::default();
+        let s2 = KVModel::step(
+            &s2,
+            "script_cincr",
+            &[Bytes::from("x")],
+            Some(&Bytes::from("-1")),
+        )
+        .unwrap();
+        assert!(!s2.store.contains_key(&Bytes::from("x")));
+        // Absent key claiming an incremented result is rejected.
+        let s3 = KVState::default();
+        assert!(
+            KVModel::step(
+                &s3,
+                "script_cincr",
+                &[Bytes::from("x")],
+                Some(&Bytes::from("1"))
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn script_cincr_non_integer_rejected() {
+        // A stored non-integer value cannot be incremented: the parse fails
+        // closed and the step is rejected regardless of the recorded result.
+        let mut s = KVState::default();
+        s.store.insert(Bytes::from("k"), Bytes::from("abc"));
+        assert!(
+            KVModel::step(
+                &s,
+                "script_cincr",
+                &[Bytes::from("k")],
+                Some(&Bytes::from("1")),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn script_cincr_overflow_rejected() {
+        // i64::MAX + 1 must not silently wrap; checked_add fails closed.
+        let mut s = KVState::default();
+        s.store
+            .insert(Bytes::from("k"), Bytes::from(i64::MAX.to_string()));
+        assert!(
+            KVModel::step(
+                &s,
+                "script_cincr",
+                &[Bytes::from("k")],
+                Some(&Bytes::from(i64::MIN.to_string())),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn script_setnx_get_sets_when_absent_noop_when_present() {
+        // Absent key: SETNX applies, GET reflects the new value.
+        let s = KVState::default();
+        let new_state = KVModel::step(
+            &s,
+            "script_setnx_get",
+            &[Bytes::from("k"), Bytes::from("v")],
+            Some(&Bytes::from("v")),
+        )
+        .unwrap();
+        assert_eq!(
+            new_state.store.get(&Bytes::from("k")),
+            Some(&Bytes::from("v"))
+        );
+
+        // Present key: SETNX is a no-op, GET reflects the existing value.
+        let mut s2 = KVState::default();
+        s2.store.insert(Bytes::from("k"), Bytes::from("old"));
+        let new_state2 = KVModel::step(
+            &s2,
+            "script_setnx_get",
+            &[Bytes::from("k"), Bytes::from("new")],
+            Some(&Bytes::from("old")),
+        )
+        .unwrap();
+        assert_eq!(
+            new_state2.store.get(&Bytes::from("k")),
+            Some(&Bytes::from("old"))
+        );
+
+        // Recorded result claiming the overwrite happened is rejected.
+        assert!(
+            KVModel::step(
+                &s2,
+                "script_setnx_get",
+                &[Bytes::from("k"), Bytes::from("new")],
+                Some(&Bytes::from("new")),
+            )
+            .is_none()
         );
     }
 }

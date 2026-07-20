@@ -62,18 +62,20 @@ pub mod workload;
 
 pub use checker::{LinearizabilityResult, check_linearizability, check_linearizability_bounded};
 pub use conservation::{
-    ConservationViolation, check_exactly_once_delivery, check_fifo_wake_order,
+    ConservationViolation, WaiterRegistrationOrder, check_exactly_once_delivery,
+    check_fifo_wake_order, check_fifo_wake_order_exact, check_pel_conservation,
     check_tx_sum_conservation, check_watch_no_false_negative,
 };
 pub use history::{History, OpKind, Operation};
 pub use models::{
-    HashModel, HashState, KVModel, KVState, ListModel, ListState, Model, RegisterModel,
-    RegisterState, StreamData, StreamId, StreamModel, StreamState, ZSetModel, ZSetState,
+    Group, HashModel, HashState, KVModel, KVState, ListModel, ListState, Model, PelEntry,
+    RegisterModel, RegisterState, StreamData, StreamGroupData, StreamGroupModel, StreamGroupState,
+    StreamId, StreamModel, StreamState, ZSetModel, ZSetState,
 };
-pub use partition::{default_keys_of, partition_by_key};
+pub use partition::{default_keys_of, is_errored_exec_result, partition_by_key};
 pub use quiescence::{
     ExpiryIndexSnapshot, LockTableSnapshot, MemoryCheckSnapshot, QuiescenceViolation,
-    WaitQueueSnapshot, check_expiry_index_consistent, check_locktable_empty,
+    WaitQueueSnapshot, WaiterOrdinal, check_expiry_index_consistent, check_locktable_empty,
     check_memory_accounting, check_waitqueue_empty,
 };
 pub use workload::{ClientScript, Profile, ScriptedOp, Workload};

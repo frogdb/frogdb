@@ -49,80 +49,113 @@ pub struct Operation {
     pub node: Option<String>,
 }
 
+/// Lossless `Bytes` <-> JSON scalar: a UTF-8 value serializes as a plain string
+/// (human-readable); a non-UTF-8 value serializes as `{"b64": "<base64>"}`.
+mod bytes_codec {
+    use base64::Engine;
+    use bytes::Bytes;
+    use serde::de::{self, MapAccess, Visitor};
+    use serde::{Deserializer, Serializer};
+    use std::fmt;
+
+    pub fn serialize<S: Serializer>(b: &Bytes, s: S) -> Result<S::Ok, S::Error> {
+        match std::str::from_utf8(b) {
+            Ok(text) => s.serialize_str(text),
+            Err(_) => {
+                use serde::ser::SerializeMap;
+                let mut m = s.serialize_map(Some(1))?;
+                let enc = base64::engine::general_purpose::STANDARD.encode(b);
+                m.serialize_entry("b64", &enc)?;
+                m.end()
+            }
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Bytes, D::Error> {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = Bytes;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a UTF-8 string or a {\"b64\": ...} object")
+            }
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Bytes, E> {
+                Ok(Bytes::from(v.to_owned()))
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Bytes, A::Error> {
+                let mut out: Option<Bytes> = None;
+                while let Some(k) = map.next_key::<String>()? {
+                    if k == "b64" {
+                        let enc: String = map.next_value()?;
+                        let raw = base64::engine::general_purpose::STANDARD
+                            .decode(enc.as_bytes())
+                            .map_err(de::Error::custom)?;
+                        out = Some(Bytes::from(raw));
+                    } else {
+                        let _: serde::de::IgnoredAny = map.next_value()?;
+                    }
+                }
+                out.ok_or_else(|| de::Error::missing_field("b64"))
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
 /// Custom serialization for Vec<Bytes>.
 mod bytes_vec_serde {
+    use super::bytes_codec;
     use bytes::Bytes;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    pub fn serialize<S>(bytes: &[Bytes], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let strings: Vec<String> = bytes
-            .iter()
-            .map(|b| String::from_utf8_lossy(b).to_string())
-            .collect();
-        strings.serialize(serializer)
-    }
+    #[derive(Serialize, Deserialize)]
+    struct Wrap(#[serde(with = "bytes_codec")] Bytes);
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Bytes>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let strings: Vec<String> = Vec::deserialize(deserializer)?;
-        Ok(strings.into_iter().map(Bytes::from).collect())
+    pub fn serialize<S: Serializer>(bytes: &[Bytes], s: S) -> Result<S::Ok, S::Error> {
+        let wrapped: Vec<Wrap> = bytes.iter().cloned().map(Wrap).collect();
+        wrapped.serialize(s)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Bytes>, D::Error> {
+        let wrapped: Vec<Wrap> = Vec::deserialize(d)?;
+        Ok(wrapped.into_iter().map(|w| w.0).collect())
     }
 }
 
 /// Public `Vec<Bytes>` <-> `Vec<String>` codec, reused by the workload
-/// generator's `ScriptedOp::args`. Same lossy-UTF-8 encoding as the private
-/// [`bytes_vec_serde`]; safe because generated args never contain non-UTF-8 or
-/// the reserved `|` delimiter.
+/// generator's `ScriptedOp::args`. Same lossless codec as the private
+/// [`bytes_vec_serde`].
 pub mod bytes_vec_serde_pub {
+    use super::bytes_codec;
     use bytes::Bytes;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    pub fn serialize<S>(bytes: &[Bytes], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let strings: Vec<String> = bytes
-            .iter()
-            .map(|b| String::from_utf8_lossy(b).to_string())
-            .collect();
-        strings.serialize(serializer)
-    }
+    #[derive(Serialize, Deserialize)]
+    struct Wrap(#[serde(with = "bytes_codec")] Bytes);
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Bytes>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let strings: Vec<String> = Vec::deserialize(deserializer)?;
-        Ok(strings.into_iter().map(Bytes::from).collect())
+    pub fn serialize<S: Serializer>(bytes: &[Bytes], s: S) -> Result<S::Ok, S::Error> {
+        let wrapped: Vec<Wrap> = bytes.iter().cloned().map(Wrap).collect();
+        wrapped.serialize(s)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Bytes>, D::Error> {
+        let wrapped: Vec<Wrap> = Vec::deserialize(d)?;
+        Ok(wrapped.into_iter().map(|w| w.0).collect())
     }
 }
 
 /// Custom serialization for Option<Bytes>.
 mod bytes_option_serde {
+    use super::bytes_codec;
     use bytes::Bytes;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    pub fn serialize<S>(bytes: &Option<Bytes>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let string: Option<String> = bytes
-            .as_ref()
-            .map(|b| String::from_utf8_lossy(b).to_string());
-        string.serialize(serializer)
-    }
+    #[derive(Serialize, Deserialize)]
+    struct Wrap(#[serde(with = "bytes_codec")] Bytes);
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Bytes>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let string: Option<String> = Option::deserialize(deserializer)?;
-        Ok(string.map(Bytes::from))
+    pub fn serialize<S: Serializer>(b: &Option<Bytes>, s: S) -> Result<S::Ok, S::Error> {
+        b.as_ref().cloned().map(Wrap).serialize(s)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Bytes>, D::Error> {
+        let w: Option<Wrap> = Option::deserialize(d)?;
+        Ok(w.map(|w| w.0))
     }
 }
 
@@ -439,5 +472,49 @@ mod tests {
         let json = r#"{"operations":[{"id":1,"client_id":1,"kind":"Invoke","function":"read","args":["x"],"result":null,"timestamp":0}]}"#;
         let restored = History::from_json(json).unwrap();
         assert_eq!(restored.operations()[0].node, None);
+    }
+
+    #[test]
+    fn non_utf8_bytes_round_trip_losslessly() {
+        let mut history = History::new();
+        // 0xff 0xfe is not valid UTF-8; lossy encoding would corrupt it.
+        let op = history.invoke(
+            1,
+            "set",
+            vec![Bytes::from(vec![0xff, 0xfe]), Bytes::from("v")],
+        );
+        history.respond(op, Some(Bytes::from(vec![0x80, 0x00, 0x81])));
+
+        let json = history.to_json();
+        let restored = History::from_json(&json).unwrap();
+
+        let inv = restored
+            .operations()
+            .iter()
+            .find(|o| o.kind == OpKind::Invoke)
+            .unwrap();
+        assert_eq!(
+            inv.args[0].as_ref(),
+            &[0xff, 0xfe][..],
+            "non-UTF8 arg corrupted"
+        );
+        let ret = restored
+            .operations()
+            .iter()
+            .find(|o| o.kind == OpKind::Return)
+            .unwrap();
+        assert_eq!(ret.result.as_deref(), Some(&[0x80, 0x00, 0x81][..]));
+    }
+
+    #[test]
+    fn utf8_values_stay_readable_in_json() {
+        let mut history = History::new();
+        let op = history.invoke(1, "set", vec![Bytes::from("key"), Bytes::from("val")]);
+        history.respond(op, Some(Bytes::from("OK")));
+        let json = history.to_json();
+        // Readable case must remain a plain JSON string, not a base64 object.
+        assert!(json.contains("\"key\""));
+        assert!(json.contains("\"OK\""));
+        assert!(!json.contains("b64"));
     }
 }

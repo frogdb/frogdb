@@ -12,12 +12,16 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use frogdb_testing::{
-    HashModel, History, KVModel, ListModel, StreamModel, ZSetModel, check_exactly_once_delivery,
-    check_fifo_wake_order, check_linearizability_bounded, check_watch_no_false_negative,
-    default_keys_of, partition_by_key,
+    HashModel, History, KVModel, ListModel, StreamGroupModel, WaiterRegistrationOrder, ZSetModel,
+    check_exactly_once_delivery, check_fifo_wake_order, check_fifo_wake_order_exact,
+    check_linearizability_bounded, check_pel_conservation, check_watch_no_false_negative,
+    default_keys_of, is_errored_exec_result, partition_by_key,
 };
 
 use super::quiescence_probe::{QuiescenceSnapshots, check_quiescence};
+use frogdb_core::shard_for_key;
+
+use super::sim_harness::hash_slot;
 
 /// Per-key op cap before WGL is skipped (conservation still covers the key).
 pub const MAX_OPS_PER_KEY: usize = 200;
@@ -55,12 +59,13 @@ enum Family {
 fn family_of(function: &str) -> Option<Family> {
     match function {
         "set" | "get" | "del" | "incr" | "mset" | "mget" | "watch" | "exec" | "cas" | "read"
-        | "write" => Some(Family::Kv),
+        | "write" | "script_getset" | "script_cincr" | "script_setnx_get" => Some(Family::Kv),
         "lpush" | "rpush" | "lpop" | "rpop" | "lmove" | "llen" | "lrange" | "blpop" | "brpop"
-        | "blmove" | "lmove_push" => Some(Family::List),
+        | "blmove" | "lmove_push" | "script_lpush_llen" | "script_rpush_llen" => Some(Family::List),
         "hset" | "hdel" | "hget" | "hincrby" | "hgetall" | "hlen" => Some(Family::Hash),
         "zadd" | "zrem" | "zscore" | "zcard" | "bzpopmin" | "bzpopmax" => Some(Family::ZSet),
-        "xadd" | "xlen" | "xread" => Some(Family::Stream),
+        "xadd" | "xlen" | "xread" | "xgroup" | "xreadgroup" | "xack" | "xpending" | "xclaim"
+        | "xautoclaim" => Some(Family::Stream),
         _ => None,
     }
 }
@@ -77,15 +82,25 @@ fn model_for(sub: &History) -> Option<Family> {
 ///
 /// `quiescence` carries the tier-4 DEBUG snapshots gathered once the server
 /// quiesced; pass `None` to skip the stage (e.g. non-turmoil unit self-tests).
+///
+/// `registration_order` carries the mid-run `DEBUG WAITQUEUE` observations
+/// (per-`(key, client_id)` registration ordinals) correlated via the CLIENT ID
+/// map; when present, stage 3 runs [`check_fifo_wake_order_exact`] instead of
+/// the invoke-time proxy [`check_fifo_wake_order`]. Pass `None` for unit
+/// self-tests that have no live prober.
 pub fn check_all(
     history: &History,
     final_elements: &HashMap<Bytes, Vec<Bytes>>,
     quiescence: Option<&QuiescenceSnapshots>,
+    registration_order: Option<&WaiterRegistrationOrder>,
+    num_shards: usize,
 ) -> InvariantReport {
     check_all_with(
         history,
         final_elements,
         quiescence,
+        registration_order,
+        num_shards,
         MAX_OPS_PER_KEY,
         MAX_WGL_STATES,
     )
@@ -97,6 +112,8 @@ pub fn check_all_with(
     history: &History,
     final_elements: &HashMap<Bytes, Vec<Bytes>>,
     quiescence: Option<&QuiescenceSnapshots>,
+    registration_order: Option<&WaiterRegistrationOrder>,
+    num_shards: usize,
     max_ops_per_key: usize,
     max_states: u64,
 ) -> InvariantReport {
@@ -104,6 +121,7 @@ pub fn check_all_with(
 
     // Stage 1: response legality (cheap, always).
     check_response_legality(history, &mut report);
+    check_exec_slot_discipline(history, num_shards, &mut report);
 
     // Stage 2: per-key partition + bounded WGL with inconclusive-downgrade.
     let partitions = partition_by_key(history, default_keys_of);
@@ -142,11 +160,21 @@ pub fn check_all_with(
             .violations
             .push(format!("exactly-once delivery: {e}"));
     }
-    if let Err(e) = check_fifo_wake_order(history) {
+    // Exact when the mid-run prober supplied per-waiter registration ordinals
+    // (a key whose served waiters are all known is judged only by ordinals);
+    // otherwise the invoke-time proxy.
+    let fifo_result = match registration_order {
+        Some(order) => check_fifo_wake_order_exact(history, order),
+        None => check_fifo_wake_order(history),
+    };
+    if let Err(e) = fifo_result {
         report.violations.push(format!("FIFO wake order: {e}"));
     }
     if let Err(e) = check_watch_no_false_negative(history) {
         report.violations.push(format!("WATCH false-negative: {e}"));
+    }
+    if let Err(e) = check_pel_conservation(history) {
+        report.violations.push(format!("PEL conservation: {e}"));
     }
 
     // Stage 4: quiescence. Fed the Phase-2 DEBUG LOCKTABLE / WAITQUEUE /
@@ -174,7 +202,7 @@ fn run_bounded(
         Family::List => check_linearizability_bounded::<ListModel>(sub, max_states),
         Family::Hash => check_linearizability_bounded::<HashModel>(sub, max_states),
         Family::ZSet => check_linearizability_bounded::<ZSetModel>(sub, max_states),
-        Family::Stream => check_linearizability_bounded::<StreamModel>(sub, max_states),
+        Family::Stream => check_linearizability_bounded::<StreamGroupModel>(sub, max_states),
     }
 }
 
@@ -205,6 +233,56 @@ fn check_response_legality(history: &History, report: &mut InvariantReport) {
     }
 }
 
+/// Pin the server's slot discipline for transactions. Per Task 3
+/// (`TransactionTarget::Multi` → `redirect::crossslot()` in
+/// `connection/state.rs`), cross-slot EXEC is *always* rejected with
+/// CROSSSLOT in standalone mode — `allow_cross_slot_standalone` gates only
+/// single-command scatter + EVAL, never transactions. So a *committed* EXEC
+/// whose sub-command keys span more than one hash slot is a CROSSSLOT-
+/// enforcement regression.
+fn check_exec_slot_discipline(history: &History, num_shards: usize, report: &mut InvariantReport) {
+    for op in history.completed_operations() {
+        if op.function != "exec" {
+            continue;
+        }
+        let keys = default_keys_of("exec", &op.args);
+        if keys.len() < 2 {
+            continue;
+        }
+        // Co-location under test is *shard*-level, not slot-level. The sim server
+        // (see `sim_helpers::real_frogdb_server`) runs standalone over
+        // `num_shards` shards, and `TransactionTarget::resolve` rejects — with
+        // CROSSSLOT — only a transaction whose keys span more than one shard. Two
+        // keys in different hash slots that map to the *same* shard form a legal
+        // same-shard transaction that commits, so cross detection must be
+        // shard-level to match the system under test. (A strict cluster would
+        // enforce the tighter slot-level rule; that mode is not exercised here.)
+        //
+        // Use the server's own `frogdb_core::shard_for_key` (slot % num_shards),
+        // NOT a re-derivation: the two must agree byte-for-byte or the checker
+        // flags legally-committed same-shard transactions as false violations.
+        let s0 = shard_for_key(&keys[0], num_shards);
+        let cross_shard = keys.iter().any(|k| shard_for_key(k, num_shards) != s0);
+        if !cross_shard {
+            continue;
+        }
+        let committed = op
+            .result
+            .as_ref()
+            .is_some_and(|r| !is_errored_exec_result(r));
+        if committed {
+            report.violations.push(format!(
+                "op {} (exec) committed across {} shards (CROSSSLOT not enforced)",
+                op.id,
+                keys.iter()
+                    .map(|k| shard_for_key(k, num_shards))
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+            ));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,7 +295,7 @@ mod tests {
         h.respond(s, Some(Bytes::from("OK")));
         let g = h.invoke(2, "get", vec![Bytes::from("{t}x")]);
         h.respond(g, Some(Bytes::from("1")));
-        assert!(check_all(&h, &Default::default(), None).passed());
+        assert!(check_all(&h, &Default::default(), None, None, 2).passed());
 
         // dirty: GET x -> 2 with no writer of 2 -> non-linearizable
         let mut d = History::new();
@@ -225,7 +303,7 @@ mod tests {
         d.respond(s, Some(Bytes::from("OK")));
         let g = d.invoke(2, "get", vec![Bytes::from("{t}x")]);
         d.respond(g, Some(Bytes::from("2")));
-        assert!(!check_all(&d, &Default::default(), None).passed());
+        assert!(!check_all(&d, &Default::default(), None, None, 2).passed());
     }
 
     #[test]
@@ -247,7 +325,7 @@ mod tests {
         for id in ids {
             h.respond(id, Some(Bytes::from("OK")));
         }
-        let report = check_all_with(&h, &Default::default(), None, MAX_OPS_PER_KEY, 1);
+        let report = check_all_with(&h, &Default::default(), None, None, 2, MAX_OPS_PER_KEY, 1);
         assert!(
             report.passed(),
             "inconclusive must not fail: {:?}",
@@ -263,7 +341,7 @@ mod tests {
     #[test]
     fn quiescence_is_skipped_when_no_snapshots() {
         let h = History::new();
-        let report = check_all(&h, &Default::default(), None);
+        let report = check_all(&h, &Default::default(), None, None, 2);
         assert!(!report.quiescence_checked);
     }
 
@@ -273,7 +351,7 @@ mod tests {
         // An empty snapshot bundle is the quiesced-server case: every checker
         // accepts zero snapshots, so the stage runs and finds no violation.
         let snap = QuiescenceSnapshots::default();
-        let report = check_all(&h, &Default::default(), Some(&snap));
+        let report = check_all(&h, &Default::default(), Some(&snap), None, 2);
         assert!(
             report.quiescence_checked,
             "stage must run when snapshots present"
@@ -294,10 +372,11 @@ mod tests {
             wait_queue: vec![WaitQueueSnapshot {
                 shard_id: 1,
                 total_waiters: 1,
+                waiters: Vec::new(),
             }],
             ..Default::default()
         };
-        let report = check_all(&h, &Default::default(), Some(&snap));
+        let report = check_all(&h, &Default::default(), Some(&snap), None, 2);
         assert!(report.quiescence_checked);
         assert!(
             report
@@ -305,6 +384,22 @@ mod tests {
                 .iter()
                 .any(|v| v.contains("wait queue not empty")),
             "expected a wait-queue quiescence violation, got {:?}",
+            report.violations
+        );
+    }
+
+    #[test]
+    fn unresponsive_connection_is_a_quiescence_violation() {
+        let h = History::new();
+        let snap = QuiescenceSnapshots {
+            connections_responsive: false,
+            ..Default::default()
+        };
+        let report = check_all(&h, &Default::default(), Some(&snap), None, 2);
+        assert!(report.quiescence_checked);
+        assert!(
+            report.violations.iter().any(|v| v.contains("unresponsive")),
+            "expected an unresponsive-connection violation, got {:?}",
             report.violations
         );
     }
@@ -321,7 +416,7 @@ mod tests {
         let mut h = History::new();
         let p = h.invoke(1, "rpush", vec![Bytes::from("{t}L"), Bytes::from("zzz")]);
         h.respond(p, Some(Bytes::from("1")));
-        let report = check_all(&h, &Default::default(), None);
+        let report = check_all(&h, &Default::default(), None, None, 2);
         assert!(!report.passed(), "a lost element must fail the report");
         assert!(
             report
@@ -339,11 +434,62 @@ mod tests {
         let mut h = History::new();
         let g = h.invoke(1, "get", vec![Bytes::from("{t}g")]);
         h.respond(g, Some(Bytes::from("phantom")));
-        let report = check_all(&h, &Default::default(), None);
+        let report = check_all(&h, &Default::default(), None, None, 2);
         assert!(
             !report.passed(),
             "a phantom read must fail the report: {:?}",
             report.violations
+        );
+    }
+
+    #[test]
+    fn cross_shard_exec_discipline_flagged() {
+        // Two keys on different shards inside one EXEC. A cross-shard EXEC is
+        // always rejected with CROSSSLOT in standalone mode (its transaction
+        // target folds to `Multi`, which `resolve` maps to CROSSSLOT), so a
+        // *committed* cross-shard EXEC is a co-location regression. The server
+        // maps shard = slot % num_shards, so with num_shards = 2, {t0}kv0 (slot
+        // 13006 → shard 0) and {t1}kv1 (slot 8943 → shard 1) are genuinely
+        // cross-shard, whereas e.g. {t0}/{t2} (slots 13006/4748, both even →
+        // shard 0) would legally commit as a same-shard transaction.
+        const NUM_SHARDS: usize = 2;
+        let a = Bytes::from("{t0}kv0");
+        let b = Bytes::from("{t1}kv1");
+        assert_ne!(
+            hash_slot(&a),
+            hash_slot(&b),
+            "fixture keys must differ in slot"
+        );
+        assert_ne!(
+            shard_for_key(&a, NUM_SHARDS),
+            shard_for_key(&b, NUM_SHARDS),
+            "fixture keys must land on different shards"
+        );
+
+        let mut h = History::new();
+        let e = h.invoke(
+            1,
+            "exec",
+            vec![
+                Bytes::from("2"),
+                Bytes::from("set"),
+                Bytes::from("2"),
+                a.clone(),
+                Bytes::from("1"),
+                Bytes::from("set"),
+                Bytes::from("2"),
+                b.clone(),
+                Bytes::from("2"),
+            ],
+        );
+        // A committed cross-shard EXEC (array reply -> "OK|OK").
+        h.respond(e, Some(Bytes::from("OK|OK")));
+
+        let mut report = InvariantReport::default();
+        check_exec_slot_discipline(&h, NUM_SHARDS, &mut report);
+        assert!(
+            !report.violations.is_empty(),
+            "cross-shard commit must be flagged"
         );
     }
 

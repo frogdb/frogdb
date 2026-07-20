@@ -386,9 +386,14 @@ pub fn hash_slot(key: &[u8]) -> u16 {
 }
 
 /// Calculate which shard owns a key given a number of shards.
+///
+/// Delegates to the server's own `frogdb_core::shard_for_key` so the harness can
+/// never disagree with the live routing. The server maps `slot % num_shards`
+/// (modulo partitioning); an earlier local re-derivation used a range partition
+/// (`slot * num_shards / HASH_SLOTS`), which silently disagreed and made the
+/// EXEC co-location checker flag legally-committed same-shard transactions.
 pub fn shard_for_key(key: &[u8], num_shards: usize) -> usize {
-    let slot = hash_slot(key) as usize;
-    slot * num_shards / HASH_SLOTS
+    frogdb_core::shard_for_key(key, num_shards)
 }
 
 /// Extract the hash tag from a key, if present.
@@ -497,12 +502,48 @@ fn canonicalize_result(command: &str, result: OperationResult) -> OperationResul
             other => other,
         },
         "xread" => canonicalize_xread(result),
+        // XREADGROUP replies share XREAD's nested `[[key, [[id,[f,v]]…]]…]`
+        // shape; an empty/nil read → `Nil`. A NOGROUP *error* reply flows
+        // through unchanged here and is mapped to `None` by `convert_result`,
+        // which the model accepts (group must already exist).
+        "xreadgroup" => canonicalize_xread(result),
+        // XCLAIM (no JUSTID) returns a flat entry array `[[id,[f,v]]…]`, same
+        // per-entry encoding as XREAD; empty claim → `Nil` (model's `None`).
+        "xclaim" => canonicalize_stream_entries(result),
+        // XPENDING summary `[total, min, max, [[consumer,count]…]]` →
+        // `"total|min|max|c:n,…"` (consumers sorted); `"0"` when empty.
+        "xpending" => canonicalize_xpending_summary(result),
+        // XAUTOCLAIM JUSTID `[cursor, [id…], [deleted…]]` → `"cursor;id,id"`
+        // (the deleted-ids element is ignored); empty claim → `"0-0;"`.
+        "xautoclaim" => canonicalize_xautoclaim(result),
         _ => result,
     }
 }
 
+/// Encode a flat stream-entry array `[[id, [f,v,…]], …]` into `"id,f,v,…"`
+/// strings (one per entry), matching the model's `encode_entries` output.
+fn encode_stream_entries(entries: &[OperationResult]) -> Vec<String> {
+    let mut out = Vec::new();
+    for entry in entries {
+        let OperationResult::Array(id_fields) = entry else {
+            continue;
+        };
+        if id_fields.len() < 2 {
+            continue;
+        }
+        let id = result_to_string(&id_fields[0]);
+        let OperationResult::Array(fields) = &id_fields[1] else {
+            continue;
+        };
+        let mut parts = vec![id];
+        parts.extend(fields.iter().map(result_to_string));
+        out.push(parts.join(","));
+    }
+    out
+}
+
 /// Canonicalize an XREAD reply `[[stream, [[id, [f,v,...]], ...]], ...]` into
-/// `id,f,v,...` entries `|`-joined, matching `StreamModel`'s expected encoding.
+/// `id,f,v,...` entries `|`-joined, matching `StreamGroupModel`'s encoding.
 fn canonicalize_xread(result: OperationResult) -> OperationResult {
     let OperationResult::Array(streams) = result else {
         return result;
@@ -516,27 +557,90 @@ fn canonicalize_xread(result: OperationResult) -> OperationResult {
         let Some(OperationResult::Array(stream_entries)) = pair.get(1) else {
             continue;
         };
-        for entry in stream_entries {
-            let OperationResult::Array(id_fields) = entry else {
-                continue;
-            };
-            if id_fields.len() < 2 {
-                continue;
-            }
-            let id = result_to_string(&id_fields[0]);
-            let OperationResult::Array(fields) = &id_fields[1] else {
-                continue;
-            };
-            let mut parts = vec![id];
-            parts.extend(fields.iter().map(result_to_string));
-            entries.push(parts.join(","));
-        }
+        entries.extend(encode_stream_entries(stream_entries));
     }
     if entries.is_empty() {
         OperationResult::Nil
     } else {
         OperationResult::String(Bytes::from(entries.join("|")))
     }
+}
+
+/// Canonicalize a flat stream-entry array reply (XCLAIM) into `"id,f,v|…"`,
+/// or `Nil` when no entries were returned.
+fn canonicalize_stream_entries(result: OperationResult) -> OperationResult {
+    let OperationResult::Array(entries) = result else {
+        return result;
+    };
+    let encoded = encode_stream_entries(&entries);
+    if encoded.is_empty() {
+        OperationResult::Nil
+    } else {
+        OperationResult::String(Bytes::from(encoded.join("|")))
+    }
+}
+
+/// Canonicalize an XPENDING summary reply
+/// `[total, min, max, [[consumer, count], …]]` into `"total|min|max|c:n,…"`
+/// with consumers sorted, or `"0"` when the PEL is empty (`total == 0`, which
+/// the server reports as `[0, nil, nil, nil]`). A non-summary shape is left
+/// untouched.
+fn canonicalize_xpending_summary(result: OperationResult) -> OperationResult {
+    let OperationResult::Array(items) = result else {
+        return result;
+    };
+    if items.len() != 4 {
+        return OperationResult::Array(items);
+    }
+    let OperationResult::Integer(total) = items[0] else {
+        return OperationResult::Array(items);
+    };
+    if total == 0 {
+        return OperationResult::String(Bytes::from("0"));
+    }
+    let min = result_to_string(&items[1]);
+    let max = result_to_string(&items[2]);
+    let mut consumers: Vec<String> = Vec::new();
+    if let OperationResult::Array(pairs) = &items[3] {
+        for pair in pairs {
+            if let OperationResult::Array(cn) = pair
+                && cn.len() == 2
+            {
+                consumers.push(format!(
+                    "{}:{}",
+                    result_to_string(&cn[0]),
+                    result_to_string(&cn[1])
+                ));
+            }
+        }
+    }
+    consumers.sort();
+    OperationResult::String(Bytes::from(format!(
+        "{total}|{min}|{max}|{}",
+        consumers.join(",")
+    )))
+}
+
+/// Canonicalize an XAUTOCLAIM JUSTID reply `[cursor, [id, …], [deleted, …]]`
+/// into `"cursor;id,id"` (the trailing deleted-ids element is ignored). An
+/// empty claim yields `"cursor;"` (e.g. `"0-0;"`), matching the model.
+fn canonicalize_xautoclaim(result: OperationResult) -> OperationResult {
+    let OperationResult::Array(items) = result else {
+        return result;
+    };
+    let Some(cursor_item) = items.first() else {
+        return OperationResult::Array(items);
+    };
+    let cursor = result_to_string(cursor_item);
+    let ids = match items.get(1) {
+        Some(OperationResult::Array(ids)) => ids
+            .iter()
+            .map(result_to_string)
+            .collect::<Vec<_>>()
+            .join(","),
+        _ => String::new(),
+    };
+    OperationResult::String(Bytes::from(format!("{cursor};{ids}")))
 }
 
 #[cfg(test)]
@@ -631,6 +735,165 @@ mod tests {
         h.record_return_canonical(op, 1, "XREAD", reply);
         let th = h.to_testing_history();
         assert_eq!(last_return_result(&th).unwrap().as_ref(), b"1-1,f,v");
+    }
+
+    #[test]
+    fn xreadgroup_is_canonicalized() {
+        // XREADGROUP shares XREAD's nested shape: [[key, [[id, [f,v]]]]].
+        let mut h = OperationHistory::new();
+        let op = h.record_invoke(
+            1,
+            "XREADGROUP",
+            vec![Bytes::from("GROUP"), Bytes::from("g"), Bytes::from("c")],
+        );
+        let reply = OperationResult::Array(vec![OperationResult::Array(vec![
+            OperationResult::String(Bytes::from("st")),
+            OperationResult::Array(vec![OperationResult::Array(vec![
+                OperationResult::String(Bytes::from("2-1")),
+                OperationResult::Array(vec![
+                    OperationResult::String(Bytes::from("f")),
+                    OperationResult::String(Bytes::from("w")),
+                ]),
+            ])]),
+        ])]);
+        h.record_return_canonical(op, 1, "XREADGROUP", reply);
+        let th = h.to_testing_history();
+        assert_eq!(last_return_result(&th).unwrap().as_ref(), b"2-1,f,w");
+    }
+
+    #[test]
+    fn xreadgroup_nogroup_error_canonicalizes_to_none() {
+        // A NOGROUP error reply must record as None (the model accepts it only
+        // when the group exists; racing per-client behavior is expected).
+        let mut h = OperationHistory::new();
+        let op = h.record_invoke(1, "XREADGROUP", vec![Bytes::from("GROUP")]);
+        let reply = OperationResult::Error("NOGROUP No such consumer group".into());
+        h.record_return_canonical(op, 1, "XREADGROUP", reply);
+        let th = h.to_testing_history();
+        assert_eq!(last_return_result(&th), None);
+    }
+
+    #[test]
+    fn xpending_summary_is_canonicalized() {
+        // [2, "1-1", "2-1", [["c1","2"]]] -> "2|1-1|2-1|c1:2".
+        let mut h = OperationHistory::new();
+        let op = h.record_invoke(1, "XPENDING", vec![Bytes::from("st"), Bytes::from("g")]);
+        let reply = OperationResult::Array(vec![
+            OperationResult::Integer(2),
+            OperationResult::String(Bytes::from("1-1")),
+            OperationResult::String(Bytes::from("2-1")),
+            OperationResult::Array(vec![OperationResult::Array(vec![
+                OperationResult::String(Bytes::from("c1")),
+                OperationResult::String(Bytes::from("2")),
+            ])]),
+        ]);
+        h.record_return_canonical(op, 1, "XPENDING", reply);
+        let th = h.to_testing_history();
+        assert_eq!(last_return_result(&th).unwrap().as_ref(), b"2|1-1|2-1|c1:2");
+    }
+
+    #[test]
+    fn xpending_summary_consumers_sorted() {
+        // Server may report consumers in any order; recorder sorts them.
+        let mut h = OperationHistory::new();
+        let op = h.record_invoke(1, "XPENDING", vec![Bytes::from("st"), Bytes::from("g")]);
+        let reply = OperationResult::Array(vec![
+            OperationResult::Integer(3),
+            OperationResult::String(Bytes::from("1-1")),
+            OperationResult::String(Bytes::from("3-1")),
+            OperationResult::Array(vec![
+                OperationResult::Array(vec![
+                    OperationResult::String(Bytes::from("c2")),
+                    OperationResult::String(Bytes::from("1")),
+                ]),
+                OperationResult::Array(vec![
+                    OperationResult::String(Bytes::from("c1")),
+                    OperationResult::String(Bytes::from("2")),
+                ]),
+            ]),
+        ]);
+        h.record_return_canonical(op, 1, "XPENDING", reply);
+        let th = h.to_testing_history();
+        assert_eq!(
+            last_return_result(&th).unwrap().as_ref(),
+            b"3|1-1|3-1|c1:2,c2:1"
+        );
+    }
+
+    #[test]
+    fn xpending_empty_summary_canonicalizes_to_zero() {
+        // Empty PEL: server returns [0, nil, nil, nil] -> "0".
+        let mut h = OperationHistory::new();
+        let op = h.record_invoke(1, "XPENDING", vec![Bytes::from("st"), Bytes::from("g")]);
+        let reply = OperationResult::Array(vec![
+            OperationResult::Integer(0),
+            OperationResult::Nil,
+            OperationResult::Nil,
+            OperationResult::Nil,
+        ]);
+        h.record_return_canonical(op, 1, "XPENDING", reply);
+        let th = h.to_testing_history();
+        assert_eq!(last_return_result(&th).unwrap().as_ref(), b"0");
+    }
+
+    #[test]
+    fn xclaim_entries_are_canonicalized() {
+        // Flat entry array [[id, [f,v]]] -> "id,f,v".
+        let mut h = OperationHistory::new();
+        let op = h.record_invoke(1, "XCLAIM", vec![Bytes::from("st"), Bytes::from("g")]);
+        let reply = OperationResult::Array(vec![OperationResult::Array(vec![
+            OperationResult::String(Bytes::from("5-0")),
+            OperationResult::Array(vec![
+                OperationResult::String(Bytes::from("f")),
+                OperationResult::String(Bytes::from("v")),
+            ]),
+        ])]);
+        h.record_return_canonical(op, 1, "XCLAIM", reply);
+        let th = h.to_testing_history();
+        assert_eq!(last_return_result(&th).unwrap().as_ref(), b"5-0,f,v");
+    }
+
+    #[test]
+    fn xclaim_empty_canonicalizes_to_none() {
+        // Empty claim (e.g. id 0-0 never in PEL) -> None.
+        let mut h = OperationHistory::new();
+        let op = h.record_invoke(1, "XCLAIM", vec![Bytes::from("st"), Bytes::from("g")]);
+        h.record_return_canonical(op, 1, "XCLAIM", OperationResult::Array(vec![]));
+        let th = h.to_testing_history();
+        assert_eq!(last_return_result(&th), None);
+    }
+
+    #[test]
+    fn xautoclaim_justid_is_canonicalized() {
+        // [cursor, [id, id], [deleted]] -> "cursor;id,id" (deleted ignored).
+        let mut h = OperationHistory::new();
+        let op = h.record_invoke(1, "XAUTOCLAIM", vec![Bytes::from("st"), Bytes::from("g")]);
+        let reply = OperationResult::Array(vec![
+            OperationResult::String(Bytes::from("0-0")),
+            OperationResult::Array(vec![
+                OperationResult::String(Bytes::from("5-0")),
+                OperationResult::String(Bytes::from("6-0")),
+            ]),
+            OperationResult::Array(vec![]),
+        ]);
+        h.record_return_canonical(op, 1, "XAUTOCLAIM", reply);
+        let th = h.to_testing_history();
+        assert_eq!(last_return_result(&th).unwrap().as_ref(), b"0-0;5-0,6-0");
+    }
+
+    #[test]
+    fn xautoclaim_empty_keeps_cursor_shape() {
+        // Empty claim -> "0-0;" (cursor, empty joined) matching the model.
+        let mut h = OperationHistory::new();
+        let op = h.record_invoke(1, "XAUTOCLAIM", vec![Bytes::from("st"), Bytes::from("g")]);
+        let reply = OperationResult::Array(vec![
+            OperationResult::String(Bytes::from("0-0")),
+            OperationResult::Array(vec![]),
+            OperationResult::Array(vec![]),
+        ]);
+        h.record_return_canonical(op, 1, "XAUTOCLAIM", reply);
+        let th = h.to_testing_history();
+        assert_eq!(last_return_result(&th).unwrap().as_ref(), b"0-0;");
     }
 
     #[test]

@@ -21,7 +21,7 @@ impl fmt::Display for StreamId {
 }
 
 /// Parse an explicit `ms` or `ms-seq` id. `*` and unparsable ids return None.
-fn parse_id(bytes: &[u8]) -> Option<StreamId> {
+pub(crate) fn parse_id(bytes: &[u8]) -> Option<StreamId> {
     let s = String::from_utf8_lossy(bytes);
     if s == "*" {
         return None;
