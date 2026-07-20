@@ -63,7 +63,7 @@ pub mod workload;
 pub use checker::{LinearizabilityResult, check_linearizability, check_linearizability_bounded};
 pub use conservation::{
     ConservationViolation, check_exactly_once_delivery, check_fifo_wake_order,
-    check_tx_sum_conservation, check_watch_no_false_negative,
+    check_pel_conservation, check_tx_sum_conservation, check_watch_no_false_negative,
 };
 pub use history::{History, OpKind, Operation};
 pub use models::{

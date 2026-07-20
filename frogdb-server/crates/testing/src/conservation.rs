@@ -75,6 +75,37 @@ pub enum ConservationViolation {
         /// The earlier waiter it jumped ahead of.
         waiter: u64,
     },
+    /// A stream entry is reported pending for two different consumers at once.
+    #[error("PEL entry {id:?} double-owned: consumers {a:?} and {b:?} (op {op})")]
+    PelDoubleOwned {
+        /// The double-owned entry id.
+        id: String,
+        /// One reported owner.
+        a: String,
+        /// The other reported owner.
+        b: String,
+        /// The op id of the XPENDING summary that exposed the contradiction.
+        op: u64,
+    },
+    /// A stream entry was acked yet later reported still pending.
+    #[error("PEL entry {id:?} acked by op {ack_op} but reported pending by op {pending_op}")]
+    PelAckedButPending {
+        /// The entry id.
+        id: String,
+        /// Op id of the XACK.
+        ack_op: u64,
+        /// Op id of the later read that still reported it pending.
+        pending_op: u64,
+    },
+    /// An XADD'd stream entry was skipped over: a later `>` read delivered a
+    /// higher id while this entry was never delivered, PEL'd, or acked.
+    #[error("stream entry {id:?} (added by op {added_by}) was lost (skipped by a later '>' read)")]
+    StreamEntryLost {
+        /// The lost entry id.
+        id: String,
+        /// Op id of the XADD that introduced it.
+        added_by: u64,
+    },
 }
 
 /// Every pushed element is delivered to exactly one popper XOR present at
@@ -500,6 +531,171 @@ pub fn check_watch_no_false_negative(history: &History) -> Result<(), Conservati
     Ok(())
 }
 
+/// PEL conservation for consumer-group streams. Scans the whole history:
+/// (i) no entry pending for two consumers at once (partial — see note below);
+/// (ii) no entry both acked and later reported pending; (iii) no entry skipped:
+/// a `>` read that starts after an entry's XADD completes and delivers a
+/// HIGHER id must have delivered (or previously delivered/acked) that entry —
+/// `>` delivers in id order, so a higher id with the entry absent everywhere
+/// means the server lost it. Entries added after the last read are
+/// legitimately undelivered and are NOT flagged. Delivery-count monotonicity
+/// is unobservable with summary-form XPENDING; deferred to Phase-4b's
+/// extended-form vocabulary.
+///
+/// Double-ownership detection is necessarily partial: XPENDING's summary
+/// form (`total|min|max|consumer:n,…`) gives a total count, an id *range*,
+/// and per-consumer counts, but never the full id list, so most
+/// double-ownership is invisible to it. The one self-contradiction it can
+/// expose is a degenerate range (`min == max`, i.e. exactly one distinct id
+/// in range) whose total exceeds 1: that single id cannot legitimately be
+/// pending more than once, so such a summary is direct proof it is
+/// multiply-owned.
+pub fn check_pel_conservation(history: &History) -> Result<(), ConservationViolation> {
+    let ops = history.completed_operations();
+
+    // Parse "id,f,v|..." into the entry ids it delivered.
+    fn delivered_ids(r: &Bytes) -> Vec<String> {
+        String::from_utf8_lossy(r)
+            .split('|')
+            .filter(|e| !e.is_empty())
+            .filter_map(|e| e.split(',').next().map(str::to_string))
+            .collect()
+    }
+
+    // "ms-seq" -> (ms, seq) for order comparison.
+    fn id_tuple(s: &str) -> Option<(u64, u64)> {
+        let (ms, seq) = s.split_once('-')?;
+        Some((ms.parse().ok()?, seq.parse().ok()?))
+    }
+
+    // A "c:n" consumer:count token -> just the consumer name.
+    fn consumer_name(tok: &str) -> String {
+        tok.rsplit_once(':')
+            .map_or(tok, |(name, _)| name)
+            .to_string()
+    }
+
+    let mut added: HashMap<String, u64> = HashMap::new(); // id -> add op
+    let mut ever_pending: HashSet<String> = HashSet::new();
+    let mut acked: HashMap<String, u64> = HashMap::new(); // id -> ack op
+
+    for op in &ops {
+        match op.function.as_str() {
+            "xadd" => {
+                if let Some(r) = &op.result {
+                    added
+                        .entry(String::from_utf8_lossy(r).to_string())
+                        .or_insert(op.id);
+                }
+            }
+            "xreadgroup" | "xclaim" => {
+                if let Some(r) = &op.result {
+                    for id in delivered_ids(r) {
+                        ever_pending.insert(id);
+                    }
+                }
+            }
+            "xack" => {
+                for id_arg in op.args.iter().skip(2) {
+                    acked
+                        .entry(String::from_utf8_lossy(id_arg).to_string())
+                        .or_insert(op.id);
+                }
+            }
+            "xpending" => {
+                if let Some(r) = &op.result {
+                    let s = String::from_utf8_lossy(r);
+                    if s != "0" {
+                        let fields: Vec<&str> = s.split('|').collect();
+                        if fields.len() >= 4 {
+                            let total: usize = fields[0].parse().unwrap_or(0);
+                            let (min, max) = (fields[1], fields[2]);
+                            if min == max && total > 1 {
+                                let mut names = fields[3].split(',').map(consumer_name);
+                                let a = names.next().unwrap_or_default();
+                                let b = names.next().unwrap_or_else(|| a.clone());
+                                return Err(ConservationViolation::PelDoubleOwned {
+                                    id: min.to_string(),
+                                    a,
+                                    b,
+                                    op: op.id,
+                                });
+                            }
+                            // Summary form only exposes the range endpoints,
+                            // not the full pending set, so only min/max are
+                            // known to be pending as of this observation.
+                            ever_pending.insert(min.to_string());
+                            ever_pending.insert(max.to_string());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // (ii) acked-but-pending: an id present in a re-read AFTER its ack.
+    for op in &ops {
+        if op.function == "xreadgroup"
+            && let Some(r) = &op.result
+        {
+            for id in delivered_ids(r) {
+                if let Some(&ack_op) = acked.get(&id) {
+                    let ack_return = ops
+                        .iter()
+                        .find(|o| o.id == ack_op)
+                        .map_or(u64::MAX, |o| o.return_time);
+                    if op.invoke_time > ack_return {
+                        return Err(ConservationViolation::PelAckedButPending {
+                            id,
+                            ack_op,
+                            pending_op: op.id,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // (iii) nothing skipped: an entry absent from every delivery/PEL/ack while
+    // a `>` read that STARTED after its add COMPLETED delivered a HIGHER id.
+    // Restricted to `>` reads: a "0" re-read shows old PEL entries whose
+    // delivery may predate this add, which implies nothing about a skip.
+    //
+    // Note: a `>` read with COUNT truncates the *tail* of the in-order
+    // delivery, never the middle, so COUNT cannot cause a false skip.
+    // Entries added after the last `>` read are never flagged (no later
+    // read exists to compare against).
+    for (id, add_op) in &added {
+        if ever_pending.contains(id) || acked.contains_key(id) {
+            continue;
+        }
+        let Some(eid) = id_tuple(id) else { continue };
+        let add_return = ops
+            .iter()
+            .find(|o| o.id == *add_op)
+            .map_or(u64::MAX, |o| o.return_time);
+        let skipped = ops.iter().any(|o| {
+            o.function == "xreadgroup"
+                && o.args.last().is_some_and(|a| a.as_ref() == b">")
+                && o.invoke_time > add_return
+                && o.result.as_ref().is_some_and(|r| {
+                    delivered_ids(r)
+                        .iter()
+                        .any(|d| id_tuple(d).is_some_and(|dt| dt > eid))
+                })
+        });
+        if skipped {
+            return Err(ConservationViolation::StreamEntryLost {
+                id: id.clone(),
+                added_by: *add_op,
+            });
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -887,6 +1083,69 @@ mod tests {
         let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
         h.respond(e, Some(b("OK")));
         assert!(check_watch_no_false_negative(&h).is_ok());
+    }
+
+    fn group_history() -> History {
+        // XADD 1-1 ; XGROUP CREATE ; XREADGROUP > (c1 owns 1-1, dc=1) ; XACK 1-1
+        let mut h = History::new();
+        let a = h.invoke(1, "xadd", vec![b("st"), b("1-1"), b("f"), b("v")]);
+        h.respond(a, Some(b("1-1")));
+        let g = h.invoke(1, "xgroup", vec![b("CREATE"), b("st"), b("g"), b("0")]);
+        h.respond(g, Some(b("OK")));
+        let r = h.invoke(
+            2,
+            "xreadgroup",
+            vec![b("GROUP"), b("g"), b("c1"), b("STREAMS"), b("st"), b(">")],
+        );
+        h.respond(r, Some(b("1-1,f,v")));
+        h
+    }
+
+    #[test]
+    fn pel_ok_when_delivered_then_acked() {
+        let mut h = group_history();
+        let ack = h.invoke(2, "xack", vec![b("st"), b("g"), b("1-1")]);
+        h.respond(ack, Some(b("1")));
+        assert!(check_pel_conservation(&h).is_ok());
+    }
+
+    #[test]
+    fn pel_detects_acked_but_still_pending() {
+        let mut h = group_history();
+        let ack = h.invoke(2, "xack", vec![b("st"), b("g"), b("1-1")]);
+        h.respond(ack, Some(b("1")));
+        // A later re-read reports 1-1 still pending for c1 -> both acked & pending.
+        let rr = h.invoke(
+            2,
+            "xreadgroup",
+            vec![b("GROUP"), b("g"), b("c1"), b("STREAMS"), b("st"), b("0")],
+        );
+        h.respond(rr, Some(b("1-1,f,v")));
+        assert!(matches!(
+            check_pel_conservation(&h),
+            Err(ConservationViolation::PelAckedButPending { .. })
+        ));
+    }
+
+    #[test]
+    fn pel_detects_double_owned() {
+        // 1-1 claimed to two consumers concurrently reported as pending for both.
+        let mut h = group_history();
+        let c1 = h.invoke(2, "xpending", vec![b("st"), b("g")]);
+        h.respond(c1, Some(b("1|1-1|1-1|c1:1")));
+        // A claim moves 1-1 to c2, but a stale reader still sees c1 owning it too.
+        let cl = h.invoke(
+            3,
+            "xclaim",
+            vec![b("st"), b("g"), b("c2"), b("0"), b("1-1")],
+        );
+        h.respond(cl, Some(b("1-1,f,v")));
+        let p2 = h.invoke(3, "xpending", vec![b("st"), b("g")]);
+        h.respond(p2, Some(b("2|1-1|1-1|c1:1,c2:1"))); // two owners of the same id
+        assert!(matches!(
+            check_pel_conservation(&h),
+            Err(ConservationViolation::PelDoubleOwned { .. })
+        ));
     }
 
     #[test]
