@@ -40,10 +40,17 @@ impl WalEffectKind {
     fn is_write(self) -> bool {
         matches!(
             self,
-            WalEffectKind::Set | WalEffectKind::Merge | WalEffectKind::Delete | WalEffectKind::Clear
+            WalEffectKind::Set
+                | WalEffectKind::Merge
+                | WalEffectKind::Delete
+                | WalEffectKind::Clear
         )
     }
 }
+
+/// Predicate deciding whether a write should be failed, given its 0-based
+/// write-index and optional key.
+pub type FailurePredicate = Arc<dyn Fn(usize, Option<&[u8]>) -> bool + Send + Sync>;
 
 /// Injectable failure: fail the Nth write, or any write matching a predicate.
 #[derive(Clone)]
@@ -54,7 +61,7 @@ pub enum FakeFailure {
     /// EXECABORT persist-failure branch.
     AtWriteIndex(usize),
     /// Fail every write for which the predicate (write_index, key) is true.
-    Predicate(Arc<dyn Fn(usize, Option<&[u8]>) -> bool + Send + Sync>),
+    Predicate(FailurePredicate),
 }
 
 impl FakeFailure {
@@ -87,13 +94,13 @@ impl FakeWalLog {
         let effects = self.effects();
         let mut last: Option<&RecordedWalEffect> = None;
         for e in effects.iter().filter(|e| e.kind.is_write()) {
-            if let Some(prev) = last {
-                if e.order <= prev.order {
-                    return Err(format!(
-                        "out-of-order WAL writes: {:?} (order {}) not after {:?} (order {})",
-                        e.kind, e.order, prev.kind, prev.order
-                    ));
-                }
+            if let Some(prev) = last
+                && e.order <= prev.order
+            {
+                return Err(format!(
+                    "out-of-order WAL writes: {:?} (order {}) not after {:?} (order {})",
+                    e.kind, e.order, prev.kind, prev.order
+                ));
             }
             last = Some(e);
         }
