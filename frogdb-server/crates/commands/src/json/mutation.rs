@@ -28,6 +28,7 @@ impl Command for JsonClearCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -62,6 +63,7 @@ impl Command for JsonToggleCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -99,6 +101,7 @@ impl Command for JsonMergeCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC

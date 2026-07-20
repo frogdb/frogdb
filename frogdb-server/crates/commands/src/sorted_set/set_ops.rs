@@ -144,6 +144,7 @@ impl Command for ZunionCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -227,6 +228,7 @@ impl Command for ZunionstoreCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -310,6 +312,7 @@ impl Command for ZinterCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -415,6 +418,7 @@ impl Command for ZinterstoreCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -527,6 +531,7 @@ impl Command for ZintercardCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -627,6 +632,7 @@ impl Command for ZdiffCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -716,6 +722,7 @@ impl Command for ZdiffstoreCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC

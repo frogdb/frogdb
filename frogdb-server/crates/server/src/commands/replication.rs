@@ -39,6 +39,7 @@ impl Command for ReplicaofCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -157,6 +158,7 @@ impl Command for SlaveofCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -197,6 +199,7 @@ impl Command for ReplconfCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -368,6 +371,7 @@ impl Command for PsyncCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Replication),
         };
         &SPEC
@@ -503,6 +507,7 @@ impl Command for WaitCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -555,6 +560,7 @@ impl Command for RoleCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC

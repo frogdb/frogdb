@@ -43,6 +43,7 @@ impl Command for BlpopCommand {
             event: EventSpec::Dynamic,
             requires_same_slot: true, // All keys must be in the same shard,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Blocking {
                 default_timeout: None,
             },
@@ -124,6 +125,7 @@ impl Command for BrpopCommand {
             event: EventSpec::Dynamic,
             requires_same_slot: true,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Blocking {
                 default_timeout: None,
             },
@@ -207,6 +209,7 @@ impl Command for BlmoveCommand {
             event: EventSpec::Dynamic,
             requires_same_slot: true, // Source and destination must be in same shard,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Blocking {
                 default_timeout: None,
             },
@@ -326,6 +329,7 @@ impl Command for BlmpopCommand {
             event: EventSpec::Dynamic,
             requires_same_slot: true,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Blocking {
                 default_timeout: None,
             },
@@ -458,6 +462,7 @@ impl Command for BzpopminCommand {
             event: EventSpec::Dynamic,
             requires_same_slot: true,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Blocking {
                 default_timeout: None,
             },
@@ -541,6 +546,7 @@ impl Command for BzpopmaxCommand {
             event: EventSpec::Dynamic,
             requires_same_slot: true,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Blocking {
                 default_timeout: None,
             },
@@ -627,6 +633,7 @@ impl Command for BzmpopCommand {
             event: EventSpec::Dynamic,
             requires_same_slot: true,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Blocking {
                 default_timeout: None,
             },
@@ -768,6 +775,7 @@ impl Command for BrpoplpushCommand {
             event: EventSpec::Dynamic,
             requires_same_slot: true,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Blocking {
                 default_timeout: None,
             },

@@ -672,6 +672,7 @@ mod tests {
                 event: EventSpec::NotApplicable,
                 requires_same_slot: false,
                 lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
                 strategy: ExecutionStrategy::Standard,
             };
             &SPEC
@@ -706,6 +707,7 @@ mod tests {
                 event: EventSpec::Suppressed,
                 requires_same_slot: false,
                 lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
                 strategy: crate::command::ExecutionStrategy::Standard,
             };
             &SPEC
@@ -745,6 +747,7 @@ mod tests {
                 event: EventSpec::NotApplicable,
                 requires_same_slot: false,
                 lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
                 strategy: ExecutionStrategy::ServerWide(ServerWideOp::DbSize),
             };
             &SPEC

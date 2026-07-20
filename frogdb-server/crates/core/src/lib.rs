@@ -67,9 +67,9 @@ pub use cluster::{
 pub use command::Command as ShardCommand;
 pub use command::{
     Arity, ClusterContextRef, Command, CommandContext, CommandContextCore, CommandFlags,
-    ConnectionLevelOp, ExecutionStrategy, KeyAccessFlag, ListpackConfig, QuorumChecker,
-    ReplicationContextRef, RoleController, ScatterGatherOp, ServerWideOp, WaiterKind, WaiterWake,
-    WalAction, WalStrategy,
+    ConnMutation, ConnectionLevelOp, ExecutionStrategy, KeyAccessFlag, ListpackConfig,
+    QuorumChecker, ReplicationContextRef, RoleController, ScatterGatherOp, ServerWideOp,
+    WaiterKind, WaiterWake, WalAction, WalStrategy,
 };
 pub use command_spec::{
     AccessSpec, CommandSpec, EventSpec, KeySpec, LookupOutcome, LookupSpec, SpecError,

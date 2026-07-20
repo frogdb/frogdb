@@ -30,6 +30,7 @@ impl Command for PingCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -60,6 +61,7 @@ impl Command for EchoCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -89,6 +91,7 @@ impl Command for QuitCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -121,6 +124,7 @@ impl Command for CommandCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -453,6 +457,7 @@ impl Command for GetCommand {
             requires_same_slot: false,
             // Keyspace hit/miss counted at the seam from `args[0]` existence.
             lookup: LookupSpec::FirstKey,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -492,6 +497,7 @@ impl Command for SetCommand {
             event: EventSpec::Emits { class: KeyspaceEventFlags::STRING, name: "set" },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -772,6 +778,7 @@ impl Command for DelCommand {
             event: EventSpec::Emits { class: KeyspaceEventFlags::GENERIC, name: "del" },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::ScatterGather(ScatterGatherOp::Del),
         };
         &SPEC
@@ -836,6 +843,7 @@ impl Command for ExistsCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::EveryKey,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::ScatterGather(ScatterGatherOp::Exists),
         };
         &SPEC

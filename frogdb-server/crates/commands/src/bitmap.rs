@@ -37,6 +37,7 @@ impl Command for SetbitCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -107,6 +108,7 @@ impl Command for GetbitCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -150,6 +152,7 @@ impl Command for BitcountCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -233,6 +236,7 @@ impl Command for BitopCommand {
             event: EventSpec::Dynamic,
             requires_same_slot: true,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -310,6 +314,7 @@ impl Command for BitposCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -397,6 +402,7 @@ impl Command for BitfieldCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -464,6 +470,7 @@ impl Command for BitfieldRoCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC

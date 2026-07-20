@@ -1111,6 +1111,7 @@ mod scatter_effect_tests {
                 },
                 requires_same_slot: false,
                 lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
                 strategy: crate::command::ExecutionStrategy::Standard,
             };
             &SPEC
@@ -1143,6 +1144,7 @@ mod scatter_effect_tests {
                 },
                 requires_same_slot: false,
                 lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
                 strategy: crate::command::ExecutionStrategy::Standard,
             };
             &SPEC
@@ -1635,6 +1637,7 @@ mod command_effects_tests {
                 event: EventSpec::Dynamic,
                 requires_same_slot: false,
                 lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
                 strategy: crate::command::ExecutionStrategy::Standard,
             };
             &SPEC

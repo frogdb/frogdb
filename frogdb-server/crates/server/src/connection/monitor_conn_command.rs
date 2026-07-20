@@ -19,7 +19,7 @@
 //! migrated connection commands. Dispatch builds a `ConnCtx` whose `monitor`
 //! field holds `Some(&mut monitor_io)` and whose other fields are placeholders
 //! (MONITOR reads none of them), mirroring
-//! [`ConnectionHandler::conn_ctx_authmut`].
+//! [`ConnectionHandler::conn_ctx_for`].
 
 use std::sync::Arc;
 
@@ -93,6 +93,7 @@ static MONITOR_SPEC: CommandSpec = CommandSpec {
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
     lookup: LookupSpec::None,
+    mutation: frogdb_core::ConnMutation::Monitor,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin),
 };
 
@@ -138,7 +139,7 @@ impl ConnectionHandler {
     ///
     /// `command` is the `'static` executor already resolved from the registry,
     /// so it does not conflict with the `&mut self` borrows the [`ConnCtx`]
-    /// takes. The `ConnCtx` mirrors [`conn_ctx_authmut`](Self::conn_ctx_authmut):
+    /// takes. The `ConnCtx` mirrors [`conn_ctx_for`](Self::conn_ctx_for):
     /// MONITOR reads only `ConnCtx::monitor`, so the ambient view's defaults
     /// stand for everything else.
     pub(crate) async fn execute_monitor(

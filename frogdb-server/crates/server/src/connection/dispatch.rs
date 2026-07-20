@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use frogdb_core::{ConnectionLevelOp, ExecutionStrategy, ServerWideOp};
+use frogdb_core::{ConnMutation, ExecutionStrategy, ServerWideOp};
 use frogdb_protocol::Response;
 use tracing::Instrument;
 
@@ -25,11 +25,10 @@ use crate::connection::conn_command::ConnectionCommand;
 ///   `ClusterSlotValidation`, `MigratingTryAgain`) are pure decisions over the
 ///   socketless [`PreDispatchView`](crate::connection::guards::PreDispatchView).
 /// - **Dispatch stages** (`PreAuthIntercept`, `ResetIntercept`,
-///   `TransactionControl`, `PauseGate`, `ConnectionStateCommand`,
-///   `ConnectionCommand`, `PsyncIntercept`, `WaitIntercept`, `ServerWide`,
-///   `ClusterSlotSubcommand`, `Execute`) terminate into a command executor that
-///   needs the full handler; their arms are thin adapters over the unchanged
-///   executors.
+///   `TransactionControl`, `PauseGate`, `ConnectionCommand`, `PsyncIntercept`,
+///   `WaitIntercept`, `ServerWide`, `ClusterSlotSubcommand`, `Execute`)
+///   terminate into a command executor that needs the full handler; their arms
+///   are thin adapters over the unchanged executors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DispatchStage {
     /// AUTH/HELLO, before the NOAUTH check.
@@ -48,9 +47,7 @@ pub(crate) enum DispatchStage {
     Arity,
     /// CLIENT PAUSE wait, after queuing.
     PauseGate,
-    /// ASKING/READONLY/READWRITE (mutable seam).
-    ConnectionStateCommand,
-    /// CONFIG/CLIENT/INFO/… registry union.
+    /// CONFIG/CLIENT/INFO/ASKING/… registry union (capability from the spec).
     ConnectionCommand,
     /// PSYNC handoff signal.
     PsyncIntercept,
@@ -72,7 +69,7 @@ pub(crate) enum DispatchStage {
 /// gauntlet's sequence; [`ConnectionHandler::route_and_execute_with_transaction`]
 /// iterates this array. `Execute` is last and is the only stage that never
 /// returns [`StageOutcome::Continue`], which is what makes the driver loop total.
-pub(crate) const PRE_DISPATCH_ORDER: [DispatchStage; 17] = [
+pub(crate) const PRE_DISPATCH_ORDER: [DispatchStage; 16] = [
     DispatchStage::PreAuthIntercept,
     DispatchStage::PreChecks,
     DispatchStage::ResetIntercept,
@@ -81,7 +78,6 @@ pub(crate) const PRE_DISPATCH_ORDER: [DispatchStage; 17] = [
     DispatchStage::TransactionQueue,
     DispatchStage::Arity,
     DispatchStage::PauseGate,
-    DispatchStage::ConnectionStateCommand,
     DispatchStage::ConnectionCommand,
     DispatchStage::PsyncIntercept,
     DispatchStage::WaitIntercept,
@@ -106,9 +102,15 @@ pub(crate) enum StageOutcome {
 impl ConnectionHandler {
     /// Dispatch a command registered as [`frogdb_core::CommandImpl::Connection`]
     /// through its connection-level executor, returning `Some(responses)` if it
-    /// was handled. Returns `None` for any command that is not a migrated
-    /// connection command, so unmigrated groups fall through to the legacy
-    /// router→handler path.
+    /// was handled. Returns `None` for any command not registered as a connection
+    /// executor (shard `Standard`/`Blocking`/scatter/server-wide commands), which
+    /// then continues down the gauntlet to its own dispatch stage.
+    ///
+    /// This is the single builder-selection site for connection commands: the
+    /// `ConnCtx` capability wiring is chosen from the command's declared
+    /// [`ConnMutation`](frogdb_core::ConnMutation) (its `CommandSpec.mutation`),
+    /// so no command name is consulted here — the former `cmd_name == "CLIENT"` /
+    /// `"MONITOR"` special-cases and the PubSub-by-strategy `matches!` are gone.
     ///
     /// The `Connection` variant holds a `&'static dyn ConnectionCommand`, so the
     /// executor reference outlives the transient registry borrow and does not
@@ -119,37 +121,31 @@ impl ConnectionHandler {
         args: &[Bytes],
     ) -> Option<Vec<Response>> {
         let command = self.core.registry.get_entry(cmd_name)?.as_connection()?;
-        // Pub/sub (SUBSCRIBE/…/PUBSUB) emits one reply per channel and needs the
-        // connection-local pub/sub machinery (subscription set + lazy channel +
-        // cluster routing + scatter-gather introspection), so it dispatches
-        // through the multi-response seam (`execute_multi`) over a dedicated
-        // `ConnCtx::pubsub` view. `command` is `'static`, so reading its spec
-        // does not conflict with re-borrowing `self` to build that view.
-        if matches!(
-            command.spec().strategy,
-            ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub)
-        ) {
-            return Some(self.execute_pubsub(command, args).await);
-        }
-        // CLIENT mutates per-connection state (name/reply/tracking/caching) and
-        // drives tracking IO, so it dispatches through the mutable builder that
-        // populates `conn_state` and `tracking`. All other connection commands
-        // are pure reads and use the shared `conn_ctx`. `as_connection()` yields
-        // a `'static` reference, so it does not conflict with re-borrowing `self`.
-        if cmd_name == "CLIENT" {
-            return Some(vec![
-                command.execute(&mut self.conn_ctx_clientmut(), args).await,
-            ]);
-        }
-        // MONITOR registers the connection as a monitor: it mutates the
-        // connection-local monitor receiver and reads the broadcaster, so it
-        // dispatches through the dedicated builder that populates
-        // `ConnCtx::monitor`. `command` is `'static`, so it does not conflict
-        // with re-borrowing `self` to build that view.
-        if cmd_name == "MONITOR" {
-            return Some(vec![self.execute_monitor(command, args).await]);
-        }
-        Some(vec![command.execute(&mut self.conn_ctx(), args).await])
+        // The command declares the connection-local mutable capabilities its
+        // `ConnCtx` needs via its `CommandSpec` (`mutation`), so the builder is
+        // selected from this datum — never from the command's string name. This
+        // one `match` over `spec().mutation` replaces the former
+        // `matches!(strategy, …PubSub)` plus the `cmd_name == "CLIENT"` /
+        // `cmd_name == "MONITOR"` special-cases: dispatch no longer knows any
+        // command's name. `command` is `'static`, so reading its spec does not
+        // conflict with re-borrowing `self` to build the view.
+        Some(match command.spec().mutation {
+            // Pub/sub (one reply per channel) and MONITOR both own a
+            // disjoint-borrow `Io` bundle that must outlive the `ConnCtx`, so
+            // they are built at these call sites rather than in `conn_ctx_for`;
+            // both are still selected from the declared capability, not the name.
+            ConnMutation::PubSub => self.execute_pubsub(command, args).await,
+            ConnMutation::Monitor => vec![self.execute_monitor(command, args).await],
+            // Read-only (CONFIG/INFO/DEBUG/…), AUTH-class (ASKING/READONLY/
+            // READWRITE), and CLIENT views build in place via the unified builder.
+            // `execute_multi` is the uniform seam: its default wraps the single
+            // response in a one-element `Vec`, so single-response commands are
+            // unchanged.
+            mutation @ (ConnMutation::None | ConnMutation::Auth | ConnMutation::Client) => {
+                let mut ctx = self.conn_ctx_for(mutation);
+                command.execute_multi(&mut ctx, args).await
+            }
+        })
     }
 
     /// Execute a server-wide command by its typed op. The exhaustive match is
@@ -231,35 +227,6 @@ impl ConnectionHandler {
         }
     }
 
-    /// Dispatch a connection-state command (ASKING/READONLY/READWRITE) migrated
-    /// behind the ConnCtx seam. Unlike the read-only registry-union
-    /// [`dispatch_connection_command`](Self::dispatch_connection_command), these
-    /// **mutate** per-connection state, so they dispatch through the *mutable*
-    /// [`conn_ctx_authmut`](Self::conn_ctx_authmut) view (`conn_state = Some`).
-    ///
-    /// Scoped to the `ConnectionState` strategy so it only claims these commands
-    /// and leaves the read-only migrated connection commands (CONFIG, INFO, ...)
-    /// to the read-only union below. RESET is *not* handled here — it needs a
-    /// handler-local teardown the seam cannot reach and is intercepted earlier
-    /// via [`execute_reset`](Self::execute_reset).
-    async fn dispatch_connection_state_command(
-        &mut self,
-        cmd_name: &str,
-        args: &[Bytes],
-    ) -> Option<Vec<Response>> {
-        let entry = self.core.registry.get_entry(cmd_name)?;
-        if !matches!(
-            entry.execution_strategy(),
-            ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::ConnectionState)
-        ) {
-            return None;
-        }
-        let command = entry.as_connection()?;
-        Some(vec![
-            command.execute(&mut self.conn_ctx_authmut(), args).await,
-        ])
-    }
-
     /// Execute RESET (migrated behind the ConnCtx seam) plus the handler-local
     /// teardown the seam cannot reach.
     ///
@@ -270,9 +237,15 @@ impl ConnectionHandler {
     /// down the tracking session's local plumbing (invalidation channels +
     /// redirect forwarder) — touch `ConnectionHandler` fields absent from the
     /// `ConnCtx`, so they are done here, matching the old `handle_reset`.
+    ///
+    /// The `ConnCtx` is built from the RESET command's declared capability
+    /// ([`ConnMutation::Auth`] → `conn_state = Some`), like every other mutating
+    /// connection command.
     pub(crate) async fn execute_reset(&mut self, args: &[Bytes]) -> Response {
-        let response = crate::connection::connection_state_conn_command::RESET_CONN_COMMAND
-            .execute(&mut self.conn_ctx_authmut(), args)
+        let command = &crate::connection::connection_state_conn_command::RESET_CONN_COMMAND;
+        let mutation = command.spec().mutation;
+        let response = command
+            .execute(&mut self.conn_ctx_for(mutation), args)
             .await;
         self.tracking_session_teardown_local();
         self.monitor_rx = None;
@@ -332,9 +305,10 @@ impl ConnectionHandler {
             // negotiate the protocol. They are migrated behind the ConnCtx seam
             // (registered as CommandImpl::Connection executors) but intercepted
             // here — before the NOAUTH pre-check and before transaction queuing —
-            // and dispatched through the *mutable* `conn_ctx_authmut` view (they
-            // change auth / protocol state). This preserves the historical
-            // pre-auth ordering.
+            // to preserve the historical pre-auth *ordering*. The name match
+            // decides only *when* to dispatch; the *how* (which ConnCtx builder)
+            // still comes from the command's declared `mutation`
+            // (`ConnMutation::Auth` → `conn_state = Some`), never from the name.
             DispatchStage::PreAuthIntercept => {
                 if cmd_name == "AUTH" || cmd_name == "HELLO" {
                     let command = self
@@ -343,9 +317,10 @@ impl ConnectionHandler {
                         .get_entry(cmd_name)
                         .and_then(|entry| entry.as_connection())
                         .expect("AUTH/HELLO are registered as connection commands");
+                    let mutation = command.spec().mutation;
                     return StageOutcome::ShortCircuit(vec![
                         command
-                            .execute(&mut self.conn_ctx_authmut(), &cmd.args)
+                            .execute(&mut self.conn_ctx_for(mutation), &cmd.args)
                             .await,
                     ]);
                 }
@@ -443,26 +418,15 @@ impl ConnectionHandler {
                 StageOutcome::Continue
             }
 
-            // Connection-state commands (ASKING/READONLY/READWRITE) migrated
-            // behind the ConnCtx seam MUTATE per-connection state, so they
-            // dispatch through the *mutable* `conn_ctx_authmut` view. This must
-            // run before the read-only registry union below, which would otherwise
-            // claim them and dispatch with `conn_state = None` (a no-op).
-            DispatchStage::ConnectionStateCommand => {
-                match self
-                    .dispatch_connection_state_command(cmd_name, &cmd.args)
-                    .await
-                {
-                    Some(responses) => StageOutcome::ShortCircuit(responses),
-                    None => StageOutcome::Continue,
-                }
-            }
-
             // Registry-union dispatch: a command registered as
             // `CommandImpl::Connection` (CONFIG, BGSAVE/LASTSAVE, CLIENT, DEBUG,
             // MONITOR, ACL, INFO, HOTKEYS, FT.CURSOR, SLOWLOG, MEMORY, LATENCY,
-            // STATUS, the pub/sub family, and the scripting family) executes
-            // through its `ConnCtx` executor. This is the sole connection-command
+            // STATUS, ASKING/READONLY/READWRITE, the pub/sub family, and the
+            // scripting family) executes through its `ConnCtx` executor. The
+            // `ConnCtx` builder is selected from each command's declared
+            // `mutation` capability, so the mutating connection-state commands
+            // (ASKING/READONLY/READWRITE → `conn_state = Some`) no longer need a
+            // separate earlier stage — this is the sole connection-command
             // dispatch path.
             DispatchStage::ConnectionCommand => {
                 match self.dispatch_connection_command(cmd_name, &cmd.args).await {
@@ -659,7 +623,6 @@ mod tests {
             TransactionQueue,
             Arity,
             PauseGate,
-            ConnectionStateCommand,
             ConnectionCommand,
             PsyncIntercept,
             WaitIntercept,
@@ -675,7 +638,7 @@ mod tests {
                 "{stage:?} must appear exactly once in PRE_DISPATCH_ORDER"
             );
         }
-        assert_eq!(PRE_DISPATCH_ORDER.len(), 17);
+        assert_eq!(PRE_DISPATCH_ORDER.len(), 16);
     }
 
     /// The must-precede relation as data: each pair `(a, b)` asserts stage `a`
@@ -700,7 +663,6 @@ mod tests {
             (PreChecks, ResetIntercept),
             // Pre-checks (auth/replica/quorum/ACL) front every stage that
             // dispatches to or executes a command.
-            (PreChecks, ConnectionStateCommand),
             (PreChecks, ConnectionCommand),
             (PreChecks, ServerWide),
             (PreChecks, Execute),
@@ -711,9 +673,6 @@ mod tests {
             (Arity, PauseGate),
             // Queued MULTI commands must not block on pause.
             (TransactionQueue, PauseGate),
-            // Mutable connection-state seam (ASKING/READONLY/READWRITE) is
-            // recognized before the general connection-command union.
-            (ConnectionStateCommand, ConnectionCommand),
             // Queued commands slot-validate at queue time; the standalone
             // slot-validation stage runs later on the non-transaction path.
             (TransactionQueue, ClusterSlotValidation),
@@ -772,6 +731,88 @@ mod tests {
                 }
                 seen.push((op, name.to_string()));
             }
+        }
+    }
+
+    /// Every connection command declares the [`ConnMutation`] capability the
+    /// dispatcher selects its `ConnCtx` builder from — pinned here as data so a
+    /// migrated command silently drifting to the wrong capability (which would
+    /// wire the wrong `ConnCtx` slots — e.g. CLIENT losing `tracking`, or
+    /// ASKING losing `conn_state`) fails this test rather than misbehaving at
+    /// runtime. Mirrors the `*_ops_are_unique_per_command` registry-iteration
+    /// style, and is the data-driven guard `dispatch_connection_command` relies
+    /// on now that it consults `spec().mutation` instead of the command name.
+    ///
+    /// Also asserts each spec's `validate()` passes, exercising the
+    /// mutation↔strategy cross-check ([`SpecError::ConnMutationStrategyMismatch`]).
+    #[test]
+    fn connection_commands_declare_expected_mutation() {
+        use frogdb_core::ConnMutation;
+
+        let mut registry = CommandRegistry::new();
+        crate::register_commands(&mut registry);
+
+        // (command name, expected declared capability).
+        let expected: &[(&str, ConnMutation)] = &[
+            // Auth-class: mutate per-connection auth/protocol/transaction state.
+            ("AUTH", ConnMutation::Auth),
+            ("HELLO", ConnMutation::Auth),
+            ("RESET", ConnMutation::Auth),
+            ("ASKING", ConnMutation::Auth),
+            ("READONLY", ConnMutation::Auth),
+            ("READWRITE", ConnMutation::Auth),
+            ("MULTI", ConnMutation::Auth),
+            ("EXEC", ConnMutation::Auth),
+            ("DISCARD", ConnMutation::Auth),
+            ("WATCH", ConnMutation::Auth),
+            ("UNWATCH", ConnMutation::Auth),
+            // CLIENT: conn_state + tracking IO.
+            ("CLIENT", ConnMutation::Client),
+            // MONITOR: monitor receiver.
+            ("MONITOR", ConnMutation::Monitor),
+            // Pub/sub family: multi-response over the pub/sub machinery.
+            ("SUBSCRIBE", ConnMutation::PubSub),
+            ("UNSUBSCRIBE", ConnMutation::PubSub),
+            ("PSUBSCRIBE", ConnMutation::PubSub),
+            ("PUNSUBSCRIBE", ConnMutation::PubSub),
+            ("SSUBSCRIBE", ConnMutation::PubSub),
+            ("SUNSUBSCRIBE", ConnMutation::PubSub),
+            ("PUBLISH", ConnMutation::PubSub),
+            ("SPUBLISH", ConnMutation::PubSub),
+            ("PUBSUB", ConnMutation::PubSub),
+            // Pure reads: dispatched through the read-only ConnCtx view.
+            ("CONFIG", ConnMutation::None),
+            ("INFO", ConnMutation::None),
+            ("DEBUG", ConnMutation::None),
+            ("ACL", ConnMutation::None),
+            ("HOTKEYS", ConnMutation::None),
+            ("BGSAVE", ConnMutation::None),
+            ("LASTSAVE", ConnMutation::None),
+            ("SLOWLOG", ConnMutation::None),
+            ("MEMORY", ConnMutation::None),
+            ("LATENCY", ConnMutation::None),
+            ("EVAL", ConnMutation::None),
+            ("SCRIPT", ConnMutation::None),
+            ("FUNCTION", ConnMutation::None),
+            ("FT.CURSOR", ConnMutation::None),
+        ];
+
+        for (name, want) in expected {
+            let command = registry
+                .get_entry(name)
+                .unwrap_or_else(|| panic!("{name} is not registered"))
+                .as_connection()
+                .unwrap_or_else(|| panic!("{name} is not a connection command"));
+            assert_eq!(
+                command.spec().mutation,
+                *want,
+                "{name} declared the wrong ConnMutation"
+            );
+            assert!(
+                command.spec().validate().is_ok(),
+                "{name} spec invalid: {:?}",
+                command.spec().validate()
+            );
         }
     }
 

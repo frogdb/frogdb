@@ -3,7 +3,7 @@
 //! These commands **mutate** per-connection state and are migrated behind the
 //! [`ConnectionCommand`] seam like AUTH/HELLO: they dispatch through a `ConnCtx`
 //! whose [`ConnCtx::conn_state`] is `Some(&mut dyn ConnStateMut)` (built by
-//! [`ConnectionHandler::conn_ctx_authmut`](crate::connection::ConnectionHandler)),
+//! [`ConnectionHandler::conn_ctx_for`](crate::connection::ConnectionHandler)),
 //! and drive their mutations through [`frogdb_core::ConnStateMut`].
 //!
 //! * **RESET** performs a full reset of the connection's server-side context —
@@ -57,6 +57,7 @@ const fn connection_state_spec(
         event: EventSpec::NotApplicable,
         requires_same_slot: false,
         lookup: LookupSpec::None,
+        mutation: frogdb_core::ConnMutation::Auth,
         strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::ConnectionState),
     }
 }

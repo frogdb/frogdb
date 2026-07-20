@@ -58,6 +58,7 @@ static DEBUG_SPEC: CommandSpec = CommandSpec {
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
     lookup: LookupSpec::None,
+    mutation: frogdb_core::ConnMutation::None,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin),
 };
 

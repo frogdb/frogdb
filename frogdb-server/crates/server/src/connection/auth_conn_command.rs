@@ -7,7 +7,7 @@
 //! mutable-`ConnCtx` capability: they are dispatched through a `ConnCtx` whose
 //! [`ConnCtx::conn_state`] is `Some(&mut dyn ConnStateMut)` and read/write
 //! per-connection state through it (see [`frogdb_core::ConnStateMut`] and
-//! [`ConnectionHandler::conn_ctx_authmut`](crate::connection::ConnectionHandler)).
+//! [`ConnectionHandler::conn_ctx_for`](crate::connection::ConnectionHandler)).
 //!
 //! # Pre-authentication
 //!
@@ -197,6 +197,7 @@ static AUTH_SPEC: CommandSpec = CommandSpec {
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
     lookup: LookupSpec::None,
+    mutation: frogdb_core::ConnMutation::Auth,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Auth),
 };
 
@@ -287,6 +288,7 @@ static HELLO_SPEC: CommandSpec = CommandSpec {
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
     lookup: LookupSpec::None,
+    mutation: frogdb_core::ConnMutation::Auth,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Auth),
 };
 

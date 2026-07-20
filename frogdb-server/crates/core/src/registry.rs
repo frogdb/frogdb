@@ -281,6 +281,7 @@ mod tests {
                 event: EventSpec::NotApplicable,
                 requires_same_slot: false,
                 lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
                 strategy: ExecutionStrategy::Standard,
             };
             &SPEC
@@ -357,6 +358,7 @@ mod tests {
             requires_same_slot: false,
             lookup: LookupSpec::None,
             strategy,
+            mutation: crate::command::ConnMutation::None,
         }
     }
 

@@ -178,6 +178,7 @@ mod tests {
                 event: EventSpec::Suppressed,
                 requires_same_slot: false,
                 lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
                 strategy: ExecutionStrategy::Standard,
             };
             &SPEC
@@ -208,6 +209,7 @@ mod tests {
                 event: EventSpec::Suppressed,
                 requires_same_slot: false,
                 lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
                 strategy: ExecutionStrategy::Standard,
             };
             &SPEC
@@ -238,6 +240,7 @@ mod tests {
                 event: EventSpec::Suppressed,
                 requires_same_slot: false,
                 lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
                 strategy: ExecutionStrategy::Standard,
             };
             &SPEC

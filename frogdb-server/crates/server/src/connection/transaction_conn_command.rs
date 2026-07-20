@@ -5,7 +5,7 @@
 //! (RESET/ASKING/READONLY/READWRITE) they **mutate** per-connection state, so
 //! they dispatch through a `ConnCtx` whose [`ConnCtx::conn_state`] is
 //! `Some(&mut dyn ConnStateMut)` (built by
-//! [`ConnectionHandler::conn_ctx_authmut`](crate::connection::ConnectionHandler))
+//! [`ConnectionHandler::conn_ctx_for`](crate::connection::ConnectionHandler))
 //! and drive their transitions through the transaction methods on
 //! [`frogdb_core::ConnStateMut`] (`begin_multi`, `is_in_multi`, `watch_key`,
 //! `fold_transaction_shard`, `unwatch`, `discard`).
@@ -63,6 +63,7 @@ const fn transaction_spec(
         event: EventSpec::NotApplicable,
         requires_same_slot: false,
         lookup: LookupSpec::None,
+        mutation: frogdb_core::ConnMutation::Auth,
         strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Transaction),
     }
 }
@@ -366,12 +367,15 @@ impl ConnectionHandler {
     /// migrated behind the ConnCtx seam.
     ///
     /// MULTI/DISCARD/WATCH/UNWATCH mutate per-connection transaction state and
-    /// dispatch through their `CommandImpl::Connection` executor over the
-    /// *mutable* [`conn_ctx_authmut`](Self::conn_ctx_authmut) view
-    /// (`conn_state = Some`). EXEC's orchestration cannot be expressed against
-    /// the narrow `ConnCtx` (it re-enters the dispatch machinery for the deferred
-    /// connection-level commands — the meta-circularity), so it is dispatched
-    /// directly to [`handle_exec`](Self::handle_exec).
+    /// dispatch through their `CommandImpl::Connection` executor over the mutable
+    /// view built from their declared capability
+    /// ([`ConnMutation::Auth`](frogdb_core::ConnMutation::Auth) →
+    /// `conn_state = Some`), via
+    /// [`conn_ctx_for`](Self::conn_ctx_for). EXEC's orchestration cannot be
+    /// expressed against the narrow `ConnCtx` (it re-enters the dispatch
+    /// machinery for the deferred connection-level commands — the
+    /// meta-circularity), so it is dispatched directly to
+    /// [`handle_exec`](Self::handle_exec).
     ///
     /// Returns `Some(responses)` for these five commands; `None` otherwise. The
     /// caller intercepts this *before* the transaction-queuing check, so these
@@ -387,8 +391,11 @@ impl ConnectionHandler {
                 // `as_connection()` yields a `'static` reference, so it does not
                 // conflict with re-borrowing `self` to build the mutable ConnCtx.
                 let command = self.core.registry.get_entry(cmd_name)?.as_connection()?;
+                let mutation = command.spec().mutation;
                 Some(vec![
-                    command.execute(&mut self.conn_ctx_authmut(), args).await,
+                    command
+                        .execute(&mut self.conn_ctx_for(mutation), args)
+                        .await,
                 ])
             }
             _ => None,

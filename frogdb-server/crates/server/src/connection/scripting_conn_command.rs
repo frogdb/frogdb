@@ -88,6 +88,7 @@ static EVAL_SPEC: CommandSpec = CommandSpec {
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
     lookup: LookupSpec::None,
+    mutation: frogdb_core::ConnMutation::None,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting),
 };
 
@@ -128,6 +129,7 @@ static EVAL_RO_SPEC: CommandSpec = CommandSpec {
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
     lookup: LookupSpec::None,
+    mutation: frogdb_core::ConnMutation::None,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting),
 };
 
@@ -167,6 +169,7 @@ static EVALSHA_SPEC: CommandSpec = CommandSpec {
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
     lookup: LookupSpec::None,
+    mutation: frogdb_core::ConnMutation::None,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting),
 };
 
@@ -207,6 +210,7 @@ static EVALSHA_RO_SPEC: CommandSpec = CommandSpec {
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
     lookup: LookupSpec::None,
+    mutation: frogdb_core::ConnMutation::None,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting),
 };
 
@@ -250,6 +254,7 @@ static SCRIPT_SPEC: CommandSpec = CommandSpec {
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
     lookup: LookupSpec::None,
+    mutation: frogdb_core::ConnMutation::None,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting),
 };
 
@@ -291,6 +296,7 @@ static FCALL_SPEC: CommandSpec = CommandSpec {
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
     lookup: LookupSpec::None,
+    mutation: frogdb_core::ConnMutation::None,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting),
 };
 
@@ -332,6 +338,7 @@ static FCALL_RO_SPEC: CommandSpec = CommandSpec {
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
     lookup: LookupSpec::None,
+    mutation: frogdb_core::ConnMutation::None,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting),
 };
 
@@ -370,6 +377,7 @@ static FUNCTION_SPEC: CommandSpec = CommandSpec {
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
     lookup: LookupSpec::None,
+    mutation: frogdb_core::ConnMutation::None,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting),
 };
 

@@ -34,6 +34,7 @@ impl Command for DbsizeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::ServerWide(ServerWideOp::DbSize),
         };
         &SPEC
@@ -64,6 +65,7 @@ impl Command for FlushdbCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::ServerWide(ServerWideOp::FlushDb),
         };
         &SPEC
@@ -110,6 +112,7 @@ impl Command for FlushallCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::ServerWide(ServerWideOp::FlushAll),
         };
         &SPEC
@@ -156,6 +159,7 @@ impl Command for TimeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -202,6 +206,7 @@ impl Command for ShutdownCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::ServerWide(ServerWideOp::Shutdown),
         };
         &SPEC
@@ -243,6 +248,7 @@ impl Command for LolwutCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC

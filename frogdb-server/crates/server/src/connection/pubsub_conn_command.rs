@@ -21,7 +21,7 @@
 //!
 //! Dispatch builds a `ConnCtx` whose `pubsub` field holds `Some(&mut pubsub_io)`
 //! and whose state/protocol/info placeholders mirror
-//! [`ConnectionHandler::conn_ctx_authmut`] (the pub/sub executor reads its live
+//! [`ConnectionHandler::conn_ctx_for`] (the pub/sub executor reads its live
 //! protocol through `PubSubIo`, never `ConnCtx::protocol_version`).
 
 use std::collections::BTreeMap;
@@ -735,6 +735,7 @@ const fn pubsub_spec(
         event: EventSpec::NotApplicable,
         requires_same_slot: false,
         lookup: LookupSpec::None,
+        mutation: frogdb_core::ConnMutation::PubSub,
         strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub),
     }
 }
@@ -888,7 +889,7 @@ impl ConnectionHandler {
     ///
     /// `command` is the `'static` executor already resolved from the registry,
     /// so it does not conflict with the `&mut self` borrows the `ConnCtx` takes.
-    /// The `ConnCtx` mirrors [`conn_ctx_authmut`](Self::conn_ctx_authmut): the
+    /// The `ConnCtx` mirrors [`conn_ctx_for`](Self::conn_ctx_for): the
     /// pub/sub executor reads only `ConnCtx::pubsub`, so `info`/`username`/
     /// `protocol_version`/`conn_state`/`tracking` are placeholders (the live
     /// protocol is read through [`PubSubIo`]).

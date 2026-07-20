@@ -11,7 +11,8 @@
 use bytes::Bytes;
 
 use crate::command::{
-    Arity, CommandFlags, ExecutionStrategy, KeyAccessFlag, WaiterWake, WalStrategy,
+    Arity, CommandFlags, ConnMutation, ConnectionLevelOp, ExecutionStrategy, KeyAccessFlag,
+    WaiterWake, WalStrategy,
 };
 use crate::keyspace_event::KeyspaceEventFlags;
 
@@ -350,6 +351,13 @@ pub struct CommandSpec {
     /// former `Command::execution_strategy()` override into the spec so routing
     /// is declared once, alongside every other mechanical fact.
     pub strategy: ExecutionStrategy,
+    /// Which connection-local mutable capabilities this command's `ConnCtx`
+    /// needs wired. Declared here so the connection dispatcher selects the
+    /// `ConnCtx` builder from this datum, never from the command's string name.
+    /// [`ConnMutation::None`] for every non-connection command and every
+    /// pure-read connection command; [`validate`](Self::validate) cross-checks
+    /// it against [`strategy`](Self::strategy). See [`ConnMutation`].
+    pub mutation: ConnMutation,
 }
 
 /// A cross-field inconsistency detected by [`CommandSpec::validate`].
@@ -368,6 +376,13 @@ pub enum SpecError {
     /// commands are intercepted before shard routing, so they must be
     /// `WalStrategy::NoOp`.
     ConnectionLevelWithWal,
+    /// The declared [`ConnMutation`] capability is illegal for the command's
+    /// [`ExecutionStrategy`]: a non-`None` mutation on a command that is not
+    /// `ConnectionLevel` (the capability selects a `ConnCtx` builder that only
+    /// the connection dispatcher wires), or a `PubSub`/`ConnectionLevel(PubSub)`
+    /// disagreement (pub/sub is the only family dispatched through the
+    /// multi-response `execute_multi` seam).
+    ConnMutationStrategyMismatch,
     /// An [`EventSpec::EmitsAt`] `key_index` cannot be statically proven to fall
     /// within the keys the `KeySpec` extracts for the command's minimum arity.
     EmitsAtIndexOutOfRange { key_index: usize, min_keys: usize },
@@ -415,6 +430,12 @@ impl std::fmt::Display for SpecError {
                 write!(
                     f,
                     "ConnectionLevel command must declare WalStrategy::NoOp (intercepted before shard routing)"
+                )
+            }
+            SpecError::ConnMutationStrategyMismatch => {
+                write!(
+                    f,
+                    "declared ConnMutation is illegal for the command's ExecutionStrategy (non-None mutation requires ConnectionLevel; PubSub mutation ⇔ ConnectionLevel(PubSub))"
                 )
             }
             SpecError::EmitsAtIndexOutOfRange {
@@ -489,6 +510,25 @@ impl CommandSpec {
             && !matches!(self.wal, WalStrategy::NoOp)
         {
             return Err(SpecError::ConnectionLevelWithWal);
+        }
+
+        // The declared connection-mutation capability selects the `ConnCtx`
+        // builder the connection dispatcher wires, so it is only meaningful for a
+        // `ConnectionLevel` command. `None` is always legal (every non-connection
+        // command and every pure-read connection command). Any other capability
+        // requires `ConnectionLevel`, and the `PubSub` capability must coincide
+        // with the `ConnectionLevel(PubSub)` routing op — pub/sub is the only
+        // family dispatched through the multi-response `execute_multi` seam.
+        match (&self.strategy, self.mutation) {
+            (_, ConnMutation::None) => {}
+            (ExecutionStrategy::ConnectionLevel(op), mutation) => {
+                let pubsub_op = matches!(op, ConnectionLevelOp::PubSub);
+                let pubsub_mutation = matches!(mutation, ConnMutation::PubSub);
+                if pubsub_op != pubsub_mutation {
+                    return Err(SpecError::ConnMutationStrategyMismatch);
+                }
+            }
+            (_, _) => return Err(SpecError::ConnMutationStrategyMismatch),
         }
 
         // A flag-derived WAL strategy derives its destination from the command's
@@ -778,6 +818,7 @@ mod tests {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: crate::command::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         }
     }
@@ -792,6 +833,60 @@ mod tests {
         let mut spec = base_write_spec();
         spec.event = EventSpec::NotApplicable;
         assert_eq!(spec.validate(), Err(SpecError::WriteWithoutEvent));
+    }
+
+    /// A non-`None` [`ConnMutation`] on a command that is not `ConnectionLevel`
+    /// is a mis-declaration: the capability selects a `ConnCtx` builder that only
+    /// the connection dispatcher wires, so it is meaningless on a shard command.
+    #[test]
+    fn validate_mutation_requires_connection_level() {
+        let mut spec = base_write_spec();
+        spec.mutation = ConnMutation::Auth;
+        // `strategy` is still `Standard` — mismatch.
+        assert_eq!(
+            spec.validate(),
+            Err(SpecError::ConnMutationStrategyMismatch)
+        );
+    }
+
+    /// The `PubSub` capability and the `ConnectionLevel(PubSub)` routing op must
+    /// agree in both directions: `PubSub` mutation on a non-PubSub connection op
+    /// errors, and a non-`PubSub` mutation on the PubSub op errors. A read-only
+    /// connection command (`None` on any connection op) is always legal.
+    #[test]
+    fn validate_pubsub_mutation_matches_pubsub_op() {
+        let mut spec = base_write_spec();
+        // A pub/sub command: ConnectionLevel(PubSub) must carry NoOp WAL.
+        spec.flags = CommandFlags::PUBSUB;
+        spec.wal = WalStrategy::NoOp;
+        spec.event = EventSpec::NotApplicable;
+
+        // PubSub op + PubSub mutation -> ok.
+        spec.strategy = ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub);
+        spec.mutation = ConnMutation::PubSub;
+        assert_eq!(spec.validate(), Ok(()));
+
+        // PubSub op + non-PubSub mutation -> mismatch.
+        spec.mutation = ConnMutation::Auth;
+        assert_eq!(
+            spec.validate(),
+            Err(SpecError::ConnMutationStrategyMismatch)
+        );
+
+        // Non-PubSub connection op + PubSub mutation -> mismatch.
+        spec.strategy = ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin);
+        spec.mutation = ConnMutation::PubSub;
+        assert_eq!(
+            spec.validate(),
+            Err(SpecError::ConnMutationStrategyMismatch)
+        );
+
+        // Non-PubSub connection op + Auth mutation -> ok (e.g. CLIENT-class Admin
+        // carrying conn_state); and `None` is always legal.
+        spec.mutation = ConnMutation::Auth;
+        assert_eq!(spec.validate(), Ok(()));
+        spec.mutation = ConnMutation::None;
+        assert_eq!(spec.validate(), Ok(()));
     }
 
     #[test]
