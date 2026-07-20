@@ -107,8 +107,9 @@ ul.starlight-sidebar-topics a:is(.starlight-sidebar-topics-current, :hover, :foc
 /* Logo and title styling */
 .site-title {
 	font-weight: 800;
-	letter-spacing: -0.03em;
+	letter-spacing: -0.06em;
 	gap: 0.4rem; /* Reduce gap between logo and title */
+	font-size: var(--sl-text-h1);
 }
 
 /* ---------------------------------------------------------------------------

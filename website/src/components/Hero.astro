@@ -3,14 +3,14 @@
  * Hero override: large tight-tracked headline with an inline logo, lede,
  * actions. Only renders on `template: splash` pages.
  */
-import { Image } from 'astro:assets';
-import { LinkButton } from '@astrojs/starlight/components';
+import { Image } from "astro:assets";
+import { LinkButton } from "@astrojs/starlight/components";
 
 const { data } = Astro.locals.starlightRoute.entry;
 const { title = data.title, tagline, image, actions = [] } = data.hero || {};
 
-const logo = image && 'file' in image ? image.file : undefined;
-const logoAlt = (image && 'alt' in image && image.alt) || '';
+const logo = image && "file" in image ? image.file : undefined;
+const logoAlt = (image && "alt" in image && image.alt) || "";
 ---
 
 <div class="frog-hero">
@@ -18,7 +18,12 @@ const logoAlt = (image && 'alt' in image && image.alt) || '';
 		{
 			logo && (
 				<div class="frog-hero-logo-box">
-					<Image src={logo} width={512} alt={logoAlt} class="frog-hero-logo" />
+					<Image
+						src={logo}
+						width={512}
+						alt={logoAlt}
+						class="frog-hero-logo"
+					/>
 				</div>
 			)
 		}
@@ -29,12 +34,24 @@ const logoAlt = (image && 'alt' in image && image.alt) || '';
 		actions.length > 0 && (
 			<div class="frog-actions">
 				{actions.map(
-					({ attrs: { class: className, ...attrs } = {}, icon, link: href, text, variant }) => (
-						<LinkButton {href} {variant} icon={icon?.name} class:list={[className]} {...attrs}>
+					({
+						attrs: { class: className, ...attrs } = {},
+						icon,
+						link: href,
+						text,
+						variant,
+					}) => (
+						<LinkButton
+							{href}
+							{variant}
+							icon={icon?.name}
+							class:list={[className]}
+							{...attrs}
+						>
 							{text}
 							{icon?.html && <Fragment set:html={icon.html} />}
 						</LinkButton>
-					)
+					),
 				)}
 			</div>
 		)
@@ -73,10 +90,11 @@ const logoAlt = (image && 'alt' in image && image.alt) || '';
 	}
 	.frog-hero h1 {
 		margin: 0;
+		margin-top: -0.2em;
 		max-width: 60rem;
 		font-size: var(--hero-h1-size);
 		font-weight: 800;
-		letter-spacing: -0.06em;
+		letter-spacing: -0.07em;
 		line-height: 1.05;
 		color: var(--sl-color-white);
 	}
@@ -94,6 +112,7 @@ const logoAlt = (image && 'alt' in image && image.alt) || '';
 		padding: 0;
 		max-width: 46rem;
 		font-size: clamp(1.05rem, 1.6vw, 1.3rem);
+		letter-spacing: -0.02em;
 		line-height: 1.6;
 		color: var(--sl-color-gray-2);
 	}
