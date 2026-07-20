@@ -1,8 +1,10 @@
 //! The invariant pipeline: runs the Phase-1 checkers over a recorded
 //! `History`, applying the WGL scaling guard (bounded state search) and the
 //! inconclusive-downgrade (a key WGL bails on becomes conservation-only, never
-//! a silent pass), then the conservation checkers, then an optional quiescence
-//! stage that is compiled but skipped while the Phase-2 DEBUG probes are absent.
+//! a silent pass), then the conservation checkers, then the tier-4 quiescence
+//! stage — the Phase-2 DEBUG introspection snapshots gathered at quiesce, fed
+//! in as [`QuiescenceSnapshots`] (absent → the stage is skipped, not silently
+//! passed).
 
 #![allow(dead_code)]
 
@@ -14,6 +16,8 @@ use frogdb_testing::{
     check_fifo_wake_order, check_linearizability_bounded, check_watch_no_false_negative,
     default_keys_of, partition_by_key,
 };
+
+use super::quiescence_probe::{QuiescenceSnapshots, check_quiescence};
 
 /// Per-key op cap before WGL is skipped (conservation still covers the key).
 pub const MAX_OPS_PER_KEY: usize = 200;
@@ -27,7 +31,7 @@ pub struct InvariantReport {
     pub violations: Vec<String>,
     /// Keys WGL bailed on (inconclusive or over the op cap) → conservation-only.
     pub downgraded_keys: Vec<String>,
-    /// False while the Phase-2 DEBUG probes are absent.
+    /// True once the tier-4 quiescence stage ran (snapshots were supplied).
     pub quiescence_checked: bool,
 }
 
@@ -70,11 +74,21 @@ fn model_for(sub: &History) -> Option<Family> {
 }
 
 /// Run the full invariant pipeline with default bounds.
+///
+/// `quiescence` carries the tier-4 DEBUG snapshots gathered once the server
+/// quiesced; pass `None` to skip the stage (e.g. non-turmoil unit self-tests).
 pub fn check_all(
     history: &History,
     final_elements: &HashMap<Bytes, Vec<Bytes>>,
+    quiescence: Option<&QuiescenceSnapshots>,
 ) -> InvariantReport {
-    check_all_with(history, final_elements, MAX_OPS_PER_KEY, MAX_WGL_STATES)
+    check_all_with(
+        history,
+        final_elements,
+        quiescence,
+        MAX_OPS_PER_KEY,
+        MAX_WGL_STATES,
+    )
 }
 
 /// Pipeline with explicit bounds (tests use a tiny `max_states` to force the
@@ -82,6 +96,7 @@ pub fn check_all(
 pub fn check_all_with(
     history: &History,
     final_elements: &HashMap<Bytes, Vec<Bytes>>,
+    quiescence: Option<&QuiescenceSnapshots>,
     max_ops_per_key: usize,
     max_states: u64,
 ) -> InvariantReport {
@@ -134,23 +149,18 @@ pub fn check_all_with(
         report.violations.push(format!("WATCH false-negative: {e}"));
     }
 
-    // Stage 4: quiescence (optional; skipped while Phase-2 probes are absent).
-    if quiescence_available() {
+    // Stage 4: quiescence. Fed the Phase-2 DEBUG LOCKTABLE / WAITQUEUE /
+    // MEMORY-CHECK / EXPIRY-INDEX-CHECK snapshots gathered after the workload
+    // drained; each checker asserts empty/consistent state at quiesce.
+    if let Some(snapshots) = quiescence {
         report.quiescence_checked = true;
-        // Phase-2 DEBUG LOCKTABLE/WAITQUEUE/MEMORY-CHECK/EXPIRY-INDEX-CHECK go
-        // here once they land; asserting empty/consistent state at quiesce.
+        report.violations.extend(check_quiescence(snapshots));
     } else {
         report.quiescence_checked = false;
-        eprintln!("quiescence skipped (phase 2 DEBUG probes absent)");
+        eprintln!("quiescence skipped (no DEBUG snapshots supplied)");
     }
 
     report
-}
-
-/// Whether the Phase-2 DEBUG quiescence probes have landed. Flip to `true`
-/// (with the probe calls in stage 4) once they exist — no restructuring needed.
-fn quiescence_available() -> bool {
-    false
 }
 
 /// Dispatch the bounded linearizability check to the family's model.
@@ -207,7 +217,7 @@ mod tests {
         h.respond(s, Some(Bytes::from("OK")));
         let g = h.invoke(2, "get", vec![Bytes::from("{t}x")]);
         h.respond(g, Some(Bytes::from("1")));
-        assert!(check_all(&h, &Default::default()).passed());
+        assert!(check_all(&h, &Default::default(), None).passed());
 
         // dirty: GET x -> 2 with no writer of 2 -> non-linearizable
         let mut d = History::new();
@@ -215,7 +225,7 @@ mod tests {
         d.respond(s, Some(Bytes::from("OK")));
         let g = d.invoke(2, "get", vec![Bytes::from("{t}x")]);
         d.respond(g, Some(Bytes::from("2")));
-        assert!(!check_all(&d, &Default::default()).passed());
+        assert!(!check_all(&d, &Default::default(), None).passed());
     }
 
     #[test]
@@ -237,7 +247,7 @@ mod tests {
         for id in ids {
             h.respond(id, Some(Bytes::from("OK")));
         }
-        let report = check_all_with(&h, &Default::default(), MAX_OPS_PER_KEY, 1);
+        let report = check_all_with(&h, &Default::default(), None, MAX_OPS_PER_KEY, 1);
         assert!(
             report.passed(),
             "inconclusive must not fail: {:?}",
@@ -251,10 +261,52 @@ mod tests {
     }
 
     #[test]
-    fn quiescence_is_skipped_while_probes_absent() {
+    fn quiescence_is_skipped_when_no_snapshots() {
         let h = History::new();
-        let report = check_all(&h, &Default::default());
+        let report = check_all(&h, &Default::default(), None);
         assert!(!report.quiescence_checked);
+    }
+
+    #[test]
+    fn quiescence_clean_snapshots_pass_and_mark_checked() {
+        let h = History::new();
+        // An empty snapshot bundle is the quiesced-server case: every checker
+        // accepts zero snapshots, so the stage runs and finds no violation.
+        let snap = QuiescenceSnapshots::default();
+        let report = check_all(&h, &Default::default(), Some(&snap));
+        assert!(
+            report.quiescence_checked,
+            "stage must run when snapshots present"
+        );
+        assert!(
+            report.passed(),
+            "clean quiesce must not fail: {:?}",
+            report.violations
+        );
+    }
+
+    #[test]
+    fn quiescence_violation_feeds_the_report() {
+        use frogdb_testing::WaitQueueSnapshot;
+        let h = History::new();
+        // A leaked waiter at quiesce must surface as a report violation.
+        let snap = QuiescenceSnapshots {
+            wait_queue: vec![WaitQueueSnapshot {
+                shard_id: 1,
+                total_waiters: 1,
+            }],
+            ..Default::default()
+        };
+        let report = check_all(&h, &Default::default(), Some(&snap));
+        assert!(report.quiescence_checked);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("wait queue not empty")),
+            "expected a wait-queue quiescence violation, got {:?}",
+            report.violations
+        );
     }
 
     // ---- Harness self-tests (silent-green guard) ----
@@ -269,7 +321,7 @@ mod tests {
         let mut h = History::new();
         let p = h.invoke(1, "rpush", vec![Bytes::from("{t}L"), Bytes::from("zzz")]);
         h.respond(p, Some(Bytes::from("1")));
-        let report = check_all(&h, &Default::default());
+        let report = check_all(&h, &Default::default(), None);
         assert!(!report.passed(), "a lost element must fail the report");
         assert!(
             report
@@ -287,7 +339,7 @@ mod tests {
         let mut h = History::new();
         let g = h.invoke(1, "get", vec![Bytes::from("{t}g")]);
         h.respond(g, Some(Bytes::from("phantom")));
-        let report = check_all(&h, &Default::default());
+        let report = check_all(&h, &Default::default(), None);
         assert!(
             !report.passed(),
             "a phantom read must fail the report: {:?}",

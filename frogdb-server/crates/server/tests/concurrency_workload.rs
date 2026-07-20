@@ -23,8 +23,8 @@ fn run_and_check(
     num_shards: usize,
 ) -> InvariantReport {
     let workload = Workload::generate(seed, profile, num_clients, ops_per_client);
-    let (history, final_elements) = run_workload_capturing(&workload, num_shards, true);
-    let report = check_all(&history, &final_elements);
+    let run = run_workload_capturing(&workload, num_shards, true);
+    let report = check_all(&run.history, &run.final_elements, Some(&run.quiescence));
     if !report.passed() {
         eprintln!("seed {seed} ({profile:?}) FAILED: {:?}", report.violations);
     }
@@ -85,6 +85,35 @@ fn seed_sweep_short_workloads() {
             );
         }
     }
+}
+
+// The tier-4 quiescence stage: run one small workload and assert the DEBUG
+// introspection probes ran (LOCKTABLE / WAITQUEUE / MEMORY-CHECK /
+// EXPIRY-INDEX-CHECK), and that a drained, quiesced server reports no
+// quiescence violation (empty lock table + wait queue, consistent memory and
+// expiry index). This is the live-wiring smoke test for the probe→snapshot
+// adapter; the full sweep above exercises it every seed.
+#[test]
+fn quiescence_stage_runs_and_is_clean() {
+    let report = run_and_check(0, Profile::Mixed, 2, 8, 2);
+    assert!(
+        report.quiescence_checked,
+        "quiescence stage must run (DEBUG snapshots supplied)"
+    );
+    let quiescence_violations: Vec<_> = report
+        .violations
+        .iter()
+        .filter(|v| v.starts_with("quiescence: "))
+        .collect();
+    assert!(
+        quiescence_violations.is_empty(),
+        "a quiesced server must report no quiescence violation: {quiescence_violations:?}"
+    );
+    assert!(
+        report.passed(),
+        "small clean workload must pass all stages: {:?}",
+        report.violations
+    );
 }
 
 // TxHeavy seed sweep — DEFERRED (documented harness/model gap, not a server bug).

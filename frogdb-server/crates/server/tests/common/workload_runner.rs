@@ -11,6 +11,7 @@ use bytes::Bytes;
 use frogdb_testing::workload::Workload;
 use turmoil::net::TcpStream;
 
+use super::quiescence_probe::QuiescenceSnapshots;
 use super::sim_harness::{OperationHistory, OperationResult, SimConfig, build_sim};
 use super::sim_helpers::{
     SERVER_HOST, SERVER_PORT, encode_command, real_frogdb_server,
@@ -32,7 +33,16 @@ pub fn run_workload(
     num_shards: usize,
     fake_persistence: bool,
 ) -> frogdb_testing::History {
-    run_workload_capturing(workload, num_shards, fake_persistence).0
+    run_workload_capturing(workload, num_shards, fake_persistence).history
+}
+
+/// The captured outputs of a workload run: the recorded history, the final
+/// list contents for exactly-once conservation, and the tier-4 quiescence
+/// snapshots gathered once the server drained.
+pub struct CapturedRun {
+    pub history: frogdb_testing::History,
+    pub final_elements: std::collections::HashMap<Bytes, Vec<Bytes>>,
+    pub quiescence: QuiescenceSnapshots,
 }
 
 /// Sim-time (ms) the drainer waits before reading final list state — long
@@ -48,10 +58,7 @@ pub fn run_workload_capturing(
     workload: &Workload,
     num_shards: usize,
     fake_persistence: bool,
-) -> (
-    frogdb_testing::History,
-    std::collections::HashMap<Bytes, Vec<Bytes>>,
-) {
+) -> CapturedRun {
     // Isolate the process-global fake-WAL registry from previous runs.
     frogdb_core::shard::FakeWalRegistry::clear();
 
@@ -115,7 +122,10 @@ pub fn run_workload_capturing(
     // key (LRANGE); non-list keys reply WRONGTYPE and are skipped.
     let final_elements: Arc<Mutex<std::collections::HashMap<Bytes, Vec<Bytes>>>> =
         Arc::new(Mutex::new(std::collections::HashMap::new()));
+    let quiescence: Arc<Mutex<QuiescenceSnapshots>> =
+        Arc::new(Mutex::new(QuiescenceSnapshots::default()));
     let drain_out = final_elements.clone();
+    let quiescence_out = quiescence.clone();
     let keys = Workload::key_space(workload.seed);
     sim.client("drainer", async move {
         tokio::time::sleep(Duration::from_millis(DRAIN_SETTLE_MS)).await;
@@ -139,6 +149,17 @@ pub fn run_workload_capturing(
                 drain_out.lock().unwrap().insert(key.clone(), elems);
             }
         }
+
+        // Tier-4 quiescence probe: the workload has drained, so the four DEBUG
+        // introspection commands report the settled server state. Parse their
+        // RESP replies into snapshots for the invariant pipeline's stage 4.
+        let locktable = debug_probe(&mut stream, &mut buf, &mut acc, b"LOCKTABLE").await?;
+        let waitqueue = debug_probe(&mut stream, &mut buf, &mut acc, b"WAITQUEUE").await?;
+        let memory = debug_probe(&mut stream, &mut buf, &mut acc, b"MEMORY-CHECK").await?;
+        let expiry = debug_probe(&mut stream, &mut buf, &mut acc, b"EXPIRY-INDEX-CHECK").await?;
+        *quiescence_out.lock().unwrap() =
+            QuiescenceSnapshots::from_replies(&locktable, &waitqueue, &memory, &expiry);
+
         Ok::<(), Box<dyn std::error::Error>>(())
     });
 
@@ -146,7 +167,26 @@ pub fn run_workload_capturing(
 
     let history = history.lock().unwrap().to_testing_history();
     let final_elements = final_elements.lock().unwrap().clone();
-    (history, final_elements)
+    let quiescence = quiescence.lock().unwrap().clone();
+    CapturedRun {
+        history,
+        final_elements,
+        quiescence,
+    }
+}
+
+/// Issue `DEBUG <subcommand>` on `stream` and return the parsed reply.
+async fn debug_probe(
+    stream: &mut TcpStream,
+    buf: &mut [u8],
+    acc: &mut Vec<u8>,
+    subcommand: &[u8],
+) -> Result<OperationResult, BoxError> {
+    use tokio::io::AsyncWriteExt;
+    stream
+        .write_all(&encode_command(&[b"DEBUG", subcommand]))
+        .await?;
+    read_reply(stream, buf, acc).await
 }
 
 /// Execute a single scripted op on `stream`, recording invoke/return.
