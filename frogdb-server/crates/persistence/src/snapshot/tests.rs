@@ -586,6 +586,7 @@ fn test_scheduler_epoch_monotonic_across_cycle() {
 ///   * every epoch that runs is unique and contiguous from 1 (no skip/reuse),
 ///   * exactly one runner is ever active (the slot is never double-claimed),
 ///   * the scheduler is fully idle at quiescence.
+///
 /// This is the only place the `finish_and_maybe_rebegin` re-CAS-failure branch
 /// (another thread stole the slot in the release↔re-CAS window) is exercised.
 #[test]
