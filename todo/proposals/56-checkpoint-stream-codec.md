@@ -33,6 +33,39 @@ added to the crate's dev-deps. Verification: `just check frogdb-replication`/`fr
 `just test frogdb-replication` 131/131, `just lint frogdb-replication` clean, targeted
 `integration_replication` full-sync subset 11/11 (proves byte-for-byte wire compatibility end to end).
 
+## Follow-up: codec owns the combined checksum (2026-07-20)
+
+The "should the codec own the combined checksum too?" open question (see Risks) is now resolved
+**yes**, closing the last piece of coverage drift the framing extraction left behind. The combined
+SHA256 was still computed by two hand-rolled `Sha256::new()` loops — one in `stream_checkpoint`
+(`replica_session.rs`), one in `receive_checkpoint` (`connection.rs`) — that had to agree byte-for-
+byte on *what the checksum covers* with nothing to catch a drift, exactly the failure mode the codec
+extraction removed for the framing.
+
+Shape: a small `CheckpointChecksum` accumulator lives in `fullsync.rs` beside the codec, with
+`new()` / `update_file(name, &file_hash)` / `finalize() -> [u8; 32]`. It owns the coverage
+definition — `SHA256( name_0 || hash_0 || name_1 || hash_1 || … )`, where `name_i` is the UTF-8
+filename bytes and `hash_i` is that file's raw 32-byte SHA256, in wire order, with no delimiters,
+length prefixes, or metadata mixed in. Both sides fold each file in as the codec frames/decodes it:
+the sender's separate second file-hash pass collapsed into the streaming loop, and the receiver's
+`file_checksums` Vec was removed in favor of feeding the accumulator inline. No hand-rolled combined
+hash remains in either caller (their `sha2` imports were dropped). A future coverage change is now a
+single edit to `CheckpointChecksum` rather than two loops kept identical by inspection.
+
+Kept a pure framing seam per the original design: `CheckpointStreamCodec` still owns only the
+delimiters, `stream_file_to_writer` / `receive_to_file` still own the per-file payload + per-file
+hash, and the accumulator sits between them owning the *combined* coverage — the checksum is no
+longer "policy in the caller" but part of the codec module's contract. The wire is byte-for-byte
+unchanged (the metadata frame still carries the same 32-byte checksum), so the golden-bytes test and
+all framing tests are untouched.
+
+Tests added to `fullsync.rs` (2): `test_checkpoint_checksum_agreement` drives a full envelope with a
+real combined checksum in the metadata and asserts the receiver's recomputed hash matches (the
+coverage drift guard); `test_checkpoint_checksum_tamper_detected` asserts a flipped payload byte
+*and* a renamed file each break the combined hash (filename is part of coverage). Verification:
+`just check` / `just test` / `just lint frogdb-replication` clean; targeted
+`integration_replication` full-sync subset green.
+
 ## Problem
 
 Full-sync checkpoint transfer has one wire format — `$FROGDB_CHECKPOINT`, a file count, a
