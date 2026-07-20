@@ -3,11 +3,10 @@
 //! Adapters that implement the debug crate's provider traits using
 //! the server's internal state types.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use frogdb_cluster::types::{NodeFlags, NodeRole, SlotMigration};
-use frogdb_core::{CLUSTER_SLOTS, ClusterState, NodeId, NodeInfo};
+use frogdb_cluster::types::{ClusterSnapshot, NodeFlags, NodeRole, SlotMigration};
+use frogdb_core::{CLUSTER_SLOTS, ClusterState, NodeInfo};
 use frogdb_debug::{
     ClusterInfoProvider, ClusterNodeSnapshot, ClusterOverviewSnapshot, MigrationSnapshot,
 };
@@ -33,7 +32,7 @@ impl ClusterInfoProvider for ClusterStateProvider {
         let nodes: Vec<ClusterNodeSnapshot> = snapshot
             .nodes
             .values()
-            .map(|node| convert_node(node, &snapshot.slot_assignment))
+            .map(|node| convert_node(node, &snapshot))
             .collect();
         let slots_assigned = snapshot.slot_assignment.len();
         let migrations = snapshot
@@ -58,21 +57,21 @@ impl ClusterInfoProvider for ClusterStateProvider {
     fn node_detail(&self, node_id: u64) -> Option<ClusterNodeSnapshot> {
         let snapshot = self.cluster_state.snapshot();
         let node = snapshot.nodes.get(&node_id)?;
-        Some(convert_node(node, &snapshot.slot_assignment))
+        Some(convert_node(node, &snapshot))
     }
 }
 
 /// Convert a `NodeInfo` into a `ClusterNodeSnapshot`.
-fn convert_node(node: &NodeInfo, slot_assignment: &BTreeMap<u16, NodeId>) -> ClusterNodeSnapshot {
-    // Collect slots assigned to this node and compact into ranges.
-    let mut slots: Vec<u16> = slot_assignment
-        .iter()
-        .filter(|(_, owner)| **owner == node.id)
-        .map(|(&slot, _)| slot)
-        .collect();
-    slots.sort_unstable();
-    let slot_ranges = compact_slot_ranges(&slots);
-    let slot_count = slots.len();
+///
+/// Slot-range compaction is delegated to the canonical
+/// [`ClusterSnapshot::get_node_slots`] in `frogdb-cluster` (the same routine
+/// `CLUSTER NODES`/`CLUSTER SHARDS` use) rather than re-implemented here; the
+/// only adaptation is mapping `SlotRange` to the debug UI's `(start, end)`
+/// pair shape.
+fn convert_node(node: &NodeInfo, snapshot: &ClusterSnapshot) -> ClusterNodeSnapshot {
+    let ranges = snapshot.get_node_slots(node.id);
+    let slot_count: usize = ranges.iter().map(|r| r.len()).sum();
+    let slot_ranges: Vec<(u16, u16)> = ranges.iter().map(|r| (r.start, r.end)).collect();
 
     ClusterNodeSnapshot {
         id: node.id,
@@ -109,27 +108,6 @@ fn flags_to_strings(flags: &NodeFlags) -> Vec<String> {
     v
 }
 
-/// Compact a sorted list of slot numbers into (start, end) inclusive ranges.
-fn compact_slot_ranges(slots: &[u16]) -> Vec<(u16, u16)> {
-    if slots.is_empty() {
-        return Vec::new();
-    }
-    let mut ranges = Vec::new();
-    let mut start = slots[0];
-    let mut end = slots[0];
-    for &slot in &slots[1..] {
-        if slot == end + 1 {
-            end = slot;
-        } else {
-            ranges.push((start, end));
-            start = slot;
-            end = slot;
-        }
-    }
-    ranges.push((start, end));
-    ranges
-}
-
 /// Convert a `SlotMigration` to a `MigrationSnapshot`.
 fn convert_migration(migration: &SlotMigration) -> MigrationSnapshot {
     MigrationSnapshot {
@@ -142,29 +120,6 @@ fn convert_migration(migration: &SlotMigration) -> MigrationSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_compact_slot_ranges_empty() {
-        assert_eq!(compact_slot_ranges(&[]), Vec::<(u16, u16)>::new());
-    }
-
-    #[test]
-    fn test_compact_slot_ranges_single() {
-        assert_eq!(compact_slot_ranges(&[5]), vec![(5, 5)]);
-    }
-
-    #[test]
-    fn test_compact_slot_ranges_contiguous() {
-        assert_eq!(compact_slot_ranges(&[0, 1, 2, 3, 4]), vec![(0, 4)]);
-    }
-
-    #[test]
-    fn test_compact_slot_ranges_gaps() {
-        assert_eq!(
-            compact_slot_ranges(&[0, 1, 2, 5, 6, 10]),
-            vec![(0, 2), (5, 6), (10, 10)]
-        );
-    }
 
     #[test]
     fn test_flags_to_strings_empty() {
