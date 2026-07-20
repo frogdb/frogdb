@@ -251,10 +251,14 @@ mod tests {
         assert!(check_fifo_wake_order_exact(&original, &order).is_ok());
 
         // Swap the serve order (client 2 served before client 1) without
-        // changing the registration order fixture: now client 2 (registered
-        // second) is served before client 1 (registered first) -> violation
-        // that only the exact checker's ordinal comparison can see, since
-        // the swap alone wouldn't touch invoke order either way here.
+        // changing the registration order fixture: client 2 (registered
+        // second) is now served before client 1 (registered first) -> a FIFO
+        // violation. This particular swap would also be caught by the
+        // invoke-proxy checker; the point here is to exercise the exact
+        // checker's ordinal-comparison path end to end. The discriminating
+        // case where registration order and invoke order *disagree* — and only
+        // the exact checker can see it — lives in
+        // `conservation::tests::exact_fifo_uses_registration_order_not_invoke_order`.
         let corrupt = reorder_completions(&original);
         assert!(matches!(
             check_fifo_wake_order_exact(&corrupt, &order),

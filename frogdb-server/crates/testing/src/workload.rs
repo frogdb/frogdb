@@ -200,8 +200,8 @@ impl Workload {
         }
     }
 
-    /// The 8–16 hash-tagged keys this workload draws from (pins shard
-    /// placement). Order is deterministic in `seed`.
+    /// The 12–18 hash-tagged keys this workload draws from (6 families ×
+    /// 2–3 keys each; pins shard placement). Order is deterministic in `seed`.
     pub fn key_space(seed: u64) -> Vec<Bytes> {
         let families = build_key_families(seed);
         let mut out = Vec::new();
@@ -212,10 +212,10 @@ impl Workload {
     }
 }
 
-/// Deterministic per-family key buckets. 8–16 keys total, each hash-tagged
+/// Deterministic per-family key buckets. 12–18 keys total, each hash-tagged
 /// `{tagN}kind` so `hash_slot` pins them; never contains `|`.
 fn build_key_families(seed: u64) -> KeyFamilies {
-    // 2 or 3 keys per family → 10–15 total; deterministic in `seed`.
+    // 6 families × (2 or 3 keys each) → 12–18 total; deterministic in `seed`.
     let per = 2 + (seed % 2) as usize; // 2 or 3
     let mut kv = Vec::new();
     let mut list = Vec::new();

@@ -711,6 +711,23 @@ mod tests {
     }
 
     #[test]
+    fn script_cincr_non_integer_rejected() {
+        // A stored non-integer value cannot be incremented: the parse fails
+        // closed and the step is rejected regardless of the recorded result.
+        let mut s = KVState::default();
+        s.store.insert(Bytes::from("k"), Bytes::from("abc"));
+        assert!(
+            KVModel::step(
+                &s,
+                "script_cincr",
+                &[Bytes::from("k")],
+                Some(&Bytes::from("1")),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
     fn script_cincr_overflow_rejected() {
         // i64::MAX + 1 must not silently wrap; checked_add fails closed.
         let mut s = KVState::default();
