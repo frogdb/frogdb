@@ -1,7 +1,7 @@
 //! Whole-history conservation checkers (pure scans, not WGL-based).
 
 use crate::history::{CompletedOperation, History};
-use crate::partition::{default_keys_of, parse_exec_commands};
+use crate::partition::{default_keys_of, is_errored_exec_result, parse_exec_commands};
 use bytes::Bytes;
 use std::collections::{HashMap, HashSet};
 
@@ -278,8 +278,8 @@ pub fn check_tx_sum_conservation(
     for op in history.completed_operations() {
         match op.function.as_str() {
             "exec" => {
-                if op.result.is_none() {
-                    continue; // aborted
+                if !exec_committed(op.result.as_ref()) {
+                    continue; // aborted or CROSSSLOT-rejected: applied no deltas
                 }
                 for (name, cargs) in parse_exec_commands(&op.args).unwrap_or_default() {
                     delta += cmd_delta(&name, &cargs, &keyset);
@@ -302,6 +302,13 @@ pub fn check_tx_sum_conservation(
         });
     }
     Ok(())
+}
+
+/// True iff an `exec` op's recorded result denotes a committed transaction (a
+/// non-nil, non-errored result). A `None` (WATCH-abort) or an `"ERR:…"`
+/// (CROSSSLOT/EXECABORT) result is NOT a commit.
+fn exec_committed(result: Option<&Bytes>) -> bool {
+    result.is_some_and(|r| !is_errored_exec_result(r))
 }
 
 fn is_write(function: &str) -> bool {
@@ -423,7 +430,7 @@ fn writer_between(
             return Some(op.id);
         }
         if op.function == "exec"
-            && op.result.is_some()
+            && exec_committed(op.result.as_ref())
             && let Some(cmds) = parse_exec_commands(&op.args)
             && cmds
                 .iter()
@@ -469,7 +476,7 @@ pub fn check_watch_no_false_negative(history: &History) -> Result<(), Conservati
                     }
                 }
                 "exec" => {
-                    if op.result.is_some() {
+                    if exec_committed(op.result.as_ref()) {
                         for (k, wt, wid) in &watched {
                             if let Some(writer) =
                                 writer_between(&ops, k, *wt, op.invoke_time, op.client_id)
@@ -823,6 +830,60 @@ mod tests {
         h.respond(w, Some(b("OK")));
         let other = h.invoke(2, "lpop", vec![b("k")]);
         h.respond(other, None);
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
+        h.respond(e, Some(b("OK")));
+        assert!(check_watch_no_false_negative(&h).is_ok());
+    }
+
+    #[test]
+    fn watch_errored_exec_is_not_a_commit() {
+        // Watcher's EXEC is CROSSSLOT-rejected (ERR:) despite an interfering
+        // write: a rejected transaction did not commit, so it is NOT a false
+        // negative.
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k")]);
+        h.respond(w, Some(b("OK")));
+        let other = h.invoke(2, "set", vec![b("k"), b("z")]);
+        h.respond(other, Some(b("OK")));
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
+        h.respond(
+            e,
+            Some(b(
+                "ERR:EXECABORT Transaction discarded because of previous errors.",
+            )),
+        );
+        assert!(check_watch_no_false_negative(&h).is_ok());
+    }
+
+    #[test]
+    fn tx_sum_ignores_errored_exec() {
+        // An errored EXEC applied no deltas; counting them would falsely leak.
+        let mut h = History::new();
+        let op = h.invoke(1, "exec", vec![b("1"), b("incrby"), b("2"), b("b"), b("5")]);
+        h.respond(
+            op,
+            Some(b(
+                "ERR:CROSSSLOT Keys in request don't hash to the same slot",
+            )),
+        );
+        let keys = vec![b("a"), b("b")];
+        assert!(check_tx_sum_conservation(&h, &keys, 100).is_ok());
+    }
+
+    #[test]
+    fn watch_errored_other_exec_not_a_writer() {
+        // Another client's EXEC that was CROSSSLOT-rejected is not an
+        // interfering write, so the watcher's committed EXEC is fine.
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k")]);
+        h.respond(w, Some(b("OK")));
+        let other = h.invoke(2, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("z")]);
+        h.respond(
+            other,
+            Some(b(
+                "ERR:CROSSSLOT Keys in request don't hash to the same slot",
+            )),
+        );
         let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
         h.respond(e, Some(b("OK")));
         assert!(check_watch_no_false_negative(&h).is_ok());
