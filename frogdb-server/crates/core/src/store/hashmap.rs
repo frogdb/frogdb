@@ -1444,6 +1444,42 @@ mod tests {
     }
 
     #[test]
+    fn expiry_index_audit_flags_key_missing() {
+        use std::time::{Duration, Instant};
+        let mut store = HashMapStore::new();
+        // An index entry for a key that was never stored: direction-1 KeyMissing.
+        store.force_index_entry_for_test(
+            Bytes::from("ghost"),
+            Instant::now() + Duration::from_secs(60),
+        );
+        let anomalies = store.audit_expiry_index();
+        assert_eq!(anomalies.len(), 1);
+        assert_eq!(anomalies[0].key, "ghost");
+        assert!(matches!(
+            anomalies[0].kind,
+            ExpiryIndexAnomalyKind::KeyMissing
+        ));
+    }
+
+    #[test]
+    fn expiry_index_audit_flags_deadline_mismatch() {
+        use std::time::{Duration, Instant};
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from("k"), Value::string(Bytes::from("v")));
+        store.set_expiry(b"k", Instant::now() + Duration::from_secs(3600));
+        assert!(store.audit_expiry_index().is_empty());
+        // Overwrite the index entry's deadline so it disagrees with the entry's.
+        store.force_index_entry_for_test(Bytes::from("k"), Instant::now() + Duration::from_secs(1));
+        let anomalies = store.audit_expiry_index();
+        assert_eq!(anomalies.len(), 1);
+        assert_eq!(anomalies[0].key, "k");
+        assert!(matches!(
+            anomalies[0].kind,
+            ExpiryIndexAnomalyKind::DeadlineMismatch
+        ));
+    }
+
+    #[test]
     fn test_store_set_get() {
         let mut store = HashMapStore::new();
 
