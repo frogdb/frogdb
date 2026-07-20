@@ -186,7 +186,7 @@ async fn handle_pubsub_broadcast(
     channel: &[u8],
     message: &[u8],
 ) -> ClusterRpcResponse {
-    use crate::connection::handlers::pubsub::BROADCAST_SHARD;
+    use crate::connection::pubsub_conn_command::BROADCAST_SHARD;
     let (response_tx, response_rx) = oneshot::channel();
     let _ = shard_senders[BROADCAST_SHARD]
         .send(ShardMessage::Publish {

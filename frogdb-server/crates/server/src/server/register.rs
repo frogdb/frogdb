@@ -174,7 +174,7 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     // Hotkeys (migrated behind the ConnCtx seam: registered as a
     // CommandImpl::Connection executor, dispatched through the registry union
     // rather than the legacy router→connection-handler path).
-    registry.register_connection(&crate::connection::handlers::hotkeys::HOTKEYS_CONN_COMMAND);
+    registry.register_connection(&crate::connection::hotkeys::HOTKEYS_CONN_COMMAND);
 
     // Status (migrated behind the ConnCtx seam).
     registry

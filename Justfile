@@ -126,8 +126,8 @@ lint-info-seam:
     set -euo pipefail
     files=( \
         "{{server-dir}}/crates/server/src/commands/info.rs" \
-        "{{server-dir}}/crates/server/src/connection/handlers/scatter.rs" \
-        "{{server-dir}}/crates/server/src/connection/handlers/info.rs" \
+        "{{server-dir}}/crates/server/src/connection/scatter.rs" \
+        "{{server-dir}}/crates/server/src/connection/info_handler.rs" \
     )
     bad=0
     for f in "${files[@]}"; do
@@ -799,7 +799,7 @@ lint-pubsub-confirmation-seam:
     #!/usr/bin/env bash
     set -uo pipefail
     status=0
-    pubsub_handler="{{server-dir}}/crates/server/src/connection/handlers/pubsub.rs"
+    pubsub_handler="{{server-dir}}/crates/server/src/connection/pubsub_conn_command.rs"
     label_pattern='b"(subscribe|unsubscribe|psubscribe|punsubscribe|ssubscribe|sunsubscribe)"'
     if matches=$(grep -nE "$label_pattern" "$pubsub_handler"); then
         echo "ERROR: hand-built pub/sub confirmation in the pub/sub handlers:" >&2
@@ -847,7 +847,7 @@ lint-failover-atomicity:
         echo "       unaffected: it flows through convert_raft_cluster_op." >&2
         status=1
     fi
-    saga_files="$src/failure_detector.rs $src/connection/handlers/cluster.rs"
+    saga_files="$src/failure_detector.rs $src/connection/cluster.rs"
     if matches=$(grep -nE 'ClusterCommand::(RemoveNode|AssignSlots|SetRole)' $saga_files); then
         echo "ERROR: failover paths must use the atomic ClusterCommand::Failover, not" >&2
         echo "       hand-rolled RemoveNode/SetRole/AssignSlots sequences:" >&2

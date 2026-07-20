@@ -40,11 +40,21 @@ use tracing::debug;
 
 use crate::connection::ConnectionHandler;
 use crate::connection::deps::{ClusterDeps, CoreDeps};
-use crate::connection::handlers::pubsub::BROADCAST_SHARD;
 use crate::connection::permission_guard::PermissionGuard;
 use crate::connection::state::{ConnectionState, SubKind, SubscribeOutcome};
 use crate::scatter::{CountByKey, DedupSorted, SumIntegers};
 use crate::slot_migration::RouteOutcome;
+
+/// The broadcast pub/sub coordinator shard.
+///
+/// Broadcast (SUBSCRIBE/PSUBSCRIBE) registrations and PUBLISH delivery all go
+/// through this single shard so each subscriber is registered exactly once and
+/// each message is delivered exactly once, with a subscriber count that is not
+/// multiplied by the number of shards. Forwarded keyspace notifications
+/// (`ShardMessage::PublishKeyspace`) and the CLIENT TRACKING BCAST redirect
+/// path rely on the same invariant. Also referenced by the cluster bus and the
+/// connection lifecycle.
+pub(crate) const BROADCAST_SHARD: usize = 0;
 
 // ============================================================================
 // Subscription-kind table

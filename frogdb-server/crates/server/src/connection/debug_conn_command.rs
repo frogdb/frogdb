@@ -13,7 +13,7 @@
 //! this connection's subscription counts, the `frogdb_debug` bundle machinery,
 //! the `enable-debug-command` gate) stays behind the [`frogdb_core::DebugProvider`]
 //! seam, implemented for `ConnectionHandler` in
-//! [`crate::connection::handlers::debug`]. The wire output of every subcommand
+//! [`crate::connection::debug_handler`]. The wire output of every subcommand
 //! is byte-for-byte identical to the pre-migration `dispatch_debug`.
 //!
 //! DEBUG is registered *only* as a `CommandImpl::Connection` executor. `COMMAND

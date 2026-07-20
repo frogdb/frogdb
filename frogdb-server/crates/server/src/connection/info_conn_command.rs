@@ -8,7 +8,7 @@
 //! whole gather-and-render is exposed through a single read-only
 //! [`frogdb_core::ConnCtx::info`] provider ([`frogdb_core::InfoProvider`]). The
 //! provider is implemented for `ConnectionHandler` in
-//! [`crate::connection::handlers::info`], where the server-only aggregation
+//! [`crate::connection::info_handler`], where the server-only aggregation
 //! types (`InfoSources`, `InfoBuilder`, replication/cluster state) can be named;
 //! the section rendering itself lives in [`crate::info`] and is untouched by the
 //! migration, so INFO's wire output is byte-for-byte identical.
