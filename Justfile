@@ -75,6 +75,7 @@ concurrency:
     {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-core --features shuttle -E 'test(/concurrency/)'
     {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-server --features turmoil -E 'test(/simulation/)'
     {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-server --features turmoil -E 'test(/seed_sweep_short_workloads/)'
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-server --features turmoil -E 'test(/seed_sweep_txheavy/)'
 
 # Replay a single concurrency repro file (seed + profile + config)
 concurrency-repro FILE:
