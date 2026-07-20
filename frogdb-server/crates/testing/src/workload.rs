@@ -21,7 +21,18 @@ pub enum Profile {
     /// Weighted toward WATCH/EXEC transactions plus plain KV.
     TxHeavy,
     /// Weighted toward blocking pops paired with producers on the same keys.
+    /// Each key's *blocking* consumer is pinned to one owner client, so per-key
+    /// registrations are unambiguously ordered for the invoke-time FIFO proxy.
     BlockingHeavy,
+    /// Concurrent multi-waiter blocking races: **every** client may block on a
+    /// shared key (the [`blocking_owner`] single-consumer restriction is
+    /// dropped) with a *long* timeout, so multiple waiters park at once and a
+    /// delayed producer serves them in registration order. Sound only because
+    /// the exact FIFO checker consumes the mid-run `DEBUG WAITQUEUE`
+    /// registration ordinals (not the invoke-time proxy), and each client
+    /// blocks at most once per key across its script (see the per-client
+    /// `multi_waited` guard in [`Workload::generate`]).
+    MultiWaiter,
     /// Even spread across all six type families.
     Mixed,
 }
@@ -154,6 +165,15 @@ impl Workload {
             // Per-client set of stream-group keys this client has already
             // issued the group-creating `XGROUP CREATE` for (see gen_stream_group).
             let mut created: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
+            // Per-client set of keys this client has already issued a
+            // multi-waiter blocking pop on. Binding soundness guard: the exact
+            // FIFO checker joins on `(key, client_id)` and keeps a client's
+            // *first* ordinal per key, so a client that parked twice on one key
+            // would have its second wait judged against its first registration —
+            // a false FIFO verdict. Cap it at one blocking pop per key per
+            // client (see `Profile::MultiWaiter`).
+            let mut multi_waited: std::collections::HashSet<Vec<u8>> =
+                std::collections::HashSet::new();
             let mut ops = Vec::with_capacity(ops_per_client);
             for _ in 0..ops_per_client {
                 let fam = pick_family(profile, &mut rng);
@@ -164,6 +184,7 @@ impl Workload {
                     &mut rng,
                     &mut block_offset,
                     &mut created,
+                    &mut multi_waited,
                     client_id,
                     num_clients,
                     &mut ops,
@@ -276,6 +297,13 @@ fn pick_family(profile: Profile, rng: &mut StdRng) -> Family {
                 Family::Script
             }
         }
+        // Almost entirely List + ZSet (the two blocking families), so many
+        // clients converge on the small shared list/zset key space and park
+        // concurrently on the same keys.
+        Profile::MultiWaiter => {
+            let r = rng.random_range(0..100);
+            if r < 55 { Family::List } else { Family::ZSet }
+        }
         // List + ZSet heavy (that is where blocking ops live).
         Profile::BlockingHeavy => {
             let r = rng.random_range(0..100);
@@ -341,6 +369,25 @@ fn block_timeout(rng: &mut StdRng) -> Bytes {
     })
 }
 
+/// Long blocking timeout (seconds) for the multi-waiter path. Chosen so the
+/// parked window (until a delayed producer serves the waiter) comfortably
+/// exceeds the ~50 sim-ms `DEBUG WAITQUEUE` prober cadence, guaranteeing the
+/// prober catches every concurrent waiter's registration ordinal.
+const MULTI_WAITER_TIMEOUT: &str = "5";
+
+/// Small early think (ms) before a multi-waiter blocking pop, so waiters
+/// register near the start of the sim and overlap in the queue.
+fn multi_waiter_think(rng: &mut StdRng) -> u64 {
+    rng.random_range(0..25)
+}
+
+/// Larger delayed think (ms) before a multi-waiter *producer* push, so the
+/// push fires after concurrent waiters have parked (letting the prober observe
+/// them first) and then serves them in registration order.
+fn producer_think(rng: &mut StdRng) -> u64 {
+    rng.random_range(120..400)
+}
+
 /// Next distinct per-key blocking think offset for this client.
 fn next_block_offset(
     block_offset: &mut std::collections::HashMap<Vec<u8>, u64>,
@@ -366,6 +413,7 @@ fn gen_op(
     rng: &mut StdRng,
     block_offset: &mut std::collections::HashMap<Vec<u8>, u64>,
     created: &mut std::collections::HashSet<Vec<u8>>,
+    multi_waited: &mut std::collections::HashSet<Vec<u8>>,
     client_id: u64,
     num_clients: usize,
     ops: &mut Vec<ScriptedOp>,
@@ -377,6 +425,7 @@ fn gen_op(
             families,
             rng,
             block_offset,
+            multi_waited,
             client_id,
             num_clients,
             ops,
@@ -387,6 +436,7 @@ fn gen_op(
             families,
             rng,
             block_offset,
+            multi_waited,
             client_id,
             num_clients,
             ops,
@@ -515,16 +565,22 @@ fn gen_exec(
     push_op(ops, "exec", args, think_ms);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn gen_list(
     profile: Profile,
     families: &KeyFamilies,
     rng: &mut StdRng,
     block_offset: &mut std::collections::HashMap<Vec<u8>, u64>,
+    multi_waited: &mut std::collections::HashSet<Vec<u8>>,
     client_id: u64,
     num_clients: usize,
     ops: &mut Vec<ScriptedOp>,
 ) {
     let keys = &families.list;
+    if matches!(profile, Profile::MultiWaiter) {
+        gen_multi_waiter(keys, MultiWaiterFamily::List, rng, multi_waited, ops);
+        return;
+    }
     let blocking_bias = matches!(profile, Profile::BlockingHeavy);
     let r = rng.random_range(0..100);
     let t = think(rng);
@@ -610,6 +666,76 @@ fn gen_list(
     }
 }
 
+/// Which blocking family a multi-waiter op targets — selects the producer push
+/// and the blocking-pop command pair.
+#[derive(Clone, Copy)]
+enum MultiWaiterFamily {
+    List,
+    ZSet,
+}
+
+/// Emit one op on the multi-waiter path: either a *long-timeout* blocking pop
+/// (this client becomes one of possibly many concurrent waiters on `k`) or a
+/// *delayed* producer that serves parked waiters in registration order.
+///
+/// The single-owner [`blocking_owner`] restriction is intentionally dropped
+/// here — every client may block on any key — because the exact FIFO checker
+/// judges served order against the mid-run `DEBUG WAITQUEUE` registration
+/// ordinals, not the invoke-time proxy. The one binding constraint is
+/// **at most one blocking pop per key per client** (`multi_waited` guard); a
+/// client that would block a second time on the same key instead issues a
+/// producer push, so its `(key, client_id)` join stays single-valued.
+fn gen_multi_waiter(
+    keys: &[Bytes],
+    family: MultiWaiterFamily,
+    rng: &mut StdRng,
+    multi_waited: &mut std::collections::HashSet<Vec<u8>>,
+    ops: &mut Vec<ScriptedOp>,
+) {
+    let k = pick(keys, rng).clone();
+    let roll = rng.random_range(0..100);
+    // Waiter path: ~55% of ops, but only if this client has not already parked
+    // on `k` (the soundness guard). Otherwise fall through to the producer.
+    if roll < 55 && !multi_waited.contains(k.as_ref()) {
+        multi_waited.insert(k.to_vec());
+        let timeout = Bytes::from(MULTI_WAITER_TIMEOUT);
+        let think = multi_waiter_think(rng);
+        match family {
+            MultiWaiterFamily::List => {
+                let cmd = if rng.random_range(0..2) == 0 {
+                    "blpop"
+                } else {
+                    "brpop"
+                };
+                push_op(ops, cmd, vec![k, timeout], think);
+            }
+            MultiWaiterFamily::ZSet => {
+                let cmd = if rng.random_range(0..2) == 0 {
+                    "bzpopmin"
+                } else {
+                    "bzpopmax"
+                };
+                push_op(ops, cmd, vec![k, timeout], think);
+            }
+        }
+    } else {
+        // Producer path: a delayed push/add that serves the oldest parked
+        // waiter FIFO. The delay lets concurrent waiters register (and the
+        // prober observe them) before the first element arrives.
+        let delay = producer_think(rng);
+        match family {
+            MultiWaiterFamily::List => {
+                push_op(ops, "rpush", vec![k, alnum_value(rng)], delay);
+            }
+            MultiWaiterFamily::ZSet => {
+                let score = Bytes::from(rng.random_range(0..100).to_string());
+                let m = Bytes::from(format!("m{}", rng.random_range(0..5)));
+                push_op(ops, "zadd", vec![k, score, m], delay);
+            }
+        }
+    }
+}
+
 fn gen_hash(families: &KeyFamilies, rng: &mut StdRng, ops: &mut Vec<ScriptedOp>) {
     let keys = &families.hash;
     let k = pick(keys, rng).clone();
@@ -632,16 +758,22 @@ fn gen_hash(families: &KeyFamilies, rng: &mut StdRng, ops: &mut Vec<ScriptedOp>)
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn gen_zset(
     profile: Profile,
     families: &KeyFamilies,
     rng: &mut StdRng,
     block_offset: &mut std::collections::HashMap<Vec<u8>, u64>,
+    multi_waited: &mut std::collections::HashSet<Vec<u8>>,
     client_id: u64,
     num_clients: usize,
     ops: &mut Vec<ScriptedOp>,
 ) {
     let keys = &families.zset;
+    if matches!(profile, Profile::MultiWaiter) {
+        gen_multi_waiter(keys, MultiWaiterFamily::ZSet, rng, multi_waited, ops);
+        return;
+    }
     let blocking_bias = matches!(profile, Profile::BlockingHeavy);
     let r = rng.random_range(0..100);
     let t = think(rng);
@@ -1068,6 +1200,83 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn multi_waiter_at_most_one_blocking_pop_per_key_per_client() {
+        // Binding soundness guard: on the MultiWaiter path each client may park
+        // on a key at most once across its whole script (the exact FIFO join
+        // keeps a client's first ordinal per key, so a second wait would be
+        // judged against a stale registration).
+        const BLOCKING: &[&str] = &["blpop", "brpop", "bzpopmin", "bzpopmax"];
+        for seed in 0..60 {
+            let w = Workload::generate(seed, Profile::MultiWaiter, 4, 40);
+            for c in &w.clients {
+                let mut seen: std::collections::HashSet<Vec<u8>> = Default::default();
+                for op in c
+                    .ops
+                    .iter()
+                    .filter(|o| BLOCKING.contains(&o.command.as_str()))
+                {
+                    let key = op.args[0].to_vec();
+                    assert!(
+                        seen.insert(key.clone()),
+                        "seed {seed} client {} blocked twice on key {:?} (multi-waiter guard breached)",
+                        c.client_id,
+                        String::from_utf8_lossy(&key)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn multi_waiter_allows_more_than_one_client_per_key() {
+        // The inverse of `blocking_ops_single_owner_per_key`, scoped to the
+        // MultiWaiter path: at least one key must receive blocking pops from
+        // more than one client (otherwise no concurrent multi-waiter race is
+        // exercised). Every blocking pop still carries the long timeout, and
+        // producers still appear so the parked waiters can be served.
+        const BLOCKING: &[&str] = &["blpop", "brpop", "bzpopmin", "bzpopmax"];
+        let mut saw_multi_client_key = false;
+        let mut saw_producer = false;
+        for seed in 0..60 {
+            let w = Workload::generate(seed, Profile::MultiWaiter, 4, 40);
+            // key -> set of client ids that block on it.
+            let mut clients_per_key: std::collections::HashMap<
+                Vec<u8>,
+                std::collections::HashSet<u64>,
+            > = Default::default();
+            for c in &w.clients {
+                for op in &c.ops {
+                    if BLOCKING.contains(&op.command.as_str()) {
+                        assert_eq!(
+                            String::from_utf8_lossy(&op.args[1]),
+                            MULTI_WAITER_TIMEOUT,
+                            "multi-waiter blocking pop must carry the long timeout"
+                        );
+                        clients_per_key
+                            .entry(op.args[0].to_vec())
+                            .or_default()
+                            .insert(c.client_id);
+                    }
+                    if matches!(op.command.as_str(), "rpush" | "zadd") {
+                        saw_producer = true;
+                    }
+                }
+            }
+            if clients_per_key.values().any(|clients| clients.len() > 1) {
+                saw_multi_client_key = true;
+            }
+        }
+        assert!(
+            saw_multi_client_key,
+            "MultiWaiter must produce at least one key with blocking pops from >1 client"
+        );
+        assert!(
+            saw_producer,
+            "MultiWaiter must emit producers to serve parked waiters"
+        );
     }
 
     #[test]

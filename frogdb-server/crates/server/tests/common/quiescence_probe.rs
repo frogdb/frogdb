@@ -15,7 +15,7 @@
 
 use frogdb_testing::{
     ExpiryIndexSnapshot, LockTableSnapshot, MemoryCheckSnapshot, QuiescenceViolation,
-    WaitQueueSnapshot, check_expiry_index_consistent, check_locktable_empty,
+    WaitQueueSnapshot, WaiterOrdinal, check_expiry_index_consistent, check_locktable_empty,
     check_memory_accounting, check_waitqueue_empty,
 };
 
@@ -101,6 +101,17 @@ fn as_array(r: &OperationResult) -> Option<&[OperationResult]> {
     }
 }
 
+/// Raw bytes of a bulk-string field (the WAITQUEUE dump encodes each parked
+/// key as a bulk string via `format_key_for_display`; ASCII keys round-trip
+/// byte-for-byte, so these bytes join directly against the recorder's served
+/// key from a `blpop` `key|elem` reply).
+fn as_bytes(r: &OperationResult) -> Option<&[u8]> {
+    match r {
+        OperationResult::String(b) => Some(b.as_ref()),
+        _ => None,
+    }
+}
+
 /// Iterate a RESP2-flattened top-level `shard:<id> → detail` map, yielding
 /// `(shard_id, detail)`. A sentinel bulk string (`# …`) yields nothing.
 fn shard_entries(reply: &OperationResult) -> Vec<(usize, &OperationResult)> {
@@ -134,7 +145,8 @@ pub fn parse_locktable(reply: &OperationResult) -> Vec<LockTableSnapshot> {
         .collect()
 }
 
-/// Parse a `DEBUG WAITQUEUE` reply, reading each shard's `total_waiters` count.
+/// Parse a `DEBUG WAITQUEUE` reply, reading each shard's `total_waiters` count
+/// and the nested `keys[].waiters[]` per-waiter registration ordinals.
 pub fn parse_waitqueue(reply: &OperationResult) -> Vec<WaitQueueSnapshot> {
     shard_entries(reply)
         .into_iter()
@@ -144,9 +156,41 @@ pub fn parse_waitqueue(reply: &OperationResult) -> Vec<WaitQueueSnapshot> {
                 .and_then(as_int)
                 .unwrap_or(0)
                 .max(0) as usize,
-            waiters: Vec::new(),
+            waiters: parse_waiters(detail),
         })
         .collect()
+}
+
+/// Walk a shard's `keys → waiters` nesting, flattening every waiter into a
+/// [`WaiterOrdinal`] carrying its parked key, `conn_id`, and `registration_seq`
+/// (the queue-wide monotonic ordinal used by the exact FIFO checker).
+fn parse_waiters(detail: &OperationResult) -> Vec<WaiterOrdinal> {
+    let mut out = Vec::new();
+    let Some(keys) = field(detail, "keys").and_then(as_array) else {
+        return out;
+    };
+    for key_entry in keys {
+        let Some(key_bytes) = field(key_entry, "key").and_then(as_bytes) else {
+            continue;
+        };
+        let Some(waiters) = field(key_entry, "waiters").and_then(as_array) else {
+            continue;
+        };
+        for w in waiters {
+            let (Some(conn_id), Some(registration_seq)) = (
+                field(w, "conn_id").and_then(as_int),
+                field(w, "registration_seq").and_then(as_int),
+            ) else {
+                continue;
+            };
+            out.push(WaiterOrdinal {
+                key: key_bytes.to_vec(),
+                conn_id: conn_id.max(0) as u64,
+                registration_seq: registration_seq.max(0) as u64,
+            });
+        }
+    }
+    out
 }
 
 /// Parse a `DEBUG MEMORY-CHECK` reply (always a per-shard map, no sentinel).
@@ -254,6 +298,63 @@ mod tests {
         assert_eq!(snaps[0].shard_id, 2);
         assert_eq!(snaps[0].total_waiters, 3);
         assert!(check_waitqueue_empty(&snaps).is_err());
+    }
+
+    #[test]
+    fn waitqueue_parses_per_waiter_ordinals() {
+        // shard:1 -> { total_waiters: 3, keys: [
+        //   { key: "{t}ls0", waiters: [ {conn_id:7, op:BLPOP, registration_seq:2, has_deadline:1},
+        //                               {conn_id:9, op:BRPOP, registration_seq:5, has_deadline:1} ] },
+        //   { key: "{t}ls1", waiters: [ {conn_id:4, op:BLPOP, registration_seq:8, has_deadline:0} ] } ] }
+        let waiter = |conn: i64, op: &str, seq: i64, dl: i64| {
+            arr(vec![
+                s("conn_id"),
+                OperationResult::Integer(conn),
+                s("op"),
+                s(op),
+                s("registration_seq"),
+                OperationResult::Integer(seq),
+                s("has_deadline"),
+                OperationResult::Integer(dl),
+            ])
+        };
+        let reply = arr(vec![
+            s("shard:1"),
+            arr(vec![
+                s("total_waiters"),
+                OperationResult::Integer(3),
+                s("keys"),
+                arr(vec![
+                    arr(vec![
+                        s("key"),
+                        s("{t}ls0"),
+                        s("waiters"),
+                        arr(vec![waiter(7, "BLPOP", 2, 1), waiter(9, "BRPOP", 5, 1)]),
+                    ]),
+                    arr(vec![
+                        s("key"),
+                        s("{t}ls1"),
+                        s("waiters"),
+                        arr(vec![waiter(4, "BLPOP", 8, 0)]),
+                    ]),
+                ]),
+            ]),
+        ]);
+        let snaps = parse_waitqueue(&reply);
+        assert_eq!(snaps.len(), 1);
+        assert_eq!(snaps[0].total_waiters, 3);
+        assert_eq!(snaps[0].waiters.len(), 3);
+        // First key's two waiters, in registration order.
+        assert_eq!(snaps[0].waiters[0].key, b"{t}ls0");
+        assert_eq!(snaps[0].waiters[0].conn_id, 7);
+        assert_eq!(snaps[0].waiters[0].registration_seq, 2);
+        assert_eq!(snaps[0].waiters[1].key, b"{t}ls0");
+        assert_eq!(snaps[0].waiters[1].conn_id, 9);
+        assert_eq!(snaps[0].waiters[1].registration_seq, 5);
+        // Second key's single waiter.
+        assert_eq!(snaps[0].waiters[2].key, b"{t}ls1");
+        assert_eq!(snaps[0].waiters[2].conn_id, 4);
+        assert_eq!(snaps[0].waiters[2].registration_seq, 8);
     }
 
     #[test]

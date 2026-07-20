@@ -28,6 +28,7 @@ fn run_and_check(
         &run.history,
         &run.final_elements,
         Some(&run.quiescence),
+        Some(&run.registration_order),
         num_shards,
     );
     if !report.passed() {
@@ -118,6 +119,43 @@ fn quiescence_stage_runs_and_is_clean() {
     assert!(
         report.passed(),
         "small clean workload must pass all stages: {:?}",
+        report.violations
+    );
+}
+
+// Multi-waiter exact-FIFO smoke test: a small `Profile::MultiWaiter` workload
+// where every client may park a long-timeout blocking pop on shared list/zset
+// keys, so several waiters register concurrently on one key and a delayed
+// producer serves them. The mid-run `DEBUG WAITQUEUE` prober correlates each
+// waiter's registration ordinal to its client via the CLIENT ID map, feeding
+// the exact FIFO wake-order checker (not the invoke-time proxy).
+//
+// Two assertions guard against a silently-disabled checker: (1) the prober +
+// CLIENT ID join must have produced at least one `(key, client_id)` ordinal
+// entry — a broken join (mismatched id space, or a WAITQUEUE key that does not
+// round-trip to the served key) would empty the map and quietly fall the exact
+// checker back to nothing; (2) a correct, FIFO-fair server serves in
+// registration order, so `check_all` must pass. If it fails on served order,
+// triage harness-vs-server per the bug workflow before pinning a regression.
+#[test]
+fn multi_waiter_exact_fifo_is_clean() {
+    let workload = Workload::generate(0, Profile::MultiWaiter, 4, 12);
+    let run = run_workload_capturing(&workload, 2, true);
+    assert!(
+        !run.registration_order.is_empty(),
+        "prober + CLIENT ID join produced no registration ordinals — the exact \
+         FIFO checker is silently disabled (join mismatch or key-encoding drift)"
+    );
+    let report = check_all(
+        &run.history,
+        &run.final_elements,
+        Some(&run.quiescence),
+        Some(&run.registration_order),
+        2,
+    );
+    assert!(
+        report.passed(),
+        "multi-waiter workload violated invariants: {:?}",
         report.violations
     );
 }

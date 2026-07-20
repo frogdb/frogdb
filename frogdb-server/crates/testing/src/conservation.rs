@@ -313,6 +313,19 @@ impl WaiterRegistrationOrder {
     fn get(&self, key: &Bytes, client_id: u64) -> Option<u64> {
         self.map.get(&(key.clone(), client_id)).copied()
     }
+
+    /// Number of distinct `(key, client_id)` registrations recorded. A run's
+    /// smoke test asserts this is non-zero so a silent CLIENT ID ↔ WAITQUEUE
+    /// join mismatch (which would empty the map and silently disable the exact
+    /// checker via the all-known guard) fails loudly instead.
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    /// True when no registration was recorded (no successful join).
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
 }
 
 /// Exact FIFO wake-order: for each key whose served blocking pops *all* have

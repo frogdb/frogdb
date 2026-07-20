@@ -12,10 +12,10 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use frogdb_testing::{
-    HashModel, History, KVModel, ListModel, StreamGroupModel, ZSetModel,
-    check_exactly_once_delivery, check_fifo_wake_order, check_linearizability_bounded,
-    check_pel_conservation, check_watch_no_false_negative, default_keys_of, is_errored_exec_result,
-    partition_by_key,
+    HashModel, History, KVModel, ListModel, StreamGroupModel, WaiterRegistrationOrder, ZSetModel,
+    check_exactly_once_delivery, check_fifo_wake_order, check_fifo_wake_order_exact,
+    check_linearizability_bounded, check_pel_conservation, check_watch_no_false_negative,
+    default_keys_of, is_errored_exec_result, partition_by_key,
 };
 
 use super::quiescence_probe::{QuiescenceSnapshots, check_quiescence};
@@ -82,16 +82,24 @@ fn model_for(sub: &History) -> Option<Family> {
 ///
 /// `quiescence` carries the tier-4 DEBUG snapshots gathered once the server
 /// quiesced; pass `None` to skip the stage (e.g. non-turmoil unit self-tests).
+///
+/// `registration_order` carries the mid-run `DEBUG WAITQUEUE` observations
+/// (per-`(key, client_id)` registration ordinals) correlated via the CLIENT ID
+/// map; when present, stage 3 runs [`check_fifo_wake_order_exact`] instead of
+/// the invoke-time proxy [`check_fifo_wake_order`]. Pass `None` for unit
+/// self-tests that have no live prober.
 pub fn check_all(
     history: &History,
     final_elements: &HashMap<Bytes, Vec<Bytes>>,
     quiescence: Option<&QuiescenceSnapshots>,
+    registration_order: Option<&WaiterRegistrationOrder>,
     num_shards: usize,
 ) -> InvariantReport {
     check_all_with(
         history,
         final_elements,
         quiescence,
+        registration_order,
         num_shards,
         MAX_OPS_PER_KEY,
         MAX_WGL_STATES,
@@ -104,6 +112,7 @@ pub fn check_all_with(
     history: &History,
     final_elements: &HashMap<Bytes, Vec<Bytes>>,
     quiescence: Option<&QuiescenceSnapshots>,
+    registration_order: Option<&WaiterRegistrationOrder>,
     num_shards: usize,
     max_ops_per_key: usize,
     max_states: u64,
@@ -151,7 +160,14 @@ pub fn check_all_with(
             .violations
             .push(format!("exactly-once delivery: {e}"));
     }
-    if let Err(e) = check_fifo_wake_order(history) {
+    // Exact when the mid-run prober supplied per-waiter registration ordinals
+    // (a key whose served waiters are all known is judged only by ordinals);
+    // otherwise the invoke-time proxy.
+    let fifo_result = match registration_order {
+        Some(order) => check_fifo_wake_order_exact(history, order),
+        None => check_fifo_wake_order(history),
+    };
+    if let Err(e) = fifo_result {
         report.violations.push(format!("FIFO wake order: {e}"));
     }
     if let Err(e) = check_watch_no_false_negative(history) {
@@ -279,7 +295,7 @@ mod tests {
         h.respond(s, Some(Bytes::from("OK")));
         let g = h.invoke(2, "get", vec![Bytes::from("{t}x")]);
         h.respond(g, Some(Bytes::from("1")));
-        assert!(check_all(&h, &Default::default(), None, 2).passed());
+        assert!(check_all(&h, &Default::default(), None, None, 2).passed());
 
         // dirty: GET x -> 2 with no writer of 2 -> non-linearizable
         let mut d = History::new();
@@ -287,7 +303,7 @@ mod tests {
         d.respond(s, Some(Bytes::from("OK")));
         let g = d.invoke(2, "get", vec![Bytes::from("{t}x")]);
         d.respond(g, Some(Bytes::from("2")));
-        assert!(!check_all(&d, &Default::default(), None, 2).passed());
+        assert!(!check_all(&d, &Default::default(), None, None, 2).passed());
     }
 
     #[test]
@@ -309,7 +325,7 @@ mod tests {
         for id in ids {
             h.respond(id, Some(Bytes::from("OK")));
         }
-        let report = check_all_with(&h, &Default::default(), None, 2, MAX_OPS_PER_KEY, 1);
+        let report = check_all_with(&h, &Default::default(), None, None, 2, MAX_OPS_PER_KEY, 1);
         assert!(
             report.passed(),
             "inconclusive must not fail: {:?}",
@@ -325,7 +341,7 @@ mod tests {
     #[test]
     fn quiescence_is_skipped_when_no_snapshots() {
         let h = History::new();
-        let report = check_all(&h, &Default::default(), None, 2);
+        let report = check_all(&h, &Default::default(), None, None, 2);
         assert!(!report.quiescence_checked);
     }
 
@@ -335,7 +351,7 @@ mod tests {
         // An empty snapshot bundle is the quiesced-server case: every checker
         // accepts zero snapshots, so the stage runs and finds no violation.
         let snap = QuiescenceSnapshots::default();
-        let report = check_all(&h, &Default::default(), Some(&snap), 2);
+        let report = check_all(&h, &Default::default(), Some(&snap), None, 2);
         assert!(
             report.quiescence_checked,
             "stage must run when snapshots present"
@@ -360,7 +376,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let report = check_all(&h, &Default::default(), Some(&snap), 2);
+        let report = check_all(&h, &Default::default(), Some(&snap), None, 2);
         assert!(report.quiescence_checked);
         assert!(
             report
@@ -384,7 +400,7 @@ mod tests {
         let mut h = History::new();
         let p = h.invoke(1, "rpush", vec![Bytes::from("{t}L"), Bytes::from("zzz")]);
         h.respond(p, Some(Bytes::from("1")));
-        let report = check_all(&h, &Default::default(), None, 2);
+        let report = check_all(&h, &Default::default(), None, None, 2);
         assert!(!report.passed(), "a lost element must fail the report");
         assert!(
             report
@@ -402,7 +418,7 @@ mod tests {
         let mut h = History::new();
         let g = h.invoke(1, "get", vec![Bytes::from("{t}g")]);
         h.respond(g, Some(Bytes::from("phantom")));
-        let report = check_all(&h, &Default::default(), None, 2);
+        let report = check_all(&h, &Default::default(), None, None, 2);
         assert!(
             !report.passed(),
             "a phantom read must fail the report: {:?}",
