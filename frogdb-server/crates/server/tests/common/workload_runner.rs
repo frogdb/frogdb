@@ -121,10 +121,19 @@ pub fn run_workload_capturing(
     // Mid-run prober observations: (shard, waiter ordinal) folded on every poll.
     let waiter_obs: Arc<Mutex<Vec<(u16, WaiterOrdinal)>>> = Arc::new(Mutex::new(Vec::new()));
 
+    // Post-workload PING sweep: AND-fold, across every workload client (NOT
+    // the prober — it's not a workload client), whether its connection still
+    // replied `+PONG` after its scripted ops finished. A leaked/wedged
+    // connection or a shard that stopped servicing one is a bug even when the
+    // wait queue looks empty, so this feeds `QuiescenceSnapshots::
+    // connections_responsive` (see quiescence_probe.rs).
+    let connections_responsive: Arc<Mutex<bool>> = Arc::new(Mutex::new(true));
+
     for script in &workload.clients {
         let h = history.clone();
         let script = script.clone();
         let client_ids = client_ids.clone();
+        let connections_responsive = connections_responsive.clone();
         let client_name = format!("client{}", script.client_id);
         sim.client(client_name, async move {
             let addr = turmoil::lookup(SERVER_HOST);
@@ -143,6 +152,17 @@ pub fn run_workload_capturing(
                 }
                 run_op(&h, script.client_id, op, &mut stream, &mut buf, &mut acc).await?;
             }
+
+            // Final action: a trailing PING this connection must still answer.
+            // A transport error counts as unresponsive too, rather than
+            // aborting the whole sim run.
+            let responsive = ping_is_pong(&mut stream, &mut buf, &mut acc)
+                .await
+                .unwrap_or(false);
+            if !responsive {
+                *connections_responsive.lock().unwrap() = false;
+            }
+
             Ok::<(), Box<dyn std::error::Error>>(())
         });
     }
@@ -224,7 +244,8 @@ pub fn run_workload_capturing(
 
     let history = history.lock().unwrap().to_testing_history();
     let final_elements = final_elements.lock().unwrap().clone();
-    let quiescence = quiescence.lock().unwrap().clone();
+    let mut quiescence = quiescence.lock().unwrap().clone();
+    quiescence.connections_responsive = *connections_responsive.lock().unwrap();
 
     // Build the true registration order: invert the CLIENT ID map (conn_id →
     // client_id) and join each observed waiter ordinal onto its workload client.
@@ -280,6 +301,20 @@ async fn client_id_query(
         OperationResult::Integer(n) if n >= 0 => Some(n as u64),
         _ => None,
     })
+}
+
+/// Send `PING` on `stream` and report whether the reply was `+PONG`. Used as
+/// each workload client's trailing action in the post-drain responsiveness
+/// sweep (see `connections_responsive` in `run_workload_capturing`).
+async fn ping_is_pong(
+    stream: &mut TcpStream,
+    buf: &mut [u8],
+    acc: &mut Vec<u8>,
+) -> Result<bool, BoxError> {
+    use tokio::io::AsyncWriteExt;
+    stream.write_all(&encode_command(&[b"PING"])).await?;
+    let reply = read_reply(stream, buf, acc).await?;
+    Ok(matches!(&reply, OperationResult::String(b) if b.as_ref() == b"PONG"))
 }
 
 /// Issue `DEBUG <subcommand>` on `stream` and return the parsed reply.

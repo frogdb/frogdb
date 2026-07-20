@@ -388,6 +388,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn unresponsive_connection_is_a_quiescence_violation() {
+        let h = History::new();
+        let snap = QuiescenceSnapshots {
+            connections_responsive: false,
+            ..Default::default()
+        };
+        let report = check_all(&h, &Default::default(), Some(&snap), None, 2);
+        assert!(report.quiescence_checked);
+        assert!(
+            report.violations.iter().any(|v| v.contains("unresponsive")),
+            "expected an unresponsive-connection violation, got {:?}",
+            report.violations
+        );
+    }
+
     // ---- Harness self-tests (silent-green guard) ----
     //
     // A deliberately broken shim must be caught by the pipeline, proving the

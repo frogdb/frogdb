@@ -21,18 +21,39 @@ use frogdb_testing::{
 
 use super::sim_harness::OperationResult;
 
-/// The four parsed DEBUG-reply snapshot sets gathered once the server quiesces.
-#[derive(Debug, Default, Clone)]
+/// The four parsed DEBUG-reply snapshot sets gathered once the server
+/// quiesces, plus the post-workload PING sweep result over every sim client
+/// connection.
+#[derive(Debug, Clone)]
 pub struct QuiescenceSnapshots {
     pub lock_table: Vec<LockTableSnapshot>,
     pub wait_queue: Vec<WaitQueueSnapshot>,
     pub memory: Vec<MemoryCheckSnapshot>,
     pub expiry_index: Vec<ExpiryIndexSnapshot>,
+    /// AND-fold, across every sim workload client, of "got `+PONG` for a
+    /// trailing `PING` sent as its final action". `true` (responsive) by
+    /// default so snapshot bundles built without a live PING sweep (unit
+    /// self-tests) don't manufacture a violation.
+    pub connections_responsive: bool,
+}
+
+impl Default for QuiescenceSnapshots {
+    fn default() -> Self {
+        Self {
+            lock_table: Vec::new(),
+            wait_queue: Vec::new(),
+            memory: Vec::new(),
+            expiry_index: Vec::new(),
+            connections_responsive: true,
+        }
+    }
 }
 
 impl QuiescenceSnapshots {
     /// Build the snapshot bundle from the four raw DEBUG replies (in the fixed
     /// LOCKTABLE / WAITQUEUE / MEMORY-CHECK / EXPIRY-INDEX-CHECK order).
+    /// `connections_responsive` defaults to `true`; the caller overwrites it
+    /// with the PING sweep result once the workload clients finish.
     pub fn from_replies(
         locktable: &OperationResult,
         waitqueue: &OperationResult,
@@ -44,12 +65,13 @@ impl QuiescenceSnapshots {
             wait_queue: parse_waitqueue(waitqueue),
             memory: parse_memory_check(memory),
             expiry_index: parse_expiry_index(expiry),
+            ..Default::default()
         }
     }
 }
 
-/// Run the four tier-4 quiescence checkers over the gathered snapshots,
-/// returning one human-readable string per violated invariant (empty = clean).
+/// Run the tier-4 quiescence checkers over the gathered snapshots, returning
+/// one human-readable string per violated invariant (empty = clean).
 pub fn check_quiescence(snap: &QuiescenceSnapshots) -> Vec<String> {
     let mut violations = Vec::new();
     let mut record = |r: Result<(), QuiescenceViolation>| {
@@ -61,6 +83,9 @@ pub fn check_quiescence(snap: &QuiescenceSnapshots) -> Vec<String> {
     record(check_waitqueue_empty(&snap.wait_queue));
     record(check_memory_accounting(&snap.memory));
     record(check_expiry_index_consistent(&snap.expiry_index));
+    if !snap.connections_responsive {
+        violations.push("quiescence: sim client connection(s) unresponsive post-drain".to_string());
+    }
     violations
 }
 
@@ -463,6 +488,7 @@ mod tests {
                 shard_id: 0,
                 anomaly_count: 1,
             }],
+            connections_responsive: true,
         };
         let violations = check_quiescence(&snap);
         assert_eq!(
