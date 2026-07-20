@@ -31,6 +31,7 @@ impl Command for MigrateCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::ServerWide(ServerWideOp::Migrate),
         };
         &SPEC

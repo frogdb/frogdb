@@ -193,6 +193,52 @@ pub enum ConnectionLevelOp {
     Persistence,
 }
 
+/// Which connection-local mutable capabilities a connection command needs wired
+/// into its [`ConnCtx`](crate::conn_command::ConnCtx).
+///
+/// Declared in the command's [`CommandSpec`](crate::command_spec::CommandSpec)
+/// (`mutation` field), so the connection dispatcher selects the `ConnCtx` builder
+/// from this declared datum, **never** from the command's string name. This is
+/// the capability-oriented sibling of [`ExecutionStrategy::ConnectionLevel`]'s
+/// [`ConnectionLevelOp`] — a finer, *capability* cut of the routing op: CLIENT
+/// and CONFIG are both `ConnectionLevelOp::Admin`, but CLIENT needs
+/// [`ConnMutation::Client`] wiring while CONFIG is a pure read
+/// ([`ConnMutation::None`]). The two fields stay orthogonal (routing vs.
+/// capability); [`CommandSpec::validate`](crate::command_spec::CommandSpec::validate)
+/// cross-checks that the declared `mutation` is legal for the command's strategy.
+///
+/// A pure `Copy` identity enum, mirroring [`ServerWideOp`] / [`ScatterGatherOp`]:
+/// the builder reads the declaration and dispatches through an exhaustive
+/// `match`, so a new capability variant without a builder arm is a compile error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConnMutation {
+    /// Pure reads (CONFIG, INFO, ACL read paths, DEBUG, HOTKEYS, SLOWLOG,
+    /// MEMORY, LATENCY, STATUS, FT.CURSOR, BGSAVE/LASTSAVE, the scripting
+    /// family, …). Dispatched through the read-only `conn_ctx` view; every
+    /// capability slot is `None`. The default for every non-connection command.
+    #[default]
+    None,
+    /// Mutates per-connection auth/protocol/transaction state without extra IO
+    /// plumbing (AUTH, HELLO, RESET, ASKING, READONLY, READWRITE, and the
+    /// MULTI/DISCARD/WATCH/UNWATCH transaction-control commands). Wires
+    /// [`ConnCtx::conn_state`](crate::conn_command::ConnCtx::conn_state) = `Some`.
+    Auth,
+    /// CLIENT: mutates per-connection state *and* drives client-tracking IO.
+    /// Wires [`ConnCtx::conn_state`](crate::conn_command::ConnCtx::conn_state)
+    /// and [`ConnCtx::tracking`](crate::conn_command::ConnCtx::tracking) = `Some`.
+    Client,
+    /// MONITOR: registers the connection on the executed-command feed. Wires
+    /// [`ConnCtx::monitor`](crate::conn_command::ConnCtx::monitor) = `Some` (its
+    /// disjoint-borrow `MonitorIo` bundle is owned at the dispatch call site).
+    Monitor,
+    /// Pub/sub family (SUBSCRIBE/…/PUBLISH/PUBSUB): multi-response, needs the
+    /// pub/sub machinery. Wires
+    /// [`ConnCtx::pubsub`](crate::conn_command::ConnCtx::pubsub) = `Some` (its
+    /// `PubSubIo` bundle is owned at the dispatch call site) and dispatches via
+    /// [`execute_multi`](crate::conn_command::ConnectionCommand::execute_multi).
+    PubSub,
+}
+
 /// Requests a runtime replication *role transition* on this node.
 ///
 /// The single seam through which a command handler (or the cluster failover
@@ -1507,6 +1553,7 @@ mod tests {
                         event: crate::command_spec::EventSpec::Suppressed,
                         requires_same_slot: false,
                         lookup: crate::command_spec::LookupSpec::None,
+                        mutation: crate::command::ConnMutation::None,
                         strategy: ExecutionStrategy::Standard,
                     };
                     &SPEC

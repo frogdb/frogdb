@@ -36,6 +36,7 @@ impl Command for TypeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::FirstKey,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -70,6 +71,7 @@ impl Command for RenameCommand {
             event: EventSpec::Dynamic,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -151,6 +153,7 @@ impl Command for RenamenxCommand {
             event: EventSpec::Dynamic,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -228,6 +231,7 @@ impl Command for TouchCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::EveryKey,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::ScatterGather(ScatterGatherOp::Touch),
         };
         &SPEC
@@ -267,6 +271,7 @@ impl Command for UnlinkCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::ScatterGather(ScatterGatherOp::Unlink),
         };
         &SPEC
@@ -316,6 +321,7 @@ impl Command for ObjectCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -511,6 +517,7 @@ impl Command for CopyCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -600,6 +607,7 @@ impl Command for RandomkeyCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::ServerWide(ServerWideOp::RandomKey),
         };
         &SPEC

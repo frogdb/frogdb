@@ -28,6 +28,7 @@ impl Command for XreadCommand {
             requires_same_slot: // Blocking XREAD requires all keys to be on the same shard
         true,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Blocking { default_timeout: None, },
         };
         &SPEC
@@ -169,6 +170,7 @@ impl Command for XreadgroupCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Blocking {
                 default_timeout: None,
             },

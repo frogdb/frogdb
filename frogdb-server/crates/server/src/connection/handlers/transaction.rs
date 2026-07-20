@@ -393,31 +393,37 @@ impl ConnectionHandler {
             .get_entry(cmd_name)
             .and_then(|entry| entry.as_connection());
         if let Some(command) = migrated {
-            // Pub/sub deferred to EXEC: multi-response with bespoke MULTI framing
-            // (PUBLISH/SPUBLISH single; SUBSCRIBE-family one confirmation per
-            // channel; PUBSUB/SSUBSCRIBE/SUNSUBSCRIBE rejected inside MULTI). See
-            // `exec_pubsub_in_transaction`.
-            if matches!(
-                command.spec().strategy,
-                frogdb_core::ExecutionStrategy::ConnectionLevel(
-                    frogdb_core::ConnectionLevelOp::PubSub
-                )
-            ) {
-                return self
-                    .exec_pubsub_in_transaction(cmd_name, command, args)
-                    .await;
-            }
-            // CLIENT mutates per-connection state and drives tracking IO, so it
-            // dispatches through the mutable builder (`conn_ctx_clientmut`),
-            // exactly as on the main path (`dispatch_connection_command`). Every
-            // other migrated connection command is a pure read over `conn_ctx`.
-            if cmd_name == "CLIENT" {
-                return (
-                    command.execute(&mut self.conn_ctx_clientmut(), args).await,
+            // The deferred connection command selects its dispatch shape from its
+            // declared `mutation` capability, exactly as on the main path
+            // (`dispatch_connection_command`) — never from its string name.
+            return match command.spec().mutation {
+                // Pub/sub deferred to EXEC: multi-response with bespoke MULTI
+                // framing (PUBLISH/SPUBLISH single; SUBSCRIBE-family one
+                // confirmation per channel; PUBSUB/SSUBSCRIBE/SUNSUBSCRIBE
+                // rejected inside MULTI). This is a distinct framing path from the
+                // main `execute_pubsub`. See `exec_pubsub_in_transaction`.
+                frogdb_core::ConnMutation::PubSub => {
+                    self.exec_pubsub_in_transaction(cmd_name, command, args)
+                        .await
+                }
+                // MONITOR owns its `MonitorIo` at the call site; route it through
+                // the dedicated builder so a deferred MONITOR wires
+                // `ConnCtx::monitor` rather than hitting the read-only view (which
+                // has `monitor = None`).
+                frogdb_core::ConnMutation::Monitor => {
+                    (self.execute_monitor(command, args).await, vec![])
+                }
+                // Read-only (CONFIG/…), AUTH-class, and CLIENT views build in
+                // place from the same declared capability.
+                mutation @ (frogdb_core::ConnMutation::None
+                | frogdb_core::ConnMutation::Auth
+                | frogdb_core::ConnMutation::Client) => (
+                    command
+                        .execute(&mut self.conn_ctx_for(mutation), args)
+                        .await,
                     vec![],
-                );
-            }
-            return (command.execute(&mut self.conn_ctx(), args).await, vec![]);
+                ),
+            };
         }
 
         // The only connection-level command not registered as a

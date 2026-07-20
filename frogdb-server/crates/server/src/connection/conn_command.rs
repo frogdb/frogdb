@@ -9,15 +9,29 @@
 //!
 //! CONFIG was the first command migrated behind this seam: it is registered as
 //! `CommandImpl::Connection` and dispatched through the registry union. Every
-//! connection group has since followed, so the registry union is now the sole
-//! connection-command dispatch path and the legacy `router.rs` op→handler
-//! machinery has been removed.
+//! *connection-level* command group has since followed, so the registry union
+//! (see [`ConnectionHandler::dispatch_connection_command`]) is the sole dispatch
+//! path for genuine connection commands, and the old `router.rs` name→op lookup
+//! *table* has been deleted.
+//!
+//! The migration is **not** finished, and the two worlds still coexist: the
+//! `handle_*` bodies under [`connection::handlers`](crate::connection::handlers)
+//! are still live. They back (a) the shard-scatter *server-wide* / *scatter*
+//! commands routed through the data-driven `ServerWideOp` / `ScatterGatherOp`
+//! seams (`dispatch_server_wide` / `dispatch_scatter`), which is their proper
+//! home, and (b) work a migrated connection command cannot reach through the
+//! narrow `ConnCtx` — EXEC's transaction orchestration
+//! (`handlers::transaction::execute_transaction`) and the scripting/search
+//! helpers a `ScriptingProvider` / server-wide op delegates into. What is gone
+//! is the name-keyed router that once *selected* a `handle_*` for every command;
+//! what remains is those handler bodies, reached from the typed-op dispatch or
+//! from an executor's provider impl, never from a name→handler table.
 
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, BoxFuture, CommandFlags, CommandSpec, ConfigProvider, ConnectionLevelOp,
-    CursorReadBatch, CursorStoreProvider, EventSpec, ExecutionStrategy, KeySpec, LookupSpec,
-    ShardMessage, WaiterWake, WalStrategy,
+    AccessSpec, Arity, BoxFuture, CommandFlags, CommandSpec, ConfigProvider, ConnMutation,
+    ConnectionLevelOp, CursorReadBatch, CursorStoreProvider, EventSpec, ExecutionStrategy, KeySpec,
+    LookupSpec, ShardMessage, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
@@ -115,72 +129,70 @@ impl ConnectionHandler {
         )
     }
 
-    /// Build the read-only connection-command view over this handler's state:
-    /// the ambient view plus the live read providers — real INFO aggregation
-    /// and scripting entry points (`self`), the DEBUG capability, and the
-    /// connection's negotiated protocol version and authenticated username.
-    pub(crate) fn conn_ctx(&self) -> ConnCtx<'_> {
-        Self::base_ctx(
-            &self.admin,
-            &self.core,
-            &self.observability,
-            &self.cluster,
-            &self.memory_diag,
-            self.num_shards,
-        )
-        .with_full_reads(
-            self,
-            self,
-            // DEBUG dispatches through this read-only builder; wire its
-            // handler-only capabilities (tracer, per-shard round-trips, bundle
-            // generation, subscription counts, the debug-command gate).
-            Some(self),
-            self.state.protocol_version,
-            self.state.username(),
-        )
-    }
-
-    /// Build a connection-command view that carries the mutable connection-state
-    /// capability ([`ConnCtx::conn_state`] = `Some`), for the mutating
-    /// AUTH/HELLO and RESET/ASKING/READONLY/READWRITE dispatch paths.
+    /// Build the [`ConnCtx`] a connection command declared it needs, selecting
+    /// the capability wiring from the command's [`ConnMutation`] — declared in
+    /// its [`CommandSpec`](frogdb_core::CommandSpec) — never from its string
+    /// name. This is the single builder that subsumes the former
+    /// `conn_ctx` / `conn_ctx_authmut` / `conn_ctx_clientmut` trio: the
+    /// "which-slots-are-`Some`" protocol is now one exhaustive `match` the
+    /// compiler checks, not three prose conventions across three methods.
     ///
-    /// This is distinct from [`conn_ctx`](Self::conn_ctx) because the `&mut
-    /// self.state` handle cannot coexist with the shared whole-`self` borrows
-    /// that `conn_ctx` takes for `info: self`/`scripting: self`. These commands
-    /// need neither: they read connection identity through `conn_state`, so the
-    /// no-op/placeholder defaults from [`ConnCtx::new`] stand.
-    pub(crate) fn conn_ctx_authmut(&mut self) -> ConnCtx<'_> {
-        Self::base_ctx(
-            &self.admin,
-            &self.core,
-            &self.observability,
-            &self.cluster,
-            &self.memory_diag,
-            self.num_shards,
-        )
-        .with_conn_state(&mut self.state)
-    }
-
-    /// Build a connection-command view for CLIENT: it carries both the mutable
-    /// connection-state capability ([`ConnCtx::conn_state`] = `Some`) and the
-    /// client-tracking IO plumbing ([`ConnCtx::tracking`] = `Some`).
+    /// The three in-place arms:
     ///
-    /// The two `&mut` borrows are of disjoint handler fields (`self.state` and
-    /// `self.tracking_io`), so they coexist with each other and with
-    /// [`base_ctx`](Self::base_ctx)'s shared dep-group borrows. As with
-    /// [`conn_ctx_authmut`](Self::conn_ctx_authmut), CLIENT reads its identity
-    /// through `conn_state`, so the defaults stand.
-    pub(crate) fn conn_ctx_clientmut(&mut self) -> ConnCtx<'_> {
-        Self::base_ctx(
+    /// * [`ConnMutation::None`] — read-only view: the ambient deps plus the live
+    ///   read providers (real INFO aggregation and scripting entry points via
+    ///   `self`, the DEBUG capability, and the connection's protocol version and
+    ///   authenticated username). Every capability slot but `debug` is `None`.
+    /// * [`ConnMutation::Auth`] — the mutable connection-state capability
+    ///   (`conn_state = Some`) for AUTH/HELLO, the RESET/ASKING/READONLY/
+    ///   READWRITE family, and the MULTI/DISCARD/WATCH/UNWATCH transaction
+    ///   controls. They read identity through `conn_state`, so the ambient
+    ///   placeholders stand for everything else.
+    /// * [`ConnMutation::Client`] — CLIENT's `conn_state = Some` *and*
+    ///   `tracking = Some`. The two `&mut` borrows are of disjoint handler
+    ///   fields (`self.state` and `self.tracking_io`).
+    ///
+    /// [`ConnMutation::Monitor`]/[`ConnMutation::PubSub`] are **not** built here:
+    /// their `MonitorIo`/`PubSubIo` disjoint-borrow bundles are local temporaries
+    /// that must outlive the `ConnCtx`, so they are owned at the dispatch call
+    /// site (see [`execute_monitor`](Self::execute_monitor) /
+    /// [`execute_pubsub`](Self::execute_pubsub)). The connection dispatcher routes
+    /// those two capabilities to those methods from the same declared
+    /// `ConnMutation`, so no command name is consulted anywhere.
+    ///
+    /// The disjointness that made the three separate builders necessary is
+    /// preserved: [`base_ctx`](Self::base_ctx) borrows only the never-a-slot dep
+    /// groups, leaving `self.state`/`self.tracking_io` free for the per-arm `&mut`
+    /// sub-borrows.
+    pub(crate) fn conn_ctx_for(&mut self, mutation: ConnMutation) -> ConnCtx<'_> {
+        let base = Self::base_ctx(
             &self.admin,
             &self.core,
             &self.observability,
             &self.cluster,
             &self.memory_diag,
             self.num_shards,
-        )
-        .with_conn_state(&mut self.state)
-        .with_tracking(&mut self.tracking_io)
+        );
+        match mutation {
+            ConnMutation::None => base.with_full_reads(
+                self,
+                self,
+                // DEBUG dispatches through this read-only view; wire its
+                // handler-only capabilities (tracer, per-shard round-trips,
+                // bundle generation, subscription counts, the debug gate).
+                Some(self),
+                self.state.protocol_version,
+                self.state.username(),
+            ),
+            ConnMutation::Auth => base.with_conn_state(&mut self.state),
+            ConnMutation::Client => base
+                .with_conn_state(&mut self.state)
+                .with_tracking(&mut self.tracking_io),
+            ConnMutation::Monitor | ConnMutation::PubSub => unreachable!(
+                "ConnMutation::{mutation:?} is dispatched via execute_monitor/execute_pubsub, \
+                 which own the Io bundle the ConnCtx borrows; conn_ctx_for is never called for it"
+            ),
+        }
     }
 }
 
@@ -202,6 +214,7 @@ static CONFIG_SPEC: CommandSpec = CommandSpec {
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
     lookup: LookupSpec::None,
+    mutation: frogdb_core::ConnMutation::None,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin),
 };
 
@@ -364,6 +377,7 @@ static FT_CURSOR_SPEC: CommandSpec = CommandSpec {
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
     lookup: LookupSpec::None,
+    mutation: frogdb_core::ConnMutation::None,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin),
 };
 

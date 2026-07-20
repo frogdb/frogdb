@@ -47,6 +47,7 @@ impl Command for SetnxCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -90,6 +91,7 @@ impl Command for SetexCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -134,6 +136,7 @@ impl Command for PsetexCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -176,6 +179,7 @@ impl Command for AppendCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -220,6 +224,7 @@ impl Command for StrlenCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::FirstKey,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -260,6 +265,7 @@ impl Command for GetrangeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::FirstKey,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -306,6 +312,7 @@ impl Command for SetrangeCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -370,6 +377,7 @@ impl Command for GetdelCommand {
             // Counted at the seam from `args[0]` existence *before* the delete,
             // so a present key is a hit even though the handler removes it.
             lookup: LookupSpec::FirstKey,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -416,6 +424,7 @@ impl Command for GetexCommand {
             // the lookup and returns an error without resolving the key, so the
             // handler — not a blanket seam probe — decides when a lookup counts.
             lookup: LookupSpec::Reported,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -528,6 +537,7 @@ impl Command for IncrCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -574,6 +584,7 @@ impl Command for DecrCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -620,6 +631,7 @@ impl Command for IncrbyCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -667,6 +679,7 @@ impl Command for DecrbyCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -718,6 +731,7 @@ impl Command for IncrbyfloatCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -775,6 +789,7 @@ impl Command for MgetCommand {
             // One lookup per key, counted at the seam from key existence. The
             // cross-shard scatter path counts its own subset in `scatter_mget`.
             lookup: LookupSpec::EveryKey,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::ScatterGather(ScatterGatherOp::MGet),
         };
         &SPEC
@@ -823,6 +838,7 @@ impl Command for MsetCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::ScatterGather(ScatterGatherOp::MSet),
         };
         &SPEC
@@ -864,6 +880,7 @@ impl Command for MsetnxCommand {
             },
             requires_same_slot: true,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -934,6 +951,7 @@ impl Command for LcsCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -1161,6 +1179,7 @@ impl Command for GetsetCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -1211,6 +1230,7 @@ impl Command for SubstrCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -1241,6 +1261,7 @@ impl Command for DigestCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -1278,6 +1299,7 @@ impl Command for DelexCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
@@ -1368,6 +1390,7 @@ impl Command for MsetexCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: true,
             lookup: LookupSpec::None,
+            mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC

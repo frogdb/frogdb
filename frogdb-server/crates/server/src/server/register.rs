@@ -139,7 +139,7 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     // behind the ConnCtx seam as *mutating* connection commands (they change
     // per-connection state via `ConnCtx::conn_state`). Registered as
     // CommandImpl::Connection executors and dispatched through the mutable
-    // `conn_ctx_authmut` view rather than the legacy router→connection-handler
+    // `conn_ctx_for` view rather than the legacy router→connection-handler
     // path. RESET is intercepted early (direct dispatch, never queued/paused);
     // ASKING/READONLY/READWRITE dispatch through the mutable registry union.
     registry

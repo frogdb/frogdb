@@ -5,7 +5,7 @@
 //! NO-TOUCH, REPLY, UNBLOCK, TRACKING, TRACKINGINFO, CACHING, GETREDIR, STATS,
 //! HELP) all mutate or read per-connection and server-wide client state. It is
 //! migrated behind the [`ConnectionCommand`] seam as a *mutating* connection
-//! command: it dispatches through [`ConnectionHandler::conn_ctx_clientmut`],
+//! command: it dispatches through [`ConnectionHandler::conn_ctx_for`],
 //! whose [`ConnCtx`] carries both the mutable connection-state capability
 //! ([`ConnCtx::conn_state`] = `Some`) and the client-tracking IO plumbing
 //! ([`ConnCtx::tracking`] = `Some`).
@@ -45,6 +45,7 @@ static CLIENT_SPEC: CommandSpec = CommandSpec {
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
     lookup: LookupSpec::None,
+    mutation: frogdb_core::ConnMutation::Client,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin),
 };
 
