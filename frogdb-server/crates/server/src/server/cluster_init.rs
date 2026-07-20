@@ -51,6 +51,11 @@ pub(super) async fn init_cluster(
     primary_replication_handler: Option<&Arc<crate::replication::PrimaryReplicationHandler>>,
     replication_tracker: &Option<Arc<ReplicationTrackerImpl>>,
     metrics_recorder: &Arc<dyn MetricsRecorder>,
+    // The resolved `replicaof` primary address when this node boots as a
+    // replica (`None` otherwise); resolved once by `init_replication` and
+    // threaded here to seed the `RoleManager`'s `primary_target` — the
+    // single source `ROLE`/INFO read, live, for the whole process lifetime.
+    boot_primary_addr: Option<std::net::SocketAddr>,
     #[cfg(not(feature = "turmoil"))] tls_manager: &Option<Arc<crate::tls::TlsManager>>,
 ) -> Result<ClusterInitResult> {
     // Create the shared is_replica flag and the RoleManager that owns it. This
@@ -71,7 +76,8 @@ pub(super) async fn init_cluster(
             #[cfg(not(feature = "turmoil"))]
             tls_manager,
         ));
-    let role_manager = crate::role_manager::RoleManager::new(is_replica_flag.clone(), streamer);
+    let role_manager =
+        crate::role_manager::RoleManager::new(is_replica_flag.clone(), streamer, boot_primary_addr);
     let role_handle = crate::role_manager::RoleManagerHandle::new(role_manager);
     let role_controller: Arc<dyn frogdb_core::RoleController> = Arc::new(role_handle.clone());
 

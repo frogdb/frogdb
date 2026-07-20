@@ -225,7 +225,7 @@ impl ShardWorker {
             is_replica,
             is_replica_flag: Some(self.identity.is_replica_flag().clone()),
             role_controller: self.identity.role_controller().cloned(),
-            master_host: self.identity.master_host().cloned(),
+            master_host: self.identity.master_host(),
             master_port: self.identity.master_port(),
             effects: Default::default(),
         }
@@ -441,11 +441,6 @@ impl ShardWorker {
         self.cluster.set_replication_tracker(tracker);
     }
 
-    /// Set the primary address for INFO replication (replica mode).
-    pub fn set_master_address(&mut self, host: String, port: u16) {
-        self.identity.set_master_address(host, port);
-    }
-
     /// Get the snapshot coordinator.
     pub fn snapshot_coordinator(&self) -> &Arc<dyn SnapshotCoordinator> {
         self.persistence.snapshot_coordinator()
@@ -504,13 +499,16 @@ mod command_context_tests {
     /// the fields EVAL/EVALSHA/FCALL previously dropped.
     #[test]
     fn command_context_carries_replica_identity() {
+        use crate::shard::types::FixedRoleController;
+
         let mut worker = minimal_worker();
         worker.set_is_replica(true);
-        worker.set_master_address("primary.local".to_string(), 6390);
+        let target: std::net::SocketAddr = "10.0.0.5:6390".parse().unwrap();
+        worker.set_role_controller(Arc::new(FixedRoleController(Some(target))));
 
         let ctx = worker.command_context(42, ProtocolVersion::Resp2);
         assert!(ctx.is_replica, "built context must report replica role");
-        assert_eq!(ctx.master_host.as_deref(), Some("primary.local"));
+        assert_eq!(ctx.master_host.as_deref(), Some("10.0.0.5"));
         assert_eq!(ctx.master_port, Some(6390));
         assert_eq!(ctx.conn_id, 42);
         assert!(ctx.command_registry.is_some(), "registry must be wired");

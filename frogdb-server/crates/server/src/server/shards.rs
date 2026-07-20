@@ -202,13 +202,12 @@ pub(super) fn spawn_shard_workers(
             worker.set_replication_tracker(tracker.clone());
         }
 
-        // Set master address on replica shard workers for INFO replication
-        if ctx.config.replication.is_replica() {
-            worker.set_master_address(
-                ctx.config.replication.primary_host.clone(),
-                ctx.config.replication.primary_port,
-            );
-        }
+        // The `master_host`/`master_port` INFO fields are no longer a
+        // per-shard copy set once at boot: `ShardIdentity` derives them live
+        // from the role controller wired just above, whose `RoleManager` is
+        // itself seeded with the `replicaof` boot target (see
+        // `cluster_init::init_cluster`). One source, always current — a
+        // runtime `REPLICAOF host port` can no longer leave this stale.
 
         // Share the per-request spans toggle with shard workers
         worker.set_per_request_spans(ctx.config_manager.per_request_spans_flag());

@@ -24,6 +24,12 @@ pub(super) struct ReplicationInitResult {
     pub primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
     pub shared_replication_offset: Option<Arc<AtomicU64>>,
     pub replication_quorum_checker: Option<Arc<dyn frogdb_core::command::QuorumChecker>>,
+    /// The resolved `replicaof` primary address when this node boots as a
+    /// replica (`None` for a primary/standalone boot). Threaded into
+    /// `init_cluster` so the `RoleManager` seeds `primary_target` with the
+    /// same address `ROLE`/INFO report at boot — computed once here rather
+    /// than re-resolved a second time.
+    pub primary_addr: Option<std::net::SocketAddr>,
 }
 
 /// Initialize replication handlers based on the server role.
@@ -43,6 +49,7 @@ pub(super) fn init_replication(
     let mut replica_frame_rx: Option<mpsc::Receiver<frogdb_core::ReplicationFrame>> = None;
     let mut primary_replication_handler: Option<Arc<PrimaryReplicationHandler>> = None;
     let mut shared_replication_offset: Option<Arc<AtomicU64>> = None;
+    let mut primary_addr: Option<std::net::SocketAddr> = None;
 
     let (replication_broadcaster, replication_tracker): (
         SharedBroadcaster,
@@ -96,12 +103,13 @@ pub(super) fn init_replication(
         (handler as SharedBroadcaster, Some(tracker))
     } else if config.replication.is_replica() {
         // Initialize ReplicaReplicationHandler for replica role
-        let primary_addr = format!(
+        let resolved_primary_addr = format!(
             "{}:{}",
             config.replication.primary_host, config.replication.primary_port
         )
         .parse::<std::net::SocketAddr>()
         .map_err(|e| anyhow::anyhow!("Invalid primary address: {}", e))?;
+        primary_addr = Some(resolved_primary_addr);
 
         let state_path = config
             .persistence
@@ -110,14 +118,14 @@ pub(super) fn init_replication(
         let repl_state = recovered_replication.clone();
 
         info!(
-            primary = %primary_addr,
+            primary = %resolved_primary_addr,
             replication_id = %repl_state.replication_id,
             offset = repl_state.replication_offset,
             "Initialized replica replication state"
         );
 
         let (mut handler, frame_rx) = ReplicaReplicationHandler::new(
-            primary_addr,
+            resolved_primary_addr,
             config.server.port,
             repl_state,
             state_path,
@@ -194,5 +202,6 @@ pub(super) fn init_replication(
         primary_replication_handler,
         shared_replication_offset,
         replication_quorum_checker,
+        primary_addr,
     })
 }

@@ -67,10 +67,23 @@ pub struct RoleManager {
 impl RoleManager {
     /// Build a manager over the shared role flag, using `streamer` to open
     /// inbound streams. The flag's current value is the boot role.
-    pub fn new(is_replica: Arc<AtomicBool>, streamer: Arc<dyn ReplicaStreamer>) -> Self {
+    ///
+    /// `boot_target` seeds [`RoleManager::primary_target`] with the
+    /// `replicaof`-configured primary when this node boots as a replica
+    /// (`None` for a primary/standalone boot). The boot replication stream
+    /// itself is opened separately by `init_replication`/`subsystems` — this
+    /// only records the *address* so `ROLE` and INFO agree with the runtime
+    /// demotion path from process start, instead of only after the first
+    /// `REPLICAOF host port`. The manager is the one place that owns this
+    /// value for the lifetime of the process.
+    pub fn new(
+        is_replica: Arc<AtomicBool>,
+        streamer: Arc<dyn ReplicaStreamer>,
+        boot_target: Option<SocketAddr>,
+    ) -> Self {
         Self {
             is_replica,
-            primary_target: None,
+            primary_target: boot_target,
             stream: None,
             streamer,
         }
@@ -167,6 +180,13 @@ impl frogdb_core::RoleController for RoleManagerHandle {
             .lock()
             .expect("role manager poisoned")
             .demote(primary);
+    }
+
+    fn primary_target(&self) -> Option<SocketAddr> {
+        self.inner
+            .lock()
+            .expect("role manager poisoned")
+            .primary_target()
     }
 }
 
@@ -372,7 +392,7 @@ mod tests {
     fn manager(replica_at_boot: bool) -> (RoleManager, Arc<FakeStreamer>) {
         let streamer = Arc::new(FakeStreamer::default());
         let flag = Arc::new(AtomicBool::new(replica_at_boot));
-        (RoleManager::new(flag, streamer.clone()), streamer)
+        (RoleManager::new(flag, streamer.clone(), None), streamer)
     }
 
     #[test]
@@ -489,5 +509,49 @@ mod tests {
         <RoleManagerHandle as RoleController>::request_promote(&handle);
         assert!(!flag.load(Ordering::Acquire));
         assert_eq!(handle.primary_target(), None);
+    }
+
+    /// A `replicaof`-configured boot target is recorded into the manager at
+    /// construction, so `ROLE`/INFO report the real primary immediately at
+    /// startup — not only after the first runtime `REPLICAOF host port`.
+    #[test]
+    fn boot_target_seeds_primary_target() {
+        let streamer = Arc::new(FakeStreamer::default());
+        let flag = Arc::new(AtomicBool::new(true));
+        let a = addr("127.0.0.1:7000");
+
+        let mgr = RoleManager::new(flag, streamer.clone(), Some(a));
+
+        assert_eq!(mgr.primary_target(), Some(a));
+        assert!(mgr.is_replica());
+        // The boot stream is opened separately by `init_replication`, not by
+        // the manager: seeding the target must not start a duplicate stream.
+        assert!(streamer.started.lock().unwrap().is_empty());
+    }
+
+    /// A primary/standalone boot passes no target, and `primary_target()`
+    /// stays `None` until (if ever) a runtime Role Demotion sets one.
+    #[test]
+    fn no_boot_target_on_primary_boot() {
+        let (mgr, _streamer) = manager(false);
+        assert_eq!(mgr.primary_target(), None);
+    }
+
+    /// `RoleController::primary_target` (the trait method command handlers
+    /// and INFO actually call through) must agree with the inherent method,
+    /// including the boot-seeded value.
+    #[test]
+    fn role_controller_primary_target_matches_boot_seed() {
+        use frogdb_core::RoleController;
+
+        let streamer = Arc::new(FakeStreamer::default());
+        let flag = Arc::new(AtomicBool::new(true));
+        let a = addr("127.0.0.1:7000");
+        let handle = RoleManagerHandle::new(RoleManager::new(flag, streamer, Some(a)));
+
+        assert_eq!(
+            <RoleManagerHandle as RoleController>::primary_target(&handle),
+            Some(a)
+        );
     }
 }

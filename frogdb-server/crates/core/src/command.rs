@@ -259,6 +259,18 @@ pub trait RoleController: Send + Sync {
     /// Raft-driven failover). Sets the replica flag, tears down any existing
     /// stream, and opens a new one to `primary`. Idempotent per target.
     fn request_demote(&self, primary: std::net::SocketAddr);
+
+    /// The primary this node currently replicates from, if any (`None` when
+    /// primary/standalone).
+    ///
+    /// The single source of truth behind `ROLE`'s replica arm and INFO's
+    /// `master_host`/`master_port` fields: it reflects the RoleManager's live
+    /// target, seeded at boot from `replicaof` config and updated by every
+    /// runtime Role Demotion (`REPLICAOF host port`, Raft-driven failover), so
+    /// both surfaces always agree with each other and with the current
+    /// replication stream — never a boot-only snapshot that goes stale after a
+    /// runtime role change.
+    fn primary_target(&self) -> Option<std::net::SocketAddr>;
 }
 
 /// Trait for checking if the local node can form a quorum.

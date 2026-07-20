@@ -111,10 +111,19 @@ impl ConnectionHandler {
             }
             None => (None, None),
         };
+        let is_replica = self.is_replica.load(std::sync::atomic::Ordering::Relaxed);
+        // `replication_tracker` is wired at boot for any node that *can* track
+        // downstream replicas and outlives a runtime Role Demotion (the
+        // `RoleManager` only owns the read-only flag / primary target / inbound
+        // stream, not this tracker) — so its mere presence does not mean this
+        // node is currently a primary. Gate on the live role flag too, or a
+        // demoted node keeps rendering the `master` branch (and never surfaces
+        // `master_host`/`master_port`) even after `REPLICAOF host port`.
         let primary = self
             .cluster
             .replication_tracker
             .as_ref()
+            .filter(|_| !is_replica)
             .map(|tracker| PrimarySnapshot {
                 replicas: tracker
                     .get_streaming_replicas()
@@ -128,7 +137,7 @@ impl ConnectionHandler {
                 repl_offset: tracker.current_offset(),
             });
         let replication = ReplicationSnapshot {
-            is_replica: self.is_replica.load(std::sync::atomic::Ordering::Relaxed),
+            is_replica,
             node_id: self.cluster.node_id,
             replication_id,
             primary,

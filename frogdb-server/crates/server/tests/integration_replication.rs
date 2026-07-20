@@ -1002,6 +1002,139 @@ async fn test_replicaof_host_port_demotes(#[case] persistence: bool) {
     target.shutdown().await;
 }
 
+/// Extract `(master_host, master_port)` from a `ROLE` slave-arm reply
+/// (`["slave", <host>, <port>, <state>, <offset>]`).
+fn role_master_host_port(response: &Response) -> Option<(String, i64)> {
+    match response {
+        Response::Array(items) if items.len() >= 3 => {
+            let host = match &items[1] {
+                Response::Bulk(Some(b)) => std::str::from_utf8(b).ok()?.to_string(),
+                _ => return None,
+            };
+            let port = match &items[2] {
+                Response::Integer(p) => *p,
+                _ => return None,
+            };
+            Some((host, port))
+        }
+        _ => None,
+    }
+}
+
+/// Round-8 P05: `ROLE` and `INFO replication` must show the *real* Primary
+/// target after a runtime `REPLICAOF host port` demotion, not the hardcoded
+/// empty host / port 0 the old `RoleCommand` stub returned. `REPLICAOF NO
+/// ONE` must then clear both surfaces back to the primary shape.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_role_and_info_report_real_primary_after_demotion(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let target = TestServer::start_primary_with_config(config.clone()).await;
+    let node = TestServer::start_primary_with_config(config).await;
+
+    // Before demotion: ROLE reports master, INFO carries no master_host/port.
+    assert_eq!(
+        role_name(&node.send("ROLE", &[]).await).as_deref(),
+        Some("master")
+    );
+    let before = parse_info_replication(&node.send("INFO", &["replication"]).await).unwrap();
+    assert!(
+        !before.contains_key("master_host"),
+        "a primary must not report master_host, got {before:?}"
+    );
+
+    // Role Demotion at runtime.
+    let target_port = target.port().to_string();
+    assert_ok(&node.send("REPLICAOF", &["127.0.0.1", &target_port]).await);
+
+    // ROLE's slave arm reports the real target, not the old "" / 0 stub.
+    let role_resp = node.send("ROLE", &[]).await;
+    assert_eq!(role_name(&role_resp).as_deref(), Some("slave"));
+    let (role_host, role_port) =
+        role_master_host_port(&role_resp).expect("slave ROLE reply must carry host/port");
+    assert_eq!(
+        role_host, "127.0.0.1",
+        "ROLE must report the real primary host"
+    );
+    assert_eq!(
+        role_port,
+        target.port() as i64,
+        "ROLE must report the real primary port"
+    );
+
+    // INFO replication's master_host/master_port agree with ROLE.
+    let info = parse_info_replication(&node.send("INFO", &["replication"]).await).unwrap();
+    assert_eq!(
+        info.get("master_host").map(String::as_str),
+        Some("127.0.0.1")
+    );
+    assert_eq!(
+        info.get("master_port").map(String::as_str),
+        Some(target_port.as_str())
+    );
+
+    // REPLICAOF NO ONE clears both surfaces back to primary shape.
+    assert_ok(&node.send("REPLICAOF", &["NO", "ONE"]).await);
+    assert_eq!(
+        role_name(&node.send("ROLE", &[]).await).as_deref(),
+        Some("master")
+    );
+    let after = parse_info_replication(&node.send("INFO", &["replication"]).await).unwrap();
+    assert!(
+        !after.contains_key("master_host"),
+        "REPLICAOF NO ONE must clear master_host, got {after:?}"
+    );
+
+    node.shutdown().await;
+    target.shutdown().await;
+}
+
+/// Round-8 P05: a boot-configured replica (`replicaof` in config, no runtime
+/// `REPLICAOF`) must report the same real `master_host`/`master_port` on
+/// both `ROLE` and `INFO replication` as a runtime-demoted node — the
+/// `RoleManager` is seeded with the boot target at construction, so there is
+/// one source of truth for both surfaces from process start.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_boot_configured_replica_reports_primary_target(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let primary = TestServer::start_primary_with_config(config.clone()).await;
+    let replica = TestServer::start_replica_with_config(&primary, config).await;
+
+    // Give the boot replication handshake a moment (mirrors other tests).
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let role_resp = replica.send("ROLE", &[]).await;
+    assert_eq!(role_name(&role_resp).as_deref(), Some("slave"));
+    let (role_host, role_port) =
+        role_master_host_port(&role_resp).expect("boot replica ROLE reply must carry host/port");
+    assert_eq!(role_host, "127.0.0.1");
+    assert_eq!(role_port, primary.port() as i64);
+
+    let info = parse_info_replication(&replica.send("INFO", &["replication"]).await).unwrap();
+    assert_eq!(
+        info.get("master_host").map(String::as_str),
+        Some("127.0.0.1")
+    );
+    assert_eq!(
+        info.get("master_port").map(String::as_str),
+        Some(primary.port().to_string().as_str())
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
 // ============================================================================
 // Concurrent Connection Tests
 // ============================================================================

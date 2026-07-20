@@ -259,6 +259,7 @@ impl Server {
             repl.primary_replication_handler.as_ref(),
             &repl.replication_tracker,
             &infra.metrics_recorder,
+            repl.primary_addr,
             #[cfg(not(feature = "turmoil"))]
             &infra.tls_manager,
         )
