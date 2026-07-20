@@ -105,6 +105,14 @@ impl ReplicaReplicationHandler {
         self.shared_offset = Some(offset);
     }
 
+    /// The cluster-bus HealthProbe offset handle this replica publishes into, if
+    /// wired. Mirrors the primary handler's `shared_offset()`; lets callers
+    /// assert that a runtime-demoted replica advertises its offset to the failure
+    /// detector the same way a boot-configured replica does.
+    pub fn shared_offset(&self) -> Option<Arc<AtomicU64>> {
+        self.shared_offset.clone()
+    }
+
     pub async fn start(&self) -> io::Result<()> {
         let mut backoff = Duration::from_millis(100);
         let max_backoff = Duration::from_secs(30);
