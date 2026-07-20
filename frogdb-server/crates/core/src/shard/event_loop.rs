@@ -258,7 +258,6 @@ impl ShardWorker {
             | SlowlogAdd { .. }
             | MemoryUsage { .. }
             | MemoryStats { .. }
-            | WalLagStats { .. }
             | InfoSnapshot { .. }
             | ScanBigKeys { .. }
             | LatencyLatest { .. }

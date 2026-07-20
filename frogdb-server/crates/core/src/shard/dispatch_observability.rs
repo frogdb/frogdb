@@ -43,10 +43,6 @@ impl ShardWorker {
                 let stats = self.collect_memory_stats();
                 let _ = response_tx.send(stats);
             }
-            ShardMessage::WalLagStats { response_tx } => {
-                let stats = self.collect_wal_lag_stats();
-                let _ = response_tx.send(stats);
-            }
             ShardMessage::InfoSnapshot { response_tx } => {
                 let snapshot = self.collect_info_snapshot();
                 let _ = response_tx.send(snapshot);
