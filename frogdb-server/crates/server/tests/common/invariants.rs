@@ -14,10 +14,11 @@ use bytes::Bytes;
 use frogdb_testing::{
     HashModel, History, KVModel, ListModel, StreamModel, ZSetModel, check_exactly_once_delivery,
     check_fifo_wake_order, check_linearizability_bounded, check_watch_no_false_negative,
-    default_keys_of, partition_by_key,
+    default_keys_of, is_errored_exec_result, partition_by_key,
 };
 
 use super::quiescence_probe::{QuiescenceSnapshots, check_quiescence};
+use super::sim_harness::hash_slot;
 
 /// Per-key op cap before WGL is skipped (conservation still covers the key).
 pub const MAX_OPS_PER_KEY: usize = 200;
@@ -104,6 +105,7 @@ pub fn check_all_with(
 
     // Stage 1: response legality (cheap, always).
     check_response_legality(history, &mut report);
+    check_exec_slot_discipline(history, &mut report);
 
     // Stage 2: per-key partition + bounded WGL with inconclusive-downgrade.
     let partitions = partition_by_key(history, default_keys_of);
@@ -200,6 +202,44 @@ fn check_response_legality(history: &History, report: &mut InvariantReport) {
                 op.id,
                 op.function,
                 String::from_utf8_lossy(r)
+            ));
+        }
+    }
+}
+
+/// Pin the server's slot discipline for transactions. Per Task 3
+/// (`TransactionTarget::Multi` → `redirect::crossslot()` in
+/// `connection/state.rs`), cross-slot EXEC is *always* rejected with
+/// CROSSSLOT in standalone mode — `allow_cross_slot_standalone` gates only
+/// single-command scatter + EVAL, never transactions. So a *committed* EXEC
+/// whose sub-command keys span more than one hash slot is a CROSSSLOT-
+/// enforcement regression.
+fn check_exec_slot_discipline(history: &History, report: &mut InvariantReport) {
+    for op in history.completed_operations() {
+        if op.function != "exec" {
+            continue;
+        }
+        let keys = default_keys_of("exec", &op.args);
+        if keys.len() < 2 {
+            continue;
+        }
+        let s0 = hash_slot(&keys[0]);
+        let cross_slot = keys.iter().any(|k| hash_slot(k) != s0);
+        if !cross_slot {
+            continue;
+        }
+        let committed = op
+            .result
+            .as_ref()
+            .is_some_and(|r| !is_errored_exec_result(r));
+        if committed {
+            report.violations.push(format!(
+                "op {} (exec) committed across {} hash slots (CROSSSLOT not enforced)",
+                op.id,
+                keys.iter()
+                    .map(|k| hash_slot(k))
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
             ));
         }
     }
@@ -344,6 +384,46 @@ mod tests {
             !report.passed(),
             "a phantom read must fail the report: {:?}",
             report.violations
+        );
+    }
+
+    #[test]
+    fn cross_slot_exec_discipline_flagged() {
+        // Two keys in different slots inside one EXEC. Cross-slot EXEC is
+        // always rejected with CROSSSLOT in standalone mode (Task 3), so a
+        // *committed* cross-slot EXEC is a slot-discipline regression.
+        let a = Bytes::from("{t0}kv0");
+        let b = Bytes::from("{t1}kv1");
+        assert_ne!(
+            hash_slot(&a),
+            hash_slot(&b),
+            "fixture keys must differ in slot"
+        );
+
+        let mut h = History::new();
+        let e = h.invoke(
+            1,
+            "exec",
+            vec![
+                Bytes::from("2"),
+                Bytes::from("set"),
+                Bytes::from("2"),
+                a.clone(),
+                Bytes::from("1"),
+                Bytes::from("set"),
+                Bytes::from("2"),
+                b.clone(),
+                Bytes::from("2"),
+            ],
+        );
+        // A committed cross-slot EXEC (array reply -> "OK|OK").
+        h.respond(e, Some(Bytes::from("OK|OK")));
+
+        let mut report = InvariantReport::default();
+        check_exec_slot_discipline(&h, &mut report);
+        assert!(
+            !report.violations.is_empty(),
+            "cross-slot commit must be flagged"
         );
     }
 
