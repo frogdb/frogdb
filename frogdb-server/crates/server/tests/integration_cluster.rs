@@ -6858,9 +6858,24 @@ async fn test_auto_failover_selects_most_caught_up_replica() {
     // among surviving nodes. Since we can't easily measure per-node
     // offsets in the current implementation, we just verify a leader
     // was elected and the cluster recovers.
+    //
+    // `wait_for_new_leader` only guarantees a Raft leader exists; the
+    // failover state machine (slot re-ownership, epoch bump, failed-node
+    // reconciliation) that flips CLUSTER INFO back to `cluster_state:ok`
+    // lands a beat later. Poll for it on a bounded deadline instead of
+    // reading once and racing the transition.
     let new_leader_node = harness.node(new_leader).unwrap();
-    let info_resp = new_leader_node.send("CLUSTER", &["INFO"]).await;
-    let info = parse_cluster_info(&info_resp).unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let info = loop {
+        let info = parse_cluster_info(&new_leader_node.send("CLUSTER", &["INFO"]).await).unwrap();
+        if info.cluster_state == "ok" {
+            break info;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            break info;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
     assert_eq!(
         info.cluster_state, "ok",
         "New leader should report cluster as ok"
@@ -8128,6 +8143,16 @@ async fn test_frogdb_finalize_success() {
         .wait_for_cluster_convergence(Duration::from_secs(10))
         .await
         .unwrap();
+    // Each node self-registers its real address+version (0.1.0) via a one-shot
+    // Raft AddNode after startup. That entry replaces the whole NodeInfo, so if
+    // it commits *after* `fake_all_node_versions`, it clobbers the faked 0.2.0
+    // back to 0.1.0 and FINALIZE rejects the cluster as mixed-version. Address
+    // convergence only holds once every self-registration AddNode has applied,
+    // so waiting for it here guarantees the fake below is the last writer.
+    harness
+        .wait_for_address_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
 
     // Fake all nodes to version 0.2.0
     harness.fake_all_node_versions("0.2.0");
@@ -8140,19 +8165,22 @@ async fn test_frogdb_finalize_success() {
         response
     );
 
-    // Wait for Raft replication
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    // Verify active_version is set on all nodes
+    // FINALIZE commits on the leader's state machine before returning OK, but
+    // followers apply the replicated entry asynchronously. Poll each node until
+    // the finalized version lands rather than betting on a fixed sleep.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     for &node_id in &harness.node_ids() {
         let node = harness.node(node_id).unwrap();
         let cs = node.cluster_state().unwrap();
-        assert_eq!(
-            cs.active_version(),
-            Some("0.2.0".to_string()),
-            "Node {} should have active_version 0.2.0",
-            node_id
-        );
+        while cs.active_version() != Some("0.2.0".to_string()) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Node {} should have active_version 0.2.0 (got {:?})",
+                node_id,
+                cs.active_version()
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
 
     harness.shutdown_all().await;
@@ -8545,6 +8573,14 @@ async fn test_info_gate_active_after_finalize() {
         .wait_for_cluster_convergence(Duration::from_secs(10))
         .await
         .unwrap();
+    // Wait for self-registration AddNode entries to settle before faking node
+    // versions; otherwise a late self-registration (real version 0.1.0)
+    // clobbers the fake and FINALIZE rejects the cluster. See
+    // `test_frogdb_finalize_success` for the full explanation.
+    harness
+        .wait_for_address_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
 
     harness.fake_all_node_versions("0.2.0");
 
@@ -8555,13 +8591,23 @@ async fn test_info_gate_active_after_finalize() {
         "Expected OK, got {:?}",
         response
     );
-    tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // INFO server should now include gated fields
+    // INFO server should now include gated fields. The finalize entry applies
+    // asynchronously on followers, so poll node[0]'s INFO until the gated
+    // active_version appears rather than sleeping a fixed interval.
     let node_ids = harness.node_ids();
     let node = harness.node(node_ids[0]).unwrap();
-    let response = node.send("INFO", &["server"]).await;
-    let info = parse_info_response(&response);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let info = loop {
+        let info = parse_info_response(&node.send("INFO", &["server"]).await);
+        if info.get("active_version").map(|s| s.as_str()) == Some("0.2.0") {
+            break info;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            break info;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
 
     assert_eq!(
         info.get("active_version").map(|s| s.as_str()),
