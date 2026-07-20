@@ -189,6 +189,11 @@ pub struct RealReplicaStreamer {
     data_dir: std::path::PathBuf,
     state_path: std::path::PathBuf,
     is_replica_flag: Arc<AtomicBool>,
+    /// The cluster-bus HealthProbe offset atomic. When set, every runtime replica
+    /// stream publishes its applied offset here so the failure detector observes a
+    /// runtime-demoted Replica's offset exactly like a boot-configured one. `None`
+    /// outside cluster mode.
+    shared_offset: Option<Arc<std::sync::atomic::AtomicU64>>,
     #[cfg(not(feature = "turmoil"))]
     tls: Option<ReplicaTlsConfig>,
 }
@@ -206,6 +211,7 @@ impl RealReplicaStreamer {
         shard_senders: Arc<Vec<frogdb_core::ShardSender>>,
         num_shards: usize,
         is_replica_flag: Arc<AtomicBool>,
+        shared_offset: Option<Arc<std::sync::atomic::AtomicU64>>,
         #[cfg(not(feature = "turmoil"))] tls_manager: &Option<Arc<crate::tls::TlsManager>>,
     ) -> Self {
         let data_dir = config.persistence.data_dir.clone();
@@ -233,6 +239,7 @@ impl RealReplicaStreamer {
             data_dir,
             state_path,
             is_replica_flag,
+            shared_offset,
             #[cfg(not(feature = "turmoil"))]
             tls,
         }
@@ -255,6 +262,14 @@ impl ReplicaStreamer for RealReplicaStreamer {
 
         #[allow(unused_mut)]
         let mut handler = handler;
+
+        // Publish this stream's applied offset into the cluster-bus HealthProbe
+        // atomic, mirroring the boot-time replica path in `init_replication`, so
+        // the failure detector sees a runtime-demoted Replica's offset the same
+        // as a boot-configured one.
+        if let Some(offset) = &self.shared_offset {
+            handler.set_shared_offset(offset.clone());
+        }
 
         // Wire TLS for the outgoing connection, mirroring `init_replication`.
         #[cfg(not(feature = "turmoil"))]
