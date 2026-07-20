@@ -2,7 +2,6 @@
 
 pub mod mock_cluster;
 pub mod mock_json;
-pub mod mock_snapshot;
 pub mod mock_streams;
 pub mod mock_watch;
 

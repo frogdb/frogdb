@@ -7,10 +7,10 @@
 
 use crate::common::mock_cluster::*;
 use crate::common::mock_json::*;
-use crate::common::mock_snapshot::*;
 use crate::common::mock_streams::*;
 use crate::common::mock_watch::*;
 use crate::common::{assert_all_unique, spawn_collect};
+use frogdb_persistence::SnapshotScheduler;
 use shuttle::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use shuttle::sync::{Arc, Mutex};
 use shuttle::{check_pct, check_random, thread};
@@ -1289,36 +1289,46 @@ fn test_del_concurrent_access() {
 
 // ============================================================================
 // Snapshot concurrency tests
+//
+// These drive the real pure `SnapshotScheduler` (frogdb-persistence) rather than
+// a hand-rolled CAS mock: `try_begin()` claims the in-progress slot and mints a
+// contiguous epoch (`None` == the old `AlreadyInProgress`), and
+// `finish_and_maybe_rebegin()` releases it. No follow-up is ever armed here
+// (nothing calls `request`/`schedule`), so each finish just releases.
 // ============================================================================
 
 /// Test that concurrent snapshot attempts are properly rejected.
 ///
-/// Multiple threads attempting start_snapshot() simultaneously should
-/// result in exactly one success and all others getting AlreadyInProgress.
+/// Multiple threads attempting `try_begin()` simultaneously should result in
+/// exactly one holder at a time; overlapping attempts get `None` (the former
+/// `AlreadyInProgress`). Every epoch that a run actually claimed is unique.
 #[test]
 fn test_snapshot_atomicity_shuttle() {
     check_random(
         || {
-            let coord = Arc::new(MockSnapshotCoordinator::new());
+            let sched = Arc::new(SnapshotScheduler::with_epoch(0));
+            let completed = Arc::new(Mutex::new(Vec::<u64>::new()));
             let success_count = Arc::new(AtomicUsize::new(0));
             let error_count = Arc::new(AtomicUsize::new(0));
             let mut handles = vec![];
 
             // 4 threads all trying to start a snapshot simultaneously
             for _ in 0..4 {
-                let coord = coord.clone();
+                let sched = sched.clone();
+                let completed = completed.clone();
                 let successes = success_count.clone();
                 let errors = error_count.clone();
 
                 handles.push(thread::spawn(move || {
-                    match coord.start_snapshot() {
-                        Ok(epoch) => {
+                    match sched.try_begin() {
+                        Some(epoch) => {
                             successes.fetch_add(1, Ordering::SeqCst);
                             // Simulate snapshot work
                             thread::yield_now();
-                            coord.complete_snapshot(epoch);
+                            completed.lock().unwrap().push(epoch);
+                            sched.finish_and_maybe_rebegin();
                         }
-                        Err(_) => {
+                        None => {
                             errors.fetch_add(1, Ordering::SeqCst);
                         }
                     }
@@ -1329,8 +1339,7 @@ fn test_snapshot_atomicity_shuttle() {
                 h.join().unwrap();
             }
 
-            // Exactly one should have succeeded (acquired the lock)
-            // The others should have gotten AlreadyInProgress
+            // Every thread either claimed the slot or was rejected.
             let total = success_count.load(Ordering::SeqCst) + error_count.load(Ordering::SeqCst);
             assert_eq!(total, 4, "All threads must complete");
 
@@ -1341,9 +1350,14 @@ fn test_snapshot_atomicity_shuttle() {
             );
 
             // Snapshots are serialized, so multiple can succeed if they don't overlap
-            // But all completed epochs should be unique and sequential
-            let completed = coord.completed_epochs();
+            // But all completed epochs must be unique.
+            let completed = completed.lock().unwrap().clone();
             assert_all_unique(&completed);
+            assert_eq!(
+                completed.len(),
+                success_count.load(Ordering::SeqCst),
+                "each successful begin completes exactly one epoch"
+            );
         },
         1000,
     );
@@ -1357,29 +1371,29 @@ fn test_snapshot_atomicity_shuttle() {
 fn test_snapshot_concurrent_writes_shuttle() {
     check_random(
         || {
-            let coord = Arc::new(MockSnapshotCoordinator::new());
+            let sched = Arc::new(SnapshotScheduler::with_epoch(0));
             let store = Arc::new(Mutex::new(HashMap::<String, String>::new()));
             let writes_during_snapshot = Arc::new(AtomicUsize::new(0));
             let mut handles = vec![];
 
             // Thread 1: Start snapshot and hold it
-            let coord_snap = coord.clone();
+            let sched_snap = sched.clone();
             handles.push(thread::spawn(move || {
-                let epoch = coord_snap.start_snapshot().unwrap();
-                assert!(coord_snap.in_progress());
+                sched_snap.try_begin().unwrap();
+                assert!(sched_snap.in_progress());
 
                 // Yield to let writers run
                 thread::yield_now();
                 thread::yield_now();
 
-                coord_snap.complete_snapshot(epoch);
+                sched_snap.finish_and_maybe_rebegin();
             }));
 
             // Threads 2-4: Write data (should not be blocked)
             for i in 0..3 {
                 let store = store.clone();
                 let writes = writes_during_snapshot.clone();
-                let coord = coord.clone();
+                let sched = sched.clone();
 
                 handles.push(thread::spawn(move || {
                     let key = format!("key_{}", i);
@@ -1392,7 +1406,7 @@ fn test_snapshot_concurrent_writes_shuttle() {
                     }
 
                     // Track if snapshot was in progress when we wrote
-                    if coord.in_progress() {
+                    if sched.in_progress() {
                         writes.fetch_add(1, Ordering::SeqCst);
                     }
                 }));
@@ -1416,37 +1430,35 @@ fn test_snapshot_concurrent_writes_shuttle() {
     );
 }
 
-/// Test that second snapshot request during active snapshot is rejected.
+/// Test that a second begin during an active snapshot is rejected.
 #[test]
 fn test_snapshot_already_in_progress_shuttle() {
     check_random(
         || {
-            let coord = Arc::new(MockSnapshotCoordinator::new());
+            let sched = Arc::new(SnapshotScheduler::with_epoch(0));
 
             // Start first snapshot
-            let epoch = coord.start_snapshot().unwrap();
-            assert!(coord.in_progress());
-            assert_eq!(epoch, 1);
+            assert_eq!(sched.try_begin(), Some(1));
+            assert!(sched.in_progress());
 
-            // Attempt second snapshot - must fail
-            let result = coord.start_snapshot();
-            assert!(result.is_err());
-            assert_eq!(result.unwrap_err(), "AlreadyInProgress");
+            // Attempt second begin - must be rejected (former AlreadyInProgress),
+            // and the rejected attempt must not have advanced the epoch.
+            assert_eq!(sched.try_begin(), None);
+            assert_eq!(sched.current_epoch(), 1);
 
             // Still in progress
-            assert!(coord.in_progress());
+            assert!(sched.in_progress());
 
-            // Complete first snapshot
-            coord.complete_snapshot(epoch);
-            assert!(!coord.in_progress());
+            // Complete first snapshot; nothing was scheduled, so no rerun.
+            assert_eq!(sched.finish_and_maybe_rebegin(), None);
+            assert!(!sched.in_progress());
 
-            // Now second snapshot should work
-            let epoch2 = coord.start_snapshot().unwrap();
-            assert_eq!(epoch2, 2);
-            assert!(coord.in_progress());
+            // Now a second snapshot should work
+            assert_eq!(sched.try_begin(), Some(2));
+            assert!(sched.in_progress());
 
-            coord.complete_snapshot(epoch2);
-            assert!(!coord.in_progress());
+            assert_eq!(sched.finish_and_maybe_rebegin(), None);
+            assert!(!sched.in_progress());
         },
         1000,
     );
@@ -1457,21 +1469,24 @@ fn test_snapshot_already_in_progress_shuttle() {
 fn test_snapshot_atomicity_pct() {
     check_pct(
         || {
-            let coord = Arc::new(MockSnapshotCoordinator::new());
+            let sched = Arc::new(SnapshotScheduler::with_epoch(0));
             let results = Arc::new(Mutex::new(Vec::new()));
+            let completed = Arc::new(Mutex::new(Vec::<u64>::new()));
             let mut handles = vec![];
 
             for thread_id in 0..4 {
-                let coord = coord.clone();
+                let sched = sched.clone();
                 let results = results.clone();
+                let completed = completed.clone();
 
                 handles.push(thread::spawn(move || {
-                    let result = coord.start_snapshot();
-                    results.lock().unwrap().push((thread_id, result.is_ok()));
+                    let begun = sched.try_begin();
+                    results.lock().unwrap().push((thread_id, begun.is_some()));
 
-                    if let Ok(epoch) = result {
+                    if let Some(epoch) = begun {
                         thread::yield_now();
-                        coord.complete_snapshot(epoch);
+                        completed.lock().unwrap().push(epoch);
+                        sched.finish_and_maybe_rebegin();
                     }
                 }));
             }
@@ -1484,6 +1499,8 @@ fn test_snapshot_atomicity_pct() {
             let results = results.lock().unwrap();
             let success_count = results.iter().filter(|(_, ok)| *ok).count();
             assert!(success_count >= 1, "At least one snapshot must succeed");
+            // Every claimed epoch is unique (the slot is never double-held).
+            assert_all_unique(&completed.lock().unwrap());
         },
         1000,
         3, // PCT depth
