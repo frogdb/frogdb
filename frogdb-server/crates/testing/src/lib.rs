@@ -70,7 +70,7 @@ pub use models::{
     HashModel, HashState, KVModel, KVState, ListModel, ListState, Model, RegisterModel,
     RegisterState, StreamData, StreamId, StreamModel, StreamState, ZSetModel, ZSetState,
 };
-pub use partition::{default_keys_of, partition_by_key};
+pub use partition::{default_keys_of, is_errored_exec_result, partition_by_key};
 pub use quiescence::{
     ExpiryIndexSnapshot, LockTableSnapshot, MemoryCheckSnapshot, QuiescenceViolation,
     WaitQueueSnapshot, check_expiry_index_consistent, check_locktable_empty,

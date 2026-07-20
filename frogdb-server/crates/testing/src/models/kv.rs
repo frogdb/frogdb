@@ -299,6 +299,12 @@ impl Model for KVModel {
                     // `check_watch_no_false_negative`.)
                     None => Some(state.clone()),
                     Some(result_bytes) => {
+                        // A CROSSSLOT/EXECABORT error EXEC (recorder marker
+                        // "ERR:...") is a rejected transaction: also a legal
+                        // no-op that leaves state unchanged.
+                        if crate::partition::is_errored_exec_result(result_bytes) {
+                            return Some(state.clone());
+                        }
                         let result_str = String::from_utf8_lossy(result_bytes);
                         if result_str == expected {
                             Some(current_state)
@@ -320,6 +326,33 @@ impl Model for KVModel {
 mod tests {
     use super::*;
     use bytes::Bytes;
+
+    #[test]
+    fn test_kv_exec_errored_is_legal_and_unchanged() {
+        // A CROSSSLOT/EXECABORT EXEC lands in the history as Some("ERR:...").
+        // It is a rejected transaction: legal, state unchanged (like a nil abort).
+        let mut state = KVState::default();
+        state.store.insert(Bytes::from("k"), Bytes::from("orig"));
+        let new_state = KVModel::step(
+            &state,
+            "exec",
+            &[
+                Bytes::from("1"),
+                Bytes::from("set"),
+                Bytes::from("2"),
+                Bytes::from("k"),
+                Bytes::from("new"),
+            ],
+            Some(&Bytes::from(
+                "ERR:EXECABORT Transaction discarded because of previous errors.",
+            )),
+        )
+        .expect("errored EXEC must be accepted as a no-op");
+        assert_eq!(
+            new_state.store.get(&Bytes::from("k")),
+            Some(&Bytes::from("orig"))
+        );
+    }
 
     #[test]
     fn test_kv_read_write() {

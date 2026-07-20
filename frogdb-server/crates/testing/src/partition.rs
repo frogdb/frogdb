@@ -337,6 +337,23 @@ pub fn partition_by_key(
     subs
 }
 
+/// True iff a recorded EXEC/transaction result denotes an aborted or rejected
+/// transaction rather than a committed one. The turmoil recorder encodes a
+/// server error reply (CROSSSLOT / EXECABORT / …) as the pipe-safe marker
+/// `"ERR:<message>"` (see `OperationHistory::encode_array_result`); a
+/// WATCH-abort is instead recorded as `None`. Callers treat both as no-ops.
+///
+/// Known edge: a *committed* EXEC whose first sub-command itself errored
+/// (e.g. `INCR` on a non-integer) would also encode as `"ERR:…|…"` and be
+/// misread as rejected here. The phase-1 generator's exec vocabulary
+/// (set/get/incr/del over numeric values) cannot produce that sub-command
+/// type error, so this is currently unreachable; if it ever becomes
+/// reachable, a misread surfaces as a noisy WGL failure (state advanced but
+/// the model treated it as a no-op), never as a silent pass.
+pub fn is_errored_exec_result(result: &Bytes) -> bool {
+    result.starts_with(b"ERR:")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
