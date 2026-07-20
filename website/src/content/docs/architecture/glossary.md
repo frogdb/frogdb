@@ -105,20 +105,22 @@ which one is meant: *FrogDB WAL* (shard flush buffer) vs *RocksDB WAL* (engine c
 See: [persistence.md](/architecture/persistence/)
 
 ### Snapshot
-A point-in-time capture of all key-value data, stored as a RocksDB checkpoint (plus
-search-index sidecar and `metadata.json`). FrogDB does not write RDB files.
+A forkless, point-in-time capture of all key-value data: a RocksDB checkpoint cut at a single
+sequence number (`RocksStore::create_checkpoint`), plus a search-index sidecar and
+`metadata.json`. FrogDB does not write RDB files.
 
-**FrogDB approach:** Epoch-based (logical point-in-time) rather than fork-based (physical point-in-time).
+**FrogDB approach:** RocksDB's own checkpoint machinery (hard-linked SST files pinned to a
+sequence number) instead of Redis's fork-based physical point-in-time snapshot. No in-memory
+buffering of pre-snapshot values is involved — concurrent writes proceed against the live
+store while the checkpoint is cut.
 
 ### Snapshot Epoch
-A logical timestamp used for snapshot coordination. Distinct from the cluster's **config
-epoch** (topology version counter) — avoid bare "epoch". When a snapshot begins:
-1. Current epoch is recorded
-2. All shards iterate keys, writing values from epoch start
-3. Concurrent writes go to WAL (not snapshot)
-
-### COW (Copy-on-Write)
-A technique where data is copied only when modified. FrogDB uses explicit COW buffers for forkless snapshots instead of Redis's fork-based approach.
+A monotonic counter that numbers and names one snapshot run (`snapshot_NNNNN` directory,
+`SnapshotEpoch` metric). Distinct from the cluster's **config epoch** (topology version
+counter) — avoid bare "epoch". Sequence:
+1. The snapshot scheduler claims the next epoch.
+2. A pre-snapshot hook runs (flushes search indexes, persists the replication offset).
+3. The coordinator cuts a RocksDB checkpoint at the current sequence number.
 
 ---
 

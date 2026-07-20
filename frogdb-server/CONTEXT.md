@@ -54,7 +54,10 @@ RocksDB's internal write-ahead log — the actual crash-durability mechanism ben
 WAL. Always qualify which WAL is meant.
 
 **Snapshot**:
-An epoch-based, forkless point-in-time capture of the dataset.
+A forkless point-in-time capture of the dataset: a RocksDB checkpoint cut at a single
+sequence number (`RocksStore::create_checkpoint`), with no in-memory buffering of
+pre-snapshot values — concurrent writes proceed against the live **Store** untouched while
+the checkpoint is cut.
 
 **Checkpoint**:
 The on-disk snapshot artifact: a RocksDB checkpoint (plus search-index sidecar and
@@ -62,12 +65,15 @@ The on-disk snapshot artifact: a RocksDB checkpoint (plus search-index sidecar a
 _Avoid_: "RDB file", "RDB-compatible file"
 
 **Snapshot Epoch**:
-The logical point-in-time marker recorded when a snapshot begins; coordinates the COW Buffer.
+The monotonic generation counter (`SnapshotScheduler`) that numbers and names one snapshot
+run (`snapshot_NNNNN` directory, `SnapshotEpoch` metric). Identifies a snapshot; does not
+gate or buffer writes.
 _Avoid_: bare "epoch"
 
-**COW Buffer**:
-The explicit copy-on-write buffer holding pre-snapshot values for keys written during a
-snapshot; counted toward `maxmemory`.
+**Pre-Snapshot Hook**:
+The `PreSnapshotHook` callback (`RocksSnapshotCoordinator::set_pre_snapshot_hook`) run
+immediately before a **Checkpoint** is cut — e.g. flushing search indexes and persisting the
+replication offset alongside the snapshot.
 
 **Warm Tier**:
 The per-shard RocksDB column family holding values spilled out of RAM.
@@ -146,8 +152,9 @@ _Avoid_: diagnostic bundle
 - A write applies to the **Store**, then the **FrogDB WAL** (→ RocksDB write batch → **RocksDB
   WAL**), then optionally streams to **Replicas** via the **Replication Backlog**, per the
   **Durability Mode**.
-- A **Snapshot** records a **Snapshot Epoch**, diverts concurrent writes to the **COW Buffer**,
-  and produces a **Checkpoint**.
+- A **Snapshot** claims the next **Snapshot Epoch**, runs the **Pre-Snapshot Hook**, then cuts
+  a RocksDB **Checkpoint** at the current sequence number; concurrent writes are never
+  diverted or buffered — they land in the **Store** and **FrogDB WAL** as normal.
 - Cold values **spill** from the **Store** to the **Warm Tier** and **unspill** on access.
 
 ## Example dialogue

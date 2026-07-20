@@ -174,22 +174,24 @@ In `Async` and `Periodic` modes, writes are visible to other clients BEFORE they
 
 ## Forkless Snapshot Algorithm
 
-FrogDB uses epoch-based forkless snapshots instead of Redis's fork-based approach:
+FrogDB uses a forkless snapshot instead of Redis's fork-based approach, built on RocksDB's own
+checkpoint machinery rather than any in-memory copy-on-write buffer:
 
-1. Snapshot begins: current epoch is recorded
-2. All shards iterate keys, writing values from epoch start
-3. Concurrent writes during snapshot go to a COW buffer
-4. COW buffer memory is explicitly tracked in `total_memory_used()`
+1. The `SnapshotScheduler` claims the next **Snapshot Epoch** (a monotonic counter that only
+   numbers and names the run, e.g. `snapshot_00007`).
+2. The coordinator's `pre_snapshot_hook` runs: it flushes each shard's search indexes and
+   persists the current replication offset, so both land in the same snapshot.
+3. `RocksStore::create_checkpoint` cuts a RocksDB checkpoint at the store's current
+   `latest_sequence_number()`. RocksDB hard-links the checkpoint's SST files and only the
+   still-mutable memtable/WAL data is copied, giving a consistent point-in-time view without
+   forking the process or freezing the keyspace.
+4. The checkpoint, sidecar, and `metadata.json` (recording the epoch and sequence number) are
+   staged under a temp directory and atomically renamed into place.
 
-**maxmemory enforcement** uses total bytes (store + COW), preventing OOM during snapshots.
-
-**Eviction during snapshot:**
-
-| Condition | Behavior |
-|-----------|----------|
-| Memory pressure during snapshot | Eviction proceeds normally |
-| Key has pending COW entry | **Skip** -- already captured for snapshot |
-| No evictable keys remain | Abort snapshot (`cow-memory-abort-threshold`) |
+Concurrent writes during the checkpoint are never diverted or buffered: they land in the
+**Store** and **FrogDB WAL** exactly as they would outside a snapshot. Nothing related to
+snapshotting is counted toward `maxmemory` — eviction during a snapshot behaves the same as at
+any other time.
 
 ---
 

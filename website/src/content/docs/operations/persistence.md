@@ -48,10 +48,12 @@ FrogDB creates periodic point-in-time snapshots for faster recovery. Snapshots u
 
 ### How Snapshots Work
 
-- Each shard captures a logical point-in-time view using epoch-based versioning.
-- The server continues processing commands during the snapshot.
-- Copy-on-write semantics capture old values for keys modified during the snapshot.
-- No 2x memory spike (unlike Redis fork-based snapshots).
+- FrogDB cuts a RocksDB checkpoint at a single sequence number instead of forking the process.
+- The server continues processing commands during the snapshot — writes are never paused,
+  diverted, or buffered; they land in the store and WAL exactly as they would outside a
+  snapshot.
+- No in-memory copy-on-write buffer and no 2x memory spike (unlike Redis fork-based
+  snapshots), because there's no fork and nothing extra is held in memory.
 
 ### Snapshot Configuration
 
@@ -64,11 +66,9 @@ max-snapshots = 5               # Retain up to 5 snapshots
 
 ### Memory During Snapshots
 
-| Scenario | Additional Memory |
-|----------|-------------------|
-| Low write rate | Minimal (~COW buffer size) |
-| High write rate, many key overwrites | Up to COW buffer per shard |
-| Pathological: every key overwritten | ~dataset size (worst case) |
+Snapshots add no extra memory pressure at any write rate: there is no in-memory buffer, so
+memory usage during a snapshot is the same as outside one, regardless of the write rate or
+how many keys are overwritten while the checkpoint is being cut.
 
 ---
 
