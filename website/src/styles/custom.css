@@ -29,14 +29,21 @@
 	--sl-color-hairline-light: rgba(255, 255, 255, 0.08);
 	--sl-color-hairline-shade: rgba(255, 255, 255, 0.05);
 
-	/* Electric lime accent (frog-adjacent) */
-	--sl-color-accent-low: #1f2a0a;
-	--sl-color-accent: #a8d92e;
-	--sl-color-accent-high: #c3f53c;
-	--sl-color-text-accent: #c3f53c;
-
-	/* Caution accent */
+	/* FrogDB accent hues — vaporwave-inspired, neon-on-black.
+	 * Each hue has a semantic home (asides, syntax tokens); lime stays brand. */
+	--frog-lime: #a8d92e;
+	--frog-lime-bright: #c3f53c;
+	--frog-violet: #8b87fa;
+	--frog-pink: #e386f0;
+	--frog-sky: #94d2e3;
 	--frog-amber: #e0a43b;
+	--frog-coral: #ffaaa1;
+
+	/* Lime drives the interactive/brand accent */
+	--sl-color-accent-low: #1f2a0a;
+	--sl-color-accent: var(--frog-lime);
+	--sl-color-accent-high: var(--frog-lime-bright);
+	--sl-color-text-accent: var(--frog-lime-bright);
 
 	/* Rapide UI chrome tokens */
 	--sl-rapide-ui-bg-color: #0f0f0e;
@@ -63,17 +70,31 @@
 	--sl-color-hairline-light: rgba(0, 0, 0, 0.08);
 	--sl-color-hairline-shade: rgba(0, 0, 0, 0.05);
 
-	/* Lime darkened for AA contrast on white */
-	--sl-color-accent-low: #e9f5c7;
-	--sl-color-accent: #55761a;
-	--sl-color-accent-high: #3f5a11;
-	--sl-color-text-accent: #55761a;
-
+	/* Accent hues darkened/saturated for AA contrast on the near-white bg */
+	--frog-lime: #55761a;
+	--frog-lime-bright: #3f5a11;
+	--frog-violet: #5a4fcf;
+	--frog-pink: #a5359a;
+	--frog-sky: #2f6a8a;
 	--frog-amber: #b07a1a;
+	--frog-coral: #c1584a;
+
+	--sl-color-accent-low: #e9f5c7;
+	--sl-color-accent: var(--frog-lime);
+	--sl-color-accent-high: var(--frog-lime-bright);
+	--sl-color-text-accent: var(--frog-lime);
 
 	--sl-rapide-ui-bg-color: #f6f5f1;
 	--sl-rapide-ui-header-bg-color: rgba(253, 252, 250, 0.85);
 	--sl-rapide-ui-border-color: rgba(0, 0, 0, 0.08);
+}
+
+/* Inline code: coral tint — gives the warm accent a frequent, on-brand home
+ * alongside the coral syntax-attribute color in fenced blocks. */
+.sl-markdown-content :not(pre) > code {
+	color: var(--frog-coral);
+	background-color: color-mix(in oklab, var(--frog-coral) 9%, var(--sl-color-gray-6));
+	border: 1px solid color-mix(in oklab, var(--frog-coral) 22%, transparent);
 }
 
 /* Add spacing around compatibility badges on command reference */
@@ -112,6 +133,50 @@ ul.starlight-sidebar-topics a:is(.starlight-sidebar-topics-current, :hover, :foc
 	font-size: var(--sl-text-h1);
 }
 
+/* Vaporwave gradient on the "FrogDB" wordmark (logo <img> is unaffected).
+ * text-fill-color is inherited, so reset it explicitly or the link color paints over. */
+.site-title span {
+	background: linear-gradient(
+		100deg,
+		var(--frog-lime),
+		var(--frog-sky) 30%,
+		var(--frog-violet) 55%,
+		var(--frog-pink) 78%,
+		var(--frog-coral)
+	);
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+	-webkit-text-fill-color: transparent;
+}
+
+/* ---------------------------------------------------------------------------
+ * Code blocks: drop Expressive Code's faux terminal titlebar (the macOS
+ * traffic-light "menu bar"). No code fence uses a title, so nothing is lost.
+ * ------------------------------------------------------------------------- */
+
+.expressive-code .frame.is-terminal .header {
+	display: none;
+}
+
+/* Flat, bordered code frames — a hairline border instead of the default drop
+ * shadow. `inherit` tracks Expressive Code's own corner radius. */
+.expressive-code .frame {
+	box-shadow: none;
+}
+
+.expressive-code .frame.is-terminal pre {
+	border: 1px solid var(--sl-color-hairline);
+	border-radius: inherit;
+}
+
+/* Header removed, so re-anchor the copy button to the code area's top-right
+ * (its default offset assumed the ~35px titlebar). */
+.expressive-code .frame.is-terminal .copy {
+	inset-block-start: 0.5rem;
+	top: 0.5rem;
+}
+
 /* ---------------------------------------------------------------------------
  * Typography polish
  * ------------------------------------------------------------------------- */
@@ -136,6 +201,7 @@ h1[data-page-title] {
 	border: 1px solid var(--sl-color-hairline);
 	background-color: var(--sl-color-gray-6);
 	transition: border-color 0.15s ease;
+	padding: clamp(1.125rem, calc(0.75rem + 0.75vw), 1.65rem);
 }
 
 .sl-link-card:hover,
@@ -155,7 +221,7 @@ h1[data-page-title] {
 }
 
 /* ---------------------------------------------------------------------------
- * Asides: left-border callouts; caution goes amber
+ * Asides: left-border callouts, one hue per type so the palette reads on prose
  * ------------------------------------------------------------------------- */
 
 .starlight-aside {
@@ -163,6 +229,18 @@ h1[data-page-title] {
 	border-inline-start-width: 3px;
 }
 
+.starlight-aside--note {
+	border-inline-start-color: var(--frog-sky);
+}
+
+.starlight-aside--tip {
+	border-inline-start-color: var(--frog-lime);
+}
+
 .starlight-aside--caution {
 	border-inline-start-color: var(--frog-amber);
+}
+
+.starlight-aside--danger {
+	border-inline-start-color: var(--frog-pink);
 }

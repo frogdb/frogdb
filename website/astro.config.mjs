@@ -112,6 +112,8 @@ starlightSidebarTopics([
 			],
 			title: 'FrogDB',
 			favicon: '/favicon.png',
+			// Site ships a hand-tuned dark theme; tell Dark Reader to leave it alone.
+			head: [{ tag: 'meta', attrs: { name: 'darkreader-lock' } }],
 			logo: {
 				src: './src/assets/frogdb-logo-128.png',
 				alt: 'FrogDB Logo',
