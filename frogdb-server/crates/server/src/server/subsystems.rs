@@ -307,6 +307,15 @@ impl Server {
             let shard_senders = self.shard_senders.clone();
             let num_shards = self.config.server.num_shards.max(1);
 
+            // Adopt this boot-spawned handler into the RoleManager, before the
+            // acceptor (spawned later in this function) can start serving
+            // client connections — so no REPLICAOF can race ahead of this
+            // call. Without this, promoting away from a boot-spawned Replica
+            // would leave its reconnect loop dialing the old primary forever,
+            // since RoleManager otherwise has no idea this handler exists.
+            self.role_manager_handle
+                .register_boot_replica_handler(handler.clone(), handler.primary_addr());
+
             // Get shared replication state for the frame consumer to update active_version
             let replication_state = Some(handler.shared_state());
 
@@ -628,14 +637,15 @@ impl Server {
                 Err(e) => error!(error = %e, "Failed to persist replication state on shutdown"),
             }
         }
-        if let Some(ref handler) = self.replica_handler {
-            match handler.save_state().await {
-                Ok(()) => info!("Replica replication state persisted on shutdown"),
-                Err(e) => {
-                    error!(error = %e, "Failed to persist replica replication state on shutdown")
-                }
-            }
-        }
+        // Note: deliberately no save-on-shutdown for `self.replica_handler`
+        // here (there used to be dead code attempting it). `start_subsystems`
+        // already `take()`s the handler before spawning the connection/
+        // consumer tasks, so `self.replica_handler` is always `None` by the
+        // time shutdown runs — the old block could never execute. There is
+        // currently no replacement persistence hook for replica state (unlike
+        // the primary handler's pre-snapshot hook above); a clean restart
+        // resumes from the last-recovered offset rather than the exact
+        // shutdown offset. Tracked separately from this fix.
 
         // Final flush of RocksDB
         if let Some(ref rocks) = self.rocks_store {

@@ -37,6 +37,10 @@ pub(super) struct ClusterInitResult {
     /// and is shared with the runtime replica streamer so a runtime-demoted
     /// node keeps publishing its offset to the failure detector.
     pub shared_replication_offset: Option<Arc<frogdb_core::sync::AtomicU64>>,
+    /// The concrete `RoleManagerHandle` (not just the trait object above), so
+    /// `Server::start_subsystems` can register the boot-spawned replica
+    /// handler with it — a capability outside `frogdb_core::RoleController`.
+    pub role_manager_handle: crate::role_manager::RoleManagerHandle,
 }
 
 /// Initialize cluster state, Raft, failure detector, and background tasks.
@@ -592,6 +596,7 @@ pub(super) async fn init_cluster(
         is_replica_flag,
         role_controller,
         shared_replication_offset,
+        role_manager_handle: role_handle,
     })
 }
 
