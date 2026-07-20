@@ -102,13 +102,18 @@ fn handle_bgsave(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
     if !args.is_empty() {
         let opt = args[0].to_ascii_uppercase();
         if opt.as_slice() == b"SCHEDULE" {
-            // BGSAVE SCHEDULE - schedule a save if one is already running,
-            // otherwise start immediately.
-            if ctx.snapshot_coordinator.in_progress() {
-                ctx.snapshot_coordinator.schedule_snapshot();
-                return Response::Simple(Bytes::from_static(b"Background saving scheduled"));
-            }
-            // No save in progress, fall through to start one immediately.
+            // BGSAVE SCHEDULE — coalesce with any in-flight run in one atomic
+            // step (no caller-side check-then-act race between the in-progress
+            // probe and starting/scheduling a save).
+            return match ctx.snapshot_coordinator.request_snapshot() {
+                frogdb_core::persistence::SnapshotRequest::Coalesced => {
+                    Response::Simple(Bytes::from_static(b"Background saving scheduled"))
+                }
+                frogdb_core::persistence::SnapshotRequest::Started(epoch) => {
+                    tracing::info!(epoch, "BGSAVE started");
+                    Response::Simple(Bytes::from_static(b"Background saving started"))
+                }
+            };
         }
     }
 

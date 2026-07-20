@@ -188,6 +188,28 @@ pub enum MergeStrategy {
     Custom,
 }
 
+/// Requests a runtime replication *role transition* on this node.
+///
+/// The single seam through which a command handler (or the cluster failover
+/// event consumer) asks the server to change roles at runtime. It is
+/// implemented by the server's `RoleManager` handle; `core` stays decoupled
+/// from the replication streaming machinery behind this trait.
+///
+/// Both methods are fire-and-request: they flip the data-path role flag
+/// synchronously (so `ROLE`/`INFO`/the write guard reflect the new role
+/// immediately) and drive the stream teardown/startup the transition implies.
+/// See `frogdb-server`'s `role_manager` module.
+pub trait RoleController: Send + Sync {
+    /// Role Promotion: become a writable primary (`REPLICAOF NO ONE`). Stops
+    /// any inbound replication stream and clears the replica flag. Idempotent.
+    fn request_promote(&self);
+
+    /// Role Demotion: become a replica of `primary` (`REPLICAOF host port` or a
+    /// Raft-driven failover). Sets the replica flag, tears down any existing
+    /// stream, and opens a new one to `primary`. Idempotent per target.
+    fn request_demote(&self, primary: std::net::SocketAddr);
+}
+
 /// Trait for checking if the local node can form a quorum.
 /// This is implemented by the failure detector to provide local quorum status.
 pub trait QuorumChecker: Send + Sync {
@@ -1085,6 +1107,15 @@ pub struct CommandContext<'a> {
     /// by shard workers, the acceptor, and all connection handlers.
     pub is_replica_flag: Option<Arc<AtomicBool>>,
 
+    /// Handle to request a runtime role transition (`REPLICAOF`).
+    ///
+    /// `REPLICAOF host port` / `REPLICAOF NO ONE` drive Role Demotion /
+    /// Promotion through this controller (the server's `RoleManager`) instead
+    /// of poking the raw flag: the manager owns the flag *and* the streaming
+    /// lifecycle a role change implies. `None` in unit/test contexts with no
+    /// manager wired.
+    pub role_controller: Option<Arc<dyn RoleController>>,
+
     /// Primary host (set when running as a replica, for INFO replication).
     pub master_host: Option<String>,
 
@@ -1123,6 +1154,7 @@ impl<'a> CommandContext<'a> {
             command_registry: None,
             is_replica: false,
             is_replica_flag: None,
+            role_controller: None,
             master_host: None,
             master_port: None,
             effects: CommandEffects::default(),

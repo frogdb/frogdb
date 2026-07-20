@@ -153,6 +153,13 @@ impl ShardWorker {
         self.identity.set_is_replica_flag(flag);
     }
 
+    /// Install the server-wide role-transition controller so that `REPLICAOF`
+    /// executed on this shard can drive Role Promotion/Demotion through the
+    /// `RoleManager`.
+    pub fn set_role_controller(&mut self, controller: Arc<dyn crate::command::RoleController>) {
+        self.identity.set_role_controller(controller);
+    }
+
     /// Replace this shard's expiry_paused flag with a shared one from the ClientRegistry.
     pub fn set_expiry_paused_flag(&mut self, flag: Arc<AtomicBool>) {
         self.expiry_paused = flag;
@@ -217,6 +224,7 @@ impl ShardWorker {
             command_registry: Some(&self.registry),
             is_replica,
             is_replica_flag: Some(self.identity.is_replica_flag().clone()),
+            role_controller: self.identity.role_controller().cloned(),
             master_host: self.identity.master_host().cloned(),
             master_port: self.identity.master_port(),
             effects: Default::default(),

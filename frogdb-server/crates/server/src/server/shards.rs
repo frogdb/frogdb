@@ -42,6 +42,9 @@ pub(super) struct ShardSpawnContext {
     pub failure_detector: Option<Arc<FailureDetector>>,
     pub replication_quorum_checker: Option<Arc<dyn frogdb_core::command::QuorumChecker>>,
     pub is_replica_flag: Arc<std::sync::atomic::AtomicBool>,
+    /// Server-wide role-transition controller (`RoleManager` handle) so
+    /// `REPLICAOF` executed on a shard drives Role Promotion/Demotion.
+    pub role_controller: Arc<dyn frogdb_core::RoleController>,
     pub client_registry: Arc<ClientRegistry>,
     pub config_manager: Arc<ConfigManager>,
     pub shard_memory_used: Arc<Vec<AtomicU64>>,
@@ -186,6 +189,10 @@ pub(super) fn spawn_shard_workers(
 
         // Share the server-wide is_replica flag with this shard worker
         worker.set_is_replica_flag(ctx.is_replica_flag.clone());
+
+        // Share the server-wide role-transition controller so REPLICAOF on this
+        // shard can drive Role Promotion/Demotion through the RoleManager.
+        worker.set_role_controller(ctx.role_controller.clone());
 
         // Share the expiry_paused flag so PAUSE ALL suppresses active expiry
         worker.set_expiry_paused_flag(ctx.client_registry.expiry_paused_flag());
