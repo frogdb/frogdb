@@ -101,14 +101,12 @@ impl ShardReceiver {
 
     /// Non-blocking receive of the next buffered envelope, if any.
     ///
-    /// Test seam for the shard-driver harness's deterministic pump loop: under
-    /// a current-thread runtime a message already delivered by a spawned
+    /// Shard-driver harness seam for the deterministic pump loop: under a
+    /// current-thread runtime a message already delivered by a spawned
     /// coordinator task is buffered and returned without yielding, so pumping
     /// one queued message never lets another task interleave mid-pump.
-    // Unused until later shard-driver-harness tasks (phase-4b) call it.
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) fn try_recv(&mut self) -> Option<Envelope> {
+    #[cfg(any(test, feature = "shard-driver"))]
+    pub fn try_recv(&mut self) -> Option<Envelope> {
         self.inner.try_recv().ok()
     }
 }

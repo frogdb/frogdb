@@ -5,6 +5,8 @@ use frogdb_types::metrics::definitions::{FieldsExpired, KeysExpired, ShardQueueL
 use crate::keyspace_event::KeyspaceEventFlags;
 
 use super::active_expiry::ExpiryResult;
+#[cfg(any(test, feature = "shard-driver"))]
+use super::message::Envelope;
 use super::message::ShardMessage;
 use super::worker::ShardWorker;
 
@@ -303,8 +305,37 @@ impl ShardWorker {
         }
     }
 
-    /// Test/driver seam mirroring the event loop's continuation-release arm
-    /// (`event_loop.rs:88-91`): await the stored release signal — fired when
+    /// Shard-driver harness seam: dispatch one message, returning the event
+    /// loop's shutdown signal (`true` == break). Wraps [`Self::dispatch_message`].
+    #[cfg(any(test, feature = "shard-driver"))]
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub async fn drive(&mut self, msg: ShardMessage) -> bool {
+        self.dispatch_message(msg).await
+    }
+
+    /// Shard-driver harness seam: run one active-expiry cycle synchronously,
+    /// without waiting on the event loop's 100 ms timer. Wraps
+    /// [`Self::run_active_expiry`].
+    #[cfg(any(test, feature = "shard-driver"))]
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn drive_expiry_tick(&mut self) {
+        self.run_active_expiry();
+    }
+
+    /// Shard-driver harness seam: fire one blocking-waiter timeout sweep,
+    /// without waiting on the event loop's 100 ms timer. Wraps
+    /// [`Self::check_waiter_timeouts`].
+    #[cfg(any(test, feature = "shard-driver"))]
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn drive_waiter_timeout_tick(&mut self) {
+        self.check_waiter_timeouts();
+    }
+
+    /// Shard-driver harness seam mirroring the event loop's continuation-release
+    /// arm (`event_loop.rs:88-91`): await the stored release signal — fired when
     /// the coordinator's `ContinuationGuard` drops — then clear the lock.
     ///
     /// Only call when a continuation lock is held and its guard has been (or is
@@ -312,12 +343,22 @@ impl ShardWorker {
     /// resolves to `pending()` and this future never completes. The shard-driver
     /// harness pumps this per shard, in a permuted order, after inducing the
     /// guard drop (scenario 4).
-    // Unused until later shard-driver-harness tasks (phase-4b) call it.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "shard-driver"))]
+    #[doc(hidden)]
     #[allow(dead_code)]
-    pub(crate) async fn pump_continuation_release(&mut self) {
+    pub async fn drive_continuation_release(&mut self) {
         self.vll.await_continuation_release().await;
         self.vll.clear_continuation_lock();
+    }
+
+    /// Shard-driver harness seam: non-blocking receive of the next queued
+    /// envelope off this worker's own message channel. See
+    /// [`ShardReceiver::try_recv`](super::message::ShardReceiver::try_recv).
+    #[cfg(any(test, feature = "shard-driver"))]
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn try_recv_queued(&mut self) -> Option<Envelope> {
+        self.message_rx.try_recv()
     }
 }
 
