@@ -60,19 +60,88 @@ impl SnapshotScheduler {
     /// If a save is running, mark a follow-up and report `Coalesced`; otherwise
     /// begin immediately and report `Started(epoch)`.
     ///
-    /// The lost-race branch (we observed idle, then `try_begin` failed because
-    /// another caller just claimed the slot) reports `Coalesced` *without*
-    /// setting `scheduled`: that fresh save began after our decision point, so it
-    /// already reflects our request and no redundant follow-up is needed.
+    /// # Contract
+    ///
+    /// After `request()` returns, a snapshot whose run *begins at or after* this
+    /// call is guaranteed — either the one we `Started`, or a rescheduled /
+    /// concurrent run that another caller owns. No request is ever silently
+    /// dropped (no lost wakeup).
+    ///
+    /// # Lost-wakeup window and how it is closed
+    ///
+    /// The naive body (`if in_progress { scheduled.store(true) }`) has a race:
+    /// between our `in_progress.load() == true` and our `scheduled.store(true)`,
+    /// the runner we observed can reach [`finish_and_maybe_rebegin`] and run its
+    /// `scheduled.swap(false)` *before* our store lands — consuming nothing. It
+    /// then exits with `in_progress == false`, and our `scheduled == true` arms
+    /// no follow-up: a lost wakeup.
+    ///
+    /// We close it with a double-check: after arming `scheduled`, re-load
+    /// `in_progress`. Because `finish_and_maybe_rebegin` stores `in_progress =
+    /// false` *before* it swaps `scheduled`, and both types are `SeqCst`, the
+    /// single total order gives us:
+    ///
+    /// * If the re-load still sees `in_progress == true`, the runner active at
+    ///   that load has *not* yet run its finish-store; therefore its later
+    ///   finish-swap is ordered after our `scheduled.store` and is guaranteed to
+    ///   observe it (or a peer already consumed our flag and owns the run). We
+    ///   fold in — a post-request run is guaranteed.
+    /// * If the re-load sees `in_progress == false`, the runner has exited and
+    ///   may have missed our flag. We take responsibility: `scheduled.swap(false)`
+    ///   claims the flag. If we win it we must run, so we `try_begin`; if that
+    ///   fails, a fresh save already claimed the slot *after* our request (so a
+    ///   post-request run again exists) and we fold in. If we lose the swap, some
+    ///   peer already claimed our flag and owns the post-request run.
+    ///
+    /// The idle branch mirrors the old lost-race comment: observing idle then
+    /// losing `try_begin` means a fresh save began after our decision point, so
+    /// it already reflects our request — `Coalesced` without arming a follow-up.
     pub fn request(&self) -> SnapshotRequest {
-        if self.in_progress.load(SeqCst) {
-            self.scheduled.store(true, SeqCst);
-            SnapshotRequest::Coalesced
-        } else {
-            match self.try_begin() {
+        if !self.in_progress.load(SeqCst) {
+            // Observed idle: claim the slot, or fold into the winner's fresh run.
+            return match self.try_begin() {
                 Some(epoch) => SnapshotRequest::Started(epoch),
                 None => SnapshotRequest::Coalesced,
+            };
+        }
+        // Observed a save running: arm a follow-up and close the wakeup window.
+        self.arm_follow_up()
+    }
+
+    /// Arm a coalesced follow-up after the caller observed `in_progress == true`,
+    /// then re-verify to close the lost-wakeup window (see [`request`] docs).
+    ///
+    /// Precondition: the caller loaded `in_progress == true` immediately before
+    /// this call. Split out (rather than inlined into `request`) so a
+    /// deterministic unit test can drive the exact former race — enter with the
+    /// runner *already exited* — which the black-box `request` re-load would
+    /// otherwise hide.
+    ///
+    /// [`request`]: SnapshotScheduler::request
+    pub(super) fn arm_follow_up(&self) -> SnapshotRequest {
+        self.scheduled.store(true, SeqCst);
+
+        if self.in_progress.load(SeqCst) {
+            // Runner still active — its finish-swap is ordered after our store
+            // (finish stores `in_progress = false` before swapping `scheduled`),
+            // so the follow-up is guaranteed. Fold in.
+            return SnapshotRequest::Coalesced;
+        }
+
+        // The runner exited in the arm window and may have missed our flag.
+        // Claim the flag ourselves rather than lose the wakeup.
+        if self.scheduled.swap(false, SeqCst) {
+            // We own the follow-up: we must begin the post-request run.
+            match self.try_begin() {
+                Some(epoch) => SnapshotRequest::Started(epoch),
+                // A concurrent save already claimed the slot after our request,
+                // so a post-request run exists without us. Fold in.
+                None => SnapshotRequest::Coalesced,
             }
+        } else {
+            // A peer (the exiting runner's finish-swap, or a concurrent request)
+            // already consumed our flag and owns the post-request run. Fold in.
+            SnapshotRequest::Coalesced
         }
     }
 
