@@ -575,35 +575,100 @@ pub fn check_pel_conservation(history: &History) -> Result<(), ConservationViola
             .to_string()
     }
 
-    let mut added: HashMap<String, u64> = HashMap::new(); // id -> add op
-    let mut ever_pending: HashSet<String> = HashSet::new();
-    let mut acked: HashMap<String, u64> = HashMap::new(); // id -> ack op
+    // XADD's stream key is args[0]; it has no group.
+    fn xadd_stream(args: &[Bytes]) -> Option<String> {
+        Some(String::from_utf8_lossy(args.first()?).to_string())
+    }
+
+    // XACK / XPENDING / XCLAIM all start "key group ...".
+    fn stream_group_prefix(args: &[Bytes]) -> Option<(String, String)> {
+        Some((
+            String::from_utf8_lossy(args.first()?).to_string(),
+            String::from_utf8_lossy(args.get(1)?).to_string(),
+        ))
+    }
+
+    // XREADGROUP's group and stream key are positional after the GROUP and
+    // STREAMS keywords respectively: "GROUP g c [COUNT n] STREAMS key id".
+    fn xreadgroup_stream_group(args: &[Bytes]) -> Option<(String, String)> {
+        let gi = args.iter().position(|a| a.eq_ignore_ascii_case(b"GROUP"))?;
+        let group = String::from_utf8_lossy(args.get(gi + 1)?).to_string();
+        let si = args
+            .iter()
+            .position(|a| a.eq_ignore_ascii_case(b"STREAMS"))?;
+        let stream = String::from_utf8_lossy(args.get(si + 1)?).to_string();
+        Some((stream, group))
+    }
+
+    // (stream, id) -> add op. XADD has no group: an added entry is visible
+    // to every group on its stream, so it is scoped by stream only.
+    let mut added: HashMap<(String, String), u64> = HashMap::new();
+    // (stream, id) -> ever observed delivered/PEL'd in ANY group of that
+    // stream. Used only for the lost-check (iii), which is inherently a
+    // per-stream property ("readable via `>`, PEL'd, or acked" somewhere),
+    // not a per-group one — a group that hasn't read up to an id yet is not
+    // "losing" it, so group identity is deliberately erased here.
+    let mut ever_pending: HashSet<(String, String)> = HashSet::new();
+    // (stream, group, id) -> ever observed pending in that EXACT group.
+    // Used to gate XACK legitimacy (i) and scoped acked lookups (ii): PELs
+    // are per (stream, group), so a delivery/pending observation in one
+    // group must never satisfy a check about a different group.
+    let mut pel_pending: HashSet<(String, String, String)> = HashSet::new();
+    // (stream, group, id) -> ack op, only for ids gated as genuinely
+    // pending at ack time (see the "xack" arm below).
+    let mut acked: HashMap<(String, String, String), u64> = HashMap::new();
 
     for op in &ops {
         match op.function.as_str() {
             "xadd" => {
-                if let Some(r) = &op.result {
+                if let (Some(stream), Some(r)) = (xadd_stream(&op.args), &op.result) {
                     added
-                        .entry(String::from_utf8_lossy(r).to_string())
+                        .entry((stream, String::from_utf8_lossy(r).to_string()))
                         .or_insert(op.id);
                 }
             }
-            "xreadgroup" | "xclaim" => {
-                if let Some(r) = &op.result {
+            "xreadgroup" => {
+                if let (Some((stream, group)), Some(r)) =
+                    (xreadgroup_stream_group(&op.args), &op.result)
+                {
                     for id in delivered_ids(r) {
-                        ever_pending.insert(id);
+                        ever_pending.insert((stream.clone(), id.clone()));
+                        pel_pending.insert((stream.clone(), group.clone(), id));
+                    }
+                }
+            }
+            "xclaim" => {
+                if let (Some((stream, group)), Some(r)) =
+                    (stream_group_prefix(&op.args), &op.result)
+                {
+                    for id in delivered_ids(r) {
+                        ever_pending.insert((stream.clone(), id.clone()));
+                        pel_pending.insert((stream.clone(), group.clone(), id));
                     }
                 }
             }
             "xack" => {
-                for id_arg in op.args.iter().skip(2) {
-                    acked
-                        .entry(String::from_utf8_lossy(id_arg).to_string())
-                        .or_insert(op.id);
+                if let Some((stream, group)) = stream_group_prefix(&op.args) {
+                    for id_arg in op.args.iter().skip(2) {
+                        let id = String::from_utf8_lossy(id_arg).to_string();
+                        // Only a genuine ack: the id must have already been
+                        // observed pending in this EXACT (stream, group)
+                        // earlier in the scan. A no-op XACK of an id never
+                        // delivered to this group (returns 0) must not
+                        // register as an ack — otherwise the id's later,
+                        // legitimate first delivery would look like
+                        // "delivered after ack".
+                        let key = (stream.clone(), group.clone(), id);
+                        if pel_pending.contains(&key) {
+                            acked.entry(key).or_insert(op.id);
+                        }
+                    }
                 }
             }
             "xpending" => {
-                if let Some(r) = &op.result {
+                if let (Some((stream, group)), Some(r)) =
+                    (stream_group_prefix(&op.args), &op.result)
+                {
                     let s = String::from_utf8_lossy(r);
                     if s != "0" {
                         let fields: Vec<&str> = s.split('|').collect();
@@ -624,8 +689,10 @@ pub fn check_pel_conservation(history: &History) -> Result<(), ConservationViola
                             // Summary form only exposes the range endpoints,
                             // not the full pending set, so only min/max are
                             // known to be pending as of this observation.
-                            ever_pending.insert(min.to_string());
-                            ever_pending.insert(max.to_string());
+                            ever_pending.insert((stream.clone(), min.to_string()));
+                            ever_pending.insert((stream.clone(), max.to_string()));
+                            pel_pending.insert((stream.clone(), group.clone(), min.to_string()));
+                            pel_pending.insert((stream.clone(), group.clone(), max.to_string()));
                         }
                     }
                 }
@@ -634,13 +701,17 @@ pub fn check_pel_conservation(history: &History) -> Result<(), ConservationViola
         }
     }
 
-    // (ii) acked-but-pending: an id present in a re-read AFTER its ack.
+    // (ii) acked-but-pending: an id present in a re-read AFTER its ack, in
+    // the SAME (stream, group) as the ack — an ack in one group's PEL says
+    // nothing about a different group's independent copy of the entry.
     for op in &ops {
         if op.function == "xreadgroup"
+            && let Some((stream, group)) = xreadgroup_stream_group(&op.args)
             && let Some(r) = &op.result
         {
             for id in delivered_ids(r) {
-                if let Some(&ack_op) = acked.get(&id) {
+                let key = (stream.clone(), group.clone(), id.clone());
+                if let Some(&ack_op) = acked.get(&key) {
                     let ack_return = ops
                         .iter()
                         .find(|o| o.id == ack_op)
@@ -657,17 +728,21 @@ pub fn check_pel_conservation(history: &History) -> Result<(), ConservationViola
         }
     }
 
-    // (iii) nothing skipped: an entry absent from every delivery/PEL/ack while
-    // a `>` read that STARTED after its add COMPLETED delivered a HIGHER id.
-    // Restricted to `>` reads: a "0" re-read shows old PEL entries whose
-    // delivery may predate this add, which implies nothing about a skip.
+    // (iii) nothing skipped: an entry absent from every delivery/PEL/ack on
+    // its stream while a `>` read on THAT SAME STREAM, started after its
+    // add completed, delivered a HIGHER id. Restricted to `>` reads: a "0"
+    // re-read shows old PEL entries whose delivery may predate this add,
+    // which implies nothing about a skip. Restricted to the same stream key
+    // (extracted from XREADGROUP's STREAMS clause): id order only holds
+    // within a single stream, so a read on an unrelated stream delivering a
+    // numerically higher id is not evidence that this stream lost anything.
     //
     // Note: a `>` read with COUNT truncates the *tail* of the in-order
     // delivery, never the middle, so COUNT cannot cause a false skip.
-    // Entries added after the last `>` read are never flagged (no later
-    // read exists to compare against).
-    for (id, add_op) in &added {
-        if ever_pending.contains(id) || acked.contains_key(id) {
+    // Entries added after the last `>` read on their stream are never
+    // flagged (no later read exists to compare against).
+    for ((stream, id), add_op) in &added {
+        if ever_pending.contains(&(stream.clone(), id.clone())) {
             continue;
         }
         let Some(eid) = id_tuple(id) else { continue };
@@ -678,6 +753,7 @@ pub fn check_pel_conservation(history: &History) -> Result<(), ConservationViola
         let skipped = ops.iter().any(|o| {
             o.function == "xreadgroup"
                 && o.args.last().is_some_and(|a| a.as_ref() == b">")
+                && xreadgroup_stream_group(&o.args).is_some_and(|(s, _)| s == *stream)
                 && o.invoke_time > add_return
                 && o.result.as_ref().is_some_and(|r| {
                     delivered_ids(r)
@@ -1146,6 +1222,58 @@ mod tests {
             check_pel_conservation(&h),
             Err(ConservationViolation::PelDoubleOwned { .. })
         ));
+    }
+
+    #[test]
+    fn pel_noop_xack_not_treated_as_ack() {
+        // A no-op XACK of an id that hasn't been delivered to this group
+        // yet (returns 0) must NOT register as a real ack: the id's first
+        // genuine delivery, which happens later, must not be mistaken for
+        // "delivered after ack".
+        let mut h = History::new();
+        let a = h.invoke(1, "xadd", vec![b("st"), b("5-0"), b("f"), b("v")]);
+        h.respond(a, Some(b("5-0")));
+        let g = h.invoke(1, "xgroup", vec![b("CREATE"), b("st"), b("g"), b("0")]);
+        h.respond(g, Some(b("OK")));
+        // No-op ack: 5-0 has never been delivered to this group.
+        let ack = h.invoke(2, "xack", vec![b("st"), b("g"), b("5-0")]);
+        h.respond(ack, Some(b("0")));
+        // First real delivery of 5-0 happens AFTER the no-op ack.
+        let r = h.invoke(
+            2,
+            "xreadgroup",
+            vec![b("GROUP"), b("g"), b("c1"), b("STREAMS"), b("st"), b(">")],
+        );
+        h.respond(r, Some(b("5-0,f,v")));
+        assert!(check_pel_conservation(&h).is_ok());
+    }
+
+    #[test]
+    fn pel_cross_stream_not_contaminated() {
+        // Two independent stream+group pairs. Stream A's entry is never
+        // read by stream A's own group; stream B's group delivers a HIGHER
+        // id on an unrelated `>` read. Id-order delivery only holds within
+        // a single (stream, group), so stream B's read must not be treated
+        // as evidence that stream A's entry was skipped.
+        let mut h = History::new();
+        let a1 = h.invoke(1, "xadd", vec![b("stA"), b("1-1"), b("f"), b("v")]);
+        h.respond(a1, Some(b("1-1")));
+        let ga = h.invoke(1, "xgroup", vec![b("CREATE"), b("stA"), b("g"), b("0")]);
+        h.respond(ga, Some(b("OK")));
+        let a2 = h.invoke(1, "xadd", vec![b("stB"), b("9-9"), b("f"), b("w")]);
+        h.respond(a2, Some(b("9-9")));
+        let gb = h.invoke(1, "xgroup", vec![b("CREATE"), b("stB"), b("g"), b("0")]);
+        h.respond(gb, Some(b("OK")));
+        let r = h.invoke(
+            2,
+            "xreadgroup",
+            vec![b("GROUP"), b("g"), b("c1"), b("STREAMS"), b("stB"), b(">")],
+        );
+        h.respond(r, Some(b("9-9,f,w")));
+        // stA's 1-1 was never read by stA's own group -> must NOT be
+        // flagged as lost just because stB's unrelated group delivered a
+        // higher id.
+        assert!(check_pel_conservation(&h).is_ok());
     }
 
     #[test]

@@ -263,13 +263,16 @@ mod tests {
 
     #[test]
     fn double_own_pel_is_caught() {
-        use crate::conservation::check_pel_conservation;
+        use crate::conservation::{ConservationViolation, check_pel_conservation};
         // Add an xpending observation to corrupt.
         let mut h = valid_group_history();
         let p = h.invoke(2, "xpending", vec![b("st"), b("g")]);
         h.respond(p, Some(b("1|1-1|1-1|c1:1")));
         let corrupt = double_own_pel(&h);
-        assert!(check_pel_conservation(&corrupt).is_err());
+        assert!(matches!(
+            check_pel_conservation(&corrupt),
+            Err(ConservationViolation::PelDoubleOwned { .. })
+        ));
     }
 
     #[test]
