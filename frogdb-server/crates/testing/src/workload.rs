@@ -77,6 +77,32 @@ const FAMILIES: [Family; 5] = [
 /// blocking registrations on one key from landing in the same tick window.
 const STAGGER_STEP: u64 = 7;
 
+/// The single client allowed to issue *blocking* pops on `key`.
+///
+/// Blocking waiters must be staggered per key so the FIFO wake-order checker
+/// (which uses invoke order as a proxy for the server's registration order)
+/// never sees two waiters whose registration order is ambiguous. Within one
+/// client, blocking ops are already staggered by [`next_block_offset`] *and*
+/// serialized on the wire (a client sends its next op only after the prior
+/// reply), so a single client's blocking pops on a key have an unambiguous
+/// registration order. Across clients there is no such guarantee — two
+/// clients' blocking pops on the same key can overlap arbitrarily under
+/// simulated network latency, landing squarely in the checker's documented
+/// false-positive window. Pinning each key's blocking consumer to one
+/// deterministic owner removes that ambiguity. Producers (pushes) still come
+/// from every client, so push/pop concurrency is unchanged; only *concurrent
+/// multi-waiter* races on one key are excluded (their sound verification needs
+/// phase-2 `DEBUG WAITQUEUE` registration dumps, not an invoke-time proxy).
+fn blocking_owner(key: &[u8], num_clients: usize) -> u64 {
+    // FNV-1a over the key bytes; deterministic and stable across runs.
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in key {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h % num_clients.max(1) as u64
+}
+
 impl Workload {
     /// Deterministic: same `(seed, profile, num_clients, ops_per_client)` ⇒
     /// byte-identical `Workload`.
@@ -104,6 +130,8 @@ impl Workload {
                     &families,
                     &mut rng,
                     &mut block_offset,
+                    client_id,
+                    num_clients,
                     &mut ops,
                 );
             }
@@ -271,19 +299,38 @@ fn think(rng: &mut StdRng) -> u64 {
 }
 
 /// Emit one (or, for blocking, a producer + a consumer) op into `ops`.
+#[allow(clippy::too_many_arguments)]
 fn gen_op(
     fam: Family,
     profile: Profile,
     families: &KeyFamilies,
     rng: &mut StdRng,
     block_offset: &mut std::collections::HashMap<Vec<u8>, u64>,
+    client_id: u64,
+    num_clients: usize,
     ops: &mut Vec<ScriptedOp>,
 ) {
     match fam {
         Family::Kv => gen_kv(profile, families, rng, ops),
-        Family::List => gen_list(profile, families, rng, block_offset, ops),
+        Family::List => gen_list(
+            profile,
+            families,
+            rng,
+            block_offset,
+            client_id,
+            num_clients,
+            ops,
+        ),
         Family::Hash => gen_hash(families, rng, ops),
-        Family::ZSet => gen_zset(profile, families, rng, block_offset, ops),
+        Family::ZSet => gen_zset(
+            profile,
+            families,
+            rng,
+            block_offset,
+            client_id,
+            num_clients,
+            ops,
+        ),
         Family::Stream => gen_stream(families, rng, ops),
     }
 }
@@ -364,6 +411,8 @@ fn gen_list(
     families: &KeyFamilies,
     rng: &mut StdRng,
     block_offset: &mut std::collections::HashMap<Vec<u8>, u64>,
+    client_id: u64,
+    num_clients: usize,
     ops: &mut Vec<ScriptedOp>,
 ) {
     let keys = &families.list;
@@ -371,37 +420,60 @@ fn gen_list(
     let r = rng.random_range(0..100);
     let t = think(rng);
     if blocking_bias && r < 40 {
-        // Producer + blocking consumer on the same key.
+        // Producer + consumer on the same key. Only the key's blocking owner
+        // issues the *blocking* pop (keeps per-key blocking registrations
+        // single-client and thus unambiguously ordered for the FIFO checker);
+        // other clients issue an equivalent non-blocking pop instead.
         let k = pick(keys, rng).clone();
         push_op(ops, "rpush", vec![k.clone(), alnum_value(rng)], t);
-        let off = next_block_offset(block_offset, &k);
-        let cmd = if rng.random_range(0..2) == 0 {
-            "blpop"
+        if blocking_owner(&k, num_clients) == client_id {
+            let off = next_block_offset(block_offset, &k);
+            let cmd = if rng.random_range(0..2) == 0 {
+                "blpop"
+            } else {
+                "brpop"
+            };
+            push_op(ops, cmd, vec![k, block_timeout(rng)], off);
         } else {
-            "brpop"
-        };
-        push_op(ops, cmd, vec![k, block_timeout(rng)], off);
+            let cmd = if rng.random_range(0..2) == 0 {
+                "lpop"
+            } else {
+                "rpop"
+            };
+            push_op(ops, cmd, vec![k], think(rng));
+        }
         return;
     }
     if blocking_bias && r < 55 && keys.len() >= 2 {
-        // Cross-key BLMOVE (dropped from per-key linearizability; conservation
-        // covers it): src dst LEFT RIGHT timeout.
+        // BLMOVE registers a blocking waiter on `src`, so only src's blocking
+        // owner may issue it; other clients do the equivalent non-blocking
+        // cross-key LMOVE. Cross-key element conservation covers both, and the
+        // partitioner splits the move into per-key pop/push halves.
         let src = pick(keys, rng).clone();
         let dst = pick(keys, rng).clone();
         push_op(ops, "lpush", vec![src.clone(), alnum_value(rng)], t);
-        let off = next_block_offset(block_offset, &src);
-        push_op(
-            ops,
-            "blmove",
-            vec![
-                src,
-                dst,
-                Bytes::from("LEFT"),
-                Bytes::from("RIGHT"),
-                block_timeout(rng),
-            ],
-            off,
-        );
+        if blocking_owner(&src, num_clients) == client_id {
+            let off = next_block_offset(block_offset, &src);
+            push_op(
+                ops,
+                "blmove",
+                vec![
+                    src,
+                    dst,
+                    Bytes::from("LEFT"),
+                    Bytes::from("RIGHT"),
+                    block_timeout(rng),
+                ],
+                off,
+            );
+        } else {
+            push_op(
+                ops,
+                "lmove",
+                vec![src, dst, Bytes::from("LEFT"), Bytes::from("RIGHT")],
+                think(rng),
+            );
+        }
         return;
     }
     let k = pick(keys, rng).clone();
@@ -456,6 +528,8 @@ fn gen_zset(
     families: &KeyFamilies,
     rng: &mut StdRng,
     block_offset: &mut std::collections::HashMap<Vec<u8>, u64>,
+    client_id: u64,
+    num_clients: usize,
     ops: &mut Vec<ScriptedOp>,
 ) {
     let keys = &families.zset;
@@ -463,18 +537,24 @@ fn gen_zset(
     let r = rng.random_range(0..100);
     let t = think(rng);
     if blocking_bias && r < 45 {
-        // Producer + blocking consumer on the same key.
+        // Producer + consumer on the same key. As with lists, only the key's
+        // blocking owner issues the blocking pop; others issue a non-blocking
+        // ZREM of the same member so per-key blocking waiters stay single-client.
         let k = pick(keys, rng).clone();
         let score = Bytes::from(rng.random_range(0..100).to_string());
         let m = Bytes::from(format!("m{}", rng.random_range(0..5)));
-        push_op(ops, "zadd", vec![k.clone(), score, m], t);
-        let off = next_block_offset(block_offset, &k);
-        let cmd = if rng.random_range(0..2) == 0 {
-            "bzpopmin"
+        push_op(ops, "zadd", vec![k.clone(), score, m.clone()], t);
+        if blocking_owner(&k, num_clients) == client_id {
+            let off = next_block_offset(block_offset, &k);
+            let cmd = if rng.random_range(0..2) == 0 {
+                "bzpopmin"
+            } else {
+                "bzpopmax"
+            };
+            push_op(ops, cmd, vec![k, block_timeout(rng)], off);
         } else {
-            "bzpopmax"
-        };
-        push_op(ops, cmd, vec![k, block_timeout(rng)], off);
+            push_op(ops, "zrem", vec![k, m], think(rng));
+        }
         return;
     }
     let k = pick(keys, rng).clone();
@@ -604,6 +684,40 @@ mod tests {
                     let key = op.args[0].as_ref();
                     if let Some(prev) = seen.insert(key, op.think_ms) {
                         assert_ne!(prev, op.think_ms, "overlapping blocking regs on same key");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn blocking_ops_single_owner_per_key() {
+        // Cross-client guard: every blocking pop on a given key must come from
+        // exactly one client, so per-key blocking registrations are never
+        // ambiguously ordered for the FIFO wake-order checker.
+        const BLOCKING: &[&str] = &["blpop", "brpop", "bzpopmin", "bzpopmax", "blmove"];
+        for seed in 0..40 {
+            let w = Workload::generate(seed, Profile::BlockingHeavy, 4, 40);
+            // key -> the single client id allowed to block on it.
+            let mut owner: std::collections::HashMap<Vec<u8>, u64> = Default::default();
+            for c in &w.clients {
+                for op in c
+                    .ops
+                    .iter()
+                    .filter(|o| BLOCKING.contains(&o.command.as_str()))
+                {
+                    // For blmove the blocking waiter registers on the src (arg 0).
+                    let key = op.args[0].to_vec();
+                    match owner.get(&key) {
+                        Some(&cid) => assert_eq!(
+                            cid,
+                            c.client_id,
+                            "key {:?} has blocking ops from >1 client",
+                            String::from_utf8_lossy(&key)
+                        ),
+                        None => {
+                            owner.insert(key, c.client_id);
+                        }
                     }
                 }
             }

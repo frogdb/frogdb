@@ -168,18 +168,46 @@ fn project_for_key(
             }
         }
         "lmove" | "blmove" => {
-            // `lmove src dst ... -> elem` atomically removes from src and
-            // pushes to dst. When src == dst it is effectively a single-key
-            // op and is kept as-is. When src != dst, no single key's
-            // sub-history can soundly represent "popped from a different
-            // list, pushed to this one" under a per-key ListModel, so the op
-            // is dropped from both partitions; element-conservation across
-            // src/dst is left to cross-key conservation checkers (a future
-            // phase may explode this into a paired pop/push sub-op instead).
+            // `lmove src dst FROM TO ... -> elem` atomically removes from src
+            // and pushes to dst. When src == dst it is effectively a single-key
+            // op and is kept as-is.
+            //
+            // When src != dst, replicating the *whole* op into either partition
+            // is unsound (see the module doc). Instead we split it into its two
+            // sound halves, each sharing the parent op's window:
+            //   - src's partition sees the pop half: an `lpop`/`rpop` (per the
+            //     FROM side) that returned `elem` — exactly what the source list
+            //     observably did.
+            //   - dst's partition sees the push half: the projection-only
+            //     `lmove_push` synthetic op (per the TO side; see the
+            //     `lmove_push` arm of `ListModel::step`), which deposits `elem`
+            //     so later pops of it in dst are explicable rather than phantom.
+            // A nil result (timeout, nothing moved) has no state effect and is
+            // dropped from both partitions; cross-key element conservation still
+            // covers the move as a whole.
             let src = args.first()?;
             let dst = args.get(1)?;
             if src == dst {
-                Some((function.to_string(), args.to_vec(), result.cloned()))
+                return Some((function.to_string(), args.to_vec(), result.cloned()));
+            }
+            let elem = result?; // nil/timeout: no effect, drop from both.
+            let from = args.get(2)?;
+            let to = args.get(3)?;
+            let is_left = |s: &Bytes| String::from_utf8_lossy(s).eq_ignore_ascii_case("left");
+            if key == src {
+                let pop = if is_left(from) { "lpop" } else { "rpop" };
+                Some((pop.to_string(), vec![src.clone()], Some(elem.clone())))
+            } else if key == dst {
+                let side = if is_left(to) { "L" } else { "R" };
+                Some((
+                    "lmove_push".to_string(),
+                    vec![
+                        dst.clone(),
+                        elem.clone(),
+                        Bytes::from_static(side.as_bytes()),
+                    ],
+                    None,
+                ))
             } else {
                 None
             }
@@ -506,20 +534,55 @@ mod tests {
     }
 
     #[test]
-    fn cross_key_lmove_dropped() {
-        // LMOVE a b left right -> x, with a != b, cannot be attributed
-        // soundly to either partition and must be dropped from both.
+    fn cross_key_lmove_split_into_pop_and_push() {
+        // LMOVE a b LEFT RIGHT -> x (a != b) splits into a pop half on `a`
+        // (lpop -> x, since FROM=LEFT) and a push half on `b` (lmove_push
+        // side R, since TO=RIGHT). Both partitions must linearize, and a
+        // later pop of the moved element on `b` must be explicable rather
+        // than a phantom.
         let mut h = History::new();
         let push = h.invoke(1, "rpush", vec![b("a"), b("x")]);
         h.respond(push, Some(b("1")));
-        let mv = h.invoke(2, "lmove", vec![b("a"), b("b"), b("left"), b("right")]);
+        let mv = h.invoke(2, "lmove", vec![b("a"), b("b"), b("LEFT"), b("RIGHT")]);
         h.respond(mv, Some(b("x")));
+        // `b` later pops the moved element: previously a false phantom.
+        let pop = h.invoke(3, "lpop", vec![b("b")]);
+        h.respond(pop, Some(b("x")));
 
         let parts = partition_by_key(&h, default_keys_of);
+
+        // `a`: rpush x then lpop -> x (the move's pop half).
         let a_ops = parts[&b("a")].completed_operations();
-        assert_eq!(a_ops.len(), 1);
-        assert_eq!(a_ops[0].function, "rpush");
+        assert_eq!(a_ops.len(), 2);
+        assert_eq!(a_ops[1].function, "lpop");
+        assert_eq!(a_ops[1].result, Some(b("x")));
         assert!(check_linearizability::<ListModel>(&parts[&b("a")]).is_linearizable);
+
+        // `b`: lmove_push (deposit) then lpop -> x. Must linearize.
+        let b_ops = parts[&b("b")].completed_operations();
+        assert_eq!(b_ops.len(), 2);
+        assert_eq!(b_ops[0].function, "lmove_push");
+        assert!(check_linearizability::<ListModel>(&parts[&b("b")]).is_linearizable);
+    }
+
+    #[test]
+    fn cross_key_lmove_timeout_dropped() {
+        // Nil result (BLMOVE timed out, nothing moved) has no state effect and
+        // is dropped from both partitions.
+        let mut h = History::new();
+        let mv = h.invoke(
+            1,
+            "blmove",
+            vec![b("a"), b("b"), b("LEFT"), b("RIGHT"), b("0")],
+        );
+        h.respond(mv, None);
+        let parts = partition_by_key(&h, default_keys_of);
+        assert!(
+            parts
+                .get(&b("a"))
+                .map(|p| p.completed_operations().is_empty())
+                .unwrap_or(true)
+        );
         assert!(
             parts
                 .get(&b("b"))

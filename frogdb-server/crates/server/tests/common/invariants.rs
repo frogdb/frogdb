@@ -53,7 +53,7 @@ fn family_of(function: &str) -> Option<Family> {
         "set" | "get" | "del" | "incr" | "mset" | "mget" | "watch" | "exec" | "cas" | "read"
         | "write" => Some(Family::Kv),
         "lpush" | "rpush" | "lpop" | "rpop" | "lmove" | "llen" | "lrange" | "blpop" | "brpop"
-        | "blmove" => Some(Family::List),
+        | "blmove" | "lmove_push" => Some(Family::List),
         "hset" | "hdel" | "hget" | "hincrby" | "hgetall" | "hlen" => Some(Family::Hash),
         "zadd" | "zrem" | "zscore" | "zcard" | "bzpopmin" | "bzpopmax" => Some(Family::ZSet),
         "xadd" | "xlen" | "xread" => Some(Family::Stream),
