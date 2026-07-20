@@ -22,6 +22,13 @@
 - **Commit per task** with the exact `git` command shown in the task's final step. **No `Co-Authored-By` lines** in any commit message. Conventional-commit style matching repo history (`test(core):`, `fix(core):`, `docs(spec):`).
 - **Ledger dir:** `.superpowers/sdd/phase4b/`.
 - **Wire-op discipline:** the VLL/scatter operation carried in messages is `ScatterOp` (`shard/message.rs:714`), NOT `core::command::ScatterGatherOp` (routing-only). Commands are built with `ParsedCommand::new(name: Bytes, args: Vec<Bytes>)` (`protocol/src/command.rs:22`) — no CommandSpec machinery. Do not conflate.
+- **Command registry (discovered in Task 1):** `CommandRegistry::new()` is **EMPTY** — real data commands live in the downstream `frogdb-commands` crate (`frogdb_commands::register_all(&mut registry)` is the entry point; the server composes it in `server/src/server/register.rs:6`). A dev-dependency cycle is legal cargo, so **Task 2 adds `frogdb-commands.workspace = true` to `frogdb-server/crates/core/Cargo.toml` `[dev-dependencies]`**. Every harness/test in this plan that dispatches real commands (SET/GET/LPUSH/XADD/XGROUP/DEL/PEXPIRE/…) builds its registry as:
+  ```rust
+  let mut r = CommandRegistry::new();
+  frogdb_commands::register_all(&mut r);
+  let registry = Arc::new(r);
+  ```
+  Server-only commands (AUTH, scripting, search, connection-level MULTI/EXEC) are NOT in `register_all` and are not needed — shard-level `ExecTransaction` bypasses the connection layer.
 
 ---
 
@@ -183,6 +190,7 @@ git commit -m "test(core): open pub(crate) shard-driver seams; delete dead enabl
 
 **Files touched:**
 - `frogdb-server/crates/core/src/shard/builder.rs`
+- `frogdb-server/crates/core/Cargo.toml` — add `frogdb-commands.workspace = true` to `[dev-dependencies]` (see the Command-registry Global Constraint; dev-dep cycles are legal cargo; if `frogdb-commands` is missing from the root `[workspace.dependencies]` table, add it there the same way sibling crates are listed).
 
 **Verified facts:** `FakeFailure` / `FakeWalSink` are reachable in-crate as `crate::persistence::FakeFailure` / `crate::persistence::FakeWalSink` (`frogdb-server/crates/core/src/persistence/mod.rs:13` `pub use frogdb_persistence::*;`; `frogdb-persistence/src/lib.rs:34` exports both). `FakeWalSink::with_failure(shard_id, failure)` exists (`fake.rs:128`). `FakeWalRegistry::install(shard_id, log)` registers the log (fake_wal_registry.rs:22).
 
@@ -194,11 +202,13 @@ git commit -m "test(core): open pub(crate) shard-driver seams; delete dead enabl
         FakeWalRegistry::clear();
         let (msg_tx, msg_rx) = mpsc::channel(16);
         let (_conn_tx, conn_rx) = mpsc::channel(16);
+        let mut registry = CommandRegistry::new();
+        frogdb_commands::register_all(&mut registry);
         let mut worker = ShardWorkerBuilder::new(0, 1)
             .with_message_rx(ShardReceiver::new(msg_rx))
             .with_new_conn_rx(conn_rx)
             .with_shard_senders(Arc::new(vec![ShardSender::new(msg_tx)]))
-            .with_registry(Arc::new(CommandRegistry::new()))
+            .with_registry(Arc::new(registry))
             .with_metrics(Arc::new(NoopMetricsRecorder::new()))
             .with_wal_mode(WalMode::Fake)
             // Fail the FIRST write (index 0): a single SET must not persist.
@@ -372,7 +382,11 @@ impl ShardDriver {
     /// length-`n` sender vector so cross-shard routing and keyspace-notify
     /// forwarding work.
     pub(crate) fn new(n: usize) -> Self {
-        let registry = Arc::new(CommandRegistry::new());
+        // Real data commands (Command-registry Global Constraint): the empty
+        // registry has nothing to dispatch.
+        let mut r = CommandRegistry::new();
+        frogdb_commands::register_all(&mut r);
+        let registry = Arc::new(r);
 
         // One (tx, rx) queue per shard; senders indexed by shard id.
         let mut msg_rxs: Vec<ShardReceiver> = Vec::with_capacity(n);
@@ -2085,11 +2099,13 @@ fn build_rollback_worker(
     let shard_id = NEXT_SHARD_ID.fetch_add(1, Ordering::SeqCst);
     let (msg_tx, msg_rx) = mpsc::channel::<Envelope>(16);
     let (conn_tx, conn_rx) = mpsc::channel::<NewConnection>(16);
+    let mut registry = CommandRegistry::new();
+    frogdb_commands::register_all(&mut registry);
     let mut worker = ShardWorkerBuilder::new(shard_id, 1)
         .with_message_rx(ShardReceiver::new(msg_rx))
         .with_new_conn_rx(conn_rx)
         .with_shard_senders(Arc::new(vec![ShardSender::new(msg_tx.clone())]))
-        .with_registry(Arc::new(CommandRegistry::new()))
+        .with_registry(Arc::new(registry))
         .with_wal_mode(WalMode::Fake)
         .with_fake_wal_failure(FakeFailure::AtWriteIndex(fail_index))
         .build();
