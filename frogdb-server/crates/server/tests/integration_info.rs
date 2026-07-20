@@ -210,7 +210,22 @@ async fn info_persistence_enabled_reports_live_wal_values() {
         assert_ok(&client.command(&["SET", &format!("wal:key:{i}"), "v"]).await);
     }
 
-    let info = info_text(&mut client, &["persistence"]).await;
+    // WAL persistence is a fire-and-forget post-execution effect, so the
+    // counters trail the SET replies; poll until they catch up (bounded)
+    // before pinning values.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let info = loop {
+        let info = info_text(&mut client, &["persistence"]).await;
+        if field_u64(&info, "wal_writes_total") >= 5
+            && field_u64(&info, "rdb_changes_since_last_save") >= 5
+        {
+            break info;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            break info;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
     assert_eq!(field(&info, "persistence_enabled"), Some("1"), "{info}");
     // Real aggregated values, not permanent placeholders: the lag fields
     // exist and parse, and the last-flush wall clock is a real timestamp
