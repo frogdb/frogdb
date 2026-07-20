@@ -11,8 +11,10 @@ use crate::store::Store;
 use super::counters::HotShardStatsResponse;
 use super::message::ScatterOp;
 use super::types::{
-    BigKeyInfo, BigKeysScanResponse, InfoShardSnapshot, ShardMemoryStats, TieredCounts,
-    VllContinuationLockInfo, VllKeyIntentInfo, VllPendingOpInfo, VllQueueInfo, WalLagStatsResponse,
+    BigKeyInfo, BigKeysScanResponse, ExpiryIndexCheckInfo, InfoShardSnapshot, LockTableInfo,
+    MemoryCheckInfo, ShardMemoryStats, TieredCounts, VllContinuationLockInfo, VllKeyIntentInfo,
+    VllPendingOpInfo, VllQueueInfo, WaitQueueInfo, WaitQueueKeyInfo, WaitQueueWaiterInfo,
+    WalLagStatsResponse,
 };
 use super::worker::ShardWorker;
 
@@ -197,6 +199,77 @@ impl ShardWorker {
         info
     }
 
+    /// Collect the VLL lock-table snapshot for `DEBUG LOCKTABLE`.
+    pub(crate) fn collect_lock_table_info(&self) -> LockTableInfo {
+        let intents = self
+            .vll
+            .intent_snapshots()
+            .into_iter()
+            .map(|snap| VllKeyIntentInfo {
+                key: Self::format_key_for_display(&snap.key),
+                txids: snap.txids,
+                lock_state: snap.lock_state,
+            })
+            .collect();
+        let continuation_lock =
+            self.vll
+                .continuation_lock_snapshot()
+                .map(|lock| VllContinuationLockInfo {
+                    txid: lock.txid,
+                    conn_id: lock.conn_id,
+                    age_ms: lock.age_ms,
+                });
+        LockTableInfo {
+            shard_id: self.shard_id(),
+            intents,
+            continuation_lock,
+        }
+    }
+
+    /// Collect the blocking-waiter snapshot for `DEBUG WAITQUEUE`.
+    pub(crate) fn collect_wait_queue_info(&self) -> WaitQueueInfo {
+        let keys = self
+            .wait_queue
+            .dump()
+            .into_iter()
+            .map(|(key, waiters)| WaitQueueKeyInfo {
+                key: Self::format_key_for_display(&key),
+                waiters: waiters
+                    .into_iter()
+                    .map(|w| WaitQueueWaiterInfo {
+                        conn_id: w.conn_id,
+                        op: w.op.to_string(),
+                        registration_seq: w.registration_seq,
+                        has_deadline: w.has_deadline,
+                    })
+                    .collect(),
+            })
+            .collect();
+        WaitQueueInfo {
+            shard_id: self.shard_id(),
+            total_waiters: self.wait_queue.waiter_count(),
+            keys,
+        }
+    }
+
+    /// Collect the memory-accounting cross-check for `DEBUG MEMORY-CHECK`.
+    pub(crate) fn collect_memory_check(&self) -> MemoryCheckInfo {
+        MemoryCheckInfo {
+            shard_id: self.shard_id(),
+            tracked_bytes: self.store.memory_used(),
+            recomputed_bytes: self.store.recompute_memory_used(),
+        }
+    }
+
+    /// Collect the expiry-index cross-check for `DEBUG EXPIRY-INDEX-CHECK`.
+    pub(crate) fn collect_expiry_index_check(&self) -> ExpiryIndexCheckInfo {
+        ExpiryIndexCheckInfo {
+            shard_id: self.shard_id(),
+            total_entries: self.store.keys_with_expiry_count(),
+            anomalies: self.store.audit_expiry_index(),
+        }
+    }
+
     /// Format a ScatterOp for display.
     fn format_scatter_op(op: &ScatterOp) -> String {
         match op {
@@ -379,5 +452,119 @@ impl ShardWorker {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod introspection_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
+
+    use tokio::sync::mpsc;
+
+    use crate::eviction::EvictionConfig;
+    use crate::noop::NoopMetricsRecorder;
+    use crate::registry::CommandRegistry;
+    use crate::replication::NoopBroadcaster;
+    use crate::shard::ShardWorker;
+    use crate::shard::message::{ShardReceiver, ShardSender};
+
+    fn test_worker() -> ShardWorker {
+        let (msg_tx, msg_rx) = mpsc::channel(16);
+        let (_, conn_rx) = mpsc::channel(16);
+        let shard_senders = Arc::new(vec![ShardSender::new(msg_tx)]);
+        ShardWorker::with_eviction(
+            0,
+            1,
+            ShardReceiver::new(msg_rx),
+            conn_rx,
+            shard_senders,
+            Arc::new(CommandRegistry::new()),
+            EvictionConfig::default(),
+            Arc::new(NoopMetricsRecorder::new()),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(NoopBroadcaster),
+        )
+    }
+
+    #[test]
+    fn lock_table_info_empty_on_idle_worker() {
+        let worker = test_worker();
+        let info = worker.collect_lock_table_info();
+        assert_eq!(info.shard_id, 0);
+        assert!(info.intents.is_empty());
+        assert!(info.continuation_lock.is_none());
+    }
+
+    #[test]
+    fn wait_queue_info_reports_registered_waiter() {
+        use crate::shard::WaitEntry;
+        use crate::types::BlockingOp;
+        use bytes::Bytes;
+        use frogdb_protocol::ProtocolVersion;
+        use tokio::sync::oneshot;
+
+        let mut worker = test_worker();
+        let (tx, _rx) = oneshot::channel();
+        worker
+            .wait_queue
+            .register(WaitEntry {
+                conn_id: 7,
+                keys: vec![Bytes::from("k")],
+                op: BlockingOp::BLPop,
+                response_tx: tx,
+                deadline: None,
+                protocol_version: ProtocolVersion::default(),
+            })
+            .unwrap();
+
+        let info = worker.collect_wait_queue_info();
+        assert_eq!(info.shard_id, 0);
+        assert_eq!(info.total_waiters, 1);
+        assert_eq!(info.keys.len(), 1);
+        assert_eq!(info.keys[0].key, "k");
+        assert_eq!(info.keys[0].waiters[0].conn_id, 7);
+        assert_eq!(info.keys[0].waiters[0].op, "BLPOP");
+    }
+
+    #[test]
+    fn memory_check_consistent_after_writes() {
+        use crate::store::Store;
+        use crate::types::Value;
+        use bytes::Bytes;
+
+        let mut worker = test_worker();
+        worker
+            .store
+            .set(Bytes::from("a"), Value::string(Bytes::from("hello")));
+        worker
+            .store
+            .set(Bytes::from("b"), Value::string(Bytes::from("world")));
+
+        let info = worker.collect_memory_check();
+        assert_eq!(info.shard_id, 0);
+        assert_eq!(info.tracked_bytes, info.recomputed_bytes);
+        assert!(info.tracked_bytes > 0);
+    }
+
+    #[test]
+    fn expiry_index_check_clean_after_expire() {
+        use crate::store::Store;
+        use crate::types::Value;
+        use bytes::Bytes;
+        use std::time::{Duration, Instant};
+
+        let mut worker = test_worker();
+        worker
+            .store
+            .set(Bytes::from("k"), Value::string(Bytes::from("v")));
+        worker
+            .store
+            .set_expiry(b"k", Instant::now() + Duration::from_secs(3600));
+
+        let info = worker.collect_expiry_index_check();
+        assert_eq!(info.shard_id, 0);
+        assert_eq!(info.total_entries, 1);
+        assert!(info.anomalies.is_empty());
     }
 }

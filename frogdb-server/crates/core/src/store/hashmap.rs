@@ -14,9 +14,9 @@ use crate::noop::{ExpiryIndex, FieldExpiryIndex};
 use crate::shard::slot_for_key;
 use crate::types::{KeyMetadata, KeyType, SetCondition, SetOptions, SetResult, Value};
 
-use super::Store;
 use super::timeseries_labels::TimeSeriesLabels;
 use super::warm_tier::WarmTier;
+use super::{ExpiryIndexAnomaly, ExpiryIndexAnomalyKind, Store};
 
 /// Where a key's value currently resides.
 #[derive(Debug)]
@@ -670,6 +670,16 @@ impl HashMapStore {
     pub fn warm_tier(&self) -> &WarmTier {
         &self.warm_tier
     }
+
+    #[cfg(test)]
+    fn force_index_entry_for_test(&mut self, key: Bytes, deadline: std::time::Instant) {
+        self.expiry_index.set(key, deadline);
+    }
+
+    #[cfg(test)]
+    fn force_drop_index_entry_for_test(&mut self, key: &[u8]) {
+        self.expiry_index.remove(key);
+    }
 }
 
 impl Store for HashMapStore {
@@ -756,6 +766,53 @@ impl Store for HashMapStore {
 
     fn memory_used(&self) -> usize {
         self.memory_used
+    }
+
+    fn recompute_memory_used(&self) -> usize {
+        // `Entry::memory_size` returns the live size (key + value + metadata +
+        // Entry overhead; warm values contribute zero value bytes). Summing it
+        // over every entry is the ground truth the running counter tracks.
+        self.data.iter().map(|(k, e)| e.memory_size(k)).sum()
+    }
+
+    fn audit_expiry_index(&self) -> Vec<ExpiryIndexAnomaly> {
+        let mut anomalies = Vec::new();
+
+        // Direction 1: every index entry must point at a key with a matching
+        // deadline.
+        for (key, index_deadline) in self.expiry_index.iter() {
+            match self.data.get(key) {
+                None => anomalies.push(ExpiryIndexAnomaly {
+                    key: String::from_utf8_lossy(key).into_owned(),
+                    kind: ExpiryIndexAnomalyKind::KeyMissing,
+                }),
+                Some(entry) => match entry.metadata.expires_at {
+                    None => anomalies.push(ExpiryIndexAnomaly {
+                        key: String::from_utf8_lossy(key).into_owned(),
+                        kind: ExpiryIndexAnomalyKind::KeyPersistent,
+                    }),
+                    Some(actual) if actual != index_deadline => {
+                        anomalies.push(ExpiryIndexAnomaly {
+                            key: String::from_utf8_lossy(key).into_owned(),
+                            kind: ExpiryIndexAnomalyKind::DeadlineMismatch,
+                        })
+                    }
+                    Some(_) => {}
+                },
+            }
+        }
+
+        // Direction 2: every entry with a deadline must be in the index.
+        for (key, entry) in self.data.iter() {
+            if entry.metadata.expires_at.is_some() && self.expiry_index.get(key).is_none() {
+                anomalies.push(ExpiryIndexAnomaly {
+                    key: String::from_utf8_lossy(key).into_owned(),
+                    kind: ExpiryIndexAnomalyKind::IndexMissing,
+                });
+            }
+        }
+
+        anomalies
     }
 
     fn scan(&self, cursor: u64, count: usize, pattern: Option<&[u8]>) -> (u64, Vec<Bytes>) {
@@ -1298,6 +1355,93 @@ impl Store for HashMapStore {
 mod tests {
     use super::*;
     use crate::glob::glob_match;
+
+    #[test]
+    fn recompute_matches_tracked_after_inserts() {
+        let mut store = HashMapStore::new();
+        assert_eq!(store.recompute_memory_used(), store.memory_used());
+        store.set(Bytes::from("a"), Value::string(Bytes::from("hello")));
+        store.set(Bytes::from("b"), Value::string(Bytes::from("world")));
+        assert_eq!(store.recompute_memory_used(), store.memory_used());
+        store.delete(b"a");
+        assert_eq!(store.recompute_memory_used(), store.memory_used());
+    }
+
+    #[test]
+    fn recompute_reveals_unflushed_inplace_growth() {
+        // In-place growth via get_mut is invisible to the tracked counter until
+        // flush_keysizes_refreshes runs; recompute (live) reveals the drift, and
+        // flushing reconciles it. This is exactly what DEBUG MEMORY-CHECK detects.
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from("l"), Value::list());
+        let before = store.recompute_memory_used();
+        assert_eq!(before, store.memory_used());
+
+        if let Some(v) = store.get_mut(b"l")
+            && let Some(list) = v.as_list_mut()
+        {
+            for i in 0..100u32 {
+                list.push_back(Bytes::from(format!("element-{i}")));
+            }
+        }
+        // Live recompute now exceeds the still-unreconciled tracked counter.
+        assert!(store.recompute_memory_used() > store.memory_used());
+
+        store.flush_keysizes_refreshes();
+        assert_eq!(store.recompute_memory_used(), store.memory_used());
+    }
+
+    #[test]
+    fn expiry_index_audit_clean_when_consistent() {
+        use std::time::{Duration, Instant};
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from("persistent"), Value::string(Bytes::from("v")));
+        store.set(Bytes::from("ttl"), Value::string(Bytes::from("v")));
+        store.set_expiry(b"ttl", Instant::now() + Duration::from_secs(3600));
+        // Persistent key not in index, ttl key in index with a matching deadline.
+        assert!(store.audit_expiry_index().is_empty());
+    }
+
+    #[test]
+    fn expiry_index_audit_flags_stale_entry_after_persist() {
+        use std::time::{Duration, Instant};
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from("k"), Value::string(Bytes::from("v")));
+        store.set_expiry(b"k", Instant::now() + Duration::from_secs(3600));
+        assert!(store.audit_expiry_index().is_empty());
+
+        // Directly corrupt: leave a stale index entry for a now-persistent key.
+        // (Simulates proposal-30's class of bug: a write path that forgot to
+        // clear the index on overwrite/persist.)
+        store.force_index_entry_for_test(Bytes::from("k"), Instant::now() + Duration::from_secs(1));
+        store.persist(b"k"); // makes the entry persistent AND clears the index...
+        // ...so re-corrupt after persist to model the leak:
+        store.force_index_entry_for_test(Bytes::from("k"), Instant::now() + Duration::from_secs(1));
+
+        let anomalies = store.audit_expiry_index();
+        assert_eq!(anomalies.len(), 1);
+        assert_eq!(anomalies[0].key, "k");
+        assert!(matches!(
+            anomalies[0].kind,
+            ExpiryIndexAnomalyKind::KeyPersistent
+        ));
+    }
+
+    #[test]
+    fn expiry_index_audit_flags_index_missing() {
+        use std::time::{Duration, Instant};
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from("k"), Value::string(Bytes::from("v")));
+        store.set_expiry(b"k", Instant::now() + Duration::from_secs(3600));
+        // Drop only the index entry, leaving the entry's deadline in place.
+        store.force_drop_index_entry_for_test(b"k");
+        let anomalies = store.audit_expiry_index();
+        assert_eq!(anomalies.len(), 1);
+        assert!(matches!(
+            anomalies[0].kind,
+            ExpiryIndexAnomalyKind::IndexMissing
+        ));
+    }
 
     #[test]
     fn test_store_set_get() {

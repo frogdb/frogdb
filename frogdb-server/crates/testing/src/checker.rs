@@ -29,6 +29,10 @@ pub struct LinearizabilityResult {
     pub problematic_ops: Vec<u64>,
     /// Number of states explored during checking.
     pub states_explored: u64,
+    /// True when the checker gave up (state bound reached) rather than
+    /// proving (non-)linearizability. When true, `is_linearizable` is false
+    /// but the history was NOT proven non-linearizable — never a silent pass.
+    pub inconclusive: bool,
 }
 
 /// Check if a history is linearizable according to a model.
@@ -45,6 +49,7 @@ pub fn check_linearizability<M: Model>(history: &History) -> LinearizabilityResu
             linearization: None,
             problematic_ops: history.pending_ops(),
             states_explored: 0,
+            inconclusive: false,
         };
     }
 
@@ -55,6 +60,7 @@ pub fn check_linearizability<M: Model>(history: &History) -> LinearizabilityResu
             linearization: Some(vec![]),
             problematic_ops: vec![],
             states_explored: 1,
+            inconclusive: false,
         };
     }
 
@@ -94,6 +100,7 @@ impl<M: Model> Checker<M> {
                 linearization: Some(self.linearization.clone()),
                 problematic_ops: vec![],
                 states_explored: self.states_explored,
+                inconclusive: false,
             }
         } else {
             // Find problematic operations (those that couldn't be linearized)
@@ -110,6 +117,7 @@ impl<M: Model> Checker<M> {
                 linearization: None,
                 problematic_ops: problematic,
                 states_explored: self.states_explored,
+                inconclusive: false,
             }
         }
     }
@@ -202,6 +210,7 @@ pub fn check_linearizability_bounded<M: Model>(
             linearization: None,
             problematic_ops: history.pending_ops(),
             states_explored: 0,
+            inconclusive: false,
         };
     }
 
@@ -212,6 +221,7 @@ pub fn check_linearizability_bounded<M: Model>(
             linearization: Some(vec![]),
             problematic_ops: vec![],
             states_explored: 1,
+            inconclusive: false,
         };
     }
 
@@ -242,14 +252,18 @@ impl<M: Model> BoundedChecker<M> {
                 linearization: Some(self.inner.linearization.clone()),
                 problematic_ops: vec![],
                 states_explored: self.inner.states_explored,
+                inconclusive: false,
             }
         } else if self.limit_reached {
-            // Inconclusive - limit reached
+            // Inconclusive - limit reached. Reported as non-linearizable to be
+            // conservative, but flagged inconclusive so callers never treat a
+            // gave-up run as a pass.
             LinearizabilityResult {
-                is_linearizable: false, // Unknown, but we report false to be conservative
+                is_linearizable: false,
                 linearization: None,
-                problematic_ops: vec![], // Can't identify specific problems
+                problematic_ops: vec![],
                 states_explored: self.inner.states_explored,
+                inconclusive: true,
             }
         } else {
             let linearized_set: HashSet<_> = self.inner.linearization.iter().copied().collect();
@@ -266,6 +280,7 @@ impl<M: Model> BoundedChecker<M> {
                 linearization: None,
                 problematic_ops: problematic,
                 states_explored: self.inner.states_explored,
+                inconclusive: false,
             }
         }
     }
@@ -405,5 +420,38 @@ mod tests {
 
         let result = check_linearizability_bounded::<KVModel>(&history, 100);
         assert!(result.is_linearizable);
+    }
+
+    #[test]
+    fn test_bounded_inconclusive_when_state_bound_hit() {
+        let mut history = History::new();
+        let op1 = history.invoke(1, "set", vec![Bytes::from("x"), Bytes::from("1")]);
+        history.respond(op1, Some(Bytes::from("OK")));
+
+        // max_states = 1 forces the search to abort before it can finish.
+        let result = check_linearizability_bounded::<KVModel>(&history, 1);
+        assert!(
+            !result.is_linearizable,
+            "bounded-out run must not report linearizable"
+        );
+        assert!(
+            result.inconclusive,
+            "hitting the state bound must set inconclusive"
+        );
+        assert!(
+            result.problematic_ops.is_empty(),
+            "inconclusive run cannot blame specific ops"
+        );
+    }
+
+    #[test]
+    fn test_normal_run_is_not_inconclusive() {
+        let mut history = History::new();
+        let op1 = history.invoke(1, "set", vec![Bytes::from("x"), Bytes::from("1")]);
+        history.respond(op1, Some(Bytes::from("OK")));
+
+        let result = check_linearizability_bounded::<KVModel>(&history, 1000);
+        assert!(result.is_linearizable);
+        assert!(!result.inconclusive, "a completed search is conclusive");
     }
 }

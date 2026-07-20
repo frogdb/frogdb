@@ -93,6 +93,11 @@ impl ExpiryIndex {
         self.by_key.get(key).copied()
     }
 
+    /// Read-only iterator over `(key, deadline)` pairs (unordered).
+    pub fn iter(&self) -> impl Iterator<Item = (&Bytes, Instant)> {
+        self.by_key.iter().map(|(k, t)| (k, *t))
+    }
+
     /// Get all expired keys up to `now`.
     ///
     /// Returns keys in expiration order (oldest first).

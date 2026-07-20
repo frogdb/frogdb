@@ -13,6 +13,7 @@ use crate::registry::CommandRegistry;
 use crate::replication::{ReplicationTrackerImpl, SharedBroadcaster};
 use crate::scripting::{ScriptExecutor, ScriptingConfig};
 use crate::slowlog::SlowLog;
+use crate::store::ExpiryIndexAnomaly;
 use bytes::Bytes;
 use frogdb_protocol::Response;
 
@@ -866,6 +867,72 @@ pub struct VllKeyIntentInfo {
     pub txids: Vec<u64>,
     /// Lock state as string.
     pub lock_state: String,
+}
+
+/// Response for `DEBUG LOCKTABLE` — a per-shard VLL lock-table snapshot.
+#[derive(Debug, Clone, Default)]
+pub struct LockTableInfo {
+    /// Shard identifier.
+    pub shard_id: usize,
+    /// Per-key intents (txids + grant state), reusing the VLL intent view.
+    pub intents: Vec<VllKeyIntentInfo>,
+    /// The continuation lock, if one is held.
+    pub continuation_lock: Option<VllContinuationLockInfo>,
+}
+
+/// Response for `DEBUG WAITQUEUE` — a per-shard blocking-waiter snapshot.
+#[derive(Debug, Clone, Default)]
+pub struct WaitQueueInfo {
+    /// Shard identifier.
+    pub shard_id: usize,
+    /// Total active waiters on this shard.
+    pub total_waiters: usize,
+    /// Waiters grouped by key (keys sorted; waiters in registration order).
+    pub keys: Vec<WaitQueueKeyInfo>,
+}
+
+/// Waiters blocked on one key.
+#[derive(Debug, Clone)]
+pub struct WaitQueueKeyInfo {
+    /// The key (lossy UTF-8 for display).
+    pub key: String,
+    /// Waiters in registration (FIFO) order.
+    pub waiters: Vec<WaitQueueWaiterInfo>,
+}
+
+/// One blocked waiter's view.
+#[derive(Debug, Clone)]
+pub struct WaitQueueWaiterInfo {
+    /// Connection id of the blocked client.
+    pub conn_id: u64,
+    /// Blocking command name (e.g. "BLPOP").
+    pub op: String,
+    /// Queue-wide monotonic registration ordinal (smaller = earlier).
+    pub registration_seq: u64,
+    /// Whether the waiter has a finite deadline.
+    pub has_deadline: bool,
+}
+
+/// Response for `DEBUG MEMORY-CHECK` — tracked vs recomputed live footprint.
+#[derive(Debug, Clone, Default)]
+pub struct MemoryCheckInfo {
+    /// Shard identifier.
+    pub shard_id: usize,
+    /// The running `memory_used` counter.
+    pub tracked_bytes: usize,
+    /// Recomputed live sum over all entries.
+    pub recomputed_bytes: usize,
+}
+
+/// Response for `DEBUG EXPIRY-INDEX-CHECK` — index-vs-entry inconsistencies.
+#[derive(Debug, Clone, Default)]
+pub struct ExpiryIndexCheckInfo {
+    /// Shard identifier.
+    pub shard_id: usize,
+    /// Number of key-level expiry-index entries examined.
+    pub total_entries: usize,
+    /// Inconsistencies found (empty = consistent).
+    pub anomalies: Vec<ExpiryIndexAnomaly>,
 }
 
 /// Pub/Sub limits info for a shard.

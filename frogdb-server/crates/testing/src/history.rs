@@ -44,6 +44,9 @@ pub struct Operation {
     pub result: Option<Bytes>,
     /// Logical timestamp for ordering.
     pub timestamp: u64,
+    /// Node/replica that served the operation (future replication phase).
+    #[serde(default)]
+    pub node: Option<String>,
 }
 
 /// Custom serialization for Vec<Bytes>.
@@ -136,6 +139,38 @@ impl History {
             args,
             result: None,
             timestamp,
+            node: None,
+        };
+
+        let idx = self.operations.len();
+        self.operations.push(op);
+        self.pending.insert(id, idx);
+
+        id
+    }
+
+    /// Record an operation invocation attributed to a specific node/replica.
+    ///
+    /// Returns the operation ID to be used when recording the response.
+    pub fn invoke_on_node(
+        &mut self,
+        client_id: u64,
+        node: impl Into<String>,
+        function: impl Into<String>,
+        args: Vec<Bytes>,
+    ) -> u64 {
+        let id = next_op_id();
+        let timestamp = self.next_timestamp();
+
+        let op = Operation {
+            id,
+            client_id,
+            kind: OpKind::Invoke,
+            function: function.into(),
+            args,
+            result: None,
+            timestamp,
+            node: Some(node.into()),
         };
 
         let idx = self.operations.len();
@@ -157,6 +192,7 @@ impl History {
         let client_id = invoke.client_id;
         let function = invoke.function.clone();
         let args = invoke.args.clone();
+        let node = invoke.node.clone();
 
         let timestamp = self.next_timestamp();
 
@@ -168,6 +204,7 @@ impl History {
             args,
             result,
             timestamp,
+            node,
         };
 
         self.operations.push(op);
@@ -339,5 +376,40 @@ mod tests {
         let restored = History::from_json(&json).unwrap();
 
         assert_eq!(restored.operations().len(), 2);
+    }
+
+    #[test]
+    fn test_invoke_on_node_records_node() {
+        let mut history = History::new();
+        let op = history.invoke_on_node(1, "node-a", "write", vec![Bytes::from("x")]);
+        history.respond(op, Some(Bytes::from("OK")));
+
+        let invoke = history
+            .operations()
+            .iter()
+            .find(|o| o.kind == OpKind::Invoke)
+            .unwrap();
+        assert_eq!(invoke.node.as_deref(), Some("node-a"));
+    }
+
+    #[test]
+    fn test_plain_invoke_has_no_node() {
+        let mut history = History::new();
+        let op = history.invoke(1, "write", vec![Bytes::from("x")]);
+        history.respond(op, None);
+        let invoke = history
+            .operations()
+            .iter()
+            .find(|o| o.kind == OpKind::Invoke)
+            .unwrap();
+        assert_eq!(invoke.node, None);
+    }
+
+    #[test]
+    fn test_node_defaults_when_absent_in_json() {
+        // JSON produced before the `node` field existed must still deserialize.
+        let json = r#"{"operations":[{"id":1,"client_id":1,"kind":"Invoke","function":"read","args":["x"],"result":null,"timestamp":0}]}"#;
+        let restored = History::from_json(json).unwrap();
+        assert_eq!(restored.operations()[0].node, None);
     }
 }

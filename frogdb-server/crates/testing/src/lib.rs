@@ -4,6 +4,23 @@
 //! - Operation history recording
 //! - Linearizability checking using the WGL algorithm
 //! - Sequential specification models for key-value operations
+//! - Per-key history partitioning (`partition`) for scalable checking
+//! - Conservation checkers (`conservation`): exactly-once delivery, FIFO wake
+//!   order, transaction-sum conservation, WATCH no-false-negative
+//! - Quiescence checkers (`quiescence`): lock-table-empty, wait-queue-empty,
+//!   memory-accounting, expiry-index-consistent — consuming parsed DEBUG-reply
+//!   snapshots
+//! - Fault-injection self-tests (`fault_injection`) guarding against
+//!   silent-green checker bugs
+//! - Strict per-type models: lists, hashes, sorted sets, streams
+//!
+//! # Encoding convention
+//!
+//! Pipe (`|`) is the reserved multi-value delimiter used across the
+//! result encodings in this crate (e.g. blocking-pop hits as
+//! `"served_key|elem"`, `HGETALL`/`LRANGE` field/value joins). Generated
+//! keys and values must not themselves contain `|` — a value that does can
+//! silently false-accept by being misparsed as an extra delimited field.
 //!
 //! # Linearizability Checking
 //!
@@ -35,9 +52,26 @@
 //! ```
 
 pub mod checker;
+pub mod conservation;
+pub mod fault_injection;
 pub mod history;
 pub mod models;
+pub mod partition;
+pub mod quiescence;
 
-pub use checker::{LinearizabilityResult, check_linearizability};
+pub use checker::{LinearizabilityResult, check_linearizability, check_linearizability_bounded};
+pub use conservation::{
+    ConservationViolation, check_exactly_once_delivery, check_fifo_wake_order,
+    check_tx_sum_conservation, check_watch_no_false_negative,
+};
 pub use history::{History, OpKind, Operation};
-pub use models::{KVModel, KVState, Model, RegisterModel};
+pub use models::{
+    HashModel, HashState, KVModel, KVState, ListModel, ListState, Model, RegisterModel,
+    RegisterState, StreamData, StreamId, StreamModel, StreamState, ZSetModel, ZSetState,
+};
+pub use partition::{default_keys_of, partition_by_key};
+pub use quiescence::{
+    ExpiryIndexSnapshot, LockTableSnapshot, MemoryCheckSnapshot, QuiescenceViolation,
+    WaitQueueSnapshot, check_expiry_index_consistent, check_locktable_empty,
+    check_memory_accounting, check_waitqueue_empty,
+};

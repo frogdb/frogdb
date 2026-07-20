@@ -525,6 +525,18 @@ pub trait DebugProvider: Send + Sync {
         shard_filter: Option<usize>,
     ) -> BoxFuture<'a, Vec<crate::shard::VllQueueInfo>>;
 
+    /// DEBUG LOCKTABLE — the per-shard VLL lock-table snapshots (all shards).
+    fn gather_lock_table<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::LockTableInfo>>;
+
+    /// DEBUG WAITQUEUE — the per-shard blocking-waiter snapshots (all shards).
+    fn gather_wait_queue<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::WaitQueueInfo>>;
+
+    /// DEBUG MEMORY-CHECK — per-shard tracked-vs-recomputed memory (all shards).
+    fn memory_check<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::MemoryCheckInfo>>;
+
+    /// DEBUG EXPIRY-INDEX-CHECK — per-shard index-vs-deadline audit (all shards).
+    fn expiry_index_check<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::ExpiryIndexCheckInfo>>;
+
     /// DEBUG PUBSUB LIMITS — this connection's and the fleet's subscription usage
     /// against the configured maxima (a whole-reply subcommand: it reads
     /// connection-local subscription counts the executor cannot see).
@@ -927,6 +939,20 @@ mod tests {
             &'a self,
             _shard_filter: Option<usize>,
         ) -> BoxFuture<'a, Vec<crate::shard::VllQueueInfo>> {
+            unimplemented!()
+        }
+        fn gather_lock_table<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::LockTableInfo>> {
+            unimplemented!()
+        }
+        fn gather_wait_queue<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::WaitQueueInfo>> {
+            unimplemented!()
+        }
+        fn memory_check<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::MemoryCheckInfo>> {
+            unimplemented!()
+        }
+        fn expiry_index_check<'a>(
+            &'a self,
+        ) -> BoxFuture<'a, Vec<crate::shard::ExpiryIndexCheckInfo>> {
             unimplemented!()
         }
         fn pubsub_limits<'a>(&'a self) -> BoxFuture<'a, Response> {
