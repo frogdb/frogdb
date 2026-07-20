@@ -2,6 +2,14 @@
 //! XGROUP CREATE, non-blocking XREADGROUP, XACK, XPENDING, XCLAIM, XAUTOCLAIM.
 //! PEL: entry id -> (owning consumer, delivery count). Bounded option set:
 //! min-idle-time is always 0, no NOACK, no blocking, no XDEL edge cases.
+//!
+//! `delivery_count` bookkeeping (phase 4a): tracked on every PEL record but
+//! intentionally inert — no implemented result encoding surfaces it.
+//! XPENDING here is summary-form only (no per-entry counts), XAUTOCLAIM is
+//! JUSTID-only (no count change), and XCLAIM returns entries without counts.
+//! So `dc += 1` never affects accept/reject in phase 4a. Phase 4b's
+//! extended-form XPENDING (with per-entry delivery counts in its reply) is
+//! expected to make it observable.
 
 use super::Model;
 use crate::models::stream::{StreamId, parse_id};
@@ -13,6 +21,12 @@ use std::collections::{BTreeMap, HashMap};
 #[derive(Debug, Clone)]
 pub struct PelEntry {
     pub consumer: Bytes,
+    /// Incremented on redelivery (XREADGROUP `>` initial delivery, XCLAIM).
+    /// Intentionally inert in phase 4a: no implemented result encoding
+    /// surfaces it (XPENDING here is summary-form only, XAUTOCLAIM is
+    /// JUSTID-only, XCLAIM returns entries without counts), so this
+    /// bookkeeping never affects accept/reject. Phase 4b's extended-form
+    /// XPENDING is expected to make it observable.
     pub delivery_count: u64,
 }
 
@@ -249,6 +263,7 @@ impl Model for StreamGroupModel {
                         .pel
                         .iter()
                         .filter(|(eid, p)| **eid > after && p.consumer == consumer)
+                        .take(count)
                         .map(|(eid, _)| *eid)
                         .collect();
                     let own: Vec<(StreamId, Vec<Bytes>)> = own_ids
@@ -362,6 +377,14 @@ impl Model for StreamGroupModel {
             "xautoclaim" => {
                 // key group consumer min-idle start [COUNT n] JUSTID: returns
                 // "cursor;id,id" (ids only), transfers ownership, no count change.
+                //
+                // Cursor assumption: this model always expects the returned cursor
+                // to be `0-0` (a single call claims the full PEL range starting at
+                // `start`). The workload generator MUST issue XAUTOCLAIM with a
+                // COUNT exceeding any achievable PEL size for this to hold — if the
+                // real server ever has more matching entries than COUNT, it legally
+                // returns a non-zero cursor to continue the scan on a later call,
+                // and this model would spuriously reject that (correct) reply.
                 let justid = args.iter().any(|a| a.eq_ignore_ascii_case(b"JUSTID"));
                 if args.len() < 5 || !justid {
                     return None; // bounded set uses JUSTID only
@@ -521,7 +544,8 @@ mod tests {
             Some("5-0,f,v"),
         )
         .unwrap();
-        // XCLAIM to c2 (min-idle 0) -> returns the entry, delivery_count now 2.
+        // XCLAIM to c2 (min-idle 0) -> returns the entry, delivery_count now 2
+        // (bumped internally but not observable here — see PelEntry::delivery_count).
         let s = step(
             &s,
             "xclaim",
@@ -529,6 +553,7 @@ mod tests {
             Some("5-0,f,v"),
         )
         .unwrap();
+        // XPENDING (summary-form) observes ownership transfer only, not the count.
         assert!(step(&s, "xpending", &["st", "g"], Some("1|5-0|5-0|c2:1")).is_some());
         // XAUTOCLAIM JUSTID from 0 to c1 -> cursor 0-0, id 5-0, no count change.
         assert!(
@@ -539,6 +564,42 @@ mod tests {
                 Some("0-0;5-0"),
             )
             .is_some()
+        );
+    }
+
+    #[test]
+    fn readgroup_reread_honors_count() {
+        let s = StreamGroupState::default();
+        let s = step(&s, "xadd", &["st", "1-1", "f", "v"], Some("1-1")).unwrap();
+        let s = step(&s, "xadd", &["st", "2-1", "f", "w"], Some("2-1")).unwrap();
+        let s = step(&s, "xgroup", &["CREATE", "st", "g", "0"], Some("OK")).unwrap();
+        // XREADGROUP GROUP g c STREAMS st '>' -> both entries pending for c.
+        let s = step(
+            &s,
+            "xreadgroup",
+            &["GROUP", "g", "c", "STREAMS", "st", ">"],
+            Some("1-1,f,v|2-1,f,w"),
+        )
+        .unwrap();
+        // Re-read own pending from 0 with COUNT 1 -> only the first entry.
+        assert!(
+            step(
+                &s,
+                "xreadgroup",
+                &["GROUP", "g", "c", "COUNT", "1", "STREAMS", "st", "0"],
+                Some("1-1,f,v"),
+            )
+            .is_some()
+        );
+        // The uncapped (both-entries) encoding must be rejected once COUNT 1 caps it.
+        assert!(
+            step(
+                &s,
+                "xreadgroup",
+                &["GROUP", "g", "c", "COUNT", "1", "STREAMS", "st", "0"],
+                Some("1-1,f,v|2-1,f,w"),
+            )
+            .is_none()
         );
     }
 
