@@ -27,17 +27,39 @@ fn test_noop_rejects_concurrent() {
     ));
 }
 #[test]
-fn test_handle_complete() {
+fn test_handle_complete_releases_flag() {
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
-    let d = Arc::new(AtomicBool::new(false));
-    let d2 = d.clone();
-    let h = SnapshotHandle::new(1, move || {
-        d2.store(true, Ordering::SeqCst);
-    });
-    assert!(!d.load(Ordering::SeqCst));
+    // A `completing` handle clears its in-progress flag on explicit complete().
+    let in_progress = Arc::new(AtomicBool::new(true));
+    let h = SnapshotHandle::completing(1, in_progress.clone());
+    assert_eq!(h.epoch(), 1);
+    assert!(in_progress.load(Ordering::SeqCst));
     h.complete();
-    assert!(d.load(Ordering::SeqCst));
+    assert!(!in_progress.load(Ordering::SeqCst));
+}
+#[test]
+fn test_handle_drop_releases_flag() {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    // Dropping a `completing` handle releases the flag: this is the RAII wiring
+    // the no-op coordinator actually relies on (production Rocks tracks
+    // completion via the scheduler instead — see
+    // `test_handle_production_drop_is_noop`).
+    let in_progress = Arc::new(AtomicBool::new(true));
+    let h = SnapshotHandle::completing(7, in_progress.clone());
+    assert!(in_progress.load(Ordering::SeqCst));
+    drop(h);
+    assert!(!in_progress.load(Ordering::SeqCst));
+}
+#[test]
+fn test_handle_production_drop_is_noop() {
+    // Production handles (`new`) carry no completion flag; Drop is a no-op and
+    // costs a single `Option` check — no inert closure on the hot path.
+    let h = SnapshotHandle::new(3);
+    assert!(!h.is_noop());
+    assert_eq!(h.epoch(), 3);
+    drop(h);
 }
 #[test]
 fn test_handle_noop() {
@@ -438,4 +460,178 @@ fn test_stager_retention_across_epochs() {
         std::fs::read_link(snap.path().join("latest")).unwrap(),
         Path::new("snapshot_00003")
     );
+}
+
+// ---------------------------------------------------------------------------
+// SnapshotScheduler — the pure coalesce/reschedule state machine.
+//
+// Previously this handshake was reachable only through a live
+// `RocksSnapshotCoordinator` (real RocksStore + Tokio + fs), so it had *no*
+// tests. Extracted as a pure value type, every transition is a synchronous
+// unit test — no runtime, no disk. The threaded storm test drives the two race
+// windows of `finish_and_maybe_rebegin` (release↔swap, swap↔re-CAS).
+// ---------------------------------------------------------------------------
+
+use super::SnapshotRequest;
+use super::scheduler::SnapshotScheduler;
+
+/// Begin while idle claims the slot and mints epoch 1.
+#[test]
+fn test_scheduler_begin_while_idle() {
+    let s = SnapshotScheduler::with_epoch(0);
+    assert!(!s.in_progress());
+    assert_eq!(s.try_begin(), Some(1));
+    assert!(s.in_progress());
+    assert_eq!(s.current_epoch(), 1);
+}
+
+/// `with_epoch` resumes the counter from a recovered epoch.
+#[test]
+fn test_scheduler_resumes_epoch() {
+    let s = SnapshotScheduler::with_epoch(5);
+    assert_eq!(s.current_epoch(), 5);
+    assert_eq!(s.try_begin(), Some(6));
+}
+
+/// Begin while a save is running is rejected (the `AlreadyInProgress` guard).
+#[test]
+fn test_scheduler_begin_while_running_rejected() {
+    let s = SnapshotScheduler::with_epoch(0);
+    assert_eq!(s.try_begin(), Some(1));
+    assert_eq!(s.try_begin(), None);
+    // The rejected begin must not have bumped the epoch.
+    assert_eq!(s.current_epoch(), 1);
+}
+
+/// A request during a run coalesces; any number of requests fold into one flag.
+#[test]
+fn test_scheduler_request_while_running_coalesces() {
+    let s = SnapshotScheduler::with_epoch(0);
+    assert_eq!(s.try_begin(), Some(1));
+    assert_eq!(s.request(), SnapshotRequest::Coalesced);
+    assert!(s.is_scheduled());
+    assert_eq!(s.request(), SnapshotRequest::Coalesced);
+    assert!(s.is_scheduled());
+    // Coalesced requests never advance the epoch on their own.
+    assert_eq!(s.current_epoch(), 1);
+}
+
+/// Finish with a pending reschedule re-runs exactly once (the double-CAS loop).
+#[test]
+fn test_scheduler_finish_with_pending_reschedule_reruns_once() {
+    let s = SnapshotScheduler::with_epoch(0);
+    assert_eq!(s.try_begin(), Some(1));
+    assert_eq!(s.request(), SnapshotRequest::Coalesced);
+    assert!(s.is_scheduled());
+
+    // Pending reschedule → rebegin at epoch 2, and the flag is consumed.
+    assert_eq!(s.finish_and_maybe_rebegin(), Some(2));
+    assert!(
+        !s.is_scheduled(),
+        "the schedule flag is cleared by the rebegin"
+    );
+    assert!(s.in_progress());
+
+    // The follow-up run itself had no further requests → next finish idles.
+    assert_eq!(s.finish_and_maybe_rebegin(), None);
+    assert!(!s.in_progress());
+    assert_eq!(s.current_epoch(), 2);
+}
+
+/// Finish with nothing scheduled goes idle (no phantom rerun).
+#[test]
+fn test_scheduler_finish_without_schedule_idles() {
+    let s = SnapshotScheduler::with_epoch(0);
+    assert_eq!(s.try_begin(), Some(1));
+    assert_eq!(s.finish_and_maybe_rebegin(), None);
+    assert!(!s.in_progress());
+    assert_eq!(s.current_epoch(), 1);
+}
+
+/// A request after everything idles starts a fresh save (not a phantom coalesce).
+#[test]
+fn test_scheduler_request_after_finish_starts() {
+    let s = SnapshotScheduler::with_epoch(0);
+    assert_eq!(s.try_begin(), Some(1));
+    assert_eq!(s.finish_and_maybe_rebegin(), None);
+    assert_eq!(s.request(), SnapshotRequest::Started(2));
+    assert!(s.in_progress());
+}
+
+/// The legacy `schedule()` protocol only arms a follow-up while a save runs.
+#[test]
+fn test_scheduler_schedule_only_while_running() {
+    let s = SnapshotScheduler::with_epoch(0);
+    assert!(!s.schedule(), "schedule while idle must be refused");
+    assert!(!s.is_scheduled());
+    assert_eq!(s.try_begin(), Some(1));
+    assert!(s.schedule());
+    assert!(s.is_scheduled());
+}
+
+/// Epochs are monotonic across a full begin → coalesce → rebegin → begin cycle.
+#[test]
+fn test_scheduler_epoch_monotonic_across_cycle() {
+    let s = SnapshotScheduler::with_epoch(0);
+    assert_eq!(s.try_begin(), Some(1));
+    assert_eq!(s.request(), SnapshotRequest::Coalesced);
+    assert_eq!(s.finish_and_maybe_rebegin(), Some(2));
+    assert_eq!(s.finish_and_maybe_rebegin(), None);
+    assert_eq!(s.try_begin(), Some(3));
+}
+
+/// Concurrent request storm: whichever thread wins `Started` owns the run and
+/// drains coalesced follow-ups; every other request folds in. Across many
+/// randomized interleavings the invariants must hold:
+///   * every epoch that runs is unique and contiguous from 1 (no skip/reuse),
+///   * exactly one runner is ever active (the slot is never double-claimed),
+///   * the scheduler is fully idle at quiescence.
+/// This is the only place the `finish_and_maybe_rebegin` re-CAS-failure branch
+/// (another thread stole the slot in the release↔re-CAS window) is exercised.
+#[test]
+fn test_scheduler_concurrent_request_storm() {
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+
+    for _ in 0..500 {
+        let sched = Arc::new(SnapshotScheduler::with_epoch(0));
+        let ran = Arc::new(Mutex::new(Vec::<u64>::new()));
+
+        let threads: Vec<_> = (0..6)
+            .map(|_| {
+                let sched = sched.clone();
+                let ran = ran.clone();
+                thread::spawn(move || {
+                    // Model the production wiring: `Started` ⇒ this caller owns
+                    // the run loop and drains reschedules; `Coalesced` ⇒ folded in.
+                    if let SnapshotRequest::Started(mut epoch) = sched.request() {
+                        loop {
+                            ran.lock().unwrap().push(epoch);
+                            match sched.finish_and_maybe_rebegin() {
+                                None => break,
+                                Some(next) => epoch = next,
+                            }
+                        }
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+
+        assert!(!sched.in_progress(), "slot must be released at quiescence");
+        let mut ran = ran.lock().unwrap().clone();
+        assert!(!ran.is_empty(), "at least one run must happen");
+        ran.sort_unstable();
+        for (i, epoch) in ran.iter().enumerate() {
+            assert_eq!(
+                *epoch,
+                i as u64 + 1,
+                "epochs must be unique + contiguous from 1: {ran:?}"
+            );
+        }
+        // Every allocated epoch corresponds to a completed run.
+        assert_eq!(sched.current_epoch(), *ran.last().unwrap());
+    }
 }

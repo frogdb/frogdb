@@ -28,6 +28,7 @@ pub use serialization::{
 pub use snapshot::{
     NoopSnapshotCoordinator, PreSnapshotHook, RocksSnapshotCoordinator, SnapshotConfig,
     SnapshotCoordinator, SnapshotError, SnapshotHandle, SnapshotMetadata, SnapshotMetadataFile,
+    SnapshotRequest, SnapshotScheduler,
 };
 pub use wal::{
     DurabilityMode, FakeFailure, FakeWalLog, FakeWalSink, RecordedWalEffect, RocksWalWriter,
