@@ -71,6 +71,39 @@ impl Server {
                     value: self.config.http.port.to_string(),
                 },
             ];
+            // Determine node role for both the debug provider and the status
+            // collector (single source of truth).
+            let mode = if self.config.cluster.enabled {
+                "cluster".to_string()
+            } else if self.config.replication.is_primary() {
+                "primary".to_string()
+            } else if self.config.replication.is_replica() {
+                "replica".to_string()
+            } else {
+                "standalone".to_string()
+            };
+
+            // Master identity, when this node is a configured replica.
+            let (master_host, master_port) = if self.config.replication.is_replica() {
+                (
+                    Some(self.config.replication.primary_host.clone()),
+                    Some(self.config.replication.primary_port),
+                )
+            } else {
+                (None, None)
+            };
+
+            // Single coherent node-state provider (replication, clients, cluster).
+            let node_state_provider = Arc::new(crate::debug_providers::ServerDebugProvider::new(
+                self.client_registry.clone(),
+                self.cluster_state.clone(),
+                self.node_id,
+                self.replication_tracker.clone(),
+                mode.clone(),
+                master_host,
+                master_port,
+            ));
+
             let debug_state = DebugState::new(
                 ServerInfo {
                     version: env!("CARGO_PKG_VERSION").to_string(),
@@ -81,31 +114,11 @@ impl Server {
                 },
                 config_entries,
             )
-            .with_client_info(self.client_registry.clone());
-
-            // Wire up cluster info if cluster mode is enabled
-            let debug_state = if let Some(ref cluster_state) = self.cluster_state {
-                debug_state.with_cluster_info(Arc::new(
-                    crate::debug_providers::ClusterStateProvider::new(
-                        cluster_state.clone(),
-                        self.node_id,
-                    ),
-                ))
-            } else {
-                debug_state
-            };
+            .with_node_state(node_state_provider)
+            .with_shard_senders(self.shard_senders.clone());
 
             // Create status collector for /status/json endpoint
             let status_collector_config = self.config.status.to_collector_config();
-            let mode = if self.config.cluster.enabled {
-                "cluster".to_string()
-            } else if self.config.replication.is_primary() {
-                "primary".to_string()
-            } else if self.config.replication.is_replica() {
-                "replica".to_string()
-            } else {
-                "standalone".to_string()
-            };
             let status_collector = Arc::new(StatusCollector::new(
                 status_collector_config,
                 self.health_checker.clone(),

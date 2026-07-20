@@ -58,27 +58,17 @@ pub struct ServerResponse {
 
 /// Handle GET /debug/api/server (formerly /api/cluster)
 pub fn handle_api_server(state: &DebugState) -> Response<Full<Bytes>> {
-    let (connected_replicas, master_host, master_port, replication_offset) =
-        if let Some(ref repl) = state.replication_info {
-            (
-                repl.connected_replicas(),
-                repl.master_host(),
-                repl.master_port(),
-                repl.replication_offset(),
-            )
-        } else {
-            (0, None, None, 0)
-        };
+    let repl = state.replication();
 
     let response = ServerResponse {
         version: state.server_info.version.clone(),
-        role: state.role().to_string(),
+        role: repl.role.clone(),
         uptime_seconds: state.uptime_seconds(),
         num_shards: state.server_info.num_shards,
-        connected_replicas,
-        master_host,
-        master_port,
-        replication_offset,
+        connected_replicas: repl.connected_replicas,
+        master_host: repl.master_host.clone(),
+        master_port: repl.master_port,
+        replication_offset: repl.replication_offset,
         bind_addr: state.server_info.bind_addr.clone(),
         port: state.server_info.port,
     };
@@ -182,8 +172,9 @@ pub async fn handle_api_latency(state: &DebugState) -> Response<Full<Bytes>> {
 fn render_cluster_html(state: &DebugState) -> String {
     let uptime = state.uptime_seconds();
     let uptime_str = format_duration(uptime);
-    let role = state.role();
-    let (role_badge_class, role_label, role_tooltip) = match role {
+    let repl = state.replication();
+    let role = repl.role.clone();
+    let (role_badge_class, role_label, role_tooltip) = match role.as_str() {
         "standalone" => (
             "tag-success",
             "Standalone Mode",
@@ -196,35 +187,28 @@ fn render_cluster_html(state: &DebugState) -> String {
         ),
         _ => (
             "tag-info",
-            role,
+            role.as_str(),
             "This server is a read replica connected to a primary node",
         ),
     };
 
-    let (replicas_html, master_html) = if let Some(ref repl) = state.replication_info {
-        let replicas = format!(
-            r#"<div class="stat-item">
+    let replicas_html = format!(
+        r#"<div class="stat-item">
                 <div class="stat-label">Connected Replicas</div>
                 <div class="stat-value">{}</div>
             </div>"#,
-            repl.connected_replicas()
-        );
-
-        let master = if let (Some(host), Some(port)) = (repl.master_host(), repl.master_port()) {
-            format!(
-                r#"<div class="stat-item">
+        repl.connected_replicas
+    );
+    let master_html = if let (Some(host), Some(port)) = (&repl.master_host, repl.master_port) {
+        format!(
+            r#"<div class="stat-item">
                     <div class="stat-label">Master</div>
                     <div class="stat-value">{}:{}</div>
                 </div>"#,
-                host, port
-            )
-        } else {
-            String::new()
-        };
-
-        (replicas, master)
+            host, port
+        )
     } else {
-        (String::new(), String::new())
+        String::new()
     };
 
     format!(

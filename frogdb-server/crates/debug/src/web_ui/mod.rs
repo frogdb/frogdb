@@ -24,6 +24,7 @@ pub mod state;
 
 pub use routes::handle_debug_request;
 pub use state::{
-    ClientInfoProvider, ClientSnapshot, ClusterInfoProvider, ClusterNodeSnapshot,
-    ClusterOverviewSnapshot, ConfigEntry, DebugState, MigrationSnapshot, ServerInfo,
+    ClientSnapshot, ClusterNodeSnapshot, ClusterOverviewSnapshot, ConfigEntry, DebugState,
+    MigrationSnapshot, NodeStateProvider, ReplicationView, ServerInfo,
+    client_snapshots_from_registry,
 };
