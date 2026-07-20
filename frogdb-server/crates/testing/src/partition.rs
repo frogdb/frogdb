@@ -242,9 +242,18 @@ fn explode_exec_for_key(
     key: &Bytes,
 ) -> Option<(String, Vec<Bytes>, Option<Bytes>)> {
     let cmds = parse_exec_commands(args)?;
-    // Aborted exec (nil) has no committed per-key effect.
+    // A rejected transaction has no committed per-key effect: an aborted exec
+    // (nil → `None`) and an errored exec (CROSSSLOT/EXECABORT → `Some("ERR:…")`)
+    // are both no-ops. They must be dropped from every per-key partition *before*
+    // the split-by-`|` explode below — otherwise the `"ERR:…"` marker would be
+    // re-encoded as a sub-result and, worse, only the sub-command at index 0
+    // would inherit it while every other touched key would get an empty result,
+    // which `KVModel::exec` misreads as a committed-but-wrong EXEC (manufacturing
+    // false non-linearizability). `KVModel::exec` also treats these as no-ops, but
+    // that guard never sees them once they are exploded, so we must gate here too.
     let results: Vec<String> = match result {
         None => return None,
+        Some(r) if is_errored_exec_result(r) => return None,
         Some(r) => {
             let s = String::from_utf8_lossy(r);
             if s.is_empty() {
@@ -475,6 +484,55 @@ mod tests {
         h.respond(e, None); // aborted (nil)
         let parts = partition_by_key(&h, default_keys_of);
         assert!(!parts.contains_key(&b("a")) || parts[&b("a")].completed_operations().is_empty());
+    }
+
+    #[test]
+    fn partition_skips_errored_exec() {
+        // A CROSSSLOT/EXECABORT-rejected EXEC is recorded as `Some("ERR:…")`.
+        // It committed nothing, so every touched key must see a no-op — NOT an
+        // exploded sub-op. Regression: the old explode split the "ERR:…" marker
+        // by `|`, gave it only to the sub-command at index 0, and left every
+        // other key with an empty result that `KVModel::exec` misread as a
+        // committed-but-wrong EXEC (false non-linearizability). Here the erroring
+        // key `b` sits at index 1 — the position that used to be poisoned.
+        let mut h = History::new();
+        // Establish a real value for `b` so a later read is only explicable if
+        // the errored EXEC left `b` untouched.
+        let s = h.invoke(1, "set", vec![b("b"), b("7")]);
+        h.respond(s, Some(b("OK")));
+        let e = h.invoke(
+            2,
+            "exec",
+            vec![
+                b("2"),
+                b("set"),
+                b("2"),
+                b("a"),
+                b("1"),
+                b("set"),
+                b("2"),
+                b("b"),
+                b("9"),
+            ],
+        );
+        h.respond(
+            e,
+            Some(b(
+                "ERR:CROSSSLOT Keys in request don't hash to the same slot",
+            )),
+        );
+        let g = h.invoke(3, "get", vec![b("b")]);
+        h.respond(g, Some(b("7"))); // still 7: the errored EXEC never wrote 9
+        let parts = partition_by_key(&h, default_keys_of);
+        // Neither key carries an exploded sub-op from the rejected EXEC.
+        assert!(!parts.contains_key(&b("a")) || parts[&b("a")].completed_operations().is_empty());
+        let b_ops = parts[&b("b")].completed_operations();
+        assert!(
+            b_ops.iter().all(|op| op.function != "exec"),
+            "rejected EXEC must not explode into a per-key sub-op: {b_ops:?}"
+        );
+        // And `b`'s sub-history (set 7; get 7) stays linearizable.
+        assert!(check_linearizability::<KVModel>(&parts[&b("b")]).is_linearizable);
     }
 
     #[test]

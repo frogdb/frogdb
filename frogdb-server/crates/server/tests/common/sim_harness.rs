@@ -386,9 +386,14 @@ pub fn hash_slot(key: &[u8]) -> u16 {
 }
 
 /// Calculate which shard owns a key given a number of shards.
+///
+/// Delegates to the server's own `frogdb_core::shard_for_key` so the harness can
+/// never disagree with the live routing. The server maps `slot % num_shards`
+/// (modulo partitioning); an earlier local re-derivation used a range partition
+/// (`slot * num_shards / HASH_SLOTS`), which silently disagreed and made the
+/// EXEC co-location checker flag legally-committed same-shard transactions.
 pub fn shard_for_key(key: &[u8], num_shards: usize) -> usize {
-    let slot = hash_slot(key) as usize;
-    slot * num_shards / HASH_SLOTS
+    frogdb_core::shard_for_key(key, num_shards)
 }
 
 /// Extract the hash tag from a key, if present.

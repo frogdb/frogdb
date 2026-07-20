@@ -18,6 +18,8 @@ use frogdb_testing::{
 };
 
 use super::quiescence_probe::{QuiescenceSnapshots, check_quiescence};
+use frogdb_core::shard_for_key;
+
 use super::sim_harness::hash_slot;
 
 /// Per-key op cap before WGL is skipped (conservation still covers the key).
@@ -82,11 +84,13 @@ pub fn check_all(
     history: &History,
     final_elements: &HashMap<Bytes, Vec<Bytes>>,
     quiescence: Option<&QuiescenceSnapshots>,
+    num_shards: usize,
 ) -> InvariantReport {
     check_all_with(
         history,
         final_elements,
         quiescence,
+        num_shards,
         MAX_OPS_PER_KEY,
         MAX_WGL_STATES,
     )
@@ -98,6 +102,7 @@ pub fn check_all_with(
     history: &History,
     final_elements: &HashMap<Bytes, Vec<Bytes>>,
     quiescence: Option<&QuiescenceSnapshots>,
+    num_shards: usize,
     max_ops_per_key: usize,
     max_states: u64,
 ) -> InvariantReport {
@@ -105,7 +110,7 @@ pub fn check_all_with(
 
     // Stage 1: response legality (cheap, always).
     check_response_legality(history, &mut report);
-    check_exec_slot_discipline(history, &mut report);
+    check_exec_slot_discipline(history, num_shards, &mut report);
 
     // Stage 2: per-key partition + bounded WGL with inconclusive-downgrade.
     let partitions = partition_by_key(history, default_keys_of);
@@ -214,7 +219,7 @@ fn check_response_legality(history: &History, report: &mut InvariantReport) {
 /// single-command scatter + EVAL, never transactions. So a *committed* EXEC
 /// whose sub-command keys span more than one hash slot is a CROSSSLOT-
 /// enforcement regression.
-fn check_exec_slot_discipline(history: &History, report: &mut InvariantReport) {
+fn check_exec_slot_discipline(history: &History, num_shards: usize, report: &mut InvariantReport) {
     for op in history.completed_operations() {
         if op.function != "exec" {
             continue;
@@ -223,9 +228,21 @@ fn check_exec_slot_discipline(history: &History, report: &mut InvariantReport) {
         if keys.len() < 2 {
             continue;
         }
-        let s0 = hash_slot(&keys[0]);
-        let cross_slot = keys.iter().any(|k| hash_slot(k) != s0);
-        if !cross_slot {
+        // Co-location under test is *shard*-level, not slot-level. The sim server
+        // (see `sim_helpers::real_frogdb_server`) runs standalone over
+        // `num_shards` shards, and `TransactionTarget::resolve` rejects — with
+        // CROSSSLOT — only a transaction whose keys span more than one shard. Two
+        // keys in different hash slots that map to the *same* shard form a legal
+        // same-shard transaction that commits, so cross detection must be
+        // shard-level to match the system under test. (A strict cluster would
+        // enforce the tighter slot-level rule; that mode is not exercised here.)
+        //
+        // Use the server's own `frogdb_core::shard_for_key` (slot % num_shards),
+        // NOT a re-derivation: the two must agree byte-for-byte or the checker
+        // flags legally-committed same-shard transactions as false violations.
+        let s0 = shard_for_key(&keys[0], num_shards);
+        let cross_shard = keys.iter().any(|k| shard_for_key(k, num_shards) != s0);
+        if !cross_shard {
             continue;
         }
         let committed = op
@@ -234,10 +251,10 @@ fn check_exec_slot_discipline(history: &History, report: &mut InvariantReport) {
             .is_some_and(|r| !is_errored_exec_result(r));
         if committed {
             report.violations.push(format!(
-                "op {} (exec) committed across {} hash slots (CROSSSLOT not enforced)",
+                "op {} (exec) committed across {} shards (CROSSSLOT not enforced)",
                 op.id,
                 keys.iter()
-                    .map(|k| hash_slot(k))
+                    .map(|k| shard_for_key(k, num_shards))
                     .collect::<std::collections::BTreeSet<_>>()
                     .len()
             ));
@@ -257,7 +274,7 @@ mod tests {
         h.respond(s, Some(Bytes::from("OK")));
         let g = h.invoke(2, "get", vec![Bytes::from("{t}x")]);
         h.respond(g, Some(Bytes::from("1")));
-        assert!(check_all(&h, &Default::default(), None).passed());
+        assert!(check_all(&h, &Default::default(), None, 2).passed());
 
         // dirty: GET x -> 2 with no writer of 2 -> non-linearizable
         let mut d = History::new();
@@ -265,7 +282,7 @@ mod tests {
         d.respond(s, Some(Bytes::from("OK")));
         let g = d.invoke(2, "get", vec![Bytes::from("{t}x")]);
         d.respond(g, Some(Bytes::from("2")));
-        assert!(!check_all(&d, &Default::default(), None).passed());
+        assert!(!check_all(&d, &Default::default(), None, 2).passed());
     }
 
     #[test]
@@ -287,7 +304,7 @@ mod tests {
         for id in ids {
             h.respond(id, Some(Bytes::from("OK")));
         }
-        let report = check_all_with(&h, &Default::default(), None, MAX_OPS_PER_KEY, 1);
+        let report = check_all_with(&h, &Default::default(), None, 2, MAX_OPS_PER_KEY, 1);
         assert!(
             report.passed(),
             "inconclusive must not fail: {:?}",
@@ -303,7 +320,7 @@ mod tests {
     #[test]
     fn quiescence_is_skipped_when_no_snapshots() {
         let h = History::new();
-        let report = check_all(&h, &Default::default(), None);
+        let report = check_all(&h, &Default::default(), None, 2);
         assert!(!report.quiescence_checked);
     }
 
@@ -313,7 +330,7 @@ mod tests {
         // An empty snapshot bundle is the quiesced-server case: every checker
         // accepts zero snapshots, so the stage runs and finds no violation.
         let snap = QuiescenceSnapshots::default();
-        let report = check_all(&h, &Default::default(), Some(&snap));
+        let report = check_all(&h, &Default::default(), Some(&snap), 2);
         assert!(
             report.quiescence_checked,
             "stage must run when snapshots present"
@@ -337,7 +354,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let report = check_all(&h, &Default::default(), Some(&snap));
+        let report = check_all(&h, &Default::default(), Some(&snap), 2);
         assert!(report.quiescence_checked);
         assert!(
             report
@@ -361,7 +378,7 @@ mod tests {
         let mut h = History::new();
         let p = h.invoke(1, "rpush", vec![Bytes::from("{t}L"), Bytes::from("zzz")]);
         h.respond(p, Some(Bytes::from("1")));
-        let report = check_all(&h, &Default::default(), None);
+        let report = check_all(&h, &Default::default(), None, 2);
         assert!(!report.passed(), "a lost element must fail the report");
         assert!(
             report
@@ -379,7 +396,7 @@ mod tests {
         let mut h = History::new();
         let g = h.invoke(1, "get", vec![Bytes::from("{t}g")]);
         h.respond(g, Some(Bytes::from("phantom")));
-        let report = check_all(&h, &Default::default(), None);
+        let report = check_all(&h, &Default::default(), None, 2);
         assert!(
             !report.passed(),
             "a phantom read must fail the report: {:?}",
@@ -388,16 +405,27 @@ mod tests {
     }
 
     #[test]
-    fn cross_slot_exec_discipline_flagged() {
-        // Two keys in different slots inside one EXEC. Cross-slot EXEC is
-        // always rejected with CROSSSLOT in standalone mode (Task 3), so a
-        // *committed* cross-slot EXEC is a slot-discipline regression.
+    fn cross_shard_exec_discipline_flagged() {
+        // Two keys on different shards inside one EXEC. A cross-shard EXEC is
+        // always rejected with CROSSSLOT in standalone mode (its transaction
+        // target folds to `Multi`, which `resolve` maps to CROSSSLOT), so a
+        // *committed* cross-shard EXEC is a co-location regression. The server
+        // maps shard = slot % num_shards, so with num_shards = 2, {t0}kv0 (slot
+        // 13006 → shard 0) and {t1}kv1 (slot 8943 → shard 1) are genuinely
+        // cross-shard, whereas e.g. {t0}/{t2} (slots 13006/4748, both even →
+        // shard 0) would legally commit as a same-shard transaction.
+        const NUM_SHARDS: usize = 2;
         let a = Bytes::from("{t0}kv0");
         let b = Bytes::from("{t1}kv1");
         assert_ne!(
             hash_slot(&a),
             hash_slot(&b),
             "fixture keys must differ in slot"
+        );
+        assert_ne!(
+            shard_for_key(&a, NUM_SHARDS),
+            shard_for_key(&b, NUM_SHARDS),
+            "fixture keys must land on different shards"
         );
 
         let mut h = History::new();
@@ -416,14 +444,14 @@ mod tests {
                 Bytes::from("2"),
             ],
         );
-        // A committed cross-slot EXEC (array reply -> "OK|OK").
+        // A committed cross-shard EXEC (array reply -> "OK|OK").
         h.respond(e, Some(Bytes::from("OK|OK")));
 
         let mut report = InvariantReport::default();
-        check_exec_slot_discipline(&h, &mut report);
+        check_exec_slot_discipline(&h, NUM_SHARDS, &mut report);
         assert!(
             !report.violations.is_empty(),
-            "cross-slot commit must be flagged"
+            "cross-shard commit must be flagged"
         );
     }
 

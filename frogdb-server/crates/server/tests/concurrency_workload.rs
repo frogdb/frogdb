@@ -24,7 +24,12 @@ fn run_and_check(
 ) -> InvariantReport {
     let workload = Workload::generate(seed, profile, num_clients, ops_per_client);
     let run = run_workload_capturing(&workload, num_shards, true);
-    let report = check_all(&run.history, &run.final_elements, Some(&run.quiescence));
+    let report = check_all(
+        &run.history,
+        &run.final_elements,
+        Some(&run.quiescence),
+        num_shards,
+    );
     if !report.passed() {
         eprintln!("seed {seed} ({profile:?}) FAILED: {:?}", report.violations);
     }
@@ -64,7 +69,8 @@ fn write_repro_for(
 //
 // TxHeavy is intentionally excluded here and deferred to the `#[ignore]`d
 // `seed_sweep_txheavy` below — see its comment for the specific remaining
-// harness gap (cross-slot WATCH/EXEC generation vs. the KV model).
+// blocker (a server-side cross-shard WATCH validation bug; the earlier
+// errored-EXEC model gap is fixed).
 #[test]
 fn seed_sweep_short_workloads() {
     // ~20 seeds x short workloads (CI per-PR tier), alternating the two
@@ -116,28 +122,29 @@ fn quiescence_stage_runs_and_is_clean() {
     );
 }
 
-// TxHeavy seed sweep — DEFERRED (documented harness/model gap, not a server bug).
+// TxHeavy seed sweep. Transactions are biased toward single-slot key groups
+// (which commit); a deliberate minority draw keys independently and so span
+// slots — some of those land on separate shards, which the standalone server
+// rejects with CROSSSLOT, pinning its transaction co-location discipline (see
+// check_exec_slot_discipline, which is shard-level to match the standalone
+// harness). KVModel, the per-key partition explode, and the conservation
+// checkers all accept an aborted (nil) or errored ("ERR:…", CROSSSLOT/
+// EXECABORT) EXEC as a legal no-op, so a rejected transaction no longer poisons
+// its per-key Kv sub-history.
 //
-// Root cause (seed 0, verified by dumping the per-key Kv sub-histories): the
-// TxHeavy generator emits standalone `watch` ops on independently-chosen keys
-// from a two-slot key family ({t0}kv0, {t1}kv1) plus `exec` transactions whose
-// sub-commands also pick keys independently. Because a connection's WATCH set
-// accumulates until an EXEC/DISCARD clears it, many EXECs end up with a watched
-// set (and/or sub-command keys) that span two hash slots. The multi-shard server
-// then *correctly* rejects those EXECs with `-CROSSSLOT` (and returns empty-array
-// aborts in related cases). `KVModel::exec` has no encoding for a CROSSSLOT/abort
-// EXEC result, so it treats every such result as a value mismatch and rejects it,
-// poisoning the entire per-key Kv sub-history (every op flagged). The plain-KV
-// ops themselves are linearizable, and the non-TxHeavy sweep above is green — so
-// this is a generator+model gap, not a FrogDB bug.
-//
-// Fixing it properly requires either (a) generating coherent single-slot
-// transactions (all watched + exec'd keys in one slot), or (b) teaching the
-// recorder/model that a CROSSSLOT/abort EXEC is a legal no-op (state unchanged).
-// Neither is a small change; tracked as the #1 phase-3 follow-up. Run manually
-// with `--run-ignored all` to reproduce.
+// STILL DEFERRED — blocked on a *server* bug, not a harness gap: 19/20 seeds
+// pass; seed 8 trips `check_watch_no_false_negative`. A client accumulates a
+// WATCH set spanning two shards (e.g. WATCH {t0}kv0 then WATCH {t1}kv1) and
+// then EXECs a transaction touching only one of them. `handle_exec`
+// (server: connection/handlers/transaction.rs) assumes "watches are all
+// same-slot, so at most one shard" and routes *all* watches to a single
+// target shard, so a concurrent write to the watched key owned by the *other*
+// shard is never version-checked and the EXEC wrongly commits instead of
+// aborting. The checker is correct; the server must either validate cross-shard
+// watches or reject them. Do NOT weaken the checker to green this — un-ignore
+// and wire into `just concurrency` once the server bug is fixed.
 #[test]
-#[ignore = "harness/model gap (not a server bug): TxHeavy generates cross-slot WATCH/EXEC combos the multi-shard server correctly rejects with CROSSSLOT; KVModel does not encode CROSSSLOT/abort EXEC results. See comment + final report."]
+#[ignore = "blocked on server bug: cross-shard WATCH not validated at EXEC (seed 8 WATCH false-negative). See comment; do not weaken the checker."]
 fn seed_sweep_txheavy() {
     for seed in 0..20u64 {
         let report = run_and_check(seed, Profile::TxHeavy, 4, 30, 2);
@@ -191,6 +198,28 @@ mod regressions {
         assert!(
             report.passed(),
             "pinned seed regressed: {:?}",
+            report.violations
+        );
+    }
+
+    /// CONFIRMED SERVER BUG (not yet fixed): cross-shard WATCH is accepted but
+    /// not validated at EXEC. TxHeavy seed 8 has a client WATCH two keys owned
+    /// by different shards ({t0}kv0 on shard 0, {t1}kv1 on shard 1) and then
+    /// EXEC a transaction touching only {t1}kv1. `handle_exec` routes all
+    /// watches to the single command-target shard (server assumes "watches are
+    /// all same-slot, so at most one shard"), so a concurrent write to the
+    /// *other* shard's watched key is never version-checked and the EXEC wrongly
+    /// commits — a WATCH false-negative caught by `check_watch_no_false_negative`.
+    ///
+    /// Ignored until the server is fixed. When it is, drop the `#[ignore]` so
+    /// this becomes a live pin (it must FAIL before the fix and PASS after).
+    #[test]
+    #[ignore = "server bug: cross-shard WATCH not validated at EXEC — un-ignore alongside the server fix"]
+    fn regression_crossshard_watch_false_negative_seed_8() {
+        let report = run_and_check(8, Profile::TxHeavy, 4, 30, 2);
+        assert!(
+            report.passed(),
+            "cross-shard WATCH false-negative regressed: {:?}",
             report.violations
         );
     }
