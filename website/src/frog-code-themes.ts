@@ -26,35 +26,35 @@ const frogDark: ThemeInput = {
 		},
 		{
 			scope: ['string', 'string.regexp'],
-			settings: { foreground: '#a8d92e' },
+			settings: { foreground: '#a8d92e' }, // lime
 		},
 		{
 			scope: ['keyword', 'storage.type', 'storage.modifier', 'keyword.operator'],
-			settings: { foreground: '#8b7cf6' },
+			settings: { foreground: '#8b87fa' }, // violet
 		},
 		{
 			scope: ['entity.name.function', 'support.function', 'entity.name.tag'],
-			settings: { foreground: '#c3f53c' },
+			settings: { foreground: '#e386f0' }, // pink
 		},
 		{
 			scope: ['constant.numeric', 'constant.language', 'constant.character'],
-			settings: { foreground: '#e0a43b' },
+			settings: { foreground: '#e0a43b' }, // amber
 		},
 		{
 			scope: ['punctuation', 'meta.brace', 'punctuation.separator', 'punctuation.terminator'],
-			settings: { foreground: '#8a8a8a' },
+			settings: { foreground: '#8a8a8a' }, // gray
 		},
 		{
 			scope: ['variable', 'variable.parameter', 'variable.other', 'support.variable'],
-			settings: { foreground: '#d8d6d3' },
+			settings: { foreground: '#d8d6d3' }, // gray-1
 		},
 		{
 			scope: ['entity.name.type', 'support.type', 'support.class', 'entity.name.class'],
-			settings: { foreground: '#7cc7e8' },
+			settings: { foreground: '#94d2e3' }, // sky
 		},
 		{
 			scope: ['entity.other.attribute-name'],
-			settings: { foreground: '#e0a43b' },
+			settings: { foreground: '#ffaaa1' }, // coral
 		},
 	],
 };
@@ -76,35 +76,35 @@ const frogLight: ThemeInput = {
 		},
 		{
 			scope: ['string', 'string.regexp'],
-			settings: { foreground: '#55761a' },
+			settings: { foreground: '#55761a' }, // lime
 		},
 		{
 			scope: ['keyword', 'storage.type', 'storage.modifier', 'keyword.operator'],
-			settings: { foreground: '#6b4fc9' },
+			settings: { foreground: '#5a4fcf' }, // violet
 		},
 		{
 			scope: ['entity.name.function', 'support.function', 'entity.name.tag'],
-			settings: { foreground: '#3f5a11' },
+			settings: { foreground: '#a5359a' }, // pink
 		},
 		{
 			scope: ['constant.numeric', 'constant.language', 'constant.character'],
-			settings: { foreground: '#b07a1a' },
+			settings: { foreground: '#b07a1a' }, // amber
 		},
 		{
 			scope: ['punctuation', 'meta.brace', 'punctuation.separator', 'punctuation.terminator'],
-			settings: { foreground: '#6f6f68' },
+			settings: { foreground: '#6f6f68' }, // gray
 		},
 		{
 			scope: ['variable', 'variable.parameter', 'variable.other', 'support.variable'],
-			settings: { foreground: '#2e2e2a' },
+			settings: { foreground: '#2e2e2a' }, // gray-1
 		},
 		{
 			scope: ['entity.name.type', 'support.type', 'support.class', 'entity.name.class'],
-			settings: { foreground: '#2f6a8a' },
+			settings: { foreground: '#2f6a8a' }, // sky
 		},
 		{
 			scope: ['entity.other.attribute-name'],
-			settings: { foreground: '#b07a1a' },
+			settings: { foreground: '#c1584a' }, // coral
 		},
 	],
 };
