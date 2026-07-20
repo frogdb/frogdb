@@ -290,6 +290,7 @@ impl Server {
             failure_detector: cluster.failure_detector.clone(),
             replication_quorum_checker: repl.replication_quorum_checker.clone(),
             is_replica_flag: cluster.is_replica_flag.clone(),
+            role_controller: cluster.role_controller.clone(),
             client_registry: infra.client_registry.clone(),
             config_manager: infra.config_manager.clone(),
             shard_memory_used: infra.shard_memory_used.clone(),

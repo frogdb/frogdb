@@ -37,6 +37,9 @@ pub(crate) struct ShardIdentity {
     master_port: Option<u16>,
     /// Server data directory (for search indexes, etc.).
     data_dir: Option<std::path::PathBuf>,
+    /// Handle to request a runtime role transition (`REPLICAOF`). Shared,
+    /// server-wide; `None` until the `RoleManager` is wired in during startup.
+    role_controller: Option<Arc<dyn crate::command::RoleController>>,
 }
 
 impl ShardIdentity {
@@ -49,6 +52,7 @@ impl ShardIdentity {
             master_host: None,
             master_port: None,
             data_dir: None,
+            role_controller: None,
         }
     }
 
@@ -106,6 +110,19 @@ impl ShardIdentity {
     pub(crate) fn set_master_address(&mut self, host: String, port: u16) {
         self.master_host = Some(host);
         self.master_port = Some(port);
+    }
+
+    /// The shared role-transition controller (clone into each `CommandContext`).
+    pub(crate) fn role_controller(&self) -> Option<&Arc<dyn crate::command::RoleController>> {
+        self.role_controller.as_ref()
+    }
+
+    /// Install the server-wide role-transition controller.
+    pub(crate) fn set_role_controller(
+        &mut self,
+        controller: Arc<dyn crate::command::RoleController>,
+    ) {
+        self.role_controller = Some(controller);
     }
 }
 

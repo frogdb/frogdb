@@ -51,6 +51,16 @@ impl Command for ReplicaofCommand {
             });
         }
 
+        // In cluster mode, replication topology is owned by the Raft metadata
+        // plane (see ADR-0001). A client `REPLICAOF` would race consensus, so —
+        // as Redis does — reject it; Role Demotion there is driven only by the
+        // failover event consumer calling the RoleManager.
+        if ctx.cluster_state.is_some() {
+            return Ok(Response::error(
+                "ERR REPLICAOF not allowed in cluster mode.",
+            ));
+        }
+
         let arg1 = std::str::from_utf8(&args[0]).map_err(|_| CommandError::InvalidArgument {
             message: "invalid host encoding".to_string(),
         })?;
@@ -59,22 +69,23 @@ impl Command for ReplicaofCommand {
             message: "invalid port encoding".to_string(),
         })?;
 
-        // Check for "NO ONE" to stop replication
+        // Role Promotion: `REPLICAOF NO ONE` — become a standalone primary.
         if arg1.eq_ignore_ascii_case("no") && arg2.eq_ignore_ascii_case("one") {
-            // Stop replication, become standalone primary
-            tracing::info!("REPLICAOF NO ONE - stopping replication, promoting to primary");
-
-            // Clear the replica flag so ROLE, INFO, and write guards
-            // all reflect the new primary status immediately.
+            tracing::info!("REPLICAOF NO ONE - Role Promotion to primary");
             ctx.is_replica = false;
-            if let Some(ref flag) = ctx.is_replica_flag {
+            // The RoleManager owns the flag and the streaming lifecycle: it
+            // clears the replica flag and stops any inbound stream.
+            if let Some(ref controller) = ctx.role_controller {
+                controller.request_promote();
+            } else if let Some(ref flag) = ctx.is_replica_flag {
+                // No manager wired (e.g. a bare test harness): still reflect the
+                // new role rather than silently doing nothing.
                 flag.store(false, std::sync::atomic::Ordering::Release);
             }
-
             return Ok(Response::ok());
         }
 
-        // Parse host and port
+        // Role Demotion: `REPLICAOF <host> <port>` — become a replica.
         let host = arg1.to_string();
         let port: u16 = arg2.parse().map_err(|_| CommandError::InvalidArgument {
             message: "invalid port number".to_string(),
@@ -86,16 +97,46 @@ impl Command for ReplicaofCommand {
             });
         }
 
-        tracing::info!(
-            host = %host,
-            port = port,
-            "REPLICAOF - configuring as replica"
-        );
+        let addr = resolve_primary(&host, port)?;
 
-        // Return OK - the actual connection happens asynchronously
-        // The server's replication manager will initiate the connection
+        tracing::info!(host = %host, port = port, "REPLICAOF - Role Demotion to replica");
+
+        // Hand the transition to the RoleManager: it sets the read-only flag
+        // (so ROLE/INFO/the write guard report replica immediately) and opens
+        // the inbound stream to `addr`. This is the operation the old stub was
+        // missing — it parsed, logged, and returned +OK while flipping nothing.
+        if let Some(ref controller) = ctx.role_controller {
+            controller.request_demote(addr);
+        } else if let Some(ref flag) = ctx.is_replica_flag {
+            // No manager wired: at minimum flip the flag so the node is not left
+            // lying about its role. (No stream can be opened without a manager.)
+            flag.store(true, std::sync::atomic::Ordering::Release);
+        }
+        ctx.is_replica = true;
+
         Ok(Response::ok())
     }
+}
+
+/// Resolve a `REPLICAOF <host> <port>` target to a socket address.
+///
+/// Accepts a literal IP or a hostname (resolved via the system resolver, as
+/// Redis does); the first resolved address wins.
+fn resolve_primary(host: &str, port: u16) -> Result<std::net::SocketAddr, CommandError> {
+    use std::net::ToSocketAddrs;
+
+    // Fast path: a literal IP address needs no name resolution.
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return Ok(std::net::SocketAddr::new(ip, port));
+    }
+
+    (host, port)
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut addrs| addrs.next())
+        .ok_or_else(|| CommandError::InvalidArgument {
+            message: format!("cannot resolve primary host '{host}'"),
+        })
 }
 
 /// SLAVEOF command - alias for REPLICAOF (deprecated).

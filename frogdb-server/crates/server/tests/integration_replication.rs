@@ -19,7 +19,8 @@ use crate::common::replication_helpers::{
 };
 use crate::common::response_helpers::assert_ok;
 use crate::common::test_server::{
-    ServerRole, TestServer, TestServerConfig, is_error, parse_integer, parse_simple_string,
+    ServerRole, TestServer, TestServerConfig, get_error_message, is_error, parse_integer,
+    parse_simple_string,
 };
 use bytes::Bytes;
 use frogdb_protocol::Response;
@@ -923,6 +924,82 @@ async fn test_replicaof_invalid_args() {
     assert!(is_error(&response), "REPLICAOF with port 0 should error");
 
     server.shutdown().await;
+}
+
+/// Extract the role name (first element) from a `ROLE` array reply.
+fn role_name(response: &Response) -> Option<String> {
+    match response {
+        Response::Array(items) => match items.first() {
+            Some(Response::Bulk(Some(b))) => std::str::from_utf8(b).ok().map(str::to_string),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Runtime `REPLICAOF <host> <port>` (Role Demotion) must *actually* demote:
+/// flip the node to read-only, reject writes, and report `slave` via ROLE —
+/// then `REPLICAOF NO ONE` (Role Promotion) must restore a writable primary.
+///
+/// Regression: the old handler parsed the args, logged, returned `+OK`, and
+/// flipped nothing — the node stayed a writable primary reporting `master`.
+/// Every post-demotion assertion below fails against that no-op stub.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_replicaof_host_port_demotes(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    // Two independent primaries; `node` will be demoted to replicate `target`.
+    let target = TestServer::start_primary_with_config(config.clone()).await;
+    let node = TestServer::start_primary_with_config(config).await;
+
+    // Precondition: `node` is a writable primary.
+    assert_ok(&node.send("SET", &["k", "v"]).await);
+    assert_eq!(
+        role_name(&node.send("ROLE", &[]).await).as_deref(),
+        Some("master"),
+        "node should start as a primary"
+    );
+
+    // Role Demotion at runtime.
+    let target_port = target.port().to_string();
+    let resp = node.send("REPLICAOF", &["127.0.0.1", &target_port]).await;
+    assert_ok(&resp);
+
+    // The node is now a replica: ROLE reports `slave` and writes are rejected.
+    assert_eq!(
+        role_name(&node.send("ROLE", &[]).await).as_deref(),
+        Some("slave"),
+        "REPLICAOF host port must flip ROLE to slave (old stub left it master)"
+    );
+
+    let write = node.send("SET", &["k2", "v2"]).await;
+    assert!(
+        is_error(&write),
+        "writes must be rejected after Role Demotion (old stub kept the node writable), got {write:?}"
+    );
+    assert!(
+        get_error_message(&write)
+            .unwrap_or("")
+            .starts_with("READONLY"),
+        "expected READONLY error, got {write:?}"
+    );
+
+    // Role Promotion back to primary restores writability.
+    assert_ok(&node.send("REPLICAOF", &["NO", "ONE"]).await);
+    assert_eq!(
+        role_name(&node.send("ROLE", &[]).await).as_deref(),
+        Some("master"),
+        "REPLICAOF NO ONE must promote back to master"
+    );
+    assert_ok(&node.send("SET", &["k3", "v3"]).await);
+
+    node.shutdown().await;
+    target.shutdown().await;
 }
 
 // ============================================================================

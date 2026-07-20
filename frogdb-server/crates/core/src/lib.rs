@@ -67,8 +67,8 @@ pub use command::Command as ShardCommand;
 pub use command::{
     Arity, ClusterContextRef, Command, CommandContext, CommandContextCore, CommandFlags,
     ConnectionLevelOp, ExecutionStrategy, KeyAccessFlag, ListpackConfig, MergeStrategy,
-    QuorumChecker, ReplicationContextRef, ServerWideOp, WaiterKind, WaiterWake, WalAction,
-    WalStrategy,
+    QuorumChecker, ReplicationContextRef, RoleController, ServerWideOp, WaiterKind, WaiterWake,
+    WalAction, WalStrategy,
 };
 pub use command_spec::{
     AccessSpec, CommandSpec, EventSpec, KeySpec, LookupOutcome, LookupSpec, SpecError,
@@ -111,7 +111,7 @@ pub use persistence::{
     CompressionType, DurabilityMode, HEADER_SIZE, NoopSnapshotCoordinator, RecoveryStats,
     RocksConfig, RocksSnapshotCoordinator, RocksStore, RocksWalWriter, SerializationError,
     SnapshotConfig, SnapshotCoordinator, SnapshotError, SnapshotHandle, SnapshotMetadata,
-    SnapshotMetadataFile, WalConfig, WalFailurePolicy, WalLagStats, deserialize,
+    SnapshotMetadataFile, SnapshotRequest, WalConfig, WalFailurePolicy, WalLagStats, deserialize,
     recover_all_shards, recover_shard, serialize, spawn_periodic_sync,
 };
 pub use pubsub::{

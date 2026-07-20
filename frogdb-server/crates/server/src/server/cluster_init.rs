@@ -28,6 +28,10 @@ pub(super) struct ClusterInitResult {
     pub failure_detector: Option<Arc<FailureDetector>>,
     pub failure_detector_handle: Option<crate::net::JoinHandle<()>>,
     pub is_replica_flag: Arc<std::sync::atomic::AtomicBool>,
+    /// Server-wide role-transition controller (the `RoleManager` handle),
+    /// injected into shard workers so `REPLICAOF` can drive Role
+    /// Promotion/Demotion, and used by the demotion-event consumer.
+    pub role_controller: Arc<dyn frogdb_core::RoleController>,
 }
 
 /// Initialize cluster state, Raft, failure detector, and background tasks.
@@ -49,6 +53,28 @@ pub(super) async fn init_cluster(
     metrics_recorder: &Arc<dyn MetricsRecorder>,
     #[cfg(not(feature = "turmoil"))] tls_manager: &Option<Arc<crate::tls::TlsManager>>,
 ) -> Result<ClusterInitResult> {
+    // Create the shared is_replica flag and the RoleManager that owns it. This
+    // single AtomicBool is shared by all shard workers, the acceptor, and all
+    // connection handlers; the RoleManager is the sole writer, driving Role
+    // Promotion/Demotion (REPLICAOF, failover) and the streaming lifecycle each
+    // implies. Built here (before the demotion-event consumer) so both the
+    // consumer and the shard workers share one controller.
+    let is_replica_flag = Arc::new(std::sync::atomic::AtomicBool::new(
+        config.replication.is_replica(),
+    ));
+    let streamer: Arc<dyn crate::role_manager::ReplicaStreamer> =
+        Arc::new(crate::role_manager::RealReplicaStreamer::new(
+            config,
+            shard_senders.clone(),
+            num_shards,
+            is_replica_flag.clone(),
+            #[cfg(not(feature = "turmoil"))]
+            tls_manager,
+        ));
+    let role_manager = crate::role_manager::RoleManager::new(is_replica_flag.clone(), streamer);
+    let role_handle = crate::role_manager::RoleManagerHandle::new(role_manager);
+    let role_controller: Arc<dyn frogdb_core::RoleController> = Arc::new(role_handle.clone());
+
     let (cluster_state, node_id, raft, network_factory, slot_migration) = if config.cluster.enabled
     {
         // Derive node_id from cluster_bus address for deterministic IDs
@@ -448,6 +474,12 @@ pub(super) async fn init_cluster(
             let primary_handler = primary_replication_handler.cloned();
             let tracker = replication_tracker.clone();
             let metrics = metrics_recorder.clone();
+            // Capture the role controller + a cluster-state handle so the
+            // consumer can reconfigure the local data path (not just log) when
+            // Raft demotes this node — resolving the new primary's client
+            // address from the committed topology.
+            let demotion_role_controller = role_controller.clone();
+            let demotion_cluster_state = cluster.clone();
             spawn(async move {
                 while let Some(event) = demotion_rx.recv().await {
                     tracing::warn!(
@@ -514,6 +546,35 @@ pub(super) async fn init_cluster(
                             );
                         }
                     }
+
+                    // Reconfigure the local data path to match consensus: this
+                    // node was demoted, so become a replica of the committed new
+                    // primary. Previously this consumer only *logged* divergent
+                    // writes and left the data path behaving as a primary. The
+                    // Raft plane owns the decision (ADR-0001); the RoleManager
+                    // only reflects it onto the data path here.
+                    if let Some(new_id) = event.new_primary_id {
+                        match demotion_cluster_state
+                            .snapshot()
+                            .nodes
+                            .get(&new_id)
+                            .map(|n| n.addr)
+                        {
+                            Some(addr) => {
+                                tracing::warn!(
+                                    new_primary = %addr,
+                                    "Role Demotion: reconfiguring data path to replicate from new primary"
+                                );
+                                demotion_role_controller.request_demote(addr);
+                            }
+                            None => {
+                                tracing::warn!(
+                                    new_primary = new_id,
+                                    "Demotion event: new primary not yet in cluster state; cannot reconfigure data path"
+                                );
+                            }
+                        }
+                    }
                 }
             });
         }
@@ -575,13 +636,6 @@ pub(super) async fn init_cluster(
             (None, None)
         };
 
-    // Create shared is_replica flag. This single AtomicBool is shared by all
-    // shard workers, the acceptor, and all connection handlers. REPLICAOF NO ONE
-    // toggles this flag to promote from replica to primary server-wide.
-    let is_replica_flag = Arc::new(std::sync::atomic::AtomicBool::new(
-        config.replication.is_replica(),
-    ));
-
     Ok(ClusterInitResult {
         cluster_state,
         node_id,
@@ -591,5 +645,6 @@ pub(super) async fn init_cluster(
         failure_detector,
         failure_detector_handle,
         is_replica_flag,
+        role_controller,
     })
 }
