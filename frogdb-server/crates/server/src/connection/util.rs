@@ -1,7 +1,7 @@
 //! Standalone utility functions for the connection module.
 //!
 //! These functions have no coupling to `ConnectionHandler` and are used
-//! by various handler submodules.
+//! by various connection submodules.
 
 use bytes::Bytes;
 use frogdb_core::{

@@ -159,7 +159,7 @@ impl ConnectionHandler {
     ///
     /// `pub(crate)` because EXEC also routes here: server-wide commands queued
     /// in a MULTI are deferred past the shard transaction and dispatched
-    /// through this same match (see `handlers::transaction::execute_transaction`).
+    /// through this same match (see `transaction::execute_transaction`).
     pub(crate) async fn dispatch_server_wide(
         &mut self,
         op: ServerWideOp,

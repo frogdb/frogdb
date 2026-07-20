@@ -6,7 +6,7 @@
 //! function registry / cross-shard EVAL coordinator through
 //! [`ConnCtx::scripting`] ([`ScriptingProvider`]), which the server implements
 //! for [`ConnectionHandler`] by delegating to the existing
-//! `handlers/scripting/*` helpers. The eval engine and the cross-shard VLL
+//! `crate::connection::scripting` helpers. The eval engine and the cross-shard VLL
 //! continuation logic are unchanged — only the dispatch entry point moves behind
 //! the seam.
 //!
@@ -32,7 +32,7 @@ use frogdb_protocol::Response;
 use crate::connection::ConnectionHandler;
 
 /// Bridges the connection-command seam to the server's scripting handlers. Each
-/// method delegates to the existing `handlers/scripting/*` entry point on
+/// method delegates to the existing `crate::connection::scripting` entry point on
 /// [`ConnectionHandler`], which owns the executor / function registry / VLL
 /// cross-shard EVAL logic.
 impl frogdb_core::ScriptingProvider for ConnectionHandler {

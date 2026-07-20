@@ -5,7 +5,7 @@
 //! bundle that is gathered exactly once per INFO request. There is no
 //! placeholder string, no `.replace`, no `.replace_range`, and no re-parsing of
 //! a buffer the code just emitted — the stub-and-patch contract that used to
-//! span `commands/info.rs` and `connection/handlers/scatter.rs` is gone.
+//! span `commands/info.rs` and `connection/scatter.rs` is gone.
 //!
 //! Layout invariants (`# Title\r\n`, `field:value\r\n`, trailing blank line)
 //! live in [`SectionWriter`]; section selection (`default`/`all`/`everything`,
