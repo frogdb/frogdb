@@ -1,7 +1,10 @@
 //! Generated-workload seed sweep: drive seeded workloads against the real
 //! server under turmoil, run the invariant pipeline, and emit a repro file on
 //! any failure. See `docs/superpowers/plans/concurrency-phase3-bug-workflow.md`.
-#![cfg(feature = "turmoil")]
+//!
+//! Turmoil-only: gated at the `mod concurrency_workload;` declaration in
+//! `tests/main.rs` (`#[cfg(feature = "turmoil")]`), so no inner `#![cfg]` here
+//! (that would trip `clippy::duplicated_attributes`).
 
 use std::path::PathBuf;
 
@@ -48,32 +51,71 @@ fn write_repro_for(
     path
 }
 
-// TRIAGE PENDING (do not enable in CI until resolved): at full workload size
-// (4 clients x 30 ops), seed 0 reports wholesale per-key non-linearizability
-// across the Kv, List, AND Stream families at once, while the hand-written
-// concurrent-write simulation tests (`test_linearizability_concurrent_writes`,
-// `test_concurrent_transactions_linearizable`) pass. Three independent
-// subsystems failing simultaneously points to a harness/model encoding gap for
-// the richer generated vocabulary under heavy concurrency — NOT three
-// independent server bugs — and must be triaged via
-// docs/superpowers/plans/concurrency-phase3-bug-workflow.md before this gate is
-// trusted. The end-to-end runner + pipeline themselves are validated
-// (`tiny_workload_runs_and_records`, `run_workload_is_deterministic` pass).
+// Full-size generated seed sweep (CI per-PR tier), BlockingHeavy + Mixed
+// profiles. This is real, enabled coverage: it drives seeded workloads against
+// the real multi-shard server and runs the full invariant pipeline.
+//
+// Previously the whole sweep was `#[ignore]`d because `to_testing_history`
+// collapsed every op into a zero-width point at completion time (manufacturing
+// wholesale false non-linearizability under real concurrency). That collapse is
+// fixed (plus the aborted-EXEC-as-`Some("")` recorder defect and `KVModel::exec`
+// rejecting nil aborts), so the List/Stream/Hash/ZSet/plain-KV vocabulary now
+// linearizes correctly.
+//
+// TxHeavy is intentionally excluded here and deferred to the `#[ignore]`d
+// `seed_sweep_txheavy` below — see its comment for the specific remaining
+// harness gap (cross-slot WATCH/EXEC generation vs. the KV model).
 #[test]
-#[ignore = "triage pending: full-size sweep surfaces a harness/model encoding gap (see comment + bug-workflow doc)"]
 fn seed_sweep_short_workloads() {
-    // ~20 seeds x short workloads (CI per-PR tier).
+    // ~20 seeds x short workloads (CI per-PR tier), alternating the two
+    // fully-supported profiles.
     for seed in 0..20u64 {
-        let profile = match seed % 3 {
-            0 => Profile::TxHeavy,
-            1 => Profile::BlockingHeavy,
-            _ => Profile::Mixed,
+        let profile = if seed % 2 == 0 {
+            Profile::Mixed
+        } else {
+            Profile::BlockingHeavy
         };
         let report = run_and_check(seed, profile, 4, 30, 2);
         if !report.passed() {
             let path = write_repro_for(seed, profile, 4, 30, 2);
             panic!(
                 "seed {seed} ({profile:?}) violated invariants: {:?}\nrepro: {}",
+                report.violations,
+                path.display()
+            );
+        }
+    }
+}
+
+// TxHeavy seed sweep — DEFERRED (documented harness/model gap, not a server bug).
+//
+// Root cause (seed 0, verified by dumping the per-key Kv sub-histories): the
+// TxHeavy generator emits standalone `watch` ops on independently-chosen keys
+// from a two-slot key family ({t0}kv0, {t1}kv1) plus `exec` transactions whose
+// sub-commands also pick keys independently. Because a connection's WATCH set
+// accumulates until an EXEC/DISCARD clears it, many EXECs end up with a watched
+// set (and/or sub-command keys) that span two hash slots. The multi-shard server
+// then *correctly* rejects those EXECs with `-CROSSSLOT` (and returns empty-array
+// aborts in related cases). `KVModel::exec` has no encoding for a CROSSSLOT/abort
+// EXEC result, so it treats every such result as a value mismatch and rejects it,
+// poisoning the entire per-key Kv sub-history (every op flagged). The plain-KV
+// ops themselves are linearizable, and the non-TxHeavy sweep above is green — so
+// this is a generator+model gap, not a FrogDB bug.
+//
+// Fixing it properly requires either (a) generating coherent single-slot
+// transactions (all watched + exec'd keys in one slot), or (b) teaching the
+// recorder/model that a CROSSSLOT/abort EXEC is a legal no-op (state unchanged).
+// Neither is a small change; tracked as the #1 phase-3 follow-up. Run manually
+// with `--run-ignored all` to reproduce.
+#[test]
+#[ignore = "harness/model gap (not a server bug): TxHeavy generates cross-slot WATCH/EXEC combos the multi-shard server correctly rejects with CROSSSLOT; KVModel does not encode CROSSSLOT/abort EXEC results. See comment + final report."]
+fn seed_sweep_txheavy() {
+    for seed in 0..20u64 {
+        let report = run_and_check(seed, Profile::TxHeavy, 4, 30, 2);
+        if !report.passed() {
+            let path = write_repro_for(seed, Profile::TxHeavy, 4, 30, 2);
+            panic!(
+                "seed {seed} (TxHeavy) violated invariants: {:?}\nrepro: {}",
                 report.violations,
                 path.display()
             );
@@ -111,10 +153,10 @@ mod regressions {
     /// bug, hardcode the failing seed/profile/config, and land it alongside the
     /// fix. It must FAIL before the fix and PASS after.
     ///
-    /// Ignored: seed 0 currently reproduces the untriaged harness/model encoding
-    /// gap described on `seed_sweep_short_workloads`. Re-enable once triaged.
+    /// Seed 0 (Mixed) exercises the Kv/List/Stream families under heavy
+    /// concurrency; it passes now that the `to_testing_history` collapse and the
+    /// EXEC-abort encoding defects are fixed (see `seed_sweep_short_workloads`).
     #[test]
-    #[ignore = "triage pending: seed 0 surfaces the harness/model encoding gap (see seed_sweep_short_workloads)"]
     fn regression_template_seed_0() {
         let report = run_and_check(0, Profile::Mixed, 4, 30, 2);
         assert!(
