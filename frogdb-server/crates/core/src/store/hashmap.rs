@@ -84,6 +84,23 @@ impl Entry {
     }
 }
 
+/// The histogram contribution of a single **hot** entry, captured before the
+/// entry is removed or resized.
+///
+/// Every hot entry contributes a key-memory bin (`key_mem`, its accounted
+/// `metadata.memory_size`); keysize-tracked types (string/list/…) additionally
+/// contribute a per-type bin (`ks`). Untracked types (bloom/json/…) carry
+/// `ks == None` but still a `key_mem`. A warm entry has no hot contribution, so
+/// `HashMapStore::histogram_snapshot` returns `None` for it — the value it holds
+/// lives on disk, not in RAM.
+#[derive(Clone, Copy, Debug)]
+struct HotHistoContribution {
+    /// Per-type keysize bin: `(type, logical_size)`. `None` for untracked types.
+    ks: Option<(crate::histogram::KeysizeType, Option<usize>)>,
+    /// Accounted memory size — the key-memory bin and the `memory_used` charge.
+    key_mem: usize,
+}
+
 /// Error returned by `spill_key()`.
 #[derive(Debug, thiserror::Error)]
 pub enum SpillError {
@@ -126,14 +143,9 @@ pub struct HashMapStore {
     keysizes: KeysizeHistograms,
     /// Keys accessed via `get_mut()` that need a deferred size reconciliation
     /// after in-place mutation (histogram bins, `memory_used`, and the
-    /// accounted `metadata.memory_size`).
-    /// Entries: (key, keysize_type, old_logical_size, old_accounted_memory).
-    pending_keysizes_refreshes: Vec<(
-        Bytes,
-        Option<crate::histogram::KeysizeType>,
-        Option<usize>,
-        usize,
-    )>,
+    /// accounted `metadata.memory_size`). Each entry pairs the key with the
+    /// pre-mutation hot contribution `resize` will retire against the live size.
+    pending_keysizes_refreshes: Vec<(Bytes, HotHistoContribution)>,
 }
 
 impl std::fmt::Debug for HashMapStore {
@@ -258,32 +270,57 @@ impl HashMapStore {
         &mut self,
         key: Bytes,
         value: Value,
+        metadata: KeyMetadata,
+    ) -> Option<Arc<Value>> {
+        self.install(key, value, metadata)
+    }
+
+    // ========================================================================
+    // Entry-lifecycle seam: install / uninstall / resize
+    //
+    // These three private methods are the ONLY code permitted to reconcile the
+    // derived side-structures (`memory_used`, the keysize histograms, both
+    // expiry indexes, `ts_labels`, the warm-key count, and the deferred-refresh
+    // queue) with the primary `data` map. Every mutation method delegates here,
+    // so the "derived structures move atomically with the entry" invariant lives
+    // in one place instead of being re-stated at nine call sites.
+    // ========================================================================
+
+    /// Insert or overwrite an entry, reconciling **every** side structure.
+    ///
+    /// The single insert/overwrite seam: `set`, `set_with_options`, and
+    /// `restore_entry` all route here (via `replace_entry`), so no write path
+    /// can forget one of the derived structures. Before this seam existed, `set`
+    /// skipped the expiry indexes — an overwritten key kept its stale index
+    /// entry and active expiry would later delete the (now persistent) key:
+    /// silent data loss. An overwrite first fully `uninstall`s the previous
+    /// incarnation, so its expiry/label/field bookkeeping cannot leak into the
+    /// new one.
+    ///
+    /// The caller supplies the new entry's `metadata`; its `expires_at` is the
+    /// source of truth for the key-level expiry index. `metadata.memory_size` is
+    /// overwritten with the computed entry size so the accounted size is always
+    /// consistent with what `memory_used` was charged. Field-level expiries are
+    /// re-derived from the value itself.
+    ///
+    /// Returns the previous hot value, if any (a warm value being overwritten is
+    /// deleted from the warm CF and reported as `None`).
+    fn install(
+        &mut self,
+        key: Bytes,
+        value: Value,
         mut metadata: KeyMetadata,
     ) -> Option<Arc<Value>> {
-        let new_size = Self::hot_entry_memory_size(&key, &value);
+        // Retire any previous incarnation wholesale — memory, histograms, both
+        // expiry indexes, ts_labels, warm-key count, and the pending-refresh
+        // queue all settle inside `uninstall`. Field TTLs and labels are then
+        // re-derived from the new value below.
+        let old_value = self.uninstall(&key).and_then(|old| match old.location {
+            ValueLocation::Hot(arc) => Some(arc),
+            ValueLocation::Warm => None,
+        });
 
-        // Retire the old incarnation's bookkeeping, if overwriting. The
-        // accounted size — not the live size — is what `memory_used` was
-        // charged, so it is what gets refunded; any unflushed deferred
-        // snapshot for the old incarnation dies with it.
-        let old_value = if let Some(old_entry) = self.data.remove(&key) {
-            self.discard_pending_refresh(&key);
-            let old_size = old_entry.metadata.memory_size;
-            let snap = Self::histogram_snapshot(&old_entry);
-            self.memory_used = self.memory_used.saturating_sub(old_size);
-            self.histogram_decrement_snapshot(snap);
-            if !old_entry.is_hot() {
-                self.warm_tier.remove_warm(&key);
-            }
-            // Field TTLs belong to the old incarnation; re-derived below.
-            self.field_expiry_index.remove_key(&key);
-            match old_entry.location {
-                ValueLocation::Hot(arc) => Some(arc),
-                ValueLocation::Warm => None,
-            }
-        } else {
-            None
-        };
+        let new_size = Self::hot_entry_memory_size(&key, &value);
 
         // Reconcile the TimeSeries label index (indexes a time series's labels,
         // drops stale labels otherwise).
@@ -299,11 +336,11 @@ impl HashMapStore {
             }
         }
 
-        // Reconcile the key-level expiry index from the new metadata.
+        // Reconcile the key-level expiry index from the new metadata. `uninstall`
+        // already dropped any old index entry, so a `None` deadline needs no
+        // further work.
         if let Some(expires_at) = metadata.expires_at {
             self.expiry_index.set(key.clone(), expires_at);
-        } else {
-            self.expiry_index.remove(&key);
         }
 
         self.histogram_increment(&value, &key, new_size);
@@ -323,6 +360,59 @@ impl HashMapStore {
         old_value
     }
 
+    /// Remove an entry, reconciling **every** side structure, and return it.
+    ///
+    /// The single removal seam: `delete`, `get_and_delete`,
+    /// `check_and_delete_expired`, `install`'s overwrite path, and
+    /// `unspill_key`'s expired branch all route here. It snapshots + decrements
+    /// the keysize histograms, refunds the accounted memory, retires both expiry
+    /// indexes + `ts_labels`, discards any pending refresh, and settles the warm
+    /// tier from the entry's own location (`remove_warm` deletes the warm CF
+    /// entry and drops the warm-key count).
+    ///
+    /// Returns the removed `Entry` (or `None` if absent) so callers that need
+    /// the value (`get_and_delete`) or a different counter (expired-on-unspill)
+    /// can finish their own residual. Callers needing the warm *bytes* must read
+    /// them (`warm_tier.take`) before calling `uninstall`, whose best-effort CF
+    /// delete then no-ops.
+    fn uninstall(&mut self, key: &[u8]) -> Option<Entry> {
+        let entry = self.data.remove(key)?;
+        self.discard_pending_refresh(key);
+
+        // Decrement the keysize histograms by the entry's hot contribution
+        // (a no-op for warm entries — their hot bytes were retired at spill).
+        let snap = Self::histogram_snapshot(&entry);
+        self.histogram_decrement_snapshot(snap);
+
+        // Refund the accounted size — exactly what `memory_used` was charged at
+        // insert/refresh/spill time — never the recomputed live size, which can
+        // exceed it after unflushed in-place growth.
+        let size = entry.metadata.memory_size;
+        debug_assert!(
+            size <= self.memory_used,
+            "memory accounting underflow during uninstall: accounted {} > memory_used {}",
+            size,
+            self.memory_used
+        );
+        if size > self.memory_used {
+            warn!(
+                key_len = key.len(),
+                reported_size = size,
+                "Memory accounting underflow during uninstall"
+            );
+        }
+        self.memory_used = self.memory_used.saturating_sub(size);
+
+        // Settle the warm side from the entry's own location.
+        if !entry.is_hot() {
+            self.warm_tier.remove_warm(key);
+        }
+        self.expiry_index.remove(key);
+        self.ts_labels.remove(key);
+        self.field_expiry_index.remove_key(key);
+        Some(entry)
+    }
+
     /// Check if a key is expired and delete it if so.
     ///
     /// Returns true if the key was expired (and deleted, unless expiry is suppressed).
@@ -337,22 +427,7 @@ impl HashMapStore {
                 return true;
             }
             debug!(key_len = key.len(), "Key expired via lazy deletion");
-            let was_warm = !entry.is_hot();
-            // Decrement keysize histograms before removal
-            let snap = Self::histogram_snapshot(entry);
-            self.histogram_decrement_snapshot(snap);
-            // Remove from both data and expiry index
-            if let Some(entry) = self.data.remove(key) {
-                self.discard_pending_refresh(key);
-                self.memory_used = self.memory_used.saturating_sub(entry.metadata.memory_size);
-            }
-            // Clean up warm CF if needed
-            if was_warm {
-                self.warm_tier.remove_warm(key);
-            }
-            self.expiry_index.remove(key);
-            self.ts_labels.remove(key);
-            self.field_expiry_index.remove_key(key);
+            self.uninstall(key);
             self.expired_keys += 1;
             return true;
         }
@@ -395,34 +470,29 @@ impl HashMapStore {
         }
     }
 
-    /// Snapshot the histogram-relevant data from an entry before removal.
+    /// Snapshot the histogram contribution of a **hot** entry before it is
+    /// removed or resized.
     ///
-    /// Returns `(keysize_type, logical_size, accounted_memory_size)` if the
-    /// entry is hot and has a keysize type. Returns `None` if not hot or not
-    /// tracked. Uses the *accounted* size (`metadata.memory_size`) rather than
-    /// the live size, so the decrement always mirrors what the increment (or
-    /// the last deferred refresh) charged.
-    fn histogram_snapshot(
-        entry: &Entry,
-    ) -> Option<(crate::histogram::KeysizeType, Option<usize>, usize)> {
+    /// Returns `None` for a warm or absent entry (no hot contribution). For a
+    /// hot entry, `key_mem` is always its *accounted* size (`metadata.memory_size`,
+    /// not the live size, so the decrement mirrors what the increment or last
+    /// refresh charged), and `ks` is present only for keysize-tracked types.
+    fn histogram_snapshot(entry: &Entry) -> Option<HotHistoContribution> {
         let v = entry.hot_value()?;
-        let ks_type = v.keysize_type()?;
-        let logical = v.logical_size();
-        let mem = entry.metadata.memory_size;
-        Some((ks_type, logical, mem))
+        Some(HotHistoContribution {
+            ks: v.keysize_type().map(|t| (t, v.logical_size())),
+            key_mem: entry.metadata.memory_size,
+        })
     }
 
-    /// Decrement keysize histograms using a pre-captured snapshot.
-    fn histogram_decrement_snapshot(
-        &mut self,
-        snapshot: Option<(crate::histogram::KeysizeType, Option<usize>, usize)>,
-    ) {
-        if let Some((ks_type, logical, mem)) = snapshot {
-            if let Some(logical) = logical {
+    /// Decrement keysize histograms using a pre-captured hot contribution.
+    fn histogram_decrement_snapshot(&mut self, snapshot: Option<HotHistoContribution>) {
+        if let Some(snap) = snapshot {
+            if let Some((ks_type, Some(logical))) = snap.ks {
                 self.keysizes.get_mut(ks_type).decrement(logical);
             }
             if self.keysizes.key_memory_enabled {
-                self.keysizes.key_memory.decrement(mem);
+                self.keysizes.key_memory.decrement(snap.key_mem);
             }
         }
     }
@@ -442,54 +512,65 @@ impl HashMapStore {
             return;
         }
         let pending = std::mem::take(&mut self.pending_keysizes_refreshes);
-        for (key, ks_type, old_logical, old_mem) in pending {
-            self.apply_size_refresh(&key, ks_type, old_logical, old_mem);
+        for (key, old_snapshot) in pending {
+            // The queued snapshot was always taken from a hot entry, so its
+            // `key_mem` is the previously-accounted size.
+            self.resize(&key, Some(old_snapshot), old_snapshot.key_mem);
         }
     }
 
-    /// Reconcile one entry's histogram bins, `memory_used`, and accounted
-    /// `metadata.memory_size` against its current live size.
+    /// Reconcile an existing entry's histograms, `memory_used`, and accounted
+    /// `metadata.memory_size` against its current live size — the in-place-size
+    /// arm of the lifecycle seam.
     ///
-    /// `old_mem` must be the previously *accounted* size — what `memory_used`
-    /// was last charged for this entry — so increments and decrements stay
-    /// exactly symmetric: `memory_used` moves by `new_live − old_accounted`
-    /// and the accounted size becomes the new live size. A key deleted since
-    /// the snapshot is a no-op: the delete already settled its accounting.
-    fn apply_size_refresh(
+    /// Retires the pre-change hot contribution (`old_snapshot`, `None` when the
+    /// entry was warm) and adds the post-change one read from the live entry, so
+    /// a bin change is a symmetric decrement/increment rather than a migrate.
+    /// This unifies four callers: deferred `get_mut` growth and hash-field
+    /// shrink (hot→hot), plus `spill_key` (hot→warm) and `unspill_key`'s
+    /// rehydrate (warm→hot). The hot↔warm transitions are why this also closes
+    /// the key-memory histogram gap `spill_key`/`unspill_key` used to leave.
+    ///
+    /// `old_accounted` must be the previously-accounted size — what `memory_used`
+    /// was last charged for this entry, valid even when `old_snapshot` is `None`
+    /// (a warm entry) — so `memory_used` moves by exactly `new_live − old_accounted`.
+    /// A key deleted since the snapshot is a no-op: the delete already settled it.
+    fn resize(
         &mut self,
         key: &[u8],
-        ks_type: Option<crate::histogram::KeysizeType>,
-        old_logical: Option<usize>,
-        old_mem: usize,
+        old_snapshot: Option<HotHistoContribution>,
+        old_accounted: usize,
     ) {
-        let (new_logical, new_mem) = match self.data.get(key) {
-            Some(entry) => (
-                entry.hot_value().and_then(|v| v.logical_size()),
-                entry.memory_size(key),
-            ),
-            // Key was deleted since the snapshot; delete() already settled
-            // histograms and memory against the accounted size.
-            None => return,
+        // Retire the pre-resize hot contribution (no-op if it was warm).
+        self.histogram_decrement_snapshot(old_snapshot);
+
+        let Some(entry) = self.data.get(key) else {
+            return;
         };
+        let new_accounted = entry.memory_size(key);
+        let new_ks = entry
+            .hot_value()
+            .and_then(|v| v.keysize_type().map(|t| (t, v.logical_size())));
+        let is_hot = entry.is_hot();
 
-        // Migrate keysize bin if logical size moved to a different bin
-        if let (Some(ks_type), Some(old_l), Some(new_l)) = (ks_type, old_logical, new_logical) {
-            self.keysizes.get_mut(ks_type).migrate(old_l, new_l);
+        // Add the post-resize hot contribution (no-op if the entry is now warm).
+        if let Some((ks_type, Some(logical))) = new_ks {
+            self.keysizes.get_mut(ks_type).increment(logical);
         }
-
-        // Migrate key-memory bin if memory size moved to a different bin
-        if self.keysizes.key_memory_enabled {
-            self.keysizes.key_memory.migrate(old_mem, new_mem);
+        if is_hot && self.keysizes.key_memory_enabled {
+            self.keysizes.key_memory.increment(new_accounted);
         }
 
         // Apply the memory delta and refresh the accounted size.
-        if new_mem >= old_mem {
-            self.memory_used += new_mem - old_mem;
+        if new_accounted >= old_accounted {
+            self.memory_used += new_accounted - old_accounted;
         } else {
-            self.memory_used = self.memory_used.saturating_sub(old_mem - new_mem);
+            self.memory_used = self
+                .memory_used
+                .saturating_sub(old_accounted - new_accounted);
         }
         if let Some(entry) = self.data.get_mut(key) {
-            entry.metadata.memory_size = new_mem;
+            entry.metadata.memory_size = new_accounted;
         }
     }
 
@@ -569,6 +650,11 @@ impl HashMapStore {
         // Serialize using existing persistence format
         let serialized = serialize(value, &entry.metadata);
         let value_bytes = value.memory_size();
+        // Capture the pre-spill hot contribution + accounted size before the
+        // location flip, so `resize` can migrate the histograms + memory in the
+        // one place that owns that reconciliation.
+        let old_snapshot = Self::histogram_snapshot(entry);
+        let old_accounted = entry.metadata.memory_size;
 
         // Write to warm CF. `try_put` returns `None` only when the tier is
         // unconfigured, already handled above.
@@ -578,15 +664,12 @@ impl HashMapStore {
             None => return Err(SpillError::NoWarmStore),
         }
 
-        // Replace location with Warm
-        let entry = self.data.get_mut(key).unwrap();
-        entry.location = ValueLocation::Warm;
-
-        // Update memory accounting — value bytes freed, metadata stays in RAM.
-        // The accounted size moves in lockstep so a later delete refunds
-        // exactly what remains charged.
-        entry.metadata.memory_size = entry.metadata.memory_size.saturating_sub(value_bytes);
-        self.memory_used = self.memory_used.saturating_sub(value_bytes);
+        // Flip to Warm, then reconcile through the seam. `resize` frees the
+        // value bytes from `memory_used` *and* migrates the key-memory /
+        // per-type histograms to the metadata-only footprint — the histogram
+        // update `spill_key` used to skip (the column-2 gap).
+        self.data.get_mut(key).unwrap().location = ValueLocation::Warm;
+        self.resize(key, old_snapshot, old_accounted);
         self.warm_tier.record_spill();
 
         Ok(value_bytes)
@@ -605,17 +688,12 @@ impl HashMapStore {
         // Check TTL before unspilling — don't waste work on expired keys
         if entry.metadata.is_expired() {
             debug!(key_len = key.len(), "Warm key expired during unspill");
-            // Clean up: remove from RAM, warm CF, and expiry index. This bumps
-            // the expired-on-unspill counter, deletes the warm CF entry, and
-            // drops the warm-key count.
-            self.warm_tier.record_expired_on_unspill(key);
-            if let Some(entry) = self.data.remove(key) {
-                self.discard_pending_refresh(key);
-                self.memory_used = self.memory_used.saturating_sub(entry.metadata.memory_size);
-            }
-            self.expiry_index.remove(key);
-            self.ts_labels.remove(key);
-            self.field_expiry_index.remove_key(key);
+            // Retire every side structure through the removal seam (its
+            // `remove_warm` deletes the warm CF entry and drops the warm-key
+            // count), then bump the expired-on-unspill counter — the residual
+            // this branch owns, like `check_and_delete_expired`'s `expired_keys`.
+            self.uninstall(key);
+            self.warm_tier.note_expired_on_unspill();
             return None;
         }
 
@@ -644,14 +722,16 @@ impl HashMapStore {
 
         // Replace location with Hot
         let value_arc = Arc::new(value);
-        let value_bytes = value_arc.memory_size();
 
-        let entry = self.data.get_mut(key).unwrap();
-        entry.location = ValueLocation::Hot(value_arc.clone());
+        // Accounted (metadata-only) size while warm, before the flip; `resize`
+        // reads the rehydrated full size from the live entry.
+        let old_accounted = self.data.get(key).unwrap().metadata.memory_size;
+        self.data.get_mut(key).unwrap().location = ValueLocation::Hot(value_arc.clone());
 
-        // Update memory accounting (accounted size in lockstep, see spill_key)
-        entry.metadata.memory_size += value_bytes;
-        self.memory_used += value_bytes;
+        // Reconcile through the seam: adds the value bytes back to `memory_used`
+        // and re-installs the key-memory / per-type histogram bins the spill
+        // removed. No old contribution to retire (the entry was warm).
+        self.resize(key, None, old_accounted);
         // Drops the warm-key count and bumps the unspill counter.
         self.warm_tier.record_unspill();
 
@@ -680,6 +760,64 @@ impl HashMapStore {
     fn force_drop_index_entry_for_test(&mut self, key: &[u8]) {
         self.expiry_index.remove(key);
     }
+
+    /// Recompute the keysize histograms from scratch over the live keyspace —
+    /// the ground truth the incremental counters must match. Only **hot** entries
+    /// contribute (a spilled value is not in RAM); per-type bins use the live
+    /// logical size, the key-memory bin uses the accounted `metadata.memory_size`.
+    /// Valid only in a settled state (no pending deferred refreshes), just like
+    /// `recompute_memory_used`.
+    #[cfg(test)]
+    fn recompute_keysizes(&self) -> KeysizeHistograms {
+        let mut ks = if self.keysizes.key_memory_enabled {
+            KeysizeHistograms::new()
+        } else {
+            KeysizeHistograms::new_without_memory()
+        };
+        for (_key, entry) in self.data.iter() {
+            if let Some(v) = entry.hot_value() {
+                if let (Some(t), Some(logical)) = (v.keysize_type(), v.logical_size()) {
+                    ks.get_mut(t).increment(logical);
+                }
+                if ks.key_memory_enabled {
+                    ks.key_memory.increment(entry.metadata.memory_size);
+                }
+            }
+        }
+        ks
+    }
+
+    /// Assert every derived side-structure agrees with a from-scratch recompute:
+    /// `memory_used`, the expiry index (both directions), and every keysize +
+    /// key-memory histogram. This is the belt-and-suspenders check the lifecycle
+    /// seam is meant to make trivially true. Call only when settled (flush any
+    /// pending `get_mut` refreshes first).
+    #[cfg(test)]
+    fn assert_consistent(&self) {
+        assert_eq!(
+            self.recompute_memory_used(),
+            self.memory_used(),
+            "memory_used drifted from the live recompute"
+        );
+        assert!(
+            self.audit_expiry_index().is_empty(),
+            "expiry index anomalies: {:?}",
+            self.audit_expiry_index()
+        );
+        let expected = self.recompute_keysizes();
+        for &t in crate::histogram::KeysizeType::ALL {
+            assert_eq!(
+                self.keysizes.get(t).bins(),
+                expected.get(t).bins(),
+                "keysize histogram {t:?} drifted from the live recompute"
+            );
+        }
+        assert_eq!(
+            self.keysizes.key_memory.bins(),
+            expected.key_memory.bins(),
+            "key_memory histogram drifted from the live recompute"
+        );
+    }
 }
 
 impl Store for HashMapStore {
@@ -703,40 +841,7 @@ impl Store for HashMapStore {
     }
 
     fn delete(&mut self, key: &[u8]) -> bool {
-        if let Some(entry) = self.data.remove(key) {
-            self.discard_pending_refresh(key);
-            // Decrement keysize histograms
-            let snap = Self::histogram_snapshot(&entry);
-            self.histogram_decrement_snapshot(snap);
-            // Refund the accounted size — exactly what `memory_used` was
-            // charged at insert/refresh time — never the recomputed live
-            // size, which can exceed it after unflushed in-place growth.
-            let size = entry.metadata.memory_size;
-            debug_assert!(
-                size <= self.memory_used,
-                "memory accounting underflow during delete: accounted {} > memory_used {}",
-                size,
-                self.memory_used
-            );
-            if size > self.memory_used {
-                warn!(
-                    key_len = key.len(),
-                    reported_size = size,
-                    "Memory accounting underflow during delete"
-                );
-            }
-            self.memory_used = self.memory_used.saturating_sub(size);
-            // Clean up warm CF if this was a warm key
-            if !entry.is_hot() {
-                self.warm_tier.remove_warm(key);
-            }
-            self.expiry_index.remove(key);
-            self.ts_labels.remove(key);
-            self.field_expiry_index.remove_key(key);
-            true
-        } else {
-            false
-        }
+        self.uninstall(key).is_some()
     }
 
     fn contains(&self, key: &[u8]) -> bool {
@@ -1037,31 +1142,23 @@ impl Store for HashMapStore {
             return None;
         }
 
-        if let Some(entry) = self.data.remove(key) {
-            self.discard_pending_refresh(key);
-            // Decrement keysize histograms
-            let snap = Self::histogram_snapshot(&entry);
-            self.histogram_decrement_snapshot(snap);
-            // Refund the accounted size, mirroring `delete`.
-            self.memory_used = self.memory_used.saturating_sub(entry.metadata.memory_size);
-            self.expiry_index.remove(key);
-            self.ts_labels.remove(key);
-            self.field_expiry_index.remove_key(key);
-            match entry.location {
-                ValueLocation::Hot(arc) => {
-                    Some(Arc::try_unwrap(arc).unwrap_or_else(|arc| (*arc).clone()))
-                }
-                ValueLocation::Warm => {
-                    self.warm_tier.decrement_warm_keys();
-                    // Read the warm value out of the CF and delete it in one step.
-                    self.warm_tier
-                        .take(key)
-                        .and_then(|d| deserialize(&d).ok())
-                        .map(|(value, _metadata)| value)
-                }
+        // A warm key holds its value on disk, not in the returned `Entry`, so
+        // read (and delete) it from the CF *before* `uninstall` retires the
+        // entry; `uninstall`'s own best-effort CF delete then no-ops.
+        let warm_bytes = match self.data.get(key) {
+            Some(e) if !e.is_hot() => self.warm_tier.take(key),
+            _ => None,
+        };
+
+        // All six side structures (and the warm-key count) settle here.
+        let entry = self.uninstall(key)?;
+        match entry.location {
+            ValueLocation::Hot(arc) => {
+                Some(Arc::try_unwrap(arc).unwrap_or_else(|arc| (*arc).clone()))
             }
-        } else {
-            None
+            ValueLocation::Warm => warm_bytes
+                .and_then(|d| deserialize(&d).ok())
+                .map(|(value, _metadata)| value),
         }
     }
 
@@ -1088,18 +1185,14 @@ impl Store for HashMapStore {
         // state) wins: pushing a mid-command state would double-apply the
         // delta between the two snapshots.
         if let Some(entry) = self.data.get(key)
-            && let Some(v) = entry.hot_value()
+            && let Some(snapshot) = Self::histogram_snapshot(entry)
             && !self
                 .pending_keysizes_refreshes
                 .iter()
                 .any(|(k, ..)| k.as_ref() == key)
         {
-            self.pending_keysizes_refreshes.push((
-                Bytes::copy_from_slice(key),
-                v.keysize_type(),
-                v.logical_size(),
-                entry.metadata.memory_size,
-            ));
+            self.pending_keysizes_refreshes
+                .push((Bytes::copy_from_slice(key), snapshot));
         }
 
         let suppress = self.suppress_touch;
@@ -1179,10 +1272,7 @@ impl Store for HashMapStore {
         {
             None
         } else {
-            self.data.get(key).and_then(|e| {
-                e.hot_value()
-                    .map(|v| (v.keysize_type(), v.logical_size(), e.metadata.memory_size))
-            })
+            self.data.get(key).and_then(Self::histogram_snapshot)
         };
 
         // Get mutable access to the hash and remove expired fields
@@ -1211,9 +1301,9 @@ impl Store for HashMapStore {
         // Reconcile histograms + memory for the in-place shrink before any
         // delete below, so the delete refunds the freshly accounted size.
         if count > 0
-            && let Some((ks_type, old_logical, old_mem)) = pre_snapshot
+            && let Some(snap) = pre_snapshot
         {
-            self.apply_size_refresh(key, ks_type, old_logical, old_mem);
+            self.resize(key, Some(snap), snap.key_mem);
         }
 
         // If hash is now empty, delete the key
@@ -1973,5 +2063,312 @@ mod tests {
         assert_eq!(batch.len(), 100, "a full limit's worth should be available");
 
         assert!(store.get_expired_fields_limited(now, 0).is_empty());
+    }
+
+    // ========================================================================
+    // Entry-lifecycle seam (install / uninstall / resize) consistency
+    //
+    // Every one of these drives the store through a lifecycle op and then asserts
+    // `assert_consistent()`: `recompute_memory_used`, `audit_expiry_index`, and a
+    // from-scratch keysize/key-memory recompute all agree with the incremental
+    // counters. That is the belt-and-suspenders guarantee the seam concentrates.
+    // ========================================================================
+
+    use crate::histogram::KeysizeType;
+
+    /// One value of a few distinct keysize-tracked variants.
+    fn sample_values() -> Vec<(Bytes, Value)> {
+        use crate::types::{HashValue, ListpackThresholds};
+        let mut hash = HashValue::new();
+        hash.set(
+            Bytes::from("f1"),
+            Bytes::from("v1"),
+            ListpackThresholds::DEFAULT_HASH,
+        );
+        hash.set(
+            Bytes::from("f2"),
+            Bytes::from("v2"),
+            ListpackThresholds::DEFAULT_HASH,
+        );
+        let mut list = Value::list();
+        if let Some(l) = list.as_list_mut() {
+            for i in 0..8u32 {
+                l.push_back(Bytes::from(format!("e{i}")));
+            }
+        }
+        vec![
+            (Bytes::from("s"), Value::string(Bytes::from("hello world"))),
+            (Bytes::from("l"), list),
+            (Bytes::from("h"), Value::Hash(hash)),
+        ]
+    }
+
+    #[test]
+    fn install_then_uninstall_returns_to_zero() {
+        let mut store = HashMapStore::new();
+        for (k, v) in sample_values() {
+            let base_mem = store.memory_used();
+            store.set(k.clone(), v);
+            store.assert_consistent();
+            assert!(store.memory_used() > base_mem);
+            assert!(store.delete(&k));
+            store.assert_consistent();
+            assert_eq!(
+                store.memory_used(),
+                base_mem,
+                "uninstall must refund exactly what install charged"
+            );
+        }
+        assert_eq!(store.memory_used(), 0);
+        assert!(store.keysizes().key_memory.is_empty());
+        for &t in KeysizeType::ALL {
+            assert!(
+                store.keysizes().get(t).is_empty(),
+                "{t:?} histogram not empty after full uninstall"
+            );
+        }
+    }
+
+    #[test]
+    fn overwrite_reconciles_and_clears_old_indexes() {
+        // Regression for the `replace_entry` silent-data-loss scar: overwriting a
+        // volatile key must retire its stale expiry-index entry and every
+        // histogram/memory counter of the old incarnation.
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from("k"), Value::string(Bytes::from("original")));
+        store.set_expiry(b"k", Instant::now() + Duration::from_secs(3600));
+        store.assert_consistent();
+
+        let mut list = Value::list();
+        if let Some(l) = list.as_list_mut() {
+            for i in 0..20u32 {
+                l.push_back(Bytes::from(format!("e{i}")));
+            }
+        }
+        store.set(Bytes::from("k"), list);
+        store.assert_consistent();
+        assert!(
+            store.get_expiry(b"k").is_none(),
+            "overwrite without a TTL must clear the expiry index"
+        );
+        assert!(store.keysizes().get(KeysizeType::Strings).is_empty());
+        assert_eq!(store.keysizes().get(KeysizeType::Lists).total(), 1);
+    }
+
+    #[test]
+    fn get_and_delete_reconciles() {
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from("s"), Value::string(Bytes::from("payload")));
+        store.set(Bytes::from("keep"), Value::string(Bytes::from("x")));
+        store.assert_consistent();
+
+        let got = store.get_and_delete(b"s").unwrap();
+        assert_eq!(got.as_string().unwrap().as_bytes().as_ref(), b"payload");
+        store.assert_consistent();
+        assert!(!store.contains(b"s"));
+        assert!(store.contains(b"keep"));
+    }
+
+    #[test]
+    fn lazy_expiry_reconciles() {
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from("k"), Value::string(Bytes::from("v")));
+        store.set(Bytes::from("keep"), Value::string(Bytes::from("y")));
+        // Give `k` a TTL and push it into the past; the check deletes it.
+        store.set_expiry(b"k", Instant::now() - Duration::from_secs(60));
+        assert!(store.check_and_delete_expired(b"k"));
+        store.assert_consistent();
+        assert!(!store.contains(b"k"));
+        assert_eq!(store.expired_keys(), 1);
+    }
+
+    #[test]
+    fn clear_reconciles() {
+        let mut store = HashMapStore::new();
+        for (k, v) in sample_values() {
+            store.set(k, v);
+        }
+        store.set_expiry(b"s", Instant::now() + Duration::from_secs(100));
+        store.assert_consistent();
+
+        store.clear();
+        store.assert_consistent();
+        assert_eq!(store.memory_used(), 0);
+        assert_eq!(store.len(), 0);
+        assert!(store.keysizes().key_memory.is_empty());
+    }
+
+    #[test]
+    fn resize_via_get_mut_growth_reconciles() {
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from("l"), Value::list());
+        if let Some(v) = store.get_mut(b"l")
+            && let Some(list) = v.as_list_mut()
+        {
+            for i in 0..500u32 {
+                list.push_back(Bytes::from(format!("element-{i}")));
+            }
+        }
+        store.flush_keysizes_refreshes();
+        store.assert_consistent();
+        assert_eq!(store.keysizes().get(KeysizeType::Lists).total(), 1);
+    }
+
+    #[test]
+    fn resize_grow_then_shrink_is_neutral() {
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from("l"), Value::list());
+        store.flush_keysizes_refreshes();
+        let base_mem = store.memory_used();
+        let base_list_bins = *store.keysizes().get(KeysizeType::Lists).bins();
+        let base_key_mem = *store.keysizes().key_memory.bins();
+
+        // Grow.
+        if let Some(v) = store.get_mut(b"l")
+            && let Some(list) = v.as_list_mut()
+        {
+            for i in 0..64u32 {
+                list.push_back(Bytes::from(format!("element-{i}")));
+            }
+        }
+        store.flush_keysizes_refreshes();
+        store.assert_consistent();
+        assert!(store.memory_used() > base_mem);
+
+        // Shrink back to empty.
+        if let Some(v) = store.get_mut(b"l")
+            && let Some(list) = v.as_list_mut()
+        {
+            while list.pop_back().is_some() {}
+        }
+        store.flush_keysizes_refreshes();
+        store.assert_consistent();
+        assert_eq!(
+            store.memory_used(),
+            base_mem,
+            "resize symmetry: a grow then an equivalent shrink is memory-neutral"
+        );
+        assert_eq!(
+            *store.keysizes().get(KeysizeType::Lists).bins(),
+            base_list_bins
+        );
+        assert_eq!(*store.keysizes().key_memory.bins(), base_key_mem);
+    }
+
+    // ------------------------------------------------------------------------
+    // Warm-tier lifecycle (spill / unspill) — needs a configured warm store.
+    // ------------------------------------------------------------------------
+
+    fn store_with_warm() -> (HashMapStore, tempfile::TempDir) {
+        use frogdb_persistence::{RocksConfig, RocksStore};
+        let tmp = tempfile::TempDir::new().unwrap();
+        let rocks = Arc::new(
+            RocksStore::open_with_warm(tmp.path(), 1, &RocksConfig::default(), true).unwrap(),
+        );
+        let mut store = HashMapStore::new();
+        store.set_warm_store(rocks, 0);
+        (store, tmp)
+    }
+
+    #[test]
+    fn spill_unspill_histograms_stay_consistent() {
+        // Regression: `spill_key`/`unspill_key` used to skip the keysize
+        // histograms, leaving a spilled key counted in the per-type and
+        // key-memory bins even though its value bytes had left RAM. Against that
+        // old behavior every `assert_consistent()` below fails (tracked bins
+        // exceed the live recompute), and the `strings_before - 1` assertion is
+        // false (the count would not move).
+        let (mut store, _tmp) = store_with_warm();
+        store.set(
+            Bytes::from("s"),
+            Value::string(Bytes::from("a reasonably sized string value")),
+        );
+        store.set(Bytes::from("keep"), Value::string(Bytes::from("y")));
+        store.assert_consistent();
+        let strings_before = store.keysizes().get(KeysizeType::Strings).total();
+
+        store.spill_key(b"s").unwrap();
+        store.assert_consistent();
+        assert_eq!(store.warm_tier().warm_keys(), 1);
+        assert_eq!(
+            store.keysizes().get(KeysizeType::Strings).total(),
+            strings_before - 1,
+            "the spilled key must leave the per-type histogram"
+        );
+
+        // Unspill via GET: the value returns to RAM and its histogram bins with it.
+        let v = store.get(b"s").unwrap();
+        assert_eq!(
+            v.as_string().unwrap().as_bytes().as_ref(),
+            b"a reasonably sized string value"
+        );
+        store.assert_consistent();
+        assert_eq!(store.warm_tier().warm_keys(), 0);
+        assert_eq!(
+            store.keysizes().get(KeysizeType::Strings).total(),
+            strings_before
+        );
+    }
+
+    #[test]
+    fn delete_of_spilled_key_leaves_no_histogram_leak() {
+        // With the spill decrementing the histograms, deleting the warm key must
+        // NOT double-decrement, and no phantom count is left behind. Old code
+        // (spill skips histograms, delete-of-warm also skips them) leaks the bin.
+        let (mut store, _tmp) = store_with_warm();
+        store.set(
+            Bytes::from("s"),
+            Value::string(Bytes::from("spillable string value")),
+        );
+        store.spill_key(b"s").unwrap();
+        store.assert_consistent();
+
+        assert!(store.delete(b"s"));
+        store.assert_consistent();
+        assert_eq!(store.memory_used(), 0);
+        assert!(store.keysizes().get(KeysizeType::Strings).is_empty());
+        assert!(store.keysizes().key_memory.is_empty());
+        assert_eq!(store.warm_tier().warm_keys(), 0);
+    }
+
+    #[test]
+    fn get_and_delete_warm_reconciles() {
+        let (mut store, _tmp) = store_with_warm();
+        store.set(
+            Bytes::from("s"),
+            Value::string(Bytes::from("warm payload here")),
+        );
+        store.spill_key(b"s").unwrap();
+        store.assert_consistent();
+
+        let got = store.get_and_delete(b"s").unwrap();
+        assert_eq!(
+            got.as_string().unwrap().as_bytes().as_ref(),
+            b"warm payload here"
+        );
+        store.assert_consistent();
+        assert_eq!(store.warm_tier().warm_keys(), 0);
+        assert!(!store.contains(b"s"));
+        assert_eq!(store.memory_used(), 0);
+    }
+
+    #[test]
+    fn unspill_expired_warm_key_reconciles() {
+        let (mut store, _tmp) = store_with_warm();
+        store.set(Bytes::from("s"), Value::string(Bytes::from("doomed value")));
+        store.set_expiry(b"s", Instant::now() + Duration::from_secs(3600));
+        store.spill_key(b"s").unwrap();
+        store.assert_consistent();
+
+        // Move the deadline into the past, then trigger an unspill via GET: the
+        // expired branch retires the entry through `uninstall` and only bumps the
+        // expired-on-unspill counter.
+        store.set_expiry(b"s", Instant::now() - Duration::from_secs(1));
+        assert!(store.get(b"s").is_none());
+        store.assert_consistent();
+        assert_eq!(store.warm_tier().warm_keys(), 0);
+        assert_eq!(store.warm_tier().expired_on_unspill(), 1);
+        assert!(!store.contains(b"s"));
+        assert_eq!(store.memory_used(), 0);
     }
 }

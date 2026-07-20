@@ -152,23 +152,19 @@ impl WarmTier {
         self.total_unspills += 1;
     }
 
-    /// Record a warm key found expired during an unspill attempt: bump the
-    /// counter and remove the warm entry (CF delete + warm-key decrement).
-    pub(super) fn record_expired_on_unspill(&mut self, key: &[u8]) {
+    /// Record that a warm key was found expired during an unspill attempt.
+    ///
+    /// Counter-only: the caller (`HashMapStore::unspill_key`) already retires the
+    /// entry — CF delete + warm-key decrement — through the store's removal seam
+    /// (`uninstall` → [`remove_warm`](Self::remove_warm)).
+    pub(super) fn note_expired_on_unspill(&mut self) {
         self.expired_on_unspill += 1;
-        self.remove_warm(key);
     }
 
     /// A warm key is being removed wholesale (delete / overwrite / lazy
     /// expiry): delete its CF entry and drop the warm-key count.
     pub(super) fn remove_warm(&mut self, key: &[u8]) {
         self.delete(key);
-        self.warm_keys = self.warm_keys.saturating_sub(1);
-    }
-
-    /// Drop the warm-key count by one without touching the CF (GETDEL of a warm
-    /// key reads the value out itself via [`take`](Self::take)).
-    pub(super) fn decrement_warm_keys(&mut self) {
         self.warm_keys = self.warm_keys.saturating_sub(1);
     }
 
@@ -250,24 +246,25 @@ mod tests {
     }
 
     #[test]
-    fn expired_on_unspill_bumps_counter_and_drops_warm_key() {
+    fn expired_on_unspill_bumps_counter_only() {
         let mut tier = WarmTier::new();
         tier.record_spill();
         assert_eq!(tier.warm_keys(), 1);
 
-        // Unconfigured delete is a no-op, but the counters still settle.
-        tier.record_expired_on_unspill(b"k");
+        // Counter-only now: the store's removal seam drops the warm-key count
+        // via `remove_warm`; this method must NOT touch it (else double-drop).
+        tier.note_expired_on_unspill();
         assert_eq!(tier.expired_on_unspill(), 1);
+        assert_eq!(tier.warm_keys(), 1);
+        tier.remove_warm(b"k");
         assert_eq!(tier.warm_keys(), 0);
     }
 
     #[test]
-    fn remove_and_decrement_saturate_at_zero() {
+    fn remove_warm_saturates_at_zero() {
         let mut tier = WarmTier::new();
         tier.remove_warm(b"k");
         assert_eq!(tier.warm_keys(), 0, "remove_warm must not underflow");
-        tier.decrement_warm_keys();
-        assert_eq!(tier.warm_keys(), 0, "decrement must not underflow");
     }
 
     #[test]
