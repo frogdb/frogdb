@@ -11,6 +11,19 @@
 //! `fake-wal` features (mirroring `frogdb-telemetry`'s `features = ["testing"]`
 //! precedent).
 
+mod generator;
+mod harness;
+mod sink;
+
+// Scenario submodules (one per targeted scenario; S7 is turmoil-level, server crate).
+mod scenario_s1;
+mod scenario_s2;
+mod scenario_s3;
+mod scenario_s4;
+mod scenario_s5;
+mod scenario_s6;
+mod scenario_s8;
+
 use std::sync::Arc;
 
 use bytes::Bytes;
