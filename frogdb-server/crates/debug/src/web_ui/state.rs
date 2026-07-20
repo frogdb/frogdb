@@ -803,4 +803,27 @@ mod tests {
         assert!(state.get_slowlog(10).await.is_empty());
         assert_eq!(state.role(), "standalone");
     }
+
+    /// End-to-end panel render: the shard-stats partial handler must produce a
+    /// non-empty table populated with real key counts from the live fixture.
+    #[tokio::test]
+    async fn shard_stats_partial_renders_non_empty_panel() {
+        use http_body_util::BodyExt;
+
+        let state = state_with_shards(&[42, 8]);
+        let response = crate::web_ui::handlers::handle_partial_shard_stats(&state).await;
+        assert_eq!(response.status(), hyper::StatusCode::OK);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let html = String::from_utf8_lossy(&body);
+
+        assert!(html.contains("Shard Statistics"), "panel header present");
+        assert!(
+            !html.contains("No shard statistics available"),
+            "panel must not render the empty-state placeholder"
+        );
+        // Real per-shard key counts from the fixture appear in the table.
+        assert!(html.contains("42"), "shard 0 key count rendered");
+        assert!(html.contains('8'), "shard 1 key count rendered");
+    }
 }

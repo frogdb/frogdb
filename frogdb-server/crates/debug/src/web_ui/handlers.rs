@@ -454,6 +454,60 @@ async fn render_latency_html(state: &DebugState) -> String {
     }
 }
 
+/// Render per-shard statistics HTML fragment (no card wrapper).
+async fn render_shard_stats_html(state: &DebugState) -> String {
+    let stats = state.get_shard_stats().await;
+
+    let rows: String = if stats.is_empty() {
+        r#"<tr><td colspan="6" style="text-align: center; color: var(--text-light);">No shard statistics available</td></tr>"#.to_string()
+    } else {
+        stats
+            .iter()
+            .map(|s| {
+                format!(
+                    r#"<tr>
+                        <td>{}</td>
+                        <td>{}</td>
+                        <td>{}</td>
+                        <td>{}</td>
+                        <td>{}</td>
+                        <td>{}</td>
+                    </tr>"#,
+                    s.shard_id,
+                    format_number(s.keys),
+                    format_bytes(s.memory_bytes),
+                    format_bytes(s.peak_memory_bytes),
+                    format_number(s.hot_keys),
+                    format_number(s.warm_keys),
+                )
+            })
+            .collect()
+    };
+
+    format!(
+        r#"<div class="section-header">
+            <h3>Shard Statistics</h3>
+        </div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Shard</th>
+                        <th>Keys</th>
+                        <th>Memory</th>
+                        <th>Peak Memory</th>
+                        <th>Hot Keys</th>
+                        <th>Warm Keys</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows}
+                </tbody>
+            </table>
+        </div>"#
+    )
+}
+
 // ============================================================================
 // Cluster API Handlers
 // ============================================================================
@@ -900,6 +954,23 @@ pub async fn handle_partial_latency(state: &DebugState) -> Response<Full<Bytes>>
     html_response(render_latency_html(state).await)
 }
 
+/// Shard-stats API response.
+#[derive(Serialize)]
+pub struct ShardStatsResponse {
+    pub shards: Vec<super::state::ShardStats>,
+}
+
+/// Handle GET /debug/api/shard-stats
+pub async fn handle_api_shard_stats(state: &DebugState) -> Response<Full<Bytes>> {
+    let shards = state.get_shard_stats().await;
+    json_response(&ShardStatsResponse { shards })
+}
+
+/// Handle GET /debug/partials/shard-stats
+pub async fn handle_partial_shard_stats(state: &DebugState) -> Response<Full<Bytes>> {
+    html_response(render_shard_stats_html(state).await)
+}
+
 /// Handle GET /debug/partials/overview - combined cluster + metrics + endpoints.
 pub fn handle_partial_overview(
     state: &DebugState,
@@ -911,11 +982,12 @@ pub fn handle_partial_overview(
     html_response(format!("{cluster}\n{metrics}\n{endpoints}"))
 }
 
-/// Handle GET /debug/partials/performance - combined latency + slowlog.
+/// Handle GET /debug/partials/performance - combined shard stats + latency + slowlog.
 pub async fn handle_partial_performance(state: &DebugState) -> Response<Full<Bytes>> {
+    let shard_stats = render_shard_stats_html(state).await;
     let latency = render_latency_html(state).await;
     let slowlog = render_slowlog_html(state).await;
-    html_response(format!("{latency}\n{slowlog}"))
+    html_response(format!("{shard_stats}\n{latency}\n{slowlog}"))
 }
 
 // ============================================================================
