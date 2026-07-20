@@ -270,6 +270,14 @@ fn pick<'a>(items: &'a [Bytes], rng: &mut StdRng) -> &'a Bytes {
     &items[rng.random_range(0..items.len())]
 }
 
+/// A same-slot transaction confines all keys to a single group sharing one
+/// hash tag. With the current per-key distinct-tag key space, the guaranteed
+/// same-slot group is a single key reused across sub-commands; document that
+/// widening the key space to multi-key same-tag groups is a follow-up.
+fn same_slot_group<'a>(keys: &'a [Bytes], rng: &mut StdRng) -> &'a Bytes {
+    pick(keys, rng)
+}
+
 /// A small finite blocking timeout (fractional seconds, as the wire expects).
 /// Finite AND short so a client whose blocking ops all time out still finishes
 /// its script well within the bounded turmoil sim window; the FIFO/exactly-once
@@ -350,7 +358,9 @@ fn gen_kv(profile: Profile, families: &KeyFamilies, rng: &mut StdRng, ops: &mut 
     let r = rng.random_range(0..100);
     let t = think(rng);
     if tx_bias && r < 35 {
-        gen_exec(keys, rng, ops, t);
+        // ~85% of transactions are single-slot (commit on the fast path).
+        let same_slot = rng.random_range(0..100) < 85;
+        gen_exec(keys, rng, ops, t, same_slot);
         return;
     }
     if tx_bias && r < 45 {
@@ -374,11 +384,27 @@ fn gen_kv(profile: Profile, families: &KeyFamilies, rng: &mut StdRng, ops: &mut 
 
 /// Emit an EXEC wrapping 1–3 single-key `set/get/incr/del` sub-commands, in the
 /// `[num_cmds, name, num_args, args...]` encoding `parse_exec_commands` expects.
-fn gen_exec(keys: &[Bytes], rng: &mut StdRng, ops: &mut Vec<ScriptedOp>, think_ms: u64) {
+///
+/// `same_slot` confines every sub-command key to one reused group key (so the
+/// EXEC hashes to a single slot and commits on the fast path); otherwise each
+/// sub-command's key is drawn independently, which — given the per-key
+/// distinct-tag key space — usually spans slots.
+fn gen_exec(
+    keys: &[Bytes],
+    rng: &mut StdRng,
+    ops: &mut Vec<ScriptedOp>,
+    think_ms: u64,
+    same_slot: bool,
+) {
     let n = rng.random_range(1..4);
+    let group = same_slot_group(keys, rng).clone();
     let mut args: Vec<Bytes> = vec![Bytes::from(n.to_string())];
     for _ in 0..n {
-        let k = pick(keys, rng).clone();
+        let k = if same_slot {
+            group.clone()
+        } else {
+            pick(keys, rng).clone()
+        };
         match rng.random_range(0..4) {
             0 => {
                 args.push(Bytes::from("set"));
@@ -649,6 +675,83 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn txheavy_mostly_same_slot_exec() {
+        // In TxHeavy, the strong majority of EXECs must be single-slot: every
+        // sub-command key hashes to the same slot as the first (so the server
+        // commits on the fast path rather than rejecting/needing VLL). A
+        // deliberate minority may still be cross-slot.
+        use crate::partition::default_keys_of;
+
+        fn slot(k: &[u8]) -> u16 {
+            // CRC16-XMODEM over the hash tag, mirroring the server's hash_slot.
+            let tagged = {
+                let s = k.iter().position(|&b| b == b'{');
+                match s {
+                    Some(si) => {
+                        let rest = &k[si + 1..];
+                        match rest.iter().position(|&b| b == b'}') {
+                            Some(ei) if ei > 0 => &rest[..ei],
+                            _ => k,
+                        }
+                    }
+                    None => k,
+                }
+            };
+            let mut crc: u16 = 0;
+            for &byte in tagged {
+                crc ^= (byte as u16) << 8;
+                for _ in 0..8 {
+                    crc = if crc & 0x8000 != 0 {
+                        (crc << 1) ^ 0x1021
+                    } else {
+                        crc << 1
+                    };
+                }
+            }
+            crc % 16384
+        }
+
+        let mut same = 0u32;
+        let mut cross = 0u32;
+        for seed in 0..40 {
+            let w = Workload::generate(seed, Profile::TxHeavy, 4, 40);
+            for op in w
+                .clients
+                .iter()
+                .flat_map(|c| &c.ops)
+                .filter(|o| o.command == "exec")
+            {
+                // Classify by SUB-COMMAND count, not key count: default_keys_of
+                // DEDUPS (exec_keys, partition.rs), so a same-slot EXEC that
+                // reuses one key yields keys.len() == 1 and must count as same.
+                let num_cmds = op
+                    .args
+                    .first()
+                    .and_then(|n| String::from_utf8_lossy(n).parse::<usize>().ok())
+                    .unwrap_or(0);
+                if num_cmds < 2 {
+                    continue;
+                }
+                let keys = default_keys_of("exec", &op.args);
+                let s0 = slot(&keys[0]);
+                if keys.len() == 1 || keys.iter().all(|k| slot(k) == s0) {
+                    same += 1;
+                } else {
+                    cross += 1;
+                }
+            }
+        }
+        assert!(
+            same > cross * 3,
+            "expected same-slot EXECs to dominate: same={same} cross={cross}"
+        );
+        assert!(
+            cross > 0,
+            "keep a deliberate minority of cross-slot EXECs: cross={cross}"
+        );
     }
 
     #[test]
