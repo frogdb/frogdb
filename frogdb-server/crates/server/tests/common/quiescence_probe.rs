@@ -144,6 +144,7 @@ pub fn parse_waitqueue(reply: &OperationResult) -> Vec<WaitQueueSnapshot> {
                 .and_then(as_int)
                 .unwrap_or(0)
                 .max(0) as usize,
+            waiters: Vec::new(),
         })
         .collect()
 }
@@ -350,6 +351,7 @@ mod tests {
             wait_queue: vec![WaitQueueSnapshot {
                 shard_id: 0,
                 total_waiters: 2,
+                waiters: Vec::new(),
             }],
             memory: vec![MemoryCheckSnapshot {
                 shard_id: 0,

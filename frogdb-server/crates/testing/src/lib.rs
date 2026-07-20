@@ -74,7 +74,7 @@ pub use models::{
 pub use partition::{default_keys_of, is_errored_exec_result, partition_by_key};
 pub use quiescence::{
     ExpiryIndexSnapshot, LockTableSnapshot, MemoryCheckSnapshot, QuiescenceViolation,
-    WaitQueueSnapshot, check_expiry_index_consistent, check_locktable_empty,
+    WaitQueueSnapshot, WaiterOrdinal, check_expiry_index_consistent, check_locktable_empty,
     check_memory_accounting, check_waitqueue_empty,
 };
 pub use workload::{ClientScript, Profile, ScriptedOp, Workload};

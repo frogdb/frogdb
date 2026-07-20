@@ -356,6 +356,7 @@ mod tests {
             wait_queue: vec![WaitQueueSnapshot {
                 shard_id: 1,
                 total_waiters: 1,
+                waiters: Vec::new(),
             }],
             ..Default::default()
         };
