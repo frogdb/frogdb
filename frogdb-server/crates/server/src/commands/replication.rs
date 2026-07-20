@@ -569,10 +569,18 @@ impl Command for RoleCommand {
     fn execute(&self, ctx: &mut CommandContext, _args: &[Bytes]) -> Result<Response, CommandError> {
         if ctx.is_replica {
             // Replica role: ["slave", <master_host>, <master_port>, <state>, <offset>]
+            //
+            // `master_host`/`master_port` come from the RoleManager's live
+            // `primary_target` (via `ShardIdentity`, threaded into every
+            // `CommandContext`) — the same single source INFO's replication
+            // section reads, seeded at boot from `replicaof` config and kept
+            // current by every runtime Role Demotion.
+            let master_host = ctx.master_host.clone().unwrap_or_default();
+            let master_port = ctx.master_port.unwrap_or(0);
             Ok(Response::Array(vec![
                 Response::bulk(Bytes::from_static(b"slave")),
-                Response::bulk(Bytes::from_static(b"")), // master_host (not tracked in context)
-                Response::Integer(0),                    // master_port
+                Response::bulk(Bytes::from(master_host)),
+                Response::Integer(master_port as i64),
                 Response::bulk(Bytes::from_static(b"connected")),
                 Response::Integer(0), // replication offset
             ]))
