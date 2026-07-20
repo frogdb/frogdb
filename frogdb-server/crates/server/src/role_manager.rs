@@ -209,6 +209,11 @@ pub struct RealReplicaStreamer {
     data_dir: std::path::PathBuf,
     state_path: std::path::PathBuf,
     is_replica_flag: Arc<AtomicBool>,
+    /// The cluster-bus HealthProbe offset atomic. When set, every runtime replica
+    /// stream publishes its applied offset here so the failure detector observes a
+    /// runtime-demoted Replica's offset exactly like a boot-configured one. `None`
+    /// outside cluster mode.
+    shared_offset: Option<Arc<std::sync::atomic::AtomicU64>>,
     #[cfg(not(feature = "turmoil"))]
     tls: Option<ReplicaTlsConfig>,
 }
@@ -226,6 +231,7 @@ impl RealReplicaStreamer {
         shard_senders: Arc<Vec<frogdb_core::ShardSender>>,
         num_shards: usize,
         is_replica_flag: Arc<AtomicBool>,
+        shared_offset: Option<Arc<std::sync::atomic::AtomicU64>>,
         #[cfg(not(feature = "turmoil"))] tls_manager: &Option<Arc<crate::tls::TlsManager>>,
     ) -> Self {
         let data_dir = config.persistence.data_dir.clone();
@@ -253,17 +259,26 @@ impl RealReplicaStreamer {
             data_dir,
             state_path,
             is_replica_flag,
+            shared_offset,
             #[cfg(not(feature = "turmoil"))]
             tls,
         }
     }
 }
 
-impl ReplicaStreamer for RealReplicaStreamer {
-    fn start(&self, primary: SocketAddr) -> Box<dyn ReplicaStream> {
-        use crate::replication::{
-            ReplicaCommandExecutor, ReplicaReplicationHandler, consume_frames,
-        };
+impl RealReplicaStreamer {
+    /// Build (but do not spawn) the replica handler for `primary`: fresh
+    /// replication identity, HealthProbe offset wiring, and TLS connect factory.
+    /// Extracted from [`ReplicaStreamer::start`] so the offset-probe wiring can be
+    /// asserted at a seam without opening a socket.
+    fn build_handler(
+        &self,
+        primary: SocketAddr,
+    ) -> (
+        crate::replication::ReplicaReplicationHandler,
+        tokio::sync::mpsc::Receiver<frogdb_core::ReplicationFrame>,
+    ) {
+        use crate::replication::ReplicaReplicationHandler;
 
         let (handler, frame_rx) = ReplicaReplicationHandler::new(
             primary,
@@ -275,6 +290,14 @@ impl ReplicaStreamer for RealReplicaStreamer {
 
         #[allow(unused_mut)]
         let mut handler = handler;
+
+        // Publish this stream's applied offset into the cluster-bus HealthProbe
+        // atomic, mirroring the boot-time replica path in `init_replication`, so
+        // the failure detector sees a runtime-demoted Replica's offset the same
+        // as a boot-configured one.
+        if let Some(offset) = &self.shared_offset {
+            handler.set_shared_offset(offset.clone());
+        }
 
         // Wire TLS for the outgoing connection, mirroring `init_replication`.
         #[cfg(not(feature = "turmoil"))]
@@ -301,6 +324,15 @@ impl ReplicaStreamer for RealReplicaStreamer {
             handler.set_connect_factory(factory);
         }
 
+        (handler, frame_rx)
+    }
+}
+
+impl ReplicaStreamer for RealReplicaStreamer {
+    fn start(&self, primary: SocketAddr) -> Box<dyn ReplicaStream> {
+        use crate::replication::{ReplicaCommandExecutor, consume_frames};
+
+        let (handler, frame_rx) = self.build_handler(primary);
         let handler = Arc::new(handler);
         let replication_state = Some(handler.shared_state());
 
@@ -488,6 +520,62 @@ mod tests {
         assert_eq!(mgr.primary_target(), Some(b));
         assert_eq!(streamer.started.lock().unwrap().len(), 2);
         assert_eq!(streamer.stops.load(Ordering::SeqCst), 1);
+    }
+
+    /// Build a bare `RealReplicaStreamer` for the offset-wiring seam tests. The
+    /// shard/flag collaborators are unused by `build_handler`, so they can be
+    /// empty; only `shared_offset` (and path/port config) matter here.
+    fn streamer_with_offset(
+        shared_offset: Option<Arc<std::sync::atomic::AtomicU64>>,
+    ) -> RealReplicaStreamer {
+        RealReplicaStreamer {
+            shard_senders: Arc::new(Vec::new()),
+            num_shards: 1,
+            listening_port: 0,
+            data_dir: std::env::temp_dir(),
+            state_path: std::env::temp_dir().join("replication_state.json"),
+            is_replica_flag: Arc::new(AtomicBool::new(false)),
+            shared_offset,
+            #[cfg(not(feature = "turmoil"))]
+            tls: None,
+        }
+    }
+
+    /// Probe seam (issue 07, criterion 3): a runtime-started replica stream must
+    /// wire the cluster-bus HealthProbe offset atomic, so a runtime-demoted
+    /// Replica's replication offset is visible to the failure detector exactly
+    /// like a boot-configured one. `build_handler` (the non-spawning half of
+    /// `start`) must hand the handler the SAME atomic the cluster bus reads.
+    #[test]
+    fn runtime_stream_wires_shared_offset_to_healthprobe_atomic() {
+        // The atomic the cluster-bus HealthProbe answers with.
+        let probe_offset = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let streamer = streamer_with_offset(Some(probe_offset.clone()));
+
+        let (handler, _frame_rx) = streamer.build_handler(addr("127.0.0.1:7000"));
+        let wired = handler
+            .shared_offset()
+            .expect("runtime stream must wire the HealthProbe offset");
+
+        // Same atomic instance the failure detector reads via the cluster bus.
+        assert!(
+            Arc::ptr_eq(&wired, &probe_offset),
+            "runtime replica must publish into the cluster-bus HealthProbe atomic"
+        );
+
+        // An offset the stream publishes is visible through the probe atomic,
+        // exactly as for a boot-configured replica.
+        wired.store(4242, Ordering::Release);
+        assert_eq!(probe_offset.load(Ordering::Acquire), 4242);
+    }
+
+    /// Outside cluster mode there is no HealthProbe atomic; a runtime stream then
+    /// leaves the handler's offset unwired (the boot path behaves the same).
+    #[test]
+    fn runtime_stream_without_cluster_leaves_offset_unwired() {
+        let streamer = streamer_with_offset(None);
+        let (handler, _frame_rx) = streamer.build_handler(addr("127.0.0.1:7000"));
+        assert!(handler.shared_offset().is_none());
     }
 
     #[test]
