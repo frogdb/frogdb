@@ -9,19 +9,21 @@
 use serde::Serialize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::oneshot;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use frogdb_core::{
-    ClientFlags, ClientRegistry, ShardMemoryStats, ShardMessage, ShardSender, ShardWalLag,
-    WalLagAggregate, WalLagStatsResponse,
-};
+use frogdb_core::{ClientFlags, ClientRegistry, ShardSender, ShardWalLag, WalLagAggregate};
 
 use crate::definitions::{
     CommandsTotal, SnapshotInProgress, SnapshotLastTimestamp, WalBytes, WalWrites,
 };
 use crate::health::HealthChecker;
+use crate::node_state::{NodeStateSnapshot, ShardState};
 use crate::prometheus_recorder::PrometheusRecorder;
+
+/// Deadline for the single node-state scatter behind `/status`. `/status` is a
+/// best-effort health surface: a shard that misses this deadline yields an empty
+/// snapshot (see [`StatusCollector::collect`]) rather than blocking the report.
+const STATUS_SCATTER_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Configuration for the status collector.
 #[derive(Debug, Clone)]
@@ -268,6 +270,9 @@ impl From<&ShardWalLag> for ShardLagStatus {
 }
 
 /// Per-shard statistics.
+///
+/// A pure JSON renderer over one [`ShardState`] row from the shared
+/// [`NodeStateSnapshot`] — it carries no aggregation of its own.
 #[derive(Debug, Clone, Serialize)]
 pub struct ShardStatus {
     /// Shard ID.
@@ -278,6 +283,17 @@ pub struct ShardStatus {
     pub memory_bytes: u64,
     /// Peak memory used by the shard.
     pub peak_memory_bytes: u64,
+}
+
+impl From<&ShardState> for ShardStatus {
+    fn from(s: &ShardState) -> Self {
+        ShardStatus {
+            id: s.shard_id,
+            keys: s.keys,
+            memory_bytes: s.data_memory as u64,
+            peak_memory_bytes: s.peak_memory,
+        }
+    }
 }
 
 /// Keyspace statistics.
@@ -359,46 +375,41 @@ impl StatusCollector {
 
     /// Collect the current server status.
     pub async fn collect(&self) -> ServerStatus {
-        // Gather shard memory stats
-        let shard_stats = self.gather_shard_stats().await;
+        // One scatter for every per-shard observable: memory, keyspace, and WAL
+        // lag are folded once into the shared node-state snapshot — the same
+        // snapshot INFO and the debug UI render from, so the three surfaces can
+        // never disagree. `/status` is a best-effort health surface, so a shard
+        // failure yields an empty snapshot rather than erroring the report.
+        let node_state =
+            NodeStateSnapshot::collect(self.shard_senders.as_slice(), STATUS_SCATTER_TIMEOUT)
+                .await
+                .unwrap_or_default();
 
-        // Gather WAL lag stats if persistence is enabled
-        let wal_lag_stats = if self.persistence_enabled {
-            Some(self.gather_wal_lag_stats().await)
-        } else {
-            None
-        };
+        // WAL lag view, only when persistence is enabled. Rendered from the
+        // snapshot's shared aggregate, so it can never disagree with INFO.
+        let wal_lag_stats = self
+            .persistence_enabled
+            .then(|| WalLagStatus::from(node_state.wal.as_ref()));
 
         // Build client status
         let clients_status = self.build_clients_status();
 
         // Build memory status
-        let memory_status = self.build_memory_status(&shard_stats);
+        let memory_status = self.build_memory_status(&node_state);
 
         // Build health status with issue detection
         let health_status =
             self.build_health_status(&clients_status, &memory_status, &wal_lag_stats);
 
-        // Build shard status
-        let shards: Vec<ShardStatus> = shard_stats
-            .iter()
-            .enumerate()
-            .map(|(id, stats)| ShardStatus {
-                id,
-                keys: stats.keys,
-                memory_bytes: stats.data_memory as u64,
-                peak_memory_bytes: stats.peak_memory,
-            })
-            .collect();
+        // Build shard status — pure renderers over the snapshot's per-shard rows.
+        let shards: Vec<ShardStatus> = node_state.per_shard.iter().map(ShardStatus::from).collect();
 
-        // Calculate totals
-        let total_keys: usize = shard_stats.iter().map(|s| s.keys).sum();
-        // Sum per-shard expired-key counts — the *same* accumulator INFO's
-        // `expired_keys` aggregates (active + lazy expiry). The Prometheus
-        // `frogdb_keys_expired_total` counter is deliberately NOT used here: it
-        // is only incremented on the active-expiry cycle, so it under-counts
-        // lazy (on-access) expirations and would disagree with INFO.
-        let expired_keys_total: u64 = shard_stats.iter().map(|s| s.expired_keys).sum();
+        // Totals come straight off the snapshot aggregate. `expired_keys` is the
+        // *same* accumulator INFO aggregates (active + lazy expiry); the
+        // Prometheus `frogdb_keys_expired_total` counter is deliberately NOT used
+        // here as it is active-only and would disagree with INFO.
+        let total_keys: usize = node_state.keys;
+        let expired_keys_total: u64 = node_state.expired_keys;
 
         // Recorder-sourced counters/gauges — the shared source of truth with
         // `/metrics` and INFO. Absent families (nothing emitted yet) read as 0.
@@ -484,58 +495,6 @@ impl StatusCollector {
         }
     }
 
-    /// Gather memory stats from all shards.
-    async fn gather_shard_stats(&self) -> Vec<ShardMemoryStats> {
-        let mut stats = Vec::with_capacity(self.shard_senders.len());
-
-        for sender in self.shard_senders.iter() {
-            let (response_tx, response_rx) = oneshot::channel();
-            if sender
-                .send(ShardMessage::MemoryStats { response_tx })
-                .await
-                .is_ok()
-            {
-                if let Ok(shard_stats) = response_rx.await {
-                    stats.push(shard_stats);
-                } else {
-                    // Use default stats if shard doesn't respond
-                    stats.push(ShardMemoryStats::default());
-                }
-            } else {
-                stats.push(ShardMemoryStats::default());
-            }
-        }
-
-        stats
-    }
-
-    /// Gather WAL lag stats from all shards.
-    async fn gather_wal_lag_stats(&self) -> WalLagStatus {
-        let mut responses: Vec<WalLagStatsResponse> = Vec::with_capacity(self.shard_senders.len());
-
-        for sender in self.shard_senders.iter() {
-            let (response_tx, response_rx) = oneshot::channel();
-            if sender
-                .send(ShardMessage::WalLagStats { response_tx })
-                .await
-                .is_ok()
-            {
-                if let Ok(lag_response) = response_rx.await {
-                    responses.push(lag_response);
-                } else {
-                    responses.push(WalLagStatsResponse::default());
-                }
-            } else {
-                responses.push(WalLagStatsResponse::default());
-            }
-        }
-
-        // Fold through the shared node-wide aggregate so INFO and this
-        // endpoint can never disagree (see `frogdb_core::observability`).
-        let lags = responses.iter().filter_map(|r| r.lag_stats.as_ref());
-        WalLagStatus::from(WalLagAggregate::from_shards(lags).as_ref())
-    }
-
     /// Build client status from registry.
     fn build_clients_status(&self) -> ClientsStatus {
         let clients = self.client_registry.list();
@@ -551,10 +510,10 @@ impl StatusCollector {
         }
     }
 
-    /// Build memory status from shard stats.
-    fn build_memory_status(&self, shard_stats: &[ShardMemoryStats]) -> MemoryStatus {
-        let used_bytes: u64 = shard_stats.iter().map(|s| s.data_memory as u64).sum();
-        let peak_bytes: u64 = shard_stats.iter().map(|s| s.peak_memory).sum();
+    /// Build memory status from the shared node-state snapshot.
+    fn build_memory_status(&self, node_state: &NodeStateSnapshot) -> MemoryStatus {
+        let used_bytes: u64 = node_state.used_memory as u64;
+        let peak_bytes: u64 = node_state.peak_memory;
 
         // Try to get RSS from system metrics
         let rss_bytes = get_process_rss();
@@ -899,7 +858,9 @@ mod tests {
     // per-shard stats INFO also reads), not a stub.
     // ------------------------------------------------------------------------
 
-    use frogdb_core::{ClientRegistry, Envelope, ShardMemoryStats, ShardMessage, ShardSender};
+    use frogdb_core::{
+        ClientRegistry, Envelope, InfoShardSnapshot, ShardMemoryStats, ShardMessage, ShardSender,
+    };
 
     /// Build a collector over the given shard senders and recorder.
     fn test_collector(
@@ -922,14 +883,19 @@ mod tests {
         )
     }
 
-    /// Spawn a mock shard that answers `MemoryStats` with `stats` and drops any
-    /// other message (its response channel closes, yielding defaults).
+    /// Spawn a mock shard that answers the single `InfoSnapshot` scatter with
+    /// `stats` and drops any other message (its response channel closes,
+    /// yielding defaults).
     fn spawn_mock_shard(stats: ShardMemoryStats) -> ShardSender {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Envelope>(8);
         tokio::spawn(async move {
             while let Some(env) = rx.recv().await {
-                if let ShardMessage::MemoryStats { response_tx } = env.message {
-                    let _ = response_tx.send(stats.clone());
+                if let ShardMessage::InfoSnapshot { response_tx } = env.message {
+                    let _ = response_tx.send(InfoShardSnapshot {
+                        shard_id: stats.shard_id,
+                        memory: stats.clone(),
+                        ..Default::default()
+                    });
                 }
             }
         });
