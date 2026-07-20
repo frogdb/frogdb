@@ -2,13 +2,32 @@
 //!
 //! This module provides the state required to serve debug information
 //! from the metrics server.
+//!
+//! ## Node-state surface
+//!
+//! Node-observable state (replication identity, connected clients, cluster
+//! topology) is exposed through a single [`NodeStateProvider`] trait rather than
+//! the three parallel provider traits this module used to declare. A single
+//! server-side adapter implements it, giving the debug UI one coherent seam onto
+//! subsystem state — the same shape a future one-shot `NodeStateSnapshot`
+//! `collect()` can populate.
+//!
+//! Per-shard statistics, latency histograms, and the slowlog are gathered on
+//! demand by scattering [`ShardMessage`] requests over the real shard senders —
+//! the same messages `INFO` and the `LATENCY`/`SLOWLOG` commands use — so no
+//! surface returns a stubbed empty panel.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::mpsc;
+
+use tokio::sync::oneshot;
 
 use crate::bundle::{BundleConfig, BundleGenerator, BundleInfo, BundleStore, DiagnosticCollector};
-use frogdb_core::{ClientRegistry, ShardSender};
+use frogdb_core::{
+    ClientRegistry, InfoShardSnapshot, LatencyEvent, LatencySample, ShardMessage, ShardSender,
+    SlowLogEntry,
+};
 use frogdb_telemetry::SharedTracer;
 
 /// A configuration entry for display in the debug UI.
@@ -47,40 +66,31 @@ impl Default for ServerInfo {
     }
 }
 
-/// Trait for providing replication information to the debug UI.
-pub trait ReplicationInfoProvider: Send + Sync {
-    /// Get the replication role (primary/replica).
-    fn role(&self) -> &str;
-    /// Get connected replicas count.
-    fn connected_replicas(&self) -> usize;
-    /// Get master host if this is a replica.
-    fn master_host(&self) -> Option<String>;
-    /// Get master port if this is a replica.
-    fn master_port(&self) -> Option<u16>;
-    /// Get replication offset.
-    fn replication_offset(&self) -> u64;
+/// A read view of this node's replication identity for the debug UI.
+#[derive(Clone, Debug)]
+pub struct ReplicationView {
+    /// Replication role (`standalone` / `primary` / `replica` / `cluster`).
+    pub role: String,
+    /// Number of connected replicas (primary only).
+    pub connected_replicas: usize,
+    /// Master host, when this node is a replica.
+    pub master_host: Option<String>,
+    /// Master port, when this node is a replica.
+    pub master_port: Option<u16>,
+    /// Current replication offset.
+    pub replication_offset: u64,
 }
 
-/// Debug query types that can be sent to shards.
-#[derive(Debug, Clone)]
-pub enum DebugQuery {
-    /// Get slowlog entries from all shards.
-    GetSlowlog { count: usize },
-    /// Get latency histogram data.
-    GetLatency,
-    /// Get shard statistics (keys, memory, queue depth).
-    GetShardStats,
-}
-
-/// Response from a debug query.
-#[derive(Debug, Clone)]
-pub enum DebugQueryResponse {
-    /// Slowlog entries from a shard.
-    Slowlog(Vec<SlowlogEntry>),
-    /// Latency data from a shard.
-    Latency(LatencyData),
-    /// Shard statistics.
-    ShardStats(ShardStats),
+impl Default for ReplicationView {
+    fn default() -> Self {
+        Self {
+            role: "standalone".to_string(),
+            connected_replicas: 0,
+            master_host: None,
+            master_port: None,
+            replication_offset: 0,
+        }
+    }
 }
 
 /// A slowlog entry.
@@ -117,17 +127,21 @@ pub struct LatencyData {
     pub samples: u64,
 }
 
-/// Statistics for a single shard.
+/// Statistics for a single internal shard.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ShardStats {
     /// Shard ID.
     pub shard_id: usize,
-    /// Number of keys.
+    /// Number of keys resident on the shard.
     pub keys: u64,
-    /// Memory usage in bytes.
+    /// Data memory usage in bytes.
     pub memory_bytes: u64,
-    /// Current queue depth.
-    pub queue_depth: u64,
+    /// Peak (high-water-mark) memory usage in bytes.
+    pub peak_memory_bytes: u64,
+    /// Keys resident in the hot tier.
+    pub hot_keys: u64,
+    /// Keys resident in the warm (spilled) tier.
+    pub warm_keys: u64,
 }
 
 /// A snapshot of a connected client for display in the debug UI.
@@ -155,12 +169,6 @@ pub struct ClientSnapshot {
     pub bytes_recv: u64,
     /// Total bytes sent.
     pub bytes_sent: u64,
-}
-
-/// Trait for providing connected client information to the debug UI.
-pub trait ClientInfoProvider: Send + Sync {
-    /// Get a snapshot of all connected clients.
-    fn client_snapshots(&self) -> Vec<ClientSnapshot>;
 }
 
 /// Snapshot of a cluster node for the debug UI.
@@ -226,12 +234,71 @@ pub struct MigrationSnapshot {
     pub target_node: u64,
 }
 
-/// Trait for providing cluster information to the debug UI.
-pub trait ClusterInfoProvider: Send + Sync {
-    /// Get a snapshot of the full cluster state.
-    fn cluster_overview(&self) -> ClusterOverviewSnapshot;
-    /// Get info about a specific node by ID.
-    fn node_detail(&self, node_id: u64) -> Option<ClusterNodeSnapshot>;
+/// Single coherent provider of node-observable state for the debug UI.
+///
+/// Collapses the former `ReplicationInfoProvider` / `ClientInfoProvider` /
+/// `ClusterInfoProvider` trio into one trait so there is a single upstream seam
+/// onto subsystem state instead of three hand-assembled ones. A server-side
+/// adapter implements it; the cluster methods default to "not in cluster mode"
+/// so a standalone node needs to supply only replication + client reads.
+pub trait NodeStateProvider: Send + Sync {
+    /// This node's replication identity.
+    fn replication(&self) -> ReplicationView;
+
+    /// Snapshots of all currently connected clients.
+    fn client_snapshots(&self) -> Vec<ClientSnapshot>;
+
+    /// Full cluster overview, or `None` when cluster mode is disabled.
+    fn cluster_overview(&self) -> Option<ClusterOverviewSnapshot> {
+        None
+    }
+
+    /// Detail for a single cluster node, or `None` when unknown / not clustered.
+    fn node_detail(&self, _node_id: u64) -> Option<ClusterNodeSnapshot> {
+        None
+    }
+}
+
+/// Build [`ClientSnapshot`]s directly from a [`ClientRegistry`].
+///
+/// Exposed so a server-side [`NodeStateProvider`] can reuse the registry →
+/// snapshot mapping without re-declaring it.
+pub fn client_snapshots_from_registry(registry: &ClientRegistry) -> Vec<ClientSnapshot> {
+    registry
+        .get_all_stats()
+        .into_iter()
+        .map(|(_id, info, stats)| {
+            let name = info
+                .name
+                .as_ref()
+                .map(|n| String::from_utf8_lossy(n).to_string())
+                .unwrap_or_default();
+            let lib_name = info
+                .lib_name
+                .as_ref()
+                .map(|n| String::from_utf8_lossy(n).to_string())
+                .unwrap_or_default();
+            let lib_ver = info
+                .lib_ver
+                .as_ref()
+                .map(|n| String::from_utf8_lossy(n).to_string())
+                .unwrap_or_default();
+
+            ClientSnapshot {
+                id: info.id,
+                addr: info.addr.to_string(),
+                name,
+                lib_name,
+                lib_ver,
+                age_secs: info.created_at.elapsed().as_secs(),
+                idle_secs: info.last_command_at.elapsed().as_secs(),
+                flags: info.flags.to_flag_string(),
+                commands_total: stats.commands_total,
+                bytes_recv: stats.bytes_recv,
+                bytes_sent: stats.bytes_sent,
+            }
+        })
+        .collect()
 }
 
 /// State required for the debug web UI.
@@ -239,31 +306,19 @@ pub trait ClusterInfoProvider: Send + Sync {
 pub struct DebugState {
     /// Server information.
     pub server_info: ServerInfo,
-    /// Replication info provider (optional).
-    pub replication_info: Option<Arc<dyn ReplicationInfoProvider>>,
-    /// Shard message senders for querying shard data.
-    /// This is optional and will be None if not wired up.
-    shard_senders: Option<Arc<Vec<mpsc::Sender<DebugShardMessage>>>>,
+    /// Real shard senders for on-demand scatter queries (shard stats, latency,
+    /// slowlog) and diagnostic-bundle collection. `None` until wired.
+    shard_senders: Option<Arc<Vec<ShardSender>>>,
     /// Bundle store for diagnostic bundles.
     bundle_store: Option<Arc<BundleStore>>,
     /// Bundle configuration.
     bundle_config: BundleConfig,
-    /// Shard senders for bundle data collection (uses ShardMessage).
-    bundle_shard_senders: Option<Arc<Vec<ShardSender>>>,
     /// Shared tracer for trace collection.
     shared_tracer: Option<SharedTracer>,
     /// Configuration entries for display.
     pub config_entries: Vec<ConfigEntry>,
-    /// Client info provider (optional).
-    client_info: Option<Arc<dyn ClientInfoProvider>>,
-    /// Cluster info provider (optional, None when not in cluster mode).
-    cluster_info: Option<Arc<dyn ClusterInfoProvider>>,
-}
-
-/// Message type for debug queries to shards.
-pub struct DebugShardMessage {
-    pub query: DebugQuery,
-    pub response_tx: tokio::sync::oneshot::Sender<DebugQueryResponse>,
+    /// Unified node-state provider (replication, clients, cluster topology).
+    node_state: Option<Arc<dyn NodeStateProvider>>,
 }
 
 impl DebugState {
@@ -271,78 +326,64 @@ impl DebugState {
     pub fn new(server_info: ServerInfo, config_entries: Vec<ConfigEntry>) -> Self {
         Self {
             server_info,
-            replication_info: None,
             shard_senders: None,
             bundle_store: None,
             bundle_config: BundleConfig::default(),
-            bundle_shard_senders: None,
             shared_tracer: None,
             config_entries,
-            client_info: None,
-            cluster_info: None,
+            node_state: None,
         }
     }
 
-    /// Set the replication info provider.
-    pub fn with_replication_info(mut self, provider: Arc<dyn ReplicationInfoProvider>) -> Self {
-        self.replication_info = Some(provider);
+    /// Set the unified node-state provider.
+    pub fn with_node_state(mut self, provider: Arc<dyn NodeStateProvider>) -> Self {
+        self.node_state = Some(provider);
         self
     }
 
-    /// Set the client info provider.
-    pub fn with_client_info(mut self, provider: Arc<dyn ClientInfoProvider>) -> Self {
-        self.client_info = Some(provider);
+    /// Set the real shard senders used for scatter queries and bundles.
+    pub fn with_shard_senders(mut self, senders: Arc<Vec<ShardSender>>) -> Self {
+        self.shard_senders = Some(senders);
         self
     }
 
-    /// Set the cluster info provider.
-    pub fn with_cluster_info(mut self, provider: Arc<dyn ClusterInfoProvider>) -> Self {
-        self.cluster_info = Some(provider);
-        self
+    /// This node's replication identity (defaults to standalone when unwired).
+    pub fn replication(&self) -> ReplicationView {
+        self.node_state
+            .as_ref()
+            .map(|p| p.replication())
+            .unwrap_or_default()
     }
 
     /// Get snapshots of all connected clients.
     pub fn get_clients(&self) -> Vec<ClientSnapshot> {
-        self.client_info
+        self.node_state
             .as_ref()
             .map(|p| p.client_snapshots())
             .unwrap_or_default()
     }
 
-    /// Whether cluster mode is enabled.
-    pub fn cluster_enabled(&self) -> bool {
-        self.cluster_info.is_some()
-    }
-
     /// Get a snapshot of the cluster overview.
     pub fn cluster_overview(&self) -> Option<ClusterOverviewSnapshot> {
-        self.cluster_info.as_ref().map(|p| p.cluster_overview())
+        self.node_state.as_ref().and_then(|p| p.cluster_overview())
     }
 
     /// Get detail for a specific cluster node.
     pub fn cluster_node_detail(&self, node_id: u64) -> Option<ClusterNodeSnapshot> {
-        self.cluster_info.as_ref()?.node_detail(node_id)
+        self.node_state
+            .as_ref()
+            .and_then(|p| p.node_detail(node_id))
     }
 
-    /// Set the shard message senders.
-    pub fn with_shard_senders(
-        mut self,
-        senders: Arc<Vec<mpsc::Sender<DebugShardMessage>>>,
-    ) -> Self {
-        self.shard_senders = Some(senders);
-        self
-    }
-
-    /// Configure bundle support.
+    /// Configure bundle support (store + tracer). Shard senders are shared with
+    /// the scatter-query path via [`Self::with_shard_senders`].
     pub fn with_bundle_support(
         mut self,
         config: BundleConfig,
-        shard_senders: Arc<Vec<ShardSender>>,
         shared_tracer: Option<SharedTracer>,
     ) -> Self {
         self.bundle_store = Some(Arc::new(BundleStore::new(config.clone())));
         self.bundle_config = config;
-        self.bundle_shard_senders = Some(shard_senders);
         self.shared_tracer = shared_tracer;
         self
     }
@@ -353,29 +394,150 @@ impl DebugState {
     }
 
     /// Get the server role.
-    pub fn role(&self) -> &str {
-        self.replication_info
-            .as_ref()
-            .map(|r| r.role())
-            .unwrap_or("standalone")
+    pub fn role(&self) -> String {
+        self.replication().role
     }
 
-    /// Query slowlog from all shards (aggregated).
-    pub async fn get_slowlog(&self, _count: usize) -> Vec<SlowlogEntry> {
-        // For now, return empty. This will be implemented when we wire up shard queries.
-        Vec::new()
+    // =========================================================================
+    // On-demand shard scatter queries
+    // =========================================================================
+
+    /// Scatter an `InfoSnapshot` request to every shard and gather the replies.
+    async fn gather_info_snapshots(&self) -> Vec<InfoShardSnapshot> {
+        let Some(senders) = self.shard_senders.as_ref() else {
+            return Vec::new();
+        };
+        let mut snapshots = Vec::with_capacity(senders.len());
+        for sender in senders.iter() {
+            let (response_tx, response_rx) = oneshot::channel();
+            if sender
+                .send(ShardMessage::InfoSnapshot { response_tx })
+                .await
+                .is_ok()
+                && let Ok(snapshot) = response_rx.await
+            {
+                snapshots.push(snapshot);
+            }
+        }
+        snapshots
     }
 
-    /// Query latency data from all shards.
-    pub async fn get_latency(&self) -> Vec<LatencyData> {
-        // For now, return empty. This will be implemented when we wire up shard queries.
-        Vec::new()
-    }
-
-    /// Query shard statistics.
+    /// Query per-shard statistics (keys, memory, tiered counts) from all shards.
     pub async fn get_shard_stats(&self) -> Vec<ShardStats> {
-        // For now, return empty. This will be implemented when we wire up shard queries.
-        Vec::new()
+        let mut stats: Vec<ShardStats> = self
+            .gather_info_snapshots()
+            .await
+            .into_iter()
+            .map(|snap| ShardStats {
+                shard_id: snap.shard_id,
+                keys: snap.memory.keys as u64,
+                memory_bytes: snap.memory.data_memory as u64,
+                peak_memory_bytes: snap.memory.peak_memory,
+                hot_keys: snap.tiered.hot_keys as u64,
+                warm_keys: snap.tiered.warm_keys as u64,
+            })
+            .collect();
+        stats.sort_by_key(|s| s.shard_id);
+        stats
+    }
+
+    /// Query latency histogram data from all shards.
+    ///
+    /// Mirrors the `LATENCY` command's gather: the newest sample per event
+    /// (across shards) supplies `latest`, and the merged per-event history
+    /// supplies min / max / avg / sample count.
+    pub async fn get_latency(&self) -> Vec<LatencyData> {
+        let Some(senders) = self.shard_senders.as_ref() else {
+            return Vec::new();
+        };
+
+        // Newest latest-sample per event across shards.
+        let mut latest: HashMap<LatencyEvent, LatencySample> = HashMap::new();
+        for sender in senders.iter() {
+            let (response_tx, response_rx) = oneshot::channel();
+            if sender
+                .send(ShardMessage::LatencyLatest { response_tx })
+                .await
+                .is_ok()
+                && let Ok(samples) = response_rx.await
+            {
+                for (event, sample) in samples {
+                    latest
+                        .entry(event)
+                        .and_modify(|existing| {
+                            if sample.timestamp > existing.timestamp {
+                                *existing = sample;
+                            }
+                        })
+                        .or_insert(sample);
+                }
+            }
+        }
+
+        let mut data = Vec::with_capacity(latest.len());
+        for (event, latest_sample) in latest {
+            let mut min_ms = u64::MAX;
+            let mut max_ms = 0u64;
+            let mut total_ms: u128 = 0;
+            let mut count: u64 = 0;
+            for sender in senders.iter() {
+                let (response_tx, response_rx) = oneshot::channel();
+                if sender
+                    .send(ShardMessage::LatencyHistory { event, response_tx })
+                    .await
+                    .is_ok()
+                    && let Ok(history) = response_rx.await
+                {
+                    for sample in history {
+                        min_ms = min_ms.min(sample.latency_ms);
+                        max_ms = max_ms.max(sample.latency_ms);
+                        total_ms += sample.latency_ms as u128;
+                        count += 1;
+                    }
+                }
+            }
+            // Fall back to the latest sample if history was empty (e.g. trimmed).
+            if count == 0 {
+                min_ms = latest_sample.latency_ms;
+                max_ms = latest_sample.latency_ms;
+                total_ms = latest_sample.latency_ms as u128;
+                count = 1;
+            }
+            let avg_ms = (total_ms / count as u128) as u64;
+            data.push(LatencyData {
+                event: event.as_str().to_string(),
+                latest_us: latest_sample.latency_ms * 1000,
+                min_us: min_ms * 1000,
+                max_us: max_ms * 1000,
+                avg_us: avg_ms * 1000,
+                samples: count,
+            });
+        }
+        data.sort_by(|a, b| a.event.cmp(&b.event));
+        data
+    }
+
+    /// Query slowlog entries from all shards (aggregated, newest first).
+    pub async fn get_slowlog(&self, count: usize) -> Vec<SlowlogEntry> {
+        let Some(senders) = self.shard_senders.as_ref() else {
+            return Vec::new();
+        };
+        let mut entries = Vec::new();
+        for sender in senders.iter() {
+            let (response_tx, response_rx) = oneshot::channel();
+            if sender
+                .send(ShardMessage::SlowlogGet { count, response_tx })
+                .await
+                .is_ok()
+                && let Ok(shard_entries) = response_rx.await
+            {
+                entries.extend(shard_entries.into_iter().map(slowlog_entry_from_core));
+            }
+        }
+        // Newest first, then by descending id for stable ordering.
+        entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp).then(b.id.cmp(&a.id)));
+        entries.truncate(count);
+        entries
     }
 
     // =========================================================================
@@ -384,7 +546,7 @@ impl DebugState {
 
     /// Check if bundle support is enabled.
     pub fn bundle_enabled(&self) -> bool {
-        self.bundle_store.is_some() && self.bundle_shard_senders.is_some()
+        self.bundle_store.is_some() && self.shard_senders.is_some()
     }
 
     /// List all stored bundles.
@@ -406,7 +568,7 @@ impl DebugState {
     /// Returns the bundle ID and the ZIP data.
     pub async fn generate_bundle(&self, duration_secs: u64) -> Result<(String, Vec<u8>), String> {
         let shard_senders = self
-            .bundle_shard_senders
+            .shard_senders
             .as_ref()
             .ok_or_else(|| "Bundle support not enabled".to_string())?;
 
@@ -425,10 +587,10 @@ impl DebugState {
 
         // Add cluster state information
         data.cluster_state = crate::bundle::ClusterStateJson {
-            mode: self.role().to_string(),
-            role: self.role().to_string(),
+            mode: self.role(),
+            role: self.role(),
             num_shards: self.server_info.num_shards,
-            cluster_enabled: false, // Will be updated when cluster info is available
+            cluster_enabled: self.cluster_overview().is_some(),
             nodes: None,
         };
 
@@ -455,7 +617,7 @@ impl DebugState {
         duration_secs: u64,
     ) -> Result<(String, Vec<u8>), String> {
         let shard_senders = self
-            .bundle_shard_senders
+            .shard_senders
             .as_ref()
             .ok_or_else(|| "Bundle support not enabled".to_string())?;
 
@@ -474,10 +636,10 @@ impl DebugState {
 
         // Add cluster state information
         data.cluster_state = crate::bundle::ClusterStateJson {
-            mode: self.role().to_string(),
-            role: self.role().to_string(),
+            mode: self.role(),
+            role: self.role(),
             num_shards: self.server_info.num_shards,
-            cluster_enabled: false,
+            cluster_enabled: self.cluster_overview().is_some(),
             nodes: None,
         };
 
@@ -497,45 +659,171 @@ impl DebugState {
     }
 }
 
-// ============================================================================
-// ClientInfoProvider implementation for ClientRegistry
-// ============================================================================
+/// Convert a core [`SlowLogEntry`] into the debug UI's [`SlowlogEntry`].
+fn slowlog_entry_from_core(entry: SlowLogEntry) -> SlowlogEntry {
+    let command = entry
+        .command
+        .iter()
+        .map(|part| String::from_utf8_lossy(part).to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    SlowlogEntry {
+        id: entry.id,
+        timestamp: entry.timestamp.max(0) as u64,
+        duration_us: entry.duration_us,
+        command,
+        client_addr: (!entry.client_addr.is_empty()).then_some(entry.client_addr),
+        client_name: (!entry.client_name.is_empty()).then_some(entry.client_name),
+    }
+}
 
-impl ClientInfoProvider for ClientRegistry {
-    fn client_snapshots(&self) -> Vec<ClientSnapshot> {
-        let all = self.get_all_stats();
-        all.into_iter()
-            .map(|(_id, info, stats)| {
-                let name = info
-                    .name
-                    .as_ref()
-                    .map(|n| String::from_utf8_lossy(n).to_string())
-                    .unwrap_or_default();
-                let lib_name = info
-                    .lib_name
-                    .as_ref()
-                    .map(|n| String::from_utf8_lossy(n).to_string())
-                    .unwrap_or_default();
-                let lib_ver = info
-                    .lib_ver
-                    .as_ref()
-                    .map(|n| String::from_utf8_lossy(n).to_string())
-                    .unwrap_or_default();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use frogdb_core::{Envelope, LatencySample, ShardMemoryStats, TieredCounts};
+    use tokio::sync::mpsc;
 
-                ClientSnapshot {
-                    id: info.id,
-                    addr: info.addr.to_string(),
-                    name,
-                    lib_name,
-                    lib_ver,
-                    age_secs: info.created_at.elapsed().as_secs(),
-                    idle_secs: info.last_command_at.elapsed().as_secs(),
-                    flags: info.flags.to_flag_string(),
-                    commands_total: stats.commands_total,
-                    bytes_recv: stats.bytes_recv,
-                    bytes_sent: stats.bytes_sent,
+    /// Spawn a mock shard worker over the real `ShardMessage` protocol.
+    ///
+    /// It answers the three read requests the debug UI scatters — `InfoSnapshot`,
+    /// `LatencyLatest`/`LatencyHistory`, and `SlowlogGet` — with fabricated data
+    /// keyed off `shard_id`, giving a live per-shard fixture without booting a
+    /// full server.
+    fn spawn_mock_shard(shard_id: usize, keys: usize) -> ShardSender {
+        let (tx, mut rx) = mpsc::channel::<Envelope>(32);
+        tokio::spawn(async move {
+            while let Some(env) = rx.recv().await {
+                match env.message {
+                    ShardMessage::InfoSnapshot { response_tx } => {
+                        let mut snap = InfoShardSnapshot {
+                            shard_id,
+                            ..Default::default()
+                        };
+                        snap.memory = ShardMemoryStats {
+                            shard_id,
+                            keys,
+                            data_memory: keys * 100,
+                            peak_memory: (keys * 200) as u64,
+                            ..Default::default()
+                        };
+                        snap.tiered = TieredCounts {
+                            hot_keys: keys,
+                            warm_keys: shard_id,
+                            ..Default::default()
+                        };
+                        let _ = response_tx.send(snap);
+                    }
+                    ShardMessage::LatencyLatest { response_tx } => {
+                        let sample = LatencySample::with_timestamp(1_000 + shard_id as i64, 5);
+                        let _ = response_tx.send(vec![(LatencyEvent::Command, sample)]);
+                    }
+                    ShardMessage::LatencyHistory { response_tx, .. } => {
+                        let history = vec![
+                            LatencySample::with_timestamp(1_000 + shard_id as i64, 5),
+                            LatencySample::with_timestamp(999 + shard_id as i64, 3),
+                        ];
+                        let _ = response_tx.send(history);
+                    }
+                    ShardMessage::SlowlogGet { response_tx, .. } => {
+                        let _ = response_tx.send(vec![SlowLogEntry {
+                            id: shard_id as u64,
+                            timestamp: 1_700_000_000 + shard_id as i64,
+                            duration_us: 12_345,
+                            command: vec![
+                                bytes::Bytes::from_static(b"GET"),
+                                bytes::Bytes::from_static(b"key"),
+                            ],
+                            client_addr: "127.0.0.1:6379".to_string(),
+                            client_name: String::new(),
+                        }]);
+                    }
+                    _ => {}
                 }
-            })
-            .collect()
+            }
+        });
+        ShardSender::new(tx)
+    }
+
+    fn state_with_shards(keys_per_shard: &[usize]) -> DebugState {
+        let senders: Vec<ShardSender> = keys_per_shard
+            .iter()
+            .enumerate()
+            .map(|(id, &keys)| spawn_mock_shard(id, keys))
+            .collect();
+        DebugState::new(ServerInfo::default(), Vec::new()).with_shard_senders(Arc::new(senders))
+    }
+
+    #[tokio::test]
+    async fn shard_stats_returns_real_rows() {
+        let state = state_with_shards(&[3, 7]);
+        let stats = state.get_shard_stats().await;
+
+        assert_eq!(stats.len(), 2, "one row per shard");
+        assert_eq!(stats[0].shard_id, 0);
+        assert_eq!(stats[0].keys, 3);
+        assert_eq!(stats[0].memory_bytes, 300);
+        assert_eq!(stats[0].hot_keys, 3);
+        assert_eq!(stats[1].shard_id, 1);
+        assert_eq!(stats[1].keys, 7);
+        assert_eq!(stats[1].warm_keys, 1);
+        let total_keys: u64 = stats.iter().map(|s| s.keys).sum();
+        assert_eq!(total_keys, 10);
+    }
+
+    #[tokio::test]
+    async fn latency_returns_real_data() {
+        let state = state_with_shards(&[1, 1]);
+        let data = state.get_latency().await;
+
+        assert_eq!(data.len(), 1, "one aggregated row for the command event");
+        let cmd = &data[0];
+        assert_eq!(cmd.event, "command");
+        assert_eq!(cmd.max_us, 5_000, "5ms max -> 5000us");
+        assert_eq!(cmd.min_us, 3_000, "3ms min -> 3000us");
+        assert_eq!(cmd.samples, 4, "two samples per shard, two shards");
+        assert!(cmd.avg_us > 0);
+    }
+
+    #[tokio::test]
+    async fn slowlog_returns_real_entries() {
+        let state = state_with_shards(&[1, 1]);
+        let entries = state.get_slowlog(10).await;
+
+        assert_eq!(entries.len(), 2, "one entry per shard");
+        assert_eq!(entries[0].command, "GET key");
+        assert_eq!(entries[0].client_addr.as_deref(), Some("127.0.0.1:6379"));
+        assert_eq!(entries[0].client_name, None);
+    }
+
+    #[tokio::test]
+    async fn unwired_state_returns_empty_not_panic() {
+        let state = DebugState::new(ServerInfo::default(), Vec::new());
+        assert!(state.get_shard_stats().await.is_empty());
+        assert!(state.get_latency().await.is_empty());
+        assert!(state.get_slowlog(10).await.is_empty());
+        assert_eq!(state.role(), "standalone");
+    }
+
+    /// End-to-end panel render: the shard-stats partial handler must produce a
+    /// non-empty table populated with real key counts from the live fixture.
+    #[tokio::test]
+    async fn shard_stats_partial_renders_non_empty_panel() {
+        use http_body_util::BodyExt;
+
+        let state = state_with_shards(&[42, 8]);
+        let response = crate::web_ui::handlers::handle_partial_shard_stats(&state).await;
+        assert_eq!(response.status(), hyper::StatusCode::OK);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let html = String::from_utf8_lossy(&body);
+
+        assert!(html.contains("Shard Statistics"), "panel header present");
+        assert!(
+            !html.contains("No shard statistics available"),
+            "panel must not render the empty-state placeholder"
+        );
+        // Real per-shard key counts from the fixture appear in the table.
+        assert!(html.contains("42"), "shard 0 key count rendered");
+        assert!(html.contains('8'), "shard 1 key count rendered");
     }
 }
