@@ -65,15 +65,42 @@ enum Family {
     ZSet,
     Stream,
     StreamGroup,
+    Script,
 }
 
-const FAMILIES: [Family; 6] = [
+const FAMILIES: [Family; 7] = [
     Family::Kv,
     Family::List,
     Family::Hash,
     Family::ZSet,
     Family::Stream,
     Family::StreamGroup,
+    Family::Script,
+];
+
+/// The fixed Lua script pool: (pseudo-op name, single-key Lua source). Shared
+/// with the turmoil runner, which SCRIPT LOADs / EVALs / EVALSHAs these.
+pub const SCRIPT_POOL: &[(&str, &str)] = &[
+    (
+        "script_getset",
+        "local o=redis.call('GET',KEYS[1]); redis.call('SET',KEYS[1],ARGV[1]); return o",
+    ),
+    (
+        "script_cincr",
+        "if redis.call('EXISTS',KEYS[1])==1 then return redis.call('INCR',KEYS[1]) else return -1 end",
+    ),
+    (
+        "script_setnx_get",
+        "if redis.call('EXISTS',KEYS[1])==0 then redis.call('SET',KEYS[1],ARGV[1]) end; return redis.call('GET',KEYS[1])",
+    ),
+    (
+        "script_lpush_llen",
+        "redis.call('LPUSH',KEYS[1],ARGV[1]); return redis.call('LLEN',KEYS[1])",
+    ),
+    (
+        "script_rpush_llen",
+        "redis.call('RPUSH',KEYS[1],ARGV[1]); return redis.call('LLEN',KEYS[1])",
+    ),
 ];
 
 /// Per-key blocking-stagger step (ms). Distinct offsets keep concurrent
@@ -219,6 +246,10 @@ impl KeyFamilies {
             Family::ZSet => &self.zset,
             Family::Stream => &self.stream,
             Family::StreamGroup => &self.stream_group,
+            // Script pseudo-ops reuse the KV and List key buckets (per
+            // `gen_script`); they own no dedicated key space, so `key_space`
+            // contributes nothing extra for this family.
+            Family::Script => &[],
         }
     }
 }
@@ -229,35 +260,39 @@ fn pick_family(profile: Profile, rng: &mut StdRng) -> Family {
         // KV-heavy (transactions live in the Kv family).
         Profile::TxHeavy => {
             let r = rng.random_range(0..100);
-            if r < 70 {
+            if r < 68 {
                 Family::Kv
-            } else if r < 80 {
+            } else if r < 78 {
                 Family::List
-            } else if r < 88 {
+            } else if r < 86 {
                 Family::Hash
-            } else if r < 96 {
+            } else if r < 94 {
                 Family::ZSet
-            } else if r < 98 {
+            } else if r < 96 {
                 Family::Stream
-            } else {
+            } else if r < 98 {
                 Family::StreamGroup
+            } else {
+                Family::Script
             }
         }
         // List + ZSet heavy (that is where blocking ops live).
         Profile::BlockingHeavy => {
             let r = rng.random_range(0..100);
-            if r < 50 {
+            if r < 48 {
                 Family::List
-            } else if r < 85 {
+            } else if r < 82 {
                 Family::ZSet
-            } else if r < 92 {
+            } else if r < 90 {
                 Family::Kv
-            } else if r < 96 {
+            } else if r < 94 {
                 Family::Hash
-            } else if r < 98 {
+            } else if r < 96 {
                 Family::Stream
-            } else {
+            } else if r < 98 {
                 Family::StreamGroup
+            } else {
+                Family::Script
             }
         }
         // Even spread.
@@ -358,7 +393,37 @@ fn gen_op(
         ),
         Family::Stream => gen_stream(families, rng, ops),
         Family::StreamGroup => gen_stream_group(families, rng, created, ops),
+        Family::Script => gen_script(families, rng, ops),
     }
+}
+
+/// Emit a single script pseudo-op: pick a pool script and a target key from the
+/// matching family (`list` for the `push_llen` scripts, `kv` otherwise). The
+/// arg shape mirrors what the models expect: `[key]` for `script_cincr` (no
+/// ARGV), `[key, value]` for the rest (ARGV[1] = a list element or a numeric).
+fn gen_script(families: &KeyFamilies, rng: &mut StdRng, ops: &mut Vec<ScriptedOp>) {
+    let (name, _) = SCRIPT_POOL[rng.random_range(0..SCRIPT_POOL.len())];
+    let list_effect = name.contains("push_llen");
+    let key = if list_effect {
+        pick(&families.list, rng).clone()
+    } else {
+        pick(&families.kv, rng).clone()
+    };
+    let t = think(rng);
+    // KV-effect scripts that write take an ARGV[1]; cincr takes none.
+    let args = if name == "script_cincr" {
+        vec![key]
+    } else {
+        vec![
+            key,
+            if list_effect {
+                alnum_value(rng)
+            } else {
+                num_value(rng)
+            },
+        ]
+    };
+    push_op(ops, name, args, t);
 }
 
 fn push_op(ops: &mut Vec<ScriptedOp>, command: &str, args: Vec<Bytes>, think_ms: u64) {
@@ -835,6 +900,11 @@ mod tests {
             "xpending",
             "xclaim",
             "xautoclaim",
+            "script_getset",
+            "script_cincr",
+            "script_setnx_get",
+            "script_lpush_llen",
+            "script_rpush_llen",
         ];
         for seed in 0..40 {
             for profile in [Profile::TxHeavy, Profile::BlockingHeavy, Profile::Mixed] {
@@ -998,6 +1068,23 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn script_vocabulary_emitted_and_routable() {
+        use crate::partition::default_keys_of;
+        let names: Vec<&str> = SCRIPT_POOL.iter().map(|(n, _)| *n).collect();
+        let mut seen = false;
+        for seed in 0..60 {
+            let w = Workload::generate(seed, Profile::Mixed, 4, 40);
+            for op in w.clients.iter().flat_map(|c| &c.ops) {
+                if names.contains(&op.command.as_str()) {
+                    seen = true;
+                    assert!(!default_keys_of(&op.command, &op.args).is_empty());
+                }
+            }
+        }
+        assert!(seen, "generator must emit script pseudo-ops");
     }
 
     #[test]

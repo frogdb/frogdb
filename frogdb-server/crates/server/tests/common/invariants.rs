@@ -59,9 +59,9 @@ enum Family {
 fn family_of(function: &str) -> Option<Family> {
     match function {
         "set" | "get" | "del" | "incr" | "mset" | "mget" | "watch" | "exec" | "cas" | "read"
-        | "write" => Some(Family::Kv),
+        | "write" | "script_getset" | "script_cincr" | "script_setnx_get" => Some(Family::Kv),
         "lpush" | "rpush" | "lpop" | "rpop" | "lmove" | "llen" | "lrange" | "blpop" | "brpop"
-        | "blmove" | "lmove_push" => Some(Family::List),
+        | "blmove" | "lmove_push" | "script_lpush_llen" | "script_rpush_llen" => Some(Family::List),
         "hset" | "hdel" | "hget" | "hincrby" | "hgetall" | "hlen" => Some(Family::Hash),
         "zadd" | "zrem" | "zscore" | "zcard" | "bzpopmin" | "bzpopmax" => Some(Family::ZSet),
         "xadd" | "xlen" | "xread" | "xgroup" | "xreadgroup" | "xack" | "xpending" | "xclaim"

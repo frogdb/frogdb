@@ -206,6 +206,9 @@ async fn run_op(
         // no model routes).
         "discard" => Ok(()),
         "exec" => run_exec(history, client_id, op, stream, buf, acc).await,
+        cmd if cmd.starts_with("script_") => {
+            run_script(history, client_id, op, stream, buf, acc).await
+        }
         _ => {
             let op_id = {
                 let mut h = history.lock().unwrap();
@@ -223,6 +226,119 @@ async fn run_op(
             Ok(())
         }
     }
+}
+
+/// Execute a pool script pseudo-op as real wire traffic, recording the
+/// pseudo-op + canonical result.
+///
+/// The pseudo-op name (`script_getset`, …) indexes [`SCRIPT_POOL`] for the Lua
+/// source; the client-side SHA-1 of that source matches FrogDB's digest scheme
+/// (`frogdb_core::scripting::cache::compute_sha` — standard SHA-1, lowercase
+/// hex), so an EVALSHA issued before the script has ever been EVAL'd genuinely
+/// races the server's SHA cache and returns NOSCRIPT, which we recover from by
+/// EVAL of the source (which also warms the cache for later EVALSHA hits).
+///
+/// EVAL vs EVALSHA is chosen **deterministically** from the seeded op (a stable
+/// FNV-1a parity over `client_id` + args) — no runtime randomness, so a given
+/// seed reproduces byte-identical wire traffic while still exercising both the
+/// cold NOSCRIPT→EVAL path and the warm-cache EVALSHA path.
+async fn run_script(
+    history: &Arc<Mutex<OperationHistory>>,
+    client_id: u64,
+    op: &frogdb_testing::ScriptedOp,
+    stream: &mut TcpStream,
+    buf: &mut [u8],
+    acc: &mut Vec<u8>,
+) -> Result<(), BoxError> {
+    use tokio::io::AsyncWriteExt;
+
+    let src = frogdb_testing::workload::SCRIPT_POOL
+        .iter()
+        .find(|(n, _)| *n == op.command)
+        .map(|(_, s)| *s)
+        .expect("unknown script pseudo-op");
+    let key = op.args[0].clone();
+    let argv: Vec<Bytes> = op.args[1..].to_vec();
+    let numkeys = Bytes::from("1");
+
+    let op_id = {
+        let mut h = history.lock().unwrap();
+        h.record_invoke(client_id, op.command.to_uppercase(), op.args.clone())
+    };
+
+    let reply = if prefer_evalsha(client_id, op) {
+        // EVALSHA first: hits the SHA cache when warm, else NOSCRIPT → EVAL.
+        let sha = hex_sha1(src.as_bytes());
+        let mut evalsha: Vec<&[u8]> =
+            vec![b"EVALSHA", sha.as_bytes(), numkeys.as_ref(), key.as_ref()];
+        evalsha.extend(argv.iter().map(|a| a.as_ref()));
+        stream.write_all(&encode_command(&evalsha)).await?;
+        let reply = read_reply(stream, buf, acc).await?;
+        if matches!(&reply, OperationResult::Error(e) if e.starts_with("NOSCRIPT")) {
+            eval_source(src, &numkeys, &key, &argv, stream, buf, acc).await?
+        } else {
+            reply
+        }
+    } else {
+        // Plain EVAL: always executes and warms the cache as a side effect.
+        eval_source(src, &numkeys, &key, &argv, stream, buf, acc).await?
+    };
+
+    {
+        let mut h = history.lock().unwrap();
+        h.record_return_canonical(op_id, client_id, &op.command, reply);
+    }
+    Ok(())
+}
+
+/// Issue `EVAL <src> <numkeys> <key> <argv…>` and return the parsed reply.
+async fn eval_source(
+    src: &str,
+    numkeys: &Bytes,
+    key: &Bytes,
+    argv: &[Bytes],
+    stream: &mut TcpStream,
+    buf: &mut [u8],
+    acc: &mut Vec<u8>,
+) -> Result<OperationResult, BoxError> {
+    use tokio::io::AsyncWriteExt;
+    let mut eval: Vec<&[u8]> = vec![b"EVAL", src.as_bytes(), numkeys.as_ref(), key.as_ref()];
+    eval.extend(argv.iter().map(|a| a.as_ref()));
+    stream.write_all(&encode_command(&eval)).await?;
+    read_reply(stream, buf, acc).await
+}
+
+/// Lowercase-hex SHA-1 of `src`, matching FrogDB's EVALSHA digest scheme
+/// (`frogdb_core::scripting::cache::sha_to_hex`).
+fn hex_sha1(src: &[u8]) -> String {
+    use sha1::{Digest, Sha1};
+    let mut hasher = Sha1::new();
+    hasher.update(src);
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Deterministic per-op choice of EVALSHA-first vs plain EVAL. FNV-1a over
+/// `client_id` and the op args — a pure function of the seeded workload, so the
+/// wire traffic is reproducible for a given seed (no runtime randomness).
+fn prefer_evalsha(client_id: u64, op: &frogdb_testing::ScriptedOp) -> bool {
+    let mut h: u64 = 0xcbf29ce484222325;
+    let mut mix = |b: u8| {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    };
+    for b in client_id.to_le_bytes() {
+        mix(b);
+    }
+    for a in &op.args {
+        for &b in a.iter() {
+            mix(b);
+        }
+    }
+    h & 1 == 0
 }
 
 /// Drive an EXEC transaction: MULTI → queued sub-commands → EXEC, recording via
@@ -450,6 +566,13 @@ mod tests {
         let history = run_workload(&w, 1, true);
         assert!(history.is_complete(), "every invoke must have a return");
         assert!(!history.completed_operations().is_empty());
+    }
+
+    #[test]
+    fn tiny_script_workload_runs() {
+        let w = Workload::generate(2, Profile::Mixed, 2, 8);
+        let history = run_workload(&w, 1, true);
+        assert!(history.is_complete());
     }
 
     #[test]

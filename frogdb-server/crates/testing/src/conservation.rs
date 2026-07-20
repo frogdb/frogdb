@@ -138,7 +138,10 @@ pub fn check_exactly_once_delivery(
 
     for op in history.completed_operations() {
         match op.function.as_str() {
-            "lpush" | "rpush" => {
+            // Plain pushes plus the list-effect script pseudo-ops, which
+            // LPUSH/RPUSH `ARGV[1]` (`op.args[1]`) and return the new LLEN —
+            // observably introducing exactly one element, same as a bare push.
+            "lpush" | "rpush" | "script_lpush_llen" | "script_rpush_llen" => {
                 // A push with no result is a failed/indeterminate op: it
                 // never observably introduced its elements, so counting it
                 // as pushed would make any later non-delivery of those
@@ -809,6 +812,24 @@ mod tests {
         h.respond(p, Some(b("1")));
         let mut final_state = HashMap::new();
         final_state.insert(b("k"), vec![b("x")]);
+        assert!(check_exactly_once_delivery(&h, &final_state).is_ok());
+    }
+
+    #[test]
+    fn delivery_counts_list_effect_scripts_as_pushes() {
+        // script_lpush_llen / script_rpush_llen push ARGV[1] and return LLEN;
+        // the checker must count them as pushes so a later pop of that element
+        // is not a PhantomDelivery.
+        let mut h = History::new();
+        let p1 = h.invoke(1, "script_rpush_llen", vec![b("k"), b("a")]);
+        h.respond(p1, Some(b("1")));
+        let p2 = h.invoke(1, "script_lpush_llen", vec![b("k"), b("b")]);
+        h.respond(p2, Some(b("2")));
+        // Deliver "a" via a plain pop; "b" remains in final state.
+        let q = h.invoke(2, "lpop", vec![b("k")]);
+        h.respond(q, Some(b("a")));
+        let mut final_state = HashMap::new();
+        final_state.insert(b("k"), vec![b("b")]);
         assert!(check_exactly_once_delivery(&h, &final_state).is_ok());
     }
 

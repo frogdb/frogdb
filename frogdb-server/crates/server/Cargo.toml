@@ -98,3 +98,4 @@ rstest = "0.26"
 frogdb-telemetry = { workspace = true, features = ["testing"] }
 zip = { version = "8", default-features = false, features = ["deflate"] }
 rcgen.workspace = true
+sha1.workspace = true
