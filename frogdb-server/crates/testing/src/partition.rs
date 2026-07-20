@@ -93,6 +93,21 @@ pub fn default_keys_of(function: &str, args: &[Bytes]) -> Vec<Bytes> {
         }
         // `watch key1 key2 ...` can watch any number of keys; all of them are keys.
         "watch" => args.to_vec(),
+        // Consumer-group ops route to their single stream key. Full pipeline
+        // routing (model dispatch, canonicalization) lands in a later task;
+        // this keeps the generator's own routability self-tests green now
+        // that `Family::StreamGroup` emits these commands.
+        "xgroup" => args.get(1).cloned().into_iter().collect(), // CREATE key group ...
+        "xack" | "xpending" | "xclaim" | "xautoclaim" => {
+            args.first().cloned().into_iter().collect()
+        }
+        "xreadgroup" => args
+            .iter()
+            .position(|a| a.eq_ignore_ascii_case(b"STREAMS"))
+            .and_then(|p| args.get(p + 1))
+            .cloned()
+            .into_iter()
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -398,6 +413,40 @@ mod tests {
         assert_eq!(
             default_keys_of("lmove", &[b("s"), b("d"), b("left"), b("right")]),
             vec![b("s"), b("d")]
+        );
+    }
+
+    #[test]
+    fn default_keys_of_stream_group_ops() {
+        assert_eq!(
+            default_keys_of("xgroup", &[b("CREATE"), b("st"), b("g"), b("0")]),
+            vec![b("st")]
+        );
+        assert_eq!(
+            default_keys_of("xack", &[b("st"), b("g"), b("1-1")]),
+            vec![b("st")]
+        );
+        assert_eq!(
+            default_keys_of("xpending", &[b("st"), b("g")]),
+            vec![b("st")]
+        );
+        assert_eq!(
+            default_keys_of("xclaim", &[b("st"), b("g"), b("c"), b("0"), b("1-1")]),
+            vec![b("st")]
+        );
+        assert_eq!(
+            default_keys_of(
+                "xautoclaim",
+                &[b("st"), b("g"), b("c"), b("0"), b("0"), b("JUSTID")]
+            ),
+            vec![b("st")]
+        );
+        assert_eq!(
+            default_keys_of(
+                "xreadgroup",
+                &[b("GROUP"), b("g"), b("c"), b("STREAMS"), b("st"), b(">")]
+            ),
+            vec![b("st")]
         );
     }
 

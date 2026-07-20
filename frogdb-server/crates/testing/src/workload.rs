@@ -2,8 +2,9 @@
 //!
 //! A [`Workload`] is a set of per-client [`ClientScript`]s, each a sequence of
 //! [`ScriptedOp`]s with sim-time think hints. The op vocabulary is **exactly**
-//! the Phase-1 model vocabulary (KV/tx, lists, hashes, zsets, streams), and
-//! every encoding constraint the Phase-1 reviews established is enforced here
+//! the Phase-1/4a model vocabulary (KV/tx, lists, hashes, zsets, streams,
+//! stream consumer groups), and every encoding constraint the Phase-1 reviews
+//! established is enforced here
 //! (no `|` in keys/values, only `*`/full `ms-seq` stream ids, blocking ops
 //! staggered per key, single-type keys so a per-key sub-history has one model).
 //!
@@ -21,7 +22,7 @@ pub enum Profile {
     TxHeavy,
     /// Weighted toward blocking pops paired with producers on the same keys.
     BlockingHeavy,
-    /// Even spread across all five type families.
+    /// Even spread across all six type families.
     Mixed,
 }
 
@@ -63,14 +64,16 @@ enum Family {
     Hash,
     ZSet,
     Stream,
+    StreamGroup,
 }
 
-const FAMILIES: [Family; 5] = [
+const FAMILIES: [Family; 6] = [
     Family::Kv,
     Family::List,
     Family::Hash,
     Family::ZSet,
     Family::Stream,
+    Family::StreamGroup,
 ];
 
 /// Per-key blocking-stagger step (ms). Distinct offsets keep concurrent
@@ -121,6 +124,9 @@ impl Workload {
             // two blocking ops on the same key never share a think_ms).
             let mut block_offset: std::collections::HashMap<Vec<u8>, u64> =
                 std::collections::HashMap::new();
+            // Per-client set of stream-group keys this client has already
+            // issued the group-creating `XGROUP CREATE` for (see gen_stream_group).
+            let mut created: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
             let mut ops = Vec::with_capacity(ops_per_client);
             for _ in 0..ops_per_client {
                 let fam = pick_family(profile, &mut rng);
@@ -130,6 +136,7 @@ impl Workload {
                     &families,
                     &mut rng,
                     &mut block_offset,
+                    &mut created,
                     client_id,
                     num_clients,
                     &mut ops,
@@ -167,12 +174,14 @@ fn build_key_families(seed: u64) -> KeyFamilies {
     let mut hash = Vec::new();
     let mut zset = Vec::new();
     let mut stream = Vec::new();
+    let mut stream_group = Vec::new();
     for (fam_idx, (bucket, kind)) in [
         (&mut kv, "kv"),
         (&mut list, "ls"),
         (&mut hash, "hs"),
         (&mut zset, "zs"),
         (&mut stream, "st"),
+        (&mut stream_group, "sg"),
     ]
     .into_iter()
     .enumerate()
@@ -188,6 +197,7 @@ fn build_key_families(seed: u64) -> KeyFamilies {
         hash,
         zset,
         stream,
+        stream_group,
     }
 }
 
@@ -197,6 +207,7 @@ struct KeyFamilies {
     hash: Vec<Bytes>,
     zset: Vec<Bytes>,
     stream: Vec<Bytes>,
+    stream_group: Vec<Bytes>,
 }
 
 impl KeyFamilies {
@@ -207,6 +218,7 @@ impl KeyFamilies {
             Family::Hash => &self.hash,
             Family::ZSet => &self.zset,
             Family::Stream => &self.stream,
+            Family::StreamGroup => &self.stream_group,
         }
     }
 }
@@ -225,8 +237,10 @@ fn pick_family(profile: Profile, rng: &mut StdRng) -> Family {
                 Family::Hash
             } else if r < 96 {
                 Family::ZSet
-            } else {
+            } else if r < 98 {
                 Family::Stream
+            } else {
+                Family::StreamGroup
             }
         }
         // List + ZSet heavy (that is where blocking ops live).
@@ -240,8 +254,10 @@ fn pick_family(profile: Profile, rng: &mut StdRng) -> Family {
                 Family::Kv
             } else if r < 96 {
                 Family::Hash
-            } else {
+            } else if r < 98 {
                 Family::Stream
+            } else {
+                Family::StreamGroup
             }
         }
         // Even spread.
@@ -314,6 +330,7 @@ fn gen_op(
     families: &KeyFamilies,
     rng: &mut StdRng,
     block_offset: &mut std::collections::HashMap<Vec<u8>, u64>,
+    created: &mut std::collections::HashSet<Vec<u8>>,
     client_id: u64,
     num_clients: usize,
     ops: &mut Vec<ScriptedOp>,
@@ -340,6 +357,7 @@ fn gen_op(
             ops,
         ),
         Family::Stream => gen_stream(families, rng, ops),
+        Family::StreamGroup => gen_stream_group(families, rng, created, ops),
     }
 }
 
@@ -620,6 +638,125 @@ fn gen_stream(families: &KeyFamilies, rng: &mut StdRng, ops: &mut Vec<ScriptedOp
     }
 }
 
+/// Consumer-group ops on a stream: XGROUP CREATE (once per client per key,
+/// MKSTREAM so the group creates the stream too), then a bounded interleave
+/// of XADD/XREADGROUP/XPENDING/XAUTOCLAIM/XCLAIM/XACK. Single group `g0` per
+/// key keeps the PEL checker's per-(stream, group) scoping simple (matches
+/// the model's bounded consumer-group vocabulary: min-idle always 0, no
+/// NOACK, no blocking, XAUTOCLAIM/XCLAIM JUSTID-only forms).
+fn gen_stream_group(
+    families: &KeyFamilies,
+    rng: &mut StdRng,
+    created: &mut std::collections::HashSet<Vec<u8>>,
+    ops: &mut Vec<ScriptedOp>,
+) {
+    let keys = &families.stream_group;
+    let k = pick(keys, rng).clone();
+    let group = Bytes::from("g0");
+    let t = think(rng);
+    // Ensure the group exists (MKSTREAM makes the stream too). Idempotent
+    // BUSYGROUP re-creates are accepted by the model as no-ops.
+    if created.insert(k.to_vec()) {
+        push_op(
+            ops,
+            "xgroup",
+            vec![
+                Bytes::from("CREATE"),
+                k.clone(),
+                group.clone(),
+                Bytes::from("0"),
+                Bytes::from("MKSTREAM"),
+            ],
+            t,
+        );
+        return;
+    }
+    let consumer = Bytes::from(format!("c{}", rng.random_range(0..3)));
+    match rng.random_range(0..7) {
+        0 => push_op(
+            ops,
+            "xadd",
+            vec![
+                k,
+                Bytes::from("*"),
+                Bytes::from(format!("f{}", rng.random_range(0..3))),
+                alnum_value(rng),
+            ],
+            t,
+        ),
+        1 => push_op(
+            ops,
+            "xreadgroup",
+            vec![
+                Bytes::from("GROUP"),
+                group,
+                consumer,
+                Bytes::from("COUNT"),
+                Bytes::from("10"),
+                Bytes::from("STREAMS"),
+                k,
+                Bytes::from(">"),
+            ],
+            t,
+        ),
+        2 => push_op(
+            ops,
+            "xreadgroup",
+            vec![
+                Bytes::from("GROUP"),
+                group,
+                consumer,
+                Bytes::from("STREAMS"),
+                k,
+                Bytes::from("0"),
+            ],
+            t,
+        ),
+        3 => push_op(ops, "xpending", vec![k, group], t),
+        4 => {
+            // XAUTOCLAIM JUSTID from 0 (claims all eligible to `consumer`).
+            // COUNT 1000 (not the usual 10): the model expects a single call
+            // to return cursor 0-0 (full-range claim in one shot). A COUNT
+            // smaller than the achievable PEL size would make the real
+            // server legally return a non-zero cursor and the model would
+            // spuriously reject that correct reply; 1000 exceeds any PEL
+            // size these bounded workloads can build.
+            push_op(
+                ops,
+                "xautoclaim",
+                vec![
+                    k,
+                    group,
+                    consumer,
+                    Bytes::from("0"),
+                    Bytes::from("0"),
+                    Bytes::from("COUNT"),
+                    Bytes::from("1000"),
+                    Bytes::from("JUSTID"),
+                ],
+                t,
+            );
+        }
+        5 => {
+            // XCLAIM wire no-op (id 0-0 is never in a PEL): exercises the
+            // command/recorder/model path; live-id claims happen via XAUTOCLAIM.
+            push_op(
+                ops,
+                "xclaim",
+                vec![k, group, consumer, Bytes::from("0"), Bytes::from("0-0")],
+                t,
+            );
+        }
+        _ => {
+            // XACK the group PEL's low id space is unknown to the generator, so
+            // ack a plausible recent id space via a wildcard-free explicit id is
+            // not possible; instead ack nothing-harmful by acking id "0-0"
+            // (count 0). Real acks happen via the model observing prior reads.
+            push_op(ops, "xack", vec![k, group, Bytes::from("0-0")], t);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -658,10 +795,46 @@ mod tests {
     #[test]
     fn only_phase1_vocabulary_emitted() {
         const ALLOWED: &[&str] = &[
-            "set", "get", "del", "incr", "mset", "mget", "watch", "exec", "discard", "lpush",
-            "rpush", "lpop", "rpop", "lmove", "llen", "lrange", "blpop", "brpop", "blmove", "hset",
-            "hdel", "hget", "hincrby", "hgetall", "hlen", "zadd", "zrem", "zscore", "zcard",
-            "bzpopmin", "bzpopmax", "xadd", "xlen", "xread",
+            "set",
+            "get",
+            "del",
+            "incr",
+            "mset",
+            "mget",
+            "watch",
+            "exec",
+            "discard",
+            "lpush",
+            "rpush",
+            "lpop",
+            "rpop",
+            "lmove",
+            "llen",
+            "lrange",
+            "blpop",
+            "brpop",
+            "blmove",
+            "hset",
+            "hdel",
+            "hget",
+            "hincrby",
+            "hgetall",
+            "hlen",
+            "zadd",
+            "zrem",
+            "zscore",
+            "zcard",
+            "bzpopmin",
+            "bzpopmax",
+            "xadd",
+            "xlen",
+            "xread",
+            "xgroup",
+            "xreadgroup",
+            "xack",
+            "xpending",
+            "xclaim",
+            "xautoclaim",
         ];
         for seed in 0..40 {
             for profile in [Profile::TxHeavy, Profile::BlockingHeavy, Profile::Mixed] {
@@ -825,6 +998,38 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn stream_group_vocabulary_emitted_and_routable() {
+        use crate::partition::default_keys_of;
+        const GROUP_OPS: &[&str] = &[
+            "xgroup",
+            "xreadgroup",
+            "xack",
+            "xpending",
+            "xclaim",
+            "xautoclaim",
+        ];
+        let mut seen: std::collections::HashSet<&str> = Default::default();
+        for seed in 0..60 {
+            let w = Workload::generate(seed, Profile::Mixed, 4, 40);
+            for op in w.clients.iter().flat_map(|c| &c.ops) {
+                if GROUP_OPS.contains(&op.command.as_str()) {
+                    seen.insert(GROUP_OPS.iter().find(|g| **g == op.command).unwrap());
+                    // Every group op must route to a non-empty key set.
+                    assert!(
+                        !default_keys_of(&op.command, &op.args).is_empty(),
+                        "group op {} not routable",
+                        op.command
+                    );
+                }
+            }
+        }
+        assert!(
+            seen.contains("xreadgroup") && seen.contains("xack"),
+            "generator must emit consumer-group ops; saw {seen:?}"
+        );
     }
 
     #[test]
