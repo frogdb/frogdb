@@ -291,7 +291,15 @@ impl InfoSection for StatsSection {
         let sh = src.shards();
         let mut w = SectionWriter::new("Stats");
         w.field("total_connections_received", 1)
-            .field("total_commands_processed", 0)
+            // Real total from the shared `frogdb_commands_total` counter (0 when
+            // metrics are disabled), matching `/status` `commands.total_processed`.
+            .field(
+                "total_commands_processed",
+                src.total_commands_processed().unwrap_or(0),
+            )
+            // No instantaneous-rate sampler exists yet; kept as a Redis-compat
+            // stub rather than a fabricated value (see `/status` `ops_per_sec`,
+            // which is omitted for the same reason).
             .field("instantaneous_ops_per_sec", 0)
             .field("total_net_input_bytes", 0)
             .field("total_net_output_bytes", 0)
@@ -695,6 +703,27 @@ mod tests {
         assert!(out.contains("expired_keys:12\r\n"), "{out}");
         assert!(out.contains("evicted_keys:7\r\n"), "{out}");
         assert!(out.contains("total_error_replies:3\r\n"), "{out}");
+    }
+
+    #[test]
+    fn stats_total_commands_processed_reflects_the_shared_counter() {
+        use frogdb_telemetry::PrometheusRecorder;
+        use frogdb_telemetry::definitions::CommandsTotal;
+
+        // With metrics disabled the field is an honest 0, never absent.
+        let src = sources();
+        let out = render(&StatsSection, &src);
+        assert!(out.contains("total_commands_processed:0\r\n"), "{out}");
+
+        // Wired to the same `frogdb_commands_total` counter `/status` reads, so
+        // INFO and `/status` cannot disagree.
+        let recorder = std::sync::Arc::new(PrometheusRecorder::new());
+        CommandsTotal::inc_by(&*recorder, 5, "GET");
+        CommandsTotal::inc_by(&*recorder, 2, "SET");
+        let mut src = sources();
+        src.metrics = recorder;
+        let out = render(&StatsSection, &src);
+        assert!(out.contains("total_commands_processed:7\r\n"), "{out}");
     }
 
     #[test]

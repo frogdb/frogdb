@@ -30,7 +30,7 @@ use frogdb_core::{
     ServerCommandStats, ShardMessage, ShardSender, TieredCounts, WalLagAggregate,
 };
 use frogdb_protocol::Response;
-use frogdb_telemetry::definitions::{WalBytes, WalWrites};
+use frogdb_telemetry::definitions::{CommandsTotal, WalBytes, WalWrites};
 use tokio::sync::oneshot;
 use tracing::warn;
 
@@ -483,6 +483,14 @@ impl InfoSources {
     /// [`Self::keyspace_hits`].
     pub fn keyspace_misses(&self) -> Option<u64> {
         Some(self.keyspace_stats.reported_misses())
+    }
+
+    /// Total commands processed, summed across the `command` label of the same
+    /// `frogdb_commands_total` counter Prometheus scrapes and the `/status`
+    /// endpoint reports — so INFO, `/metrics`, and `/status` never disagree.
+    /// `None` when metrics are disabled (nothing to report).
+    pub fn total_commands_processed(&self) -> Option<u64> {
+        self.metrics.counter_value(CommandsTotal::NAME)
     }
 
     /// Total WAL writes, from the same counter Prometheus scrapes.
