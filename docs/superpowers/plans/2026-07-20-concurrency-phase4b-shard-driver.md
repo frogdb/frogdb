@@ -2474,6 +2474,11 @@ Per brief D7, 4b = harness + 8 (re-scoped) scenarios + F1–F4 + spec amendment.
 - group-reply binary-safety
 - cross-shard WATCH validation via VLL-EXEC
 
+- Rollback-mode WAL partial-append inconsistency: a mid-transaction WAL failure leaves
+  earlier same-transaction records already appended while the store rolls back — a
+  recovery-replay inconsistency candidate. Durability phase; S6 only asserts no
+  post-failure appends.
+
 Additional structural non-goals confirmed by 4b research (not bugs, not in scope):
 - Same-slot-but-cross-internal-shard EXEC is structurally unreachable in standalone mode (same slot ⟹ same shard) — deferred single-shard-vs-VLL EXEC distinction beyond S3's sparse-participant scatter coverage.
 - Persistence real path (RocksDB/FrogDB WAL) — fake sink only; durability phase later.
