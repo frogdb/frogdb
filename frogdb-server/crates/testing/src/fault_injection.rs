@@ -238,6 +238,30 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn reorder_completions_is_caught_by_exact_checker() {
+        use crate::conservation::{WaiterRegistrationOrder, check_fifo_wake_order_exact};
+        // Fixed registration order matching the original (legal) invoke/serve
+        // order: client 1 registered before client 2.
+        let mut order = WaiterRegistrationOrder::default();
+        order.insert(b("k"), 1, 1);
+        order.insert(b("k"), 2, 2);
+
+        let original = valid_fifo_history();
+        assert!(check_fifo_wake_order_exact(&original, &order).is_ok());
+
+        // Swap the serve order (client 2 served before client 1) without
+        // changing the registration order fixture: now client 2 (registered
+        // second) is served before client 1 (registered first) -> violation
+        // that only the exact checker's ordinal comparison can see, since
+        // the swap alone wouldn't touch invoke order either way here.
+        let corrupt = reorder_completions(&original);
+        assert!(matches!(
+            check_fifo_wake_order_exact(&corrupt, &order),
+            Err(ConservationViolation::FifoViolation { .. })
+        ));
+    }
+
     fn valid_group_history() -> History {
         let mut h = History::new();
         let a = h.invoke(1, "xadd", vec![b("st"), b("1-1"), b("f"), b("v")]);

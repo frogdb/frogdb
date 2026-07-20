@@ -280,6 +280,119 @@ pub fn check_fifo_wake_order(history: &History) -> Result<(), ConservationViolat
     Ok(())
 }
 
+/// Observed true registration order: `(served_key, client_id) -> registration_seq`,
+/// built from mid-run `DEBUG WAITQUEUE` observations.
+///
+/// Soundness constraint (binding on callers): this joins strictly on
+/// `(key, client_id)` and keeps the *smallest* observed ordinal per pair.
+/// That collapse is sound only because the multi-waiter generator path
+/// guarantees **at most one blocking pop per key per client** across a
+/// script — a client that parked twice on the same key would have two
+/// distinct registrations collapsed into one ordinal (its first), which
+/// can silently misjudge the second wait. Per-operation matching (using a
+/// prober observation's timestamp against each op's `[invoke, return]`
+/// interval, rather than joining on client identity alone) is the phase-4b
+/// lift that removes this constraint.
+#[derive(Debug, Default, Clone)]
+pub struct WaiterRegistrationOrder {
+    map: std::collections::HashMap<(Bytes, u64), u64>,
+}
+
+impl WaiterRegistrationOrder {
+    /// Record an observed registration ordinal for `client_id` waiting on
+    /// `key`. If multiple observations exist for the same `(key, client_id)`
+    /// pair (e.g. re-probed mid-run), the smallest ordinal wins — see the
+    /// struct-level soundness note for why that's safe.
+    pub fn insert(&mut self, key: Bytes, client_id: u64, registration_seq: u64) {
+        self.map
+            .entry((key, client_id))
+            .and_modify(|e| *e = (*e).min(registration_seq))
+            .or_insert(registration_seq);
+    }
+
+    fn get(&self, key: &Bytes, client_id: u64) -> Option<u64> {
+        self.map.get(&(key.clone(), client_id)).copied()
+    }
+}
+
+/// Exact FIFO wake-order: for each key whose served blocking pops *all* have
+/// a known registration ordinal, serve (return-time) order must equal
+/// ascending `registration_seq`. Keys missing one or more ordinals fall back
+/// to the invoke-time proxy used by [`check_fifo_wake_order`], applied only
+/// to that key's served waiters.
+///
+/// A key with complete ordinals is judged **only** by ordinals, never also
+/// by the invoke-time proxy: the proxy is known to false-positive on
+/// overlapping invokes (two waiters can legitimately register in either
+/// order relative to their invoke timestamps), so re-running it over a key
+/// this function already validated exactly would risk flagging a spurious
+/// violation on a provably-correct history. This function therefore
+/// replicates the proxy's per-key logic inline (scoped to the residual,
+/// ordinal-incomplete keys) rather than delegating to
+/// `check_fifo_wake_order(history)` over the whole history afterward.
+pub fn check_fifo_wake_order_exact(
+    history: &History,
+    order: &WaiterRegistrationOrder,
+) -> Result<(), ConservationViolation> {
+    // served_key -> [(invoke_time, return_time, client_id, op_id)] for served
+    // blocking pops, grouped by the key each waiter was actually served from
+    // (mirrors check_fifo_wake_order's grouping, with client_id carried
+    // through for the ordinal lookup).
+    let mut by_key: HashMap<Bytes, Vec<(u64, u64, u64, u64)>> = HashMap::new();
+    for op in history.completed_operations() {
+        if !matches!(op.function.as_str(), "blpop" | "brpop") {
+            continue;
+        }
+        let Some(result) = &op.result else {
+            // Timed out: never served, no ordering information to check.
+            continue;
+        };
+        let result_str = String::from_utf8_lossy(result);
+        let Some((served_key, _)) = result_str.split_once('|') else {
+            continue;
+        };
+        by_key
+            .entry(Bytes::from(served_key.to_string()))
+            .or_default()
+            .push((op.invoke_time, op.return_time, op.client_id, op.id));
+    }
+
+    for (key, mut served) in by_key {
+        served.sort_by_key(|x| x.1); // by serve (return) order
+        let all_known = served
+            .iter()
+            .all(|(_, _, client_id, _)| order.get(&key, *client_id).is_some());
+        if all_known {
+            // Exact path: compare ascending registration_seq.
+            for w in served.windows(2) {
+                let seq0 = order.get(&key, w[0].2).unwrap();
+                let seq1 = order.get(&key, w[1].2).unwrap();
+                if seq0 > seq1 {
+                    return Err(ConservationViolation::FifoViolation {
+                        key: key.to_vec(),
+                        served: w[0].3,
+                        waiter: w[1].3,
+                    });
+                }
+            }
+        } else {
+            // Residual (ordinal-incomplete) key: fall back to the
+            // invoke-time proxy, scoped to this key alone.
+            for w in served.windows(2) {
+                if w[0].0 > w[1].0 {
+                    // Served earlier but invoked later -> jumped an earlier waiter.
+                    return Err(ConservationViolation::FifoViolation {
+                        key: key.to_vec(),
+                        served: w[0].3,
+                        waiter: w[1].3,
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Net integer delta a single command applies to keys in `keyset`.
 fn cmd_delta(name: &str, args: &[Bytes], keyset: &HashSet<Bytes>) -> i64 {
     if args.is_empty() || !keyset.contains(&args[0]) {
@@ -946,6 +1059,37 @@ mod tests {
 
         assert!(matches!(
             check_fifo_wake_order(&h),
+            Err(ConservationViolation::FifoViolation { .. })
+        ));
+    }
+
+    #[test]
+    fn exact_fifo_uses_registration_order_not_invoke_order() {
+        // Two waiters whose INVOKE order is w1 (client 1) then w2 (client 2),
+        // but whose true REGISTRATION order (per DEBUG WAITQUEUE) is REVERSED.
+        // Serving in registration order (w2 first) is legal exactly; the
+        // invoke-proxy would wrongly flag it.
+        let mut h = History::new();
+        let w1 = h.invoke(1, "blpop", vec![b("k"), b("0")]);
+        let w2 = h.invoke(2, "blpop", vec![b("k"), b("0")]);
+        h.respond(w2, Some(b("k|b"))); // served first
+        h.respond(w1, Some(b("k|a"))); // served second
+        let mut order = WaiterRegistrationOrder::default();
+        order.insert(b("k"), 2, 3); // client 2 registered first (seq 3)
+        order.insert(b("k"), 1, 8); // client 1 registered later (seq 8)
+        assert!(
+            check_fifo_wake_order_exact(&h, &order).is_ok(),
+            "serving in true registration order must be legal"
+        );
+
+        // Now flip: serve w1 (registered later) before w2 -> violation.
+        let mut h2 = History::new();
+        let a = h2.invoke(1, "blpop", vec![b("k"), b("0")]);
+        let bb = h2.invoke(2, "blpop", vec![b("k"), b("0")]);
+        h2.respond(a, Some(b("k|a")));
+        h2.respond(bb, Some(b("k|b")));
+        assert!(matches!(
+            check_fifo_wake_order_exact(&h2, &order),
             Err(ConservationViolation::FifoViolation { .. })
         ));
     }
