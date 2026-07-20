@@ -43,17 +43,19 @@ just fmt-py                             # format Python code
 - When designing features, research what implementation Redis, Valkey, and DragonflyDB use for the
   feature. This provides critical insight for decision making.
 - When adding new development tools or dependencies:
-  - Language runtimes and dev CLI tools (rust, python, node, just, uv, bun, cargo plugins, ...)
-    live in `.mise.toml`. If the tool has a mise plugin or is available via the `cargo:`/`ubi:`
-    backends, add it there.
+  - Language runtimes and dev CLI tools (rust, python, node, just, uv, bun, cargo plugins, ...) live
+    in `.mise.toml`. If the tool has a mise plugin or is available via the `cargo:`/`ubi:` backends,
+    add it there.
   - System libraries and specialized packages that mise cannot manage (libclang, OpenSSL, redis,
     tcl-tk, leiningen, heaptrack, ...) still go in `Brewfile` (macOS) and `shell.nix` (Nix/Linux).
     Keep the two in sync.
-  - If you bump Rust, update both `rust-toolchain.toml` and `.mise.toml`. The
-    `sync-toolchain-check` lefthook job enforces that they agree.
+  - If you bump Rust, update both `rust-toolchain.toml` and `.mise.toml`. The `sync-toolchain-check`
+    lefthook job enforces that they agree.
 - Try to keep a single source of truth in documentation (DRY) using Markdown links when referencing
   a topic covered in another section.
 - When renaming markdown files or moving content, fix any links that point to the affected
   file/section.
 - Run `pwd` before starting and only search for code in the current directory. You may be in a
   worktree directory and not the main directory.
+- If you need a paragraph-long comment to justify why the workaround is OK, the code is wrong — fix
+  the code.
