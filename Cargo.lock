@@ -1962,6 +1962,7 @@ dependencies = [
 name = "frogdb-testing"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "bytes",
  "proptest",
  "rand 0.10.0",
