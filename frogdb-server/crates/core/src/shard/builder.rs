@@ -89,7 +89,6 @@ pub enum WalMode {
 ///     .with_metrics(metrics_recorder)
 ///     .with_eviction(eviction_config)
 ///     .with_persistence(rocks_store, wal_config)
-///     .enable_vll()
 ///     .build();
 /// ```
 pub struct ShardWorkerBuilder {
@@ -115,7 +114,6 @@ pub struct ShardWorkerBuilder {
     raft: Option<Arc<ClusterRaft>>,
     network_factory: Option<Arc<ClusterNetworkFactory>>,
     quorum_checker: Option<Arc<dyn QuorumChecker>>,
-    enable_vll: bool,
     queue_depth: Option<Arc<AtomicUsize>>,
     per_request_spans: Option<Arc<AtomicBool>>,
     wal_failure_policy: Option<Arc<AtomicU8>>,
@@ -148,7 +146,6 @@ impl ShardWorkerBuilder {
             raft: None,
             network_factory: None,
             quorum_checker: None,
-            enable_vll: false,
             queue_depth: None,
             per_request_spans: None,
             wal_failure_policy: None,
@@ -259,12 +256,6 @@ impl ShardWorkerBuilder {
     /// Set the quorum checker for cluster health detection.
     pub fn with_quorum_checker(mut self, checker: Arc<dyn QuorumChecker>) -> Self {
         self.quorum_checker = Some(checker);
-        self
-    }
-
-    /// Enable VLL (Virtual Lock Loom) for transaction coordination.
-    pub fn enable_vll(mut self) -> Self {
-        self.enable_vll = true;
         self
     }
 
