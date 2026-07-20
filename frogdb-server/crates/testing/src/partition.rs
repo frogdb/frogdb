@@ -88,9 +88,9 @@ pub fn default_keys_of(function: &str, args: &[Bytes]) -> Vec<Bytes> {
         "exec" => exec_keys(args),
         "get" | "set" | "read" | "write" | "cas" | "del" | "delete" | "incr" | "lpush"
         | "rpush" | "lpop" | "rpop" | "llen" | "lrange" | "hset" | "hdel" | "hget" | "hincrby"
-        | "hgetall" | "hlen" | "zadd" | "zrem" | "zscore" | "zcard" | "xadd" | "xlen" | "xread" => {
-            args.first().cloned().into_iter().collect()
-        }
+        | "hgetall" | "hlen" | "zadd" | "zrem" | "zscore" | "zcard" | "xadd" | "xlen" | "xread"
+        | "script_getset" | "script_cincr" | "script_setnx_get" | "script_lpush_llen"
+        | "script_rpush_llen" => args.first().cloned().into_iter().collect(),
         // `watch key1 key2 ...` can watch any number of keys; all of them are keys.
         "watch" => args.to_vec(),
         // Consumer-group ops route to their single stream key. Full pipeline
@@ -413,6 +413,27 @@ mod tests {
         assert_eq!(
             default_keys_of("lmove", &[b("s"), b("d"), b("left"), b("right")]),
             vec![b("s"), b("d")]
+        );
+    }
+
+    #[test]
+    fn default_keys_of_script_pseudo_ops() {
+        assert_eq!(
+            default_keys_of("script_getset", &[b("k"), b("v")]),
+            vec![b("k")]
+        );
+        assert_eq!(default_keys_of("script_cincr", &[b("k")]), vec![b("k")]);
+        assert_eq!(
+            default_keys_of("script_setnx_get", &[b("k"), b("v")]),
+            vec![b("k")]
+        );
+        assert_eq!(
+            default_keys_of("script_lpush_llen", &[b("k"), b("v")]),
+            vec![b("k")]
+        );
+        assert_eq!(
+            default_keys_of("script_rpush_llen", &[b("k"), b("v")]),
+            vec![b("k")]
         );
     }
 
