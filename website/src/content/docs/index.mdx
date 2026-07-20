@@ -1,12 +1,13 @@
 ---
-title: FrogDB Documentation
+title: 'Redis 8.x compatible, memory-first database'
 description: A Redis 8.x-compatible, memory-first database built in Rust
 template: splash
 hero:
   image:
     file: ../../assets/frogdb-logo.png
     alt: FrogDB Logo
-  tagline: A Redis 8.x-compatible, memory-first database built in Rust.
+  title: '<span class="accent">Redis 8.x</span> compatible. Memory-first. Built in Rust.'
+  tagline: FrogDB implements *all* Redis 8.x types, is wire compatible with existing Redis clients, supports replication and cluster mode operation, and persistence with hot/warm tiering if desired. Extensively tested for Redis compatibility and correctness.
   actions:
     - text: Get Started
       link: /getting-started/quickstart/
@@ -15,6 +16,7 @@ hero:
     - text: View on GitHub
       link: https://github.com/frogdb/frogdb
       icon: external
+      variant: secondary
 ---
 
 import { CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -24,22 +26,22 @@ import Card from 'starlight-plugin-icons/components/Card.astro';
 
 <CardGrid stagger>
 	<Card title="Redis 8.x Compatible" icon="i-tabler:puzzle">
-		Full RESP2/RESP3 wire protocol support. Core types, bitmaps, JSON, time series, vector sets, probabilistic structures, geospatial, pub/sub, Lua scripting, search, and more.
+		Full support for all Redis types, including search, scripts, streams, multi, geo, vectors, timeseries, pubsub, etc. Wire-compatibility with Redis: use your existing clients.
 	</Card>
 	<Card title="Clustering & Replication" icon="i-tabler:arrows-shuffle">
-		Distributed hash slots with automatic sharding, Raft-based consensus for cluster state coordination, and read replicas.
+		Cluster mode and replication support. Cluster state managed via Raft consensus.
 	</Card>
 	<Card title="Persistent Storage" icon="i-tabler:database">
-		RocksDB-backed WAL with configurable durability modes (write-through or async). No separate AOF or RDB files to manage.
+		RocksDB-backed persistence with configurable durability (write-through or async). Hot/warm tier support for memory to SSD spillover.
 	</Card>
 	<Card title="Operations" icon="i-tabler:settings">
-		Prometheus metrics, Grafana dashboards, OpenTelemetry tracing, DTrace probes, HTTP debug UI, and online configuration changes.
+		Modern observability. Prometheus metrics, Grafana dashboards, OpenTelemetry, DTrace, HTTP debug UI, performance profiling bundles and more. Management CLI. Kube operator coming soon.
 	</Card>
-	<Card title="Battle-Tested" icon="i-tabler:shield-check">
-		Shuttle and Turmoil deterministic concurrency testing, Jepsen verification (linearizability and serializability), fuzz testing, and a Redis regression compatibility suite.
+	<Card title="Extensively tested" icon="i-tabler:shield-check">
+		Full Redis compatibility suite ported to Rust. Concurrency/fault testing via Jepsen and an extensive shuttle/turmoil test suite. Custom linearizability/serializability checkers. Fuzz testing.
 	</Card>
 	<Card title="Built with Rust" icon="i-tabler:rocket">
-		Memory-safe, high-performance implementation with Tokio async I/O and zero-copy RESP parsing.
+		Memory-safe, high-performance, and maybe a neck beard.
 	</Card>
 </CardGrid>
 
@@ -57,6 +59,16 @@ FrogDB supports the full Redis 8.x feature set:
 - **Pub/Sub** — Channel and pattern-based publish/subscribe, event sourcing
 - **Scripting & Transactions** — Lua scripting, MULTI/EXEC
 - **Search** — Full text search, secondary indexing, vector search, aggregations
+
+## Testing
+
+FrogDB is verified with extensive deterministic concurrency simulation, distributed-systems testing, and a ported Redis regression suite that runs on every commit.
+
+* Redis compatibility test suite ported from official distribution
+* Jepsen Knossos and Elle black box tests for concurrency correctness and failure modes
+* Shuttle and Turmoil tests for white box testing for concurrency correctness and failure modes
+* Fuzz testing on all input paths (app requests, cluster state, replication, recovery, etc)
+
 
 ## Quick Example
 

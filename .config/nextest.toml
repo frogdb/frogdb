@@ -42,6 +42,15 @@ slow-timeout = { period = "15s", terminate-after = 4 }
 filter = "test(property_tests::)"
 slow-timeout = { period = "15s", terminate-after = 4 }
 
+# The generated-workload seed sweep drives ~20 seeded turmoil sims back-to-back,
+# each spinning a multi-shard server, running the full invariant pipeline, and
+# probing the four DEBUG quiescence commands. That is legitimately >15s in debug,
+# so give it generous headroom (the individual sub-runs are fast; it is the
+# 20× repetition that accumulates).
+[[profile.default.overrides]]
+filter = "test(concurrency_workload::seed_sweep)"
+slow-timeout = { period = "30s", terminate-after = 4 }
+
 # HyperLogLog cardinality tests add tens of thousands of elements over the
 # socket (sparse→dense promotion + repeated PFCOUNT) and run ~14s in debug —
 # right at the default 15s hard kill, so they tip over under parallel load.

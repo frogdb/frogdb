@@ -4,10 +4,15 @@ use anyhow::Result;
 use frogdb_core::shard::NewConnection;
 use frogdb_core::sync::{Arc, AtomicUsize, Ordering};
 
-use frogdb_telemetry::definitions::{
-    ConnectionsCurrent, ConnectionsRejected, ConnectionsTotal, TlsHandshakeErrors,
-};
-use frogdb_telemetry::labels::{RejectionReason, TlsHandshakeError};
+use frogdb_telemetry::definitions::{ConnectionsCurrent, ConnectionsRejected, ConnectionsTotal};
+use frogdb_telemetry::labels::RejectionReason;
+// TLS handshake metrics are only referenced by the non-turmoil TLS accept path
+// below (`#[cfg(not(feature = "turmoil"))]`); importing them under turmoil is an
+// unused-import error under `-D warnings`.
+#[cfg(not(feature = "turmoil"))]
+use frogdb_telemetry::definitions::TlsHandshakeErrors;
+#[cfg(not(feature = "turmoil"))]
+use frogdb_telemetry::labels::TlsHandshakeError;
 use std::sync::atomic::AtomicI64;
 
 use tokio::sync::mpsc;
@@ -352,7 +357,12 @@ impl Acceptor {
     }
 }
 
-#[cfg(test)]
+// Every test here hardcodes `tokio::net::TcpListener`, which is incompatible
+// with the turmoil-typed `PortSpec.listener` (and a turmoil listener cannot
+// bind outside a sim World). None is a simulation test, so the whole module is
+// excluded under the `turmoil` feature — otherwise `test_context` and its
+// imports are dead code under `-D warnings`.
+#[cfg(all(test, not(feature = "turmoil")))]
 mod tests {
     use super::*;
     use crate::runtime_config::ConfigManager;
@@ -412,6 +422,9 @@ mod tests {
     /// The same `AcceptorContext` is shared by every port; only the
     /// `PortSpec` should differ per listener. Verify `is_admin` threads
     /// through correctly and shared fields stay identical across ports.
+    // Hardcodes `tokio::net::TcpListener`, which is incompatible with the
+    // turmoil-typed `PortSpec.listener` under the `turmoil` feature (and a
+    // turmoil listener cannot bind outside a sim World). Not a simulation test.
     #[tokio::test]
     async fn bind_threads_is_admin_per_port() {
         let ctx = test_context();
@@ -458,6 +471,8 @@ mod tests {
     /// receives" inspectable without accepting a socket. Two ports built from
     /// the same context must *share* their Arc dep members (pointer-equal), not
     /// copy them — while `config.is_admin` still tracks the per-port `PortSpec`.
+    // See `bind_threads_is_admin_per_port`: tokio-listener bind is incompatible
+    // with the turmoil-typed `PortSpec.listener`. Not a simulation test.
     #[tokio::test]
     async fn bind_shares_deps_across_ports() {
         let ctx = test_context();
@@ -516,7 +531,6 @@ mod tests {
 
     /// The TLS port gets a `tls_manager`; the plaintext port does not, even
     /// though both are built from the same context.
-    #[cfg(not(feature = "turmoil"))]
     #[tokio::test]
     async fn bind_threads_tls_manager_per_port() {
         use frogdb_test_harness::tls::TlsFixture;

@@ -1,0 +1,125 @@
+---
+/**
+ * Hero override: large tight-tracked headline with an inline logo, lede,
+ * actions. Only renders on `template: splash` pages.
+ */
+import { Image } from "astro:assets";
+import { LinkButton } from "@astrojs/starlight/components";
+
+const { data } = Astro.locals.starlightRoute.entry;
+const { title = data.title, tagline, image, actions = [] } = data.hero || {};
+
+const logo = image && "file" in image ? image.file : undefined;
+const logoAlt = (image && "alt" in image && image.alt) || "";
+---
+
+<div class="frog-hero">
+	<div class="frog-hero-row">
+		{
+			logo && (
+				<div class="frog-hero-logo-box">
+					<Image
+						src={logo}
+						width={512}
+						alt={logoAlt}
+						class="frog-hero-logo"
+					/>
+				</div>
+			)
+		}
+		<h1 id="_top" data-page-title set:html={title} />
+	</div>
+	{tagline && <p class="frog-lede" set:html={tagline} />}
+	{
+		actions.length > 0 && (
+			<div class="frog-actions">
+				{actions.map(
+					({
+						attrs: { class: className, ...attrs } = {},
+						icon,
+						link: href,
+						text,
+						variant,
+					}) => (
+						<LinkButton
+							{href}
+							{variant}
+							icon={icon?.name}
+							class:list={[className]}
+							{...attrs}
+						>
+							{text}
+							{icon?.html && <Fragment set:html={icon.html} />}
+						</LinkButton>
+					),
+				)}
+			</div>
+		)
+	}
+</div>
+
+<style>
+	.frog-hero {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 1.25rem;
+		padding-block: clamp(2.5rem, 8vw, 5.5rem) 1.5rem;
+		text-align: left;
+	}
+	.frog-hero-row {
+		/* Single source of truth for the headline size so the logo can match
+		   the two-line text block exactly (2 lines × 1.05 line-height). */
+		--hero-h1-size: clamp(2.5rem, 6.5vw, 4.5rem);
+		display: flex;
+		align-items: center;
+		gap: 1.5rem;
+	}
+	.frog-hero-logo-box {
+		position: relative;
+		height: calc(var(--hero-h1-size) * 2.1);
+		aspect-ratio: 1;
+		flex-shrink: 0;
+	}
+	.frog-hero-logo {
+		position: absolute;
+		inset: 0;
+		width: 100%;
+		height: 100%;
+		object-fit: contain;
+	}
+	.frog-hero h1 {
+		margin: 0;
+		margin-top: -0.2em;
+		max-width: 60rem;
+		font-size: var(--hero-h1-size);
+		font-weight: 800;
+		letter-spacing: -0.07em;
+		line-height: 1.05;
+		color: var(--sl-color-white);
+	}
+	/* `hero.title` frontmatter HTML is injected via set:html, so it escapes
+	   Astro's scoping — target it with :global. */
+	.frog-hero h1 :global(.accent) {
+		color: var(--sl-color-accent-high);
+	}
+	.frog-lede {
+		margin: 0;
+		/* Neutralize starlight-theme-rapide's `.content-panel:first-of-type p:not(...)`
+		   "notice" rule (@layer rapide, node_modules/starlight-theme-rapide/styles/base.css),
+		   which otherwise matches this paragraph and adds padding: 1rem (all sides),
+		   misaligning it against the logo box/actions row and adding stray vertical gap. */
+		padding: 0;
+		max-width: 46rem;
+		font-size: clamp(1.05rem, 1.6vw, 1.3rem);
+		letter-spacing: -0.02em;
+		line-height: 1.6;
+		color: var(--sl-color-gray-2);
+	}
+	.frog-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+		margin-top: 0.5rem;
+	}
+</style>

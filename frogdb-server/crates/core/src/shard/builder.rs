@@ -10,7 +10,7 @@ use crate::eviction::EvictionConfig;
 use crate::functions::SharedFunctionRegistry;
 use crate::persistence::{
     NoopSnapshotCoordinator, RocksStore, RocksWalWriter, SnapshotCoordinator, WalConfig,
-    WalFailurePolicy,
+    WalFailurePolicy, WalSink,
 };
 use crate::pubsub::ShardSubscriptions;
 use crate::registry::CommandRegistry;
@@ -55,6 +55,21 @@ impl std::fmt::Display for ShardBuilderError {
 
 impl std::error::Error for ShardBuilderError {}
 
+/// Which WAL implementation the built shard should use.
+///
+/// `Rocks` is the production default. `Fake` selects the deterministic
+/// in-process [`FakeWalSink`](frogdb_persistence::FakeWalSink) used by
+/// simulation tests; its construction arm is only compiled under
+/// `cfg(any(test, feature = "fake-wal"))`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WalMode {
+    /// RocksDB-backed WAL (production).
+    #[default]
+    Rocks,
+    /// Deterministic in-process fake WAL (tests / simulation).
+    Fake,
+}
+
 /// Builder for creating [`ShardWorker`] instances with a fluent API.
 ///
 /// This is the **single construction path** for [`ShardWorker`]: the
@@ -80,6 +95,7 @@ impl std::error::Error for ShardBuilderError {}
 pub struct ShardWorkerBuilder {
     shard_id: usize,
     num_shards: usize,
+    wal_mode: WalMode,
     message_rx: Option<ShardReceiver>,
     new_conn_rx: Option<mpsc::Receiver<NewConnection>>,
     shard_senders: Option<Arc<Vec<ShardSender>>>,
@@ -112,6 +128,7 @@ impl ShardWorkerBuilder {
         Self {
             shard_id,
             num_shards,
+            wal_mode: WalMode::Rocks,
             message_rx: None,
             new_conn_rx: None,
             shard_senders: None,
@@ -196,6 +213,12 @@ impl ShardWorkerBuilder {
     /// Set scripting configuration.
     pub fn with_scripting(mut self, config: ScriptingConfig) -> Self {
         self.scripting_config = config;
+        self
+    }
+
+    /// Select the WAL implementation. Defaults to [`WalMode::Rocks`].
+    pub fn with_wal_mode(mut self, mode: WalMode) -> Self {
+        self.wal_mode = mode;
         self
     }
 
@@ -337,22 +360,40 @@ impl ShardWorkerBuilder {
             .wal_failure_policy
             .clone()
             .unwrap_or_else(|| Arc::new(AtomicU8::new(WalFailurePolicy::default().as_u8())));
-        let wal_writer = match (self.rocks_store.as_ref(), self.wal_config.as_ref()) {
-            (Some(rocks), Some(wal_config)) => {
-                if self.wal_failure_policy.is_none() {
-                    failure_policy.store(
-                        wal_config.failure_policy.as_u8(),
-                        std::sync::atomic::Ordering::Relaxed,
-                    );
+        let wal_writer: Option<Box<dyn WalSink>> = match self.wal_mode {
+            // Production path — byte-identical to the pre-WalMode behavior.
+            WalMode::Rocks => match (self.rocks_store.as_ref(), self.wal_config.as_ref()) {
+                (Some(rocks), Some(wal_config)) => {
+                    if self.wal_failure_policy.is_none() {
+                        failure_policy.store(
+                            wal_config.failure_policy.as_u8(),
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                    }
+                    Some(Box::new(RocksWalWriter::new(
+                        rocks.clone(),
+                        shard_id,
+                        wal_config.clone(),
+                        metrics_recorder.clone(),
+                    )) as Box<dyn WalSink>)
                 }
-                Some(RocksWalWriter::new(
-                    rocks.clone(),
-                    shard_id,
-                    wal_config.clone(),
-                    metrics_recorder.clone(),
-                ))
+                _ => None,
+            },
+            // Deterministic fake WAL — only compiled under test / `fake-wal`.
+            // Never requires a `rocks_store`.
+            WalMode::Fake => {
+                #[cfg(any(test, feature = "fake-wal"))]
+                {
+                    let sink = crate::persistence::FakeWalSink::new(shard_id);
+                    crate::shard::fake_wal_registry::FakeWalRegistry::install(shard_id, sink.log());
+                    Some(Box::new(sink) as Box<dyn WalSink>)
+                }
+                #[cfg(not(any(test, feature = "fake-wal")))]
+                {
+                    // Fake WAL is not compiled into production binaries.
+                    None
+                }
             }
-            _ => None,
         };
 
         // Search index lifecycle: rocks-backed when persistence is enabled.
@@ -436,5 +477,35 @@ impl ShardWorkerBuilder {
     pub fn build(self) -> ShardWorker {
         self.try_build()
             .expect("ShardWorkerBuilder: missing required fields")
+    }
+}
+
+#[cfg(test)]
+mod fake_wal_tests {
+    use super::*;
+    use crate::noop::NoopMetricsRecorder;
+    use crate::registry::CommandRegistry;
+    use crate::shard::fake_wal_registry::FakeWalRegistry;
+    use tokio::sync::mpsc;
+
+    #[test]
+    fn fake_wal_mode_builds_a_recording_sink() {
+        FakeWalRegistry::clear();
+        let (msg_tx, msg_rx) = mpsc::channel(16);
+        let (_conn_tx, conn_rx) = mpsc::channel(16);
+        let worker = ShardWorkerBuilder::new(0, 1)
+            .with_message_rx(ShardReceiver::new(msg_rx))
+            .with_new_conn_rx(conn_rx)
+            .with_shard_senders(Arc::new(vec![ShardSender::new(msg_tx)]))
+            .with_registry(Arc::new(CommandRegistry::new()))
+            .with_metrics(Arc::new(NoopMetricsRecorder::new()))
+            .with_wal_mode(WalMode::Fake)
+            .build();
+        // A fake sink is installed and observable via the registry.
+        assert!(worker.persistence.has_wal());
+        assert!(
+            FakeWalRegistry::log(0).is_some(),
+            "fake sink log must be registered for shard 0"
+        );
     }
 }

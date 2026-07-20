@@ -58,6 +58,7 @@ pub mod history;
 pub mod models;
 pub mod partition;
 pub mod quiescence;
+pub mod workload;
 
 pub use checker::{LinearizabilityResult, check_linearizability, check_linearizability_bounded};
 pub use conservation::{
@@ -75,3 +76,4 @@ pub use quiescence::{
     WaitQueueSnapshot, check_expiry_index_consistent, check_locktable_empty,
     check_memory_accounting, check_waitqueue_empty,
 };
+pub use workload::{ClientScript, Profile, ScriptedOp, Workload};

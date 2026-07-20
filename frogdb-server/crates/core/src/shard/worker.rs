@@ -266,6 +266,41 @@ impl ShardWorker {
             .build()
     }
 
+    /// Create a shard worker backed by the deterministic fake WAL sink.
+    ///
+    /// Mirrors [`Self::with_eviction`] but selects [`WalMode::Fake`], so the
+    /// shard records WAL effects into the process-global
+    /// [`FakeWalRegistry`](super::fake_wal_registry::FakeWalRegistry) without
+    /// touching RocksDB. Test / `fake-wal` only.
+    #[cfg(any(test, feature = "fake-wal"))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_fake_persistence(
+        shard_id: usize,
+        num_shards: usize,
+        store: HashMapStore,
+        message_rx: ShardReceiver,
+        new_conn_rx: mpsc::Receiver<NewConnection>,
+        shard_senders: Arc<Vec<ShardSender>>,
+        registry: Arc<CommandRegistry>,
+        eviction_config: EvictionConfig,
+        metrics_recorder: Arc<dyn crate::noop::MetricsRecorder>,
+        slowlog_next_id: Arc<AtomicU64>,
+        replication_broadcaster: SharedBroadcaster,
+    ) -> Self {
+        ShardWorkerBuilder::new(shard_id, num_shards)
+            .with_store(store)
+            .with_message_rx(message_rx)
+            .with_new_conn_rx(new_conn_rx)
+            .with_shard_senders(shard_senders)
+            .with_registry(registry)
+            .with_wal_mode(super::builder::WalMode::Fake)
+            .with_eviction(eviction_config)
+            .with_metrics(metrics_recorder)
+            .with_slowlog_id(slowlog_next_id)
+            .with_replication(replication_broadcaster)
+            .build()
+    }
+
     /// Create a new shard worker with persistence.
     #[allow(clippy::too_many_arguments)]
     pub fn with_persistence(

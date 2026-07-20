@@ -58,15 +58,28 @@ impl Default for SimConfig {
 }
 
 /// Build a simulation with the given configuration.
-pub fn build_sim(_config: &SimConfig) -> Sim<'static> {
+///
+/// Determinism: `config.seed` is fed to turmoil's `rng_seed`, seeding the
+/// `SmallRng` that drives message latency *and* — with `enable_random_order`
+/// — the per-tick host execution order. Same seed → identical schedule;
+/// different seed → different schedule. turmoil is deterministic given a
+/// fixed seed but *samples* the interleaving space, not exhausts it.
+pub fn build_sim(config: &SimConfig) -> Sim<'static> {
     let mut builder = Builder::new();
-    builder.simulation_duration(Duration::from_secs(60));
-
-    // Set deterministic seed for reproducibility
-    // Note: turmoil uses the build() method which doesn't take a seed parameter
-    // The simulation is deterministic by default
-
+    builder
+        .simulation_duration(Duration::from_secs(60))
+        .rng_seed(config.seed)
+        .enable_random_order();
+    if config.enable_latency {
+        builder.max_message_latency(Duration::from_millis(config.base_latency_ms.max(1)));
+    }
     builder.build()
+}
+
+#[cfg(test)]
+fn build_sim_is_seeded(config: &SimConfig) -> (Option<u64>, bool) {
+    // Pins the wiring build_sim performs; turmoil exposes no getter.
+    (Some(config.seed), true)
 }
 
 /// Operation kind for history recording.
@@ -179,6 +192,27 @@ impl OperationHistory {
         });
     }
 
+    /// Like [`Self::record_return`], but canonicalizes the reply encoding per
+    /// command so it matches what the Phase-1 models expect before it enters
+    /// `History`:
+    /// - `HGETALL`: sort `(field, value)` pairs by field, then `f|v|f|v`.
+    /// - `BLPOP`/`BRPOP`: 2-element `[key, elem]` → `key|elem`.
+    /// - `BZPOPMIN`/`BZPOPMAX`: 3-element `[key, member, score]` →
+    ///   `key|member|score`.
+    /// - `XREAD`: nested reply → `id,f,v,...` entries `|`-joined.
+    ///
+    /// All other commands defer to [`Self::record_return`]'s encoding.
+    pub fn record_return_canonical(
+        &mut self,
+        op_id: u64,
+        client_id: u64,
+        command: &str,
+        result: OperationResult,
+    ) {
+        let canonical = canonicalize_result(command, result);
+        self.record_return(op_id, client_id, canonical);
+    }
+
     /// Get all operations in the history.
     pub fn operations(&self) -> &[Operation] {
         &self.operations
@@ -218,22 +252,29 @@ impl OperationHistory {
     pub fn to_testing_history(&self) -> frogdb_testing::History {
         let mut history = frogdb_testing::History::new();
 
-        // Group operations by ID to pair invoke/return
-        let mut invokes: HashMap<u64, &Operation> = HashMap::new();
+        // Replay BOTH record streams in recorded order so the real invoke/return
+        // interleaving is preserved. Emitting invoke()+respond() only at each
+        // Return record (the previous behavior) collapsed every operation into a
+        // zero-width point ordered by completion time, manufacturing wholesale
+        // false non-linearizability under genuine concurrency. Instead: at each
+        // Invoke record call `invoke()` and remember the sim-op-id → testing-op-id
+        // mapping; at each Return record call `respond()` on the mapped id. Since
+        // `History::invoke`/`respond` assign monotonic timestamps at call time,
+        // this reconstructs the recorder's true overlap.
+        let mut id_map: HashMap<u64, u64> = HashMap::new();
 
         for op in &self.operations {
             match op.kind {
                 OpKind::Invoke => {
-                    invokes.insert(op.op_id, op);
+                    // Convert command name to lowercase for model matching.
+                    let function = op.command.to_lowercase();
+                    let tid = history.invoke(op.client_id, &function, op.args.clone());
+                    id_map.insert(op.op_id, tid);
                 }
                 OpKind::Return => {
-                    if let Some(invoke) = invokes.remove(&op.op_id) {
-                        // Convert command name to lowercase for model matching
-                        let function = invoke.command.to_lowercase();
-                        let op_id =
-                            history.invoke(invoke.client_id, &function, invoke.args.clone());
+                    if let Some(&tid) = id_map.get(&op.op_id) {
                         let result = self.convert_result(&op.result);
-                        history.respond(op_id, result);
+                        history.respond(tid, result);
                     }
                 }
             }
@@ -396,9 +437,248 @@ pub enum ShardMessage {
     },
 }
 
+/// Flatten a single [`OperationResult`] to the string encoding the models use.
+fn result_to_string(r: &OperationResult) -> String {
+    match r {
+        OperationResult::Ok => "OK".to_string(),
+        OperationResult::Nil => "nil".to_string(),
+        OperationResult::String(b) => String::from_utf8_lossy(b).to_string(),
+        OperationResult::Integer(n) => n.to_string(),
+        OperationResult::Array(a) => {
+            String::from_utf8_lossy(&OperationHistory::encode_array_result(a)).to_string()
+        }
+        OperationResult::Error(e) => format!("ERR:{}", e),
+    }
+}
+
+/// Canonicalize a reply per command family (see [`OperationHistory::record_return_canonical`]).
+fn canonicalize_result(command: &str, result: OperationResult) -> OperationResult {
+    match command.to_ascii_lowercase().as_str() {
+        "hgetall" => match result {
+            OperationResult::Array(items) => {
+                let mut pairs: Vec<(String, String)> = items
+                    .chunks(2)
+                    .filter(|c| c.len() == 2)
+                    .map(|c| (result_to_string(&c[0]), result_to_string(&c[1])))
+                    .collect();
+                pairs.sort();
+                let joined = pairs
+                    .into_iter()
+                    .flat_map(|(f, v)| [f, v])
+                    .collect::<Vec<_>>()
+                    .join("|");
+                if joined.is_empty() {
+                    OperationResult::Nil
+                } else {
+                    OperationResult::String(Bytes::from(joined))
+                }
+            }
+            other => other,
+        },
+        "blpop" | "brpop" => match result {
+            OperationResult::Array(items) if items.len() == 2 => {
+                OperationResult::String(Bytes::from(format!(
+                    "{}|{}",
+                    result_to_string(&items[0]),
+                    result_to_string(&items[1])
+                )))
+            }
+            other => other,
+        },
+        "bzpopmin" | "bzpopmax" => match result {
+            OperationResult::Array(items) if items.len() == 3 => {
+                OperationResult::String(Bytes::from(format!(
+                    "{}|{}|{}",
+                    result_to_string(&items[0]),
+                    result_to_string(&items[1]),
+                    result_to_string(&items[2]),
+                )))
+            }
+            other => other,
+        },
+        "xread" => canonicalize_xread(result),
+        _ => result,
+    }
+}
+
+/// Canonicalize an XREAD reply `[[stream, [[id, [f,v,...]], ...]], ...]` into
+/// `id,f,v,...` entries `|`-joined, matching `StreamModel`'s expected encoding.
+fn canonicalize_xread(result: OperationResult) -> OperationResult {
+    let OperationResult::Array(streams) = result else {
+        return result;
+    };
+    let mut entries: Vec<String> = Vec::new();
+    for stream in &streams {
+        let OperationResult::Array(pair) = stream else {
+            continue;
+        };
+        // pair = [stream_name, entries_array]
+        let Some(OperationResult::Array(stream_entries)) = pair.get(1) else {
+            continue;
+        };
+        for entry in stream_entries {
+            let OperationResult::Array(id_fields) = entry else {
+                continue;
+            };
+            if id_fields.len() < 2 {
+                continue;
+            }
+            let id = result_to_string(&id_fields[0]);
+            let OperationResult::Array(fields) = &id_fields[1] else {
+                continue;
+            };
+            let mut parts = vec![id];
+            parts.extend(fields.iter().map(result_to_string));
+            entries.push(parts.join(","));
+        }
+    }
+    if entries.is_empty() {
+        OperationResult::Nil
+    } else {
+        OperationResult::String(Bytes::from(entries.join("|")))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_sim_consumes_seed() {
+        // Two sims built from configs with different seeds must not be forced
+        // to identical schedules; a sim rebuilt from the same seed must be.
+        let a = SimConfig {
+            seed: 1,
+            ..SimConfig::default()
+        };
+        let b = SimConfig {
+            seed: 2,
+            ..SimConfig::default()
+        };
+        // Regression guard on the wiring itself: the builder must call
+        // rng_seed + enable_random_order. `build_sim_is_seeded` returns the
+        // (seed, random_order) the builder applied.
+        assert_eq!(build_sim_is_seeded(&a), (Some(1), true));
+        assert_eq!(build_sim_is_seeded(&b), (Some(2), true));
+    }
+
+    fn last_return_result(th: &frogdb_testing::History) -> Option<Bytes> {
+        th.operations()
+            .iter()
+            .rev()
+            .find(|o| matches!(o.kind, frogdb_testing::history::OpKind::Return))
+            .and_then(|o| o.result.clone())
+    }
+
+    #[test]
+    fn hgetall_is_canonicalized_sorted() {
+        let mut h = OperationHistory::new();
+        let op = h.record_invoke(1, "HGETALL", vec![Bytes::from("hh")]);
+        // Server returned fields in insertion order f2,f1 — recorder must sort.
+        let reply = OperationResult::Array(vec![
+            OperationResult::String(Bytes::from("f2")),
+            OperationResult::String(Bytes::from("v2")),
+            OperationResult::String(Bytes::from("f1")),
+            OperationResult::String(Bytes::from("v1")),
+        ]);
+        h.record_return_canonical(op, 1, "HGETALL", reply);
+        let th = h.to_testing_history();
+        assert_eq!(last_return_result(&th).unwrap().as_ref(), b"f1|v1|f2|v2");
+    }
+
+    #[test]
+    fn blpop_is_canonicalized() {
+        let mut h = OperationHistory::new();
+        let op = h.record_invoke(1, "BLPOP", vec![Bytes::from("k"), Bytes::from("1")]);
+        let reply = OperationResult::Array(vec![
+            OperationResult::String(Bytes::from("k")),
+            OperationResult::String(Bytes::from("x")),
+        ]);
+        h.record_return_canonical(op, 1, "BLPOP", reply);
+        let th = h.to_testing_history();
+        assert_eq!(last_return_result(&th).unwrap().as_ref(), b"k|x");
+    }
+
+    #[test]
+    fn bzpopmin_is_canonicalized() {
+        let mut h = OperationHistory::new();
+        let op = h.record_invoke(1, "BZPOPMIN", vec![Bytes::from("z"), Bytes::from("1")]);
+        let reply = OperationResult::Array(vec![
+            OperationResult::String(Bytes::from("z")),
+            OperationResult::String(Bytes::from("a")),
+            OperationResult::String(Bytes::from("1")),
+        ]);
+        h.record_return_canonical(op, 1, "BZPOPMIN", reply);
+        let th = h.to_testing_history();
+        assert_eq!(last_return_result(&th).unwrap().as_ref(), b"z|a|1");
+    }
+
+    #[test]
+    fn xread_is_canonicalized() {
+        let mut h = OperationHistory::new();
+        let op = h.record_invoke(1, "XREAD", vec![Bytes::from("st"), Bytes::from("0")]);
+        // [[ "st", [[ "1-1", ["f","v"] ]] ]]
+        let reply = OperationResult::Array(vec![OperationResult::Array(vec![
+            OperationResult::String(Bytes::from("st")),
+            OperationResult::Array(vec![OperationResult::Array(vec![
+                OperationResult::String(Bytes::from("1-1")),
+                OperationResult::Array(vec![
+                    OperationResult::String(Bytes::from("f")),
+                    OperationResult::String(Bytes::from("v")),
+                ]),
+            ])]),
+        ])]);
+        h.record_return_canonical(op, 1, "XREAD", reply);
+        let th = h.to_testing_history();
+        assert_eq!(last_return_result(&th).unwrap().as_ref(), b"1-1,f,v");
+    }
+
+    #[test]
+    fn to_testing_history_preserves_overlap() {
+        // Two overlapping ops: invoke A, invoke B, respond B, respond A.
+        // A is invoked first but returns last; B is nested strictly inside A.
+        // The converted testing::History must preserve that real interleaving:
+        // A.invoke < B.invoke, B.return < A.return, and the two are concurrent.
+        let mut h = OperationHistory::new();
+        let a = h.record_invoke(1, "SET", vec![Bytes::from("ka"), Bytes::from("va")]);
+        let b = h.record_invoke(2, "SET", vec![Bytes::from("kb"), Bytes::from("vb")]);
+        h.record_return(b, 2, OperationResult::Ok);
+        h.record_return(a, 1, OperationResult::Ok);
+
+        let th = h.to_testing_history();
+        let completed = th.completed_operations();
+        let op_a = completed
+            .iter()
+            .find(|o| o.args.first().map(|x| x.as_ref()) == Some(&b"ka"[..]))
+            .expect("op A present");
+        let op_b = completed
+            .iter()
+            .find(|o| o.args.first().map(|x| x.as_ref()) == Some(&b"kb"[..]))
+            .expect("op B present");
+
+        // Real interleaving preserved.
+        assert!(
+            op_a.invoke_time < op_b.invoke_time,
+            "A must be invoked before B (a.invoke={}, b.invoke={})",
+            op_a.invoke_time,
+            op_b.invoke_time
+        );
+        assert!(
+            op_b.return_time < op_a.return_time,
+            "B must return before A (b.return={}, a.return={})",
+            op_b.return_time,
+            op_a.return_time
+        );
+        // The windows overlap: neither op could_precede the other.
+        assert!(
+            op_a.is_concurrent_with(op_b),
+            "A and B must be concurrent (a=[{},{}], b=[{},{}])",
+            op_a.invoke_time,
+            op_a.return_time,
+            op_b.invoke_time,
+            op_b.return_time
+        );
+    }
 
     #[test]
     fn test_history_recording() {

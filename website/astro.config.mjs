@@ -8,6 +8,7 @@ import starlightLinksValidator from 'starlight-links-validator';
 import starlightSidebarTopics from 'starlight-sidebar-topics';
 import { starlightIconsPlugin } from 'starlight-plugin-icons';
 import remarkBaseUrl from './plugins/remark-base-url.mjs';
+import { frogDark, frogLight } from './src/frog-code-themes.ts';
 
 const BASE = '/';
 
@@ -22,6 +23,7 @@ export default defineConfig({
 		UnoCSS(),
 		starlight({
 			expressiveCode: {
+				themes: [frogDark, frogLight],
 				shiki: {
 					langAlias: { redis: 'text' },
 				},
@@ -129,8 +131,12 @@ starlightSidebarTopics([
 				baseUrl: 'https://github.com/frogdb/frogdb/edit/main/website/',
 			},
 			customCss: [
+				'@fontsource-variable/inter',
 				'./src/styles/custom.css',
 			],
+			components: {
+				Hero: './src/components/Hero.astro',
+			},
 		}),
 	],
 });

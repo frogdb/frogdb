@@ -153,9 +153,14 @@ impl RecoveryError {
 /// already blocks the runtime here, so a synchronous seam is behavior-preserving;
 /// wrapping the call in `spawn_blocking` is a follow-up.
 pub(crate) fn recover(inputs: &RecoveryInputs<'_>) -> Result<RecoveredState, RecoveryError> {
-    // Persistence phases (1-4) only run when persistence is enabled; otherwise
-    // the on-disk store does not exist and we start with fresh per-shard stores.
-    let (rocks, shards, functions, installed, stats) = if inputs.persistence.enabled {
+    // Persistence phases (1-4) only run when persistence is enabled AND backed
+    // by RocksDB; otherwise the on-disk store does not exist and we start with
+    // fresh per-shard stores. The `fake` WAL mode is enabled-but-RocksDB-less:
+    // it records into an in-process fake sink (simulation tests), so it takes
+    // the fresh-stores path here and never opens RocksDB.
+    let rocks_backed =
+        inputs.persistence.enabled && !inputs.persistence.mode.eq_ignore_ascii_case("fake");
+    let (rocks, shards, functions, installed, stats) = if rocks_backed {
         info!(
             data_dir = %inputs.persistence.data_dir.display(),
             durability_mode = %inputs.persistence.durability_mode,
