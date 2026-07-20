@@ -52,8 +52,9 @@ coverage.
 ## Non-goals (future phases)
 
 - Durability / crash-window testing (wake-before-WAL, fsync, recovery).
-- Replication correctness (WAIT quorum, offset drift, full-sync gap).
-- Cluster operations (slot migration, failover, Raft).
+- Replication correctness (WAIT quorum, offset drift, full-sync gap) — feasibility now
+  recorded in [Phase 6](#phase-6-replication--cluster-under-turmoil-feasibility-recorded-2026-07-20).
+- Cluster operations (slot migration, failover, Raft) — same.
 - Real-kernel networking, real-time jitter, multi-process chaos (remains Jepsen's job).
 
 ## Architecture
@@ -243,16 +244,88 @@ silent-green checker bugs.
 
 Each phase lands independently:
 
-1. Oracle library: models + history format + checker extensions + self-tests.
-2. DEBUG introspection commands + quiescence checkers.
+1. Oracle library: models + history format + checker extensions + self-tests. **Done.**
+2. DEBUG introspection commands + quiescence checkers. **Done.**
 3. Turmoil harness v2 + workload generator + persistence fake; first seed sweeps;
-   fix what trips.
-4. Shard-driver harness + 8 targeted scenarios; fix what trips.
+   fix what trips. **Done.**
+4. Split (2026-07-20, after the phase-3 coverage audit found the largest holes are
+   cheaper to close through the existing workload harness than through new harnesses):
+   - **4a. Workload vocabulary expansion** — real concurrent traffic for the worst
+     audit gaps, all through the proven phase-3 harness:
+     - Un-ignore the TxHeavy sweep: extend `KVModel` exec encoding with an
+       aborted/error outcome (CROSSSLOT, WATCH-abort) that never mutates state; bias
+       the generator toward hash-tagged same-slot transaction key groups while keeping
+       a minority of cross-slot combos to pin CROSSSLOT rejection. Research whether
+       standalone same-slot/cross-internal-shard EXEC via VLL is generator-reachable —
+       if so, weight it (that path has zero concurrency coverage today).
+     - Consumer groups: new `Family::StreamGroup` (XGROUP CREATE, non-blocking
+       XREADGROUP, XACK, XCLAIM, XAUTOCLAIM, XPENDING); strict `StreamGroupModel`
+       (PEL: entry → owning consumer + delivery count) for per-key WGL; new PEL
+       conservation checker (delivered-unacked entry in exactly one PEL; never both
+       acked and pending; delivery counts monotonic; no entry lost).
+     - Scripting: new `Family::Script` with a fixed pool of ~4–6 single-key /
+       hash-tagged Lua scripts of known composite semantics, each model-steppable with
+       existing models; generator mixes SCRIPT LOAD / EVAL / EVALSHA across clients
+       (covers the SHA-cache population race).
+     - Exact multi-waiter FIFO: allow multiple blocking waiters per key (drop the
+       blocking-owner stagger on this path); checker consumes DEBUG WAITQUEUE
+       registration ordinals.
+     - Bundled small items: connections-responsive quiescence (post-workload PING
+       sweep), `audit_expiry_index` KeyMissing/DeadlineMismatch unit tests,
+       binary-safe `history.rs` serde (drop `from_utf8_lossy`).
+   - **4b. Shard-driver harness + 8 targeted scenarios** (unchanged; see
+     [Targeted shard-driver scenarios](#targeted-shard-driver-scenarios)); blocking
+     XREADGROUP races (expiry-vs-NOGROUP) land here.
+   - **4c. Pub/sub oracle** — the audit's weakest area (zero concurrency-tooling
+     coverage; the mock-based shuttle tests and the 188 sequential functional tests
+     don't count). Not per-key-linearizability-checkable; needs its own oracle:
+     per-channel delivery conservation (a client subscribed for the entire
+     publish window must receive the message exactly once) + per-publisher order
+     preservation per channel; SUBSCRIBE/PSUBSCRIBE/PUBLISH vocabulary.
 5. CI wiring (per-PR + nightly).
+6. Replication & cluster in-process testing (see next section).
 
 Future phases (accommodated, not built): durability/crash-injection via the persistence
 seam; replication histories via the node-aware history format; cluster-op workloads via
 the RESP-level generator and DEBUG probes.
+
+## Phase 6: replication & cluster under turmoil (feasibility, recorded 2026-07-20)
+
+Both subsystems are fully implemented (`frogdb-replication`, PSYNC2-style, ~6k LOC;
+`frogdb-cluster`, openraft metadata plane, ~4.5k LOC) and currently tested only by
+Jepsen (3 topologies, ~20 workloads, kill/partition/clock/disk nemeses, knossos + Elle
+checkers). A code survey found in-process deterministic testing feasible, with
+asymmetric cost. Turmoil is the vehicle; shuttle is not — replication/cluster logic is
+almost entirely tokio async (`tokio::sync` locks, spawned tasks), which shuttle's
+thread-interleaving exploration cannot schedule.
+
+Ladder:
+
+- **6a. Replication under turmoil** — two small known seams:
+  - Primary PSYNC handoff is compiled out under turmoil
+    (`server/src/connection.rs` turmoil branch no-ops with "PSYNC handoff not
+    supported"); the handler already accepts `BoxedStream`, so only
+    `into_boxed()` for turmoil's `TcpStream` is missing.
+  - Replica outbound hard-codes `tokio::net::TcpStream::connect`
+    (`replication/src/replica/mod.rs` `plain_tcp_connect_factory`), but a
+    `ConnectFactory` injection seam already exists (used for TLS) — wire a turmoil
+    factory from the server crate (`frogdb-replication` itself stays turmoil-free).
+  - Plus multi-node harness prerequisites: `FakeWalRegistry` is process-global keyed
+    by `shard_id` only — needs a node/host key; a multi-`sim.host` harness (all
+    existing sims are single-host standalone). Oracle reuse: node-aware history
+    format + existing checkers give lost-write/split-brain/WAIT-quorum checks.
+- **6b. In-sim node kill + restart-from-WAL** — recovery boot phases exist
+  (`server/src/recovery/`) but nothing re-drives them inside a live sim; needs host
+  restart wiring. Clock-skew has no in-process seam (Jepsen uses libfaketime; some
+  code reads wall clock).
+- **6c. Cluster bus under turmoil** — materially more work: the cluster-bus RPC
+  handler is entirely `#[cfg(not(turmoil))]` (accepted connections dropped); the Raft
+  client, failure detector, and `migrate.rs` use raw `tokio::net::TcpStream`
+  (a `ConnectFactory` seam exists for the Raft client only). openraft is tokio-based
+  and should tolerate turmoil's reactor.
+
+Complementary to Jepsen, not a replacement: turmoil adds deterministic seeds and
+shrinkable repros; real disk, real clocks, real kill -9 remain Jepsen's job.
 
 ## References
 
