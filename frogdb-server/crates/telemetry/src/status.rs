@@ -13,7 +13,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::oneshot;
 
 use frogdb_core::{
-    ClientFlags, ClientRegistry, ShardMemoryStats, ShardMessage, ShardSender, WalLagStatsResponse,
+    ClientFlags, ClientRegistry, ShardMemoryStats, ShardMessage, ShardSender, ShardWalLag,
+    WalLagAggregate, WalLagStatsResponse,
 };
 
 use crate::health::HealthChecker;
@@ -200,6 +201,36 @@ pub struct WalLagStatus {
     pub shards: Vec<ShardLagStatus>,
 }
 
+impl From<Option<&WalLagAggregate>> for WalLagStatus {
+    /// Render the shared aggregate into the JSON status shape. `None` (no shard
+    /// reported WAL stats) becomes an all-zero status, matching the historical
+    /// behavior when persistence was enabled but no shard participated.
+    fn from(agg: Option<&WalLagAggregate>) -> Self {
+        match agg {
+            None => WalLagStatus {
+                pending_ops_total: 0,
+                pending_bytes_total: 0,
+                max_durability_lag_ms: 0,
+                avg_durability_lag_ms: 0.0,
+                flush_failures_total: 0,
+                lost_ops_total: 0,
+                last_flush_ok: true,
+                shards: Vec::new(),
+            },
+            Some(agg) => WalLagStatus {
+                pending_ops_total: agg.pending_ops,
+                pending_bytes_total: agg.pending_bytes,
+                max_durability_lag_ms: agg.max_durability_lag_ms,
+                avg_durability_lag_ms: agg.avg_durability_lag_ms(),
+                flush_failures_total: agg.flush_failures,
+                lost_ops_total: agg.lost_ops,
+                last_flush_ok: agg.last_flush_ok,
+                shards: agg.per_shard.iter().map(ShardLagStatus::from).collect(),
+            },
+        }
+    }
+}
+
 /// Per-shard lag status.
 #[derive(Debug, Clone, Serialize)]
 pub struct ShardLagStatus {
@@ -217,6 +248,20 @@ pub struct ShardLagStatus {
     pub lost_ops: u64,
     /// Whether the most recent flush attempt succeeded.
     pub last_flush_ok: bool,
+}
+
+impl From<&ShardWalLag> for ShardLagStatus {
+    fn from(s: &ShardWalLag) -> Self {
+        ShardLagStatus {
+            shard_id: s.shard_id,
+            pending_ops: s.pending_ops,
+            pending_bytes: s.pending_bytes,
+            durability_lag_ms: s.durability_lag_ms,
+            flush_failures: s.flush_failures,
+            lost_ops: s.lost_ops,
+            last_flush_ok: s.last_flush_ok,
+        }
+    }
 }
 
 /// Per-shard statistics.
@@ -438,59 +483,10 @@ impl StatusCollector {
             }
         }
 
-        // Aggregate stats
-        let mut pending_ops_total = 0usize;
-        let mut pending_bytes_total = 0usize;
-        let mut max_durability_lag_ms = 0u64;
-        let mut total_durability_lag_ms = 0u64;
-        let mut flush_failures_total = 0u64;
-        let mut lost_ops_total = 0u64;
-        let mut last_flush_ok = true;
-        let mut enabled_shards = 0usize;
-        let mut shards = Vec::new();
-
-        for response in &responses {
-            if let Some(ref lag_stats) = response.lag_stats {
-                enabled_shards += 1;
-                pending_ops_total += lag_stats.pending_ops;
-                pending_bytes_total += lag_stats.pending_bytes;
-                total_durability_lag_ms += lag_stats.durability_lag_ms;
-                flush_failures_total += lag_stats.flush_failures;
-                lost_ops_total += lag_stats.lost_ops;
-                last_flush_ok &= lag_stats.last_flush_ok;
-
-                if lag_stats.durability_lag_ms > max_durability_lag_ms {
-                    max_durability_lag_ms = lag_stats.durability_lag_ms;
-                }
-
-                shards.push(ShardLagStatus {
-                    shard_id: lag_stats.shard_id,
-                    pending_ops: lag_stats.pending_ops,
-                    pending_bytes: lag_stats.pending_bytes,
-                    durability_lag_ms: lag_stats.durability_lag_ms,
-                    flush_failures: lag_stats.flush_failures,
-                    lost_ops: lag_stats.lost_ops,
-                    last_flush_ok: lag_stats.last_flush_ok,
-                });
-            }
-        }
-
-        let avg_durability_lag_ms = if enabled_shards > 0 {
-            total_durability_lag_ms as f64 / enabled_shards as f64
-        } else {
-            0.0
-        };
-
-        WalLagStatus {
-            pending_ops_total,
-            pending_bytes_total,
-            max_durability_lag_ms,
-            avg_durability_lag_ms,
-            flush_failures_total,
-            lost_ops_total,
-            last_flush_ok,
-            shards,
-        }
+        // Fold through the shared node-wide aggregate so INFO and this
+        // endpoint can never disagree (see `frogdb_core::observability`).
+        let lags = responses.iter().filter_map(|r| r.lag_stats.as_ref());
+        WalLagStatus::from(WalLagAggregate::from_shards(lags).as_ref())
     }
 
     /// Build client status from registry.

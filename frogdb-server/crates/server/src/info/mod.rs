@@ -25,10 +25,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use frogdb_core::persistence::WalLagStats;
 use frogdb_core::{
     ClusterState, CommandLatencyHistograms, InfoShardSnapshot, KeysizeHistograms, MetricsRecorder,
-    ServerCommandStats, ShardMessage, ShardSender, TieredCounts,
+    ServerCommandStats, ShardMessage, ShardSender, TieredCounts, WalLagAggregate,
 };
 use frogdb_protocol::Response;
 use frogdb_telemetry::definitions::{WalBytes, WalWrites};
@@ -259,7 +258,7 @@ pub struct ShardInfoSnapshot {
     /// Keysize histograms merged across all shards.
     pub keysizes: KeysizeHistograms,
     /// Aggregated WAL lag; `None` when persistence is disabled on every shard.
-    pub wal: Option<WalAggregate>,
+    pub wal: Option<WalLagAggregate>,
     /// Primary host when running as a replica (from shard identity).
     pub master_host: Option<String>,
     /// Primary port when running as a replica (from shard identity).
@@ -283,10 +282,9 @@ impl ShardInfoSnapshot {
         self.tiered.expired_on_unspill += snap.tiered.expired_on_unspill;
         self.keysizes.merge(&snap.keysizes);
         if let Some(lag) = snap.wal_lag {
-            match &mut self.wal {
-                Some(agg) => agg.absorb(&lag),
-                None => self.wal = Some(WalAggregate::from_shard(&lag)),
-            }
+            self.wal
+                .get_or_insert_with(WalLagAggregate::new)
+                .absorb(&lag);
         }
         if self.master_host.is_none() {
             self.master_host = snap.master_host;
@@ -294,56 +292,6 @@ impl ShardInfoSnapshot {
         if self.master_port.is_none() {
             self.master_port = snap.master_port;
         }
-    }
-}
-
-/// WAL lag aggregated across shards: pending work and failure counters sum,
-/// lags take the worst (max) shard, the "last flush" timestamp takes the
-/// oldest (min) shard — i.e. every shard has flushed at least as of the
-/// reported time — and the flush status is ok only if every shard's last
-/// flush attempt succeeded.
-#[derive(Debug, Clone, Default)]
-pub struct WalAggregate {
-    /// Total operations buffered but not yet flushed.
-    pub pending_ops: usize,
-    /// Total bytes buffered but not yet flushed.
-    pub pending_bytes: usize,
-    /// Worst per-shard durability lag (ms since last flush).
-    pub durability_lag_ms: u64,
-    /// Total failed flush attempts across shards since startup.
-    pub flush_failures: u64,
-    /// Total WAL entries dropped in failed flushes across shards since
-    /// startup. Losses are permanent; this never decreases.
-    pub lost_ops: u64,
-    /// False if any shard's most recent flush attempt failed.
-    pub last_flush_ok: bool,
-    /// Oldest per-shard last-flush wall-clock time (unix ms).
-    pub last_flush_time_ms: u64,
-}
-
-impl WalAggregate {
-    /// Seed the aggregate from the first shard's lag stats.
-    fn from_shard(lag: &WalLagStats) -> Self {
-        Self {
-            pending_ops: lag.pending_ops,
-            pending_bytes: lag.pending_bytes,
-            durability_lag_ms: lag.durability_lag_ms,
-            flush_failures: lag.flush_failures,
-            lost_ops: lag.lost_ops,
-            last_flush_ok: lag.last_flush_ok,
-            last_flush_time_ms: lag.last_flush_timestamp_ms,
-        }
-    }
-
-    /// Fold another shard's lag stats into the aggregate.
-    fn absorb(&mut self, lag: &WalLagStats) {
-        self.pending_ops += lag.pending_ops;
-        self.pending_bytes += lag.pending_bytes;
-        self.durability_lag_ms = self.durability_lag_ms.max(lag.durability_lag_ms);
-        self.flush_failures += lag.flush_failures;
-        self.lost_ops += lag.lost_ops;
-        self.last_flush_ok &= lag.last_flush_ok;
-        self.last_flush_time_ms = self.last_flush_time_ms.min(lag.last_flush_timestamp_ms);
     }
 }
 
@@ -706,7 +654,7 @@ pub(crate) mod test_support {
 mod tests {
     use super::test_support::sources;
     use super::*;
-    use frogdb_core::{ShardMemoryStats, ShardReceiver};
+    use frogdb_core::{ShardMemoryStats, ShardReceiver, WalLagStats};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::mpsc;
 
@@ -886,7 +834,7 @@ mod tests {
         let wal = agg.wal.expect("wal aggregate present");
         assert_eq!(wal.pending_ops, 7);
         assert_eq!(wal.pending_bytes, 70);
-        assert_eq!(wal.durability_lag_ms, 80, "lag takes the worst shard");
+        assert_eq!(wal.max_durability_lag_ms, 80, "lag takes the worst shard");
         assert_eq!(wal.flush_failures, 5, "failures sum across shards");
         assert_eq!(wal.lost_ops, 3, "lost ops sum across shards");
         assert!(

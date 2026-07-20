@@ -232,14 +232,14 @@ impl InfoSection for PersistenceSection {
         if let Some(wal) = &sh.wal {
             w.field("wal_pending_ops", wal.pending_ops)
                 .field("wal_pending_bytes", wal.pending_bytes)
-                .field("wal_durability_lag_ms", wal.durability_lag_ms)
+                .field("wal_durability_lag_ms", wal.max_durability_lag_ms)
                 .field(
                     "wal_last_flush_status",
                     if wal.last_flush_ok { "ok" } else { "err" },
                 )
                 .field("wal_flush_failures", wal.flush_failures)
                 .field("wal_lost_ops", wal.lost_ops)
-                .field("wal_last_flush_time", wal.last_flush_time_ms / 1000)
+                .field("wal_last_flush_time", wal.last_flush_time_ms() / 1000)
                 .field_opt("wal_writes_total", src.wal_writes_total())
                 .field_opt("wal_bytes_total", src.wal_bytes_total());
         }
@@ -676,10 +676,10 @@ impl InfoSection for KeysizesSection {
 mod tests {
     use super::super::test_support::sources;
     use super::super::{
-        InfoBuilder, PrimarySnapshot, RateLimitSnapshot, ReplicaLine, SectionSelector, WalAggregate,
+        InfoBuilder, PrimarySnapshot, RateLimitSnapshot, ReplicaLine, SectionSelector,
     };
     use super::*;
-    use frogdb_core::ServerCommandStats;
+    use frogdb_core::{ServerCommandStats, WalLagAggregate};
 
     fn render(section: &dyn InfoSection, src: &InfoSources) -> String {
         section.render(src)
@@ -740,14 +740,15 @@ mod tests {
     fn persistence_enabled_renders_aggregated_wal_lag() {
         let mut src = sources();
         src.shards.dirty = 9;
-        src.shards.wal = Some(WalAggregate {
+        src.shards.wal = Some(WalLagAggregate {
             pending_ops: 4,
             pending_bytes: 128,
-            durability_lag_ms: 55,
+            max_durability_lag_ms: 55,
             flush_failures: 2,
             lost_ops: 1,
             last_flush_ok: false,
             last_flush_time_ms: 1_700_000_000_500,
+            per_shard: Vec::new(),
         });
         let out = render(&PersistenceSection, &src);
         assert!(out.contains("persistence_enabled:1\r\n"), "{out}");
