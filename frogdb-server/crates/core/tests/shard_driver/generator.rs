@@ -70,12 +70,27 @@ pub enum Step {
 /// A logical sender: an ordered program plus a cursor (C1).
 #[derive(Debug, Clone)]
 pub struct Sender {
-    pub program: Vec<Step>,
-    pub cursor: usize,
+    program: Vec<Step>,
+    cursor: usize,
 }
 
 impl Sender {
+    /// C3 (structural): an `UnregisterWait` step is constructible only after
+    /// this sender's own `BlockWait` for the same conn — Timeout/Unblocked
+    /// histories. Panics on an illegal program, so violating schedules are
+    /// unrepresentable at run time.
     pub fn new(program: Vec<Step>) -> Self {
+        for (i, step) in program.iter().enumerate() {
+            if let Step::UnregisterWait { conn_id, .. } = step {
+                let has_prior_block = program[..i]
+                    .iter()
+                    .any(|s| matches!(s, Step::BlockWait { conn_id: c, .. } if c == conn_id));
+                assert!(
+                    has_prior_block,
+                    "C3 violation: UnregisterWait for conn {conn_id} without a prior BlockWait in the same sender program"
+                );
+            }
+        }
         Self { program, cursor: 0 }
     }
     pub fn finished(&self) -> bool {
@@ -159,6 +174,9 @@ pub async fn replay(
         match *choice {
             Choice::Advance(s) => advance(driver, senders, s).await,
             Choice::Tick { shard, tick } => {
+                // Belt-and-suspenders: `schedule_strategy` never emits
+                // `ContinuationRelease` (see its comment), but filter it here too
+                // in case a caller hand-builds a schedule.
                 if shard < num_shards && tick != Tick::ContinuationRelease {
                     fire_tick(driver, shard, tick).await;
                 }
@@ -183,6 +201,10 @@ pub fn schedule_strategy(
     max_len: usize,
 ) -> impl Strategy<Value = Vec<Choice>> {
     let advance = (0..num_senders).prop_map(Choice::Advance);
+    // `Tick::ContinuationRelease` is deliberately excluded: it's scenario-driven
+    // (C7 ordering — only fired after a scenario explicitly drops a guard), never
+    // a randomly interleaved event. `replay` mirrors this by filtering it out of
+    // any schedule that reaches it.
     let tick = (
         0..num_shards,
         prop_oneof![Just(Tick::Expiry), Just(Tick::WaiterTimeout)],
@@ -200,6 +222,15 @@ mod generator_tests {
     fn advancing_a_finished_sender_is_a_noop() {
         let s = Sender::new(vec![]);
         assert!(s.finished());
+    }
+
+    #[test]
+    #[should_panic(expected = "C3 violation")]
+    fn unregister_before_block_wait_is_unrepresentable() {
+        let _ = Sender::new(vec![Step::UnregisterWait {
+            shard: 0,
+            conn_id: 1,
+        }]);
     }
 
     proptest! {
