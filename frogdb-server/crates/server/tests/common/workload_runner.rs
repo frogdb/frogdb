@@ -206,16 +206,25 @@ async fn run_exec(
         .write_all(&encode_command(&[b"EXEC" as &[u8]]))
         .await?;
     let reply = read_reply(stream, buf, acc).await?;
-    let results: Vec<OperationResult> = match reply {
-        OperationResult::Array(items) => items,
-        OperationResult::Nil => Vec::new(),
-        other => vec![other],
-    };
     {
         let mut h = history.lock().unwrap();
-        h.record_exec_return(op_id, client_id, &results);
+        record_exec_reply(&mut h, op_id, client_id, reply);
     }
     Ok(())
+}
+
+/// Record the reply to an EXEC. A WATCH-aborted EXEC returns RESP nil and MUST
+/// be recorded as `None` (an aborted transaction) — NOT as an empty array,
+/// which `record_exec_return` would encode to `Some("")`. The empty-string
+/// encoding is misread by `KVModel::exec` as a committed-but-empty EXEC and by
+/// `check_watch_no_false_negative` as a committed transaction, manufacturing
+/// false non-linearizability and false WATCH violations.
+fn record_exec_reply(h: &mut OperationHistory, op_id: u64, client_id: u64, reply: OperationResult) {
+    match reply {
+        OperationResult::Nil => h.record_return(op_id, client_id, OperationResult::Nil),
+        OperationResult::Array(items) => h.record_exec_return(op_id, client_id, &items),
+        other => h.record_exec_return(op_id, client_id, &[other]),
+    }
 }
 
 /// Build the on-the-wire command parts for a model-level op. Only XREAD needs
@@ -416,5 +425,46 @@ mod tests {
     #[test]
     fn resp_parser_reports_incomplete() {
         assert!(try_parse(b"$3\r\nab").is_none());
+    }
+
+    #[test]
+    fn aborted_exec_records_none_not_empty() {
+        // A WATCH-aborted EXEC (RESP nil) must land in the history as an
+        // aborted transaction (result None), never as Some("").
+        let mut h = OperationHistory::new();
+        let op = h.record_exec_invoke(
+            1,
+            &[("set".to_string(), vec![Bytes::from("k"), Bytes::from("v")])],
+        );
+        record_exec_reply(&mut h, op, 1, OperationResult::Nil);
+
+        let th = h.to_testing_history();
+        let completed = th.completed_operations();
+        assert_eq!(completed.len(), 1);
+        assert_eq!(
+            completed[0].result, None,
+            "aborted EXEC must record None, not Some(\"\")"
+        );
+    }
+
+    #[test]
+    fn committed_exec_records_encoded_results() {
+        // A committed EXEC (array reply) still records the pipe-encoded results.
+        let mut h = OperationHistory::new();
+        let op = h.record_exec_invoke(
+            1,
+            &[("set".to_string(), vec![Bytes::from("k"), Bytes::from("v")])],
+        );
+        record_exec_reply(
+            &mut h,
+            op,
+            1,
+            OperationResult::Array(vec![OperationResult::Ok]),
+        );
+
+        let th = h.to_testing_history();
+        let completed = th.completed_operations();
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].result.as_deref(), Some(&b"OK"[..]));
     }
 }
