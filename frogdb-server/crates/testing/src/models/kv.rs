@@ -292,7 +292,12 @@ impl Model for KVModel {
 
                 // Verify result matches expected
                 match result {
-                    None => None, // EXEC should always return something
+                    // A nil EXEC is a WATCH-aborted transaction under optimistic
+                    // concurrency: it is legal and leaves state unchanged. (The
+                    // "should-have-aborted" direction — an EXEC that committed
+                    // despite a watched-key write — is checked separately by
+                    // `check_watch_no_false_negative`.)
+                    None => Some(state.clone()),
                     Some(result_bytes) => {
                         let result_str = String::from_utf8_lossy(result_bytes);
                         if result_str == expected {
@@ -471,6 +476,34 @@ mod tests {
         assert_eq!(
             new_state.store.get(&Bytes::from("counter")),
             Some(&Bytes::from("2"))
+        );
+    }
+
+    #[test]
+    fn test_kv_exec_nil_abort_is_legal_and_unchanged() {
+        // A WATCH-aborted EXEC returns nil (result None). It is a legal outcome
+        // that must leave state unchanged, not a non-linearizable rejection.
+        let mut state = KVState::default();
+        state.store.insert(Bytes::from("k"), Bytes::from("orig"));
+
+        let new_state = KVModel::step(
+            &state,
+            "exec",
+            &[
+                Bytes::from("1"),   // num_cmds
+                Bytes::from("set"), // cmd1_name
+                Bytes::from("2"),   // cmd1_num_args
+                Bytes::from("k"),   // cmd1_arg1
+                Bytes::from("new"), // cmd1_arg2
+            ],
+            None, // aborted → nil
+        )
+        .expect("nil abort must be accepted");
+
+        // State is unchanged: the aborted SET did not apply.
+        assert_eq!(
+            new_state.store.get(&Bytes::from("k")),
+            Some(&Bytes::from("orig"))
         );
     }
 

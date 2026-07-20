@@ -208,6 +208,33 @@ impl Model for ListModel {
                     }
                 }
             }
+            // Projection-only synthetic op (never on the wire): the
+            // destination-side push half of a cross-key `lmove`/`blmove`, split
+            // out by `partition::project_for_key`. Args are
+            // `[dst_key, element, side]` where side is "L" (push to head) or "R"
+            // (push to tail). It has no observable reply, so the recorded
+            // `result` is ignored and the push always applies — its whole job is
+            // to make the element the move deposited visible to later pops in the
+            // destination key's sub-history. Without it, a subsequent pop of that
+            // element would look like a phantom (element never pushed here) and
+            // spuriously fail linearizability. See the `lmove`/`blmove` arm of
+            // `partition::project_for_key` for the source-side (pop) half.
+            "lmove_push" => {
+                if args.len() < 3 {
+                    return None;
+                }
+                let key = &args[0];
+                let elem = args[1].clone();
+                let to_left = String::from_utf8_lossy(&args[2]) == "L";
+                let mut new = state.clone();
+                let list = new.lists.entry(key.clone()).or_default();
+                if to_left {
+                    list.push_front(elem);
+                } else {
+                    list.push_back(elem);
+                }
+                Some(new)
+            }
             "blmove" => {
                 if args.len() < 5 {
                     return None;
@@ -349,6 +376,27 @@ mod tests {
         h.respond(blk, None); // timeout despite a present element
         let r = check_linearizability::<ListModel>(&h);
         assert!(!r.is_linearizable);
+    }
+
+    #[test]
+    fn lmove_push_tail_then_pop_fifo() {
+        // Synthetic destination-push (side "R" = tail) makes the deposited
+        // element visible: RPUSH x, lmove_push y (tail), then LPOP twice yields
+        // x, y in FIFO order.
+        let s = ListState::default();
+        let s = ListModel::step(&s, "rpush", &[b("k"), b("x")], Some(&b("1"))).unwrap();
+        let s = ListModel::step(&s, "lmove_push", &[b("k"), b("y"), b("R")], None).unwrap();
+        let s = ListModel::step(&s, "lpop", &[b("k")], Some(&b("x"))).unwrap();
+        assert!(ListModel::step(&s, "lpop", &[b("k")], Some(&b("y"))).is_some());
+    }
+
+    #[test]
+    fn lmove_push_head_places_at_front() {
+        // Side "L" = head: the element becomes the new head.
+        let s = ListState::default();
+        let s = ListModel::step(&s, "rpush", &[b("k"), b("x")], Some(&b("1"))).unwrap();
+        let s = ListModel::step(&s, "lmove_push", &[b("k"), b("y"), b("L")], None).unwrap();
+        assert!(ListModel::step(&s, "lpop", &[b("k")], Some(&b("y"))).is_some());
     }
 
     use proptest::prelude::*;

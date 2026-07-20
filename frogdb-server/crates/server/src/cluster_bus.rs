@@ -226,7 +226,10 @@ async fn handle_pubsub_forward(
     }
 }
 
-#[cfg(test)]
+// Real-network test: `tcp_listener_reusable` binds a real socket, which under
+// the `turmoil` feature routes through turmoil's simulated net and panics
+// (scoped-tls) outside a running sim. Excluded from the turmoil build.
+#[cfg(all(test, not(feature = "turmoil")))]
 mod tests {
     use crate::net::tcp_listener_reusable;
     use std::net::SocketAddr;

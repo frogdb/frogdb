@@ -84,7 +84,37 @@ pub(super) fn spawn_shard_workers(
             .next()
             .expect("recovered_stores length validated to equal num_shards");
 
-        let mut worker = if let Some(ref rocks) = ctx.rocks_store {
+        // Fake WAL mode (simulation tests, `turmoil` feature): enabled but
+        // RocksDB-less. Recovery leaves `rocks_store = None`; select the
+        // deterministic fake sink instead of the no-WAL eviction path.
+        #[cfg(feature = "turmoil")]
+        let fake_wal = ctx.config.persistence.enabled
+            && ctx.config.persistence.mode.eq_ignore_ascii_case("fake");
+        #[cfg(not(feature = "turmoil"))]
+        let fake_wal = false;
+
+        let mut worker = if fake_wal {
+            #[cfg(feature = "turmoil")]
+            {
+                ShardWorker::with_fake_persistence(
+                    shard_id,
+                    ctx.num_shards,
+                    store,
+                    msg_rx,
+                    conn_rx,
+                    ctx.shard_senders.clone(),
+                    ctx.registry.clone(),
+                    ctx.eviction_config.clone(),
+                    ctx.metrics_recorder.clone(),
+                    ctx.slowlog_next_id.clone(),
+                    ctx.replication_broadcaster.clone(),
+                )
+            }
+            #[cfg(not(feature = "turmoil"))]
+            {
+                unreachable!("fake WAL mode requires the turmoil feature")
+            }
+        } else if let Some(ref rocks) = ctx.rocks_store {
             ShardWorker::with_persistence(
                 shard_id,
                 ctx.num_shards,

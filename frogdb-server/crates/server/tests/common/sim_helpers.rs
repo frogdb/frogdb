@@ -172,6 +172,48 @@ pub async fn real_frogdb_server(num_shards: usize) -> Result<(), BoxError> {
     Ok(())
 }
 
+/// Start a real FrogDB server inside turmoil with the deterministic WAL fake
+/// (`persistence.mode = "fake"`), replacing today's `enabled = false`. WAL
+/// effects are recorded and reachable via `FakeWalRegistry::log(shard_id)`.
+///
+/// The fake path never opens RocksDB: recovery leaves `rocks_store = None` and
+/// the shard spawn selects the in-process fake sink.
+pub async fn real_frogdb_server_fake_persistence(num_shards: usize) -> Result<(), BoxError> {
+    let config = Config {
+        server: ServerConfig {
+            bind: "0.0.0.0".to_string(),
+            port: SERVER_PORT,
+            num_shards,
+            allow_cross_slot_standalone: true,
+            scatter_gather_timeout_ms: 5000,
+            ..Default::default()
+        },
+        persistence: PersistenceConfig {
+            enabled: true,
+            mode: "fake".into(),
+            ..Default::default()
+        },
+        http: HttpConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        metrics: MetricsConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let server = Server::new(
+        config,
+        frogdb_server::runtime_config::LogReloadHandle::noop(),
+    )
+    .await?;
+    server.run_until(std::future::pending::<()>()).await?;
+
+    Ok(())
+}
+
 /// Start a real FrogDB server with a chaos configuration.
 ///
 /// Passes the chaos config through to the server so that failure injection

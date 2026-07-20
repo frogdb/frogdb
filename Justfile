@@ -70,10 +70,19 @@ coverage crate="" pattern="":
 coverage-lcov:
     {{dyld-env}} {{rocksdb-env}} cargo llvm-cov nextest --all --lcov --output-path target/llvm-cov/lcov.info
 
-# Run concurrency tests (Shuttle + Turmoil)
+# Run concurrency tests (Shuttle + Turmoil + generated workload sweep)
 concurrency:
     {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-core --features shuttle -E 'test(/concurrency/)'
     {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-server --features turmoil -E 'test(/simulation/)'
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-server --features turmoil -E 'test(/seed_sweep_short_workloads/)'
+
+# Replay a single concurrency repro file (seed + profile + config)
+concurrency-repro FILE:
+    {{dyld-env}} {{rocksdb-env}} REPRO_FILE={{FILE}} cargo nextest run -p frogdb-server --features turmoil --run-ignored all -E 'test(/replay_repro/)'
+
+# Run turmoil-featured tests matching PATTERN (default: the generated-workload sweep)
+concurrency-turmoil PATTERN='seed_sweep':
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-server --features turmoil -E 'test(/{{PATTERN}}/)'
 
 # Run the full test suite (unit + integration + concurrency + simulation)
 test-all: test concurrency

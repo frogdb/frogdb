@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [features]
 shuttle = ["dep:shuttle", "frogdb-core/shuttle"]
-turmoil = ["dep:turmoil", "frogdb-config/turmoil"]
+turmoil = ["dep:turmoil", "frogdb-config/turmoil", "frogdb-core/fake-wal"]
 causal-profile = ["dep:tokio-coz"]
 profiling = ["dep:tracing-flame"]
 

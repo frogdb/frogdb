@@ -15,6 +15,9 @@ path = "tests/main.rs"
 shuttle = ["dep:shuttle", "frogdb-types/shuttle"]
 usdt-probes = ["dep:usdt"]
 test-utils = ["frogdb-cluster/test-utils"]
+# Compile the deterministic FakeWalSink builder arm + fake-WAL registry. Enabled
+# by the server's `turmoil` feature for simulation tests; never in production.
+fake-wal = []
 
 [dependencies]
 frogdb-types.workspace = true
