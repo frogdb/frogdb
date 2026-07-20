@@ -213,27 +213,78 @@ fn find_crlf(buf: &[u8]) -> Option<usize> {
     buf.windows(2).position(|w| w == b"\r\n")
 }
 
-/// Scan the buffer starting from a `*N\r\n` multibulk header for any `$M\r\n`
-/// bulk string prefix where M exceeds the protocol maximum. Returns the byte
-/// offset just past the offending `$M\r\n` if found.
+/// Check the elements of the **first** multibulk frame at the front of `buf`
+/// (which must begin with a `*N\r\n` header) for a bulk-string header `$M\r\n`
+/// whose length exceeds [`PROTO_MAX_BULK_LEN`]. Returns the byte offset just
+/// past the offending `$M\r\n` if found.
+///
+/// # Why this shape (bounded, structural)
+///
+/// This mirrors how Redis's `processMultibulkBuffer` validates a request: it
+/// reads the `*N` header, then for each of the N elements reads one `$len\r\n`
+/// bulk header, rejects `len > proto_max_bulk_len` (Redis: `512MB`), and
+/// otherwise **skips the `len + 2` payload bytes** to reach the next element.
+/// We do the same. Two properties fall out, both load-bearing for performance:
+///
+/// 1. **Payload is skipped by length, never byte-walked.** A large in-flight
+///    bulk (e.g. a multi-megabyte value drip-fed a packet at a time) costs
+///    O(1) per `decode` call — we jump over its declared length — instead of
+///    O(bytes-buffered-so-far) rescans of the same prefix.
+/// 2. **Only the first frame is inspected.** Elements of *later* pipelined
+///    frames are validated when their own `*`-prefixed `decode` call runs, so a
+///    buffer holding N pipelined commands costs O(elements-of-one-frame) per
+///    call rather than O(whole-buffer). Total work over a pipeline is linear,
+///    not quadratic.
+///
+/// The previous implementation was a flat byte-scan of the entire buffer on
+/// every `*`-prefixed `decode`, which was measured to be quadratic (dominant,
+/// over 90% of decode time) on both a realistic pipeline of small commands and
+/// an adversarial drip-fed large bulk. See the round-7 follow-up notes.
+///
+/// A frame whose payload has not fully arrived yet, or a malformed element
+/// (missing `$`, incomplete `$len\r\n` line, non-numeric length), yields `None`
+/// — there is nothing to reject, and the incomplete/malformed frame is left for
+/// the upstream decoder to pend on or reject on a later call. Restricting to
+/// structurally-valid `$` element headers also fixes a latent false positive in
+/// the old byte-scan: binary bulk *data* that happened to contain the byte
+/// sequence `$<huge>\r\n` was wrongly rejected. Redis accepts such payloads and
+/// so do we now.
 fn scan_for_oversized_bulk(buf: &[u8]) -> Option<usize> {
-    let mut pos = 0;
-    while pos < buf.len() {
-        if buf[pos] == b'$' {
-            if let Some(crlf_rel) = find_crlf(&buf[pos..]) {
-                let line = &buf[pos + 1..pos + crlf_rel];
-                if let Ok(s) = std::str::from_utf8(line) {
-                    if let Ok(len) = s.parse::<i64>() {
-                        if len > PROTO_MAX_BULK_LEN {
-                            return Some(pos + crlf_rel + 2);
-                        }
-                    }
-                }
-                pos += crlf_rel + 2;
-                continue;
-            }
+    debug_assert_eq!(buf.first(), Some(&b'*'), "caller guarantees a `*` prefix");
+
+    // Parse the `*N\r\n` element count. A missing terminator (partial header) or
+    // a non-numeric / non-positive count means there is nothing to validate.
+    let count_crlf = find_crlf(buf)?;
+    let count = std::str::from_utf8(&buf[1..count_crlf])
+        .ok()?
+        .parse::<i64>()
+        .ok()?;
+    if count <= 0 {
+        return None;
+    }
+
+    let mut pos = count_crlf + 2; // first element header, just past `*N\r\n`
+    for _ in 0..count {
+        // The element header must be fully present and start with `$`.
+        if pos >= buf.len() || buf[pos] != b'$' {
+            return None;
         }
-        pos += 1;
+        let crlf_rel = find_crlf(&buf[pos..])?;
+        let len = std::str::from_utf8(&buf[pos + 1..pos + crlf_rel])
+            .ok()?
+            .parse::<i64>()
+            .ok()?;
+        if len > PROTO_MAX_BULK_LEN {
+            return Some(pos + crlf_rel + 2);
+        }
+        // Advance to the next element: past `$len\r\n`, then past the payload and
+        // its trailing CRLF (only for a non-negative length; `$-1` carries none).
+        // This may point beyond `buf` when the payload has not fully arrived; the
+        // bounds check at the top of the next iteration handles that.
+        pos += crlf_rel + 2;
+        if len >= 0 {
+            pos += len as usize + 2;
+        }
     }
     None
 }
@@ -448,11 +499,14 @@ mod tests {
     //! depends on exactly how much of the buffer is consumed to resynchronize its
     //! stream after a protocol error, so both halves are part of the contract.
     //!
-    //! Note (measure-before-optimizing, per the proposal): [`scan_for_oversized_bulk`]
-    //! is an O(n) full-buffer scan run on *every* `*`-prefixed decode. These tests
-    //! pin its current behavior so a later bound (e.g. cap the scan at the first
-    //! `$` header) can be shown to be equivalence-preserving; they are not a change
-    //! to that scan.
+    //! Note (measured, then optimized — round-7 follow-up): [`scan_for_oversized_bulk`]
+    //! was originally a flat O(n) full-buffer byte-scan run on *every* `*`-prefixed
+    //! decode. Measurement showed it dominated decode time (>90%) and scaled
+    //! quadratically on a realistic pipeline of small commands and on an
+    //! adversarial drip-fed large bulk. It is now a bounded, structural scan of the
+    //! first frame's element headers (skipping payload by length). The table cases
+    //! below pin the observable decode contract unchanged across that rewrite; the
+    //! [`scan_bounded_structural`] test pins the new bounded properties directly.
 
     use super::*;
     use bytes::Bytes;
@@ -857,6 +911,86 @@ mod tests {
         let next = codec.decode(&mut buf).unwrap();
         assert_eq!(next, Some(array(vec![bulk(b"PING")])));
         assert!(buf.is_empty());
+    }
+
+    /// Direct coverage of the bounded, structural [`scan_for_oversized_bulk`].
+    /// Pins the properties that make it non-quadratic and that distinguish it
+    /// from the old flat byte-scan.
+    #[test]
+    fn scan_bounded_structural() {
+        // (a) An oversized element in the first frame is still caught, and the
+        //     returned offset lands just past the bad `$M\r\n` header.
+        let input = b"*2\r\n$536870913\r\nx\r\n";
+        let off = scan_for_oversized_bulk(input).expect("oversized element flagged");
+        assert_eq!(&input[..off], b"*2\r\n$536870913\r\n");
+
+        // (b) Structural skip: bulk *data* that literally contains the byte
+        //     sequence `$536870913\r\n` is NOT a header and must not be flagged.
+        //     The 12-byte value below is exactly those bytes. The old byte-scan
+        //     false-positived here; the structural scan skips the payload.
+        let benign = b"*1\r\n$12\r\n$536870913\r\n\r\n";
+        assert_eq!(scan_for_oversized_bulk(benign), None);
+
+        // (c) A large-but-legal bulk whose payload has not fully arrived costs
+        //     nothing to clear: the scan skips by declared length and returns
+        //     None without walking the (absent) payload.
+        let drip_head = b"*2\r\n$3\r\nSET\r\n$4194304\r\nxxxx";
+        assert_eq!(scan_for_oversized_bulk(drip_head), None);
+
+        // (d) Frame-bounded: an oversized element in a *later* pipelined frame is
+        //     not caught while scanning from the first frame's header — it is
+        //     validated on its own decode call (see the decode-level test below).
+        let later = b"*1\r\n$1\r\na\r\n*2\r\n$536870913\r\nx\r\n";
+        assert_eq!(scan_for_oversized_bulk(later), None);
+
+        // (e) A partial multibulk header (no CRLF yet) has nothing to validate.
+        assert_eq!(scan_for_oversized_bulk(b"*2\r"), None);
+
+        // (f) Non-positive counts (null array / empty array) have no elements.
+        assert_eq!(scan_for_oversized_bulk(b"*-1\r\n"), None);
+        assert_eq!(scan_for_oversized_bulk(b"*0\r\n"), None);
+    }
+
+    /// Beneficial divergence from the old flat scan, verified end-to-end: a good
+    /// frame followed by a frame with an oversized bulk. The old scan rejected
+    /// immediately and discarded the good frame too; the bounded scan decodes the
+    /// good frame first, then rejects the bad one on its own `decode` call — so
+    /// the oversized-bulk protection still holds, just deferred to the right frame.
+    #[test]
+    fn decode_good_frame_then_oversized_bulk_in_next_frame() {
+        let mut codec = FrogDbResp2::default();
+        let mut buf = BytesMut::from(&b"*1\r\n$1\r\na\r\n*2\r\n$536870913\r\nx\r\n"[..]);
+
+        let first = codec.decode(&mut buf).unwrap();
+        assert_eq!(first, Some(array(vec![bulk(b"a")])));
+        assert_eq!(
+            &buf[..],
+            b"*2\r\n$536870913\r\nx\r\n",
+            "the good frame decodes; the bad frame is left intact",
+        );
+
+        let err = codec.decode(&mut buf).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid bulk length"),
+            "the oversized bulk must be rejected on its own frame, got {err:?}",
+        );
+        assert_eq!(
+            &buf[..],
+            b"x\r\n",
+            "consume up to and including the bad header"
+        );
+    }
+
+    /// Beneficial divergence, verified end-to-end: a bulk whose binary *value*
+    /// contains the bytes `$536870913\r\n` decodes as an ordinary value — Redis
+    /// accepts such payloads, and the structural scan no longer false-rejects it.
+    #[test]
+    fn decode_bulk_value_containing_dollar_length_sequence() {
+        let mut codec = FrogDbResp2::default();
+        let mut buf = BytesMut::from(&b"*1\r\n$12\r\n$536870913\r\n\r\n"[..]);
+        let got = codec.decode(&mut buf).unwrap();
+        assert_eq!(got, Some(array(vec![bulk(b"$536870913\r\n")])));
+        assert!(buf.is_empty(), "the frame drains the buffer");
     }
 
     /// The codec owns the RESP2 array-null encoding: feeding
