@@ -67,8 +67,9 @@ pub use conservation::{
 };
 pub use history::{History, OpKind, Operation};
 pub use models::{
-    HashModel, HashState, KVModel, KVState, ListModel, ListState, Model, RegisterModel,
-    RegisterState, StreamData, StreamId, StreamModel, StreamState, ZSetModel, ZSetState,
+    Group, HashModel, HashState, KVModel, KVState, ListModel, ListState, Model, PelEntry,
+    RegisterModel, RegisterState, StreamData, StreamGroupData, StreamGroupModel, StreamGroupState,
+    StreamId, StreamModel, StreamState, ZSetModel, ZSetState,
 };
 pub use partition::{default_keys_of, is_errored_exec_result, partition_by_key};
 pub use quiescence::{
