@@ -117,6 +117,8 @@ pub struct ShardWorkerBuilder {
     queue_depth: Option<Arc<AtomicUsize>>,
     per_request_spans: Option<Arc<AtomicBool>>,
     wal_failure_policy: Option<Arc<AtomicU8>>,
+    #[cfg(any(test, feature = "fake-wal"))]
+    fake_wal_failure: crate::persistence::FakeFailure,
     is_replica: bool,
 }
 
@@ -149,6 +151,8 @@ impl ShardWorkerBuilder {
             queue_depth: None,
             per_request_spans: None,
             wal_failure_policy: None,
+            #[cfg(any(test, feature = "fake-wal"))]
+            fake_wal_failure: crate::persistence::FakeFailure::None,
             is_replica: false,
         }
     }
@@ -283,6 +287,15 @@ impl ShardWorkerBuilder {
         self
     }
 
+    /// Inject a fake-WAL write failure (test / `fake-wal` only). Only takes
+    /// effect together with [`WalMode::Fake`]. Enables the persist-failure /
+    /// rollback (`EXECABORT`) branch to be exercised deterministically.
+    #[cfg(any(test, feature = "fake-wal"))]
+    pub fn with_fake_wal_failure(mut self, failure: crate::persistence::FakeFailure) -> Self {
+        self.fake_wal_failure = failure;
+        self
+    }
+
     /// Set core dependencies from a bundle.
     pub fn with_core_deps(mut self, core: ShardCoreDeps) -> Self {
         self.shard_senders = Some(core.shard_senders);
@@ -375,7 +388,10 @@ impl ShardWorkerBuilder {
             WalMode::Fake => {
                 #[cfg(any(test, feature = "fake-wal"))]
                 {
-                    let sink = crate::persistence::FakeWalSink::new(shard_id);
+                    let sink = crate::persistence::FakeWalSink::with_failure(
+                        shard_id,
+                        self.fake_wal_failure.clone(),
+                    );
                     crate::shard::fake_wal_registry::FakeWalRegistry::install(shard_id, sink.log());
                     Some(Box::new(sink) as Box<dyn WalSink>)
                 }
