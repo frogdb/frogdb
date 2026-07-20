@@ -32,6 +32,10 @@ pub(super) struct ClusterInitResult {
     /// injected into shard workers so `REPLICAOF` can drive Role
     /// Promotion/Demotion, and used by the demotion-event consumer.
     pub role_controller: Arc<dyn frogdb_core::RoleController>,
+    /// The concrete `RoleManagerHandle` (not just the trait object above), so
+    /// `Server::start_subsystems` can register the boot-spawned replica
+    /// handler with it — a capability outside `frogdb_core::RoleController`.
+    pub role_manager_handle: crate::role_manager::RoleManagerHandle,
 }
 
 /// Initialize cluster state, Raft, failure detector, and background tasks.
@@ -646,5 +650,6 @@ pub(super) async fn init_cluster(
         failure_detector_handle,
         is_replica_flag,
         role_controller,
+        role_manager_handle: role_handle,
     })
 }

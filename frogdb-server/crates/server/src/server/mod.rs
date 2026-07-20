@@ -187,6 +187,13 @@ pub struct Server {
     /// connection handlers.
     is_replica_flag: Arc<std::sync::atomic::AtomicBool>,
 
+    /// Handle to the `RoleManager` that owns `is_replica_flag` and the
+    /// replication streaming lifecycle. `start_subsystems` uses this to
+    /// register the boot-spawned replica handler (see
+    /// `role_manager::RoleManager::register_boot_replica_handler`) so a later
+    /// Role Promotion also stops its reconnect loop.
+    role_manager_handle: crate::role_manager::RoleManagerHandle,
+
     /// Shared maxmemory value for SystemMetricsCollector.
     shared_maxmemory: Arc<AtomicU64>,
 
@@ -370,6 +377,7 @@ impl Server {
             _task_monitor_handle: Some(task_monitor_handle),
             shared_replication_offset,
             is_replica_flag: cluster.is_replica_flag,
+            role_manager_handle: cluster.role_manager_handle,
             shared_maxmemory: infra.shared_maxmemory,
             shard_memory_used: infra.shard_memory_used,
             #[cfg(not(feature = "turmoil"))]

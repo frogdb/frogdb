@@ -31,6 +31,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::replication::ReplicaReplicationHandler;
+
 /// A running inbound replication stream (connection task + frame consumer).
 ///
 /// The stream is owned by the [`RoleManager`]; **dropping the handle tears the
@@ -62,6 +64,15 @@ pub struct RoleManager {
     stream: Option<Box<dyn ReplicaStream>>,
     /// Factory that opens a replica stream to a primary address.
     streamer: Arc<dyn ReplicaStreamer>,
+    /// The boot-spawned replica handler, when this node started as a
+    /// config-file Replica (`replicaof` in config). `init_replication` and
+    /// `Server::start_subsystems` construct and spawn it directly, before
+    /// this `RoleManager` exists, so it is wired in after the fact via
+    /// [`RoleManager::register_boot_replica_handler`]. `promote()` (and a
+    /// superseding `demote()`) stop it through its own shutdown watch so a
+    /// Role Promotion of a boot-spawned Replica actually halts the boot
+    /// reconnect loop instead of leaving it dialing the old primary forever.
+    boot_replica_handler: Option<Arc<ReplicaReplicationHandler>>,
 }
 
 impl RoleManager {
@@ -73,7 +84,22 @@ impl RoleManager {
             primary_target: None,
             stream: None,
             streamer,
+            boot_replica_handler: None,
         }
+    }
+
+    /// Register the boot-spawned replica handler so a later `promote()` /
+    /// `demote()` also stops its reconnect loop. Called once, by
+    /// `Server::start_subsystems`, immediately after spawning the boot
+    /// replica's connection task and before the acceptor starts serving
+    /// client connections — so no `REPLICAOF` can race ahead of this call.
+    pub fn register_boot_replica_handler(
+        &mut self,
+        handler: Arc<ReplicaReplicationHandler>,
+        primary: SocketAddr,
+    ) {
+        self.boot_replica_handler = Some(handler);
+        self.primary_target = Some(primary);
     }
 
     /// A clone of the data-path role flag, for the write guard / `ROLE` / `INFO`
@@ -93,11 +119,17 @@ impl RoleManager {
         self.is_replica.load(Ordering::Acquire)
     }
 
-    /// Role Promotion: become a writable primary. Stops any inbound stream and
-    /// clears the flag. Idempotent.
+    /// Role Promotion: become a writable primary. Stops any inbound stream
+    /// (runtime-demotion or boot-spawned) and clears the flag. Idempotent.
     pub fn promote(&mut self) {
-        // Dropping the handle stops the stream.
+        // Dropping the handle stops a runtime-demotion stream.
         self.stream = None;
+        // Stop the boot-spawned reconnect loop too: it was started by
+        // `Server::start_subsystems` before this manager existed, so it
+        // lives outside `stream` and needs its own teardown.
+        if let Some(handler) = self.boot_replica_handler.take() {
+            handler.stop();
+        }
         self.primary_target = None;
         self.is_replica.store(false, Ordering::Release);
         tracing::info!("Role Promotion complete: node is now a primary");
@@ -116,6 +148,12 @@ impl RoleManager {
         self.is_replica.store(true, Ordering::Release);
         // Stop any prior stream before starting the new one.
         self.stream = None;
+        // A boot-spawned handler being superseded by a fresh runtime target
+        // must stop too, or it would keep dialing its original primary
+        // alongside the new stream.
+        if let Some(handler) = self.boot_replica_handler.take() {
+            handler.stop();
+        }
         self.stream = Some(self.streamer.start(primary));
         self.primary_target = Some(primary);
         tracing::info!(primary = %primary, "Role Demotion complete: node is now a replica");
@@ -154,6 +192,20 @@ impl RoleManagerHandle {
             .lock()
             .expect("role manager poisoned")
             .primary_target()
+    }
+
+    /// Adopt a boot-spawned replica handler so a later `promote()`/`demote()`
+    /// also stops its reconnect loop. See
+    /// [`RoleManager::register_boot_replica_handler`].
+    pub fn register_boot_replica_handler(
+        &self,
+        handler: Arc<ReplicaReplicationHandler>,
+        primary: SocketAddr,
+    ) {
+        self.inner
+            .lock()
+            .expect("role manager poisoned")
+            .register_boot_replica_handler(handler, primary);
     }
 }
 
@@ -241,9 +293,7 @@ impl RealReplicaStreamer {
 
 impl ReplicaStreamer for RealReplicaStreamer {
     fn start(&self, primary: SocketAddr) -> Box<dyn ReplicaStream> {
-        use crate::replication::{
-            ReplicaCommandExecutor, ReplicaReplicationHandler, consume_frames,
-        };
+        use crate::replication::{ReplicaCommandExecutor, consume_frames};
 
         let (handler, frame_rx) = ReplicaReplicationHandler::new(
             primary,
@@ -489,5 +539,90 @@ mod tests {
         <RoleManagerHandle as RoleController>::request_promote(&handle);
         assert!(!flag.load(Ordering::Acquire));
         assert_eq!(handle.primary_target(), None);
+    }
+
+    /// Regression test for the bug this issue fixes: a boot-spawned
+    /// `ReplicaReplicationHandler` (built by `init_replication`/
+    /// `start_subsystems`, entirely outside the `RoleManager`'s own `stream`
+    /// field) used to keep dialing the old primary forever after a Role
+    /// Promotion, because `RoleManager` had no idea it existed. This
+    /// registers a boot handler pointed at a primary that always refuses the
+    /// connection, drives some reconnect attempts, promotes, and asserts both
+    /// that the reconnect task terminates (via `stop()`, no `abort()`) and
+    /// that no further connection attempts happen afterward.
+    #[tokio::test]
+    async fn promote_stops_registered_boot_replica_handler() {
+        use frogdb_replication::replica::ConnectFactory;
+        use std::sync::atomic::AtomicUsize;
+        use std::time::Duration;
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let counter = attempts.clone();
+        let factory: ConnectFactory = Arc::new(move |_addr| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    "test: primary unreachable",
+                ))
+            })
+        });
+
+        let primary = addr("127.0.0.1:7000");
+        let data_dir = std::env::temp_dir();
+        let state_path = data_dir.join(format!(
+            "frogdb-test-role-manager-boot-{}-{}.json",
+            std::process::id(),
+            line!()
+        ));
+        let (mut handler, _rx) = ReplicaReplicationHandler::new(
+            primary,
+            6380,
+            frogdb_replication::ReplicationState::new(),
+            state_path,
+            data_dir,
+        );
+        handler.set_connect_factory(factory);
+        let handler = Arc::new(handler);
+
+        let handler_clone = handler.clone();
+        let task = tokio::spawn(async move { handler_clone.start().await });
+
+        // Let a few reconnect attempts happen (first backoff is 100ms).
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert!(
+            attempts.load(Ordering::SeqCst) >= 1,
+            "boot handler should have attempted to connect at least once"
+        );
+
+        let (mut mgr, _streamer) = manager(true);
+        mgr.register_boot_replica_handler(handler, primary);
+        assert_eq!(mgr.primary_target(), Some(primary));
+
+        mgr.promote();
+
+        assert!(
+            !mgr.is_replica(),
+            "promote must clear the role flag even for a boot-spawned replica"
+        );
+        assert_eq!(mgr.primary_target(), None);
+
+        // The reconnect loop must terminate via the shutdown watch, no
+        // `task.abort()` needed.
+        let result = tokio::time::timeout(Duration::from_secs(5), task).await;
+        assert!(
+            result.is_ok(),
+            "promote() must stop the boot handler's reconnect loop without abort"
+        );
+        assert!(result.unwrap().unwrap().is_ok());
+
+        // No further connection attempts to the old primary after promotion.
+        let attempts_at_promote = attempts.load(Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            attempts_at_promote,
+            "no further connection attempts to the old primary after promote()"
+        );
     }
 }
