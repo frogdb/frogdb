@@ -472,7 +472,7 @@ impl PreDispatchView<'_> {
             matches!(
                 entry.execution_strategy(),
                 ExecutionStrategy::ConnectionLevel(_)
-                    | ExecutionStrategy::ScatterGather { .. }
+                    | ExecutionStrategy::ScatterGather(_)
                     | ExecutionStrategy::ServerWide(_)
             )
         })

@@ -84,10 +84,13 @@ pub enum ExecutionStrategy {
 
     /// Scatter-gather: distribute across multiple shards, merge results.
     /// Used for multi-key commands that span shards.
-    ScatterGather {
-        /// How to merge results from multiple shards.
-        merge: MergeStrategy,
-    },
+    ///
+    /// The payload is a flat [`ScatterGatherOp`] identity — the *single source
+    /// of truth* the router derives the cross-shard plan from. Routing reads
+    /// this op and dispatches through an exhaustive `match` (see
+    /// `dispatch_scatter`), so a spec that declares a new op without a handler
+    /// arm is a compile error rather than a silent `-CROSSSLOT`.
+    ScatterGather(ScatterGatherOp),
 
     /// Raft consensus: requires cluster consensus before execution.
     /// Used for cluster topology changes.
@@ -144,6 +147,31 @@ pub enum ServerWideOp {
     EsAll,
 }
 
+/// Identifies a keyed cross-shard (scatter-gather) command.
+///
+/// A flat, `Copy` identity enum — pure command identity, mirroring
+/// [`ServerWideOp`]. It is the single seam at which a scatter command is
+/// declared (`ExecutionStrategy::ScatterGather(ScatterGatherOp::…)`); routing
+/// reads the declaration and dispatches through an exhaustive `match`, so
+/// adding a variant without a handler arm is a compile error. The per-shard
+/// wire message (`ScatterOp`) and merge behavior (`ScatterGatherStrategy`)
+/// live behind that match, not in a second name-keyed table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScatterGatherOp {
+    /// MGET — fetch many keys, merge preserving request order.
+    MGet,
+    /// MSET — set many key/value pairs; all shards must ack.
+    MSet,
+    /// DEL — delete many keys, sum the per-shard counts.
+    Del,
+    /// EXISTS — count existing keys, sum the per-shard counts.
+    Exists,
+    /// TOUCH — touch many keys, sum the per-shard counts.
+    Touch,
+    /// UNLINK — async-delete many keys, sum the per-shard counts.
+    Unlink,
+}
+
 /// Operations handled at the connection level (not routed to shards).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionLevelOp {
@@ -163,29 +191,6 @@ pub enum ConnectionLevelOp {
     Replication,
     /// Persistence: BGSAVE, LASTSAVE.
     Persistence,
-}
-
-/// Strategy for merging results from scatter-gather operations.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MergeStrategy {
-    /// Preserve key order in response (MGET).
-    /// Results are assembled to match original key positions.
-    OrderedArray,
-
-    /// Sum integer results (DEL, EXISTS, TOUCH, UNLINK, DBSIZE).
-    SumIntegers,
-
-    /// Collect all keys into single array (KEYS).
-    CollectKeys,
-
-    /// Merge cursored scan results (SCAN).
-    CursoredScan,
-
-    /// All shards must return OK (MSET, FLUSHDB).
-    AllOk,
-
-    /// Command implements custom merge logic.
-    Custom,
 }
 
 /// Requests a runtime replication *role transition* on this node.

@@ -633,7 +633,7 @@ impl ConnectionHandler {
 #[cfg(test)]
 mod tests {
     use super::{DispatchStage, PRE_DISPATCH_ORDER};
-    use frogdb_core::{CommandRegistry, ExecutionStrategy, ServerWideOp};
+    use frogdb_core::{CommandRegistry, ExecutionStrategy, ScatterGatherOp, ServerWideOp};
 
     /// Index of a stage in `PRE_DISPATCH_ORDER` (panics if absent).
     fn order_index(stage: DispatchStage) -> usize {
@@ -767,6 +767,31 @@ mod tests {
                 if let Some((_, prev)) = seen.iter().find(|(seen_op, _)| *seen_op == op) {
                     panic!(
                         "ServerWideOp::{:?} declared by two commands: {} and {}",
+                        op, prev, name
+                    );
+                }
+                seen.push((op, name.to_string()));
+            }
+        }
+    }
+
+    /// Each `ScatterGatherOp` must be declared by at most one command spec.
+    /// The exhaustive `match op` in `dispatch_scatter` (routing.rs) already
+    /// guarantees every op has a handler (adding a variant without an arm is a
+    /// compile error); this catches the opposite mistake — a wrong-op
+    /// copy-paste that points two commands at the same scatter op, which would
+    /// silently route one command through the other's merge strategy.
+    #[test]
+    fn scatter_gather_ops_are_unique_per_command() {
+        let mut registry = CommandRegistry::new();
+        crate::register_commands(&mut registry);
+
+        let mut seen: Vec<(ScatterGatherOp, String)> = Vec::new();
+        for (name, entry) in registry.iter() {
+            if let ExecutionStrategy::ScatterGather(op) = entry.execution_strategy() {
+                if let Some((_, prev)) = seen.iter().find(|(seen_op, _)| *seen_op == op) {
+                    panic!(
+                        "ScatterGatherOp::{:?} declared by two commands: {} and {}",
                         op, prev, name
                     );
                 }

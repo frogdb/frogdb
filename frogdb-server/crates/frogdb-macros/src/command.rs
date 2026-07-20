@@ -339,11 +339,16 @@ fn generate_strategy_impl(strategy: &Option<String>) -> TokenStream2 {
             }
         },
         Some("scatter_gather") | Some("scatter-gather") => quote! {
-            fn execution_strategy(&self) -> ::frogdb_core::ExecutionStrategy {
-                ::frogdb_core::ExecutionStrategy::ScatterGather {
-                    merge: ::frogdb_core::MergeStrategy::Custom
-                }
-            }
+            // A scatter-gather command carries a flat `ScatterGatherOp` identity
+            // that the router dispatches through an exhaustive match. The op
+            // cannot be synthesized from the bare attribute, so scatter commands
+            // must hand-write `strategy: ExecutionStrategy::ScatterGather(
+            // ScatterGatherOp::…)` in their `CommandSpec`.
+            compile_error!(
+                "the `scatter_gather` strategy attribute cannot pick a ScatterGatherOp; \
+                 declare `ExecutionStrategy::ScatterGather(ScatterGatherOp::…)` \
+                 explicitly in the command spec instead"
+            );
         },
         Some("async_external") | Some("async-external") => quote! {
             fn execution_strategy(&self) -> ::frogdb_core::ExecutionStrategy {

@@ -13,7 +13,7 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
     EventSpec, ExecutionStrategy, KeyAccessFlag, KeySpec, KeyspaceEventFlags, LookupSpec,
-    MergeStrategy, ServerWideOp, Value, WaiterWake, WalStrategy, shard_for_key,
+    ScatterGatherOp, ServerWideOp, Value, WaiterWake, WalStrategy, shard_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -228,9 +228,7 @@ impl Command for TouchCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::EveryKey,
-            strategy: ExecutionStrategy::ScatterGather {
-                merge: MergeStrategy::SumIntegers,
-            },
+            strategy: ExecutionStrategy::ScatterGather(ScatterGatherOp::Touch),
         };
         &SPEC
     }
@@ -269,9 +267,7 @@ impl Command for UnlinkCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ScatterGather {
-                merge: MergeStrategy::SumIntegers,
-            },
+            strategy: ExecutionStrategy::ScatterGather(ScatterGatherOp::Unlink),
         };
         &SPEC
     }
