@@ -17,7 +17,7 @@ testbox (`just tb-warmup` / `just tb-run`); `just concurrency` + `just lint` run
 
 - [x] Task 1 — Store reports lazy removals (behavior-neutral seam) — `64e8b3d0` APPROVED
 - [x] Task 2 — Apply lazy-purge effects (gaps 1-3) + flip repros + S2 lazy arm — `8ffc47d7` APPROVED
-- [ ] Task 3 — Per-key `live_at_watch` plumbing via `WatchEntry` (behavior-neutral) + `watch_keys` helper
+- [x] Task 3 — Per-key `live_at_watch` plumbing via `WatchEntry` (behavior-neutral) + `watch_keys` helper — `0609aa85` APPROVED
 - [ ] Task 4 — `check_watches` honors `live_at_watch` (gap 4) + flip repro + two-watcher arm
 - [ ] Task 5 — Proposal acceptance update + full verification (testbox + local concurrency/lint)
 
@@ -29,3 +29,6 @@ Implementer (Opus): seam per plan; deviations endorsed (test seeding via `set`+`
 ### Task 2 — `8ffc47d7`
 Implementer (Opus): effects filled in (per-key XREADGROUP NOGROUP drain + one bump per non-empty batch, early-return on empty); `purge_expired_watches` refactored to route through the seam (dropped explicit bump + discard); gap-1/2 shard-driver + gap-3 turmoil repros flipped (`regression_gap1_lazy_read_drains_xreadgroup`, `regression_gap2_lazy_read_drains_before_sweep`, `regression_watch_read_lazy_purge_aborts_realpath`); new S2 lazy arm `regression_gap3_third_party_lazy_read_aborts_watch`; carried nit fixed. Review (Opus): APPROVE — refactor sound (bump exactly on real removal; EXEC-time drain parity-correct, no reentrancy; exactly-once drain per purge incl. txn loop); parity exact (no deferred effects added; `expired_keys` not double-counted); pins genuinely inverted. 19/19 + 2/2 turmoil + lint green.
 **Carried observation (LOW) for Task 4 review:** `purge_expired_watches` no longer bumps for a pause-suppressed (CLIENT PAUSE ALL) logically-expired watched key (suppressed branch reports nothing). Narrow under-abort window; Task 4's `live_at_watch && !exists_unexpired` clause covers it (present-but-expired reads as not-live). Task-4 reviewer: confirm coverage.
+
+### Task 3 — `0609aa85`
+Implementer (Opus): `WatchEntry` end-to-end; `GetVersion` reply `(u64, Vec<bool>)` with `exists_unexpired` probe before no-bump purge; `watch_keys` harness helper; 15 files. Deviations endorsed: re-export files added (lib.rs, shard/mod.rs, conn_command.rs trait); connection map stays `HashMap<Bytes,(usize,u64,bool)>` (shard_id connection-local, `WatchEntry` at boundary via `take_transaction`); replication executor was already `watches: Vec::new()` pre-commit (verified neutral); test sites hardcode `live_at_watch: true` (correct + ignored this task). Review (Opus): APPROVE — check_watches pure version compare preserved; handle_watch zip provably aligned (WATCH is single-shard by SlotValidator, one GetVersion covers all keys; re-WATCH overwrites with fresh liveness = Redis semantics); EXEC single-shard by construction (multi-shard watch set → CROSSSLOT). 9/9 + 43/43 transaction + 17/17 watch + 2/2 turmoil + lint green. Useful Task-4 fact: WATCH/EXEC are single-shard; `watch_keys` returns real computed liveness.
