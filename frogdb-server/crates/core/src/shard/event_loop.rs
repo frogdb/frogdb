@@ -1,5 +1,6 @@
 use std::time::{Duration, Instant};
 
+use bytes::Bytes;
 use frogdb_types::metrics::definitions::{FieldsExpired, KeysExpired, ShardQueueLatency};
 
 use crate::keyspace_event::KeyspaceEventFlags;
@@ -188,6 +189,20 @@ impl ShardWorker {
                 std::str::from_utf8(key).unwrap_or("<binary>"),
                 self.shard_id() as u64,
             );
+        }
+
+        // F1: TTL/active-expiry must drain blocked XREADGROUP waiters for any
+        // removed stream key, mirroring the DEL write path
+        // (drain_stream_waiters_with_error → NOGROUP; XREAD waiters stay
+        // blocked). apply_expiry_effects previously never touched wait_queue.
+        let removed_keys: Vec<Bytes> = result
+            .deleted_keys
+            .iter()
+            .chain(result.emptied_keys.iter())
+            .cloned()
+            .collect();
+        for key in &removed_keys {
+            self.drain_stream_waiters_with_error(key);
         }
 
         // Record expired keys metric and increment version.

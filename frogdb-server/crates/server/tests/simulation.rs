@@ -3314,3 +3314,167 @@ fn watch_lazy_expiry_false_negative_realpath() {
          has regressed.",
     );
 }
+
+/// F1 real-path (D8): active-expiry (TTL) must drain a blocked XREADGROUP waiter
+/// to `NOGROUP`, exactly as the DEL write path does.
+///
+/// The bug: `apply_expiry_effects` (shard/event_loop.rs) applied every other
+/// side effect of an active-expiry cycle (keyspace notifications, tracking
+/// invalidation, metrics, version bump) but never touched the wait queue. A
+/// blocked XREADGROUP waiter on a stream key whose TTL then elapsed was left
+/// parked forever, waking only at its own BLOCK timeout with the null-array
+/// timeout reply — whereas `DEL st` drains the same waiter to `NOGROUP` via
+/// `drain_stream_waiters_with_error` (shard/blocking.rs). The two key-death
+/// paths diverged. The fix drains those waiters in `apply_expiry_effects`, so
+/// TTL/active-expiry and DEL converge to the same `NOGROUP`.
+///
+/// Real-path shape (Task-8 dual-clock conventions): key expiry is evaluated
+/// against the real wall clock (`std::time::Instant`), not turmoil's virtual
+/// clock, so the 10ms TTL is elapsed with a real 50ms `std::thread::sleep`
+/// (a `tokio::time::sleep` would advance only virtual time and leave `st`
+/// physically live). The active-expiry sweep itself runs on the shard's 100ms
+/// virtual-time interval, so a `tokio::time::sleep` window after the real elapse
+/// lets a sweep fire while `st` is genuinely past its TTL.
+#[test]
+fn xreadgroup_ttl_no_nogroup_realpath() {
+    let mut sim = Builder::new()
+        .tick_duration(Duration::from_millis(1))
+        .build();
+
+    // Single shard: the wait queue and active-expiry cycle are per-shard.
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
+
+    // Captures the raw bytes of the blocked XREADGROUP reply.
+    let group_reply: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let group_reply_client = group_reply.clone();
+
+    // Gate the blocker so it registers its XREADGROUP only after the consumer
+    // group exists (otherwise the read would itself get NOGROUP immediately and
+    // never reach the blocked state under test).
+    let group_ready = Arc::new(tokio::sync::Notify::new());
+    let group_ready_setup = group_ready.clone();
+    let group_ready_block = group_ready.clone();
+
+    // Blocker: parks on `XREADGROUP ... BLOCK 5000 ... >` and records the reply.
+    sim.client("blocker", async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        // Wait until the group has been created.
+        group_ready_block.notified().await;
+
+        // The group is created at `$` (last-delivered = top), so `>` has no new
+        // entries and this blocks. A finite 5000ms virtual BLOCK deadline
+        // guarantees termination even pre-fix, where the waiter is never drained
+        // and only the timeout ends it (that path yields the null-array reply).
+        stream
+            .write_all(&encode_command(&[
+                b"XREADGROUP",
+                b"GROUP",
+                b"g",
+                b"c",
+                b"BLOCK",
+                b"5000",
+                b"STREAMS",
+                b"st",
+                b">",
+            ]))
+            .await?;
+        let n = stream.read(&mut buf).await?;
+        *group_reply_client.lock().unwrap() = buf[..n].to_vec();
+        Ok(())
+    });
+
+    // Killer: builds the stream+group, sets a short TTL, elapses it in real
+    // wall-clock time, then lets an active-expiry sweep run.
+    sim.client("killer", async move {
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        async fn round_trip(
+            stream: &mut TcpStream,
+            buf: &mut [u8],
+            cmd: &Bytes,
+        ) -> Result<Vec<u8>, BoxError> {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            stream.write_all(cmd).await?;
+            let n = stream.read(buf).await?;
+            Ok(buf[..n].to_vec())
+        }
+
+        // XADD st 1-1 f v — one entry so the stream exists.
+        round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"XADD", b"st", b"1-1", b"f", b"v"]),
+        )
+        .await?;
+
+        // XGROUP CREATE st g $ — last-delivered = top entry, so a subsequent
+        // `XREADGROUP ... >` sees no new entries and blocks.
+        let reply = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"XGROUP", b"CREATE", b"st", b"g", b"$"]),
+        )
+        .await?;
+        assert!(
+            matches!(parse_simple_response(&reply), OperationResult::Ok),
+            "XGROUP CREATE should reply +OK, got {reply:?}"
+        );
+
+        // Group now exists — release the blocker to park its waiter.
+        group_ready_setup.notify_one();
+
+        // Give the blocker ample virtual time to connect and register its wait.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // PEXPIRE st 10 — a 10ms real-clock TTL; the key is still live.
+        let reply = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"PEXPIRE", b"st", b"10"]),
+        )
+        .await?;
+        assert!(
+            matches!(parse_simple_response(&reply), OperationResult::Integer(1)),
+            "PEXPIRE st 10 should reply :1, got {reply:?}"
+        );
+
+        // Elapse the TTL in REAL wall-clock time. Key expiry checks
+        // `std::time::Instant::now()`, not turmoil's virtual clock, and
+        // `thread::sleep` advances no virtual time — so 50ms real (>> 10ms TTL)
+        // leaves the key logically expired but still physically present (nothing
+        // has accessed it and no sweep has run yet).
+        std::thread::sleep(Duration::from_millis(50));
+
+        // Now advance virtual time so the shard's 100ms active-expiry interval
+        // fires with `st` genuinely past its TTL: the sweep removes `st` and
+        // (after the fix) drains the blocked XREADGROUP waiter to NOGROUP.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        Ok(())
+    });
+
+    sim.run().unwrap();
+
+    let reply = group_reply.lock().unwrap().clone();
+    assert!(
+        !reply.is_empty(),
+        "blocker never captured an XREADGROUP reply"
+    );
+
+    // F1 FIXED: active-expiry drains the blocked XREADGROUP waiter to NOGROUP,
+    // matching the DEL write path. Before the fix `apply_expiry_effects` never
+    // touched the wait queue, so the waiter sat parked until its own 5000ms
+    // BLOCK timeout and replied with the RESP2 null-array timeout (`*-1\r\n`).
+    assert!(
+        reply.starts_with(b"-NOGROUP"),
+        "F1 regression guard: expected active-expiry to drain the blocked \
+         XREADGROUP waiter to NOGROUP (as DEL does). Got {reply:?}. A `*-1\\r\\n` \
+         here means apply_expiry_effects stopped draining stream waiters and the \
+         waiter fell through to its BLOCK timeout.",
+    );
+}
