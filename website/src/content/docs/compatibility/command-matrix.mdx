@@ -14,7 +14,7 @@ This matrix is generated from FrogDB's running command registry joined with the 
 
 <CommandMatrixSummary />
 
-FrogDB extensions are FrogDB-original commands with no Redis equivalent (for example the `ES.*` event-sourcing family); they are counted separately above and documented under Extensions.
+The four counts are not mutually exclusive: supported, partial, and unsupported partition the Redis command surface, while FrogDB extensions are a *subset* of the supported count — of the supported commands, that many are FrogDB-original or Redis-Stack extension commands with no plain-Redis equivalent (for example the `ES.*` event-sourcing family). Do not sum all four. Extensions are documented under [Extensions](/extensions/overview/).
 
 ## Matrix
 

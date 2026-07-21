@@ -26,6 +26,7 @@ const { supported, partial, unsupported, extension } = (data as any).summary;
     <div class="stat-card">
       <span class="stat-value">{extension.toLocaleString()}</span>
       <span class="stat-label">FrogDB Extensions</span>
+      <span class="stat-note">subset of Supported</span>
     </div>
   </div>
 </div>
@@ -56,5 +57,11 @@ const { supported, partial, unsupported, extension } = (data as any).summary;
     font-size: 0.85rem;
     color: var(--sl-color-gray-2);
     margin-top: 0.25rem;
+  }
+  .stat-note {
+    font-size: 0.72rem;
+    color: var(--sl-color-gray-3);
+    margin-top: 0.15rem;
+    font-style: italic;
   }
 </style>

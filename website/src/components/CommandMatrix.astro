@@ -8,7 +8,8 @@
 
 import data from '../data/command-matrix.json';
 
-type Command = { name: string; status: string; note: string };
+type Arity = { kind: string; min?: number; max?: number };
+type Command = { name: string; status: string; note: string; arity: Arity };
 type Family = { family: string; commands: Command[] };
 
 const families = ((data as any).families as Family[])
