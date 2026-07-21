@@ -177,8 +177,9 @@ GET /status/json    # Same document over HTTP, unauthenticated
 ```
 
 Both paths render from the same status collector, so the RESP and HTTP forms always agree.
-The JSON document is organized into sections: `cluster`, `health`, `clients`, `memory`,
-`persistence`, `keyspace`, `commands`.
+The JSON document is organized into sections: `frogdb` (version, uptime, pid, timestamp),
+`cluster`, `health`, `clients`, `memory`, `persistence`, `shards` (a per-shard array),
+`keyspace`, `commands`.
 
 Warning thresholds:
 
@@ -232,7 +233,9 @@ curl -H "Authorization: Bearer my-secret-token" http://localhost:9090/debug/api/
 
 | Endpoint | Description |
 |---|---|
-| `GET /debug/api/cluster` | Cluster topology and state |
+| `GET /debug/api/server` | Server status snapshot: version, role, uptime, shard count, replication (`/debug/api/cluster` is an alias for this same handler — it does not return topology) |
+| `GET /debug/api/cluster/overview` | Cluster topology: nodes and their state (cluster mode only; reports `{"enabled": false}` outside cluster mode) |
+| `GET /debug/api/cluster/node/:id` | Detail for a single cluster node |
 | `GET /debug/api/config` | Current configuration values |
 | `GET /debug/api/metrics` | Current metrics snapshot (JSON) |
 | `GET /debug/api/clients` | Connected clients list |
