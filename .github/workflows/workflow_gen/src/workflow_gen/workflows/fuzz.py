@@ -22,6 +22,7 @@ def fuzz_workflow() -> Workflow:
 
     w.jobs["fuzz-regression"] = Job(
         name="Fuzz Regression",
+        runs_on="blacksmith-4vcpu-ubuntu-2404",
         steps=[
             checkout_step(),
             self_hosted_env_step(),

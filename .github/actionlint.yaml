@@ -1,0 +1,9 @@
+# actionlint configuration
+# https://github.com/rhysd/actionlint/blob/main/docs/config.md
+#
+# Register Blacksmith runner labels so actionlint does not flag them as unknown
+# `runs-on:` values. See https://docs.blacksmith.sh/blacksmith-runners/overview#runner-tags
+self-hosted-runner:
+  labels:
+    - blacksmith-2vcpu-ubuntu-2404
+    - blacksmith-4vcpu-ubuntu-2404

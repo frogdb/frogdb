@@ -35,7 +35,9 @@ pub(super) struct SubsystemHandles {
     #[cfg(not(feature = "turmoil"))]
     pub tls_acceptor: Option<JoinHandle<()>>,
     pub failure_detector: Option<JoinHandle<()>>,
-    pub shard_handles: Vec<JoinHandle<()>>,
+    /// Handle to the shard-worker supervisor. Completes once every shard worker
+    /// has terminated, so shutdown awaits it in place of the per-worker handles.
+    pub shard_supervisor: Option<JoinHandle<()>>,
     pub periodic_sync_handle: Option<JoinHandle<()>>,
     pub periodic_snapshot_handle: Option<JoinHandle<()>>,
 }
@@ -546,8 +548,8 @@ impl Server {
         // Move failure_detector_handle out of self
         let failure_detector_handle = self.failure_detector_handle.take();
 
-        // Move shard handles and periodic handles out of self
-        let shard_handles = std::mem::take(&mut self.shard_handles);
+        // Move shard supervisor and periodic handles out of self
+        let shard_supervisor = self.shard_supervisor_handle.take();
         let periodic_sync_handle = self.periodic_sync_handle.take();
         let periodic_snapshot_handle = self.periodic_snapshot_handle.take();
 
@@ -561,7 +563,7 @@ impl Server {
             #[cfg(not(feature = "turmoil"))]
             tls_acceptor: tls_acceptor_handle,
             failure_detector: failure_detector_handle,
-            shard_handles,
+            shard_supervisor,
             periodic_sync_handle,
             periodic_snapshot_handle,
         })
@@ -577,8 +579,12 @@ impl Server {
             let _ = sender.send(ShardMessage::Shutdown).await;
         }
 
-        // Wait for shard workers to finish
-        for handle in handles.shard_handles {
+        // Wait for the shard supervisor to observe every worker terminate. The
+        // supervisor owns the individual worker handles; its task completes only
+        // once all shards have drained. `health_checker.shutdown()` above already
+        // flipped the shutdown signal, so these completions are treated as
+        // expected teardown rather than fail-stop-triggering crashes.
+        if let Some(handle) = handles.shard_supervisor {
             let _ = handle.await;
         }
 

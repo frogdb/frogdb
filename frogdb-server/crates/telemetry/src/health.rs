@@ -119,6 +119,12 @@ impl HealthChecker {
         self.inner.alive.store(false, Ordering::SeqCst);
         self.inner.ready.store(false, Ordering::SeqCst);
     }
+
+    /// Whether shutdown has begun (the `alive` flag has been cleared by
+    /// [`shutdown`](Self::shutdown)).
+    pub fn is_shutting_down(&self) -> bool {
+        !self.inner.alive.load(Ordering::SeqCst)
+    }
 }
 
 #[cfg(test)]

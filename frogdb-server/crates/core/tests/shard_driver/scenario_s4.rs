@@ -63,6 +63,23 @@ async fn s4_holder_panic_releases_locks_and_shard_resumes() {
         "the panicking holder task must surface a JoinError"
     );
 
+    // The guard's release signals have not been pumped yet, so both shards
+    // still hold conn 99's continuation lock. A third connection's Execute
+    // must hit the gate's positive branch (`can_execute_during_lock`,
+    // worker.rs) and observe the shard-busy error, not run its command.
+    for &sid in &SHARDS {
+        let resp = driver.execute_conn(sid, 7, "SET", &["busy", "nope"]).await;
+        match resp {
+            Response::Error(msg) => assert!(
+                msg.starts_with(&b"ERR shard busy"[..]),
+                "shard {sid} returned an unexpected error while locked: {msg:?}"
+            ),
+            other => {
+                panic!("shard {sid} let conn 7 execute while conn 99 holds the lock: {other:?}")
+            }
+        }
+    }
+
     // Guard Drop (on unwind) fired the release signals; pump each shard's
     // continuation-release seam in a permuted order.
     driver.pump_continuation_release(1).await;

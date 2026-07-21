@@ -1,7 +1,11 @@
 # FrogDB Justfile
 
 # libclang is required by bindgen (used by librocksdb-sys). macOS: brew install llvm
-export LIBCLANG_PATH := env("LIBCLANG_PATH", "/opt/homebrew/opt/llvm/lib")
+# Linux: apt install libclang-dev (LLVM 18). When LIBCLANG_PATH is set, clang-sys
+# searches ONLY that directory, so a wrong default breaks the build — the fallback
+# must match the platform's real libclang location.
+libclang-default := if os() == "macos" { "/opt/homebrew/opt/llvm/lib" } else { "/usr/lib/llvm-18/lib" }
+export LIBCLANG_PATH := env("LIBCLANG_PATH", libclang-default)
 
 # DYLD_LIBRARY_PATH needed at runtime for librocksdb-sys build script to find libclang.dylib
 # Note: just's export doesn't propagate DYLD_* vars on macOS (SIP strips them), so this is
@@ -115,8 +119,15 @@ fmt-check crate="":
     cargo fmt {{ if crate != "" { "-p " + crate } else { "--all" } }} -- --check
 
 # Run clippy lints (optionally for a specific crate)
-lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint
+lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-turmoil
     {{dyld-env}} {{rocksdb-env}} cargo clippy {{ if crate != "" { "-p " + crate } else { "--all-targets" } }} -- -D warnings
+
+# Gate: turmoil-featured test bodies (frogdb-server/crates/server/tests/simulation.rs)
+# are behind #[cfg(feature = "turmoil")], a non-default feature the plain clippy
+# pass above never enables — those bodies escape clippy entirely and only surface
+# rustc warnings via the nextest build. Lint them explicitly with the feature on.
+lint-turmoil:
+    {{dyld-env}} {{rocksdb-env}} cargo clippy -p frogdb-server --features turmoil --tests -- -D warnings
 
 # Gate: INFO section content must come from a renderer (crates/server/src/info),
 # never a post-hoc string patch. Rejects placeholder-anchor rewrites in the

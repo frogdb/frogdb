@@ -3479,6 +3479,319 @@ fn xreadgroup_ttl_no_nogroup_realpath() {
     );
 }
 
+/// GAP 3 real-path (D8): a watched key lazily purged by a THIRD party's read
+/// leaves the per-shard WATCH version untouched, so a later EXEC does NOT abort
+/// — a WATCH false negative (under-abort) on the READ path. This is the
+/// read-path sibling of F3 (`watch_lazy_expiry_false_negative_realpath`).
+///
+/// F3 fixed the case where EXEC's OWN watch validation lazily purges the expired
+/// watched key (`purge_expired_watches`, worker.rs) and bumps the shard version.
+/// But that bump only fires if the key is still physically present at EXEC. Here
+/// a THIRD connection's `GET k` runs `Store::get_with_expiry_check`
+/// (store/hashmap.rs `check_and_delete_expired`) first and physically removes
+/// `k` WITHOUT bumping the version (the read path is version-ignorant). At EXEC,
+/// `purge_if_expired(k)` finds nothing to purge, so no bump happens, the watch
+/// still matches its snapshot, and the transaction COMMITS over a live->gone
+/// transition.
+///
+/// Reference behavior (Redis 7/8, Valkey, Dragonfly all ABORT): the read's own
+/// `expireIfNeeded` -> `deleteExpiredKeyAndPropagate` -> `keyModified` ->
+/// `touchWatchedKey` (db.c) marks the watch dirty at the moment of the lazy
+/// removal, regardless of which client triggered it (redis PR #7920 / issue
+/// #7918). FrogDB's coarse per-shard version cannot express "this key was
+/// modified" from a version-ignorant read, so the third-party lazy purge is
+/// invisible to the watcher.
+///
+/// CRITICAL ORDERING (why PEXPIRE precedes WATCH): identical to F3 — PEXPIRE on
+/// a live key is itself a version-bumping write, so setting the TTL BEFORE WATCH
+/// makes the watch snapshot the post-PEXPIRE version. The only thing that could
+/// invalidate the watch in the window is the lazy purge under test.
+///
+/// Clock: TTL expiry uses the real `std::time::Instant`; a `tokio::time::sleep`
+/// under turmoil advances only virtual time, so the 10ms TTL is elapsed with a
+/// real 50ms `std::thread::sleep` (F3 precedent). Ordering between the watcher
+/// (conn A) and the third-party reader (conn B) is made deterministic with
+/// `tokio::sync::Notify` handshakes (permit-storing `notify_one`, race-free).
+///
+/// Documents the CURRENT (buggy) behavior: EXEC COMMITS (`*1\r\n+OK\r\n`).
+/// Remove `#[ignore]` and flip the assertion to the aborted null bulk
+/// (`$-1\r\n`) when the read-path lazy-purge effects seam (per-key expired-watch
+/// tracking) lands.
+#[test]
+#[ignore = "GAP 3 repro: third-party read-path lazy purge does not bump WATCH version (documents current under-abort; unfixed)"]
+fn watch_read_lazy_purge_no_bump_realpath() {
+    let mut sim = Builder::new()
+        .tick_duration(Duration::from_millis(1))
+        .build();
+    // Single shard: WATCH is validated against the per-shard version.
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
+
+    let exec_reply: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let exec_reply_a = exec_reply.clone();
+
+    // A (watcher) -> B (reader): k has expired and A is ready for the lazy read.
+    // B -> A: the lazy read is done, A may EXEC.
+    let go_read = Arc::new(tokio::sync::Notify::new());
+    let read_done = Arc::new(tokio::sync::Notify::new());
+    let go_read_a = go_read.clone();
+    let read_done_a = read_done.clone();
+    let go_read_b = go_read.clone();
+    let read_done_b = read_done.clone();
+
+    // Conn A: disable active expiry, SET k, PEXPIRE k (bump BEFORE WATCH), WATCH
+    // the still-live key, elapse the TTL, release B for the third-party read,
+    // then EXEC once B is done.
+    sim.client("watcher", async move {
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        async fn round_trip(
+            stream: &mut TcpStream,
+            buf: &mut [u8],
+            cmd: &Bytes,
+        ) -> Result<Vec<u8>, BoxError> {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            stream.write_all(cmd).await?;
+            let n = stream.read(buf).await?;
+            Ok(buf[..n].to_vec())
+        }
+
+        round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"DEBUG", b"SET-ACTIVE-EXPIRE", b"0"]),
+        )
+        .await?;
+        round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"SET", b"k", b"v"]),
+        )
+        .await?;
+        round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"PEXPIRE", b"k", b"10"]),
+        )
+        .await?;
+        // WATCH the still-live key (snapshots the post-PEXPIRE version).
+        round_trip(&mut stream, &mut buf, &encode_command(&[b"WATCH", b"k"])).await?;
+
+        // Elapse the real-clock TTL: k is now logically expired but still
+        // physically present (active expiry off, nothing has touched it).
+        std::thread::sleep(Duration::from_millis(50));
+
+        // Release B to run the third-party lazy read, and wait for it to finish.
+        go_read_a.notify_one();
+        read_done_a.notified().await;
+
+        // MULTI ; SET k x ; EXEC — correct outcome is ABORT (k went live->gone
+        // while watched); current buggy outcome is COMMIT.
+        round_trip(&mut stream, &mut buf, &encode_command(&[b"MULTI"])).await?;
+        let reply = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"SET", b"k", b"x"]),
+        )
+        .await?;
+        assert_eq!(
+            reply.as_slice(),
+            b"+QUEUED\r\n",
+            "SET k x inside MULTI should reply +QUEUED, got {reply:?}"
+        );
+        let reply = round_trip(&mut stream, &mut buf, &encode_command(&[b"EXEC"])).await?;
+        *exec_reply_a.lock().unwrap() = reply;
+        Ok(())
+    });
+
+    // Conn B: after A signals, GET k — the version-ignorant lazy purge that
+    // physically removes k without bumping the shard version.
+    sim.client("reader", async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        go_read_b.notified().await;
+        stream.write_all(&encode_command(&[b"GET", b"k"])).await?;
+        let _n = stream.read(&mut buf).await?;
+        read_done_b.notify_one();
+        Ok(())
+    });
+
+    sim.run().unwrap();
+
+    let reply = exec_reply.lock().unwrap().clone();
+    assert!(!reply.is_empty(), "watcher never captured an EXEC reply");
+
+    // Current (buggy) behavior: the queued `SET k x` commits.
+    const COMMITTED: &[u8] = b"*1\r\n+OK\r\n";
+    assert_eq!(
+        reply.as_slice(),
+        COMMITTED,
+        "GAP 3: current behavior — a third-party GET lazily purged the watched \
+         key WITHOUT bumping the shard version, so EXEC COMMITTED \
+         (`*1\\r\\n+OK\\r\\n`) over a live->gone key. Redis/Valkey/Dragonfly ABORT \
+         here (`$-1\\r\\n`). Flip this assertion and drop #[ignore] when the \
+         read-path lazy-purge effects seam lands. Got {reply:?}.",
+    );
+}
+
+/// GAP 4 real-path (D8): a SECOND watcher under-aborts because the FIRST
+/// watcher's WATCH-time lazy purge removes the expired key WITHOUT bumping the
+/// version.
+///
+/// Conn B watches k while live (snapshots the post-PEXPIRE version). k expires.
+/// Conn A then watches k: WATCH issues `GetVersion` with the watched key, whose
+/// handler lazily purges the already-stale key via `Store::purge_if_expired`
+/// (dispatch_core.rs) but DELIBERATELY does not bump the version — the F3 design
+/// records a key already stale at WATCH time as a "nonexistent" watch. That
+/// purge physically removes k. When conn B later runs EXEC,
+/// `purge_expired_watches` finds nothing to purge (A already removed k), so it
+/// does not bump either — and B's watch still matches its snapshot, so the
+/// transaction COMMITS over a live->gone key.
+///
+/// This is the gap the proposal flags as UNFIXABLE at the coarse per-shard
+/// version: A's no-bump WATCH-time purge is correct for A (A never saw k live)
+/// but wrong for B (B did). Only per-key expired-watch state can tell them
+/// apart. Redis records `wk->expired` per watched key at WATCH time and fires
+/// `touchWatchedKey` on the lazy removal, so B's watch is invalidated while A's
+/// is not.
+///
+/// Ordering: conn B sets the TTL BEFORE its own WATCH (PEXPIRE is a bump), so
+/// B's watch snapshots the post-PEXPIRE version — the only invalidation source
+/// in the window is A's WATCH-time purge under test. The 10ms TTL is elapsed
+/// with a real 50ms `std::thread::sleep` (real-clock `Instant`); the B->A->B
+/// sequence is pinned with `tokio::sync::Notify` handshakes.
+///
+/// Documents the CURRENT (buggy) behavior: B's EXEC COMMITS (`*1\r\n+OK\r\n`).
+/// Remove `#[ignore]` and flip to the aborted null bulk (`$-1\r\n`) when the
+/// per-key expired-watch fix lands.
+#[test]
+#[ignore = "GAP 4 repro: second watcher under-aborts via first watcher's no-bump WATCH-time purge (documents current under-abort; unfixed)"]
+fn watch_second_watcher_under_abort_realpath() {
+    let mut sim = Builder::new()
+        .tick_duration(Duration::from_millis(1))
+        .build();
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
+
+    let exec_reply: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let exec_reply_b = exec_reply.clone();
+
+    // B (live watcher) -> A: k has expired, run your (stale) WATCH now.
+    // A -> B: the stale WATCH (and its no-bump purge) is done, B may EXEC.
+    let go_watch = Arc::new(tokio::sync::Notify::new());
+    let watch_done = Arc::new(tokio::sync::Notify::new());
+    let go_watch_a = go_watch.clone();
+    let watch_done_a = watch_done.clone();
+    let go_watch_b = go_watch.clone();
+    let watch_done_b = watch_done.clone();
+
+    // Conn B: the LIVE watcher. Disable active expiry, SET/PEXPIRE/WATCH while
+    // live, elapse the TTL, release A for its stale WATCH, then EXEC.
+    sim.client("live_watcher", async move {
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        async fn round_trip(
+            stream: &mut TcpStream,
+            buf: &mut [u8],
+            cmd: &Bytes,
+        ) -> Result<Vec<u8>, BoxError> {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            stream.write_all(cmd).await?;
+            let n = stream.read(buf).await?;
+            Ok(buf[..n].to_vec())
+        }
+
+        round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"DEBUG", b"SET-ACTIVE-EXPIRE", b"0"]),
+        )
+        .await?;
+        round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"SET", b"k", b"v"]),
+        )
+        .await?;
+        round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"PEXPIRE", b"k", b"10"]),
+        )
+        .await?;
+        // WATCH k while it is still LIVE (snapshots the post-PEXPIRE version).
+        round_trip(&mut stream, &mut buf, &encode_command(&[b"WATCH", b"k"])).await?;
+
+        // Elapse the real-clock TTL — k is now logically expired, physically
+        // present.
+        std::thread::sleep(Duration::from_millis(50));
+
+        // Release A to run its stale WATCH (the no-bump WATCH-time purge), wait
+        // for it to finish.
+        go_watch_b.notify_one();
+        watch_done_b.notified().await;
+
+        // MULTI ; SET k x ; EXEC — B saw k live and it is now gone, so the
+        // correct outcome is ABORT; current buggy outcome is COMMIT.
+        round_trip(&mut stream, &mut buf, &encode_command(&[b"MULTI"])).await?;
+        let reply = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"SET", b"k", b"x"]),
+        )
+        .await?;
+        assert_eq!(
+            reply.as_slice(),
+            b"+QUEUED\r\n",
+            "SET k x inside MULTI should reply +QUEUED, got {reply:?}"
+        );
+        let reply = round_trip(&mut stream, &mut buf, &encode_command(&[b"EXEC"])).await?;
+        *exec_reply_b.lock().unwrap() = reply;
+        Ok(())
+    });
+
+    // Conn A: the STALE watcher. After B signals, WATCH k — k is already
+    // expired, so the GetVersion handler purges it via `purge_if_expired`
+    // WITHOUT bumping the version (F3 no-bump WATCH-time purge).
+    sim.client("stale_watcher", async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        go_watch_a.notified().await;
+        stream.write_all(&encode_command(&[b"WATCH", b"k"])).await?;
+        let _n = stream.read(&mut buf).await?;
+        watch_done_a.notify_one();
+        Ok(())
+    });
+
+    sim.run().unwrap();
+
+    let reply = exec_reply.lock().unwrap().clone();
+    assert!(
+        !reply.is_empty(),
+        "live watcher never captured an EXEC reply"
+    );
+
+    const COMMITTED: &[u8] = b"*1\r\n+OK\r\n";
+    assert_eq!(
+        reply.as_slice(),
+        COMMITTED,
+        "GAP 4: current behavior — the first (stale) watcher's WATCH-time purge \
+         removed the key WITHOUT bumping the version, so the second (live) \
+         watcher's EXEC COMMITTED (`*1\\r\\n+OK\\r\\n`) over a live->gone key. \
+         Redis/Valkey/Dragonfly ABORT here (`$-1\\r\\n`). This is unfixable at the \
+         coarse per-shard version — flip the assertion and drop #[ignore] when \
+         per-key expired-watch tracking lands. Got {reply:?}.",
+    );
+}
+
 /// S7 (phase-4b): `CLIENT PAUSE WRITE` vs an in-flight write-`EXEC` on the real
 /// connection path (turmoil-level).
 ///
@@ -3521,14 +3834,30 @@ fn xreadgroup_ttl_no_nogroup_realpath() {
 ///
 /// ## Expiry sub-assertion: intentionally dropped (brief fallback)
 /// The brief permits observing `expiry_paused` suppression only if the harness
-/// exposes a *deterministic client-visible* way to see it; it does not.
-/// `HashMapStore::check_and_delete_expired` (store/hashmap.rs:421-435) returns
-/// `true` (logically expired) for an elapsed key even when `expiry_suppressed`
-/// is set — it merely skips the *physical* delete / counter / replication. So
-/// `get_with_expiry_check` (:1024) still returns `None` to a client `GET` on a
-/// suppressed-but-elapsed key: suppression is indistinguishable from real expiry
-/// over the wire. The suppression that matters (skipping the active sweep to
-/// avoid master/replica divergence) is internal and is covered by the
+/// exposes a *deterministic client-visible* way to see it; it does not, but not
+/// for the reason it might look like at first glance. `GET` alone would in fact
+/// be ambiguous: `HashMapStore::check_and_delete_expired` (store/hashmap.rs:
+/// 421-435) returns `true` (logically expired) for an elapsed key even when
+/// `expiry_suppressed` is set — it merely skips the *physical* delete / counter
+/// / replication — so `get_with_expiry_check` (:1024) still returns `None` to a
+/// client `GET` on a suppressed-but-elapsed key, same as real expiry over the
+/// wire. But `GET` is not the only client-visible probe: `OBJECT ENCODING`
+/// (commands/generic.rs:334-340, via raw `Store::get`, hashmap.rs:824-833) and
+/// `OBJECT REFCOUNT` (commands/generic.rs:438-448, via raw `Store::contains`,
+/// hashmap.rs:847-849) both skip the expiry-aware path entirely — neither calls
+/// `get_with_expiry_check` nor `check_and_delete_expired`, and REFCOUNT doesn't
+/// even use the expiry-aware `exists_unexpired` (:851-859) — so they *would*
+/// observe the physical presence of a suppressed-but-elapsed key and *would*
+/// distinguish suppression from real expiry. So the sub-assertion is not
+/// dropped because it is unobservable; it is dropped because constructing the
+/// scenario at all requires a real-clock TTL to actually elapse while the test
+/// runs under turmoil's virtual clock. Per the "Clock findings" above, `Instant`
+/// (real) and turmoil's sim clock (virtual) do not advance together, so driving
+/// a key past its real-clock TTL deadline deterministically from inside a
+/// turmoil sim is exactly the cross-clock race this test otherwise avoids by
+/// construction (explicit `CLIENT UNPAUSE` instead of deadline auto-expiry).
+/// The suppression that matters (skipping the active sweep to avoid
+/// master/replica divergence) is internal and is covered by the
 /// `run_active_expiry` pause gate (shard/event_loop.rs:124-133, unit path). We
 /// therefore assert only the two write/read invariants here, per the brief.
 ///
