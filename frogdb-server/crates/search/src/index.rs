@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use bytes::Bytes;
+
 use tantivy::collector::TopDocs;
 use tantivy::directory::MmapDirectory;
 use tantivy::query::{BooleanQuery, Occur, RangeQuery, TermSetQuery};
@@ -375,23 +377,74 @@ impl ShardSearchIndex {
         doc
     }
 
-    /// Index a document (add or replace).
-    pub fn index_document(&mut self, key: &str, hash_fields: &[(String, String)]) {
+    /// Index a hash document (add or replace) from raw `Store` field bytes.
+    ///
+    /// This is the document-level write entry point for `ON HASH` indexes: it owns
+    /// the whole lockstep between the tantivy inverted index and the usearch vector
+    /// sidecar, so callers cannot desync them or feed the vector side the wrong bytes.
+    ///
+    /// - Text/tag/numeric/geo fields go to tantivy via a lossy `String` projection.
+    /// - Vector fields are indexed from the **raw** little-endian f32 `Bytes`, never
+    ///   from the lossy projection (which would corrupt the blob length and be rejected).
+    pub fn index_hash(&mut self, key: &str, entries: &[(Bytes, Bytes)]) {
+        // Text side: lossy projection for tantivy, matching what the Store hands us.
+        let text_fields: Vec<(String, String)> = entries
+            .iter()
+            .map(|(k, v)| {
+                (
+                    String::from_utf8_lossy(k).to_string(),
+                    String::from_utf8_lossy(v).to_string(),
+                )
+            })
+            .collect();
+        self.index_document(key, &text_fields);
+
+        // Vector side: raw bytes, gated by the schema this index already owns.
+        for (field, raw) in entries {
+            let fname = String::from_utf8_lossy(field);
+            if self.is_vector_field(&fname) {
+                self.index_vector(&fname, key, raw);
+            }
+        }
+    }
+
+    /// Index a JSON document (add or replace) against this index's JSONPath schema.
+    ///
+    /// Extracts each field via `extract_json_fields`, feeds text fields to tantivy,
+    /// and indexes any vector fields from the extracted value's bytes. JSON values are
+    /// natively textual, so `as_bytes()` is faithful here (unlike the hash path, where
+    /// the raw blob must be used). Owning the vector step here means the latent
+    /// JSON+vector combination is handled in exactly one place.
+    pub fn index_json(&mut self, key: &str, json_data: &serde_json::Value) {
+        let fields = extract_json_fields(&self.def, json_data);
+        self.index_document(key, &fields);
+
+        for (field_name, value) in &fields {
+            if self.is_vector_field(field_name) {
+                self.index_vector(field_name, key, value.as_bytes());
+            }
+        }
+    }
+
+    /// Whether the named field is a `VECTOR` field in this index's schema.
+    fn is_vector_field(&self, field_name: &str) -> bool {
+        self.def
+            .fields
+            .iter()
+            .any(|f| f.name == field_name && matches!(f.field_type, FieldType::Vector { .. }))
+    }
+
+    /// Write a document's text fields into the tantivy index (add or replace).
+    ///
+    /// Text-only: vector fields are handled by [`Self::index_hash`] / [`Self::index_json`],
+    /// which own the raw-bytes projection. Not part of the public write surface.
+    pub(crate) fn index_document(&mut self, key: &str, hash_fields: &[(String, String)]) {
         // Delete existing document with this key first
         let key_term = tantivy::Term::from_field_text(self.key_field, key);
         self.writer.delete_term(key_term);
 
         let doc = self.build_document(key, hash_fields);
         let _ = self.writer.add_document(doc);
-
-        // Index vector fields into usearch sidecar
-        for (field_name, value) in hash_fields {
-            if let Some(field_def) = self.def.fields.iter().find(|f| f.name == *field_name)
-                && matches!(field_def.field_type, FieldType::Vector { .. })
-            {
-                self.index_vector(field_name, key, value.as_bytes());
-            }
-        }
 
         self.dirty = true;
     }
@@ -996,14 +1049,19 @@ impl ShardSearchIndex {
     }
 
     /// Index a vector for a specific field. The blob is raw f32 bytes (little-endian).
-    pub fn index_vector(&mut self, field_name: &str, key: &str, blob: &[u8]) {
+    ///
+    /// Implementation detail of the document-level write methods
+    /// ([`Self::index_hash`] / [`Self::index_json`]); not part of the public surface.
+    pub(crate) fn index_vector(&mut self, field_name: &str, key: &str, blob: &[u8]) {
         if let Err(e) = self.vectors.index(field_name, key, blob) {
             tracing::warn!(error = %e, field = field_name, key, "vector index failed");
         }
     }
 
     /// Remove all vectors for a given Redis key from all vector fields.
-    pub fn delete_vector(&mut self, key: &str) {
+    ///
+    /// Owned by [`Self::delete_document`]; not part of the public surface.
+    pub(crate) fn delete_vector(&mut self, key: &str) {
         self.vectors.delete(key);
     }
 
@@ -1080,14 +1138,6 @@ impl ShardSearchIndex {
             distance_metric,
             count,
         ))
-    }
-
-    /// Check if this index has any vector fields.
-    pub fn has_vector_fields(&self) -> bool {
-        self.def
-            .fields
-            .iter()
-            .any(|f| matches!(f.field_type, FieldType::Vector { .. }))
     }
 }
 
@@ -1347,7 +1397,7 @@ pub fn haversine_distance(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{FieldDef, FieldType, SearchIndexDef};
+    use crate::schema::{FieldDef, FieldType, SearchIndexDef, VectorDistanceMetric};
 
     fn test_def() -> SearchIndexDef {
         SearchIndexDef {
@@ -1853,5 +1903,77 @@ mod tests {
         // Same point: distance = 0
         let dist = haversine_distance(0.0, 0.0, 0.0, 0.0);
         assert!(dist < 0.01);
+    }
+
+    /// A TEXT+VECTOR hash document must feed both the inverted (tantivy) index and
+    /// the vector (usearch) sidecar in lockstep, indexing the vector from the *raw*
+    /// field bytes. This is impossible to express with the field-granular API alone:
+    /// `index_document` projected hash values through `from_utf8_lossy` before feeding
+    /// the vector sidecar, which rejected the wrong-length blob and dropped the vector.
+    /// `index_hash` owns both projections, so KNN and text queries both match.
+    #[test]
+    fn index_hash_indexes_text_and_vector_in_lockstep() {
+        let def = SearchIndexDef {
+            name: "hv_idx".to_string(),
+            prefix: vec!["doc:".to_string()],
+            fields: vec![
+                FieldDef {
+                    name: "title".to_string(),
+                    field_type: FieldType::Text { weight: 1.0 },
+                    sortable: false,
+                    noindex: false,
+                    nostem: false,
+                    casesensitive: false,
+                    json_path: None,
+                },
+                FieldDef {
+                    name: "embedding".to_string(),
+                    field_type: FieldType::Vector {
+                        dim: 3,
+                        distance_metric: VectorDistanceMetric::L2,
+                    },
+                    sortable: false,
+                    noindex: false,
+                    nostem: false,
+                    casesensitive: false,
+                    json_path: None,
+                },
+            ],
+            version: 1,
+            synonym_groups: HashMap::new(),
+            source: Default::default(),
+            stopwords: None,
+            skip_initial_scan: false,
+            language: None,
+        };
+        let mut index = ShardSearchIndex::open_in_ram(def).unwrap();
+
+        // Raw little-endian f32 blob for the vector field — exactly what the Store holds.
+        // Running these bytes through `from_utf8_lossy` (the old path) corrupts the
+        // length and the sidecar drops the vector.
+        let raw_vec: Vec<u8> = [1.0f32, 0.0, 0.0]
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+        let entries: Vec<(Bytes, Bytes)> = vec![
+            (
+                Bytes::from_static(b"title"),
+                Bytes::from_static(b"hello world"),
+            ),
+            (Bytes::from_static(b"embedding"), Bytes::from(raw_vec)),
+        ];
+
+        index.index_hash("doc:1", &entries);
+        index.commit().unwrap();
+
+        // Text side: the tantivy inverted index matches.
+        let text = index.search("hello", &SearchOptions::page(0, 10)).unwrap();
+        assert_eq!(text.hits.len(), 1);
+        assert_eq!(text.hits[0].key, "doc:1");
+
+        // Vector side: KNN over the usearch sidecar returns the same doc.
+        let knn = index.knn_search("embedding", &[1.0, 0.0, 0.0], 1).unwrap();
+        assert_eq!(knn.len(), 1);
+        assert_eq!(knn[0].key, "doc:1");
     }
 }
