@@ -100,35 +100,30 @@ impl ConnectionCommand for LastsaveConnCommand {
 /// BGSAVE `[SCHEDULE]` — start a background snapshot, or schedule one if a save
 /// is already running.
 fn handle_bgsave(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
-    // Check for SCHEDULE option.
-    if !args.is_empty() {
-        let opt = args[0].to_ascii_uppercase();
-        if opt.as_slice() == b"SCHEDULE" {
-            // BGSAVE SCHEDULE — coalesce with any in-flight run in one atomic
-            // step (no caller-side check-then-act race between the in-progress
-            // probe and starting/scheduling a save).
-            return match ctx.snapshot_coordinator.request_snapshot() {
-                frogdb_core::persistence::SnapshotRequest::Coalesced => {
-                    Response::Simple(Bytes::from_static(b"Background saving scheduled"))
-                }
-                frogdb_core::persistence::SnapshotRequest::Started(epoch) => {
-                    tracing::info!(epoch, "BGSAVE started");
-                    Response::Simple(Bytes::from_static(b"Background saving started"))
-                }
-            };
-        }
-    }
+    use frogdb_core::persistence::{SnapshotMode, SnapshotRequest};
 
-    match ctx.snapshot_coordinator.start_snapshot() {
-        Ok(handle) => {
-            tracing::info!(epoch = handle.epoch(), "BGSAVE started");
+    // With `SCHEDULE`, a save already in flight coalesces a follow-up; without it,
+    // BGSAVE refuses without queuing. Both read the same coalesce decision through
+    // one atomic seam (no caller-side check-then-act race).
+    let is_schedule = !args.is_empty() && args[0].eq_ignore_ascii_case(b"SCHEDULE");
+    let mode = if is_schedule {
+        SnapshotMode::Schedule
+    } else {
+        SnapshotMode::Immediate
+    };
+
+    match ctx.snapshot_coordinator.request_snapshot(mode) {
+        SnapshotRequest::Started(epoch) => {
+            tracing::info!(epoch, "BGSAVE started");
             Response::Simple(Bytes::from_static(b"Background saving started"))
         }
-        Err(frogdb_core::persistence::SnapshotError::AlreadyInProgress) => {
+        SnapshotRequest::Coalesced => {
+            Response::Simple(Bytes::from_static(b"Background saving scheduled"))
+        }
+        SnapshotRequest::AlreadyRunning => {
             // Return a simple status like Redis does.
             Response::Simple(Bytes::from_static(b"Background save already in progress"))
         }
-        Err(e) => Response::error(format!("ERR {}", e)),
     }
 }
 
@@ -262,11 +257,13 @@ mod tests {
         let resp = BgsaveConnCommand
             .execute(&mut fx.ctx(), &[arg("SCHEDULE")])
             .await;
+        // The observable contract is the RESP response; the coalesce-arming
+        // invariant is asserted at the scheduler
+        // (`test_scheduler_request_mode_immediate_no_queue_vs_schedule_arms`).
         assert_eq!(
             resp,
             Response::Simple(Bytes::from_static(b"Background saving scheduled"))
         );
-        assert!(fx.snapshot_coordinator.is_scheduled());
     }
 
     #[tokio::test]

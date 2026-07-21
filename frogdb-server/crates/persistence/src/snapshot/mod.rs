@@ -24,6 +24,18 @@ pub enum SnapshotError {
     #[error("Internal error: {0}")]
     Internal(String),
 }
+/// How a background-save request should behave when a save is already running.
+///
+/// This is the one seam that distinguishes plain `BGSAVE` from `BGSAVE SCHEDULE`:
+/// both start a save when idle, but only `Schedule` queues a coalesced follow-up
+/// when a save is in flight — `Immediate` refuses without queuing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotMode {
+    /// Plain `BGSAVE`: start if idle, else report already-running WITHOUT queuing.
+    Immediate,
+    /// `BGSAVE SCHEDULE`: start if idle, else coalesce a single follow-up.
+    Schedule,
+}
 /// Outcome of a coalescing snapshot request ([`SnapshotCoordinator::request_snapshot`]).
 ///
 /// Folds the check-then-act BGSAVE decision (is a save running? if so schedule a
@@ -34,18 +46,17 @@ pub enum SnapshotRequest {
     /// No save was running; this call claimed the slot and started `epoch`.
     Started(u64),
     /// A save was already running (or another caller won the start race); this
-    /// call folded into a single pending follow-up.
+    /// call folded into a single pending follow-up ([`SnapshotMode::Schedule`]).
     Coalesced,
+    /// A save was already running; nothing was queued ([`SnapshotMode::Immediate`]).
+    AlreadyRunning,
 }
 pub trait SnapshotCoordinator: Send + Sync {
     fn start_snapshot(&self) -> Result<SnapshotHandle, SnapshotError>;
     fn last_save_time(&self) -> Option<Instant>;
     fn in_progress(&self) -> bool;
-    fn last_snapshot_metadata(&self) -> Option<SnapshotMetadata>;
-    fn schedule_snapshot(&self) -> bool;
-    fn is_scheduled(&self) -> bool;
     /// Atomically request a background save, coalescing with any in-flight run.
-    /// Replaces the caller-side check-then-act over `in_progress` +
-    /// `schedule_snapshot` / `start_snapshot`.
-    fn request_snapshot(&self) -> SnapshotRequest;
+    /// `mode` selects the no-queue (`Immediate`) vs coalesce (`Schedule`)
+    /// behaviour when a save is already running.
+    fn request_snapshot(&self, mode: SnapshotMode) -> SnapshotRequest;
 }
