@@ -505,8 +505,13 @@ impl ConnectionHandler {
                 continue;
             }
 
-            if let Ok(result) = response_rx.await {
-                responses.push(result);
+            // Bound each per-shard await by the scatter-gather timeout so a wedged
+            // ShardWorker cannot hang FUNCTION KILL forever (mirrors SCRIPT KILL).
+            // A dropped receiver or a timeout skips that shard, preserving the
+            // gather-then-scan reply semantics below.
+            match tokio::time::timeout(self.scatter_gather_timeout, response_rx).await {
+                Ok(Ok(result)) => responses.push(result),
+                Ok(Err(_)) | Err(_) => continue,
             }
         }
 

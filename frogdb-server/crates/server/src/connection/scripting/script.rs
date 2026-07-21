@@ -211,6 +211,11 @@ mod broadcast_timeout_routing_tests {
                     ShardMessage::ScriptLoad { response_tx, .. } => {
                         let _ = response_tx.send("deadbeef".to_string());
                     }
+                    ShardMessage::ScriptKill { response_tx } => {
+                        // Healthy shard 0 has no running script.
+                        let _ = response_tx
+                            .send(Err("NOTBUSY No scripts in execution right now.".to_string()));
+                    }
                     ShardMessage::PubSubIntrospection {
                         request,
                         response_tx,
@@ -309,6 +314,41 @@ mod broadcast_timeout_routing_tests {
             "PUBSUB CHANNELS must route through the timed broadcast seam and error on a \
              stalled shard rather than hang; got {:?}",
             responses[0]
+        );
+    }
+
+    // FUNCTION KILL is a hand-rolled gather-then-scan walk over every shard's
+    // `ScriptKill` reply. It used to await each shard's oneshot with no timeout,
+    // so a single wedged ShardWorker hung the whole ConnectionHandler forever —
+    // while its twin SCRIPT KILL (retrofitted with `scatter_gather_timeout`)
+    // returned and moved on. Shard 0 reports NOTBUSY, shard 1 stalls: the fixed
+    // handler must bound the per-shard await, skip the stalled shard, and still
+    // produce FUNCTION KILL's canonical NOTBUSY reply.
+    #[tokio::test]
+    async fn function_kill_returns_when_a_shard_stalls() {
+        let (handler, _shards) = handler_with_stalled_shard(Duration::from_millis(150)).await;
+
+        // Against current code this await never resolves; the outer guard bounds
+        // the whole call so the regression fails as an expired guard here rather
+        // than by tripping nextest's 15s cap.
+        let resp = tokio::time::timeout(
+            Duration::from_secs(5),
+            handler.handle_function(&[Bytes::from_static(b"KILL")]),
+        )
+        .await
+        .expect(
+            "FUNCTION KILL hung on a stalled shard: each per-shard await must be \
+             bounded by scatter_gather_timeout like SCRIPT KILL",
+        );
+
+        assert!(
+            matches!(
+                resp,
+                Response::Error(ref e)
+                    if e.as_ref() == b"NOTBUSY No scripts in execution right now."
+            ),
+            "FUNCTION KILL must skip the stalled shard and report NOTBUSY once no \
+             shard is running a read-only function; got {resp:?}"
         );
     }
 }
