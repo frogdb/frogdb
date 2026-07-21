@@ -53,7 +53,7 @@ pub use node_state::{NodeStateSnapshot, ShardScatterError, ShardState};
 pub use prometheus_recorder::{
     CommandSnapshot, DashboardMetrics, PrometheusRecorder, ShardSnapshot,
 };
-pub use status::{ServerStatus, StatusCollector, StatusCollectorConfig};
+pub use status::{LiveMode, ServerStatus, StatusCollector, StatusCollectorConfig};
 pub use system::SystemMetricsCollector;
 pub use task_monitors::TaskMonitorRegistry;
 pub use tracing::{

@@ -929,9 +929,9 @@ mod tests {
         ClientRegistry, CommandLatencyHistograms, KeyspaceStats, NoopMetricsRecorder,
         SharedHotkeySession, new_shared_hotkey_session,
     };
-    use frogdb_telemetry::{HealthChecker, StatusCollector, StatusCollectorConfig};
+    use frogdb_telemetry::{HealthChecker, LiveMode, StatusCollector, StatusCollectorConfig};
     use std::sync::Arc;
-    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::{AtomicBool, AtomicU64};
 
     /// Build a `ConnCtx` over fixture dependencies — no socket, no
     /// `ConnectionHandler`. These commands run with no shards (`shard_senders`
@@ -969,7 +969,7 @@ mod tests {
             0,
             false,
             "async".to_string(),
-            "standalone".to_string(),
+            LiveMode::new(false, Arc::new(AtomicBool::new(false)), "standalone"),
         ))
     }
 
@@ -1317,7 +1317,8 @@ mod tests {
             0,
             true, // persistence enabled (was hardcoded false)
             "async".to_string(),
-            "cluster".to_string(), // mode (was hardcoded "standalone")
+            // cluster mode (was hardcoded "standalone"); cluster is config-static.
+            LiveMode::new(true, Arc::new(AtomicBool::new(false)), "primary"),
         ));
 
         let fx = Fixture::with_status_collector(collector.clone());

@@ -5,7 +5,7 @@ use frogdb_core::ShardMessage;
 use frogdb_core::sync::{Arc, AtomicU64};
 use frogdb_core::{ClusterState, MetricsRecorder};
 use frogdb_debug::{ConfigEntry, DebugState, ServerInfo};
-use frogdb_telemetry::{StatusCollector, SystemMetricsCollector};
+use frogdb_telemetry::{LiveMode, StatusCollector, SystemMetricsCollector};
 use std::time::Duration;
 use tracing::{error, info};
 
@@ -46,18 +46,23 @@ impl Server {
         // Capture server start time
         let start_time = std::time::Instant::now();
 
-        // Determine node role once — the single source of truth for both the
-        // status collector and (when HTTP is enabled) the debug node-state
-        // provider.
-        let mode = if self.config.cluster.enabled {
-            "cluster".to_string()
-        } else if self.config.replication.is_primary() {
-            "primary".to_string()
-        } else if self.config.replication.is_replica() {
-            "replica".to_string()
+        // Live operating mode shared by the status collector and (when HTTP is
+        // enabled) the debug node-state provider. Cluster mode is config-static;
+        // the primary/replica axis follows the shared role flag so a runtime
+        // `REPLICAOF` promote/demote is reflected on every surface. A boot
+        // replica promoted via `REPLICAOF NO ONE` is a real primary, so both a
+        // `primary` and a `replica` config map to the `"primary"` non-replica
+        // label to match INFO's `role:master`.
+        let non_replica_label = if self.config.replication.is_standalone() {
+            "standalone"
         } else {
-            "standalone".to_string()
+            "primary"
         };
+        let mode = LiveMode::new(
+            self.config.cluster.enabled,
+            self.is_replica_flag.clone(),
+            non_replica_label,
+        );
 
         // Single status collector shared by the HTTP `/status` endpoint and the
         // STATUS JSON connection command, so the two surfaces can never disagree.
@@ -103,25 +108,16 @@ impl Server {
                     value: self.config.http.port.to_string(),
                 },
             ];
-            // Master identity, when this node is a configured replica.
-            let (master_host, master_port) = if self.config.replication.is_replica() {
-                (
-                    Some(self.config.replication.primary_host.clone()),
-                    Some(self.config.replication.primary_port),
-                )
-            } else {
-                (None, None)
-            };
-
             // Single coherent node-state provider (replication, clients, cluster).
+            // The provider draws role from the shared live mode and master
+            // host/port from the RoleManager, so both track runtime `REPLICAOF`.
             let node_state_provider = Arc::new(crate::debug_providers::ServerDebugProvider::new(
                 self.client_registry.clone(),
                 self.cluster_state.clone(),
                 self.node_id,
                 self.replication_tracker.clone(),
                 mode.clone(),
-                master_host,
-                master_port,
+                self.role_manager_handle.clone(),
             ));
 
             let debug_state = DebugState::new(
