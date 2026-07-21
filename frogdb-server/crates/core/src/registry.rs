@@ -105,6 +105,17 @@ impl CommandImpl {
         matches!(self, CommandImpl::Shard(_))
     }
 
+    /// Check if this is a deliberate stub (see `Command::is_stub`).
+    ///
+    /// Connection-level entries (e.g. SUBSCRIBE, MULTI) are never stubs — they
+    /// are intentionally handled at the connection level, not unimplemented.
+    pub fn is_stub(&self) -> bool {
+        match self {
+            CommandImpl::Shard(cmd) => cmd.is_stub(),
+            CommandImpl::Connection(_) => false,
+        }
+    }
+
     /// Get as shard command if available.
     pub fn as_command(&self) -> Option<&Arc<dyn Command>> {
         match self {
@@ -296,6 +307,44 @@ mod tests {
         }
     }
 
+    /// A deliberate stub command (overrides `is_stub`), used to prove the
+    /// registry entry surfaces the stub marker.
+    struct TestStubCommand;
+
+    impl Command for TestStubCommand {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "TESTSTUB",
+                arity: Arity::Fixed(0),
+                flags: CommandFlags::ADMIN,
+                keys: KeySpec::None,
+                access: AccessSpec::Uniform,
+                wal: crate::command::WalStrategy::NoOp,
+                wakes: crate::command::WaiterWake::None,
+                event: EventSpec::NotApplicable,
+                requires_same_slot: false,
+                lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
+                strategy: ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+
+        fn is_stub(&self) -> bool {
+            true
+        }
+
+        fn execute(
+            &self,
+            _ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, CommandError> {
+            Err(CommandError::NotImplemented {
+                command: "TESTSTUB",
+            })
+        }
+    }
+
     #[test]
     fn test_register_and_get() {
         let mut registry = CommandRegistry::new();
@@ -322,6 +371,7 @@ mod tests {
 
         let entry = registry.get_entry("TEST").unwrap();
         assert!(entry.is_full());
+        assert!(!entry.is_stub());
         assert_eq!(entry.name(), "TEST");
         assert_eq!(entry.execution_strategy(), ExecutionStrategy::Standard);
     }
@@ -363,6 +413,16 @@ mod tests {
     }
 
     #[test]
+    fn test_stub_entry() {
+        let mut registry = CommandRegistry::new();
+        registry.register(TestStubCommand);
+        registry.register(TestCommand);
+
+        assert!(registry.get_entry("TESTSTUB").unwrap().is_stub());
+        assert!(!registry.get_entry("TEST").unwrap().is_stub());
+    }
+
+    #[test]
     fn connection_registration_dispatches_through_union() {
         static SPEC: CommandSpec =
             conn_spec(ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin));
@@ -378,6 +438,9 @@ mod tests {
         assert!(!entry.is_full());
         assert!(entry.as_command().is_none());
         assert!(entry.as_connection().is_some());
+        // Connection-level entries are intentional (handled at the connection
+        // level), never stubs.
+        assert!(!entry.is_stub());
         assert_eq!(entry.name(), "TESTCONN");
         assert_eq!(
             entry.execution_strategy(),

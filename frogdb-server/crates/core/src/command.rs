@@ -700,6 +700,18 @@ pub trait Command: Send + Sync {
             .collect()
     }
 
+    /// Whether this is a deliberate stub — registered so clients get a
+    /// specific error (e.g. "not implemented", "database not supported")
+    /// instead of "unknown command", but not a real implementation.
+    ///
+    /// Defaults to `false`. Overridden by `crate::commands::stub` in the
+    /// server crate (SELECT, SWAPDB, MOVE, MODULE, BGREWRITEAOF, SYNC, SAVE,
+    /// WAITAOF); the documentation generator reads this to keep stubs out of
+    /// the "supported" column.
+    fn is_stub(&self) -> bool {
+        false
+    }
+
     /// Extract key(s) from arguments for routing.
     ///
     /// Derived from the spec's [`KeySpec`]. Dynamic key layouts defer to
