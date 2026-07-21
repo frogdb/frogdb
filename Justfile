@@ -14,7 +14,10 @@ dyld-env := "DYLD_LIBRARY_PATH=/opt/homebrew/opt/llvm/lib"
 
 # System RocksDB: set FROGDB_SYSTEM_ROCKSDB=1 to link against system-installed RocksDB
 # Optionally set FROGDB_LIB_DIR to override the library path (default: /opt/homebrew/lib)
-use-system-rocksdb := env("FROGDB_SYSTEM_ROCKSDB", "1")
+# Defaults on only for macOS (Homebrew rocksdb); Linux distros ship RocksDB versions too old
+# for librocksdb-sys, so Linux builds from vendored source unless explicitly overridden.
+system-rocksdb-default := if os() == "macos" { "1" } else { "" }
+use-system-rocksdb := env("FROGDB_SYSTEM_ROCKSDB", system-rocksdb-default)
 system-lib-dir := env("FROGDB_LIB_DIR", "/opt/homebrew/lib")
 # ROCKSDB_LIB_DIR and SNAPPY_LIB_DIR tell librocksdb-sys to use system libraries.
 # lz4-sys always compiles from vendored C source (4 small files, unavoidable).
@@ -936,6 +939,42 @@ lint-metrics-chokepoint:
         exit 1
     fi
     echo "OK: metric emission goes through the typed handles"
+
+# =============================================================================
+# Blacksmith Testboxes (remote Linux build/test VMs)
+# =============================================================================
+
+# Warm up a testbox and record its ID for session-end cleanup
+tb-warmup workflow="blacksmith-testbox.yml" *args="":
+    ./scripts/testbox-warmup.sh {{workflow}} {{args}}
+
+# Run a command on the most recently warmed testbox: just tb-run "just test frogdb-server"
+tb-run cmd:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PATH="$HOME/.local/bin:$PATH"
+    id=$(tail -1 "$(git rev-parse --git-dir)/blacksmith-testboxes" 2>/dev/null || true)
+    [ -n "$id" ] || { echo "no testbox recorded; run 'just tb-warmup' first" >&2; exit 1; }
+    blacksmith testbox run --id "$id" {{quote(cmd)}}
+
+# Show status of the most recently warmed testbox
+tb-status *args="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PATH="$HOME/.local/bin:$PATH"
+    id=$(tail -1 "$(git rev-parse --git-dir)/blacksmith-testboxes" 2>/dev/null || true)
+    [ -n "$id" ] || { echo "no testbox recorded; run 'just tb-warmup' first" >&2; exit 1; }
+    blacksmith testbox status --id "$id" {{args}}
+
+# Stop all testboxes recorded for this worktree
+tb-stop:
+    ./scripts/testbox-cleanup.sh
+
+# List active testboxes for the org
+tb-list:
+    #!/usr/bin/env bash
+    export PATH="$HOME/.local/bin:$PATH"
+    blacksmith testbox list
 
 # =============================================================================
 # Aggregate CI
