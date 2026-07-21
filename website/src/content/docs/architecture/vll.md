@@ -8,117 +8,180 @@ Design rationale and internals of FrogDB's VLL transaction coordination mechanis
 
 ## Overview
 
-VLL provides atomic multi-shard operations without traditional mutex-based locking. Key principles:
+VLL (Very Lightweight Locking) coordinates atomic operations that span more than
+one internal shard without a global mutex, a two-phase-commit coordinator, or
+optimistic retries. Each operation declares the keys it will touch as *intents*
+in a per-shard lock table; a global monotonically increasing transaction id
+(`txid`) gives every operation a place in a total order; and **Selective
+Contention Analysis (SCA)** uses the declared intents to let non-conflicting
+operations acquire their locks and execute out of order. Only operations whose
+intents actually conflict — an exclusive (write) lock overlapping another lock on
+the same key — wait, and then only behind lower-`txid` operations.
 
-- **Intent-based locking**: Operations declare keys they'll access
-- **Out-of-order execution**: Non-conflicting operations bypass the queue
-- **Transaction ID ordering**: Global monotonic counter prevents deadlocks
-- **Shard locks for conflicts**: Only operations with key conflicts wait
+- **Intent-based locking** — operations declare their keys up front.
+- **Selective Contention Analysis** — the intent table's whole purpose is to make
+  contention visible so non-conflicting work skips the queue.
+- **Total `txid` order** — a monotonic counter makes the wait-for relation
+  acyclic, so the scheme is deadlock-free by construction.
+- **Locks only where they conflict** — an operation is blocked solely by
+  conflicting intents with a smaller `txid`.
+
+The crate lives at `frogdb-server/crates/vll/`; its module header names SCA
+directly.
 
 ## Design Goals
 
-1. Allow concurrent execution of non-conflicting operations
-2. Provide atomic semantics for multi-key operations
-3. Prevent deadlocks via deterministic ordering
-4. Minimize latency for single-shard operations
+1. Allow concurrent execution of operations that do not conflict.
+2. Provide atomic multi-key semantics across internal shards.
+3. Prevent deadlocks through a deterministic total order rather than lock-ordering
+   discipline at each call site.
+4. Keep single-shard operations cheap — VLL is only engaged when an operation
+   touches more than one shard.
 
 ---
 
 ## VLL Use Cases
 
-VLL coordinates atomicity for ALL operations touching multiple internal shards:
+VLL coordinates atomicity for operations that touch more than one internal shard:
 
-| Operation Type | Example Commands | VLL Behavior |
+| Operation type | Example commands | VLL behavior |
 |----------------|------------------|--------------|
-| Multi-key commands | MGET, MSET, DEL (multi), RENAME, COPY | Lock all touched shards |
-| Transactions | MULTI/EXEC | Lock shards on EXEC |
-| Lua scripts | EVAL, EVALSHA | Lock shards before execution |
-| Blocking commands | BLPOP (multi-key), BRPOP (multi-key) | Lock during wake evaluation |
-| Set operations | SINTER, SUNION, SDIFF, SMOVE | Lock all source shards |
-| Sorted set ops | ZUNIONSTORE, ZINTERSTORE, ZDIFF | Lock source and dest shards |
-| List operations | LMOVE, BLMOVE, LMPOP | Lock source and dest shards |
+| Multi-key commands | MGET, MSET, DEL (multi), COPY | Declare intents on every touched shard |
+| Transactions | MULTI/EXEC | Continuation lock on EXEC |
+| Lua scripts | EVAL, EVALSHA | Continuation lock before execution |
+| Multi-key blocking | BLPOP / BRPOP over several keys | Locks during wake evaluation |
+| Set operations | SINTERSTORE, SUNIONSTORE, SDIFFSTORE, SMOVE | Lock source and destination shards |
+| Sorted-set operations | ZUNIONSTORE, ZINTERSTORE | Lock source and destination shards |
+| List operations | LMOVE, BLMOVE, LMPOP | Lock source and destination shards |
 
-**Single-node vs Cluster behavior:**
-- In standalone mode with `allow-cross-slot-standalone = true`: VLL coordinates cross-shard atomicity
-- In cluster mode: Cross-slot operations return `-CROSSSLOT` error (VLL only applies within a node)
+**Standalone vs cluster.** In standalone mode with `allow-cross-slot-standalone`
+enabled, VLL coordinates cross-shard atomicity for keys that hash to different
+slots. In cluster mode, cross-slot operations are rejected with `-CROSSSLOT`;
+VLL only ever coordinates shards *within* a single node. `allow-cross-slot-standalone`
+defaults to `false` (`frogdb-server/crates/config/src/server.rs`).
 
 ---
 
 ## How VLL Works
 
-### Lock Table
+### Lock table
 
-Each shard maintains a lock table tracking, per key, which transactions intend to access it and which of those intents have been granted the lock:
+Each shard worker owns a single lock table that records, per key, both which
+transactions intend to access it and which of those intents have been granted a
+lock. Because a granted lock is a flag on the intent entry, the two views can
+never fall out of step, and releasing a transaction is one operation: drop its
+intents. The table is owned exclusively by its shard worker (`&mut self`, no
+atomics).
+
+The following is illustrative; the authoritative types are `LockTable` and
+`Intent` in `frogdb-server/crates/vll/src/lock_table.rs` and `LockMode` in
+`frogdb-server/crates/vll/src/types.rs`.
 
 ```rust
 pub struct LockTable {
-    /// Intents per key, ordered by txid (BTreeMap gives SCA its ordering).
+    // Per key, intents ordered by txid. The BTreeMap ordering is what
+    // gives SCA its "only lower txids can block me" semantics.
     keys: HashMap<Bytes, BTreeMap<u64, Intent>>,
 }
 
 struct Intent {
-    mode: LockMode,
-    /// Whether the lock has been granted. Multiple Read grants may
-    /// coexist on a key; a Write grant is exclusive.
-    granted: bool,
+    mode: LockMode,   // Read or Write
+    granted: bool,    // multiple Read grants may coexist; a Write grant is exclusive
 }
 
 pub enum LockMode {
-    Read,   // Read-only access (multiple concurrent OK)
-    Write,  // Write access (exclusive)
+    Read,   // shared read access
+    Write,  // exclusive write access
 }
 ```
 
-### Transaction Flow
+Read/Read is the only non-conflicting combination; Read/Write, Write/Read, and
+Write/Write all conflict.
 
-1. **Acquire txid** from global atomic counter
-2. **Register intents** on all participating shards (sorted order to prevent deadlocks)
-3. **Wait for all shards** to signal ready
-4. **Execute** on all shards
-5. **Release intents** on all shards
+### Transaction flow
 
-### Deadlock Prevention
+1. **Acquire a `txid`** from the global monotonic counter.
+2. **Declare intents** on every participating shard (via `VllLockRequest`).
+3. **Wait for readiness** — each shard replies `ShardReadyResult::Ready` once its
+   locks are granted, or `Failed` if they cannot be.
+4. **Execute** — the coordinator sends `VllExecute` to each ready shard.
+5. **Release** — completing, failing, or aborting a transaction removes its
+   intents, which releases any locks it held.
 
-Lock acquisition in sorted shard order prevents circular waits. The global txid counter ensures a total ordering -- operations with lower txid execute before higher ones.
+### Deadlock prevention
 
-### Out-of-Order Execution
+Deadlock-freedom follows from the total `txid` order, not from a lock-ordering
+convention. Within each key's intent map, waiters are ordered by `txid`, and an
+operation can be blocked *only* by a conflicting intent with a strictly smaller
+`txid`. Because every shard observes the same global `txid` order, the resulting
+wait-for relation cannot contain a cycle — there is no combination of
+transactions that each wait on the other.
 
-Non-conflicting operations can bypass the queue. If operation A holds a Shared lock on key X, and operation B wants a Shared lock on key X, B can proceed immediately. Only Exclusive locks block.
+### Selective Contention Analysis
+
+SCA is the mechanism behind "out-of-order execution." When a transaction tries to
+acquire its locks, the shard checks each key against only the *lower*-`txid`
+intents already declared on that key:
+
+- If no lower-`txid` intent conflicts with the requested mode, the transaction may
+  proceed — even past queued lower-`txid` operations that conflict with *other*
+  keys but not with this one.
+- Grants are all-or-nothing across the transaction's keys, and a second check
+  refuses the grant if any *already-granted* intent from another transaction
+  conflicts, regardless of `txid` order.
+
+Two operations that touch disjoint keys never interact — each key's intent map is
+independent — so they run concurrently. Two readers of the same key proceed
+together. A writer waits only for conflicting lower-`txid` work on the keys it
+actually touches. When a transaction releases (or aborts before ever being
+granted), it disappears from the ordering and whatever it was gating can advance;
+each shard re-scans all pending operations after a release, not just the head, so
+newly unblocked operations proceed regardless of their queue position. This is
+the source of the crate's name: the intent table exists to support SCA.
+
+The per-shard queue that preserves `txid` priority is `TransactionQueue` in
+`frogdb-server/crates/vll/src/queue.rs`; the shard state machine that drives
+declare → grant → execute lives alongside the lock table.
 
 ---
 
 ## Atomicity Semantics
 
-VLL provides **execution atomicity** (isolation) through ordered multi-shard locking:
+VLL provides **execution atomicity** (isolation) but **not failure atomicity**
+(rollback):
 
-1. **Lock Phase:** Acquire write locks on all target shards (sorted order prevents deadlock)
-2. **Execute Phase:** Execute writes on each shard while holding all locks
-3. **Release Phase:** Release all locks
-
-| Scenario | Behavior | Data State |
+| Scenario | Behavior | Data state |
 |----------|----------|------------|
-| **Single-shard operation** | True atomicity (all-or-nothing) | Consistent |
-| **Multi-shard success** | All shards execute with isolation | Consistent, globally ordered |
-| **Lock acquisition timeout** | Client receives `-TIMEOUT` | **No changes** |
-| **Failure during execution** | Error returned; partial writes persist | **Partial state** (no rollback) |
-| **Coordinator crash mid-op** | Locks timeout and release | **Partial state possible** |
+| Single-shard operation | Runs to completion without interleaving | Consistent |
+| Multi-shard success | All shards execute under held locks, globally ordered | Consistent |
+| Lock-acquisition timeout | Coordinator aborts every shard still holding locks; client receives an `ERR` | No changes |
+| Failure mid-execution | Shards that already received `VllExecute` complete; the rest are aborted | Partial writes persist (no rollback) |
+| Coordinator abandons mid-op | Un-executed participants are aborted; executed ones release their own locks | Partial state possible |
 
-**Key Insight:** VLL provides **execution atomicity** (no interleaving) but **not failure atomicity** (no rollback). This matches Redis and DragonflyDB behavior.
+**Key point:** once a shard has received `VllExecute`, its write proceeds and
+persists; there is no cross-shard undo. Abort is best-effort and only targets
+participants that have *not yet* been told to execute. This matches Redis and
+DragonflyDB, which likewise do not roll back partially applied multi-key work.
+
+There is no dedicated VLL timeout error code. A lock-acquisition failure surfaces
+to the client with the generic prefix as `ERR VLL lock acquisition failed`; the
+internal `VllError::QueueFull` / `LockTimeout` values are logged, not sent as
+distinct wire codes.
 
 ---
 
 ## Why VLL vs Traditional Approaches
 
-Traditional approaches and their drawbacks:
-- **Global Mutexes**: Contention at scale, not suitable for shared-nothing
-- **2PC with separate coordinator**: Expensive overhead, blocking protocol
-- **Optimistic CC**: High abort rate under contention
+| Approach | Drawback VLL avoids |
+|----------|---------------------|
+| Global mutex | Serializes all multi-shard work; contention scales with core count |
+| Two-phase commit with a separate coordinator | Extra round trips and a blocking prepare phase |
+| Optimistic concurrency control | High abort/retry rate under contention |
 
-VLL advantages:
-- Ordered locking with deadlock prevention (no 2PC overhead)
-- Minimal lock contention (each shard is single-threaded internally)
-- Simple failure model (no complex rollback logic)
-- Deterministic ordering via txid counter
+VLL keeps ordered locking with deadlock-freedom from the `txid` total order, adds
+no 2PC prepare phase, keeps each shard single-threaded internally (so
+per-shard locking is cheap), and has a simple failure model because it does not
+attempt rollback.
 
 ---
 
@@ -126,18 +189,37 @@ VLL advantages:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `scatter-gather-timeout-ms` | 5000 | Timeout for entire multi-shard operation (VLL + scatter-gather) |
-| `vll-max-queue-depth` | 10000 | Max pending operations per shard before rejecting new ones |
+| `scatter-gather-timeout-ms` | 5000 | Overall deadline for a multi-shard operation (VLL locking plus scatter-gather execution) |
+| `max-queue-depth` (under `[vll]`) | 10000 | Maximum pending operations per shard before new ones are rejected |
 
-**Queue Overflow:** When `vll-max-queue-depth` is reached, new operations receive `-ERR shard queue full, try again later`. Metric: `frogdb_vll_queue_rejections_total`.
+Defaults are defined in `frogdb-server/crates/config/src/server.rs` and
+`frogdb-server/crates/config/src/vll.rs`; treat those files as the source of
+truth. A validator enforces that the per-shard and lock-acquisition timeouts are
+each smaller than `scatter-gather-timeout-ms`.
 
-**Why a Single Timeout?** VLL is guaranteed deadlock-free by design (ordered transaction IDs). A separate "VLL queue timeout" would add complexity without benefit. A slow shard is a node health issue, not a locking issue.
+**Queue overflow.** When a shard's pending queue is full, the lock request fails
+with `VllError::QueueFull`; the client receives `ERR VLL lock acquisition failed`.
+There is no VLL-specific rejection counter — the outcome is recorded on the
+scatter-gather counter (`frogdb_scatter_gather_total{status="error"}`); crossing
+the internal depth warning threshold emits a log warning only.
+
+**Why a single timeout?** VLL is deadlock-free by design, so there is no separate
+"waiting for locks" deadline to tune. A shard that is slow to grant is a node
+health problem, surfaced by the one scatter-gather timeout, not a locking problem.
 
 ---
 
-## Continuation Locks (Lua/MULTI)
+## Continuation Locks (Lua / MULTI)
 
-For operations that need full shard access (Lua scripts, MULTI/EXEC with unknown key access patterns), VLL supports continuation locks that provide exclusive access to an entire shard:
+Some operations cannot declare their keys up front — a Lua script or a MULTI/EXEC
+block may touch any key. For these, VLL grants a **continuation lock**: exclusive
+access to an entire shard for the duration of the operation. While a continuation
+lock is held, the shard is exclusive and SCA is bypassed — a competing lock
+request from another connection is refused (`ShardBusy`) rather than interleaved.
+
+The message and guard are illustrative of the real
+`frogdb-server/crates/core/src/shard/message.rs` variant and the
+`ContinuationGuard` in `frogdb-server/crates/vll/src/coordinator.rs`:
 
 ```rust
 ShardMessage::VllContinuationLock {
@@ -148,4 +230,11 @@ ShardMessage::VllContinuationLock {
 }
 ```
 
-This blocks all other operations on the shard until the continuation completes, but allows the script/transaction to access any key without declaring intents upfront.
+The coordinator acquires the lock on every participating shard, runs the caller's
+work, and drops an RAII `ContinuationGuard`; dropping the guard sends the release
+signal on `release_rx` for each shard. This lets a script or transaction touch any
+key without declaring intents, at the cost of holding the whole shard exclusively.
+
+For the scatter-gather channel plumbing that carries these messages, see
+[Request Flows](/architecture/request-flows/) and
+[Concurrency Model](/architecture/concurrency/).

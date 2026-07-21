@@ -24,7 +24,11 @@ use std::time::Instant;
 use mlua::{HookTriggers, IntoLua, Lua, Result as LuaResult, StdLib, Table, Value, VmState};
 
 /// Redis version reported to scripts as `redis.REDIS_VERSION`.
-pub const REDIS_VERSION: &str = "7.2.0";
+///
+/// Single-sourced from [`frogdb_types::ADVERTISED_REDIS_VERSION`] so the
+/// scripting API, INFO's `redis_version`, and the replication RDB AUX field
+/// never drift apart.
+pub const REDIS_VERSION: &str = frogdb_types::ADVERTISED_REDIS_VERSION;
 /// Redis version reported to scripts as `redis.REDIS_VERSION_NUM`
 /// (`(major << 16) | (minor << 8) | patch`).
 pub const REDIS_VERSION_NUM: i64 = 0x0007_0200;

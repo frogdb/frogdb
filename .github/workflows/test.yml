@@ -28,6 +28,8 @@ jobs:
       helm: ${{ steps.filter.outputs.helm }}
       python: ${{ steps.filter.outputs.python }}
       workflow_gen: ${{ steps.filter.outputs.workflow_gen }}
+      website: ${{ steps.filter.outputs.website }}
+      testing: ${{ steps.filter.outputs.testing }}
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -62,6 +64,10 @@ jobs:
             - 'Justfile'
             - '.mise.toml'
             - 'rust-toolchain.toml'
+          website:
+            - 'website/**'
+          testing:
+            - 'testing/**'
   actionlint:
     needs: changes
     if: needs.changes.outputs.workflows == 'true'
@@ -349,7 +355,7 @@ jobs:
       run: dashboard-linter lint --strict frogdb-server/ops/grafana/frogdb-overview.json
   docs-gen-check:
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.website == 'true'
     name: Docs Generation Check
     runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
     steps:
@@ -384,7 +390,7 @@ jobs:
       run: cargo run -p docs-gen -- --check
   compat-gen-check:
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.website == 'true'
     name: Compat Generation Check
     runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
     steps:
@@ -399,6 +405,58 @@ jobs:
         experimental: 'true'
     - name: Check compatibility data is up to date
       run: just compat-gen-check
+  matrix-gen-check:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.website == 'true'
+    name: Command Matrix Generation Check
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    - name: Configure self-hosted build environment
+      if: runner.environment == 'self-hosted'
+      run: |
+        {
+          echo "CC=clang-18"
+          echo "CXX=clang++-18"
+          echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
+          echo "CARGO_BUILD_JOBS=4"
+        } >> "$GITHUB_ENV"
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      with:
+        install: 'true'
+        install_args: python uv just
+        cache: 'true'
+        experimental: 'true'
+    - name: Install Rust 1.92.0
+      uses: dtolnay/rust-toolchain@1.92.0
+    - name: Install libclang
+      if: runner.environment != 'self-hosted'
+      run: sudo apt-get install -y libclang-dev
+    - name: Cache Rust build artifacts
+      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      with:
+        shared-key: stable
+    - name: Check command matrix is up to date
+      run: just matrix-gen-check
+  docs-path-check:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.operator == 'true' || needs.changes.outputs.testing == 'true' || needs.changes.outputs.website == 'true'
+    name: Docs Path Check
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      with:
+        install: 'true'
+        install_args: python uv just
+        cache: 'true'
+        experimental: 'true'
+    - name: Check documentation code paths exist
+      run: just docs-path-check
   workflow-gen-check:
     needs: changes
     if: needs.changes.outputs.workflow_gen == 'true'
@@ -469,6 +527,8 @@ jobs:
     - dashboard-lint
     - docs-gen-check
     - compat-gen-check
+    - matrix-gen-check
+    - docs-path-check
     - workflow-gen-check
     - python-lint
     - helm-lint

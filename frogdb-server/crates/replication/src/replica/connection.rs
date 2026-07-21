@@ -10,7 +10,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
@@ -82,11 +82,24 @@ pub struct ReplicaConnection {
     pub(crate) connection_state: ConnectionState,
     pub(crate) data_dir: PathBuf,
     pub(crate) shared_offset: Option<Arc<AtomicU64>>,
+    /// Shared with the owning [`super::ReplicaReplicationHandler`]; kept in
+    /// lockstep with `connection_state` via [`Self::set_state`] so INFO can
+    /// read the link status without a lock on this connection.
+    pub(crate) link_up: Arc<AtomicBool>,
 }
 
 impl ReplicaConnection {
+    /// Transition to `state`, publishing the derived up/down signal to the
+    /// shared `link_up` atomic in the same step so the two can never drift:
+    /// up iff the new state is [`ConnectionState::Streaming`].
+    fn set_state(&mut self, state: ConnectionState) {
+        self.connection_state = state;
+        self.link_up
+            .store(state == ConnectionState::Streaming, Ordering::Release);
+    }
+
     pub(crate) async fn handshake(&mut self, listening_port: u16) -> io::Result<()> {
-        self.connection_state = ConnectionState::Handshaking;
+        self.set_state(ConnectionState::Handshaking);
         let cmd = serialize_command_to_resp(
             "REPLCONF",
             &[
@@ -156,7 +169,7 @@ impl ReplicaConnection {
                     shared.store(new_offset, Ordering::Release);
                 }
                 tracing::info!(replication_id = %new_repl_id, offset = new_offset, "FULLRESYNC initiated");
-                self.connection_state = ConnectionState::Syncing;
+                self.set_state(ConnectionState::Syncing);
                 let line_buf = read_resp_line(&mut self.stream).await?;
                 let line = line_buf.trim();
                 if !line.starts_with('$') {
@@ -194,7 +207,7 @@ impl ReplicaConnection {
                 state.replication_id = new_repl_id.clone();
                 tracing::info!(replication_id = %new_repl_id, "Partial sync with new replication ID");
             }
-            self.connection_state = ConnectionState::Streaming;
+            self.set_state(ConnectionState::Streaming);
             tracing::info!("Partial sync (CONTINUE) initiated");
             Ok(SyncType::PartialSync)
         } else if let Some(rest) = line.strip_prefix('-') {
@@ -219,7 +232,7 @@ impl ReplicaConnection {
                 "invalid RDB header",
             ));
         }
-        self.connection_state = ConnectionState::Streaming;
+        self.set_state(ConnectionState::Streaming);
         Ok(())
     }
 
@@ -301,6 +314,11 @@ impl ReplicaConnection {
         if let Some(ref shared) = self.shared_offset {
             shared.store(metadata.replication_offset, Ordering::Release);
         }
+        // The checkpoint itself needs a restart to load, but the connection
+        // now moves straight into live WAL streaming (see `connect_and_sync`)
+        // exactly like the RDB fullsync path below — so the link is up from
+        // here, matching `receive_rdb`'s transition.
+        self.set_state(ConnectionState::Streaming);
         Ok(())
     }
 

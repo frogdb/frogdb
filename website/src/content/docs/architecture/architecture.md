@@ -60,14 +60,23 @@ When a client connects:
 
 ### Key Hashing
 
-FrogDB uses two hash algorithms for different purposes:
+Both key-routing levels derive from the **same** CRC16 (XMODEM) hash of the same
+hash tag, so a key's cluster slot and its internal shard are never computed by
+different algorithms:
 
-| Purpose | Algorithm | Range | Reference |
-|---------|-----------|-------|-----------|
-| Internal shard routing | CRC16 (XMODEM) | `CRC16(key) % 16384 % num_shards` | [concurrency.md](/architecture/concurrency/#key-hashing) |
-| Cluster slot assignment | CRC16 | `hash % 16384` | [storage.md](/architecture/storage/#hash-algorithms) |
+| Purpose | Derivation |
+|---------|------------|
+| Cluster slot assignment | `CRC16(hash_tag) % 16384` |
+| Internal shard routing | `CRC16(hash_tag) % 16384 % num_shards` |
 
-Both use the same hash tag extraction logic (`{tag}` syntax) for colocation.
+The internal shard is the cluster slot reduced modulo the shard count, so
+same-slot keys are always same-shard keys. Hash tag extraction (`{tag}` syntax)
+is shared by both. The `xxhash64` hash in the codebase is used only by
+probabilistic structures (bloom, cuckoo, count-min, top-k); it plays no part in
+key routing. The routing functions live in
+`frogdb-server/crates/core/src/shard/partition.rs`; see
+[concurrency.md](/architecture/concurrency/#key-hashing) for the canonical
+description.
 
 ### Separation of Concerns
 
@@ -82,69 +91,83 @@ Each crate has a clear, bounded responsibility:
 
 ## Crate Architecture
 
-FrogDB is organized as a Cargo workspace with 26 crates. The core dependency graph:
+FrogDB is organized as a Cargo workspace of many crates, grouped by layer (the
+authoritative member list is `Cargo.toml`'s `workspace.members`). The core
+dependency graph:
+
+`frogdb-core` is the aggregator: it depends on the feature crates (scripting,
+persistence, vll, replication, cluster, acl, search) plus protocol and types, and
+`frogdb-server` depends on core. The feature crates do **not** depend on core —
+they build on the foundation crates (`frogdb-types`, `frogdb-protocol`):
 
 ```mermaid
 graph TD
     SERVER[frogdb-server<br/>Binary]
-    PROTO[frogdb-protocol<br/>Library]
-    CORE[frogdb-core<br/>Library]
-    LUA[frogdb-scripting<br/>Library]
-    PERSIST[frogdb-persistence<br/>Library]
+    CORE[frogdb-core<br/>Aggregator library]
+    LUA[frogdb-scripting]
+    PERSIST[frogdb-persistence]
+    VLL[frogdb-vll]
+    REPL[frogdb-replication]
+    PROTO[frogdb-protocol]
+    TYPES[frogdb-types]
 
-    SERVER --> PROTO
     SERVER --> CORE
-    SERVER --> LUA
-    SERVER --> PERSIST
-    LUA --> CORE
-    PERSIST --> CORE
+    SERVER --> PROTO
+    CORE --> LUA
+    CORE --> PERSIST
+    CORE --> VLL
+    CORE --> REPL
+    CORE --> PROTO
+    CORE --> TYPES
+    LUA --> TYPES
+    PERSIST --> TYPES
+    VLL --> PROTO
+    REPL --> PROTO
+    REPL --> TYPES
+    REPL --> PERSIST
 ```
 
 ### Workspace Layout
 
 ```
-frogdb/
-├── Cargo.toml                 # Workspace manifest (26 members)
-├── Cargo.lock                 # Committed (binary project)
-├── Justfile                   # Local dev commands (fmt, lint, test)
-├── rust-toolchain.toml        # Pinned Rust version
-├── .cargo/
-│   └── config.toml            # Cargo settings, linker, sccache
-├── frogdb-server/
-│   ├── crates/                # All Rust crates
-│   │   ├── server/            # Binary: networking, runtime, main()
-│   │   ├── core/              # Core engine: Command trait, Store, shard worker
-│   │   ├── commands/          # Data-structure command implementations
-│   │   ├── protocol/          # RESP2/RESP3 wire protocol
-│   │   ├── types/             # Shared value types and errors
-│   │   ├── persistence/       # RocksDB storage, WAL, snapshots
-│   │   ├── scripting/         # Lua scripting (Functions API)
-│   │   ├── search/            # RediSearch-compatible full-text search
-│   │   ├── acl/               # Redis 7.0 ACL system
-│   │   ├── cluster/           # Raft-based cluster coordination
-│   │   ├── replication/       # Primary-replica streaming
-│   │   ├── vll/               # Very Lightweight Locking
-│   │   ├── telemetry/         # Prometheus metrics, OpenTelemetry tracing
-│   │   ├── debug/             # Debug web UI
-│   │   ├── frogdb-macros/     # #[derive(Command)] proc macro
-│   │   ├── metrics-derive/    # Typed metrics proc macro
-│   │   ├── test-harness/      # TestServer, ClusterHarness
-│   │   ├── testing/           # Consistency checker, test models
-│   │   ├── redis-regression/  # Redis compat regression tests
-│   │   ├── browser-tests/     # Browser integration tests
-│   │   └── tokio-coz/         # Causal profiler for Tokio
-│   ├── benchmarks/            # Criterion benchmarks
-│   └── ops/                   # Operational tooling
-│       ├── helm/helm-gen/     # Helm chart generator
-│       └── grafana/dashboard-gen/  # Grafana dashboard generator
-├── website/src/content/docs/
-│   ├── architecture/          # Contributor/internals documentation
-│   ├── operations/            # Operator documentation
-│   └── guides/                # User documentation
-├── testing/
-│   ├── jepsen/                # Jepsen distributed systems tests
-│   └── load-test/             # Load testing scripts
-└── fuzz/                      # cargo-fuzz targets
+frogdb-server/
+├── crates/                    # Library and binary crates
+│   ├── server/                # Binary: networking, runtime, main()
+│   ├── core/                  # Core engine: Command trait, Store, shard worker
+│   ├── commands/              # Data-structure command implementations
+│   ├── protocol/              # RESP2/RESP3 wire protocol
+│   ├── types/                 # Shared value types and errors
+│   ├── config/                # Configuration model and loader
+│   ├── persistence/           # RocksDB storage, WAL, snapshots
+│   ├── scripting/             # Lua scripting (Functions API)
+│   ├── search/                # RediSearch-compatible full-text search
+│   ├── acl/                   # ACL system
+│   ├── cluster/               # Raft-based cluster coordination
+│   ├── replication/           # Primary-replica streaming
+│   ├── vll/                   # Very Lightweight Locking
+│   ├── telemetry/             # Prometheus metrics, OpenTelemetry tracing
+│   ├── debug/                 # Debug web UI
+│   ├── frogdb-macros/         # Proc macros
+│   ├── metrics-derive/        # Typed metrics proc macro
+│   ├── test-harness/          # TestServer, ClusterHarness
+│   ├── testing/               # Consistency checker, test models
+│   ├── redis-regression/      # Redis-compatibility regression tests
+│   ├── browser-tests/         # Browser integration tests
+│   └── tokio-coz/             # Causal profiler for Tokio
+├── benchmarks/                # Criterion benchmarks
+└── ops/                       # Operational tooling
+    ├── helm/helm-gen/         # Helm chart generator
+    ├── grafana/dashboard-gen/ # Grafana dashboard generator
+    ├── frogdb-admin/          # Cluster admin tooling
+    ├── docs-gen/              # Config-reference generator
+    └── deb/deb-gen/           # Debian package generator
+
+frogctl/                       # Command-line client binary
+
+testing/
+├── fuzz/                      # cargo-fuzz targets
+├── jepsen/                    # Jepsen distributed-systems tests
+└── load/                      # Load-testing scripts
 ```
 
 ### Crate Layers
@@ -155,10 +178,11 @@ frogdb/
 | **Commands & Observability** | `frogdb-commands`, `frogdb-telemetry`, `frogdb-debug` | Command impls, metrics, tracing |
 | **Core Engine** | `frogdb-core` | Command trait, Store trait, shard worker |
 | **Features** | `frogdb-acl`, `frogdb-scripting`, `frogdb-search`, `frogdb-replication`, `frogdb-cluster`, `frogdb-persistence`, `frogdb-vll` | Feature modules |
-| **Foundation** | `frogdb-types`, `frogdb-protocol` | Value types, RESP protocol |
+| **Foundation** | `frogdb-types`, `frogdb-protocol`, `frogdb-config` | Value types, RESP protocol, configuration |
 | **Macros** | `frogdb-macros`, `frogdb-metrics-derive` | Proc macros (no internal deps) |
 | **Testing** | `frogdb-test-harness`, `frogdb-testing`, `frogdb-redis-regression`, `frogdb-browser-tests` | Test infrastructure |
-| **Tooling** | `frogdb-benches`, `helm-gen`, `dashboard-gen`, `tokio-coz` | Benchmarks, ops tooling |
+| **CLI** | `frogctl` | Command-line client |
+| **Tooling** | `frogdb-benches`, `helm-gen`, `dashboard-gen`, `frogdb-admin`, `docs-gen`, `deb-gen`, `tokio-coz` | Benchmarks, generators, ops tooling |
 
 ### frogdb-protocol
 
@@ -380,21 +404,30 @@ Core traits that define component contracts:
 
 #### AclChecker Trait
 
+Defined in `frogdb-server/crates/acl/src/checker.rs`. `AllowAllChecker` is
+installed when no authentication is configured; the full enforcing checker is
+installed when ACLs are enabled.
+
 ```rust
 pub trait AclChecker: Send + Sync {
-    fn check_command(&self, user: &AuthenticatedUser, command: &str, subcommand: Option<&str>) -> PermissionResult;
-    fn check_key_access(&self, user: &AuthenticatedUser, key: &[u8], access_type: KeyAccessType) -> PermissionResult;
+    fn check_command(&self, user: &AuthenticatedUser, cmd: &str, subcmd: Option<&str>) -> PermissionResult;
+    fn check_key_access(&self, user: &AuthenticatedUser, key: &[u8], access: KeyAccessType) -> PermissionResult;
     fn check_channel_access(&self, user: &AuthenticatedUser, channel: &[u8]) -> PermissionResult;
+    fn requires_auth(&self) -> bool;
+    fn is_auth_exempt(&self, cmd: &str) -> bool; // AUTH, QUIT, HELLO run before AUTH
 }
 ```
 
 #### WalWriter Trait
 
+Defined in `frogdb-server/crates/types/src/traits/wal.rs`. `append` returns the
+sequence number assigned to the operation, which drives replication ordering.
+
 ```rust
-pub trait WalWriter: Send {
-    fn write(&mut self, entry: &WalEntry) -> Result<(), PersistenceError>;
-    fn flush(&mut self) -> Result<(), PersistenceError>;
-    fn sync(&mut self) -> Result<(), PersistenceError>;
+pub trait WalWriter: Send + Sync {
+    fn append(&mut self, operation: &WalOperation) -> u64;
+    fn flush(&mut self) -> std::io::Result<()>;
+    fn current_sequence(&self) -> u64;
 }
 ```
 
@@ -451,6 +484,10 @@ sequenceDiagram
     Handler->>Client: $5\r\nhello\r\n
 ```
 
+These walkthroughs are illustrative. See
+[request-flows.md](/architecture/request-flows/) for the authoritative sequence
+diagrams and the inter-component channel summary.
+
 ### SET Command Walkthrough
 
 For write commands, the persistence hook writes to the WAL:
@@ -459,7 +496,7 @@ For write commands, the persistence hook writes to the WAL:
 1. Client sends: SET mykey hello
 2. Protocol parses to ParsedCommand
 3. ACL check: Allowed (or Denied if ACL configured)
-4. Router: shard_id = hash("mykey") % num_shards
+4. Route: shard_id = CRC16(mykey) % 16384 % num_shards
 5. SetCommand.execute():
    a. store.set("mykey", Value::String("hello"))
    b. wal_writer.write(SetEntry { key, value })

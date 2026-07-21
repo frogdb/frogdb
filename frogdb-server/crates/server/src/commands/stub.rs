@@ -43,6 +43,10 @@ macro_rules! stub_command {
                 &SPEC
             }
 
+            fn is_stub(&self) -> bool {
+                true
+            }
+
             fn execute(
                 &self,
                 _ctx: &mut CommandContext,
@@ -88,6 +92,10 @@ impl Command for ModuleCommand {
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
+    }
+
+    fn is_stub(&self) -> bool {
+        true
     }
 
     fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -142,6 +150,10 @@ macro_rules! not_supported_command {
                     strategy: ExecutionStrategy::Standard,
                 });
                 &SPEC
+            }
+
+            fn is_stub(&self) -> bool {
+                true
             }
 
             fn execute(
@@ -212,6 +224,10 @@ macro_rules! db_not_supported_command {
                 &SPEC
             }
 
+            fn is_stub(&self) -> bool {
+                true
+            }
+
             fn execute(
                 &self,
                 _ctx: &mut CommandContext,
@@ -260,6 +276,10 @@ impl Command for SelectCommand {
             strategy: ExecutionStrategy::Standard,
         };
         &SPEC
+    }
+
+    fn is_stub(&self) -> bool {
+        true
     }
 
     fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

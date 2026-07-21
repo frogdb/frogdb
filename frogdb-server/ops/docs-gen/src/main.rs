@@ -1,12 +1,22 @@
 //! Documentation data generator for FrogDB.
 //!
 //! Extracts configuration defaults and JSON Schema metadata from the
-//! `Config` struct to produce a `config-reference.json` file consumed
-//! by the Astro/Starlight documentation site.
+//! `Config` struct to produce a `config-reference.json` file, version
+//! identifiers to produce a `versions.json` file, the full command
+//! registry to produce a `commands.json` file, the typed metrics
+//! registry to produce a `metrics.json` file, the annotated example
+//! config (identical to `frogdb-server --generate-config`) to produce
+//! an `example-config.toml` file, and the `clap::Command` definitions
+//! for both binaries to produce `frogdb-server-cli.json` and
+//! `frogctl-cli.json`, all consumed by the Astro/Starlight documentation
+//! site.
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use frogdb_config::{Config, config_param_registry};
+use frogdb_core::{Arity, CommandRegistry, ExecutionStrategy};
+use frogdb_server::config::ConfigLoader;
+use frogdb_telemetry::ALL_METRICS;
 use schemars::schema_for;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -78,6 +88,197 @@ struct GeneratedNotice {
     regenerate: String,
 }
 
+/// Top-level output structure for `versions.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VersionsInfo {
+    /// Machine-readable notice that this file is generated.
+    #[serde(rename = "_generated")]
+    generated: GeneratedNotice,
+    /// The FrogDB workspace version.
+    workspace_version: String,
+    /// The pinned Rust toolchain channel.
+    rust_toolchain: String,
+    /// The Redis version FrogDB advertises to clients.
+    advertised_redis_version: String,
+    /// The upstream Redis version FrogDB's compatibility is measured against.
+    redis_compat_target: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RustToolchainFile {
+    toolchain: RustToolchainSection,
+}
+
+#[derive(Debug, Deserialize)]
+struct RustToolchainSection {
+    channel: String,
+}
+
+/// Top-level output structure for `commands.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CommandsOutput {
+    /// Machine-readable notice that this file is generated.
+    #[serde(rename = "_generated")]
+    generated: GeneratedNotice,
+    /// Number of entries in `commands` (both full and metadata-only).
+    count: usize,
+    commands: Vec<CommandInfo>,
+}
+
+/// A single command registry entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CommandInfo {
+    /// Upper-case command name (e.g. `GET`, `JSON.SET`).
+    name: String,
+    arity: ArityInfo,
+    /// `CommandFlags` bit names, in declaration order (e.g. `WRITE`, `FAST`).
+    flags: Vec<String>,
+    /// Namespace derived from a dotted command name (e.g. `JSON.GET` -> `JSON`).
+    /// `None` for core Redis-compatible commands, which have no such prefix.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    family: Option<String>,
+    /// How the command is executed (`standard`, `blocking`, `scatter_gather`, ...).
+    execution_strategy: String,
+    /// Whether this is a full command (has `execute()`) versus a metadata-only
+    /// entry handled at the connection level (e.g. SUBSCRIBE, MULTI).
+    full: bool,
+    /// Whether this is a deliberate stub (registered so clients get a
+    /// specific error instead of "unknown command", but not a real
+    /// implementation) — see `Command::is_stub`. `false` for metadata-only
+    /// entries, which are intentional, not unimplemented.
+    is_stub: bool,
+}
+
+/// JSON-friendly view of `frogdb_core::Arity`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ArityInfo {
+    /// `fixed`, `at_least`, or `range`.
+    kind: String,
+    /// Minimum number of arguments after the command name.
+    min: usize,
+    /// Maximum number of arguments, if bounded (`fixed` and `range`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max: Option<usize>,
+}
+
+impl From<Arity> for ArityInfo {
+    fn from(arity: Arity) -> Self {
+        match arity {
+            Arity::Fixed(n) => ArityInfo {
+                kind: "fixed".to_string(),
+                min: n,
+                max: Some(n),
+            },
+            Arity::AtLeast(n) => ArityInfo {
+                kind: "at_least".to_string(),
+                min: n,
+                max: None,
+            },
+            Arity::Range { min, max } => ArityInfo {
+                kind: "range".to_string(),
+                min,
+                max: Some(max),
+            },
+        }
+    }
+}
+
+/// Top-level output structure for `metrics.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MetricsOutput {
+    /// Machine-readable notice that this file is generated.
+    #[serde(rename = "_generated")]
+    generated: GeneratedNotice,
+    /// Number of entries in `metrics`.
+    count: usize,
+    metrics: Vec<MetricInfo>,
+}
+
+/// A single metric registry entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MetricInfo {
+    /// The Prometheus metric name (e.g. `frogdb_commands_total`).
+    name: String,
+    /// `counter`, `gauge`, or `histogram`.
+    #[serde(rename = "type")]
+    metric_type: String,
+    /// Help/doc text describing the metric.
+    help: String,
+    /// Grouping derived from the metric name's prefix (e.g. `frogdb_wal_writes_total`
+    /// -> `wal`), matching the categorization the Grafana dashboard generator uses.
+    group: String,
+    /// Labels attached to this metric, empty if none.
+    labels: Vec<LabelInfo>,
+}
+
+/// A single metric label.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LabelInfo {
+    /// The label name (e.g. `reason`).
+    name: String,
+    /// The label's value type: `string` for a free-form `&str` label, or the
+    /// label enum's type name for a fixed set of values (e.g. `RejectionReason`).
+    #[serde(rename = "type")]
+    value_type: String,
+    /// Every possible value this label can take, in declaration order.
+    /// Omitted for free-form `&str` labels, which have no fixed enumeration.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
+    values: Vec<String>,
+}
+
+/// Top-level output structure for `frogdb-server-cli.json` / `frogctl-cli.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CliReference {
+    /// Machine-readable notice that this file is generated.
+    #[serde(rename = "_generated")]
+    generated: GeneratedNotice,
+    command: CliCommandInfo,
+}
+
+/// A single command or subcommand in a `clap::Command` tree.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CliCommandInfo {
+    /// The command's name, e.g. `frogctl` at the root, `config` for a
+    /// subcommand.
+    name: String,
+    /// Short help text, if declared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    about: Option<String>,
+    /// Arguments and flags declared directly on this command.
+    args: Vec<CliArgInfo>,
+    /// Nested subcommands, in clap declaration order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
+    subcommands: Vec<CliCommandInfo>,
+}
+
+/// A single argument or flag on a `clap::Command`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CliArgInfo {
+    /// The argument's clap id, e.g. `tls_enabled`.
+    name: String,
+    /// Long flag, e.g. `tls-enabled` for `--tls-enabled`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    long: Option<String>,
+    /// Short flag, e.g. `'p'` for `-p`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    short: Option<char>,
+    /// Placeholder shown for the argument's value in `--help` (e.g. `PORT`),
+    /// absent for boolean flags that take no value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value_name: Option<String>,
+    /// Default value, if clap declares one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default: Option<String>,
+    /// Environment variable clap falls back to, if declared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    env: Option<String>,
+    /// Help text, if declared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    help: Option<String>,
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -85,15 +286,66 @@ fn main() -> Result<()> {
     let output_dir = workspace_root.join(&args.output);
 
     let reference = generate_config_reference()?;
-    let json = serde_json::to_string_pretty(&reference)?;
+    let reference_json = serde_json::to_string_pretty(&reference)?;
+    write_or_check(
+        &output_dir,
+        "config-reference.json",
+        &reference_json,
+        args.check,
+    )?;
 
-    let output_path = output_dir.join("config-reference.json");
+    let versions = generate_versions(&workspace_root)?;
+    let versions_json = serde_json::to_string_pretty(&versions)?;
+    write_or_check(&output_dir, "versions.json", &versions_json, args.check)?;
 
-    if args.check {
-        check_file(&output_path, &json)?;
+    let commands = generate_commands();
+    let commands_json = serde_json::to_string_pretty(&commands)?;
+    write_or_check(&output_dir, "commands.json", &commands_json, args.check)?;
+
+    let metrics = generate_metrics();
+    let metrics_json = serde_json::to_string_pretty(&metrics)?;
+    write_or_check(&output_dir, "metrics.json", &metrics_json, args.check)?;
+
+    let example_config = generate_example_config();
+    write_or_check(
+        &output_dir,
+        "example-config.toml",
+        &example_config,
+        args.check,
+    )?;
+
+    let server_cli = generate_cli_reference(
+        frogdb_server::cli::Cli::command(),
+        "frogdb-server/crates/server/src/cli.rs",
+    );
+    let server_cli_json = serde_json::to_string_pretty(&server_cli)?;
+    write_or_check(
+        &output_dir,
+        "frogdb-server-cli.json",
+        &server_cli_json,
+        args.check,
+    )?;
+
+    let frogctl_cli = generate_cli_reference(frogctl::cli::Cli::command(), "frogctl/src/cli.rs");
+    let frogctl_cli_json = serde_json::to_string_pretty(&frogctl_cli)?;
+    write_or_check(
+        &output_dir,
+        "frogctl-cli.json",
+        &frogctl_cli_json,
+        args.check,
+    )?;
+
+    Ok(())
+}
+
+fn write_or_check(output_dir: &PathBuf, file_name: &str, json: &str, check: bool) -> Result<()> {
+    let output_path = output_dir.join(file_name);
+
+    if check {
+        check_file(&output_path, json)?;
     } else {
-        fs::create_dir_all(&output_dir)?;
-        fs::write(&output_path, &json)?;
+        fs::create_dir_all(output_dir)?;
+        fs::write(&output_path, json)?;
         println!("Generated: {}", output_path.display());
     }
 
@@ -116,7 +368,10 @@ fn check_file(path: &PathBuf, expected: &str) -> Result<()> {
         );
     }
 
-    println!("config-reference.json is up to date.");
+    println!(
+        "{} is up to date.",
+        path.file_name().unwrap_or_default().to_string_lossy()
+    );
     Ok(())
 }
 
@@ -193,6 +448,198 @@ fn generate_config_reference() -> Result<ConfigReference> {
         },
         sections,
     })
+}
+
+/// Generate the annotated example config, byte-identical to what
+/// `frogdb-server --generate-config` prints to stdout (the `println!` there
+/// contributes the trailing newline).
+fn generate_example_config() -> String {
+    format!("{}\n", Config::default_toml())
+}
+
+fn generate_versions(workspace_root: &std::path::Path) -> Result<VersionsInfo> {
+    let toolchain_path = workspace_root.join("rust-toolchain.toml");
+    let toolchain_toml = fs::read_to_string(&toolchain_path)
+        .with_context(|| format!("Failed to read {}", toolchain_path.display()))?;
+    let toolchain: RustToolchainFile = toml::from_str(&toolchain_toml)
+        .with_context(|| format!("Failed to parse {}", toolchain_path.display()))?;
+
+    Ok(VersionsInfo {
+        generated: GeneratedNotice {
+            warning: "DO NOT EDIT — this file is auto-generated from Rust source code".into(),
+            source: "frogdb-server/crates/types/src/redis_version.rs, rust-toolchain.toml".into(),
+            regenerate: "just docs-gen".into(),
+        },
+        workspace_version: env!("CARGO_PKG_VERSION").to_string(),
+        rust_toolchain: toolchain.toolchain.channel,
+        advertised_redis_version: frogdb_types::ADVERTISED_REDIS_VERSION.to_string(),
+        redis_compat_target: frogdb_types::REDIS_COMPAT_TARGET.to_string(),
+    })
+}
+
+/// Build the full command registry the same way the server does, then dump
+/// every entry (data-structure commands plus server-specific ones) to a
+/// diff-stable, name-sorted list.
+fn generate_commands() -> CommandsOutput {
+    let mut registry = CommandRegistry::new();
+    frogdb_server::register_commands(&mut registry);
+
+    let mut commands: Vec<CommandInfo> = registry
+        .iter()
+        .map(|(name, entry)| CommandInfo {
+            name: name.to_string(),
+            arity: ArityInfo::from(entry.arity()),
+            flags: entry
+                .flags()
+                .iter_names()
+                .map(|(flag_name, _)| flag_name.to_string())
+                .collect(),
+            family: derive_family(name),
+            execution_strategy: execution_strategy_name(&entry.execution_strategy()).to_string(),
+            full: entry.is_full(),
+            is_stub: entry.is_stub(),
+        })
+        .collect();
+
+    commands.sort_by(|a, b| a.name.cmp(&b.name));
+
+    CommandsOutput {
+        generated: GeneratedNotice {
+            warning: "DO NOT EDIT — this file is auto-generated from Rust source code".into(),
+            source: "frogdb-server/crates/commands/src/lib.rs, \
+                     frogdb-server/crates/server/src/server/register.rs"
+                .into(),
+            regenerate: "just docs-gen".into(),
+        },
+        count: commands.len(),
+        commands,
+    }
+}
+
+/// Dump the full typed metrics registry (`ALL_METRICS`, generated by the
+/// `define_metrics!` macro from `frogdb-telemetry::definitions`) to a
+/// diff-stable, name-sorted list.
+fn generate_metrics() -> MetricsOutput {
+    let mut metrics: Vec<MetricInfo> = ALL_METRICS
+        .iter()
+        .map(|m| MetricInfo {
+            name: m.name.to_string(),
+            metric_type: m.metric_type.as_str().to_string(),
+            help: m.help.to_string(),
+            group: m.category().to_string(),
+            labels: m
+                .labels
+                .iter()
+                .zip(m.label_types.iter())
+                .zip(m.label_values.iter())
+                .map(|((&name, &value_type), &values)| LabelInfo {
+                    name: name.to_string(),
+                    value_type: value_type.to_string(),
+                    values: values.iter().map(|v| v.to_string()).collect(),
+                })
+                .collect(),
+        })
+        .collect();
+
+    metrics.sort_by(|a, b| a.name.cmp(&b.name));
+
+    MetricsOutput {
+        generated: GeneratedNotice {
+            warning: "DO NOT EDIT — this file is auto-generated from Rust source code".into(),
+            source: "frogdb-server/crates/telemetry/src/definitions.rs".into(),
+            regenerate: "just docs-gen".into(),
+        },
+        count: metrics.len(),
+        metrics,
+    }
+}
+
+/// Walk a `clap::Command` tree (built via `CommandFactory::command()`, never
+/// by parsing `--help` output) and dump its arguments and subcommand
+/// hierarchy to a diff-stable structure. Iteration order follows clap's own
+/// declaration order, which is already stable.
+fn generate_cli_reference(mut command: clap::Command, source: &str) -> CliReference {
+    // `CommandFactory::command()` returns a Command whose derived state
+    // (e.g. per-arg `num_args`) is only fully resolved by `build()` — the
+    // same step clap runs internally before parsing or rendering `--help`.
+    command.build();
+
+    CliReference {
+        generated: GeneratedNotice {
+            warning: "DO NOT EDIT — this file is auto-generated from Rust source code".into(),
+            source: source.into(),
+            regenerate: "just docs-gen".into(),
+        },
+        command: build_cli_command(&command),
+    }
+}
+
+fn build_cli_command(command: &clap::Command) -> CliCommandInfo {
+    CliCommandInfo {
+        name: command.get_name().to_string(),
+        about: command.get_about().map(|s| s.to_string()),
+        args: command.get_arguments().map(build_cli_arg).collect(),
+        // `Command::build()` auto-generates a "help" subcommand whose own
+        // subcommand list is a full mirror of its parent's tree (clap's
+        // machinery for `frogctl help <subcommand>...`), not a command any
+        // of these binaries declare. Skip it — including it would double
+        // the size of the tree with a redundant copy of every subcommand.
+        subcommands: command
+            .get_subcommands()
+            .filter(|sc| sc.get_name() != "help")
+            .map(build_cli_command)
+            .collect(),
+    }
+}
+
+fn build_cli_arg(arg: &clap::Arg) -> CliArgInfo {
+    // Boolean flags (`num_args == 0`) get an auto-derived value name from
+    // clap even though they never take a value on the command line; only
+    // report `value_name` for args that actually consume one, so the JSON
+    // doesn't claim `--tls-enabled` accepts a `TLS_ENABLED` argument.
+    let takes_value = arg.get_num_args().is_some_and(|range| range.takes_values());
+
+    CliArgInfo {
+        name: arg.get_id().to_string(),
+        long: arg.get_long().map(str::to_string),
+        short: arg.get_short(),
+        value_name: takes_value
+            .then(|| arg.get_value_names().and_then(|names| names.first()))
+            .flatten()
+            .map(|name| name.to_string()),
+        default: arg
+            .get_default_values()
+            .first()
+            .map(|value| value.as_os_str().to_string_lossy().into_owned()),
+        env: arg
+            .get_env()
+            .map(|value| value.to_string_lossy().into_owned()),
+        help: arg.get_help().map(|s| s.to_string()),
+    }
+}
+
+/// Derive a command's family from its dot-namespaced prefix, e.g.
+/// `JSON.GET` -> `JSON`, matching the convention FrogDB's Redis-Stack-style
+/// extension commands already use (JSON, FT, BF, CF, CMS, TS, TDIGEST, TOPK,
+/// ES, FROGDB). Core Redis-compatible commands (GET, HSET, ZADD, ...) have no
+/// such prefix and are left unclassified: the registry has no other
+/// family/category field to derive one from, and hand-maintaining a
+/// per-command table would duplicate the module layout instead of reading it.
+fn derive_family(name: &str) -> Option<String> {
+    name.split_once('.').map(|(prefix, _)| prefix.to_string())
+}
+
+/// Map an `ExecutionStrategy` to a stable, JSON-friendly name.
+fn execution_strategy_name(strategy: &ExecutionStrategy) -> &'static str {
+    match strategy {
+        ExecutionStrategy::Standard => "standard",
+        ExecutionStrategy::ConnectionLevel(_) => "connection_level",
+        ExecutionStrategy::Blocking { .. } => "blocking",
+        ExecutionStrategy::ScatterGather(_) => "scatter_gather",
+        ExecutionStrategy::RaftConsensus => "raft_consensus",
+        ExecutionStrategy::AsyncExternal => "async_external",
+        ExecutionStrategy::ServerWide(_) => "server_wide",
+    }
 }
 
 fn extract_fields(

@@ -1,0 +1,5643 @@
+{
+  "_generated": {
+    "warning": "DO NOT EDIT — this file is auto-generated from Rust source code",
+    "source": "frogdb-server/crates/commands/src/lib.rs, frogdb-server/crates/server/src/server/register.rs",
+    "regenerate": "just docs-gen"
+  },
+  "count": 390,
+  "commands": [
+    {
+      "name": "ACL",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "ADMIN"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "APPEND",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ASKING",
+      "arity": {
+        "kind": "fixed",
+        "min": 0,
+        "max": 0
+      },
+      "flags": [
+        "FAST",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "AUTH",
+      "arity": {
+        "kind": "range",
+        "min": 1,
+        "max": 2
+      },
+      "flags": [
+        "FAST"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "BF.ADD",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "family": "BF",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "BF.CARD",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "BF",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "BF.EXISTS",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "family": "BF",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "BF.INFO",
+      "arity": {
+        "kind": "range",
+        "min": 1,
+        "max": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "BF",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "BF.INSERT",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "BF",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "BF.LOADCHUNK",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "BF",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "BF.MADD",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "BF",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "BF.MEXISTS",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "BF",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "BF.RESERVE",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "BF",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "BF.SCANDUMP",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "BF",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "BGREWRITEAOF",
+      "arity": {
+        "kind": "fixed",
+        "min": 0,
+        "max": 0
+      },
+      "flags": [
+        "ADMIN"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": true
+    },
+    {
+      "name": "BGSAVE",
+      "arity": {
+        "kind": "range",
+        "min": 0,
+        "max": 1
+      },
+      "flags": [
+        "ADMIN"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "BITCOUNT",
+      "arity": {
+        "kind": "range",
+        "min": 1,
+        "max": 4
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "BITFIELD",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "BITFIELD_RO",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "BITOP",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "BITPOS",
+      "arity": {
+        "kind": "range",
+        "min": 2,
+        "max": 5
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "BLMOVE",
+      "arity": {
+        "kind": "fixed",
+        "min": 5,
+        "max": 5
+      },
+      "flags": [
+        "WRITE",
+        "BLOCKING"
+      ],
+      "execution_strategy": "blocking",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "BLMPOP",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "WRITE",
+        "BLOCKING"
+      ],
+      "execution_strategy": "blocking",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "BLPOP",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST",
+        "BLOCKING"
+      ],
+      "execution_strategy": "blocking",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "BRPOP",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST",
+        "BLOCKING"
+      ],
+      "execution_strategy": "blocking",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "BRPOPLPUSH",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE",
+        "BLOCKING"
+      ],
+      "execution_strategy": "blocking",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "BZMPOP",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "WRITE",
+        "BLOCKING"
+      ],
+      "execution_strategy": "blocking",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "BZPOPMAX",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST",
+        "BLOCKING"
+      ],
+      "execution_strategy": "blocking",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "BZPOPMIN",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST",
+        "BLOCKING"
+      ],
+      "execution_strategy": "blocking",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "CF.ADD",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "family": "CF",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "CF.ADDNX",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "family": "CF",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "CF.COUNT",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "family": "CF",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "CF.DEL",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "family": "CF",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "CF.EXISTS",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "family": "CF",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "CF.INFO",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "CF",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "CF.INSERT",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "CF",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "CF.INSERTNX",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "CF",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "CF.LOADCHUNK",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "CF",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "CF.MEXISTS",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "CF",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "CF.RESERVE",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "CF",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "CF.SCANDUMP",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "CF",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "CLIENT",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "NOSCRIPT",
+        "LOADING",
+        "STALE",
+        "ADMIN"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "CLUSTER",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "STALE",
+        "ADMIN"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "CMS.INCRBY",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "family": "CMS",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "CMS.INFO",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "CMS",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "CMS.INITBYDIM",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "CMS",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "CMS.INITBYPROB",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "CMS",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "CMS.MERGE",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "CMS",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "CMS.QUERY",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "family": "CMS",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "COMMAND",
+      "arity": {
+        "kind": "at_least",
+        "min": 0
+      },
+      "flags": [
+        "READONLY",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "CONFIG",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "NOSCRIPT",
+        "LOADING",
+        "STALE",
+        "ADMIN"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "COPY",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "DBSIZE",
+      "arity": {
+        "kind": "fixed",
+        "min": 0,
+        "max": 0
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "DEBUG",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "NOSCRIPT",
+        "LOADING",
+        "STALE",
+        "ADMIN",
+        "MOVABLEKEYS"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "DECR",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "DECRBY",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "DEL",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "scatter_gather",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "DELEX",
+      "arity": {
+        "kind": "range",
+        "min": 1,
+        "max": 3
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "DIGEST",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "DISCARD",
+      "arity": {
+        "kind": "fixed",
+        "min": 0,
+        "max": 0
+      },
+      "flags": [
+        "FAST",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "DUMP",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ECHO",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ES.ALL",
+      "arity": {
+        "kind": "at_least",
+        "min": 0
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "ES",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ES.APPEND",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "ES",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ES.INFO",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "ES",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ES.READ",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "ES",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ES.REPLAY",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY",
+        "MOVABLEKEYS"
+      ],
+      "family": "ES",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ES.SNAPSHOT",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "ES",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "EVAL",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "SCRIPT",
+        "NONDETERMINISTIC",
+        "MOVABLEKEYS"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "EVALSHA",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "SCRIPT",
+        "NONDETERMINISTIC",
+        "MOVABLEKEYS"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "EVALSHA_RO",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY",
+        "SCRIPT",
+        "NONDETERMINISTIC",
+        "MOVABLEKEYS"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "EVAL_RO",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY",
+        "SCRIPT",
+        "NONDETERMINISTIC",
+        "MOVABLEKEYS"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "EXEC",
+      "arity": {
+        "kind": "fixed",
+        "min": 0,
+        "max": 0
+      },
+      "flags": [
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "EXISTS",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "scatter_gather",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "EXPIRE",
+      "arity": {
+        "kind": "range",
+        "min": 2,
+        "max": 4
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "EXPIREAT",
+      "arity": {
+        "kind": "range",
+        "min": 2,
+        "max": 4
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "EXPIRETIME",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FCALL",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "SCRIPT",
+        "NOSCRIPT",
+        "STALE",
+        "MOVABLEKEYS"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "FCALL_RO",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY",
+        "SCRIPT",
+        "NOSCRIPT",
+        "STALE",
+        "MOVABLEKEYS"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "FLUSHALL",
+      "arity": {
+        "kind": "range",
+        "min": 0,
+        "max": 1
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FLUSHDB",
+      "arity": {
+        "kind": "range",
+        "min": 0,
+        "max": 1
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FROGDB.FINALIZE",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "WRITE",
+        "ADMIN"
+      ],
+      "family": "FROGDB",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FROGDB.VERSION",
+      "arity": {
+        "kind": "fixed",
+        "min": 0,
+        "max": 0
+      },
+      "flags": [
+        "READONLY",
+        "FAST",
+        "LOADING",
+        "STALE"
+      ],
+      "family": "FROGDB",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.AGGREGATE",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "FT",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.ALIASADD",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "FT",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.ALIASDEL",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "FT",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.ALIASUPDATE",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "FT",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.ALTER",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "FT",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.CONFIG",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "FT",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.CREATE",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "FT",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.CURSOR",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "FT",
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "FT.DICTADD",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "FT",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.DICTDEL",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "FT",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.DICTDUMP",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "FT",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.DROPINDEX",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "FT",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.EXPLAIN",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "FT",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.EXPLAINCLI",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "FT",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.HYBRID",
+      "arity": {
+        "kind": "at_least",
+        "min": 6
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "FT",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.INFO",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "FT",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.PROFILE",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "FT",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.SEARCH",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "FT",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.SPELLCHECK",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "FT",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.SUGADD",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "FT",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.SUGDEL",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "FT",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.SUGGET",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "FT",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.SUGLEN",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "FT",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.SYNDUMP",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "FT",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.SYNUPDATE",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "FT",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT.TAGVALS",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "FT",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FT._LIST",
+      "arity": {
+        "kind": "fixed",
+        "min": 0,
+        "max": 0
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "FT",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FUNCTION",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "NOSCRIPT"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "GEOADD",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "GEODIST",
+      "arity": {
+        "kind": "range",
+        "min": 3,
+        "max": 4
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "GEOHASH",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "GEOPOS",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "GEORADIUS",
+      "arity": {
+        "kind": "at_least",
+        "min": 5
+      },
+      "flags": [
+        "WRITE",
+        "MOVABLEKEYS"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "GEORADIUSBYMEMBER",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "WRITE",
+        "MOVABLEKEYS"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "GEORADIUSBYMEMBER_RO",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "GEORADIUS_RO",
+      "arity": {
+        "kind": "at_least",
+        "min": 5
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "GEOSEARCH",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "GEOSEARCHSTORE",
+      "arity": {
+        "kind": "at_least",
+        "min": 5
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "GET",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "GETBIT",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "GETDEL",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "GETEX",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "GETRANGE",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "GETSET",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HDEL",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HELLO",
+      "arity": {
+        "kind": "at_least",
+        "min": 0
+      },
+      "flags": [
+        "FAST",
+        "NOSCRIPT",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "HEXISTS",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HEXPIRE",
+      "arity": {
+        "kind": "at_least",
+        "min": 5
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HEXPIREAT",
+      "arity": {
+        "kind": "at_least",
+        "min": 5
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HEXPIRETIME",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HGET",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HGETALL",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HGETDEL",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HGETEX",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HINCRBY",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HINCRBYFLOAT",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HKEYS",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HLEN",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HMGET",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HMSET",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HOTKEYS",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "NOSCRIPT",
+        "LOADING",
+        "STALE",
+        "ADMIN"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "HPERSIST",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HPEXPIRE",
+      "arity": {
+        "kind": "at_least",
+        "min": 5
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HPEXPIREAT",
+      "arity": {
+        "kind": "at_least",
+        "min": 5
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HPEXPIRETIME",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HPTTL",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HRANDFIELD",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HSCAN",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HSET",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HSETEX",
+      "arity": {
+        "kind": "at_least",
+        "min": 6
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HSETNX",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HSTRLEN",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HTTL",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "HVALS",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "INCR",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "INCRBY",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "INCRBYFLOAT",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "INFO",
+      "arity": {
+        "kind": "at_least",
+        "min": 0
+      },
+      "flags": [
+        "READONLY",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "JSON.ARRAPPEND",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "JSON",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "JSON.ARRINDEX",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "JSON",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "JSON.ARRINSERT",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "JSON",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "JSON.ARRLEN",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "JSON",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "JSON.ARRPOP",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "JSON",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "JSON.ARRTRIM",
+      "arity": {
+        "kind": "fixed",
+        "min": 4,
+        "max": 4
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "JSON",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "JSON.CLEAR",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "JSON",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "JSON.DEBUG",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST",
+        "MOVABLEKEYS"
+      ],
+      "family": "JSON",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "JSON.DEL",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "JSON",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "JSON.GET",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "family": "JSON",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "JSON.MERGE",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "JSON",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "JSON.MGET",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "JSON",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "JSON.NUMINCRBY",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "JSON",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "JSON.NUMMULTBY",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "JSON",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "JSON.OBJKEYS",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "JSON",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "JSON.OBJLEN",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "JSON",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "JSON.SET",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "JSON",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "JSON.STRAPPEND",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "JSON",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "JSON.STRLEN",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "JSON",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "JSON.TOGGLE",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "JSON",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "JSON.TYPE",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "family": "JSON",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "KEYS",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "LASTSAVE",
+      "arity": {
+        "kind": "fixed",
+        "min": 0,
+        "max": 0
+      },
+      "flags": [
+        "READONLY",
+        "FAST",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "LATENCY",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "NOSCRIPT",
+        "LOADING",
+        "STALE",
+        "ADMIN"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "LCS",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "LINDEX",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "LINSERT",
+      "arity": {
+        "kind": "fixed",
+        "min": 4,
+        "max": 4
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "LLEN",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "LMOVE",
+      "arity": {
+        "kind": "fixed",
+        "min": 4,
+        "max": 4
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "LMPOP",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "LOLWUT",
+      "arity": {
+        "kind": "at_least",
+        "min": 0
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "LPOP",
+      "arity": {
+        "kind": "range",
+        "min": 1,
+        "max": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "LPOS",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "LPUSH",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "LPUSHX",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "LRANGE",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "LREM",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "LSET",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "LTRIM",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "MEMORY",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY",
+        "RANDOM"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "MGET",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "scatter_gather",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "MIGRATE",
+      "arity": {
+        "kind": "at_least",
+        "min": 5
+      },
+      "flags": [
+        "WRITE",
+        "NOSCRIPT",
+        "MOVABLEKEYS"
+      ],
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "MODULE",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "NOSCRIPT",
+        "ADMIN"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": true
+    },
+    {
+      "name": "MONITOR",
+      "arity": {
+        "kind": "fixed",
+        "min": 0,
+        "max": 0
+      },
+      "flags": [
+        "ADMIN"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "MOVE",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": true
+    },
+    {
+      "name": "MSET",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "scatter_gather",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "MSETEX",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE",
+        "MOVABLEKEYS"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "MSETNX",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "MULTI",
+      "arity": {
+        "kind": "fixed",
+        "min": 0,
+        "max": 0
+      },
+      "flags": [
+        "FAST",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "OBJECT",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY",
+        "MOVABLEKEYS"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "PERSIST",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "PEXPIRE",
+      "arity": {
+        "kind": "range",
+        "min": 2,
+        "max": 4
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "PEXPIREAT",
+      "arity": {
+        "kind": "range",
+        "min": 2,
+        "max": 4
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "PEXPIRETIME",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "PFADD",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "PFCOUNT",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "PFDEBUG",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "READONLY",
+        "ADMIN"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "PFMERGE",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "PFSELFTEST",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "ADMIN"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "PING",
+      "arity": {
+        "kind": "range",
+        "min": 0,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "PSETEX",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "PSUBSCRIBE",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "PUBSUB",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "PSYNC",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "NOSCRIPT",
+        "ADMIN"
+      ],
+      "execution_strategy": "connection_level",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "PTTL",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "PUBLISH",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "FAST",
+        "PUBSUB",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "PUBSUB",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "PUBSUB",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "PUNSUBSCRIBE",
+      "arity": {
+        "kind": "at_least",
+        "min": 0
+      },
+      "flags": [
+        "PUBSUB",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "QUIT",
+      "arity": {
+        "kind": "fixed",
+        "min": 0,
+        "max": 0
+      },
+      "flags": [
+        "READONLY",
+        "FAST",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "RANDOMKEY",
+      "arity": {
+        "kind": "fixed",
+        "min": 0,
+        "max": 0
+      },
+      "flags": [
+        "READONLY",
+        "RANDOM"
+      ],
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "READONLY",
+      "arity": {
+        "kind": "fixed",
+        "min": 0,
+        "max": 0
+      },
+      "flags": [
+        "FAST",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "READWRITE",
+      "arity": {
+        "kind": "fixed",
+        "min": 0,
+        "max": 0
+      },
+      "flags": [
+        "FAST",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "RENAME",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "RENAMENX",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "REPLCONF",
+      "arity": {
+        "kind": "at_least",
+        "min": 0
+      },
+      "flags": [
+        "NOSCRIPT",
+        "LOADING",
+        "STALE",
+        "ADMIN"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "REPLICAOF",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "NOSCRIPT",
+        "STALE",
+        "ADMIN"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "RESET",
+      "arity": {
+        "kind": "fixed",
+        "min": 0,
+        "max": 0
+      },
+      "flags": [
+        "FAST",
+        "NOSCRIPT",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "RESTORE",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ROLE",
+      "arity": {
+        "kind": "fixed",
+        "min": 0,
+        "max": 0
+      },
+      "flags": [
+        "READONLY",
+        "FAST",
+        "NOSCRIPT",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "RPOP",
+      "arity": {
+        "kind": "range",
+        "min": 1,
+        "max": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "RPOPLPUSH",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "RPUSH",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "RPUSHX",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SADD",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SAVE",
+      "arity": {
+        "kind": "fixed",
+        "min": 0,
+        "max": 0
+      },
+      "flags": [
+        "NOSCRIPT",
+        "ADMIN"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": true
+    },
+    {
+      "name": "SCAN",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SCARD",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SCRIPT",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "NOSCRIPT",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "SDIFF",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SDIFFSTORE",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SELECT",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "FAST",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": true
+    },
+    {
+      "name": "SET",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SETBIT",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SETEX",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SETNX",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SETRANGE",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SHUTDOWN",
+      "arity": {
+        "kind": "range",
+        "min": 0,
+        "max": 2
+      },
+      "flags": [
+        "NOSCRIPT",
+        "LOADING",
+        "STALE",
+        "ADMIN"
+      ],
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SINTER",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SINTERCARD",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SINTERSTORE",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SISMEMBER",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SLAVEOF",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "NOSCRIPT",
+        "STALE",
+        "ADMIN"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SLOWLOG",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST",
+        "LOADING",
+        "SKIP_SLOWLOG",
+        "ADMIN"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "SMEMBERS",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SMISMEMBER",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SMOVE",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SORT",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "WRITE",
+        "MOVABLEKEYS"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SORT_RO",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SPOP",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SPUBLISH",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "FAST",
+        "PUBSUB",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "SRANDMEMBER",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SREM",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SSCAN",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SSUBSCRIBE",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "PUBSUB",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "STATUS",
+      "arity": {
+        "kind": "range",
+        "min": 0,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "STRLEN",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SUBSCRIBE",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "PUBSUB",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "SUBSTR",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SUNION",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SUNIONSTORE",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "SUNSUBSCRIBE",
+      "arity": {
+        "kind": "at_least",
+        "min": 0
+      },
+      "flags": [
+        "PUBSUB",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "SWAPDB",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": true
+    },
+    {
+      "name": "SYNC",
+      "arity": {
+        "kind": "fixed",
+        "min": 0,
+        "max": 0
+      },
+      "flags": [
+        "READONLY",
+        "NOSCRIPT",
+        "ADMIN"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": true
+    },
+    {
+      "name": "TDIGEST.ADD",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "TDIGEST",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TDIGEST.CDF",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "TDIGEST",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TDIGEST.CREATE",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "TDIGEST",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TDIGEST.INFO",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "TDIGEST",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TDIGEST.MAX",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "family": "TDIGEST",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TDIGEST.MERGE",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "TDIGEST",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TDIGEST.MIN",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "family": "TDIGEST",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TDIGEST.QUANTILE",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "TDIGEST",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TDIGEST.RANK",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "TDIGEST",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TDIGEST.RESET",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "TDIGEST",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TDIGEST.REVRANK",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "TDIGEST",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TDIGEST.TRIMMED_MEAN",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "TDIGEST",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TIME",
+      "arity": {
+        "kind": "fixed",
+        "min": 0,
+        "max": 0
+      },
+      "flags": [
+        "READONLY",
+        "FAST",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TOPK.ADD",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "family": "TOPK",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TOPK.COUNT",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "family": "TOPK",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TOPK.INCRBY",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "family": "TOPK",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TOPK.INFO",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "TOPK",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TOPK.LIST",
+      "arity": {
+        "kind": "range",
+        "min": 1,
+        "max": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "TOPK",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TOPK.QUERY",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "family": "TOPK",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TOPK.RESERVE",
+      "arity": {
+        "kind": "range",
+        "min": 2,
+        "max": 5
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "TOPK",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TOUCH",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "scatter_gather",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TS.ADD",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "family": "TS",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TS.ALTER",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "TS",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TS.CREATE",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "TS",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TS.CREATERULE",
+      "arity": {
+        "kind": "fixed",
+        "min": 5,
+        "max": 5
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "TS",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TS.DECRBY",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "family": "TS",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TS.DEL",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "TS",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TS.DELETERULE",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "TS",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TS.GET",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "family": "TS",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TS.INCRBY",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "family": "TS",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TS.INFO",
+      "arity": {
+        "kind": "range",
+        "min": 1,
+        "max": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "TS",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TS.MADD",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "family": "TS",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TS.MGET",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "TS",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TS.MRANGE",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "TS",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TS.MREVRANGE",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "TS",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TS.QUERYINDEX",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "TS",
+      "execution_strategy": "server_wide",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TS.RANGE",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "TS",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TS.REVRANGE",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "family": "TS",
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TTL",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "TYPE",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "UNLINK",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "scatter_gather",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "UNSUBSCRIBE",
+      "arity": {
+        "kind": "at_least",
+        "min": 0
+      },
+      "flags": [
+        "PUBSUB",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "UNWATCH",
+      "arity": {
+        "kind": "fixed",
+        "min": 0,
+        "max": 0
+      },
+      "flags": [
+        "FAST",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "VADD",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "VCARD",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "VDIM",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "VEMB",
+      "arity": {
+        "kind": "range",
+        "min": 2,
+        "max": 3
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "VGETATTR",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "VINFO",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "VLINKS",
+      "arity": {
+        "kind": "range",
+        "min": 2,
+        "max": 3
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "VRANDMEMBER",
+      "arity": {
+        "kind": "range",
+        "min": 1,
+        "max": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "VRANGE",
+      "arity": {
+        "kind": "range",
+        "min": 3,
+        "max": 4
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "VREM",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "VSETATTR",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "VSIM",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "WAIT",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "NOSCRIPT"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "WAITAOF",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "NOSCRIPT"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": true
+    },
+    {
+      "name": "WATCH",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "FAST",
+        "LOADING",
+        "STALE"
+      ],
+      "execution_strategy": "connection_level",
+      "full": false,
+      "is_stub": false
+    },
+    {
+      "name": "XACK",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "XACKDEL",
+      "arity": {
+        "kind": "at_least",
+        "min": 5
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "XADD",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "XAUTOCLAIM",
+      "arity": {
+        "kind": "at_least",
+        "min": 5
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "XCLAIM",
+      "arity": {
+        "kind": "at_least",
+        "min": 5
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "XDEL",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "XDELEX",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "XGROUP",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "XINFO",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "XLEN",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "XPENDING",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "XRANGE",
+      "arity": {
+        "kind": "range",
+        "min": 3,
+        "max": 5
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "XREAD",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "READONLY",
+        "MOVABLEKEYS"
+      ],
+      "execution_strategy": "blocking",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "XREADGROUP",
+      "arity": {
+        "kind": "at_least",
+        "min": 6
+      },
+      "flags": [
+        "WRITE",
+        "MOVABLEKEYS"
+      ],
+      "execution_strategy": "blocking",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "XREVRANGE",
+      "arity": {
+        "kind": "range",
+        "min": 3,
+        "max": 5
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "XSETID",
+      "arity": {
+        "kind": "range",
+        "min": 2,
+        "max": 5
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "XTRIM",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZADD",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZCARD",
+      "arity": {
+        "kind": "fixed",
+        "min": 1,
+        "max": 1
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZCOUNT",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZDIFF",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZDIFFSTORE",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZINCRBY",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZINTER",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZINTERCARD",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZINTERSTORE",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZLEXCOUNT",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZMPOP",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZMSCORE",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZPOPMAX",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZPOPMIN",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZRANDMEMBER",
+      "arity": {
+        "kind": "at_least",
+        "min": 1
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZRANGE",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZRANGEBYLEX",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZRANGEBYSCORE",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZRANGESTORE",
+      "arity": {
+        "kind": "at_least",
+        "min": 4
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZRANK",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZREM",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "WRITE",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZREMRANGEBYLEX",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZREMRANGEBYRANK",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZREMRANGEBYSCORE",
+      "arity": {
+        "kind": "fixed",
+        "min": 3,
+        "max": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZREVRANGE",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZREVRANGEBYLEX",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZREVRANGEBYSCORE",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZREVRANK",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZSCAN",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZSCORE",
+      "arity": {
+        "kind": "fixed",
+        "min": 2,
+        "max": 2
+      },
+      "flags": [
+        "READONLY",
+        "FAST"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZUNION",
+      "arity": {
+        "kind": "at_least",
+        "min": 2
+      },
+      "flags": [
+        "READONLY"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "ZUNIONSTORE",
+      "arity": {
+        "kind": "at_least",
+        "min": 3
+      },
+      "flags": [
+        "WRITE"
+      ],
+      "execution_strategy": "standard",
+      "full": true,
+      "is_stub": false
+    }
+  ]
+}

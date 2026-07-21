@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Land Phase 4b of the concurrency-invariant-testing design (`docs/superpowers/specs/2026-07-17-concurrency-invariant-testing-design.md`, "Phasing" item 4b + "Targeted shard-driver scenarios"): an **in-crate** `#[cfg(test)]` shard-driver harness that drives a real `ShardWorker` (and a real `VllCoordinator`) directly with controlled `ShardMessage` ordering, plus proptest-shrinkable permutations for the eight targeted races. Four production fixes land tests-first: F1 (TTL expiry never drains blocked XREADGROUP waiters), F2 (`EXECABRT`→`EXECABORT` spelling), F3 (lazy-expiry WATCH false negative), F4 (builder fake-WAL failure-injection seam). The design brief (`.superpowers/sdd/phase4b/brief.md`, Decisions D1–D8, constraints C1–C7, specs S1–S8) is settled and is the authority; the two research docs (`.superpowers/sdd/phase4b/research-harness-surface.md`, `.superpowers/sdd/phase4b/research-scenario-seams.md`) are ground truth for every signature — if code here contradicts them, the code is wrong.
+**Goal:** Land Phase 4b of the concurrency-invariant-testing design (`docs/superpowers/specs/2026-07-17-concurrency-invariant-testing-design.md`, "Phasing" item 4b + "Targeted shard-driver scenarios"): an **integration-test** shard-driver harness (under `frogdb-server/crates/core/tests/shard_driver/`) that drives a real `ShardWorker` (and a real `VllCoordinator`) directly with controlled `ShardMessage` ordering, plus proptest-shrinkable permutations for the eight targeted races. Four production fixes land tests-first: F1 (TTL expiry never drains blocked XREADGROUP waiters), F2 (`EXECABRT`→`EXECABORT` spelling), F3 (lazy-expiry WATCH false negative), F4 (builder fake-WAL failure-injection seam). The design brief (`.superpowers/sdd/phase4b/brief.md`, Decisions D1–D8, constraints C1–C7, specs S1–S8) is settled and is the authority; the two research docs (`.superpowers/sdd/phase4b/research-harness-surface.md`, `.superpowers/sdd/phase4b/research-scenario-seams.md`) are ground truth for every signature — if code here contradicts them, the code is wrong.
 
-**Architecture:** The harness lives at `frogdb-server/crates/core/src/shard/driver_harness/` as a `#[cfg(test)]` module tree (D1) — every seam it needs (`dispatch_message` private, execution/tick fns `pub(crate)`/private) is unreachable from an external `crates/core/tests/` crate, and the codebase's established pattern is in-crate `#[cfg(test)]` modules (event_loop.rs:307, worker.rs:483, builder.rs:483). Two driving styles (D3): **Direct** — `driver.dispatch(shard, msg)` → `worker.dispatch_message(msg)` — used when the test is the only sender; **Pumped** — a real `VllCoordinator` runs as a spawned task talking through a harness-local `ChannelSink: ShardSink`, and the driver *chooses which shard's queue to service next* (`pump_one`), making cross-shard interleaving a deterministic function of the driver's service schedule under `#[tokio::test]` current-thread. Ticks (active expiry, waiter timeout, continuation-release) have no `ShardMessage` and are direct method calls (D2). Probes go through the production DEBUG seam (`GetLockTableInfo` / `GetWaitQueueInfo` / `MemoryCheck` / `ExpiryIndexCheck`), not ad-hoc field peeking; `worker.store` (pub) is read for value-level asserts. The generator (C1–C7) models each logical sender as a small state machine advanced by a proptest-chosen schedule, so illegal message orders are **unrepresentable**, not filtered.
+**Architecture:** The harness lives at `frogdb-server/crates/core/tests/shard_driver/` as an **integration-test** tree (D1, as landed). It is *not* an in-crate `#[cfg(test)]` module: the harness needs the `frogdb-commands` crate to populate a real `CommandRegistry`, and `frogdb-commands` depends on `frogdb-core`, so adding it as a `frogdb-core` dev-dependency forms a dev-dep cycle that compiles `frogdb-core` twice (once as the crate-under-test, once as the copy `frogdb-commands` links). Unit-test code touching both copies trips `E0308` type mismatches. Integration tests do not: they link the single **normal** build of `frogdb-core` that `frogdb-commands` also links, and reach the otherwise-private seams through **feature-gated public wrappers** — the `drive*` methods on `ShardWorker` and `ShardReceiver::try_recv`, each `#[cfg(any(test, feature = "shard-driver"))] #[doc(hidden)] pub`, enabled here by the crate's own `[dev-dependencies]` self-dep (`frogdb-core = { path = ".", features = ["shard-driver", "fake-wal"] }`, mirroring `frogdb-telemetry`'s `features = ["testing"]` precedent). Two driving styles (D3): **Direct** — `driver.dispatch(shard, msg)` → `worker.drive(msg)` — used when the test is the only sender; **Pumped** — a real `VllCoordinator` runs as a spawned task talking through a harness-local `ChannelSink: ShardSink`, and the driver *chooses which shard's queue to service next* (`pump_one` → `worker.try_recv_queued()` + `worker.drive`), making cross-shard interleaving a deterministic function of the driver's service schedule under `#[tokio::test]` current-thread. Ticks (active expiry, waiter timeout, continuation-release) have no `ShardMessage` and are direct wrapper calls (`drive_expiry_tick`, `drive_waiter_timeout_tick`, `drive_continuation_release`) (D2). Probes go through the production DEBUG seam (`GetLockTableInfo` / `GetWaitQueueInfo` / `MemoryCheck` / `ExpiryIndexCheck`), not ad-hoc field peeking; `worker.store` (pub) is read for value-level asserts. The generator (C1–C7) models each logical sender as a small state machine advanced by a proptest-chosen schedule, so illegal message orders are **unrepresentable**, not filtered.
 
 **Tech Stack:** Rust; `bytes::Bytes`; `tokio` (`#[tokio::test]`, `oneshot`, `mpsc`, current-thread); `proptest` (existing frogdb-core dev-dep); `frogdb-vll` (`VllCoordinator`, `ShardSink`, `LockMode`, `ShardReadyResult`); `frogdb-protocol` (`ParsedCommand`, `Response`, `ProtocolVersion`); `frogdb-persistence` (`FakeWalSink`, `FakeFailure`, `FakeWalLog`); `frogdb-server` turmoil sim harness for the two real-path verifications (F1, F3) and S7; `just` + `cargo nextest`.
 
@@ -22,12 +22,22 @@
 - **Commit per task** with the exact `git` command shown in the task's final step. **No `Co-Authored-By` lines** in any commit message. Conventional-commit style matching repo history (`test(core):`, `fix(core):`, `docs(spec):`).
 - **Ledger dir:** `.superpowers/sdd/phase4b/`.
 - **Wire-op discipline:** the VLL/scatter operation carried in messages is `ScatterOp` (`shard/message.rs:714`), NOT `core::command::ScatterGatherOp` (routing-only). Commands are built with `ParsedCommand::new(name: Bytes, args: Vec<Bytes>)` (`protocol/src/command.rs:22`) — no CommandSpec machinery. Do not conflate.
+- **Command registry (discovered in Task 1):** `CommandRegistry::new()` is **EMPTY** — real data commands live in the downstream `frogdb-commands` crate (`frogdb_commands::register_all(&mut registry)` is the entry point; the server composes it in `server/src/server/register.rs:6`). A dev-dependency cycle is legal cargo, so **Task 2 adds `frogdb-commands.workspace = true` to `frogdb-server/crates/core/Cargo.toml` `[dev-dependencies]`**. Every harness/test in this plan that dispatches real commands (SET/GET/LPUSH/XADD/XGROUP/DEL/PEXPIRE/…) builds its registry as:
+  ```rust
+  let mut r = CommandRegistry::new();
+  frogdb_commands::register_all(&mut r);
+  let registry = Arc::new(r);
+  ```
+  Server-only commands (AUTH, scripting, search, connection-level MULTI/EXEC) are NOT in `register_all` and are not needed — shard-level `ExecTransaction` bypasses the connection layer. `register_all` is reached from the integration-test crate as a plain dev-dependency (the dev-dep cycle is legal cargo and resolves for integration tests).
+- **Harness location:** `frogdb-server/crates/core/tests/shard_driver/` integration-test crate; seams are `#[doc(hidden)] pub` under `cfg(any(test, feature = "shard-driver"))`, enabled for tests by the self-dev-dep (`frogdb-core = { path = ".", features = ["shard-driver", "fake-wal"] }`). Harness code therefore imports from `frogdb_core::…` (not `crate::…`) and calls the `drive*` wrappers rather than the private `dispatch_message`/`run_active_expiry`/`check_waiter_timeouts`/`pump_continuation_release` methods.
 
 ---
 
 ## Task 1 — Visibility widenings, continuation-release pump helper, pump seam, and `enable_vll` dead-code deletion
 
-**Goal:** Open the minimal set of seams the harness needs (D2), all `pub(crate)` (no public API change), add the continuation-release pump helper and a test-only `try_recv` on `ShardReceiver`, and delete the dead `enable_vll()` builder no-op. A trivial compile-check test proves the seams are reachable from an in-crate `#[cfg(test)]` module.
+**Goal:** Open the minimal set of seams the harness needs (D2), add the continuation-release pump helper and a `try_recv` on `ShardReceiver`, and delete the dead `enable_vll()` builder no-op.
+
+**DONE — landed as `30af07f2` then `8e5362f8`.** The pivot to an integration-test harness changed the seam shape from the `pub(crate)` promotions written below to **feature-gated public wrappers**: rather than promoting `dispatch_message`/`run_active_expiry`/`check_waiter_timeouts`, commit `8e5362f8` added thin `#[cfg(any(test, feature = "shard-driver"))] #[doc(hidden)] pub` wrapper methods on `ShardWorker` — `drive(msg) -> bool` (async), `drive_expiry_tick()`, `drive_waiter_timeout_tick()`, `drive_continuation_release()` (async), `try_recv_queued() -> Option<Envelope>` — plus `ShardReceiver::try_recv` promoted to `pub` under the same cfg, the `shard-driver`/`fake-wal` features and self-dev-dep in `Cargo.toml`, and the compile-check moved to `tests/shard_driver.rs` (`smoke_real_registry_set_get_and_ticks`). The `enable_vll` deletion landed in `30af07f2`. The `pub(crate)` code below is retained as the historical record; the reachable seams are the `drive*` wrappers. All checkboxes complete.
 
 **Files touched:**
 - `frogdb-server/crates/core/src/shard/event_loop.rs` — three visibility promotions + one new pump helper + compile-check test module.
@@ -36,12 +46,12 @@
 
 **`enable_vll` call-site check (done during drafting; re-run to confirm before deleting):** `grep -rn "\.enable_vll()" frogdb-server` returns **zero** call sites — the only references are the builder field (`builder.rs:118`), its init (`:151`), the method (`:266-269`), and the doc-example line (`:92`). `try_build` never reads `self.enable_vll` (VLL state is unconditionally `ShardVll::default()`, builder.rs:445; `handle_vll_*` always live). The `pub enable_vll: bool` field on the *separate* `ShardConfig` struct (types.rs:703) is out of scope — do not touch it.
 
-- [ ] **Step 1: Promote the three seams to `pub(crate)`.** In `frogdb-server/crates/core/src/shard/event_loop.rs`:
+- [x] **Step 1: Promote the three seams to `pub(crate)`.** In `frogdb-server/crates/core/src/shard/event_loop.rs`:
   - Line 217: `async fn dispatch_message(&mut self, msg: ShardMessage) -> bool` → `pub(crate) async fn dispatch_message(&mut self, msg: ShardMessage) -> bool`.
   - Line 123: `fn run_active_expiry(&mut self)` → `pub(crate) fn run_active_expiry(&mut self)`.
   - Line 151: `fn apply_expiry_effects(&mut self, result: ExpiryResult)` → `pub(crate) fn apply_expiry_effects(&mut self, result: ExpiryResult)`.
 
-- [ ] **Step 2: Add the continuation-release pump helper.** In `event_loop.rs`, inside `impl ShardWorker` (after `dispatch_message`, before the closing `}` of the impl block at line 305), add the smallest `pub(crate)` seam mirroring the event-loop's continuation-release arm (event_loop.rs:88-91):
+- [x] **Step 2: Add the continuation-release pump helper.** In `event_loop.rs`, inside `impl ShardWorker` (after `dispatch_message`, before the closing `}` of the impl block at line 305), add the smallest `pub(crate)` seam mirroring the event-loop's continuation-release arm (event_loop.rs:88-91):
 
 ```rust
     /// Test/driver seam mirroring the event loop's continuation-release arm
@@ -60,7 +70,7 @@
     }
 ```
 
-- [ ] **Step 3: Add the test-only non-blocking receive seam.** In `frogdb-server/crates/core/src/shard/message.rs`, inside `impl ShardReceiver` (after `is_empty`, before the closing `}` at line 101), add:
+- [x] **Step 3: Add the test-only non-blocking receive seam.** In `frogdb-server/crates/core/src/shard/message.rs`, inside `impl ShardReceiver` (after `is_empty`, before the closing `}` at line 101), add:
 
 ```rust
     /// Non-blocking receive of the next buffered envelope, if any.
@@ -75,7 +85,7 @@
     }
 ```
 
-- [ ] **Step 4: Delete the `enable_vll` dead code.** In `frogdb-server/crates/core/src/shard/builder.rs`:
+- [x] **Step 4: Delete the `enable_vll` dead code.** In `frogdb-server/crates/core/src/shard/builder.rs`:
   - Delete field `enable_vll: bool,` (line 118).
   - Delete init `enable_vll: false,` (line 151).
   - Delete the method (lines 265-269):
@@ -90,7 +100,7 @@
 
   - In the doc-comment example (around line 92), delete the `///     .enable_vll()` line so the example still compiles conceptually.
 
-- [ ] **Step 5: Add the compile-check test.** At the bottom of `event_loop.rs`, the `#[cfg(test)] mod effect_tests` block already exists (line 307). Add a second small test module below it (after the closing `}` of `effect_tests`) that proves the promoted seams are callable from an in-crate test:
+- [x] **Step 5: Add the compile-check test.** At the bottom of `event_loop.rs`, the `#[cfg(test)] mod effect_tests` block already exists (line 307). Add a second small test module below it (after the closing `}` of `effect_tests`) that proves the promoted seams are callable from an in-crate test:
 
 ```rust
 #[cfg(test)]
@@ -164,9 +174,9 @@ mod seam_reachability_tests {
 }
 ```
 
-- [ ] **Step 6: Run tests.** `just test frogdb-core seam_reachability_tests` — expected PASS. Then `just check frogdb-core` — expected clean (no dead-code warning from the removed `enable_vll`).
+- [x] **Step 6: Run tests.** `just test frogdb-core seam_reachability_tests` — expected PASS. Then `just check frogdb-core` — expected clean (no dead-code warning from the removed `enable_vll`).
 
-- [ ] **Step 7: Format, lint, commit.**
+- [x] **Step 7: Format, lint, commit.**
 
 Run: `just fmt frogdb-core && just lint frogdb-core`
 
@@ -179,14 +189,17 @@ git commit -m "test(core): open pub(crate) shard-driver seams; delete dead enabl
 
 ## Task 2 — F4: builder fake-WAL failure-injection seam (`with_fake_wal_failure`)
 
-**Goal:** The builder's `WalMode::Fake` arm hardcodes a non-failing `FakeWalSink::new(shard_id)` (builder.rs:387). Add a `with_fake_wal_failure(FakeFailure)` setter, gated by the existing `cfg(any(test, feature = "fake-wal"))` convention, threaded into the fake-sink construction so S6 can inject `FakeFailure::AtWriteIndex(n)` / `Predicate`. Failing test first. **This task must precede S6 (Task 12).**
+**Goal:** The builder's `WalMode::Fake` arm hardcodes a non-failing `FakeWalSink::new(shard_id)` (builder.rs:387). Add a `with_fake_wal_failure(FakeFailure)` setter, gated by the existing `cfg(any(test, feature = "fake-wal"))` convention, threaded into the fake-sink construction so S6 can inject `FakeFailure::AtWriteIndex(n)` / `Predicate`. Failing test first. **This task must precede S6 (Task 13).**
+
+**DONE — landed as `de81ddb3`.** The setter, field, init, and `try_build` threading landed in `builder.rs` exactly as written below. The failing test landed in the integration harness at `frogdb-server/crates/core/tests/shard_driver.rs` as `fake_wal_failure_is_injected_at_index` (not the in-crate `mod fake_wal_tests` shown below), driving the real `SET` through the public `worker.drive(set)` seam and building the registry via `frogdb_commands::register_all`. All checkboxes complete.
 
 **Files touched:**
 - `frogdb-server/crates/core/src/shard/builder.rs`
+- `frogdb-server/crates/core/Cargo.toml` — add `frogdb-commands.workspace = true` to `[dev-dependencies]` (see the Command-registry Global Constraint; dev-dep cycles are legal cargo; if `frogdb-commands` is missing from the root `[workspace.dependencies]` table, add it there the same way sibling crates are listed).
 
 **Verified facts:** `FakeFailure` / `FakeWalSink` are reachable in-crate as `crate::persistence::FakeFailure` / `crate::persistence::FakeWalSink` (`frogdb-server/crates/core/src/persistence/mod.rs:13` `pub use frogdb_persistence::*;`; `frogdb-persistence/src/lib.rs:34` exports both). `FakeWalSink::with_failure(shard_id, failure)` exists (`fake.rs:128`). `FakeWalRegistry::install(shard_id, log)` registers the log (fake_wal_registry.rs:22).
 
-- [ ] **Step 1: Write the failing test.** In `frogdb-server/crates/core/src/shard/builder.rs`, in the existing `#[cfg(test)] mod fake_wal_tests` block (line 483), add:
+- [x] **Step 1: Write the failing test.** In `frogdb-server/crates/core/src/shard/builder.rs`, in the existing `#[cfg(test)] mod fake_wal_tests` block (line 483), add:
 
 ```rust
     #[tokio::test]
@@ -194,11 +207,13 @@ git commit -m "test(core): open pub(crate) shard-driver seams; delete dead enabl
         FakeWalRegistry::clear();
         let (msg_tx, msg_rx) = mpsc::channel(16);
         let (_conn_tx, conn_rx) = mpsc::channel(16);
+        let mut registry = CommandRegistry::new();
+        frogdb_commands::register_all(&mut registry);
         let mut worker = ShardWorkerBuilder::new(0, 1)
             .with_message_rx(ShardReceiver::new(msg_rx))
             .with_new_conn_rx(conn_rx)
             .with_shard_senders(Arc::new(vec![ShardSender::new(msg_tx)]))
-            .with_registry(Arc::new(CommandRegistry::new()))
+            .with_registry(Arc::new(registry))
             .with_metrics(Arc::new(NoopMetricsRecorder::new()))
             .with_wal_mode(WalMode::Fake)
             // Fail the FIRST write (index 0): a single SET must not persist.
@@ -235,9 +250,9 @@ git commit -m "test(core): open pub(crate) shard-driver seams; delete dead enabl
     }
 ```
 
-- [ ] **Step 2: Run to verify it fails.** `just test frogdb-core fake_wal_failure_is_injected` — expected FAIL: `no method named with_fake_wal_failure`.
+- [x] **Step 2: Run to verify it fails.** `just test frogdb-core fake_wal_failure_is_injected` — expected FAIL: `no method named with_fake_wal_failure`.
 
-- [ ] **Step 3: Add the builder field.** In `builder.rs`, in the `ShardWorkerBuilder` struct (after `wal_failure_policy: Option<Arc<AtomicU8>>,`, line 121), add a test/fake-gated field:
+- [x] **Step 3: Add the builder field.** In `builder.rs`, in the `ShardWorkerBuilder` struct (after `wal_failure_policy: Option<Arc<AtomicU8>>,`, line 121), add a test/fake-gated field:
 
 ```rust
     #[cfg(any(test, feature = "fake-wal"))]
@@ -251,7 +266,7 @@ In `ShardWorkerBuilder::new` (the struct literal at lines 128-156), add the init
             fake_wal_failure: crate::persistence::FakeFailure::None,
 ```
 
-- [ ] **Step 4: Add the setter.** After `with_wal_failure_policy` (line 293), add:
+- [x] **Step 4: Add the setter.** After `with_wal_failure_policy` (line 293), add:
 
 ```rust
     /// Inject a fake-WAL write failure (test / `fake-wal` only). Only takes
@@ -264,7 +279,7 @@ In `ShardWorkerBuilder::new` (the struct literal at lines 128-156), add the init
     }
 ```
 
-- [ ] **Step 5: Thread it into the fake-sink construction.** In `try_build`, replace the `WalMode::Fake` construction arm (builder.rs:385-390) so the sink is built with the injected failure. The `#[cfg(any(test, feature = "fake-wal"))]` block becomes:
+- [x] **Step 5: Thread it into the fake-sink construction.** In `try_build`, replace the `WalMode::Fake` construction arm (builder.rs:385-390) so the sink is built with the injected failure. The `#[cfg(any(test, feature = "fake-wal"))]` block becomes:
 
 ```rust
                 #[cfg(any(test, feature = "fake-wal"))]
@@ -280,9 +295,9 @@ In `ShardWorkerBuilder::new` (the struct literal at lines 128-156), add the init
 
 (The `#[cfg(not(any(test, feature = "fake-wal")))] { None }` arm is unchanged. Note `self.fake_wal_failure` is moved-from in `try_build` which takes `self` by value — `.clone()` keeps `FakeFailure: Clone`, fake.rs:56.)
 
-- [ ] **Step 6: Run to verify green.** `just test frogdb-core fake_wal` — expected PASS (new test + pre-existing `fake_wal_mode_builds_a_recording_sink`).
+- [x] **Step 6: Run to verify green.** `just test frogdb-core fake_wal` — expected PASS (new test + pre-existing `fake_wal_mode_builds_a_recording_sink`).
 
-- [ ] **Step 7: Format, lint, commit.**
+- [x] **Step 7: Format, lint, commit.**
 
 Run: `just fmt frogdb-core && just lint frogdb-core`
 
@@ -293,45 +308,22 @@ git commit -m "test(core): add ShardWorkerBuilder::with_fake_wal_failure fake-WA
 
 ---
 
-## Task 3 — Driver core: `driver_harness` module + `ShardDriver` (direct dispatch, ticks, probes)
+## Task 3 — Driver core: `tests/shard_driver/` harness tree + `ShardDriver` (direct dispatch, ticks, probes)
 
-**Goal:** Create the `#[cfg(test)] mod driver_harness` tree with the `ShardDriver` struct: N `ShardWorker`s built via `ShardWorkerBuilder` with a real length-N `Arc<Vec<ShardSender>>`, direct-dispatch helpers (`execute`, `exec_transaction`, `get_version`, `block_wait`), tick helpers, `pump_one`, and probe helpers via the DEBUG messages. Unit-test the driver itself.
+**Goal:** Create the integration-test harness tree with the `ShardDriver` struct: N `ShardWorker`s built via `ShardWorkerBuilder` with a real length-N `Arc<Vec<ShardSender>>`, direct-dispatch helpers (`execute`, `exec_transaction`, `get_version`, `block_wait`), tick helpers, `pump_one`, and probe helpers via the DEBUG messages. Unit-test the driver itself.
 
 **Files touched:**
-- Create: `frogdb-server/crates/core/src/shard/driver_harness/mod.rs`
-- Modify: `frogdb-server/crates/core/src/shard/mod.rs` — declare the module.
+- Create: `frogdb-server/crates/core/tests/shard_driver/harness.rs`
+- Modify: `frogdb-server/crates/core/tests/shard_driver.rs` — declare the harness + scenario modules. This file is the single integration-test target for the whole harness (`cargo` compiles `tests/shard_driver.rs` as one crate; every file under `tests/shard_driver/` is one of its modules). The two smoke/F4 tests landed by Tasks 1–2 already live here and stay.
 
-- [ ] **Step 1: Declare the module.** In `frogdb-server/crates/core/src/shard/mod.rs`, add near the other `mod` declarations:
-
-```rust
-#[cfg(test)]
-mod driver_harness;
-```
-
-- [ ] **Step 2: Write the driver core.** Create `frogdb-server/crates/core/src/shard/driver_harness/mod.rs`:
+- [ ] **Step 1: Declare the modules.** In `frogdb-server/crates/core/tests/shard_driver.rs`, add the module declarations. Because the harness files live *flat* under `tests/shard_driver/`, every module is declared at the crate root here as a sibling (declaring `mod sink;` inside `harness.rs` would resolve to `tests/shard_driver/harness/sink.rs`, the wrong path):
 
 ```rust
-//! In-crate shard-driver harness (Phase 4b).
-//!
-//! Drives a real [`ShardWorker`] (and, in pumped mode, a real
-//! `VllCoordinator`) directly with controlled `ShardMessage` ordering. Lives
-//! in-crate because every seam it needs (`dispatch_message`, tick fns) is
-//! `pub(crate)`/private and unreachable from an external test crate (brief D1).
-//!
-//! Two driving styles (brief D3):
-//! - **Direct**: [`ShardDriver::dispatch`] → `worker.dispatch_message` — used
-//!   when the test is the only sender.
-//! - **Pumped**: a real coordinator task talks through [`ChannelSink`]; the
-//!   driver chooses which shard's queue to service next via
-//!   [`ShardDriver::pump_one`]. Under a current-thread runtime this makes
-//!   cross-shard interleaving a deterministic function of the service schedule.
-
-#![allow(dead_code)] // harness surface is used piecemeal across scenario modules
-
-mod generator;
+mod harness;
 mod sink;
+mod generator;
 
-// Scenario submodules (one per targeted scenario).
+// Scenario submodules (one per targeted scenario; S7 is turmoil-level, server crate).
 mod scenario_s1;
 mod scenario_s2;
 mod scenario_s3;
@@ -339,6 +331,33 @@ mod scenario_s4;
 mod scenario_s5;
 mod scenario_s6;
 mod scenario_s8;
+```
+
+- [ ] **Step 2: Write the driver core.** Create `frogdb-server/crates/core/tests/shard_driver/harness.rs`:
+
+```rust
+//! Shard-driver harness core (Phase 4b), integration-test tree.
+//!
+//! Drives a real [`ShardWorker`] (and, in pumped mode, a real
+//! `VllCoordinator`) directly with controlled `ShardMessage` ordering. Lives
+//! under `crates/core/tests/shard_driver/` rather than as an in-crate
+//! `#[cfg(test)]` module: the harness populates a real `CommandRegistry` via the
+//! `frogdb-commands` dev-dependency, whose dep on `frogdb-core` forms a dev-dep
+//! cycle that compiles `frogdb-core` twice — unit-test code touching both copies
+//! trips E0308. Integration tests link the single normal build and reach the
+//! seams through the feature-gated public `drive*` wrappers (`shard-driver`
+//! feature, enabled by the self-dev-dep) (brief D1).
+//!
+//! Two driving styles (brief D3):
+//! - **Direct**: [`ShardDriver::dispatch`] → `worker.drive` — used when the test
+//!   is the only sender.
+//! - **Pumped**: a real coordinator task talks through [`crate::sink::ChannelSink`];
+//!   the driver chooses which shard's queue to service next via
+//!   [`ShardDriver::pump_one`] (`worker.try_recv_queued()` + `worker.drive`).
+//!   Under a current-thread runtime this makes cross-shard interleaving a
+//!   deterministic function of the service schedule.
+
+#![allow(dead_code)] // harness surface is used piecemeal across scenario modules
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -348,18 +367,17 @@ use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
-use crate::registry::CommandRegistry;
-use crate::shard::builder::ShardWorkerBuilder;
-use crate::shard::connection::NewConnection;
-use crate::shard::message::{Envelope, ShardMessage, ShardReceiver, ShardSender};
-use crate::shard::types::{
+use frogdb_core::shard::types::{
     ExpiryIndexCheckInfo, LockTableInfo, MemoryCheckInfo, TransactionResult, WaitQueueInfo,
 };
-use crate::shard::worker::ShardWorker;
-use crate::types::BlockingOp;
+use frogdb_core::shard::{
+    Envelope, NewConnection, ShardMessage, ShardReceiver, ShardSender, ShardWorkerBuilder,
+};
+use frogdb_core::types::BlockingOp;
+use frogdb_core::{CommandRegistry, ShardWorker};
 
 /// Owns N real shard workers plus the sender side of each shard's queue.
-pub(crate) struct ShardDriver {
+pub struct ShardDriver {
     workers: Vec<ShardWorker>,
     /// The length-N sender vector every worker shares (cross-shard routing).
     senders: Arc<Vec<ShardSender>>,
@@ -371,8 +389,12 @@ impl ShardDriver {
     /// Build `n` shards with ids `0..n`, a shared registry, and a real
     /// length-`n` sender vector so cross-shard routing and keyspace-notify
     /// forwarding work.
-    pub(crate) fn new(n: usize) -> Self {
-        let registry = Arc::new(CommandRegistry::new());
+    pub fn new(n: usize) -> Self {
+        // Real data commands (Command-registry Global Constraint): the empty
+        // registry has nothing to dispatch.
+        let mut r = CommandRegistry::new();
+        frogdb_commands::register_all(&mut r);
+        let registry = Arc::new(r);
 
         // One (tx, rx) queue per shard; senders indexed by shard id.
         let mut msg_rxs: Vec<ShardReceiver> = Vec::with_capacity(n);
@@ -406,24 +428,24 @@ impl ShardDriver {
     }
 
     /// Cloned handle to a shard's sender (for wiring a coordinator sink).
-    pub(crate) fn senders(&self) -> Arc<Vec<ShardSender>> {
+    pub fn senders(&self) -> Arc<Vec<ShardSender>> {
         self.senders.clone()
     }
 
     /// Mutable access to a worker's store for value-level asserts.
-    pub(crate) fn worker(&mut self, shard: usize) -> &mut ShardWorker {
+    pub fn worker(&mut self, shard: usize) -> &mut ShardWorker {
         &mut self.workers[shard]
     }
 
     // --- Direct dispatch (test is the sole sender) ----------------------
 
     /// Dispatch a raw message directly to a shard, bypassing its queue.
-    pub(crate) async fn dispatch(&mut self, shard: usize, msg: ShardMessage) -> bool {
-        self.workers[shard].dispatch_message(msg).await
+    pub async fn dispatch(&mut self, shard: usize, msg: ShardMessage) -> bool {
+        self.workers[shard].drive(msg).await
     }
 
     /// Run one command and await its reply.
-    pub(crate) async fn execute(&mut self, shard: usize, name: &str, args: &[&str]) -> Response {
+    pub async fn execute(&mut self, shard: usize, name: &str, args: &[&str]) -> Response {
         let (tx, rx) = oneshot::channel();
         let msg = ShardMessage::Execute {
             command: Arc::new(cmd(name, args)),
@@ -439,7 +461,7 @@ impl ShardDriver {
     }
 
     /// Run a command attributed to a specific connection.
-    pub(crate) async fn execute_conn(
+    pub async fn execute_conn(
         &mut self,
         shard: usize,
         conn_id: u64,
@@ -461,7 +483,7 @@ impl ShardDriver {
     }
 
     /// Read a shard's WATCH version.
-    pub(crate) async fn get_version(&mut self, shard: usize) -> u64 {
+    pub async fn get_version(&mut self, shard: usize) -> u64 {
         let (tx, rx) = oneshot::channel();
         self.dispatch(shard, ShardMessage::GetVersion { response_tx: tx })
             .await;
@@ -469,7 +491,7 @@ impl ShardDriver {
     }
 
     /// Run a transaction with the given watches; returns the result.
-    pub(crate) async fn exec_transaction(
+    pub async fn exec_transaction(
         &mut self,
         shard: usize,
         conn_id: u64,
@@ -490,7 +512,7 @@ impl ShardDriver {
 
     /// Register a blocking waiter; the returned receiver resolves when the
     /// waiter is satisfied, drained, or timed out by the shard.
-    pub(crate) async fn block_wait(
+    pub async fn block_wait(
         &mut self,
         shard: usize,
         conn_id: u64,
@@ -512,23 +534,23 @@ impl ShardDriver {
     }
 
     /// Fire-and-forget waiter cleanup (connection gave up).
-    pub(crate) async fn unregister_wait(&mut self, shard: usize, conn_id: u64) {
+    pub async fn unregister_wait(&mut self, shard: usize, conn_id: u64) {
         self.dispatch(shard, ShardMessage::UnregisterWait { conn_id })
             .await;
     }
 
     // --- Ticks (timer-only work; no ShardMessage exists) ----------------
 
-    pub(crate) fn tick_expiry(&mut self, shard: usize) {
-        self.workers[shard].run_active_expiry();
+    pub fn tick_expiry(&mut self, shard: usize) {
+        self.workers[shard].drive_expiry_tick();
     }
 
-    pub(crate) fn tick_waiter_timeout(&mut self, shard: usize) {
-        self.workers[shard].check_waiter_timeouts();
+    pub fn tick_waiter_timeout(&mut self, shard: usize) {
+        self.workers[shard].drive_waiter_timeout_tick();
     }
 
-    pub(crate) async fn pump_continuation_release(&mut self, shard: usize) {
-        self.workers[shard].pump_continuation_release().await;
+    pub async fn pump_continuation_release(&mut self, shard: usize) {
+        self.workers[shard].drive_continuation_release().await;
     }
 
     // --- Pumped mode ----------------------------------------------------
@@ -536,9 +558,9 @@ impl ShardDriver {
     /// Service one buffered message on a shard's queue (recv + dispatch).
     /// Returns `true` if a message was serviced. Non-blocking: does nothing
     /// if the queue is empty.
-    pub(crate) async fn pump_one(&mut self, shard: usize) -> bool {
-        if let Some(env) = self.workers[shard].message_rx.try_recv() {
-            self.workers[shard].dispatch_message(env.message).await;
+    pub async fn pump_one(&mut self, shard: usize) -> bool {
+        if let Some(env) = self.workers[shard].try_recv_queued() {
+            self.workers[shard].drive(env.message).await;
             true
         } else {
             false
@@ -546,34 +568,34 @@ impl ShardDriver {
     }
 
     /// Drain every buffered message on a shard until its queue is empty.
-    pub(crate) async fn drain(&mut self, shard: usize) {
+    pub async fn drain(&mut self, shard: usize) {
         while self.pump_one(shard).await {}
     }
 
     // --- Probes (production DEBUG seam) ----------------------------------
 
-    pub(crate) async fn wait_queue_info(&mut self, shard: usize) -> WaitQueueInfo {
+    pub async fn wait_queue_info(&mut self, shard: usize) -> WaitQueueInfo {
         let (tx, rx) = oneshot::channel();
         self.dispatch(shard, ShardMessage::GetWaitQueueInfo { response_tx: tx })
             .await;
         rx.await.expect("wait queue info")
     }
 
-    pub(crate) async fn lock_table_info(&mut self, shard: usize) -> LockTableInfo {
+    pub async fn lock_table_info(&mut self, shard: usize) -> LockTableInfo {
         let (tx, rx) = oneshot::channel();
         self.dispatch(shard, ShardMessage::GetLockTableInfo { response_tx: tx })
             .await;
         rx.await.expect("lock table info")
     }
 
-    pub(crate) async fn memory_check(&mut self, shard: usize) -> MemoryCheckInfo {
+    pub async fn memory_check(&mut self, shard: usize) -> MemoryCheckInfo {
         let (tx, rx) = oneshot::channel();
         self.dispatch(shard, ShardMessage::MemoryCheck { response_tx: tx })
             .await;
         rx.await.expect("memory check")
     }
 
-    pub(crate) async fn expiry_index_check(&mut self, shard: usize) -> ExpiryIndexCheckInfo {
+    pub async fn expiry_index_check(&mut self, shard: usize) -> ExpiryIndexCheckInfo {
         let (tx, rx) = oneshot::channel();
         self.dispatch(shard, ShardMessage::ExpiryIndexCheck { response_tx: tx })
             .await;
@@ -582,14 +604,13 @@ impl ShardDriver {
 }
 
 /// Build a `ParsedCommand` from `&str`s.
-pub(crate) fn cmd(name: &str, args: &[&str]) -> ParsedCommand {
+pub fn cmd(name: &str, args: &[&str]) -> ParsedCommand {
     ParsedCommand::new(
         Bytes::from(name.to_string()),
         args.iter().map(|a| Bytes::from(a.to_string())).collect(),
     )
 }
 
-#[cfg(test)]
 mod driver_tests {
     use super::*;
 
@@ -619,15 +640,15 @@ mod driver_tests {
 }
 ```
 
-**Note for the implementer:** the seven scenario submodules (`scenario_s1`..`scenario_s8`, minus `s7`) are declared here but created in Tasks 6–13; `generator` and `sink` land in Tasks 5 and 4. Create all of them as one-line stub files in this task (Step 3 below) so the module tree compiles; each later task replaces its stub.
+**Note for the implementer:** the seven scenario submodules (`scenario_s1`..`scenario_s8`, minus `s7`) are declared in `tests/shard_driver.rs` (Step 1) but created in Tasks 6–13/15; `generator` and `sink` land in Tasks 5 and 4. Create all of them as one-line stub files in this task (Step 3 below) so the module tree compiles; each later task replaces its stub.
 
 - [ ] **Step 3: Create the stub files** so the module tree compiles:
 
 ```bash
-mkdir -p frogdb-server/crates/core/src/shard/driver_harness
-printf '//! placeholder — filled in Task 4\n' > frogdb-server/crates/core/src/shard/driver_harness/sink.rs
-printf '//! placeholder — filled in Task 5\n' > frogdb-server/crates/core/src/shard/driver_harness/generator.rs
-for s in s1 s2 s3 s4 s5 s6 s8; do printf '//! placeholder — filled in its scenario task\n' > "frogdb-server/crates/core/src/shard/driver_harness/scenario_${s}.rs"; done
+mkdir -p frogdb-server/crates/core/tests/shard_driver
+printf '//! placeholder — filled in Task 4\n' > frogdb-server/crates/core/tests/shard_driver/sink.rs
+printf '//! placeholder — filled in Task 5\n' > frogdb-server/crates/core/tests/shard_driver/generator.rs
+for s in s1 s2 s3 s4 s5 s6 s8; do printf '//! placeholder — filled in its scenario task\n' > "frogdb-server/crates/core/tests/shard_driver/scenario_${s}.rs"; done
 ```
 
 - [ ] **Step 4: Run tests.** `just test frogdb-core driver_tests` — expected PASS.
@@ -637,7 +658,7 @@ for s in s1 s2 s3 s4 s5 s6 s8; do printf '//! placeholder — filled in its scen
 Run: `just fmt frogdb-core && just lint frogdb-core`
 
 ```bash
-git add frogdb-server/crates/core/src/shard/mod.rs frogdb-server/crates/core/src/shard/driver_harness
+git add frogdb-server/crates/core/tests/shard_driver.rs frogdb-server/crates/core/tests/shard_driver
 git commit -m "test(core): shard-driver harness core (ShardDriver: dispatch, ticks, pump, probes)"
 ```
 
@@ -648,15 +669,15 @@ git commit -m "test(core): shard-driver harness core (ShardDriver: dispatch, tic
 **Goal:** Reimplement the server-private `ShardSenderSink` inside the harness as `ChannelSink: ShardSink` (`type Operation = ScatterOp; type Response = PartialResult;`, template `server/src/vll_adapter.rs:61-161`) — neither it nor vll's `TestSink` is reachable from core. Add a `FaultSink` wrapper that scripts per-shard lock/execute failure (service-withholding stays driver-side). Unit test: a real `VllCoordinator` scatter (MSET) round-trips over 2 pumped shards.
 
 **Files touched:**
-- `frogdb-server/crates/core/src/shard/driver_harness/sink.rs` (replace stub).
+- `frogdb-server/crates/core/tests/shard_driver/sink.rs` (replace stub).
 
-- [ ] **Step 1: Write the sink module.** Replace `frogdb-server/crates/core/src/shard/driver_harness/sink.rs`:
+- [ ] **Step 1: Write the sink module.** Replace `frogdb-server/crates/core/tests/shard_driver/sink.rs`:
 
 ```rust
 //! Harness-local [`ShardSink`] over a `Vec<ShardSender>` (template
 //! `server/src/vll_adapter.rs:61-161`), plus a failure-injecting wrapper. The
 //! server's `ShardSenderSink` and vll's `TestSink` are both unreachable from
-//! core, so the harness supplies its own.
+//! the integration-test crate, so the harness supplies its own.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -665,17 +686,17 @@ use bytes::Bytes;
 use frogdb_vll::{LockMode, ShardReadyResult, ShardSink, ShardSinkError};
 use tokio::sync::oneshot;
 
-use crate::shard::message::{ScatterOp, ShardMessage, ShardSender};
-use crate::shard::types::PartialResult;
+use frogdb_core::shard::types::PartialResult;
+use frogdb_core::shard::{ScatterOp, ShardMessage, ShardSender};
 
 /// Plain sink: maps `ShardSink` calls onto `ShardMessage::Vll*` sends into the
 /// per-shard queues. The driver services those queues via `pump_one`.
-pub(crate) struct ChannelSink {
+pub struct ChannelSink {
     senders: Arc<Vec<ShardSender>>,
 }
 
 impl ChannelSink {
-    pub(crate) fn new(senders: Arc<Vec<ShardSender>>) -> Self {
+    pub fn new(senders: Arc<Vec<ShardSender>>) -> Self {
         Self { senders }
     }
 }
@@ -756,7 +777,7 @@ impl ShardSink for ChannelSink {
 /// chosen set of shards (phase-2 / phase-3 failure). Service-withholding —
 /// forcing a `LockTimeout` — is driver-side (the driver simply does not
 /// `pump_one` that shard), so it is not modeled here.
-pub(crate) struct FaultSink {
+pub struct FaultSink {
     inner: ChannelSink,
     /// Shards whose `send_lock_request` returns an error (phase-2 dispatch
     /// failure → `ScatterError::ShardUnavailable`).
@@ -766,7 +787,7 @@ pub(crate) struct FaultSink {
 }
 
 impl FaultSink {
-    pub(crate) fn new(
+    pub fn new(
         senders: Arc<Vec<ShardSender>>,
         fail_lock: HashSet<usize>,
         fail_execute: HashSet<usize>,
@@ -836,7 +857,6 @@ impl ShardSink for FaultSink {
     }
 }
 
-#[cfg(test)]
 mod sink_tests {
     use std::time::Duration;
 
@@ -844,8 +864,8 @@ mod sink_tests {
     use frogdb_vll::{LockMode, NoopMetricsSink, ScatterParticipant, ScatterRequest, VllCoordinator};
 
     use super::*;
-    use crate::shard::driver_harness::ShardDriver;
-    use crate::shard::message::ScatterOp;
+    use crate::harness::ShardDriver;
+    use frogdb_core::shard::ScatterOp;
 
     #[tokio::test]
     async fn real_coordinator_scatter_mset_over_two_pumped_shards() {
@@ -926,7 +946,7 @@ mod sink_tests {
 Run: `just fmt frogdb-core && just lint frogdb-core`
 
 ```bash
-git add frogdb-server/crates/core/src/shard/driver_harness/sink.rs
+git add frogdb-server/crates/core/tests/shard_driver/sink.rs
 git commit -m "test(core): harness ChannelSink + FaultSink; real VllCoordinator scatter round-trip"
 ```
 
@@ -937,7 +957,7 @@ git commit -m "test(core): harness ChannelSink + FaultSink; real VllCoordinator 
 **Goal:** The heart of the harness. Model each logical sender as a small state machine advanced one step at a time by a proptest-chosen **schedule** (a choice sequence), so illegal message orders (violating C1–C7) are **unrepresentable**, not filtered. Ticks (C4) may sit between any two dispatches. Shrinking reduces both the schedule and the programs.
 
 **Files touched:**
-- `frogdb-server/crates/core/src/shard/driver_harness/generator.rs` (replace stub).
+- `frogdb-server/crates/core/tests/shard_driver/generator.rs` (replace stub).
 
 **Constraint mapping (documented in the module):**
 - **C1 (per-sender FIFO):** a sender only ever advances to its *own next* step; the schedule cannot reorder within a sender.
@@ -946,7 +966,7 @@ git commit -m "test(core): harness ChannelSink + FaultSink; real VllCoordinator 
 - **C4 (ticks between dispatches only):** `Choice::Tick` is a distinct choice variant; a tick is a direct method call between whole dispatches, never mid-dispatch (single-task loop).
 - **C5/C6/C7:** enforced by construction in pumped/VLL and WATCH scenarios (the real coordinator / response-gated `GetVersion`→`ExecTransaction` ordering), documented at the scenario call sites.
 
-- [ ] **Step 1: Write the generator.** Replace `frogdb-server/crates/core/src/shard/driver_harness/generator.rs`:
+- [ ] **Step 1: Write the generator.** Replace `frogdb-server/crates/core/tests/shard_driver/generator.rs`:
 
 ```rust
 //! Schedule generator enforcing the permutation-constraint model (brief
@@ -966,12 +986,12 @@ use bytes::Bytes;
 use frogdb_protocol::ParsedCommand;
 use proptest::prelude::*;
 
-use crate::shard::driver_harness::ShardDriver;
-use crate::types::BlockingOp;
+use crate::harness::ShardDriver;
+use frogdb_core::types::BlockingOp;
 
 /// A per-shard tick pseudo-event (C4). Ticks never preempt a dispatch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Tick {
+pub enum Tick {
     Expiry,
     WaiterTimeout,
     ContinuationRelease,
@@ -979,14 +999,14 @@ pub(crate) enum Tick {
 
 /// One scheduling choice: advance sender `s`, or fire a tick on `shard`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Choice {
+pub enum Choice {
     Advance(usize),
     Tick { shard: usize, tick: Tick },
 }
 
 /// One step in a logical sender's program.
 #[derive(Debug, Clone)]
-pub(crate) enum Step {
+pub enum Step {
     /// Gated single command on `shard` (awaits its reply — C2).
     Execute {
         shard: usize,
@@ -1018,23 +1038,23 @@ pub(crate) enum Step {
 
 /// A logical sender: an ordered program plus a cursor (C1).
 #[derive(Debug, Clone)]
-pub(crate) struct Sender {
-    pub(crate) program: Vec<Step>,
-    pub(crate) cursor: usize,
+pub struct Sender {
+    pub program: Vec<Step>,
+    pub cursor: usize,
 }
 
 impl Sender {
-    pub(crate) fn new(program: Vec<Step>) -> Self {
+    pub fn new(program: Vec<Step>) -> Self {
         Self { program, cursor: 0 }
     }
-    pub(crate) fn finished(&self) -> bool {
+    pub fn finished(&self) -> bool {
         self.cursor >= self.program.len()
     }
 }
 
 /// Advance sender `idx` by exactly one step against the driver, awaiting any
 /// gating reply (C2). No-op if the sender is finished.
-pub(crate) async fn advance(driver: &mut ShardDriver, senders: &mut [Sender], idx: usize) {
+pub async fn advance(driver: &mut ShardDriver, senders: &mut [Sender], idx: usize) {
     if idx >= senders.len() || senders[idx].finished() {
         return;
     }
@@ -1047,7 +1067,7 @@ pub(crate) async fn advance(driver: &mut ShardDriver, senders: &mut [Sender], id
             command,
         } => {
             let (tx, rx) = tokio::sync::oneshot::channel();
-            let msg = crate::shard::message::ShardMessage::Execute {
+            let msg = frogdb_core::shard::ShardMessage::Execute {
                 command: std::sync::Arc::new(command),
                 conn_id,
                 txid: None,
@@ -1088,7 +1108,7 @@ pub(crate) async fn advance(driver: &mut ShardDriver, senders: &mut [Sender], id
 }
 
 /// Fire one tick against the driver.
-pub(crate) async fn fire_tick(driver: &mut ShardDriver, shard: usize, tick: Tick) {
+pub async fn fire_tick(driver: &mut ShardDriver, shard: usize, tick: Tick) {
     match tick {
         Tick::Expiry => driver.tick_expiry(shard),
         Tick::WaiterTimeout => driver.tick_waiter_timeout(shard),
@@ -1098,7 +1118,7 @@ pub(crate) async fn fire_tick(driver: &mut ShardDriver, shard: usize, tick: Tick
 
 /// Replay a whole schedule: advance senders and fire ticks in the chosen order,
 /// then drain each sender to completion so no program is left half-run.
-pub(crate) async fn replay(
+pub async fn replay(
     driver: &mut ShardDriver,
     senders: &mut Vec<Sender>,
     schedule: &[Choice],
@@ -1126,7 +1146,7 @@ pub(crate) async fn replay(
 /// shards, at most `max_len` choices. Advancing a finished sender is a no-op,
 /// so the strategy is total (every generated schedule is legal) and shrinks by
 /// dropping choices.
-pub(crate) fn schedule_strategy(
+pub fn schedule_strategy(
     num_senders: usize,
     num_shards: usize,
     max_len: usize,
@@ -1142,7 +1162,6 @@ pub(crate) fn schedule_strategy(
     proptest::collection::vec(choice, 0..max_len)
 }
 
-#[cfg(test)]
 mod generator_tests {
     use super::*;
 
@@ -1174,7 +1193,7 @@ mod generator_tests {
 Run: `just fmt frogdb-core && just lint frogdb-core`
 
 ```bash
-git add frogdb-server/crates/core/src/shard/driver_harness/generator.rs
+git add frogdb-server/crates/core/tests/shard_driver/generator.rs
 git commit -m "test(core): schedule generator with structural C1-C7 sender state machines"
 ```
 
@@ -1185,7 +1204,7 @@ git commit -m "test(core): schedule generator with structural C1-C7 sender state
 **Goal:** Pin the already-closed lost-element race (`drive_satisfaction` re-validates deadline + `is_closed()` before consuming, blocking.rs:243-261) under permutation. 1 shard. Conn A (`BlockWait` BLPOP with elapsed-or-future deadline), conn B (`Execute` LPUSH), `WaiterTimeoutTick` events, A's optional receiver-drop + `UnregisterWait` (C3). Invariants: **element conservation** (v delivered to A exactly once XOR present in `worker.store` at quiesce), wait queue empty at quiesce, a delivered response never sent to a closed receiver. This is a **pin**, not a bug hunt (brief D4).
 
 **Files touched:**
-- `frogdb-server/crates/core/src/shard/driver_harness/scenario_s1.rs` (replace stub).
+- `frogdb-server/crates/core/tests/shard_driver/scenario_s1.rs` (replace stub).
 
 - [ ] **Step 1: Write the scenario.** Replace `scenario_s1.rs`:
 
@@ -1195,16 +1214,14 @@ git commit -m "test(core): schedule generator with structural C1-C7 sender state
 //! permutation. Invariants: element conservation, empty wait queue at quiesce,
 //! no delivery to a closed receiver.
 
-#![cfg(test)]
-
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use frogdb_protocol::Response;
 use proptest::prelude::*;
 
-use crate::shard::driver_harness::ShardDriver;
-use crate::types::BlockingOp;
+use crate::harness::ShardDriver;
+use frogdb_core::types::BlockingOp;
 
 /// Run one permutation. `deadline_elapsed` selects A's deadline variant;
 /// `drop_receiver` models A giving up (receiver-drop before UnregisterWait);
@@ -1307,7 +1324,7 @@ proptest! {
 Run: `just fmt frogdb-core && just lint frogdb-core`
 
 ```bash
-git add frogdb-server/crates/core/src/shard/driver_harness/scenario_s1.rs
+git add frogdb-server/crates/core/tests/shard_driver/scenario_s1.rs
 git commit -m "test(core): S1 dual-timeout race pinned under permutation (element conservation)"
 ```
 
@@ -1318,7 +1335,7 @@ git commit -m "test(core): S1 dual-timeout race pinned under permutation (elemen
 **Goal:** S2 (brief D4/S2). 1 shard. Conn A: `GetVersion` → (gap) → `ExecTransaction{watches:[(k,v0)], commands:[SET k x]}`. In the gap, permuted: conn B unrelated-key write, conn B watched-key write, `ExpiryTick` (seeded expiring keys), lazy-expiry probe. Invariant: **zero false negatives** — if the watched key's state changed by a *write* or by *active expiry*, EXEC must return `WatchAborted`; over-aborts (unrelated same-shard write / active-expiry removal) are legal and **characterized** (counted, not asserted). The F3 lazy-expiry case is split into Tasks 8–9. This task covers the write and active-expiry arms only.
 
 **Files touched:**
-- `frogdb-server/crates/core/src/shard/driver_harness/scenario_s2.rs` (replace stub).
+- `frogdb-server/crates/core/tests/shard_driver/scenario_s2.rs` (replace stub).
 
 - [ ] **Step 1: Write the scenario.** Replace `scenario_s2.rs`:
 
@@ -1329,14 +1346,12 @@ git commit -m "test(core): S1 dual-timeout race pinned under permutation (elemen
 //! (a genuine change to the watched key MUST abort). Over-aborts are legal and
 //! characterized. F3 (lazy-expiry false negative) is covered in Tasks 8-9.
 
-#![cfg(test)]
-
 use std::time::Duration;
 
 use bytes::Bytes;
 
-use crate::shard::driver_harness::{cmd, ShardDriver};
-use crate::shard::types::TransactionResult;
+use crate::harness::{cmd, ShardDriver};
+use frogdb_core::shard::types::TransactionResult;
 
 /// What happens in the WATCH→EXEC gap.
 #[derive(Debug, Clone, Copy)]
@@ -1435,7 +1450,7 @@ async fn s2_zero_false_negatives_and_over_abort_characterized() {
 Run: `just fmt frogdb-core && just lint frogdb-core`
 
 ```bash
-git add frogdb-server/crates/core/src/shard/driver_harness/scenario_s2.rs
+git add frogdb-server/crates/core/tests/shard_driver/scenario_s2.rs
 git commit -m "test(core): S2 WATCH vs write/active-expiry — zero false negatives, over-abort characterized"
 ```
 
@@ -1500,7 +1515,7 @@ git commit -m "test(sim): real-path repro for WATCH lazy-expiry false negative (
 **Goal:** With the real-path repro (Task 8) confirming F3, land the shard-driver failing test (the lazy-expiry arm of S2) and fix it at the **worker seam** — lazy purge is invoked from command execution which *can* reach `increment_version`; the store stays version-ignorant (encapsulation, brief F3). Then invert + un-ignore the Task-8 turmoil test. If investigation (Task 8) had overturned the analysis, the test would pin the verified-correct behavior instead — it did not.
 
 **Files touched:**
-- `frogdb-server/crates/core/src/shard/driver_harness/scenario_s2.rs` (add the F3 arm test).
+- `frogdb-server/crates/core/tests/shard_driver/scenario_s2.rs` (add the F3 arm test).
 - The worker seam where lazy purge runs (investigate: the read/write command path that calls `purge_if_expired`/`check_and_delete_expired`; bump `increment_version` when a lazy purge actually removed a key). **Do not** add `shard_version` awareness to `HashMapStore`.
 - `frogdb-server/crates/server/tests/...` (invert + un-ignore the Task-8 test).
 
@@ -1552,7 +1567,7 @@ async fn s2_f3_lazy_expiry_watched_key_aborts() {
 Run: `just fmt frogdb-core && just lint frogdb-core`
 
 ```bash
-git add frogdb-server/crates/core/src/shard/driver_harness/scenario_s2.rs frogdb-server/crates/core/src/shard frogdb-server/crates/server/tests
+git add frogdb-server/crates/core/tests/shard_driver/scenario_s2.rs frogdb-server/crates/core/src/shard frogdb-server/crates/server/tests
 git commit -m "fix(core): lazy-expiry purge bumps shard version so WATCH aborts on expired watched key (F3)"
 ```
 
@@ -1563,7 +1578,7 @@ git commit -m "fix(core): lazy-expiry purge bumps shard version so WATCH aborts 
 **Goal:** 8 shards, pumped mode, real coordinator + `ChannelSink`/`FaultSink`. Inject phase-2 (lock dispatch) and phase-3 (execute dispatch) failures on chosen shards, plus driver service-withholding to force `LockTimeout`. Permute service schedules × failure points. Invariants (C5): abort messages address exactly the real shard ids per the C5 split; after drain, `GetLockTableInfo` on all of [2,5,7] shows zero intents + no continuation lock; non-participant shards untouched; no partial VLL-EXEC effects on aborted shards.
 
 **Files touched:**
-- `frogdb-server/crates/core/src/shard/driver_harness/scenario_s3.rs` (replace stub).
+- `frogdb-server/crates/core/tests/shard_driver/scenario_s3.rs` (replace stub).
 
 - [ ] **Step 1: Write the scenario.** Replace `scenario_s3.rs`:
 
@@ -1574,8 +1589,6 @@ git commit -m "fix(core): lazy-expiry purge bumps shard version so WATCH aborts 
 //! any abort every participant's lock table is clean and no partial write
 //! landed on an aborted shard.
 
-#![cfg(test)]
-
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -1584,9 +1597,9 @@ use bytes::Bytes;
 use frogdb_protocol::Response;
 use frogdb_vll::{LockMode, NoopMetricsSink, ScatterParticipant, ScatterRequest, VllCoordinator};
 
-use crate::shard::driver_harness::sink::FaultSink;
-use crate::shard::driver_harness::ShardDriver;
-use crate::shard::message::ScatterOp;
+use crate::harness::ShardDriver;
+use crate::sink::FaultSink;
+use frogdb_core::shard::ScatterOp;
 
 const PARTICIPANTS: [usize; 3] = [2, 5, 7];
 const NUM_SHARDS: usize = 8;
@@ -1729,7 +1742,7 @@ async fn s3_withheld_service_forces_lock_timeout() {
 #[tokio::test]
 async fn s3_clean_run_commits_on_all_participants() {
     let mut driver = ShardDriver::new(NUM_SHARDS);
-    let sink = crate::shard::driver_harness::sink::ChannelSink::new(driver.senders());
+    let sink = crate::sink::ChannelSink::new(driver.senders());
     let coordinator = Arc::new(VllCoordinator::new(sink, NoopMetricsSink));
     let coord = coordinator.clone();
     let handle = tokio::spawn(async move { coord.scatter(mset_request(1)).await });
@@ -1754,7 +1767,7 @@ async fn s3_clean_run_commits_on_all_participants() {
 }
 ```
 
-**Import note:** add `use crate::shard::driver_harness::sink::ChannelSink;` if preferred over the fully-qualified path used in `s3_clean_run_commits_on_all_participants`.
+**Import note:** add `use crate::sink::ChannelSink;` if preferred over the fully-qualified path used in `s3_clean_run_commits_on_all_participants`.
 
 - [ ] **Step 2: Run tests.** `just test frogdb-core s3` — expected PASS. If a fault case hangs, the coordinator is waiting on a queue the loop stopped servicing — confirm the drain-after-finish and `yield_now` are present.
 
@@ -1763,7 +1776,7 @@ async fn s3_clean_run_commits_on_all_participants() {
 Run: `just fmt frogdb-core && just lint frogdb-core`
 
 ```bash
-git add frogdb-server/crates/core/src/shard/driver_harness/scenario_s3.rs
+git add frogdb-server/crates/core/tests/shard_driver/scenario_s3.rs
 git commit -m "test(core): S3 VLL phase-2/3 failure with sparse participants [2,5,7], clean lock tables"
 ```
 
@@ -1774,7 +1787,7 @@ git commit -m "test(core): S3 VLL phase-2/3 failure with sparse participants [2,
 **Goal:** ≥2 shards, pumped. Run `acquire_continuation_and_run` whose `run` closure panics after acquisition (task panic → unwind → guard `Drop` → `release_txs` fire; no `panic = "abort"` in the workspace). The driver then `pump_continuation_release` each shard (permuted order/timing vs other traffic). Invariants: every shard clears its continuation lock (`GetLockTableInfo.continuation_lock == None`); a subsequent `Execute` from another conn succeeds (no lingering `-ERR shard busy with continuation lock`); the panicked task's `JoinError` is observed.
 
 **Files touched:**
-- `frogdb-server/crates/core/src/shard/driver_harness/scenario_s4.rs` (replace stub).
+- `frogdb-server/crates/core/tests/shard_driver/scenario_s4.rs` (replace stub).
 
 - [ ] **Step 1: Write the scenario.** Replace `scenario_s4.rs`:
 
@@ -1784,16 +1797,14 @@ git commit -m "test(core): S3 VLL phase-2/3 failure with sparse participants [2,
 //! ContinuationReleasePump step (event_loop.rs:88-91). After the pump every
 //! shard's continuation lock is cleared and another conn can execute.
 
-#![cfg(test)]
-
 use std::sync::Arc;
 use std::time::Duration;
 
 use frogdb_protocol::Response;
 use frogdb_vll::{NoopMetricsSink, VllCoordinator};
 
-use crate::shard::driver_harness::sink::ChannelSink;
-use crate::shard::driver_harness::ShardDriver;
+use crate::harness::ShardDriver;
+use crate::sink::ChannelSink;
 
 const SHARDS: [usize; 2] = [0, 1];
 
@@ -1874,7 +1885,7 @@ async fn s4_holder_panic_releases_locks_and_shard_resumes() {
 Run: `just fmt frogdb-core && just lint frogdb-core`
 
 ```bash
-git add frogdb-server/crates/core/src/shard/driver_harness/scenario_s4.rs
+git add frogdb-server/crates/core/tests/shard_driver/scenario_s4.rs
 git commit -m "test(core): S4 continuation-lock holder panic releases locks, shard resumes"
 ```
 
@@ -1887,7 +1898,7 @@ git commit -m "test(core): S4 continuation-lock holder panic releases locks, sha
 **Files touched:**
 - `frogdb-server/crates/server/tests/...` — F1 real-path turmoil test (per Task-8 conventions).
 - `frogdb-server/crates/core/src/shard/event_loop.rs` — the F1 fix in `apply_expiry_effects`.
-- `frogdb-server/crates/core/src/shard/driver_harness/scenario_s5.rs` (replace stub).
+- `frogdb-server/crates/core/tests/shard_driver/scenario_s5.rs` (replace stub).
 
 - [ ] **Step 1: Real-path repro first (D8).** Add a turmoil test: a client issues `XADD st 1-1 f v`, `XGROUP CREATE st g 0`, then a second client `XREADGROUP GROUP g c BLOCK 0 STREAMS st >` after acking the first (so it blocks), then `PEXPIRE st <short>`; advance sim time past the TTL with **no further write** to `st`. Observe: the blocked client currently **hangs until its own timeout** (or never, with BLOCK 0) instead of getting NOGROUP. Assert the current behavior with a `// BUG(F1):` marker; keep `#[ignore]` until the fix. Run:
   `cargo nextest run -p frogdb-server --features turmoil --run-ignored all -E 'test(/xreadgroup_ttl_no_nogroup_realpath/)' > "$TMPDIR/f1_realpath.log" 2>&1` (foreground, 600000ms). Record the confirmation in the commit body.
@@ -1900,15 +1911,13 @@ git commit -m "test(core): S4 continuation-lock holder panic releases locks, sha
 //! NOT (F1 gap). After the fix both arms converge to identical NOGROUP
 //! outcomes; a plain XREAD waiter stays blocked in both.
 
-#![cfg(test)]
-
 use std::time::Duration;
 
 use bytes::Bytes;
 use frogdb_protocol::Response;
 
-use crate::shard::driver_harness::ShardDriver;
-use crate::types::BlockingOp;
+use crate::harness::ShardDriver;
+use frogdb_core::types::BlockingOp;
 
 /// Register a blocked XREADGROUP waiter on `st` for group `g`, consumer `c`.
 async fn block_xreadgroup(d: &mut ShardDriver, conn_id: u64) -> tokio::sync::oneshot::Receiver<Response> {
@@ -2024,7 +2033,7 @@ Read the current `apply_expiry_effects` body first to locate the actual early-re
 Run: `just fmt frogdb-core && just lint frogdb-core`
 
 ```bash
-git add frogdb-server/crates/core/src/shard/event_loop.rs frogdb-server/crates/core/src/shard/blocking.rs frogdb-server/crates/core/src/shard/driver_harness/scenario_s5.rs frogdb-server/crates/server/tests
+git add frogdb-server/crates/core/src/shard/event_loop.rs frogdb-server/crates/core/src/shard/blocking.rs frogdb-server/crates/core/tests/shard_driver/scenario_s5.rs frogdb-server/crates/server/tests
 git commit -m "fix(core): active-expiry drains blocked XREADGROUP waiters to NOGROUP (F1)"
 ```
 
@@ -2036,7 +2045,7 @@ git commit -m "fix(core): active-expiry drains blocked XREADGROUP waiters to NOG
 
 **Files touched:**
 - `frogdb-server/crates/core/src/shard/execution.rs` — F2 spelling fix (`EXECABRT`→`EXECABORT`).
-- `frogdb-server/crates/core/src/shard/driver_harness/scenario_s6.rs` (replace stub).
+- `frogdb-server/crates/core/tests/shard_driver/scenario_s6.rs` (replace stub).
 
 **D6 note:** `FakeWalRegistry` is process-global keyed by shard_id. S6 builds each worker with a **unique** shard_id from a module `AtomicUsize` and `num_shards = 1` (keyspace routing stays `Local` for `num_shards <= 1`, keyspace_coordinator.rs:73, so a length-1 sender vec is safe regardless of the id). This guarantees no cross-case registry collision within the in-process proptest run.
 
@@ -2048,8 +2057,6 @@ git commit -m "fix(core): active-expiry drains blocked XREADGROUP waiters to NOG
 //! (rollback.rs:85-116) and every command result is replaced with the
 //! EXECABORT error (post-F2 spelling). Store == pre-transaction snapshot.
 
-#![cfg(test)]
-
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -2058,14 +2065,12 @@ use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
-use crate::persistence::{FakeFailure, WalFailurePolicy};
-use crate::registry::CommandRegistry;
-use crate::shard::builder::{ShardWorkerBuilder, WalMode};
-use crate::shard::connection::NewConnection;
-use crate::shard::fake_wal_registry::FakeWalRegistry;
-use crate::shard::message::{Envelope, ShardMessage, ShardReceiver, ShardSender};
-use crate::shard::types::TransactionResult;
-use crate::shard::worker::ShardWorker;
+use frogdb_core::persistence::{FakeFailure, WalFailurePolicy};
+use frogdb_core::shard::types::TransactionResult;
+use frogdb_core::shard::{
+    Envelope, FakeWalRegistry, NewConnection, ShardMessage, ShardReceiver, ShardSender, ShardWorkerBuilder, WalMode,
+};
+use frogdb_core::{CommandRegistry, ShardWorker};
 
 /// Unique shard ids so the process-global FakeWalRegistry never collides (D6).
 static NEXT_SHARD_ID: AtomicUsize = AtomicUsize::new(1);
@@ -2085,11 +2090,13 @@ fn build_rollback_worker(
     let shard_id = NEXT_SHARD_ID.fetch_add(1, Ordering::SeqCst);
     let (msg_tx, msg_rx) = mpsc::channel::<Envelope>(16);
     let (conn_tx, conn_rx) = mpsc::channel::<NewConnection>(16);
+    let mut registry = CommandRegistry::new();
+    frogdb_commands::register_all(&mut registry);
     let mut worker = ShardWorkerBuilder::new(shard_id, 1)
         .with_message_rx(ShardReceiver::new(msg_rx))
         .with_new_conn_rx(conn_rx)
         .with_shard_senders(Arc::new(vec![ShardSender::new(msg_tx.clone())]))
-        .with_registry(Arc::new(CommandRegistry::new()))
+        .with_registry(Arc::new(registry))
         .with_wal_mode(WalMode::Fake)
         .with_fake_wal_failure(FakeFailure::AtWriteIndex(fail_index))
         .build();
@@ -2111,7 +2118,7 @@ async fn exec_tx(
         protocol_version: ProtocolVersion::Resp3,
         response_tx: tx,
     };
-    worker.dispatch_message(msg).await;
+    worker.drive(msg).await;
     rx.await.expect("transaction result")
 }
 
@@ -2126,7 +2133,7 @@ async fn get(worker: &mut ShardWorker, key: &str) -> Response {
         no_touch: false,
         response_tx: tx,
     };
-    worker.dispatch_message(msg).await;
+    worker.drive(msg).await;
     rx.await.unwrap()
 }
 
@@ -2189,7 +2196,7 @@ async fn s6_rollback_all_results_execabort_and_store_restored() {
 1. If the injected failure does not trip where expected, dump
    `FakeWalRegistry::log(shard_id).effects()` to recalibrate the write index —
    do **not** loosen the assertions.
-2. Rollback mode is enabled by the verified expression `Arc::new(AtomicU8::new(WalFailurePolicy::Rollback.as_u8()))` passed to `set_wal_failure_policy_flag` (worker.rs:169 takes `Arc<AtomicU8>`; `should_rollback()` reads it, types.rs:390). `WalFailurePolicy::Rollback` (`as_u8() == 1`) lives at `frogdb-server/crates/persistence/src/wal/config.rs:6,17` and is reachable in-crate as `crate::persistence::WalFailurePolicy`. No new API to invent.
+2. Rollback mode is enabled by the verified expression `Arc::new(AtomicU8::new(WalFailurePolicy::Rollback.as_u8()))` passed to `set_wal_failure_policy_flag` (worker.rs:169 takes `Arc<AtomicU8>`; `should_rollback()` reads it, types.rs:390). `WalFailurePolicy::Rollback` (`as_u8() == 1`) lives at `frogdb-server/crates/persistence/src/wal/config.rs:6,17` and is reachable from the integration-test crate as `frogdb_core::persistence::WalFailurePolicy`. No new API to invent.
 
 - [ ] **Step 2: Run to verify it fails on the F2 typo.** `just test frogdb-core s6_rollback_all_results` — expected FAIL: the assertion `e.starts_with(b"EXECABORT")` fails because the production string is the truncated `"EXECABRT transaction aborted due to WAL failure"` (execution.rs:533).
 
@@ -2202,7 +2209,7 @@ async fn s6_rollback_all_results_execabort_and_store_restored() {
 Run: `just fmt frogdb-core && just lint frogdb-core`
 
 ```bash
-git add frogdb-server/crates/core/src/shard/execution.rs frogdb-server/crates/core/src/shard/driver_harness/scenario_s6.rs
+git add frogdb-server/crates/core/src/shard/execution.rs frogdb-server/crates/core/tests/shard_driver/scenario_s6.rs
 git commit -m "fix(core): correct EXECABRT->EXECABORT WAL-rollback error code (F2); pin S6 rollback"
 ```
 
@@ -2239,7 +2246,7 @@ git commit -m "test(sim): S7 CLIENT PAUSE WRITE vs in-flight write-EXEC (turmoil
 **Goal:** S8 (brief D4/S8). 1 shard. Seed keys with TTLs; permute sequences of [`ExecTransaction` (multi-write), `Execute`, `ExpiryTick`, `WaiterTimeoutTick`]. Invariants: EXEC effects atomic (a subsequent read + `GetVersion` never sees partial transaction state); version monotonic, bumped exactly once per committed EXEC (post_execution.rs:207) and once per non-empty sweep (event_loop.rs:212); keyspace notifications consistent with the chosen order; `MemoryCheck` + `ExpiryIndexCheck` clean at quiesce. Uses the shared schedule generator.
 
 **Files touched:**
-- `frogdb-server/crates/core/src/shard/driver_harness/scenario_s8.rs` (replace stub).
+- `frogdb-server/crates/core/tests/shard_driver/scenario_s8.rs` (replace stub).
 
 - [ ] **Step 1: Write the scenario.** Replace `scenario_s8.rs`:
 
@@ -2250,17 +2257,15 @@ git commit -m "test(sim): S7 CLIENT PAUSE WRITE vs in-flight write-EXEC (turmoil
 //! message-granularity only: EXEC effects are always atomic and version bumps
 //! are exactly-once (per committed EXEC + per non-empty sweep).
 
-#![cfg(test)]
-
 use std::time::Duration;
 
 use bytes::Bytes;
 use frogdb_protocol::Response;
 use proptest::prelude::*;
 
-use crate::shard::driver_harness::generator::{replay, schedule_strategy, Choice, Sender, Step, Tick};
-use crate::shard::driver_harness::{cmd, ShardDriver};
-use crate::shard::types::TransactionResult;
+use crate::generator::{replay, schedule_strategy, Choice, Sender, Step, Tick};
+use crate::harness::{cmd, ShardDriver};
+use frogdb_core::shard::types::TransactionResult;
 
 /// Deterministic pin: a multi-write EXEC is atomic even with an expiry tick and
 /// an unrelated write permuted around it; the version bumps exactly once for
@@ -2372,7 +2377,7 @@ proptest! {
 Run: `just fmt frogdb-core && just lint frogdb-core`
 
 ```bash
-git add frogdb-server/crates/core/src/shard/driver_harness/scenario_s8.rs
+git add frogdb-server/crates/core/tests/shard_driver/scenario_s8.rs
 git commit -m "test(core): S8 expiry sweep vs EXEC serialization pinned (atomicity, exactly-once version)"
 ```
 
@@ -2385,12 +2390,11 @@ git commit -m "test(core): S8 expiry sweep vs EXEC serialization pinned (atomici
 **Files touched:**
 - `docs/superpowers/specs/2026-07-17-concurrency-invariant-testing-design.md`
 
-- [ ] **Step 1: Harness location — in-crate, not `crates/core/tests/`.** In section "4. Shard-driver harness" (spec :113-122), change the header line:
+- [ ] **Step 1: Harness location — integration-test tree with feature-gated seams.** In section "4. Shard-driver harness" (spec :113-122), set the header line:
 
-  Old: `### 4. Shard-driver harness (`frogdb-server/crates/core/tests/`)`
-  New: `### 4. Shard-driver harness (`frogdb-server/crates/core/src/shard/driver_harness/`, in-crate `#[cfg(test)]`)`
+  New: `### 4. Shard-driver harness (`frogdb-server/crates/core/tests/shard_driver/`, integration-test crate)`
 
-  Append a sentence to that section's first bullet noting the reason: every seam (`dispatch_message` private, execution/tick fns `pub(crate)`) is unreachable from an external test crate, so the harness is an in-crate `#[cfg(test)]` module tree (matching event_loop.rs / worker.rs / builder.rs precedent).
+  Append a sentence to that section's first bullet noting the reason: the harness needs `frogdb-commands` (added as a `frogdb-core` dev-dependency) to populate a real `CommandRegistry`, and that dev-dep cycle compiles `frogdb-core` twice — an in-crate `#[cfg(test)]` harness touching both copies trips E0308. The integration test links the single normal build and reaches the seams through **feature-gated public `drive*` wrappers** on `ShardWorker` (and `ShardReceiver::try_recv`), each `#[cfg(any(test, feature = "shard-driver"))] #[doc(hidden)] pub`, with the `shard-driver` feature enabled by the crate's self-dev-dep.
 
 - [ ] **Step 2: S1 re-scope to a pin.** In "Targeted shard-driver scenarios" item 1 (spec :195-197), append: "The lost-element race is already closed (`drive_satisfaction` re-validates deadline + `is_closed()` before consuming); 4b **pins the closure under permutation** rather than hunting a known bug."
 
@@ -2430,7 +2434,7 @@ git commit -m "docs(spec): 4b re-scopes — in-crate harness, S1 pin, S7 turmoil
 just test frogdb-core > "$TMPDIR/final_core.log" 2>&1 ; tail -30 "$TMPDIR/final_core.log"
 ```
 
-Expected: green (all `driver_harness` scenarios, F1–F4 fixes, seam + generator + sink tests).
+Expected: green (all `shard_driver` scenarios, F1–F4 fixes, seam + generator + sink tests).
 
 ```bash
 just test frogdb-server > "$TMPDIR/final_server.log" 2>&1 ; tail -30 "$TMPDIR/final_server.log"

@@ -16,6 +16,28 @@ const BASE = '/';
 export default defineConfig({
 	site: 'https://frogdb.dev',
 	base: BASE,
+	redirects: {
+		// Cut / superseded compatibility pages.
+		'/compatibility/migration-guide/': '/compatibility/overview/',
+		'/compatibility/redis-differences/': '/compatibility/overview/',
+		'/compatibility/redis-test-suite/': '/compatibility/test-suite/',
+		// Command reference folded into the generated compatibility matrix.
+		'/reference/commands/': '/compatibility/command-matrix/',
+		// Testing methodology moved out of Architecture.
+		'/architecture/testing/': '/compatibility/testing-methodology/',
+		// Guides topic dissolved into Extensions.
+		'/guides/': '/extensions/overview/',
+		'/guides/event-sourcing/': '/extensions/event-sourcing/',
+		// Operations merges: monitoring→observability, performance+debug-ui→diagnostics,
+		// kubernetes→deployment.
+		'/operations/monitoring/': '/operations/observability/',
+		'/operations/performance/': '/operations/diagnostics/',
+		'/operations/debug-ui/': '/operations/diagnostics/',
+		'/operations/kubernetes/': '/operations/deployment/',
+		// Cut / replaced reference pages.
+		'/reference/reference-config/': '/reference/example-config/',
+		'/reference/benchmarks/': '/reference/configuration/',
+	},
 	markdown: {
 		remarkPlugins: [[remarkBaseUrl, { base: BASE }]],
 	},
@@ -46,53 +68,51 @@ starlightSidebarTopics([
 						],
 					},
 					{
-						label: 'Compatibility',
-						link: '/compatibility/redis-differences/',
+						label: 'Compatibility & Correctness',
+						link: '/compatibility/overview/',
 						icon: 'i-tabler:plug-connected',
 						items: [
-							{ label: 'Redis Differences', slug: 'compatibility/redis-differences' },
-							{ label: 'Migration Guide', slug: 'compatibility/migration-guide' },
-							{ label: 'Redis Test Suite', slug: 'compatibility/redis-test-suite' },
+							{ label: 'Overview & differences', slug: 'compatibility/overview' },
+							{ label: 'Command matrix', slug: 'compatibility/command-matrix' },
+							{ label: 'Test suite results', slug: 'compatibility/test-suite' },
+							{ label: 'Testing methodology', slug: 'compatibility/testing-methodology' },
 						],
 					},
 					{
-						label: 'Guides',
-						link: '/guides/event-sourcing/',
-						icon: 'i-tabler:book',
+						label: 'Extensions',
+						link: '/extensions/overview/',
+						icon: 'i-tabler:puzzle',
 						items: [
-							{ label: 'Event Sourcing', slug: 'guides/event-sourcing' },
+							{ label: 'Overview', slug: 'extensions/overview' },
+							{ label: 'Event Sourcing', slug: 'extensions/event-sourcing' },
 						],
 					},
 					{
 						label: 'Operations',
-						link: '/operations/deployment/',
+						link: '/operations/configuration/',
 						icon: 'i-tabler:dashboard',
 						items: [
+							{ label: 'Configuration', slug: 'operations/configuration' },
 							{ label: 'Deployment', slug: 'operations/deployment' },
 							{ label: 'Persistence', slug: 'operations/persistence' },
 							{ label: 'Replication', slug: 'operations/replication' },
 							{ label: 'Clustering', slug: 'operations/clustering' },
-							{ label: 'Monitoring', slug: 'operations/monitoring' },
-							{ label: 'Observability', slug: 'operations/observability' },
-							{ label: 'Debug UI & HTTP API', slug: 'operations/debug-ui' },
-							{ label: 'Performance Tools', slug: 'operations/performance' },
 							{ label: 'Security', slug: 'operations/security' },
+							{ label: 'Observability', slug: 'operations/observability' },
+							{ label: 'Diagnostics', slug: 'operations/diagnostics' },
 							{ label: 'Backup & Restore', slug: 'operations/backup-restore' },
-							{ label: 'Kubernetes', slug: 'operations/kubernetes' },
 						],
 					},
 					{
 						label: 'Reference',
-						link: '/reference/commands/',
+						link: '/reference/configuration/',
 						icon: 'i-tabler:file-text',
 						items: [
-							{ label: 'Commands', slug: 'reference/commands' },
 							{ label: 'Configuration', slug: 'reference/configuration' },
-							{ label: 'Reference Config', slug: 'reference/reference-config' },
+							{ label: 'Example Config', slug: 'reference/example-config' },
 							{ label: 'frogdb-server', slug: 'reference/frogdb-server' },
 							{ label: 'frogctl', slug: 'reference/frogctl' },
 							{ label: 'Metrics', slug: 'reference/metrics' },
-							{ label: 'Benchmarks', slug: 'reference/benchmarks' },
 						],
 					},
 					{

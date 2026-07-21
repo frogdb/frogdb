@@ -11,9 +11,15 @@ name = "docs-gen"
 path = "src/main.rs"
 
 [dependencies]
+frogctl = { path = "../../../frogctl" }
 frogdb-config.workspace = true
+frogdb-core.workspace = true
+frogdb-server = { path = "../../crates/server" }
+frogdb-telemetry = { path = "../../crates/telemetry" }
+frogdb-types.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 clap.workspace = true
 anyhow.workspace = true

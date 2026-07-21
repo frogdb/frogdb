@@ -5,24 +5,20 @@ description: Complete reference for all FrogDB configuration options
 
 import ConfigTable from '../../../components/ConfigTable.astro';
 import ConfigDefault from '../../../components/ConfigDefault.astro';
-import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-<Aside type="tip">
-Looking for a ready-to-use config file? See the [Reference Config File](/reference/reference-config/) for a complete TOML with all defaults, or generate one with `frogdb-server --generate-config`.
-</Aside>
-
-This reference documents all configuration options available in FrogDB. Default values and types are extracted directly from the source code and are always up to date.
+FrogDB is configured with a TOML file. Every table on this page is extracted directly from the `Config` struct in `frogdb-server/crates/config/src/`, so its parameter names, types, and defaults match the binary. For the four config surfaces (file, environment variables, CLI flags, `CONFIG SET`) and their precedence, see [Operations → Configuration](/operations/configuration/); this page does not repeat that model.
 
 **Legend:** The **Runtime** column shows whether a field can be changed at runtime via `CONFIG SET`:
 - **✓** — mutable at runtime
 - **✗** — immutable (requires restart)
-- **—** — not exposed via CONFIG GET/SET
+- **—** — not exposed via `CONFIG GET`/`CONFIG SET`
 
-Fields with a different `CONFIG` parameter name show it below the TOML key.
+Where a field's `CONFIG` parameter name differs from its TOML key, it is shown below the TOML key as `CONFIG: <name>`.
 
-## Configuration File Format
+## Configuration file format
 
-FrogDB uses TOML for configuration files. Pass the config file path with `--config`:
+Pass a TOML file's path with `--config`:
 
 ```bash
 frogdb-server --config /etc/frogdb/frogdb.toml
@@ -30,17 +26,11 @@ frogdb-server --config /etc/frogdb/frogdb.toml
 
 ```toml
 # frogdb.toml
-
-[server]
-bind = "127.0.0.1"
-port = 6379
-
-[persistence]
-enabled = true
-data-dir = "/var/lib/frogdb"
+[section]
+key = value
 ```
 
-Configuration can also be set via environment variables with the `FROGDB_` prefix (e.g., `FROGDB_SERVER__PORT=6380`).
+Every field below also accepts a `FROGDB_`-prefixed environment variable and, for a subset of fields, a CLI flag; see [Operations → Configuration](/operations/configuration/) for the exact mapping and precedence rules.
 
 ---
 
@@ -85,7 +75,7 @@ compression = "lz4"
 block-cache-size-mb = 512
 ```
 
-### Durability Modes
+### Durability modes
 
 | Mode | Description |
 |------|-------------|
@@ -103,15 +93,6 @@ Point-in-time snapshot settings.
 
 <ConfigTable section="snapshot" />
 
-Example:
-
-```toml
-[snapshot]
-snapshot-dir = "/var/lib/frogdb/snapshots"
-snapshot-interval-secs = 1800   # every 30 minutes
-max-snapshots = 3
-```
-
 ## Memory
 
 Memory management and eviction settings.
@@ -122,29 +103,20 @@ Memory management and eviction settings.
 
 <ConfigTable section="memory" />
 
-### Eviction Policies
+### Eviction policies
 
 | Policy | Description |
 |--------|-------------|
-| `noeviction` | Return error when memory limit is reached. |
+| `noeviction` | Return an error when the memory limit is reached. |
 | `allkeys-lru` | Evict least recently used keys. |
 | `allkeys-lfu` | Evict least frequently used keys. |
 | `allkeys-random` | Evict random keys. |
-| `volatile-lru` | Evict LRU keys with TTL set. |
-| `volatile-lfu` | Evict LFU keys with TTL set. |
-| `volatile-random` | Evict random keys with TTL set. |
-| `volatile-ttl` | Evict keys with shortest TTL. |
-| `tiered-lru` | Spill LRU keys to warm tier (requires `tiered-storage.enabled`). |
-| `tiered-lfu` | Spill LFU keys to warm tier (requires `tiered-storage.enabled`). |
-
-Example:
-
-```toml
-[memory]
-maxmemory = 4294967296   # 4 GB
-maxmemory-policy = "allkeys-lru"
-maxmemory-samples = 10
-```
+| `volatile-lru` | Evict LRU keys with a TTL set. |
+| `volatile-lfu` | Evict LFU keys with a TTL set. |
+| `volatile-random` | Evict random keys with a TTL set. |
+| `volatile-ttl` | Evict keys with the shortest TTL. |
+| `tiered-lru` | Spill LRU keys to the warm tier instead of deleting them (requires `tiered-storage.enabled`). |
+| `tiered-lfu` | Spill LFU keys to the warm tier instead of deleting them (requires `tiered-storage.enabled`). |
 
 ## Replication
 
@@ -165,7 +137,7 @@ primary-host = "primary.example.com"
 primary-port = 6379
 ```
 
-Example — configuring a primary with write quorum:
+Example — configuring a primary with a write quorum:
 
 ```toml
 [replication]
@@ -194,6 +166,36 @@ initial-nodes = ["10.0.1.2:16379", "10.0.1.3:16379"]
 auto-failover = true
 ```
 
+## HTTP
+
+Unified HTTP endpoint (default port <ConfigDefault path="http.port" />) serving Prometheus metrics at `/metrics` and the admin/debug API at `/admin/*` and `/debug/*`.
+
+```toml
+[http]
+```
+
+<ConfigTable section="http" />
+
+## Admin
+
+RESP-protocol listener for administrative commands, separate from the main client port.
+
+```toml
+[admin]
+```
+
+<ConfigTable section="admin" />
+
+## TLS
+
+TLS settings for the RESP, admin, HTTP, replication, and cluster-bus listeners.
+
+```toml
+[tls]
+```
+
+<ConfigTable section="tls" />
+
 ## Security
 
 Authentication settings.
@@ -204,14 +206,7 @@ Authentication settings.
 
 <ConfigTable section="security" />
 
-For fine-grained access control, see the ACL section below.
-
-Example:
-
-```toml
-[security]
-requirepass = "your-secure-password"
-```
+For fine-grained access control, see ACL below.
 
 ## ACL
 
@@ -233,16 +228,6 @@ Logging configuration.
 
 <ConfigTable section="logging" />
 
-Example:
-
-```toml
-[logging]
-level = "info"
-format = "json"
-file-path = "/var/log/frogdb/frogdb.log"
-output = "none"   # disable console when logging to file
-```
-
 ## Metrics
 
 Prometheus metrics and OTLP export settings.
@@ -257,24 +242,10 @@ Example:
 
 ```toml
 [metrics]
-enabled = true
-port = 9090
-
-# Optional: export to an OTLP collector
 otlp-enabled = true
 otlp-endpoint = "http://otel-collector:4317"
 otlp-interval-secs = 30
 ```
-
-## Admin
-
-HTTP admin API for management operations.
-
-```toml
-[admin]
-```
-
-<ConfigTable section="admin" />
 
 ## Slow Log
 
@@ -286,17 +257,9 @@ Slow query logging.
 
 <ConfigTable section="slowlog" />
 
-Example:
-
-```toml
-[slowlog]
-log-slower-than = 10000   # 10ms in microseconds
-max-len = 256
-```
-
 ## Blocking
 
-Limits for blocking commands (BLPOP, BRPOP, BLMOVE, etc.).
+Limits for blocking commands (`BLPOP`, `BRPOP`, `BLMOVE`, etc.).
 
 ```toml
 [blocking]
@@ -316,7 +279,7 @@ Very Lightweight Locking — controls the shard-level locking system.
 
 ## JSON
 
-Limits for the JSON data type (JSON.SET, JSON.GET, etc.).
+Limits for the JSON data type (`JSON.SET`, `JSON.GET`, etc.).
 
 ```toml
 [json]
@@ -326,7 +289,7 @@ Limits for the JSON data type (JSON.SET, JSON.GET, etc.).
 
 ## Tiered Storage
 
-Two-tier hot/warm storage that spills values to RocksDB instead of evicting.
+Two-tier hot/warm storage that spills values to RocksDB instead of evicting them.
 
 ```toml
 [tiered-storage]
@@ -345,15 +308,6 @@ OpenTelemetry-compatible distributed tracing.
 ```
 
 <ConfigTable section="tracing" />
-
-Example:
-
-```toml
-[tracing]
-enabled = true
-otlp-endpoint = "http://jaeger:4317"
-sampling-rate = 0.1   # sample 10% of requests
-```
 
 ## Compatibility
 
@@ -417,7 +371,7 @@ Diagnostic bundle generation for troubleshooting.
 
 ## MONITOR
 
-Settings for the MONITOR command.
+Settings for the `MONITOR` command.
 
 ```toml
 [monitor]
@@ -425,56 +379,11 @@ Settings for the MONITOR command.
 
 <ConfigTable section="monitor" />
 
----
-
-## Complete Example
-
-```toml
-# Production configuration
-
-[server]
-bind = "0.0.0.0"   # Listen on all interfaces in production
-port = 6379
-num-shards = 0
-max-clients = 10000
-
-[persistence]
-enabled = true
-data-dir = "/var/lib/frogdb"
-durability-mode = "periodic"
-sync-interval-ms = 1000
-compression = "lz4"
-
-[snapshot]
-snapshot-dir = "/var/lib/frogdb/snapshots"
-snapshot-interval-secs = 3600
-max-snapshots = 5
-
-[memory]
-maxmemory = 8589934592   # 8 GB
-maxmemory-policy = "allkeys-lru"
-
-[security]
-requirepass = "your-secure-password"
-
-[logging]
-level = "info"
-format = "json"
-file-path = "/var/log/frogdb/frogdb.log"
-
-[metrics]
-enabled = true
-port = 9090
-
-[slowlog]
-log-slower-than = 10000
-max-len = 256
-```
-
-## See Also
+## See also
 
 <CardGrid>
+  <LinkCard title="Configuration surfaces" description="File, env vars, CLI flags, and CONFIG SET precedence" href="/operations/configuration/" />
+  <LinkCard title="Example config file" description="A complete, generated config file" href="/reference/example-config/" />
   <LinkCard title="frogdb-server" description="Server command-line options" href="/reference/frogdb-server/" />
   <LinkCard title="frogctl" description="Operational CLI tool" href="/reference/frogctl/" />
-  <LinkCard title="Deployment" description="Production deployment guide" href="/operations/deployment/" />
 </CardGrid>

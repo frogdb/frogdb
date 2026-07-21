@@ -74,6 +74,8 @@ def test_workflow() -> Workflow:
                 helm="${{ steps.filter.outputs.helm }}",
                 python="${{ steps.filter.outputs.python }}",
                 workflow_gen="${{ steps.filter.outputs.workflow_gen }}",
+                website="${{ steps.filter.outputs.website }}",
+                testing="${{ steps.filter.outputs.testing }}",
             ),
             steps=[
                 checkout_step(),
@@ -109,6 +111,10 @@ def test_workflow() -> Workflow:
                               - 'Justfile'
                               - '.mise.toml'
                               - 'rust-toolchain.toml'
+                            website:
+                              - 'website/**'
+                            testing:
+                              - 'testing/**'
                         """),
                     ),
                 ),
@@ -361,7 +367,10 @@ def test_workflow() -> Workflow:
             name="Docs Generation Check",
             runs_on=RUNS_ON,
             needs="changes",
-            if_="needs.changes.outputs.rust == 'true'",
+            # Also gated on website changes: docs-gen's output (commands.json,
+            # config-reference.json, ...) lives under website/src/data, so a
+            # hand-edit there without regenerating must fail CI too.
+            if_="needs.changes.outputs.rust == 'true' || needs.changes.outputs.website == 'true'",
             steps=[
                 checkout_step(),
                 self_hosted_env_step(),
@@ -383,13 +392,68 @@ def test_workflow() -> Workflow:
             name="Compat Generation Check",
             runs_on=RUNS_ON,
             needs="changes",
-            if_="needs.changes.outputs.rust == 'true'",
+            # Also gated on website changes: compat-gen's output
+            # (compat-exclusions.json) lives under website/src/data, so a
+            # hand-edit there without regenerating must fail CI too.
+            if_="needs.changes.outputs.rust == 'true' || needs.changes.outputs.website == 'true'",
             steps=[
                 checkout_step(),
                 mise_setup_step(install_args=MISE_PYTHON_WORKFLOW_GEN),
                 run_step(
                     name="Check compatibility data is up to date",
                     run="just compat-gen-check",
+                ),
+            ],
+        ),
+    )
+
+    matrix_gen_check = w.job(
+        "matrix-gen-check",
+        Job(
+            name="Command Matrix Generation Check",
+            runs_on=RUNS_ON,
+            needs="changes",
+            # `just matrix-gen-check` runs docs-gen-check and compat-gen-check
+            # first (Justfile dependency), then joins their output with the
+            # vendored Redis command list — needs Rust (docs-gen) and
+            # Python/uv (compat-gen.py, matrix-gen.py) in the same job.
+            if_="needs.changes.outputs.rust == 'true' || needs.changes.outputs.website == 'true'",
+            steps=[
+                checkout_step(),
+                self_hosted_env_step(),
+                mise_setup_step(install_args=MISE_PYTHON_WORKFLOW_GEN),
+                rust_toolchain_step(),
+                libclang_step(),
+                cargo_cache_step(shared_key="stable"),
+                run_step(
+                    name="Check command matrix is up to date",
+                    run="just matrix-gen-check",
+                ),
+            ],
+        ),
+    )
+
+    docs_path_check = w.job(
+        "docs-path-check",
+        Job(
+            name="Docs Path Check",
+            runs_on=RUNS_ON,
+            needs="changes",
+            # Pure Python — no Rust build needed. Triggers on any change to a
+            # tree the docs reference by path (frogdb-server/frogctl via
+            # `rust`, frogdb-operator, testing/, and the docs themselves).
+            if_=(
+                "needs.changes.outputs.rust == 'true' || "
+                "needs.changes.outputs.operator == 'true' || "
+                "needs.changes.outputs.testing == 'true' || "
+                "needs.changes.outputs.website == 'true'"
+            ),
+            steps=[
+                checkout_step(),
+                mise_setup_step(install_args=MISE_PYTHON_WORKFLOW_GEN),
+                run_step(
+                    name="Check documentation code paths exist",
+                    run="just docs-path-check",
                 ),
             ],
         ),
@@ -473,6 +537,8 @@ def test_workflow() -> Workflow:
                 dashboard_lint,
                 docs_gen_check,
                 compat_gen_check,
+                matrix_gen_check,
+                docs_path_check,
                 workflow_gen_check,
                 python_lint,
                 helm_lint,

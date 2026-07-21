@@ -5,4 +5,5 @@ mod proptest_glob;
 mod proptest_json;
 mod proptest_serialization;
 mod proptest_types;
+mod shard_driver;
 mod tiered_storage;

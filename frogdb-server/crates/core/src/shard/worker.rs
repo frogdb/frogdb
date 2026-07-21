@@ -15,6 +15,7 @@ use crate::registry::CommandRegistry;
 use crate::replication::SharedBroadcaster;
 use crate::scripting::{ScriptExecutor, ScriptingConfig};
 use crate::store::HashMapStore;
+use crate::store::Store;
 
 use super::active_expiry::ActiveExpiryCoordinator;
 use super::builder::ShardWorkerBuilder;
@@ -227,6 +228,7 @@ impl ShardWorker {
             role_controller: self.identity.role_controller().cloned(),
             master_host: self.identity.master_host(),
             master_port: self.identity.master_port(),
+            master_link_up: self.identity.master_link_up(),
             effects: Default::default(),
         }
     }
@@ -463,6 +465,31 @@ impl ShardWorker {
             .all(|(key, watched_ver)| self.get_key_version(key) == *watched_ver)
     }
 
+    /// Lazily purge any watched keys whose TTL has elapsed, bumping the shard
+    /// version once if a removal occurred (F3).
+    ///
+    /// A key that expired only lazily is still physically present until some
+    /// access purges it, so the version-based [`Self::check_watches`] cannot
+    /// see the expiry on its own. Calling this at the EXEC watch-validation
+    /// seam makes the removal bump the shard version, so a watched key that
+    /// transitioned live -> gone aborts the transaction — matching active
+    /// expiry (`apply_expiry_effects`) and Redis/Valkey/Dragonfly. The store
+    /// stays version-ignorant: the removal is decided by
+    /// [`crate::store::Store::purge_if_expired`], the version bump lives here.
+    /// One bump per call regardless of how many keys purge, mirroring active
+    /// expiry's one-bump-per-cycle.
+    pub(crate) fn purge_expired_watches(&mut self, watches: &[(Bytes, u64)]) {
+        let mut purged = false;
+        for (key, _watched_ver) in watches {
+            if self.store.purge_if_expired(key) {
+                purged = true;
+            }
+        }
+        if purged {
+            self.increment_version();
+        }
+    }
+
     /// Check if this connection can execute during a continuation lock.
     #[allow(clippy::result_large_err)]
     pub(crate) fn can_execute_during_lock(&self, conn_id: u64) -> Result<(), Response> {
@@ -504,12 +531,16 @@ mod command_context_tests {
         let mut worker = minimal_worker();
         worker.set_is_replica(true);
         let target: std::net::SocketAddr = "10.0.0.5:6390".parse().unwrap();
-        worker.set_role_controller(Arc::new(FixedRoleController(Some(target))));
+        worker.set_role_controller(Arc::new(FixedRoleController(Some(target), true)));
 
         let ctx = worker.command_context(42, ProtocolVersion::Resp2);
         assert!(ctx.is_replica, "built context must report replica role");
         assert_eq!(ctx.master_host.as_deref(), Some("10.0.0.5"));
         assert_eq!(ctx.master_port, Some(6390));
+        assert!(
+            ctx.master_link_up,
+            "built context must report the role controller's link status"
+        );
         assert_eq!(ctx.conn_id, 42);
         assert!(ctx.command_registry.is_some(), "registry must be wired");
         assert!(
@@ -526,5 +557,6 @@ mod command_context_tests {
         assert!(!ctx.is_replica);
         assert_eq!(ctx.master_host, None);
         assert_eq!(ctx.master_port, None);
+        assert!(!ctx.master_link_up);
     }
 }

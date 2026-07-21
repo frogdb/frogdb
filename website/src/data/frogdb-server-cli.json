@@ -1,0 +1,162 @@
+{
+  "_generated": {
+    "warning": "DO NOT EDIT — this file is auto-generated from Rust source code",
+    "source": "frogdb-server/crates/server/src/cli.rs",
+    "regenerate": "just docs-gen"
+  },
+  "command": {
+    "name": "frogdb-server",
+    "about": "FrogDB - A high-performance Redis-compatible database",
+    "args": [
+      {
+        "name": "config",
+        "long": "config",
+        "short": "c",
+        "value_name": "FILE",
+        "help": "Path to configuration file"
+      },
+      {
+        "name": "bind",
+        "long": "bind",
+        "short": "b",
+        "value_name": "ADDR",
+        "help": "Bind address"
+      },
+      {
+        "name": "port",
+        "long": "port",
+        "short": "p",
+        "value_name": "PORT",
+        "help": "Listen port"
+      },
+      {
+        "name": "shards",
+        "long": "shards",
+        "short": "s",
+        "value_name": "N",
+        "help": "Number of shards (default: 1, \"auto\" = num_cpus)"
+      },
+      {
+        "name": "log_level",
+        "long": "log-level",
+        "short": "l",
+        "value_name": "LEVEL",
+        "help": "Log level (trace, debug, info, warn, error)"
+      },
+      {
+        "name": "log_format",
+        "long": "log-format",
+        "value_name": "FORMAT",
+        "help": "Log format (pretty, json)"
+      },
+      {
+        "name": "admin_bind",
+        "long": "admin-bind",
+        "value_name": "ADDR",
+        "help": "Admin bind address (overrides config)"
+      },
+      {
+        "name": "admin_port",
+        "long": "admin-port",
+        "value_name": "PORT",
+        "help": "Admin port (overrides config, implies admin.enabled=true)"
+      },
+      {
+        "name": "http_bind",
+        "long": "http-bind",
+        "value_name": "ADDR",
+        "help": "HTTP server bind address (overrides config)"
+      },
+      {
+        "name": "http_port",
+        "long": "http-port",
+        "value_name": "PORT",
+        "help": "HTTP server port (overrides config)"
+      },
+      {
+        "name": "http_token",
+        "long": "http-token",
+        "value_name": "TOKEN",
+        "help": "Bearer token for protected HTTP endpoints (/admin/*, /debug/*)"
+      },
+      {
+        "name": "tls_enabled",
+        "long": "tls-enabled",
+        "default": "false",
+        "help": "Enable TLS"
+      },
+      {
+        "name": "tls_cert_file",
+        "long": "tls-cert-file",
+        "value_name": "FILE",
+        "help": "Path to TLS certificate file (PEM)"
+      },
+      {
+        "name": "tls_key_file",
+        "long": "tls-key-file",
+        "value_name": "FILE",
+        "help": "Path to TLS private key file (PEM)"
+      },
+      {
+        "name": "tls_ca_file",
+        "long": "tls-ca-file",
+        "value_name": "FILE",
+        "help": "Path to TLS CA certificate file (PEM) for client verification"
+      },
+      {
+        "name": "tls_port",
+        "long": "tls-port",
+        "value_name": "PORT",
+        "help": "TLS listen port"
+      },
+      {
+        "name": "tls_require_client_cert",
+        "long": "tls-require-client-cert",
+        "value_name": "MODE",
+        "help": "Client certificate mode: none, optional, required"
+      },
+      {
+        "name": "tls_replication",
+        "long": "tls-replication",
+        "default": "false",
+        "help": "Encrypt replication connections with TLS"
+      },
+      {
+        "name": "tls_cluster",
+        "long": "tls-cluster",
+        "default": "false",
+        "help": "Encrypt cluster bus connections with TLS"
+      },
+      {
+        "name": "generate_config",
+        "long": "generate-config",
+        "default": "false",
+        "help": "Generate default configuration file"
+      },
+      {
+        "name": "intrinsic_latency",
+        "long": "intrinsic-latency",
+        "value_name": "SECONDS",
+        "help": "Run intrinsic latency test for N seconds and exit (standalone mode)"
+      },
+      {
+        "name": "startup_latency_check",
+        "long": "startup-latency-check",
+        "default": "false",
+        "help": "Run latency check at startup before accepting connections"
+      },
+      {
+        "name": "help",
+        "long": "help",
+        "short": "h",
+        "help": "Print help"
+      },
+      {
+        "name": "version",
+        "long": "version",
+        "short": "V",
+        "help": "Print version"
+      }
+    ]
+  }
+}

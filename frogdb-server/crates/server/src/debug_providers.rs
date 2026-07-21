@@ -213,7 +213,11 @@ mod tests {
         use std::sync::atomic::AtomicBool;
 
         struct NoopStream;
-        impl ReplicaStream for NoopStream {}
+        impl ReplicaStream for NoopStream {
+            fn link_up(&self) -> bool {
+                false
+            }
+        }
         struct NoopStreamer;
         impl ReplicaStreamer for NoopStreamer {
             fn start(&self, _primary: SocketAddr) -> Box<dyn ReplicaStream> {
@@ -267,7 +271,11 @@ mod tests {
         use std::sync::atomic::AtomicBool;
 
         struct NoopStream;
-        impl ReplicaStream for NoopStream {}
+        impl ReplicaStream for NoopStream {
+            fn link_up(&self) -> bool {
+                false
+            }
+        }
         struct NoopStreamer;
         impl ReplicaStreamer for NoopStreamer {
             fn start(&self, _primary: SocketAddr) -> Box<dyn ReplicaStream> {

@@ -23,7 +23,7 @@ The command execution pipeline, Command trait interface, arity validation, comma
 
 5. Key routing check
    +-- SetCommand.keys(args) -> ["mykey"]
-   +-- hash("mykey") % num_shards -> Shard M
+   +-- CRC16("mykey") % 16384 % num_shards -> Shard M
 
 6. If M == N (local):
    +-- Execute directly on local store
@@ -49,7 +49,52 @@ The command execution pipeline, Command trait interface, arity validation, comma
 
 ## Command Trait
 
-Each command implements a `Command` trait that provides: name, arity, flags, key extraction, execution strategy, WAL strategy, and an execute method.
+Each command is a type implementing the `Command` trait
+(`frogdb-server/crates/core/src/command.rs`). The trait has two required
+methods and derives everything else from a single declarative specification:
+
+```rust
+pub trait Command: Send + Sync {
+    /// The single source of truth for this command's mechanics.
+    fn spec(&self) -> &'static CommandSpec;
+
+    /// Execute the command against the local shard.
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes])
+        -> Result<Response, CommandError>;
+
+    // name(), arity(), flags(), execution_strategy(), wal_strategy(),
+    // keys(), keys_with_flags() are default methods that read from spec().
+}
+```
+
+`CommandSpec` is a `'static` struct carrying the command's `name`, `arity`,
+`flags`, `strategy` (execution strategy), key specification, per-key access
+specification, WAL strategy, keyspace-event specification, and related routing
+metadata. Because the derived accessors all read from `spec()`, a command
+declares its mechanics once. For example, `GetCommand`:
+
+```rust
+impl Command for GetCommand {
+    fn spec(&self) -> &'static CommandSpec {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "GET",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            strategy: ExecutionStrategy::Standard,
+            // ...access, wal, event, lookup, mutation, requires_same_slot
+        };
+        &SPEC
+    }
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes])
+        -> Result<Response, CommandError> { /* ... */ }
+}
+```
+
+Connection-level commands (AUTH, HELLO, CONFIG, and other commands handled
+directly by the connection handler rather than routed to a shard) implement the
+sibling `ConnectionCommand` trait, which likewise carries a `CommandSpec` and an
+`execute` against a connection context. See [Command Registry](#command-registry).
 
 ---
 
@@ -61,11 +106,16 @@ Error handling uses a `CommandError` enum with variants for wrong arity, wrong t
 
 ### Arity
 
+Arity is checked against the argument count **excluding** the command name (the
+name is held separately on `ParsedCommand`, and validation calls
+`arity.check(args.len())`). This is the opposite convention to Redis's
+`COMMAND` output, which includes the command token.
+
 | Mode | Description | Example |
 |------|-------------|---------|
-| Fixed(n) | Exactly n arguments (including command name) | GET = Fixed(2) |
-| AtLeast(n) | Minimum n arguments | DEL = AtLeast(2) |
-| Range(min, max) | Between min and max arguments | SET = Range(3, 7) |
+| `Fixed(n)` | Exactly n arguments | `GET key` = `Fixed(1)` |
+| `AtLeast(n)` | Minimum n arguments | `DEL key [key ...]` = `AtLeast(1)` |
+| `Range { min, max }` | Between min and max arguments inclusive | `EXPIRE key seconds [NX\|XX\|GT\|LT]` = `Range { min: 2, max: 4 }` |
 
 ---
 
@@ -88,7 +138,10 @@ Error handling uses a `CommandError` enum with variants for wrong arity, wrong t
 | ADMIN | Administrative command | Restricted by ACL +@admin |
 | NONDETERMINISTIC | Output varies between runs | Affects replication mode |
 | NO_PROPAGATE | Not replicated to replicas | Connection-local state changes |
-| TRACKS_KEYSPACE | Triggers keyspace notifications | Used by client tracking |
+| MOVABLEKEYS | Key positions depend on argument values | Keys resolved by inspecting args (SORT, EVAL, XREAD); reported by `COMMAND INFO` |
+
+Flags are a `bitflags` set (`CommandFlags`) in
+`frogdb-server/crates/core/src/command.rs`.
 
 ### Execution Strategy
 
@@ -151,7 +204,7 @@ Commands with subcommands (CLIENT, CONFIG, ACL, etc.) use hierarchical arity val
 | CLIENT | GETNAME, SETNAME, ID, INFO, LIST, KILL, PAUSE, UNPAUSE, REPLY, NO-EVICT |
 | CONFIG | GET, SET, REWRITE, RESETSTAT |
 | ACL | LIST, GETUSER, SETUSER, DELUSER, CAT, GENPASS, WHOAMI, LOG, LOAD, SAVE |
-| DEBUG | SLEEP, STRUCTSIZE, HASHING, DUMP-VLL-QUEUE, DUMP-CONNECTIONS |
+| DEBUG | OBJECT, SLEEP, STRUCTSIZE, HASHING, SET-ACTIVE-EXPIRE, RELOAD, LOCKTABLE, WAITQUEUE, VLL |
 | MEMORY | USAGE, DOCTOR, STATS, MALLOC-SIZE, PURGE |
 | SLOWLOG | GET, LEN, RESET |
 | CLUSTER | INFO, NODES, SLOTS, MEET, ADDSLOTS, DELSLOTS, FAILOVER, ... |
@@ -163,26 +216,48 @@ Commands with subcommands (CLIENT, CONFIG, ACL, etc.) use hierarchical arity val
 
 ## Command Registry
 
-Commands are registered at startup in a static hashmap:
+Commands are registered at startup into a `CommandRegistry`
+(`frogdb-server/crates/core/src/registry.rs`), not a `lazy_static` map. The
+server calls `frogdb_commands::register_all(&mut registry)`
+(`frogdb-server/crates/commands/src/lib.rs`, invoked from the server's
+`register.rs`), which registers each command struct by name (case-insensitive):
 
 ```rust
-lazy_static! {
-    static ref COMMANDS: HashMap<&'static str, Box<dyn Command>> = {
-        let mut m = HashMap::new();
-        m.insert("GET", Box::new(GetCommand));
-        m.insert("SET", Box::new(SetCommand));
-        m.insert("DEL", Box::new(DelCommand));
-        // ... register all commands
-        m
-    };
-}
-
-fn dispatch(cmd: &ParsedCommand) -> Result<Response, Error> {
-    let handler = COMMANDS.get(cmd.name.to_uppercase().as_str())
-        .ok_or(Error::UnknownCommand)?;
-    handler.execute(cmd)
+pub fn register_all(registry: &mut CommandRegistry) {
+    registry.register(basic::GetCommand);
+    registry.register(basic::SetCommand);
+    registry.register(basic::DelCommand);
+    // ... every command
 }
 ```
+
+Each registry entry is a `CommandEntry` (an alias for `CommandImpl`), a tagged
+union so that a registered command carries **exactly one** execution path and
+there is no never-called stub:
+
+```rust
+pub enum CommandImpl {
+    /// Shard-local executor: execute(&mut CommandContext).
+    /// Standard, ScatterGather, Blocking, and ServerWide commands.
+    Shard(Arc<dyn Command>),
+    /// Connection-level executor: execute(&ConnCtx).
+    /// Migrated connection-level commands (e.g. CONFIG).
+    Connection(&'static dyn ConnectionCommand),
+}
+```
+
+`register()` inserts a `Shard` entry; `register_connection()` inserts a
+`Connection` entry. In debug builds, registration validates that a command's
+declared `ExecutionStrategy` agrees with its entry variant — a `Connection`
+executor must declare `ExecutionStrategy::ConnectionLevel` — so a migrated
+command's never-reached path is unrepresentable rather than a latent routing
+bug. Lookup (`get_entry`) upper-cases the command name.
+
+This registry is the authoritative surface of the command set. The generated
+command-compatibility matrix (work item S1, `commands-gen`) is produced by
+dumping `register_all()` into `commands.json`; the matrix is **derived** from the
+registry, not hand-maintained. Command counts therefore live in the generated
+matrix, not in this page.
 
 ---
 
@@ -204,29 +279,39 @@ Most commands expect a specific type and return an error if the key holds a diff
 
 ## CommandContext Definition
 
-The `CommandContext` struct provides commands access to execution state:
+The `CommandContext` struct (`frogdb-server/crates/core/src/command.rs`)
+provides commands access to execution state. Its current shape:
 
 ```rust
 pub struct CommandContext<'a> {
     pub store: &'a mut dyn Store,
-    pub shard_senders: &'a Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    pub shard_senders: &'a Arc<Vec<ShardSender>>,
     pub shard_id: usize,
     pub num_shards: usize,
     pub conn_id: u64,
     pub protocol_version: ProtocolVersion,
     pub replication_tracker: Option<&'a Arc<ReplicationTrackerImpl>>,
-    pub replication_state: Option<&'a Arc<RwLock<ReplicationState>>>,
     pub cluster_state: Option<&'a Arc<ClusterState>>,
     pub node_id: Option<u64>,
     pub raft: Option<&'a Arc<ClusterRaft>>,
     pub network_factory: Option<&'a Arc<ClusterNetworkFactory>>,
     pub quorum_checker: Option<&'a dyn QuorumChecker>,
     pub command_registry: Option<&'a Arc<CommandRegistry>>,
-    pub dirty_delta: i64,
+    pub is_replica: bool,
+    pub is_replica_flag: Option<Arc<AtomicBool>>,
+    pub role_controller: Option<Arc<dyn RoleController>>,
+    pub master_host: Option<String>,
+    pub master_port: Option<u16>,
+    pub effects: CommandEffects,
 }
 ```
 
-Most commands only need `store`. The shard_senders field is used by multi-key commands that need scatter-gather coordination.
+Most commands only need `store`. `shard_senders` is used by multi-key commands
+that coordinate scatter-gather; the cluster/replication fields are `None` unless
+those subsystems are enabled. `effects` is the command's out-buffer for
+everything it produces besides the `Response` (keyspace events, WAL actions),
+drained by the execution seam. This struct changes as features land; treat the
+listing as current-shape, not stable API.
 
 ---
 

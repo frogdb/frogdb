@@ -22,8 +22,9 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, LookupSpec, WaiterWake, WalStrategy,
+    ADVERTISED_REDIS_VERSION, AccessSpec, Arity, Command, CommandContext, CommandError,
+    CommandFlags, CommandSpec, ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec,
+    LookupSpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::collections::HashSet;
@@ -163,7 +164,7 @@ fn build_server_info(ctx: &CommandContext) -> String {
     let mut info = format!(
         "# Server\r\n\
          frogdb_version:{}\r\n\
-         redis_version:7.2.0\r\n\
+         redis_version:{}\r\n\
          redis_git_sha1:00000000\r\n\
          redis_git_dirty:0\r\n\
          redis_build_id:0\r\n\
@@ -188,6 +189,7 @@ fn build_server_info(ctx: &CommandContext) -> String {
          config_file:\r\n\
          io_threads_active:0\r\n",
         env!("CARGO_PKG_VERSION"),
+        ADVERTISED_REDIS_VERSION,
         std::env::consts::OS,
         std::env::consts::FAMILY,
         std::env::consts::ARCH,
@@ -431,7 +433,10 @@ fn build_replication_info(ctx: &CommandContext) -> String {
             if let Some(port) = ctx.master_port {
                 info.push_str(&format!("master_port:{}\r\n", port));
             }
-            info.push_str("master_link_status:up\r\n");
+            info.push_str(&format!(
+                "master_link_status:{}\r\n",
+                if ctx.master_link_up { "up" } else { "down" }
+            ));
         }
 
         info.push_str(&format!(

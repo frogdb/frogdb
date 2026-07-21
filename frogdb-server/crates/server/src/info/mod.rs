@@ -297,6 +297,10 @@ pub struct ReplicationSnapshot {
     pub master_host: Option<String>,
     /// Primary port when running as a replica.
     pub master_port: Option<u16>,
+    /// Whether the replication link to the primary is connected and
+    /// streaming, when running as a replica. Rendered as
+    /// `master_link_status:up`/`down`.
+    pub master_link_up: bool,
     /// Failover-continuity window: the previous primary's replication id
     /// (rendered as `master_replid2`) paired with the offset boundary up to
     /// which it stays valid for PSYNC (rendered as `second_repl_offset`).
@@ -720,6 +724,7 @@ mod tests {
             wal_lag: None,
             master_host: None,
             master_port: None,
+            master_link_up: false,
         }
     }
 

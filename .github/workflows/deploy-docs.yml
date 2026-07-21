@@ -23,9 +23,6 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: website
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -33,11 +30,22 @@ jobs:
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
         install: 'true'
-        install_args: node bun
+        install_args: node bun python uv just
         cache: 'true'
         experimental: 'true'
-    - run: bun install
-    - run: bun run build
+    - name: Install Rust 1.92.0
+      uses: dtolnay/rust-toolchain@1.92.0
+    - name: Install libclang
+      if: runner.environment != 'self-hosted'
+      run: sudo apt-get install -y libclang-dev
+    - name: Cache Rust build artifacts
+      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      with:
+        shared-key: stable
+    - name: Install site dependencies
+      run: just docs-install
+    - name: Build documentation site
+      run: just docs-build
     - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b
       with:
         path: website/dist

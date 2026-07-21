@@ -2735,6 +2735,86 @@ async fn test_info_replication_replica_format() {
     }
 }
 
+/// `master_link_status` must track the real replication link, not a
+/// hardcoded literal: `up` once the replica is connected and streaming from
+/// its primary, and never `up` while no connection has ever been
+/// established.
+#[tokio::test]
+async fn test_info_replication_master_link_status_tracks_connection() {
+    let config = TestServerConfig {
+        persistence: true,
+        ..Default::default()
+    };
+    let (_primary, replica) = start_primary_replica_pair(config).await;
+
+    // Poll for the handshake to complete and the link to report up — avoids a
+    // flaky fixed sleep on slower CI hosts.
+    let mut link_status = None;
+    for _ in 0..50 {
+        let response = replica.send("INFO", &["replication"]).await;
+        if let Some(info) = parse_info_replication(&response)
+            && info.get("role").map(String::as_str) == Some("slave")
+        {
+            link_status = info.get("master_link_status").cloned();
+            if link_status.as_deref() == Some("up") {
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        link_status.as_deref(),
+        Some("up"),
+        "replica should report master_link_status:up once streaming"
+    );
+}
+
+/// Complementary case: a replica booted against a primary address nobody is
+/// listening on reports `role:slave` (the boot config still flags it as a
+/// replica) but must never claim `master_link_status:up` — the connection
+/// never reaches the Streaming state. Guards against the field defaulting to
+/// (or getting stuck at) "up" before any real link exists.
+#[tokio::test]
+async fn test_info_replication_master_link_status_down_before_connected() {
+    // Grab a port nothing is listening on: bind then immediately drop the
+    // listener so the address is free but unreachable.
+    let unused_port = {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ephemeral port");
+        listener.local_addr().expect("local_addr").port()
+    };
+
+    let mut config = TestServerConfig {
+        persistence: true,
+        ..Default::default()
+    };
+    config.replication_primary_host = Some("127.0.0.1".to_string());
+    config.replication_primary_port = Some(unused_port);
+    let replica = TestServer::start_with_config(config, ServerRole::Replica).await;
+
+    // Give the reconnect loop several attempts against the unreachable
+    // address; the link must never be reported "up".
+    for _ in 0..10 {
+        let response = replica.send("INFO", &["replication"]).await;
+        if let Some(info) = parse_info_replication(&response) {
+            assert_eq!(
+                info.get("role").map(String::as_str),
+                Some("slave"),
+                "boot-configured replica should report role:slave even before connecting"
+            );
+            assert_ne!(
+                info.get("master_link_status").map(String::as_str),
+                Some("up"),
+                "replica must not report master_link_status:up before ever connecting"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    replica.shutdown().await;
+}
+
 /// Tests that writes to a fully-connected replica return READONLY error.
 ///
 /// NOTE: The replica may accept writes if the replication handshake hasn't

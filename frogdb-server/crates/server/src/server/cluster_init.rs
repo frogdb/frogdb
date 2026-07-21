@@ -760,6 +760,9 @@ mod tests {
         fn primary_target(&self) -> Option<SocketAddr> {
             self.demotes.lock().unwrap().last().copied()
         }
+        fn master_link_up(&self) -> bool {
+            false
+        }
     }
 
     fn addr(s: &str) -> SocketAddr {

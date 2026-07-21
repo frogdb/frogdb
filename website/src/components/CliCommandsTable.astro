@@ -1,0 +1,51 @@
+---
+/**
+ * Renders a top-level command list (Command, Description) from an
+ * auto-generated `<binary>-cli.json` file's `subcommands` array.
+ *
+ * Usage in MDX:
+ *   import CliCommandsTable from '../../components/CliCommandsTable.astro';
+ *   <CliCommandsTable source="frogctl-cli" />
+ */
+
+interface Props {
+  source: 'frogctl-cli';
+}
+
+const { source } = Astro.props;
+
+import frogctlCli from '../data/frogctl-cli.json';
+
+const SOURCES: Record<string, any> = {
+  'frogctl-cli': frogctlCli,
+};
+
+const data = SOURCES[source];
+
+if (!data) {
+  throw new Error(`CliCommandsTable: unknown source "${source}". Available: ${Object.keys(SOURCES).join(', ')}`);
+}
+
+const subcommands = (data.command.subcommands ?? []) as any[];
+
+if (subcommands.length === 0) {
+  throw new Error(`CliCommandsTable: source "${source}" has no subcommands.`);
+}
+---
+
+<table>
+  <thead>
+    <tr>
+      <th>Command</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    {subcommands.map((cmd: any) => (
+      <tr>
+        <td><code>{cmd.name}</code></td>
+        <td>{cmd.about ?? ''}</td>
+      </tr>
+    ))}
+  </tbody>
+</table>

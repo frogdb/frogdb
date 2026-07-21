@@ -6944,7 +6944,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "Total keys demoted to the cold tier instead of evicted",
+      "description": "Total keys spilled to the cold tier instead of evicted",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -7020,13 +7020,13 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (shard, policy) (rate(frogdb_tiered_demotions_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval]))",
+          "expr": "sum by (shard, policy) (rate(frogdb_tiered_spills_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval]))",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Frogdb Tiered Demotions Total",
+      "title": "Frogdb Tiered Spills Total",
       "type": "timeseries"
     },
     {
@@ -7034,7 +7034,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "Total bytes freed by demoting keys to the cold tier",
+      "description": "Total bytes freed by spilling keys to the cold tier",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -7110,13 +7110,13 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (shard) (rate(frogdb_tiered_bytes_demoted_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval]))",
+          "expr": "sum by (shard) (rate(frogdb_tiered_bytes_spilled_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval]))",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Frogdb Tiered Bytes Demoted Total",
+      "title": "Frogdb Tiered Bytes Spilled Total",
       "type": "timeseries"
     },
     {

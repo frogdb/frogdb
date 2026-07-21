@@ -7,14 +7,14 @@ sidebar:
 High-level component-interaction diagrams showing how requests move between major architectural components.
 
 **Key source files:**
-- `crates/server/src/acceptor.rs` -- `Acceptor`
-- `crates/server/src/connection.rs` -- `ConnectionHandler`
-- `crates/core/src/shard.rs` -- `ShardWorker`, `ShardMessage`, `ScatterOp`
-- `crates/server/src/scatter/executor.rs` -- `ScatterGatherExecutor`
-- `crates/vll/src/` -- `VllCoordinator`, `LockTable`, `TransactionQueue`
-- `crates/core/src/pubsub.rs` -- `PubSubMessage`, `ShardSubscriptions`
-- `crates/server/src/replication/` -- `PrimaryReplicationHandler`, `ReplicaReplicationHandler`
-- `crates/core/src/cluster/` -- `ClusterRaft`, `ClusterStateMachine`, `ClusterState`
+- `frogdb-server/crates/server/src/acceptor.rs` -- `Acceptor`
+- `frogdb-server/crates/server/src/connection.rs` -- `ConnectionHandler`
+- `frogdb-server/crates/core/src/shard/` -- `ShardWorker` (`worker.rs`, `event_loop.rs`), `ShardMessage` (`message.rs`), scatter op types (`types.rs`), key routing (`partition.rs`)
+- `frogdb-server/crates/server/src/scatter/executor.rs` -- `ScatterGatherExecutor`
+- `frogdb-server/crates/vll/src/` -- `VllCoordinator<S, M>` (`coordinator.rs`), `LockTable` (`lock_table.rs`), transaction queue (`queue.rs`)
+- `frogdb-server/crates/core/src/pubsub.rs` -- `PubSubMessage`, `ShardSubscriptions`
+- `frogdb-server/crates/replication/src/` -- `PrimaryReplicationHandler`, `ReplicaReplicationHandler`, `ReplicationFrame` (`frame.rs`); `ReplicaCommandExecutor` lives in `frogdb-server/crates/server/src/replication/executor.rs`
+- `frogdb-server/crates/cluster/src/` -- `ClusterStateMachine`, `ClusterState` (`state.rs`), `ClusterCommand` (`types.rs`); `ClusterRaft` is defined in `frogdb-server/crates/cluster/src/lib.rs`
 
 ---
 

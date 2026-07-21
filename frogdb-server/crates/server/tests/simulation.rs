@@ -3118,3 +3118,634 @@ fn test_role_command_standalone() {
 
     sim.run().unwrap();
 }
+
+// =============================================================================
+// F3 — WATCH lazy-expiry false negative (real connection path)
+// =============================================================================
+
+/// Real-path regression guard for production bug F3 (now fixed): a watched key
+/// that expires only *lazily* inside the WATCH window MUST abort the following
+/// `EXEC`.
+///
+/// Correct behavior: a watched key that transitions live -> gone (even via
+/// passive/lazy expiry) is a modification of the watch, so `EXEC` must ABORT.
+/// Before the F3 fix, FrogDB's lazy expiry (`purge_if_expired` -> store
+/// `check_and_delete_expired`) never bumped the per-shard WATCH version, while
+/// active expiry (`apply_expiry_effects` -> `increment_version`,
+/// event_loop.rs ~:214) did — so a key that expired only lazily inside the
+/// WATCH window did not dirty the shard WATCH version and `EXEC` committed over
+/// the dead key (the false negative). Task 9 closed the seam: EXEC's own watch
+/// validation now purges expired watched keys and bumps the version
+/// (`purge_expired_watches`, worker.rs), so `EXEC` aborts. This test verifies
+/// that on the full connection path (turmoil), proving the fix is not a
+/// shard-driver artifact.
+///
+/// Reference behavior (Redis 7/8, Valkey, DragonflyDB all ABORT here):
+/// - Redis: `lookupKey` -> `expireIfNeeded` -> `deleteExpiredKeyAndPropagate`
+///   -> `signalModifiedKey` (now `keyModified`) -> `touchWatchedKey`
+///   (multi.c). Fixed in redis/redis PR #7920 for issue #7918 ("WATCH no
+///   longer ignores keys which have expired for MULTI/EXEC"); the
+///   `keyModified` -> `touchWatchedKey` seam lives in db.c.
+/// - Valkey mirrors the same `keyModified`/`touchWatchedKey` seam.
+/// - DragonflyDB also aborts a transaction whose watched key expired.
+///
+/// CRITICAL ORDERING (why PEXPIRE runs BEFORE WATCH): `EXPIRE`/`PEXPIRE` on a
+/// live key is itself a write that bumps the shard version. If the TTL were set
+/// *after* `WATCH`, PEXPIRE would dirty the watch directly and `EXEC` would
+/// abort for that reason — masking the lazy-expiry seam entirely. FrogDB
+/// already tests exactly that (redis-regression `multi_tcl.rs`
+/// `tcl_watch_considers_expire_on_watched_key`: SET; WATCH; EXPIRE; EXEC ->
+/// aborted). To isolate F3 we set the TTL first, `WATCH` the still-live key
+/// (snapshotting the post-PEXPIRE version), then let it expire *lazily* inside
+/// the window with no touch and no active sweep. The only thing that removes
+/// `k` in the window is the lazy check under test.
+///
+/// Determinism: active expiry is disabled up front with
+/// `DEBUG SET-ACTIVE-EXPIRE 0` (debug.rs -> ShardMessage::SetActiveExpire), so
+/// no sim sweep tick can race the TTL-elapse-to-EXEC window. Key expiry is
+/// evaluated against the real wall clock (`std::time::Instant`), not turmoil's
+/// virtual clock, so the window is advanced with a real 50ms `std::thread::sleep`
+/// (see the call site) — a `tokio::time::sleep` would advance only virtual time
+/// and leave k physically live. 50ms >> the 10ms TTL gives a wide, robust margin.
+#[test]
+fn watch_lazy_expiry_false_negative_realpath() {
+    // Verifies the FIXED behavior on the real connection path: an `EXEC` over a
+    // lazily-expired watched key ABORTS. Redis/Valkey/Dragonfly all ABORT here.
+    let mut sim = Builder::new()
+        .tick_duration(Duration::from_millis(1))
+        .build();
+
+    // Single shard: WATCH is validated against the per-shard version, so a
+    // single-shard server isolates the lazy-vs-active version-bump seam.
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
+
+    // Captures the exact raw bytes of the EXEC reply for the report + assertion.
+    let exec_reply: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let exec_reply_client = exec_reply.clone();
+
+    sim.client("client1", async move {
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        // Read exactly one reply for a command and return the raw bytes.
+        async fn round_trip(
+            stream: &mut TcpStream,
+            buf: &mut [u8],
+            cmd: &Bytes,
+        ) -> Result<Vec<u8>, BoxError> {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            stream.write_all(cmd).await?;
+            let n = stream.read(buf).await?;
+            Ok(buf[..n].to_vec())
+        }
+
+        // Disable active expiry so no sweep can race the window; only the lazy
+        // path may remove k.
+        let reply = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"DEBUG", b"SET-ACTIVE-EXPIRE", b"0"]),
+        )
+        .await?;
+        assert!(
+            matches!(parse_simple_response(&reply), OperationResult::Ok),
+            "DEBUG SET-ACTIVE-EXPIRE 0 should reply +OK, got {reply:?}"
+        );
+
+        // SET k v
+        let reply = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"SET", b"k", b"v"]),
+        )
+        .await?;
+        assert!(
+            matches!(parse_simple_response(&reply), OperationResult::Ok),
+            "SET k v should reply +OK, got {reply:?}"
+        );
+
+        // PEXPIRE k 10 — set the TTL BEFORE watching (see CRITICAL ORDERING in
+        // the doc comment): this write bumps the shard version now, so the
+        // subsequent WATCH snapshots the post-PEXPIRE version and PEXPIRE cannot
+        // be what dirties the watch. k is still live (10ms TTL).
+        let reply = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"PEXPIRE", b"k", b"10"]),
+        )
+        .await?;
+        assert!(
+            matches!(parse_simple_response(&reply), OperationResult::Integer(1)),
+            "PEXPIRE k 10 should reply :1, got {reply:?}"
+        );
+
+        // WATCH k while still live — records the current (post-PEXPIRE) per-shard
+        // version for k.
+        let reply = round_trip(&mut stream, &mut buf, &encode_command(&[b"WATCH", b"k"])).await?;
+        assert!(
+            matches!(parse_simple_response(&reply), OperationResult::Ok),
+            "WATCH k should reply +OK, got {reply:?}"
+        );
+
+        // Advance WALL-CLOCK time well past the 10ms TTL WITHOUT touching k and
+        // (with active expiry off) without any sweep removing it. Key expiry is
+        // evaluated against `std::time::Instant::now()` (KeyMetadata::is_expired,
+        // types/src/types/mod.rs), the real wall clock — NOT tokio's virtual
+        // clock. A `tokio::time::sleep` under turmoil advances only virtual time
+        // (~microseconds of real time), so it would leave k physically live and
+        // EXEC would commit over a *live* key — not the F3 scenario at all. We
+        // therefore block the sim thread for 50ms of REAL time (50ms >> 10ms TTL,
+        // a wide deterministic margin): k is now logically expired but still
+        // physically present, because active expiry is off and nothing has
+        // accessed it. Only a lazy check will remove it.
+        std::thread::sleep(Duration::from_millis(50));
+
+        // MULTI ; SET k x ; EXEC — none of the queued commands touch k before
+        // EXEC runs, and the correct outcome is an ABORT because k expired
+        // (live -> gone) while watched.
+        let reply = round_trip(&mut stream, &mut buf, &encode_command(&[b"MULTI"])).await?;
+        assert!(
+            matches!(parse_simple_response(&reply), OperationResult::Ok),
+            "MULTI should reply +OK, got {reply:?}"
+        );
+
+        let reply = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"SET", b"k", b"x"]),
+        )
+        .await?;
+        assert_eq!(
+            reply.as_slice(),
+            b"+QUEUED\r\n",
+            "SET k x inside MULTI should reply +QUEUED, got {reply:?}"
+        );
+
+        let reply = round_trip(&mut stream, &mut buf, &encode_command(&[b"EXEC"])).await?;
+        *exec_reply_client.lock().unwrap() = reply;
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+
+    // Assert the FIXED behavior on the real connection path.
+    let reply = exec_reply.lock().unwrap().clone();
+    assert!(!reply.is_empty(), "client never captured an EXEC reply");
+
+    // FrogDB signals a WATCH abort with `Response::null()`, which serializes to
+    // the RESP2 null *bulk* string `$-1\r\n` (not the null *array* `*-1\r\n`
+    // Redis uses for an aborted EXEC — a known encoding divergence tracked
+    // separately; the abort semantics are what F3 is about).
+    const ABORTED: &[u8] = b"$-1\r\n";
+
+    // F3 FIXED: EXEC's watch validation lazily purges the expired watched key
+    // (`purge_expired_watches`, worker.rs), bumping the per-shard WATCH version
+    // so the watch is invalidated and EXEC ABORTS over the dead key — matching
+    // Redis / Valkey / Dragonfly. Before the fix FrogDB committed the queued
+    // `SET k x` (`*1\r\n+OK\r\n`).
+    assert_eq!(
+        reply.as_slice(),
+        ABORTED,
+        "F3 regression guard: expected FrogDB to ABORT the transaction over the \
+         lazily-expired watched key (WATCH-abort null `$-1\\r\\n`). Got {reply:?}. \
+         A committed `*1\\r\\n+OK\\r\\n` here means the F3 lazy-expiry watch seam \
+         has regressed.",
+    );
+}
+
+/// F1 real-path (D8): active-expiry (TTL) must drain a blocked XREADGROUP waiter
+/// to `NOGROUP`, exactly as the DEL write path does.
+///
+/// The bug: `apply_expiry_effects` (shard/event_loop.rs) applied every other
+/// side effect of an active-expiry cycle (keyspace notifications, tracking
+/// invalidation, metrics, version bump) but never touched the wait queue. A
+/// blocked XREADGROUP waiter on a stream key whose TTL then elapsed was left
+/// parked forever, waking only at its own BLOCK timeout with the null-array
+/// timeout reply — whereas `DEL st` drains the same waiter to `NOGROUP` via
+/// `drain_stream_waiters_with_error` (shard/blocking.rs). The two key-death
+/// paths diverged. The fix drains those waiters in `apply_expiry_effects`, so
+/// TTL/active-expiry and DEL converge to the same `NOGROUP`.
+///
+/// Real-path shape (Task-8 dual-clock conventions): key expiry is evaluated
+/// against the real wall clock (`std::time::Instant`), not turmoil's virtual
+/// clock, so the 10ms TTL is elapsed with a real 50ms `std::thread::sleep`
+/// (a `tokio::time::sleep` would advance only virtual time and leave `st`
+/// physically live). The active-expiry sweep itself runs on the shard's 100ms
+/// virtual-time interval, so a `tokio::time::sleep` window after the real elapse
+/// lets a sweep fire while `st` is genuinely past its TTL.
+#[test]
+fn xreadgroup_ttl_no_nogroup_realpath() {
+    let mut sim = Builder::new()
+        .tick_duration(Duration::from_millis(1))
+        .build();
+
+    // Single shard: the wait queue and active-expiry cycle are per-shard.
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
+
+    // Captures the raw bytes of the blocked XREADGROUP reply.
+    let group_reply: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let group_reply_client = group_reply.clone();
+
+    // Gate the blocker so it registers its XREADGROUP only after the consumer
+    // group exists (otherwise the read would itself get NOGROUP immediately and
+    // never reach the blocked state under test).
+    let group_ready = Arc::new(tokio::sync::Notify::new());
+    let group_ready_setup = group_ready.clone();
+    let group_ready_block = group_ready.clone();
+
+    // Blocker: parks on `XREADGROUP ... BLOCK 5000 ... >` and records the reply.
+    sim.client("blocker", async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        // Wait until the group has been created.
+        group_ready_block.notified().await;
+
+        // The group is created at `$` (last-delivered = top), so `>` has no new
+        // entries and this blocks. A finite 5000ms virtual BLOCK deadline
+        // guarantees termination even pre-fix, where the waiter is never drained
+        // and only the timeout ends it (that path yields the null-array reply).
+        stream
+            .write_all(&encode_command(&[
+                b"XREADGROUP",
+                b"GROUP",
+                b"g",
+                b"c",
+                b"BLOCK",
+                b"5000",
+                b"STREAMS",
+                b"st",
+                b">",
+            ]))
+            .await?;
+        let n = stream.read(&mut buf).await?;
+        *group_reply_client.lock().unwrap() = buf[..n].to_vec();
+        Ok(())
+    });
+
+    // Killer: builds the stream+group, sets a short TTL, elapses it in real
+    // wall-clock time, then lets an active-expiry sweep run.
+    sim.client("killer", async move {
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        async fn round_trip(
+            stream: &mut TcpStream,
+            buf: &mut [u8],
+            cmd: &Bytes,
+        ) -> Result<Vec<u8>, BoxError> {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            stream.write_all(cmd).await?;
+            let n = stream.read(buf).await?;
+            Ok(buf[..n].to_vec())
+        }
+
+        // XADD st 1-1 f v — one entry so the stream exists.
+        round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"XADD", b"st", b"1-1", b"f", b"v"]),
+        )
+        .await?;
+
+        // XGROUP CREATE st g $ — last-delivered = top entry, so a subsequent
+        // `XREADGROUP ... >` sees no new entries and blocks.
+        let reply = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"XGROUP", b"CREATE", b"st", b"g", b"$"]),
+        )
+        .await?;
+        assert!(
+            matches!(parse_simple_response(&reply), OperationResult::Ok),
+            "XGROUP CREATE should reply +OK, got {reply:?}"
+        );
+
+        // Group now exists — release the blocker to park its waiter.
+        group_ready_setup.notify_one();
+
+        // Give the blocker ample virtual time to connect and register its wait.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // PEXPIRE st 10 — a 10ms real-clock TTL; the key is still live.
+        let reply = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"PEXPIRE", b"st", b"10"]),
+        )
+        .await?;
+        assert!(
+            matches!(parse_simple_response(&reply), OperationResult::Integer(1)),
+            "PEXPIRE st 10 should reply :1, got {reply:?}"
+        );
+
+        // Elapse the TTL in REAL wall-clock time. Key expiry checks
+        // `std::time::Instant::now()`, not turmoil's virtual clock, and
+        // `thread::sleep` advances no virtual time — so 50ms real (>> 10ms TTL)
+        // leaves the key logically expired but still physically present (nothing
+        // has accessed it and no sweep has run yet).
+        std::thread::sleep(Duration::from_millis(50));
+
+        // Now advance virtual time so the shard's 100ms active-expiry interval
+        // fires with `st` genuinely past its TTL: the sweep removes `st` and
+        // (after the fix) drains the blocked XREADGROUP waiter to NOGROUP.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        Ok(())
+    });
+
+    sim.run().unwrap();
+
+    let reply = group_reply.lock().unwrap().clone();
+    assert!(
+        !reply.is_empty(),
+        "blocker never captured an XREADGROUP reply"
+    );
+
+    // F1 FIXED: active-expiry drains the blocked XREADGROUP waiter to NOGROUP,
+    // matching the DEL write path. Before the fix `apply_expiry_effects` never
+    // touched the wait queue, so the waiter sat parked until its own 5000ms
+    // BLOCK timeout and replied with the RESP2 null-array timeout (`*-1\r\n`).
+    assert!(
+        reply.starts_with(b"-NOGROUP"),
+        "F1 regression guard: expected active-expiry to drain the blocked \
+         XREADGROUP waiter to NOGROUP (as DEL does). Got {reply:?}. A `*-1\\r\\n` \
+         here means apply_expiry_effects stopped draining stream waiters and the \
+         waiter fell through to its BLOCK timeout.",
+    );
+}
+
+/// S7 (phase-4b): `CLIENT PAUSE WRITE` vs an in-flight write-`EXEC` on the real
+/// connection path (turmoil-level).
+///
+/// S7 is **not expressible in the shard driver**: the pause gate is purely
+/// connection-side, pre-dispatch (dispatch.rs `DispatchStage::PauseGate` ->
+/// lifecycle.rs `wait_if_paused` / `wait_if_paused_for_transaction`). An EXEC
+/// sitting in a shard queue is by construction already past that gate, so the
+/// invariant can only be exercised over a real TCP connection. This drives three
+/// concurrent connections through the real server:
+///   - A (pauser): `CLIENT PAUSE <big> WRITE`, later `CLIENT UNPAUSE`.
+///   - B (writer): `MULTI; SET k v; EXEC` — the write-EXEC that must block.
+///   - C (reader): `GET k` — a read that must proceed under WRITE-mode pause.
+///
+/// Invariants asserted:
+///   1. While paused, the write-EXEC has **not** committed: C's `GET k` returns
+///      the RESP2 null bulk `$-1\r\n` (k not observable) — the write is gated.
+///   2. That `GET k` **returns** while paused (its reply is captured before any
+///      unpause): WRITE-mode pause does not block reads.
+///   3. After `CLIENT UNPAUSE`, B's blocked `EXEC` commits (`*1\r\n+OK\r\n`) and
+///      a subsequent `GET k` on B returns `v` — the effect becomes observable
+///      only once the pause is lifted.
+///
+/// ## Clock findings (dual-clock discipline; the trap that bit Tasks 8/9/12)
+/// - **Pause deadline** (`PauseState::unpause_at`): a real `std::time::Instant`
+///   (client_registry/mod.rs:186; armed at :733 as `Instant::now() + timeout`;
+///   compared at :786/:797 via `Instant::now()`). It elapses on the **real wall
+///   clock**, independent of turmoil's virtual clock.
+/// - **Pause wait loop**: `tokio::time::sleep(10ms)` (lifecycle.rs `wait_if_paused`
+///   :515 and `wait_if_paused_for_transaction` :543) — the poll *interval* is
+///   **virtual**; the release *condition* (`check_pause`) reads the real-clock
+///   deadline above. Because the deadline is real and the poll is virtual, we do
+///   NOT rely on the deadline auto-expiring (that would be a cross-clock race).
+///   Instead the pause uses a large 60_000ms deadline and is released
+///   **deterministically by an explicit `CLIENT UNPAUSE`**, sequenced by
+///   `tokio::sync::Notify` handshakes. The write invariant is therefore
+///   independent of both clocks: the SET simply cannot commit until unpause, and
+///   C's GET is captured (and signals the unpause) strictly before that.
+/// - **Key TTL expiry**: real `Instant` (`KeyMetadata::is_expired`); the
+///   **active-expiry sweep** runs on the shard's virtual-time interval.
+///
+/// ## Expiry sub-assertion: intentionally dropped (brief fallback)
+/// The brief permits observing `expiry_paused` suppression only if the harness
+/// exposes a *deterministic client-visible* way to see it; it does not.
+/// `HashMapStore::check_and_delete_expired` (store/hashmap.rs:421-435) returns
+/// `true` (logically expired) for an elapsed key even when `expiry_suppressed`
+/// is set — it merely skips the *physical* delete / counter / replication. So
+/// `get_with_expiry_check` (:1024) still returns `None` to a client `GET` on a
+/// suppressed-but-elapsed key: suppression is indistinguishable from real expiry
+/// over the wire. The suppression that matters (skipping the active sweep to
+/// avoid master/replica divergence) is internal and is covered by the
+/// `run_active_expiry` pause gate (shard/event_loop.rs:124-133, unit path). We
+/// therefore assert only the two write/read invariants here, per the brief.
+///
+/// ## Determinism
+/// Looped over a handful of turmoil seeds with `enable_random_order()`, so
+/// `rng_seed` drives per-tick host execution order and each seed samples a
+/// different A/B/C interleave. The `Notify` handshakes make all three invariants
+/// hold for every schedule.
+#[test]
+fn client_pause_write_vs_exec() {
+    // Connect with retry: under `enable_random_order()` a seeded schedule can run
+    // a client's connect before the server host binds its listener, yielding
+    // ConnectionRefused. Retry over sim-time until the server is up (mirrors
+    // workload_runner's `connect_with_retry`).
+    async fn connect_retry(addr: std::net::IpAddr) -> Result<TcpStream, BoxError> {
+        for _ in 0..50 {
+            match TcpStream::connect((addr, SERVER_PORT)).await {
+                Ok(s) => return Ok(s),
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Err("connect_retry: server never accepted".into())
+    }
+
+    for seed in [1u64, 7, 42, 100, 999] {
+        let mut sim = Builder::new()
+            .tick_duration(Duration::from_millis(1))
+            .simulation_duration(Duration::from_secs(60))
+            .rng_seed(seed)
+            .enable_random_order()
+            .build();
+
+        // Single shard: SET/GET k share a key (same shard); pause is server-wide
+        // (admin-shared client registry), so one shard fully exercises the gate.
+        sim.host(SERVER_HOST, || real_frogdb_server(1));
+
+        // Captured raw reply bytes.
+        let get_while_paused: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let exec_reply: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let get_after_unpause: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+
+        // Handshakes (each single-waiter -> `notify_one` stores a permit, so the
+        // wake is race-free regardless of task scheduling order):
+        //   release_writer/release_reader: A -> B / A -> C, fired only after the
+        //     pause is engaged (A has the `+OK` in hand), so B's EXEC reaches the
+        //     gate and C's GET runs strictly while paused.
+        //   ready_to_unpause: C -> A, fired only after C has captured its GET
+        //     reply, so the unpause (and thus B's commit) strictly follows it.
+        let release_writer = Arc::new(tokio::sync::Notify::new());
+        let release_reader = Arc::new(tokio::sync::Notify::new());
+        let ready_to_unpause = Arc::new(tokio::sync::Notify::new());
+
+        let release_writer_a = release_writer.clone();
+        let release_reader_a = release_reader.clone();
+        let ready_to_unpause_a = ready_to_unpause.clone();
+        let release_writer_b = release_writer.clone();
+        let release_reader_c = release_reader.clone();
+        let ready_to_unpause_c = ready_to_unpause.clone();
+
+        let exec_reply_b = exec_reply.clone();
+        let get_after_unpause_b = get_after_unpause.clone();
+        let get_while_paused_c = get_while_paused.clone();
+
+        // A (pauser): engage PAUSE WRITE, release B+C, wait for C's read, unpause.
+        sim.client("pauser", async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let addr = turmoil::lookup(SERVER_HOST);
+            let mut stream = connect_retry(addr).await?;
+            let mut buf = vec![0u8; 1024];
+
+            // 60_000ms real-clock deadline: far beyond the test's real runtime, so
+            // release is governed solely by the explicit UNPAUSE below (never by
+            // the real-vs-virtual deadline race).
+            stream
+                .write_all(&encode_command(&[b"CLIENT", b"PAUSE", b"60000", b"WRITE"]))
+                .await?;
+            let n = stream.read(&mut buf).await?;
+            assert!(
+                matches!(parse_simple_response(&buf[..n]), OperationResult::Ok),
+                "CLIENT PAUSE 60000 WRITE should reply +OK, got {:?}",
+                &buf[..n]
+            );
+
+            // Pause is engaged; release the writer and reader into it.
+            release_writer_a.notify_one();
+            release_reader_a.notify_one();
+
+            // Wait until the reader has captured its while-paused GET, then unpause.
+            ready_to_unpause_a.notified().await;
+            stream
+                .write_all(&encode_command(&[b"CLIENT", b"UNPAUSE"]))
+                .await?;
+            let n = stream.read(&mut buf).await?;
+            assert!(
+                matches!(parse_simple_response(&buf[..n]), OperationResult::Ok),
+                "CLIENT UNPAUSE should reply +OK, got {:?}",
+                &buf[..n]
+            );
+            Ok(())
+        });
+
+        // B (writer): the in-flight write-EXEC. Blocks at the connection-side
+        // transaction pause gate until A unpauses, then commits.
+        sim.client("writer", async move {
+            let addr = turmoil::lookup(SERVER_HOST);
+            let mut stream = connect_retry(addr).await?;
+            let mut buf = vec![0u8; 1024];
+
+            async fn round_trip(
+                stream: &mut TcpStream,
+                buf: &mut [u8],
+                cmd: &Bytes,
+            ) -> Result<Vec<u8>, BoxError> {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                stream.write_all(cmd).await?;
+                let n = stream.read(buf).await?;
+                Ok(buf[..n].to_vec())
+            }
+
+            // Only enter the transaction once the pause is engaged, so the EXEC
+            // gate observes PAUSE WRITE.
+            release_writer_b.notified().await;
+
+            let reply = round_trip(&mut stream, &mut buf, &encode_command(&[b"MULTI"])).await?;
+            assert!(
+                matches!(parse_simple_response(&reply), OperationResult::Ok),
+                "MULTI should reply +OK, got {reply:?}"
+            );
+            let reply = round_trip(
+                &mut stream,
+                &mut buf,
+                &encode_command(&[b"SET", b"k", b"v"]),
+            )
+            .await?;
+            assert_eq!(
+                reply.as_slice(),
+                b"+QUEUED\r\n",
+                "SET k v inside MULTI should reply +QUEUED, got {reply:?}"
+            );
+
+            // EXEC contains a write -> `transaction_has_writes` -> blocks in
+            // `wait_if_paused_for_transaction` until UNPAUSE. This read does not
+            // return until A unpauses.
+            let reply = round_trip(&mut stream, &mut buf, &encode_command(&[b"EXEC"])).await?;
+            *exec_reply_b.lock().unwrap() = reply;
+
+            // Now unpaused and committed: k must be observable as `v`.
+            let reply = round_trip(&mut stream, &mut buf, &encode_command(&[b"GET", b"k"])).await?;
+            *get_after_unpause_b.lock().unwrap() = reply;
+            Ok(())
+        });
+
+        // C (reader): a WRITE-mode-exempt read that must proceed while paused.
+        sim.client("reader", async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let addr = turmoil::lookup(SERVER_HOST);
+            let mut stream = connect_retry(addr).await?;
+            let mut buf = vec![0u8; 1024];
+
+            // Read strictly while paused.
+            release_reader_c.notified().await;
+
+            // GET is not a write -> `should_pause_command` == false -> not gated.
+            // It returns immediately, and (because the write-EXEC is still gated)
+            // k is not yet set: null bulk.
+            stream.write_all(&encode_command(&[b"GET", b"k"])).await?;
+            let n = stream.read(&mut buf).await?;
+            *get_while_paused_c.lock().unwrap() = buf[..n].to_vec();
+
+            // Only now allow the unpause: the while-paused GET is captured and
+            // strictly precedes any commit of B's SET.
+            ready_to_unpause_c.notify_one();
+            Ok(())
+        });
+
+        sim.run().unwrap();
+
+        // Null bulk string: FrogDB's reply for GET on an absent key (RESP2).
+        const NULL_BULK: &[u8] = b"$-1\r\n";
+
+        let paused_read = get_while_paused.lock().unwrap().clone();
+        assert!(
+            !paused_read.is_empty(),
+            "seed {seed}: reader never captured a while-paused GET reply"
+        );
+        // Invariants 1 + 2: the read returned *while paused* (captured before the
+        // unpause handshake) AND saw k absent -> the write-EXEC has not committed
+        // under the pause, and WRITE-mode pause did not block the read.
+        assert_eq!(
+            paused_read.as_slice(),
+            NULL_BULK,
+            "seed {seed}: S7 write/read invariant: while PAUSE WRITE is engaged, a \
+             concurrent write-EXEC must not have committed and a read must still \
+             proceed. Expected `GET k` -> null bulk `$-1\\r\\n`, got {paused_read:?}. \
+             A `$1\\r\\nv\\r\\n` here means the gated write-EXEC leaked its SET before \
+             unpause (pause gate bypassed); an empty/hung reply means WRITE-mode \
+             pause wrongly blocked the read."
+        );
+
+        // Invariant 3a: once unpaused, the previously blocked EXEC commits.
+        let exec = exec_reply.lock().unwrap().clone();
+        assert_eq!(
+            exec.as_slice(),
+            b"*1\r\n+OK\r\n",
+            "seed {seed}: after UNPAUSE the blocked write-EXEC must commit \
+             (`*1\\r\\n+OK\\r\\n`), got {exec:?}"
+        );
+
+        // Invariant 3b: the committed effect is now observable.
+        let after = get_after_unpause.lock().unwrap().clone();
+        assert_eq!(
+            after.as_slice(),
+            b"$1\r\nv\r\n",
+            "seed {seed}: after UNPAUSE + commit, `GET k` must return `v`, got {after:?}"
+        );
+    }
+}

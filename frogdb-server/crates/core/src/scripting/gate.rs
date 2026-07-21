@@ -273,6 +273,7 @@ pub(crate) struct ScriptInvoker<'a> {
     is_replica_flag: Option<Arc<AtomicBool>>,
     master_host: Option<String>,
     master_port: Option<u16>,
+    master_link_up: bool,
     /// Effective local writes performed by this script's sub-commands, recorded
     /// so the shard worker can run the canonical write-effect pipeline
     /// (notifications, WATCH bump, tracking, waiter wake, WAL, replication)
@@ -302,6 +303,7 @@ impl<'a> ScriptInvoker<'a> {
             is_replica_flag: ctx.is_replica_flag.clone(),
             master_host: ctx.master_host.clone(),
             master_port: ctx.master_port,
+            master_link_up: ctx.master_link_up,
             // Reborrow last, after every scalar field is read, so the mutable
             // borrows of the two written-to fields do not shadow the disjoint
             // scalar reads. `store` and `effects.script_writes` are distinct
@@ -414,6 +416,7 @@ impl CommandInvoker for ScriptInvoker<'_> {
         ctx.is_replica_flag = self.is_replica_flag.clone();
         ctx.master_host = self.master_host.clone();
         ctx.master_port = self.master_port;
+        ctx.master_link_up = self.master_link_up;
 
         let result = handler.execute(&mut ctx, args);
 
@@ -646,6 +649,7 @@ mod tests {
             is_replica_flag: None,
             master_host: None,
             master_port: None,
+            master_link_up: false,
             store: RefCell::<&mut dyn Store>::new(store),
             script_writes: RefCell::new(writes),
         }
@@ -837,6 +841,7 @@ mod tests {
             is_replica_flag: Some(Arc::new(AtomicBool::new(true))),
             master_host: Some("primary.example".to_string()),
             master_port: Some(6390),
+            master_link_up: true,
             store: RefCell::<&mut dyn Store>::new(&mut store),
             script_writes: RefCell::new(&mut writes),
         };

@@ -39,7 +39,12 @@ use crate::replication::ReplicaReplicationHandler;
 /// stream down** (aborts its tasks and signals the connection loop). This is
 /// the sole stop mechanism, so `promote()`/re-`demote()` need only replace the
 /// stored handle.
-pub trait ReplicaStream: Send {}
+pub trait ReplicaStream: Send {
+    /// Whether this stream's connection to the primary is currently up
+    /// (connected, past PSYNC, streaming WAL frames). See
+    /// [`crate::replication::ReplicaReplicationHandler::link_up`].
+    fn link_up(&self) -> bool;
+}
 
 /// Opens inbound replication streams to a primary.
 ///
@@ -132,6 +137,27 @@ impl RoleManager {
         self.is_replica.load(Ordering::Acquire)
     }
 
+    /// Whether the current inbound replication stream is up: connected to
+    /// `primary_target` and streaming, not merely dialing/handshaking/full-
+    /// syncing. `false` when not a replica, or when a replica but neither the
+    /// boot-spawned handler nor a runtime-demotion stream is currently
+    /// connected. At most one of `boot_replica_handler`/`stream` is ever the
+    /// active connection (`demote()` always retires the boot handler before
+    /// installing a new `stream`), so checking both in sequence never double
+    /// counts.
+    pub fn link_up(&self) -> bool {
+        if !self.is_replica() {
+            return false;
+        }
+        if let Some(handler) = &self.boot_replica_handler {
+            return handler.link_up();
+        }
+        if let Some(stream) = &self.stream {
+            return stream.link_up();
+        }
+        false
+    }
+
     /// Role Promotion: become a writable primary. Stops any inbound stream
     /// (runtime-demotion or boot-spawned) and clears the flag. Idempotent.
     pub fn promote(&mut self) {
@@ -205,6 +231,12 @@ impl RoleManagerHandle {
         self.with_lock(|manager| manager.primary_target())
     }
 
+    /// Whether the current inbound replication stream is up. See
+    /// [`RoleManager::link_up`].
+    pub fn link_up(&self) -> bool {
+        self.inner.lock().expect("role manager poisoned").link_up()
+    }
+
     /// Adopt a boot-spawned replica handler so a later `promote()`/`demote()`
     /// also stops its reconnect loop. See
     /// [`RoleManager::register_boot_replica_handler`].
@@ -228,6 +260,10 @@ impl frogdb_core::RoleController for RoleManagerHandle {
 
     fn primary_target(&self) -> Option<SocketAddr> {
         RoleManagerHandle::primary_target(self)
+    }
+
+    fn master_link_up(&self) -> bool {
+        self.link_up()
     }
 }
 
@@ -410,7 +446,11 @@ struct RealReplicaStream {
     handler: Arc<crate::replication::ReplicaReplicationHandler>,
 }
 
-impl ReplicaStream for RealReplicaStream {}
+impl ReplicaStream for RealReplicaStream {
+    fn link_up(&self) -> bool {
+        self.handler.link_up()
+    }
+}
 
 impl Drop for RealReplicaStream {
     fn drop(&mut self) {
@@ -435,7 +475,11 @@ mod tests {
     struct FakeStream {
         stops: Arc<AtomicUsize>,
     }
-    impl ReplicaStream for FakeStream {}
+    impl ReplicaStream for FakeStream {
+        fn link_up(&self) -> bool {
+            false
+        }
+    }
     impl Drop for FakeStream {
         fn drop(&mut self) {
             self.stops.fetch_add(1, Ordering::SeqCst);
@@ -664,6 +708,98 @@ mod tests {
     fn no_boot_target_on_primary_boot() {
         let (mgr, _streamer) = manager(false);
         assert_eq!(mgr.primary_target(), None);
+    }
+
+    /// A fake stream whose `link_up()` answer is fixed at construction, for
+    /// asserting `RoleManager::link_up` propagates whatever the active stream
+    /// reports without touching real sockets.
+    struct FixedLinkStream(bool);
+    impl ReplicaStream for FixedLinkStream {
+        fn link_up(&self) -> bool {
+            self.0
+        }
+    }
+    struct FixedLinkStreamer(bool);
+    impl ReplicaStreamer for FixedLinkStreamer {
+        fn start(&self, _primary: SocketAddr) -> Box<dyn ReplicaStream> {
+            Box::new(FixedLinkStream(self.0))
+        }
+    }
+
+    #[test]
+    fn link_up_is_false_before_any_replication_role() {
+        let (mgr, _streamer) = manager(false);
+        assert!(
+            !mgr.link_up(),
+            "a primary/standalone node has no inbound link to report"
+        );
+    }
+
+    #[test]
+    fn link_up_reflects_the_active_runtime_stream() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let mut mgr = RoleManager::new(flag, Arc::new(FixedLinkStreamer(true)), None);
+        mgr.demote(addr("127.0.0.1:7000"));
+        assert!(
+            mgr.link_up(),
+            "demote() must surface the new stream's link_up() answer"
+        );
+    }
+
+    #[test]
+    fn link_up_is_false_when_the_active_stream_reports_down() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let mut mgr = RoleManager::new(flag, Arc::new(FixedLinkStreamer(false)), None);
+        mgr.demote(addr("127.0.0.1:7000"));
+        assert!(
+            !mgr.link_up(),
+            "a replica mid-handshake/full-sync must not report up"
+        );
+    }
+
+    #[test]
+    fn link_up_is_false_after_promote_even_though_still_flagged_replica_briefly() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let mut mgr = RoleManager::new(flag, Arc::new(FixedLinkStreamer(true)), None);
+        mgr.demote(addr("127.0.0.1:7000"));
+        assert!(mgr.link_up());
+        mgr.promote();
+        assert!(
+            !mgr.link_up(),
+            "promote() drops the stream, so link_up must fall back to false"
+        );
+    }
+
+    /// A registered boot-spawned handler (never connected in this test) must
+    /// report `link_up() == false` — the same handler `INFO` would read from,
+    /// exercised through the real `ReplicaReplicationHandler` rather than a
+    /// fake, so this also guards the wiring between `RoleManager` and the
+    /// production handler type.
+    #[test]
+    fn link_up_reads_through_boot_handler_before_any_connection() {
+        let primary = addr("127.0.0.1:7000");
+        let data_dir = std::env::temp_dir();
+        let state_path = data_dir.join(format!(
+            "frogdb-test-role-manager-link-up-{}-{}.json",
+            std::process::id(),
+            line!()
+        ));
+        let (handler, _rx) = ReplicaReplicationHandler::new(
+            primary,
+            6380,
+            frogdb_replication::ReplicationState::new(),
+            state_path,
+            data_dir,
+        );
+        let handler = Arc::new(handler);
+
+        let (mut mgr, _streamer) = manager(true);
+        mgr.register_boot_replica_handler(handler, primary);
+
+        assert!(
+            !mgr.link_up(),
+            "a boot handler that never connected must report down, not up"
+        );
     }
 
     /// `RoleController::primary_target` (the trait method command handlers

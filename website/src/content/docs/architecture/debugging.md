@@ -1,199 +1,217 @@
 ---
 title: "Debugging Guide"
-description: "Tools and techniques for investigating FrogDB behavior."
+description: "The contributor's toolset for investigating FrogDB behavior: DEBUG/LATENCY/MONITOR, USDT probes, shuttle, and the tokio-coz causal profiler."
 sidebar:
   order: 15
 ---
-Tools and techniques for investigating FrogDB behavior.
+The contributor's toolset for investigating FrogDB behavior. This page covers the
+developer- and contributor-facing debugging surface. For the operator-facing debug
+web UI, HTTP JSON API, and diagnostic bundles, see
+[Operations → Diagnostics](/operations/diagnostics/); for the metric catalog, see
+[Reference → Metrics](/reference/metrics/); for the full test pyramid, see
+[Testing methodology](/compatibility/testing-methodology/).
 
 ---
 
-## Built-in Diagnostic Commands
+## Built-in diagnostic commands
 
-### DEBUG Commands
+### DEBUG
 
-FrogDB implements a safe subset of Redis DEBUG commands for diagnostics.
+The implemented `DEBUG` subcommands are dispatched in
+`frogdb-server/crates/server/src/connection/debug_conn_command.rs`. Redis-compatible
+subcommands:
 
-#### DEBUG OBJECT
+| Subcommand | Purpose |
+|------------|---------|
+| `OBJECT <key>` | Internal representation of a key (encoding, refcount, idle time). Registered as the `OBJECT` command in `frogdb-server/crates/commands/src/generic.rs` |
+| `STRUCTSIZE` | Sizes of internal data structures, for memory estimation |
+| `SET-ACTIVE-EXPIRE 0\|1` | Toggle the active-expiry cycle |
+| `SLEEP <seconds>` | Block the server briefly (gated — see below) |
+| `HELP` | List subcommands |
 
-Inspect the internal representation of a key:
+FrogDB-specific subcommands, useful for diagnosing the shard/VLL machinery:
 
-```
-DEBUG OBJECT mykey
-Value at:0x7f1234567890 refcount:1 encoding:embstr serializedlength:12 lru:1234567 lru_seconds_idle:10
-```
+| Subcommand | Purpose |
+|------------|---------|
+| `HASHING <key>` | Which internal shard (and slot) a key maps to |
+| `VLL [shard_id]` | Dump the VLL transaction queue for a shard |
+| `LOCKTABLE` | Dump the per-shard VLL lock table |
+| `WAITQUEUE` | Dump the per-shard blocking wait queue |
+| `PUBSUB LIMITS` | Pub/sub subscription limits |
+| `TRACING STATUS \| RECENT [count]` | Tracing state and recent spans |
+| `BUNDLE GENERATE [DURATION <s>] \| LIST` | Generate or list diagnostic bundles |
+| `RESP3 BIGNUMBER \| BOOLEAN \| VERBATIM` | Emit a RESP3 type, for client testing |
+| `MEMORY-CHECK`, `EXPIRY-INDEX-CHECK` | Internal consistency checks |
+| `KEYSIZES-HIST-ASSERT`, `ALLOCSIZE-SLOTS-ASSERT` | Contributor/test assertion helpers |
 
-| Field | Description | Debugging Use |
-|-------|-------------|---------------|
-| `encoding` | Internal representation | Identify suboptimal encodings |
-| `serializedlength` | Bytes when serialized | Estimate persistence cost |
-| `lru_seconds_idle` | Seconds since last access | Find cold keys |
+`DEBUG SLEEP` is gated behind the `server.enable-debug-command` config; when
+disabled it returns
+`ERR DEBUG SLEEP is disabled. Set server.enable-debug-command in the config to allow it.`
 
-#### DEBUG STRUCTSIZE
+**Explicitly rejected.** The dangerous Redis DEBUG subcommands are refused so a
+client cannot crash or corrupt the server: `SEGFAULT`, `RELOAD`,
+`CRASH-AND-RECOVER`, `OOM`, and `PANIC` all return
+`ERR DEBUG <NAME> is not supported (unsafe command)`.
 
-Display sizes of internal data structures for memory estimation.
+### LATENCY
 
-#### DEBUG SLEEP
+FrogDB implements Redis-compatible latency monitoring plus FrogDB-specific
+extensions. Subcommands (in
+`frogdb-server/crates/server/src/connection/observability_conn_command.rs`):
+`LATEST`, `HISTORY`, `DOCTOR`, `RESET`, `HELP`, and the FrogDB-specific `BANDS`,
+`GRAPH`, and `HISTOGRAM`. `LATENCY BANDS` requires `latency_bands.enabled` in
+config.
 
-Block the server for a specified duration. Useful for testing client timeout handling and verifying watchdog triggers.
-
-#### DEBUG HASHING (FrogDB-specific)
-
-Show which internal shard a key maps to:
-
-```
-DEBUG HASHING user:123
-key:user:123 hash:0x7f1234567890abcd shard:3 num_shards:8
-
-DEBUG HASHING {user:1}:profile
-key:{user:1}:profile tag:user:1 hash:0x1234567890abcdef shard:5 num_shards:8
-```
-
-Essential for understanding key distribution and diagnosing shard hotspots.
-
-#### DEBUG DUMP-VLL-QUEUE (FrogDB-specific)
-
-Inspect the VLL transaction queue for a shard:
-
-```
-DEBUG DUMP-VLL-QUEUE 0
-shard:0 queue_depth:5 executing_txid:1000
-pending:
-  txid:1001 operation:SET keys:1 queued_at:1705312245.123
-  txid:1002 operation:MSET keys:3 queued_at:1705312245.456
-```
-
-#### DEBUG DUMP-CONNECTIONS (FrogDB-specific)
-
-Dump detailed state of all connections including current command, pending shards, and response status.
-
-#### Dangerous Commands (Not Implemented)
-
-`DEBUG SEGFAULT`, `DEBUG RELOAD`, `DEBUG CRASH-AND-RECOVER`, `DEBUG SET-ACTIVE-EXPIRE` are intentionally not implemented due to safety concerns.
-
----
-
-## LATENCY Monitoring Framework
-
-Redis-compatible latency monitoring for diagnosing latency spikes.
-
-### Event Types
+The tracked event types are exactly those in the `LatencyEvent` enum
+(`frogdb-server/crates/core/src/latency.rs`):
 
 | Event | Description |
 |-------|-------------|
-| `command` | Individual command execution exceeding threshold |
-| `fast-command` | Commands expected to be O(1) or O(log N) |
-| `expire-cycle` | Active expiry sweep duration |
-| `eviction-cycle` | Memory eviction sweep duration |
-| `persistence-write` | WAL or snapshot write latency |
-| `shard-message` (FrogDB-specific) | Cross-shard message delivery latency |
-| `scatter-gather` (FrogDB-specific) | Multi-shard operation total latency |
+| `command` | Command execution latency |
+| `fork` | Fork operation (background save) |
+| `aof-fsync` | AOF fsync latency |
+| `expire-cycle` | Active-expiry sweep duration |
+| `eviction-cycle` | Memory-eviction sweep duration |
+| `snapshot-io` | Snapshot I/O latency |
 
-### Commands
+### MEMORY
 
-- **LATENCY LATEST** - Most recent latency event per type
-- **LATENCY HISTORY** - Time series for a specific event type
-- **LATENCY DOCTOR** - Human-readable latency analysis with recommendations
-- **LATENCY RESET** - Clear latency history
+`MEMORY DOCTOR` returns a human-readable memory assessment. Per-shard memory and
+key distribution are exposed through `INFO` sections and metrics — see
+[Reference → Metrics](/reference/metrics/) for the exact field and metric names
+rather than relying on a sample here.
 
----
+### MONITOR
 
-## Memory Debugging
-
-### MEMORY DOCTOR
-
-Automated analysis with recommendations for peak memory, fragmentation, big keys, and shard memory imbalance.
-
-### Per-Shard Memory Analysis (FrogDB-specific)
-
-```
-INFO frogdb
-
-# FrogDB
-frogdb_shards:8
-frogdb_shard_0_keys:125000
-frogdb_shard_0_memory:134217728
-...
-```
-
-A healthy distribution shows relatively even values. Significant imbalance (>2:1 ratio) indicates hot keys or poor key naming patterns.
+`MONITOR` streams every command the server processes over a bounded
+`tokio::sync::broadcast` channel (default capacity 4096, from the monitor config's
+`default_channel_capacity` in `frogdb-server/crates/config/src/monitor.rs`). It is
+zero-overhead when no client is subscribed — a single atomic load of the receiver
+count per command — and a slow subscriber is dropped forward rather than stalling
+the server. `AUTH` command arguments are replaced with `(redacted)`; note this
+special-cases the `AUTH` command only, so an inline password passed to
+`HELLO … AUTH …` is not redacted.
 
 ---
 
-## Connection & Shard Debugging
+## Per-shard diagnostics
 
-### MONITOR Command
-
-Stream all commands processed by the server. Uses bounded `tokio::sync::broadcast` channel (default capacity 4096). Zero overhead when no subscribers (single atomic load per command). AUTH commands are redacted.
-
-### Per-Shard Statistics (FrogDB-specific)
-
-Key metrics per shard: `queue_depth` (VLL queue), `commands_processed`, `scatter_requests`.
-
-### Scatter-Gather Tracing (FrogDB-specific)
-
-Enable `debug` log level to trace multi-shard operations with per-shard latency breakdown.
+The `DEBUG VLL`, `DEBUG LOCKTABLE`, and `DEBUG WAITQUEUE` subcommands above dump a
+single shard's transaction queue, lock table, and blocking wait queue respectively
+— the primary way to see what a specific shard worker is doing. Scatter-gather
+execution across shards can be traced by raising the log level (see
+[Debug logging](#debug-logging)); the trace records the per-shard fan-out of a
+multi-shard operation.
 
 ---
 
-## External Introspection Tools
+## External introspection
 
-### Building Debug Binaries
+### Build flags
 
 ```bash
-cargo build                                    # Full symbols, no optimizations
-RUSTFLAGS="-C debuginfo=2" cargo build --release  # Symbols WITH optimizations
-RUSTFLAGS="-C force-frame-pointers=yes -C debuginfo=2" cargo build --release  # For profiling
+cargo build                                                              # full symbols, no optimization
+RUSTFLAGS="-C debuginfo=2" cargo build --release                         # symbols with optimizations
+RUSTFLAGS="-C force-frame-pointers=yes -C debuginfo=2" cargo build --release  # frame pointers for profiling
 ```
 
-### DTrace/USDT Probes (FrogDB-specific)
+### USDT / DTrace probes
 
-Always-on USDT probes with zero runtime overhead when no tracer is attached.
+FrogDB defines a `frogdb` USDT provider in
+`frogdb-server/crates/core/src/probes.rs`, gated by the `usdt-probes` cargo feature
+(`cargo build --features usdt-probes`). When the feature is off the probe
+functions compile away entirely; when on, an attached tracer (DTrace, bpftrace) can
+observe them with effectively zero overhead when no tracer is attached. The probes
+and their arguments:
 
-| Probe | Arguments | Description |
-|-------|-----------|-------------|
-| `frogdb:::command-start` | (command, key, conn_id) | Command execution begins |
-| `frogdb:::command-done` | (command, latency_us, status) | Command execution completes |
-| `frogdb:::shard-message-sent` | (from_shard, to_shard, msg_type) | Cross-shard message |
-| `frogdb:::key-expired` | (key, shard_id) | Key expiration |
-| `frogdb:::key-evicted` | (key, shard_id, policy) | Key eviction |
-| `frogdb:::memory-pressure` | (used, max, action) | Memory limit approached |
+| Probe | Arguments |
+|-------|-----------|
+| `frogdb:::command-start` | (command, key, conn_id) |
+| `frogdb:::command-done` | (command, latency_us, status) |
+| `frogdb:::shard-message-sent` | (from_shard, to_shard, msg_type) |
+| `frogdb:::shard-message-received` | (shard, msg_type, queue_depth) |
+| `frogdb:::key-expired` | (key, shard_id) |
+| `frogdb:::key-evicted` | (key, shard_id, policy) |
+| `frogdb:::memory-pressure` | (used, max, action) |
+| `frogdb:::wal-write` | (shard_id, key, bytes) |
+| `frogdb:::scatter-start` | (command, shard_count, txid) |
+| `frogdb:::scatter-done` | (command, latency_us, shard_count) |
+| `frogdb:::pubsub-publish` | (channel, subscribers) |
+| `frogdb:::connection-accept` | (conn_id, addr) |
 
-### eBPF/bpftrace (Linux)
+### eBPF / bpftrace (Linux)
 
-Trace Rust functions with uprobes, memory allocation with jemalloc probes, network connections.
-
-Build with frame pointers for accurate stack traces:
-```bash
-RUSTFLAGS="-C force-frame-pointers=yes" cargo build --release
-```
+The same uprobe-able functions and the USDT probes are reachable from bpftrace;
+allocation tracing works through the allocator's probes. Build with frame pointers
+(`RUSTFLAGS="-C force-frame-pointers=yes"`) for accurate stacks.
 
 ---
 
-## Developer Debugging (FrogDB-specific)
+## Deterministic concurrency testing (shuttle)
 
-### tokio-console
-
-Real-time visualization of async task state. Build with `--features tokio-console` and `RUSTFLAGS="--cfg tokio_unstable"`.
-
-| Warning | Meaning | Fix |
-|---------|---------|-----|
-| `lost waker` | Task waker dropped without wake | Ensure Futures are stored/polled |
-| `never yielded` | Task ran >1s without yielding | Add `yield_now()` in tight loops |
-| `very long poll` | Single poll >100ms | Break up blocking work |
-
-### Concurrency Testing with loom
-
-Exhaustive concurrency testing for lock-free data structures and atomic ordering correctness. Scale limitations: only for targeted verification of critical concurrent code.
-
-### Randomized Testing with shuttle
-
-Randomized concurrency testing that scales better than loom. Use `PortfolioRunner` to combine multiple scheduling strategies.
-
-### Debug Logging Patterns
+FrogDB uses [shuttle](https://docs.rs/shuttle) for randomized deterministic
+concurrency testing (dependency `shuttle = "0.8"`). Under
+`cfg(all(feature = "shuttle", test))`, the synchronization primitives in
+`frogdb-server/crates/types/src/sync.rs` (`Arc`, `Mutex`, `RwLock`, `AtomicU64`,
+`AtomicUsize`) are swapped from `std::sync` to `shuttle::sync`, so the same
+production code runs under shuttle's controlled scheduler. The concurrency tests in
+`frogdb-server/crates/core/tests/concurrency.rs` drive scenarios with
+`shuttle::check_random` and `shuttle::check_pct`:
 
 ```bash
-FROGDB_LOGGING__LEVEL=debug frogdb-server    # At startup
-RUST_LOG=frogdb::shard=debug,frogdb::scatter=trace frogdb-server  # Targeted
-CONFIG SET loglevel debug                    # At runtime
+cargo test -p frogdb-core --features shuttle --test concurrency
 ```
+
+shuttle explores many interleavings of a scenario per run and reports a minimal
+failing schedule when an assertion breaks. It is the tool for this job in FrogDB —
+there is no `loom` dependency and no `tokio-console` integration in the repo. See
+[Testing methodology](/compatibility/testing-methodology/) for where this sits in
+the overall test strategy.
+
+---
+
+## Causal profiling (tokio-coz) — FrogDB in-house
+
+`frogdb-server/crates/tokio-coz/` is an in-house causal profiler. Causal profiling
+answers "if this code were X% faster, how much would end-to-end performance
+improve?" — the classic [coz](https://github.com/plasma-umass/coz) method, which
+runs a *virtual speedup* experiment: instead of speeding the target up (impossible
+mid-run), it delays everything else by the same fraction and measures the effect on
+a progress point.
+
+Stock coz operates at the OS-thread level, which does not fit tokio's M:N
+scheduling — many tasks are multiplexed onto a few worker threads, so pausing
+"other threads" also pauses unrelated tasks sharing those threads and confounds the
+causal signal. tokio-coz instead works at tracing-span / task-poll granularity: it
+injects a real delay into non-target task polls using `std::thread::sleep` (which
+must block the worker thread, not yield, to preserve the coz invariant), driven by
+the runtime's unstable poll hooks (`on_task_spawn`, `on_before_task_poll`,
+`on_after_task_poll`, `on_task_terminate`) plus a tracing layer. The API is
+`CausalProfiler::new(ProfilerConfig)`, then `.start()` / `.report()`, with progress
+points registered via a macro; it requires `RUSTFLAGS="--cfg tokio_unstable"`.
+
+Treat this as experimental and research-grade. It is a standalone crate whose
+README is a design document, compiled into the server only under the non-default
+`causal-profile` feature (and only when `tokio_unstable` is set) — it is off in
+normal builds. The README itself flags an open research question: whether the coz
+speedup invariant still holds under M:N scheduling with work-stealing is unproven.
+Do not read its presence as a shipped, validated profiler.
+
+---
+
+## Debug logging
+
+Log level is configured three ways (see the config loader in
+`frogdb-server/crates/server/src/config/loader.rs`):
+
+```bash
+FROGDB_LOGGING__LEVEL=debug frogdb-server   # env var: FROGDB_ prefix, __ = section, _ -> -
+RUST_LOG=info,frogdb_core=debug frogdb-server  # standard tracing EnvFilter, honored when set
+```
+
+```
+CONFIG SET loglevel debug                   # at runtime (levels: trace, debug, info, warn, error)
+```
+
+`CONFIG SET loglevel` reloads the tracing filter live through a reload handle, so
+the level can be raised to capture a problem and lowered again without a restart.

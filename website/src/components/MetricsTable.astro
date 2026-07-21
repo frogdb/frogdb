@@ -1,0 +1,118 @@
+---
+/**
+ * Renders a Prometheus metrics table (Metric, Type, Labels, Description)
+ * for one human-facing category, from the auto-generated metrics.json
+ * (which is a dump of `frogdb_telemetry::ALL_METRICS`).
+ *
+ * metrics.json groups each metric by a raw `group` token -- the first
+ * `_`-delimited segment after `frogdb_` (see `MetricDefinition::category()`
+ * in `frogdb-server/crates/telemetry/src/typed.rs`). That token does not
+ * match the human categories this page uses (e.g. `wal` + `snapshot` +
+ * `persistence` + `flush` all belong under "Persistence"), so this
+ * component owns the group -> category mapping. This is a second
+ * hand-maintained place (the `define_metrics!` source has no category
+ * field yet); the two assertions below catch it drifting from
+ * metrics.json in either direction -- a new metric landing in an unmapped
+ * group, or a mapped group disappearing from the source.
+ *
+ * Labels with a fixed enum (e.g. `reason: maxclients | auth_required |
+ * shutdown` on `frogdb_connections_rejected_total`) carry a `values` array
+ * in metrics.json; those are rendered alongside the label name, mirroring
+ * how ConfigTable.astro renders `enum_values`.
+ *
+ * Usage in MDX:
+ *   import MetricsTable from '../../components/MetricsTable.astro';
+ *   <MetricsTable category="Persistence" />
+ */
+
+interface Props {
+  category: string;
+}
+
+const { category } = Astro.props;
+
+import metricsData from '../data/metrics.json';
+
+type Label = { name: string; type: string; values?: string[] };
+type Metric = { name: string; type: string; help: string; group: string; labels: Label[] };
+
+const allMetrics = (metricsData as any).metrics as Metric[];
+
+const CATEGORY_GROUPS: Record<string, string[]> = {
+  'System': ['uptime', 'info', 'cpu', 'task'],
+  'Connections': ['connections', 'tls'],
+  'Commands': ['commands'],
+  'Keyspace': ['keys', 'keyspace', 'fields'],
+  'Shards': ['shard'],
+  'Persistence': ['wal', 'snapshot', 'persistence', 'flush'],
+  'Pub/Sub': ['pubsub'],
+  'Memory / Eviction': ['memory', 'eviction', 'tiered'],
+  'Blocking': ['blocked'],
+  'Lua Scripting': ['lua'],
+  'Transactions': ['transactions'],
+  'Scatter-Gather': ['scatter'],
+  'Split-Brain': ['split'],
+  'Latency': ['latency'],
+  'Version / Rolling Upgrade': ['active', 'binary', 'cluster', 'version'],
+};
+
+const mappedGroups = new Set(Object.values(CATEGORY_GROUPS).flat());
+const actualGroups = new Set(allMetrics.map((m) => m.group));
+
+for (const g of actualGroups) {
+  if (!mappedGroups.has(g)) {
+    throw new Error(
+      `MetricsTable: metric group "${g}" in metrics.json has no category mapping in CATEGORY_GROUPS (src/components/MetricsTable.astro).`,
+    );
+  }
+}
+for (const g of mappedGroups) {
+  if (!actualGroups.has(g)) {
+    throw new Error(
+      `MetricsTable: CATEGORY_GROUPS maps group "${g}" which no longer appears in metrics.json. Update src/components/MetricsTable.astro.`,
+    );
+  }
+}
+
+const groups = CATEGORY_GROUPS[category];
+if (!groups) {
+  throw new Error(`MetricsTable: unknown category "${category}". Available: ${Object.keys(CATEGORY_GROUPS).join(', ')}`);
+}
+
+const rows = allMetrics.filter((m) => groups.includes(m.group)).sort((a, b) => a.name.localeCompare(b.name));
+
+function formatLabels(labels: Label[]): string {
+  if (!labels || labels.length === 0) return '—';
+  return labels
+    .map((l) => {
+      const name = `<code>${l.name}</code>`;
+      if (l.values && l.values.length > 0) {
+        const options = l.values.map((v) => `<code>${v}</code>`).join(', ');
+        return `${name}: ${options}`;
+      }
+      return name;
+    })
+    .join('<br />');
+}
+---
+
+<table>
+  <thead>
+    <tr>
+      <th>Metric</th>
+      <th>Type</th>
+      <th>Labels</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    {rows.map((m: Metric) => (
+      <tr>
+        <td><code>{m.name}</code></td>
+        <td>{m.type}</td>
+        <td set:html={formatLabels(m.labels)} />
+        <td>{m.help}</td>
+      </tr>
+    ))}
+  </tbody>
+</table>

@@ -3,22 +3,28 @@ title: Quickstart
 description: Get up and running with FrogDB in 5 minutes
 ---
 
-import { Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+import { Tabs, TabItem, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+import versions from '../../../data/versions.json';
 
-FrogDB is wire-compatible with RESP2 and RESP3, so you can use your standard Redis client.
+This page starts a server, connects with `redis-cli`, runs a few commands across
+different data types, and enables persistence. It assumes you already have a
+`frogdb-server` binary or Docker image — see [Installation](/getting-started/installation/)
+if you don't yet. FrogDB speaks RESP2 and RESP3, and targets compatibility with
+Redis {versions.redis_compat_target} commands — see [Compatibility](/compatibility/overview/)
+for exactly which commands and behaviors differ.
 
-## Start the Server
+## Start the server
 
 <Tabs>
   <TabItem label="Binary" icon="seti:shell">
     ```bash
-    # Start with defaults (port 6379, persistence enabled)
+    # Start with defaults: 127.0.0.1:6379, persistence enabled, 1 shard
     frogdb-server
 
     # Or with a config file
     frogdb-server --config frogdb.toml
 
-    # Auto-detect shards, bind to all interfaces
+    # Bind to all interfaces, one shard per CPU core
     frogdb-server -b 0.0.0.0 -s auto
     ```
   </TabItem>
@@ -27,14 +33,17 @@ FrogDB is wire-compatible with RESP2 and RESP3, so you can use your standard Red
     docker run -d --name frogdb \
       -p 6379:6379 \
       -v frogdb-data:/data \
-      frogdb/frogdb:latest
+      frogdb:latest
     ```
+
+    This uses the image tag from [Installation](/getting-started/installation/#docker) —
+    build it locally first if you haven't already.
   </TabItem>
   <TabItem label="Docker Compose" icon="seti:docker">
     ```yaml
     services:
       frogdb:
-        image: frogdb/frogdb:latest
+        image: frogdb:latest
         ports:
           - "6379:6379"
         volumes:
@@ -57,68 +66,142 @@ FrogDB is wire-compatible with RESP2 and RESP3, so you can use your standard Red
   </TabItem>
 </Tabs>
 
+By default the bare binary listens on `127.0.0.1:6379` with a single shard.
+`-s auto` sizes the shard count to the number of CPU cores instead.
+
 ## Connect
 
 ```bash
 redis-cli -p 6379
 ```
 
+## Run some commands
+
+A string:
+
 ```redis
 127.0.0.1:6379> SET greeting "Hello from FrogDB!"
 OK
 127.0.0.1:6379> GET greeting
 "Hello from FrogDB!"
-127.0.0.1:6379> INFO server
-# Server info including version
+127.0.0.1:6379> INCR counter
+(integer) 1
+127.0.0.1:6379> EXPIRE greeting 60
+(integer) 1
+127.0.0.1:6379> TTL greeting
+(integer) 60
 ```
 
-## Client Libraries
+A hash:
 
-Any Redis client works with FrogDB. Here are the official clients for popular languages:
+```redis
+127.0.0.1:6379> HSET user:1 name "Ada" role "admin"
+(integer) 2
+127.0.0.1:6379> HGETALL user:1
+1) "name"
+2) "Ada"
+3) "role"
+4) "admin"
+```
 
-<CardGrid>
-  <LinkCard title="redis-cli" description="Redis command-line interface" href="https://redis.io/docs/latest/develop/tools/cli/" />
-  <LinkCard title="redis-py" description="Python client" href="https://github.com/redis/redis-py" />
-  <LinkCard title="ioredis" description="Node.js client" href="https://github.com/redis/ioredis" />
-  <LinkCard title="redis-rs" description="Rust client" href="https://github.com/redis-rs/redis-rs" />
-  <LinkCard title="go-redis" description="Go client" href="https://github.com/redis/go-redis" />
-  <LinkCard title="Jedis" description="Java client" href="https://github.com/redis/jedis" />
-</CardGrid>
+A sorted set:
+
+```redis
+127.0.0.1:6379> ZADD leaderboard 100 alice 85 bob
+(integer) 2
+127.0.0.1:6379> ZRANGE leaderboard 0 -1 WITHSCORES
+1) "bob"
+2) "85"
+3) "alice"
+4) "100"
+```
+
+A list:
+
+```redis
+127.0.0.1:6379> LPUSH queue job1 job2
+(integer) 2
+127.0.0.1:6379> LRANGE queue 0 -1
+1) "job2"
+2) "job1"
+```
+
+This is a small slice of what's supported — see the [command matrix](/compatibility/command-matrix/)
+for the full, generated list of every command and its support status, and
+[Compatibility](/compatibility/overview/) for behavioral differences from Redis.
+
+## Persistence
+
+Persistence is enabled by default, backed by RocksDB. The bare binary writes to
+`./frogdb-data` (relative to the working directory it's started from); the
+Debian package's default config points this at `/var/lib/frogdb/data` instead.
+
+```toml
+[persistence]
+enabled = true
+data-dir = "./frogdb-data"
+durability-mode = "periodic"  # async, periodic, or sync
+sync-interval-ms = 1000
+```
+
+`durability-mode` controls when writes are flushed to disk: `async` batches
+writes with no fixed interval, `periodic` (the default) flushes every
+`sync-interval-ms`, and `sync` flushes every write before acknowledging it —
+each mode trades some durability for throughput. See
+[Operations → Persistence](/operations/persistence/) for details on snapshots,
+recovery, and choosing a durability mode.
 
 ## Configuration
 
-Generate a default config file:
+FrogDB reads configuration from a TOML file, `FROGDB_<SECTION>__<FIELD>`
+environment variables, and CLI flags, in increasing order of precedence
+(CLI flags win); most settings can also be changed at runtime with
+`CONFIG SET`. See
+[Operations → Configuration](/operations/configuration/) for how those surfaces
+combine.
+
+Generate a default config file to see every setting and its default value:
 
 ```bash
 frogdb-server --generate-config > frogdb.toml
 ```
 
-Common options:
+An excerpt:
 
 ```toml
 [server]
-bind = "0.0.0.0"        # Listen on all interfaces
+bind = "127.0.0.1"
 port = 6379
-num-shards = 0           # 0 = auto-detect CPU cores
+num-shards = 1
 
 [persistence]
 enabled = true
-data-dir = "/var/lib/frogdb"
-durability-mode = "periodic"  # async, periodic, sync
+data-dir = "./frogdb-data"
+durability-mode = "periodic"
 sync-interval-ms = 1000
 
 [memory]
-maxmemory = 4294967296   # 4 GB
-maxmemory-policy = "allkeys-lru"
+maxmemory = 0                    # 0 = unlimited
+maxmemory-policy = "noeviction"
 ```
 
-See [Configuration Reference](/reference/configuration/) for all options, or the [Reference Config File](/reference/reference-config/) for a complete example with defaults.
+See [Configuration Reference](/reference/configuration/) for every field, or
+[Example Config File](/reference/example-config/) for a complete generated file.
 
-## Next Steps
+## Client libraries
+
+Any RESP2/RESP3-capable Redis client library works with FrogDB over the standard
+`redis://` protocol; this guide uses `redis-cli` for simplicity. See
+[redis.io's client list](https://redis.io/docs/latest/develop/clients/) for
+clients in your language.
+
+## Next steps
 
 <CardGrid>
-  <LinkCard title="Redis Differences" description="What's different from Redis" href="/compatibility/redis-differences/" />
-  <LinkCard title="Event Sourcing" description="FrogDB-specific event sourcing commands" href="/guides/event-sourcing/" />
-  <LinkCard title="Deployment" description="Production deployment guide" href="/operations/deployment/" />
-  <LinkCard title="Commands Reference" description="All supported commands" href="/reference/commands/" />
+  <LinkCard title="Compatibility overview" description="What's different from Redis" href="/compatibility/overview/" />
+  <LinkCard title="Command matrix" description="Every command and its support status" href="/compatibility/command-matrix/" />
+  <LinkCard title="Persistence" description="Snapshots, recovery, durability modes" href="/operations/persistence/" />
+  <LinkCard title="Configuration" description="Config surfaces and precedence" href="/operations/configuration/" />
+  <LinkCard title="Extensions overview" description="FrogDB-specific capabilities beyond Redis" href="/extensions/overview/" />
+  <LinkCard title="Event sourcing" description="FrogDB's event-sourcing commands" href="/extensions/event-sourcing/" />
 </CardGrid>

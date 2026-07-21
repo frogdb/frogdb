@@ -1322,10 +1322,16 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "frogctl",
  "frogdb-config",
+ "frogdb-core",
+ "frogdb-server",
+ "frogdb-telemetry",
+ "frogdb-types",
  "schemars",
  "serde",
  "serde_json",
+ "toml 1.1.0+spec-1.1.0",
 ]
 
 [[package]]
@@ -1674,6 +1680,8 @@ dependencies = [
  "dashmap",
  "frogdb-acl",
  "frogdb-cluster",
+ "frogdb-commands",
+ "frogdb-core",
  "frogdb-persistence",
  "frogdb-protocol",
  "frogdb-replication",

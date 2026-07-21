@@ -20,7 +20,8 @@ FrogDB supports both single-node and cluster operation. The architecture uses:
   service
 - **16384 hash slots** for Redis Cluster client compatibility
 - **Full dataset replication** -- replicas copy all data from their primary
-- **PSYNC + WAL streaming** for incremental replication
+- **PSYNC checkpoint transfer + logical command streaming** for the data path (see
+  [Replication Internals](/architecture/replication/))
 
 Cluster metadata (topology, slot ownership, node roles, Config Epoch) is self-coordinated by the
 nodes themselves through Raft consensus. The data path never goes through Raft: reads, writes,
@@ -65,7 +66,7 @@ ShardWorker threads within a node (internal shards).
 +---------------------------------------------------------+
 ```
 
-**Routing** (`frogdb-core`, `shard/partition.rs`):
+**Routing** (`frogdb-server/crates/core/src/shard/partition.rs`):
 1. **Cluster routing:** `slot = CRC16(key) % 16384` -> determines which node owns the key
 2. **Internal routing:** `internal_shard = slot % num_shards` -> determines which ShardWorker
    thread within the node
@@ -80,7 +81,7 @@ Hash tags guarantee colocation at **both** levels: the `{tag}` substring is hash
 whole key, so both the slot and the internal shard are computed from the tag alone.
 
 ```rust
-// frogdb-core: shard/partition.rs
+// frogdb-server/crates/core/src/shard/partition.rs
 fn slot_for_key(key: &[u8]) -> u16 {
     let hash_key = extract_hash_tag(key).unwrap_or(key);
     crc16::State::<crc16::XMODEM>::calculate(hash_key) % 16384
@@ -103,12 +104,12 @@ real consensus rather than gossip convergence.
 
 ### What Raft Owns (Metadata Only)
 
-The replicated state machine (`ClusterStateMachine`, `frogdb-cluster`) holds exactly:
+The replicated state machine (`ClusterStateMachine`, `frogdb-server/crates/cluster/src/state.rs`) holds exactly:
 
 | Metadata (replicated via Raft) | NOT via Raft (data plane) |
 |--------------------------------|---------------------------|
 | Cluster membership (`nodes`) | Key-value reads and writes |
-| Slot ownership (`slot_assignment`) | PSYNC / WAL replication streaming |
+| Slot ownership (`slot_assignment`) | PSYNC checkpoint + command-stream replication |
 | Node roles (Primary / Replica) | Slot key-transfer during migration |
 | Config Epoch | |
 | Active slot migrations (`migrations`) | |
@@ -172,8 +173,8 @@ Nodes detect that their local view is stale by:
 ## Slot Ownership Routing
 
 Before executing a keyed command, the node routes it against the current slot assignment and any
-active migration. The decision logic lives in `frogdb-server`
-(`slot_migration/routing.rs`, `RouteDecision`):
+active migration. The decision logic lives in
+`frogdb-server/crates/server/src/slot_migration/routing.rs` (`RouteDecision`):
 
 ```rust
 enum RouteDecision {
@@ -226,7 +227,7 @@ target even without `ASKING`.
 
 ## Failover
 
-Failure detection is **leader-only** (`frogdb-server`, `failure_detector.rs`), like
+Failure detection is **leader-only** (`frogdb-server/crates/server/src/failure_detector.rs`), like
 CockroachDB/FoundationDB rather than peer-to-peer gossip. The Raft leader probes each node with a
 TCP connect; after `fail_threshold` consecutive failures it proposes `MarkNodeFailed` through Raft
 (which sets the `FAIL` flag and bumps the Config Epoch atomically). Only the leader can write
@@ -274,7 +275,7 @@ Nodes do NOT gossip topology. They connect directly for:
 |---------|-----------|-----------|
 | Raft consensus (metadata) | Leader <-> members | Cluster bus (`cluster_addr`) |
 | Failure detection | Leader -> members | TCP connect probe |
-| Replication | Replica -> Primary | PSYNC + WAL stream |
+| Replication | Replica -> Primary | PSYNC checkpoint + command stream |
 | Slot key-transfer | Source -> Target | `MIGRATE` protocol |
 
 Only the first row is Raft; the rest are data-path or health-probe connections that never pass
@@ -283,19 +284,56 @@ peer's gossip or an external control plane.
 
 ---
 
-## HTTP Endpoints
+## Rolling Upgrades: Version Gating
 
-Each node exposes HTTP endpoints (bind address from the `[metrics]` / `[http]` config) used by the
-operator and by Kubernetes probes. These are health and status surfaces — topology is **not**
-pushed over HTTP; it is owned by the Raft metadata plane.
+A mixed-version cluster must not let a newly upgraded node emit a behavior that older peers cannot
+understand. FrogDB gates such behaviors behind an explicit **version gate**
+(`frogdb-server/crates/cluster/src/version_gate.rs`).
 
-| Endpoint | Purpose |
-|----------|---------|
-| `/health/live`, `/healthz` | Liveness probe |
-| `/health/ready` | Readiness probe (node ready to serve traffic) |
-| `/admin/upgrade-status` | Rolling-upgrade / version-gate status across the cluster |
+Each gate is a `VersionGateEntry { name, min_version, description }`. A gate stays **dormant** until
+the cluster's finalized `active_version` reaches its `min_version`: `is_gate_active(name,
+active_version)` returns true only when `active_version` is set and `>= min_version`. The
+`active_version` advances only after every node reports running at least the target version and the
+leader commits a `FinalizeUpgrade` Raft command — so a feature never activates while an older node
+is still in the cluster. `pending_gates(active_version, target_version)` reports the gates that a
+proposed upgrade would unlock but that are still blocked.
 
-Admin and debug endpoints can be protected with a bearer token (`[http]` config).
+The static registry currently declares one gate:
+
+| Gate | `min_version` | Effect once active |
+|------|---------------|--------------------|
+| `extended_info_fields` | 0.2.0 | Include `active_version` and `cluster_version` in `INFO server` |
+
+See [Operations: Clustering](/operations/clustering/) for the operator-facing rolling-upgrade
+procedure.
+
+---
+
+## Observability Endpoints
+
+Each node exposes a **read-only** HTTP observability plane (bind address from the `[http]` config,
+`frogdb-server/crates/server/src/observability_server.rs`). These are health and status surfaces —
+topology is **not** pushed over HTTP; it is owned by the Raft metadata plane. `/admin/cluster` is
+GET-only; there is no POST topology-push endpoint.
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/metrics` | GET | Prometheus metrics |
+| `/health/live`, `/healthz` | GET | Liveness probe |
+| `/health/ready`, `/readyz` | GET | Readiness probe |
+| `/status/json` | GET | Node status snapshot |
+| `/admin/cluster` | GET | Cluster topology view (read-only) |
+| `/admin/role` | GET | This node's role |
+| `/admin/nodes` | GET | Known cluster members |
+| `/admin/upgrade-status` | GET | Rolling-upgrade / version-gate status |
+| `/admin/health` | GET | Admin health detail |
+| `/admin/shutdown` | POST | Graceful shutdown |
+| `/admin/transfer-leader` | POST | Request Raft leadership transfer |
+
+The `/admin/*` and `/debug/*` routes can be protected with a bearer token (`[http]` `token`
+config). Topology mutations are Raft commands, not HTTP verbs. See
+[Operations: Diagnostics](/operations/diagnostics/) and the
+[Metrics reference](/reference/metrics/).
 
 ---
 

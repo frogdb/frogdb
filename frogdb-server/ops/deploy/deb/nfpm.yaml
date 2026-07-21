@@ -30,8 +30,8 @@ contents:
     file_info:
       mode: 0755
 
-  - src: frog
-    dst: /usr/bin/frog
+  - src: frogctl
+    dst: /usr/bin/frogctl
     file_info:
       mode: 0755
 

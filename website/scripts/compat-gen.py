@@ -31,6 +31,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 TESTS_DIR = REPO_ROOT / "frogdb-server" / "crates" / "redis-regression" / "tests"
 DEFAULT_OUTPUT = REPO_ROOT / "website" / "src" / "data" / "compat-exclusions.json"
+REDIS_VERSION_PATH = REPO_ROOT / "frogdb-server" / "crates" / "types" / "src" / "redis_version.rs"
 
 # ---------------------------------------------------------------------------
 # Regexes (from audit_tcl.py)
@@ -47,6 +48,8 @@ INTENTIONAL_BULLET_RE = re.compile(r"//!\s*-\s*`([^`]+)`\s*\u2014\s*(.*)$")
 INTENTIONAL_CONT_RE = re.compile(r"^//!\s{2,}(.+)$")
 # Count #[ignore = "..."] tests (broken tests)
 IGNORE_RE = re.compile(r'#\[ignore\s*=\s*"([^"]+)"\]')
+# Extract REDIS_COMPAT_TARGET from frogdb-types, the single source of truth
+REDIS_COMPAT_TARGET_RE = re.compile(r'pub const REDIS_COMPAT_TARGET:\s*&str\s*=\s*"([^"]+)"')
 # Extract test function names
 TEST_FN_RE = re.compile(
     r"#\[tokio::test\b[^\]]*\][^\n]*\n(?:\s*#\[[^\]]*\][^\n]*\n)*\s*async\s+fn\s+([a-z_][a-z0-9_]*)"
@@ -66,6 +69,16 @@ FILE_TO_COMMANDS: dict[str, list[str]] = {
     "bitfield_tcl.rs": ["BITFIELD"],
     "bitops_tcl.rs": ["BITOP", "BITCOUNT", "BITPOS"],
     "bitops_regression.rs": ["BITOP", "BITCOUNT", "BITPOS"],
+    "blocking_nil_shape_regression.rs": [
+        "BLPOP",
+        "BRPOP",
+        "BLMOVE",
+        "BRPOPLPUSH",
+        "BLMPOP",
+        "BZPOPMIN",
+        "BZPOPMAX",
+        "BZMPOP",
+    ],
     "bloom_regression.rs": ["BF.ADD", "BF.EXISTS"],
     "client_eviction_tcl.rs": ["CLIENT"],
     "cluster_scripting_tcl.rs": ["EVAL", "EVALSHA"],
@@ -80,50 +93,179 @@ FILE_TO_COMMANDS: dict[str, list[str]] = {
     "functions_tcl.rs": ["FUNCTION"],
     "functions_regression.rs": ["FUNCTION"],
     "geo_tcl.rs": ["GEOADD", "GEODIST", "GEOSEARCH"],
+    "geo_regression.rs": ["GEOADD", "GEOSEARCH"],
     "hash_tcl.rs": ["HSET", "HGET", "HDEL", "HGETALL"],
     "hash_field_expire_tcl.rs": ["HEXPIRE", "HTTL", "HPERSIST"],
+    "hash_regression.rs": [
+        "HSET",
+        "HGET",
+        "HDEL",
+        "HGETALL",
+        "HSETEX",
+        "HGETEX",
+        "HEXPIRE",
+        "HTTL",
+    ],
     "hotkeys_tcl.rs": ["HOTKEYS"],
     "hyperloglog_tcl.rs": ["PFADD", "PFCOUNT", "PFMERGE"],
+    "hyperloglog_regression.rs": ["PFADD", "PFCOUNT", "PFMERGE"],
     "incr_tcl.rs": ["INCR", "DECR", "INCRBY", "DECRBY"],
+    "incr_regression.rs": ["INCR", "DECR", "INCRBY", "DECRBY", "INCRBYFLOAT"],
     "info_command_tcl.rs": ["COMMAND"],
+    "info_command_regression.rs": ["COMMAND", "INFO"],
     "info_keysizes_tcl.rs": ["INFO"],
     "info_regression.rs": ["INFO"],
     "info_tcl.rs": ["INFO"],
+    "json_array_regression.rs": [
+        "JSON.ARRAPPEND",
+        "JSON.ARRINDEX",
+        "JSON.ARRINSERT",
+        "JSON.ARRLEN",
+        "JSON.ARRPOP",
+        "JSON.ARRTRIM",
+    ],
+    "json_ops_regression.rs": [
+        "JSON.NUMINCRBY",
+        "JSON.NUMMULTBY",
+        "JSON.OBJKEYS",
+        "JSON.OBJLEN",
+        "JSON.STRAPPEND",
+        "JSON.STRLEN",
+    ],
+    "json_regression.rs": [
+        "JSON.SET",
+        "JSON.GET",
+        "JSON.DEL",
+        "JSON.CLEAR",
+        "JSON.TOGGLE",
+        "JSON.MGET",
+        "JSON.TYPE",
+        "JSON.MERGE",
+    ],
     "maxmemory_tcl.rs": ["MAXMEMORY"],
     "introspection_tcl.rs": ["CONFIG", "CLIENT", "DEBUG"],
     "introspection2_tcl.rs": ["CONFIG", "CLIENT"],
     "keyspace_tcl.rs": ["SELECT", "DBSIZE", "KEYS"],
+    "keyspace_regression.rs": ["COPY", "EXPIRE", "TTL", "KEYS"],
     "latency_monitor_tcl.rs": ["LATENCY"],
     "lazyfree_tcl.rs": ["UNLINK", "FLUSHDB"],
+    "limits_regression.rs": ["SET", "GET", "MSET", "MGET"],
     "list_tcl.rs": ["LPUSH", "RPUSH", "LPOP", "RPOP", "LLEN", "LRANGE"],
+    "list2_regression.rs": ["LINSERT", "LSET", "LTRIM", "LINDEX", "LLEN"],
+    "list3_regression.rs": ["LPUSH", "RPUSH", "LRANGE", "LINDEX"],
+    "list_regression.rs": ["LPOP", "RPOP", "LPOS", "LMOVE", "LMPOP", "LREM", "LINSERT"],
     "maxmemory_regression.rs": ["MAXMEMORY"],
     "memefficiency_tcl.rs": ["MEMORY"],
     "multi_tcl.rs": ["MULTI", "EXEC", "DISCARD", "WATCH"],
+    "multi_regression.rs": ["MULTI", "EXEC", "DISCARD", "WATCH", "UNWATCH"],
     "networking_tcl.rs": ["CLIENT"],
+    "networking_regression.rs": ["CLIENT"],
     "other_tcl.rs": ["OBJECT", "TYPE"],
+    "other_regression.rs": ["COMMAND"],
     "pause_tcl.rs": ["CLIENT PAUSE"],
+    "pause_regression.rs": ["CLIENT PAUSE", "CLIENT UNPAUSE"],
     "protocol_tcl.rs": ["PING", "ECHO"],
+    "protocol_regression.rs": ["PING"],
     "pubsub_tcl.rs": ["SUBSCRIBE", "PUBLISH"],
     "pubsub_regression.rs": ["SUBSCRIBE", "PUBLISH"],
     "pubsubshard_tcl.rs": ["SSUBSCRIBE", "SPUBLISH"],
+    "pubsubshard_regression.rs": ["SSUBSCRIBE", "SPUBLISH", "PUBSUB"],
     "querybuf_tcl.rs": ["CLIENT"],
     "quit_regression.rs": ["QUIT"],
+    "quit_tcl.rs": ["QUIT"],
     "replybufsize_tcl.rs": ["CLIENT"],
     "scan_tcl.rs": ["SCAN", "SSCAN", "HSCAN", "ZSCAN"],
+    "scan_regression.rs": ["SCAN", "SSCAN", "HSCAN", "ZSCAN"],
     "scripting_tcl.rs": ["EVAL", "EVALSHA", "SCRIPT"],
-    "scripting_regression.rs": ["EVAL", "EVALSHA", "SCRIPT"],
+    "search_regression.rs": [
+        "FT.SEARCH",
+        "FT.CREATE",
+        "FT.AGGREGATE",
+        "FT.SUGADD",
+        "FT.DICTADD",
+        "FT.ALTER",
+        "FT.EXPLAIN",
+        "FT.PROFILE",
+    ],
     "set_tcl.rs": ["SADD", "SREM", "SMEMBERS", "SCARD"],
+    "set_regression.rs": [
+        "SADD",
+        "SREM",
+        "SMEMBERS",
+        "SCARD",
+        "SINTER",
+        "SUNION",
+        "SDIFF",
+        "SMOVE",
+    ],
     "slowlog_tcl.rs": ["SLOWLOG"],
     "sort_tcl.rs": ["SORT"],
+    "sort_regression.rs": ["SORT", "SORT_RO"],
     "stream_tcl.rs": ["XADD", "XLEN", "XRANGE", "XREAD", "XTRIM"],
     "stream_cgroups_tcl.rs": ["XGROUP", "XREADGROUP", "XACK", "XCLAIM"],
+    "stream_cgroups_regression.rs": ["XGROUP", "XREADGROUP", "XACK", "XCLAIM", "XPENDING"],
     "stream_regression.rs": ["XADD", "XLEN", "XRANGE"],
     "string_tcl.rs": ["SET", "GET", "SETNX", "SETEX", "MSET", "MGET"],
+    "string_regression.rs": ["SET", "GET", "STRLEN", "GETRANGE", "LCS"],
+    "tdigest_regression.rs": [
+        "TDIGEST.CREATE",
+        "TDIGEST.ADD",
+        "TDIGEST.QUANTILE",
+        "TDIGEST.CDF",
+        "TDIGEST.MERGE",
+        "TDIGEST.RANK",
+        "TDIGEST.INFO",
+    ],
+    "timeseries_regression.rs": [
+        "TS.CREATE",
+        "TS.ADD",
+        "TS.GET",
+        "TS.ALTER",
+        "TS.RANGE",
+        "TS.INCRBY",
+        "TS.DECRBY",
+        "TS.MADD",
+    ],
+    "timeseries2_regression.rs": [
+        "TS.CREATE",
+        "TS.ADD",
+        "TS.RANGE",
+        "TS.MRANGE",
+        "TS.MREVRANGE",
+        "TS.CREATERULE",
+        "TS.DELETERULE",
+    ],
     "tracking_tcl.rs": ["CLIENT TRACKING"],
+    "tracking_regression.rs": ["CLIENT TRACKING"],
+    "vectorset_regression.rs": [
+        "VADD",
+        "VSIM",
+        "VCARD",
+        "VEMB",
+        "VRANDMEMBER",
+        "VREM",
+        "VRANGE",
+        "VSETATTR",
+    ],
+    "vectorset_filter_regression.rs": ["VADD", "VSIM", "VLINKS", "VINFO"],
     "violations_tcl.rs": ["ACL"],
     "wait_tcl.rs": ["WAIT"],
     "zset_tcl.rs": ["ZADD", "ZREM", "ZRANGE", "ZSCORE", "ZRANK"],
+    "zset_regression.rs": [
+        "ZADD",
+        "ZRANGE",
+        "ZRANGESTORE",
+        "ZPOPMIN",
+        "ZPOPMAX",
+        "ZRANDMEMBER",
+        "ZINTERCARD",
+    ],
 }
+
+# Non-suite files in TESTS_DIR that are not expected to appear in
+# FILE_TO_COMMANDS (harness scaffolding, not a Redis-command test suite).
+# Enforced by the `_check_file_to_commands_coverage` guard below.
+NON_SUITE_FILES: frozenset[str] = frozenset({"main.rs"})
 
 # Human-readable labels and descriptions for each exclusion category.
 CATEGORY_META: dict[str, tuple[str, str]] = {
@@ -150,6 +292,10 @@ CATEGORY_META: dict[str, tuple[str, str]] = {
     "intentional-incompatibility:replication": (
         "Replication Differences",
         "Tests for Redis replication internals (SLAVEOF, replica propagation) that differ in FrogDB's Raft-based replication.",
+    ),
+    "needs:repl": (
+        "Requires Replication",
+        "Tests that need a primary+replica pair to assert propagation or replica-visible state, which the regression harness runs single-node.",
     ),
     "intentional-incompatibility:protocol": (
         "Protocol Differences",
@@ -178,6 +324,10 @@ CATEGORY_META: dict[str, tuple[str, str]] = {
     "intentional-incompatibility:scripting": (
         "Scripting Differences",
         "Tests for Redis Lua 5.1 scripting quirks or redis.* API details that differ in FrogDB's Lua 5.4 environment.",
+    ),
+    "architecture:scripting-pubsub": (
+        "Scripting + Pub/Sub Interaction",
+        "Tests that publish from inside a Lua script, which FrogDB's sharded scripting execution context does not support.",
     ),
     "intentional-incompatibility:cli": (
         "CLI Differences",
@@ -280,6 +430,46 @@ def count_broken_tests(rs_path: Path) -> int:
     return len(IGNORE_RE.findall(content))
 
 
+def get_redis_compat_target() -> str:
+    """Read REDIS_COMPAT_TARGET from frogdb-types, the single source of truth."""
+    content = REDIS_VERSION_PATH.read_text()
+    match = REDIS_COMPAT_TARGET_RE.search(content)
+    if not match:
+        raise SystemExit(f"Could not find REDIS_COMPAT_TARGET in {REDIS_VERSION_PATH}")
+    return match.group(1)
+
+
+# ---------------------------------------------------------------------------
+# Drift guards
+# ---------------------------------------------------------------------------
+
+
+def check_file_to_commands_coverage(rs_files: list[Path]) -> list[str]:
+    """Return suite files on disk that `FILE_TO_COMMANDS` doesn't cover.
+
+    A new `*_tcl.rs`/`*_regression.rs` file with no entry here still counts
+    toward `total_tests`, but its tests never get attributed to a command in
+    `command_impact` -- the command-matrix page would silently undercount
+    that command's coverage. Add the file to `FILE_TO_COMMANDS` (or, if it
+    genuinely isn't a command test suite, to `NON_SUITE_FILES`).
+    """
+    return sorted(
+        rs_path.name
+        for rs_path in rs_files
+        if rs_path.name not in FILE_TO_COMMANDS and rs_path.name not in NON_SUITE_FILES
+    )
+
+
+def check_category_meta_completeness(categories: dict[str, dict]) -> list[str]:
+    """Return exclusion categories with no `CATEGORY_META` entry.
+
+    Not fatal -- `generate()` already falls back to a title-cased label --
+    but a missing entry means the categories/exclusions page loses its
+    curated label and description, so `--check` surfaces it as a warning.
+    """
+    return sorted(cat for cat in categories if cat not in CATEGORY_META)
+
+
 # ---------------------------------------------------------------------------
 # Generation
 # ---------------------------------------------------------------------------
@@ -288,6 +478,15 @@ def count_broken_tests(rs_path: Path) -> int:
 def generate(tests_dir: Path) -> dict:
     """Walk test files and produce the compat-exclusions data structure."""
     rs_files = sorted(tests_dir.glob("*.rs"))
+
+    uncovered = check_file_to_commands_coverage(rs_files)
+    if uncovered:
+        raise SystemExit(
+            "FILE_TO_COMMANDS in website/scripts/compat-gen.py does not cover: "
+            + ", ".join(uncovered)
+            + ". Add an entry for each file (or add it to NON_SUITE_FILES if it "
+            "isn't a command test suite)."
+        )
 
     total_tests = 0
     total_exclusions = 0
@@ -330,7 +529,16 @@ def generate(tests_dir: Path) -> dict:
                 }
             )
 
-        # Build command impact data
+        # Build command impact data. NOTE: `FILE_TO_COMMANDS` maps a whole
+        # suite (file) to every command it exercises, and doc-comment
+        # exclusions aren't tagged to a specific command within a
+        # multi-command file — so `total_tests`/`total_excluded` below are
+        # the *suite's* totals, copied as-is onto each of that suite's
+        # commands (not divided or attributed per command). A command
+        # covered by several suites gets those suite totals summed. Do not
+        # present these as a per-command "N of M tests excluded" ratio
+        # downstream (see `matrix-gen.py`'s `exclusion_note`) — the
+        # metadata doesn't support that claim.
         for cmd in commands:
             if cmd not in command_data:
                 command_data[cmd] = {
@@ -374,7 +582,7 @@ def generate(tests_dir: Path) -> dict:
             "total_tests": total_tests,
             "total_exclusions": total_exclusions,
             "broken_tests": total_broken,
-            "upstream_version": "Redis 8.6.0",
+            "upstream_version": f"Redis {get_redis_compat_target()}",
         },
         "categories": categories,
         "suites": suites,
@@ -408,6 +616,16 @@ def main() -> int:
     generated_json = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
     if args.check:
+        missing_meta = check_category_meta_completeness(data["categories"])
+        if missing_meta:
+            print(
+                "Warning: CATEGORY_META has no entry for: "
+                + ", ".join(missing_meta)
+                + ". These categories fall back to a generic label/description "
+                "-- add an entry in website/scripts/compat-gen.py.",
+                file=sys.stderr,
+            )
+
         output_path: Path = args.output
         if not output_path.exists():
             print(

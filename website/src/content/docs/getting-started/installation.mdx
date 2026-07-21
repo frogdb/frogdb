@@ -4,111 +4,237 @@ description: How to install FrogDB
 ---
 
 import { Tabs, TabItem, Steps, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+import versions from '../../../data/versions.json';
 
-<Tabs>
-  <TabItem label="macOS" icon="apple">
-    <Aside type="note">Homebrew formula coming soon.</Aside>
+FrogDB ships as a single `frogdb-server` binary. FrogDB is pre-release software — no
+tagged release has published binaries, container images, or packages yet, so every
+path below builds the binary or image locally from this repository. Pick Docker for
+the fastest path to a running server, Debian/Ubuntu if you want a systemd-managed
+install, or build from source if you're contributing or want full control over the
+build.
 
-    ```bash
-    brew install frogdb/tap/frogdb
-    ```
+## Docker
 
-    Or build from source using the **Build from Source** tab.
-  </TabItem>
-  <TabItem label="Docker" icon="seti:docker">
-    The fastest way to get started:
+<Aside type="note">
+No FrogDB image has been published to a registry yet (the release pipeline that
+pushes to `docker.io/frogdb/frogdb` and `ghcr.io` runs only on tagged releases).
+Build the image locally instead — it takes one command once the cross-compilation
+toolchain is installed.
+</Aside>
 
-    ```bash
-    docker run -d --name frogdb -p 6379:6379 frogdb/frogdb:latest
-    ```
+<Steps>
+1. **Install the cross-compilation toolchain** (once):
 
-    With persistent storage:
+   ```bash
+   just cross-install
+   ```
 
-    ```bash
-    docker run -d --name frogdb \
-      -p 6379:6379 \
-      -v frogdb-data:/data \
-      frogdb/frogdb:latest
-    ```
+   This installs [`cargo-zigbuild`](https://github.com/rust-cross/cargo-zigbuild),
+   used to cross-compile `frogdb-server` for Linux from any host.
 
-    Docker Compose:
+2. **Build the image**:
 
-    ```yaml
-    services:
-      frogdb:
-        image: frogdb/frogdb:latest
-        ports:
-          - "6379:6379"
-        volumes:
-          - frogdb-data:/data
-        environment:
-          FROGDB_SERVER__BIND: "0.0.0.0"
-          FROGDB_PERSISTENCE__DATA_DIR: /data
-        healthcheck:
-          test: ["CMD", "redis-cli", "-p", "6379", "PING"]
-          interval: 5s
-          retries: 10
+   ```bash
+   just docker-cross-build
+   ```
 
-    volumes:
-      frogdb-data:
-    ```
-  </TabItem>
-  <TabItem label="Debian/Ubuntu" icon="linux">
-    ```bash
-    # Download the latest .deb package from GitHub Releases
-    sudo dpkg -i frogdb_*.deb
+   This cross-compiles a release binary for `x86_64-unknown-linux-gnu`, then runs
+   `docker build` against `frogdb-server/docker/Dockerfile`, tagging the result
+   `frogdb:latest`.
 
-    # The server is managed via systemd
-    sudo systemctl start frogdb-server
-    sudo systemctl enable frogdb-server
-    ```
+3. **Run it**:
 
-    The package installs to `/usr/bin/frogdb-server` with data at `/var/lib/frogdb/`.
-  </TabItem>
-  <TabItem label="Build from Source" icon="seti:rust">
-    <Aside type="note">Requires Rust 1.75+ ([rustup.rs](https://rustup.rs/)) and RocksDB dependencies.</Aside>
+   ```bash
+   docker run -d --name frogdb \
+     -p 6379:6379 \
+     -v frogdb-data:/data \
+     frogdb:latest
+   ```
 
-    <Steps>
-    1. **Install dependencies**
+   The image bundles `redis-cli` (via the Debian `redis-tools` package), so you can
+   exec into the container to use it, or connect from the host as shown in
+   [Verify the install](#verify-the-install).
+</Steps>
 
-       **macOS:**
-       ```bash
-       brew install rocksdb snappy lz4 zstd
-       ```
-
-       **Ubuntu/Debian:**
-       ```bash
-       sudo apt-get install -y build-essential librocksdb-dev libsnappy-dev liblz4-dev libzstd-dev
-       ```
-
-       **Arch Linux:**
-       ```bash
-       sudo pacman -S rocksdb snappy lz4 zstd
-       ```
-
-    2. **Clone and build**
-
-       ```bash
-       git clone https://github.com/frogdb/frogdb.git
-       cd frogdb
-       cargo build --release
-       # Binary at ./target/release/frogdb-server
-       ```
-    </Steps>
-  </TabItem>
-</Tabs>
-
-## Test
+Configuration via environment variables (see `frogdb-server/docker/Dockerfile` for the full list):
 
 ```bash
-# Connect with any Redis client
-redis-cli ping
+docker run -d --name frogdb \
+  -p 6379:6379 \
+  -v frogdb-data:/data \
+  -e FROGDB_SERVER__BIND=0.0.0.0 \
+  -e FROGDB_PERSISTENCE__DATA_DIR=/data \
+  frogdb:latest
+```
+
+Docker Compose:
+
+```yaml
+services:
+  frogdb:
+    image: frogdb:latest
+    ports:
+      - "6379:6379"
+    volumes:
+      - frogdb-data:/data
+    environment:
+      FROGDB_SERVER__BIND: "0.0.0.0"
+      FROGDB_PERSISTENCE__DATA_DIR: /data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "PING"]
+      interval: 5s
+      retries: 10
+
+volumes:
+  frogdb-data:
+```
+
+## Debian / Ubuntu
+
+<Aside type="caution">
+No `.deb` package has been published to GitHub Releases yet — the release
+pipeline's packaging job runs only on tagged releases and requires
+[`nfpm`](https://nfpm.goreleaser.com/), which isn't part of this repo's normal
+dev toolchain. If you just want a running server, use Docker or Build from
+Source above/below instead. The steps here build the package locally, the same
+way the release pipeline does.
+</Aside>
+
+<Steps>
+1. **Build the binaries**:
+
+   ```bash
+   cargo build --release --bin frogdb-server --bin frogctl --bin frogdb-admin
+   ```
+
+2. **Regenerate the packaging files** (nfpm config, default `frogdb.toml`, systemd
+   unit, install scripts) from the current config source:
+
+   ```bash
+   just deb-gen
+   ```
+
+3. **Install `nfpm`** and build the package:
+
+   ```bash
+   go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+
+   cp target/release/frogdb-server target/release/frogctl target/release/frogdb-admin \
+     frogdb-server/ops/deploy/deb/
+
+   cd frogdb-server/ops/deploy/deb
+   ARCH=$(dpkg --print-architecture)
+   VERSION=$(awk -F'"' '/^version:/{print $2}' nfpm.yaml)
+   nfpm package \
+     --config nfpm.yaml --packager deb \
+     --target frogdb-server_${VERSION}_${ARCH}.deb
+   ```
+
+4. **Install and start**:
+
+   ```bash
+   sudo dpkg -i frogdb-server_*.deb
+   ```
+
+   The package's postinstall script creates a `frogdb` system user, then enables
+   and starts `frogdb-server.service` automatically. No manual `systemctl` step is
+   needed, though `sudo systemctl status frogdb-server` is useful to confirm it.
+</Steps>
+
+The package installs:
+
+| What | Path |
+|---|---|
+| Server binary | `/usr/bin/frogdb-server` |
+| `frogctl` (operational CLI) | `/usr/bin/frogctl` |
+| `frogdb-admin` CLI | `/usr/bin/frogdb-admin` |
+| Config file | `/etc/frogdb/frogdb.toml` |
+| systemd unit | `/usr/lib/systemd/system/frogdb-server.service` |
+| Data directory | `/var/lib/frogdb` (data at `/var/lib/frogdb/data`) |
+| Logs | `/var/log/frogdb` |
+
+## Build from Source
+
+<Steps>
+1. **Install the Rust toolchain.** The project pins its toolchain in
+   `rust-toolchain.toml` (currently `{versions.rust_toolchain}`); running any
+   `cargo` command inside the repo with [rustup](https://rustup.rs/) installed
+   fetches that exact version automatically.
+
+2. **Install system dependencies.** FrogDB needs `libclang` for `bindgen`
+   (used by `librocksdb-sys`) and a C/C++ toolchain to compile RocksDB's C++
+   sources; TLS is handled by a pure-Rust `rustls` stack, so no system OpenSSL
+   is required. See `Brewfile` / `shell.nix` at the repo root for the full,
+   current list.
+
+   **macOS:**
+   ```bash
+   brew install llvm rocksdb
+   ```
+   `llvm` provides `libclang`. The `Justfile` defaults `FROGDB_SYSTEM_ROCKSDB`
+   to `1`, so the `just` build recipes below link against this Homebrew
+   RocksDB by default — install it even though `Brewfile` labels it
+   "optional," or the default build will fail to find it. macOS builds also
+   need `DYLD_LIBRARY_PATH` pointed at `llvm`; the `just` recipes set this for
+   you automatically.
+
+   **Debian/Ubuntu:**
+   ```bash
+   sudo apt install build-essential libclang-dev
+   ```
+
+   **Arch Linux:**
+   ```bash
+   sudo pacman -S base-devel clang
+   ```
+
+3. **Clone and build:**
+
+   ```bash
+   git clone https://github.com/nathanjordan/frogdb
+   cd frogdb
+   just release
+   ```
+
+   `just release` wraps `cargo build --release` with the environment
+   variables from step 2 already set. The binary lands at
+   `target/release/frogdb-server`. Prefer it over a bare `cargo build
+   --release` so you don't have to set those variables by hand.
+
+   <Aside type="tip">
+   `just` build recipes default to linking against a Homebrew-installed
+   RocksDB (`FROGDB_SYSTEM_ROCKSDB` defaults to `1` in the `Justfile`, with
+   a Homebrew library path) — that's what step 2's `brew install rocksdb`
+   is for on macOS. On Linux, no system RocksDB path has been set up, so
+   build from source instead by setting `FROGDB_SYSTEM_ROCKSDB=0`:
+
+   ```bash
+   FROGDB_SYSTEM_ROCKSDB=0 just release
+   ```
+   </Aside>
+</Steps>
+
+## Verify the install
+
+```bash
+frogdb-server --version
+```
+
+Start the server (see [Quickstart](/getting-started/quickstart/) for all the
+ways to do this), then from another terminal:
+
+```bash
+redis-cli -p 6379 PING
 # PONG
 ```
 
-## Next Steps
+`redis-cli` ships with Redis; install it via your package manager (e.g. `brew
+install redis`, `apt install redis-tools`) if you don't already have it. It's
+bundled in the Docker image.
+
+## Next steps
 
 <CardGrid>
-  <LinkCard title="Quickstart" description="First commands" href="/getting-started/quickstart/" />
-  <LinkCard title="Configuration Reference" description="All configuration options" href="/reference/configuration/" />
+  <LinkCard title="Quickstart" description="Connect, run commands, enable persistence" href="/getting-started/quickstart/" />
+  <LinkCard title="Configuration" description="Config surfaces, precedence, and runtime-mutable settings" href="/operations/configuration/" />
 </CardGrid>

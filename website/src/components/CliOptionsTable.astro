@@ -1,0 +1,74 @@
+---
+/**
+ * Renders a CLI options table (Option, Short, Type, Default, Description)
+ * from an auto-generated `<binary>-cli.json` file, which is a JSON dump of
+ * the clap `Command` model (see `frogdb-server/ops/docs-gen/src/main.rs`,
+ * `generate_cli_reference`). Row order follows the JSON's `args` array,
+ * which mirrors clap declaration order.
+ *
+ * Usage in MDX:
+ *   import CliOptionsTable from '../../components/CliOptionsTable.astro';
+ *   <CliOptionsTable source="frogdb-server-cli" />
+ */
+
+interface Props {
+  source: 'frogdb-server-cli' | 'frogctl-cli';
+}
+
+const { source } = Astro.props;
+
+import frogdbServerCli from '../data/frogdb-server-cli.json';
+import frogctlCli from '../data/frogctl-cli.json';
+
+const SOURCES: Record<string, any> = {
+  'frogdb-server-cli': frogdbServerCli,
+  'frogctl-cli': frogctlCli,
+};
+
+const data = SOURCES[source];
+
+if (!data) {
+  throw new Error(`CliOptionsTable: unknown source "${source}". Available: ${Object.keys(SOURCES).join(', ')}`);
+}
+
+const args = data.command.args as any[];
+
+function formatOption(arg: any): string {
+  return `--${arg.long}`;
+}
+
+function formatShort(arg: any): string {
+  return arg.short ? `-${arg.short}` : '';
+}
+
+// The generated JSON has no explicit semantic type -- only a clap
+// `value_name` (set for options that take a value) and an optional
+// `default`. An arg with no value_name is a boolean flag; one with a
+// value_name is typed by that name (e.g. `<PORT>`, `<FILE>`).
+function formatType(arg: any): string {
+  return arg.value_name ? `<${arg.value_name}>` : 'flag';
+}
+---
+
+<table>
+  <thead>
+    <tr>
+      <th>Option</th>
+      <th>Short</th>
+      <th>Type</th>
+      <th>Default</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    {args.map((arg: any) => (
+      <tr>
+        <td><code>{formatOption(arg)}</code></td>
+        <td>{formatShort(arg) && <code>{formatShort(arg)}</code>}</td>
+        <td><code>{formatType(arg)}</code></td>
+        <td>{arg.default !== undefined ? <code>{arg.default}</code> : '—'}</td>
+        <td>{arg.help ?? ''}</td>
+      </tr>
+    ))}
+  </tbody>
+</table>

@@ -98,6 +98,18 @@ impl ShardReceiver {
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
+
+    /// Non-blocking receive of the next buffered envelope, if any.
+    ///
+    /// Shard-driver harness seam for the deterministic pump loop: under a
+    /// current-thread runtime a message already delivered by a spawned
+    /// coordinator task is buffered and returned without yielding, so pumping
+    /// one queued message never lets another task interleave mid-pump.
+    #[cfg(any(test, feature = "shard-driver"))]
+    #[doc(hidden)]
+    pub fn try_recv(&mut self) -> Option<Envelope> {
+        self.inner.try_recv().ok()
+    }
 }
 
 /// Messages sent to shard workers.
@@ -129,7 +141,20 @@ pub enum ShardMessage {
     },
 
     /// Get the current shard version (for WATCH).
-    GetVersion { response_tx: oneshot::Sender<u64> },
+    ///
+    /// `keys` are the keys being watched. Any that are *already* logically
+    /// expired at watch time are lazily purged here (physical state aligned to
+    /// logical state) WITHOUT bumping the version — so watching an already-stale
+    /// key records a "nonexistent" watch that a later EXEC does not treat as
+    /// modified. This is what lets `purge_expired_watches` at EXEC distinguish a
+    /// key that was live-at-watch and expired during the window (F3: must abort)
+    /// from one that was already gone when watched (must NOT abort), matching
+    /// Redis's `wk->expired` flag (PR #7920). Pass an empty `keys` for a pure
+    /// version probe (no purge).
+    GetVersion {
+        keys: Vec<Bytes>,
+        response_tx: oneshot::Sender<u64>,
+    },
 
     /// Execute a transaction atomically.
     ExecTransaction {

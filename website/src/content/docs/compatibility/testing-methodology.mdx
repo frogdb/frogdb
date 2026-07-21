@@ -1,0 +1,119 @@
+---
+title: Testing Methodology
+description: The layered, automated testing that backs FrogDB's compatibility and correctness claims.
+---
+
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+FrogDB's compatibility and correctness claims rest on layered, automated testing. Every layer described below exists in the repository and runs in CI. The layers build on one another from fast unit tests up to distributed fault-injection: unit and integration tests establish per-operation behavior, Shuttle and Turmoil probe concurrency and network conditions, Jepsen exercises full replication and cluster topologies under faults, fuzzing hardens the parsers and serializers, the ported Redis regression suites measure wire-protocol compatibility, and a history-based checker verifies the results against consistency models.
+
+## The testing pyramid
+
+```
+                    +------------------+
+                    |      Jepsen      |   distributed correctness
+                    |  (replication +  |   under fault injection
+                    |   Raft cluster)  |
+                    +------------------+
+                    |     Turmoil      |   deterministic network
+                    |    simulation    |   simulation
+                    +------------------+
+                    |     Shuttle      |   randomized concurrency
+                    +------------------+
+                    |   Integration    |   real TCP, RESP contract
+                    +------------------+
+                    |       Unit       |   functions, data structures
+                    +------------------+
+
+   cross-cutting:  cargo-fuzz (parsers/serializers)  ·
+                   ported Redis regression suites  ·
+                   history-based consistency checking
+```
+
+Fuzzing, the regression suites, and the consistency checker are cross-cutting: they draw on the layers below them rather than sitting at a single height in the stack.
+
+## Unit & integration tests
+
+Unit tests live inline with the source in `#[cfg(test)]` modules and cover individual functions, data structures, and algorithms.
+
+Integration tests connect over real TCP. They combine black-box assertions on the public RESP contract with white-box assertions on internal state (data-structure contents, WAL contents, shard distribution). Property-based tests using `proptest` generate randomized inputs to surface edge cases. Tests run under `cargo nextest`.
+
+## Randomized concurrency (Shuttle)
+
+[Shuttle](https://github.com/awslabs/shuttle) (AWS Labs) explores randomized thread interleavings rather than exhaustively enumerating them, trading completeness for the ability to scale to higher-level scenarios. FrogDB uses it for multi-client and cross-shard concurrency, gated behind an optional `shuttle` crate feature. Run it with `just concurrency`.
+
+## Network simulation (Turmoil)
+
+[Turmoil](https://github.com/tokio-rs/turmoil) provides a deterministic, simulated network — latency, partitions, and message loss — so that replication and cluster scenarios run reproducibly in-process without real sockets. The simulation tests live at `frogdb-server/crates/server/tests/simulation.rs` with a harness at `frogdb-server/crates/server/tests/common/sim_harness.rs`, behind the optional `turmoil` feature. Run it with `just concurrency`.
+
+## Distributed correctness (Jepsen)
+
+Jepsen is the strongest evidence for FrogDB's distributed guarantees. The harness under `testing/jepsen/` drives real multi-node clusters in Docker, injects faults (process crashes, network partitions), and checks the recorded histories for consistency violations.
+
+Two topologies are exercised, each with its own compose file:
+
+- **Replication** — `testing/jepsen/frogdb/docker-compose.replication.yml`
+- **Raft cluster** — `testing/jepsen/frogdb/docker-compose.raft-cluster.yml`
+
+The `testing/jepsen/run.py` harness builds images and runs the suites (`all`, `single`, `crash`, `replication`, `raft`, `raft-extended`). Typical recipes:
+
+- `just jepsen-suite <suite>` — run a named suite
+- `just jepsen-up <topology>` — bring up a topology (`single`, `replication`, `raft`)
+- `just jepsen-summary` — print a pass/fail summary of the latest run
+- `just jepsen-list` — list available tests and suites
+
+See `testing/jepsen/README.md` and the `jepsen-testing` skill for details.
+
+## Fuzzing (cargo-fuzz)
+
+Coverage-guided fuzzing under `testing/fuzz/` hardens the untrusted-input surfaces of the server. The targets span:
+
+- **Protocol and RPC parsing** — RESP request parsing and pipelining, internal RPC frames, replication frames
+- **Data-structure operations** — skiplists, bitfields, geo, vector sets, JSON documents and path expressions
+- **Search and filter** — search and filter expression parsing, aggregation, `FT.CREATE` parsing
+- **Scripting** — script parsing and function restore
+- **Serialization** — deserialization, HyperLogLog decoding, time-series decompression
+- **Cluster** — cluster-bus message and snapshot decoding
+- **Miscellaneous** — glob matching, stream ID parsing, ACL rule parsing
+
+Run a single target with `just fuzz <target>`, the full set with `just fuzz-all`, and list the targets with `just fuzz-list`.
+
+## Ported Redis regression suites
+
+The `frogdb-server/crates/redis-regression/` crate ports the upstream Redis regression tests to Rust: each `*_tcl.rs` file under its `tests/` directory reproduces a specific upstream test file as native `#[tokio::test]` functions. These are Rust-native ports, not a live TCL runner — the upstream TCL runner was removed, and no `.tcl` files execute against FrogDB.
+
+Every ported test runs on each commit. Intentional exclusions are documented in the source: file-level exclusions in the crate module docs and per-test exclusions in each port file's `## Intentional exclusions` doc-comment. Those exclusions are surfaced, with reasons, on the [Test suite results](/compatibility/test-suite/) page.
+
+## History-based consistency checking
+
+The `frogdb-server/crates/testing/` crate records operation histories and checks them for linearizability. The checker (`frogdb-server/crates/testing/src/checker.rs`) implements the Wing–Gong–Larus (WGL) linearizability algorithm — the same approach used by [Porcupine](https://github.com/anishathalye/porcupine) — searching for a valid linearization of a recorded history (`frogdb-server/crates/testing/src/history.rs`) against a sequential specification model.
+
+Scope of the guarantees the checker verifies:
+
+- **Linearizability** for single-key operations: each operation appears to take effect atomically at a single point between its invocation and its response.
+- **Serializability** for transactions (`MULTI`/`EXEC`, Lua scripts, multi-key operations): the group appears to execute in some serial order.
+
+These are the properties the code checks; they are not extended into broader claims.
+
+## Running the tests
+
+| Recipe | What it runs |
+|---|---|
+| `just test` | Unit and integration tests (all crates) |
+| `just test <crate> <pattern>` | A subset, scoped to one crate |
+| `just concurrency` | Shuttle randomized-concurrency and Turmoil simulation tests |
+| `just test-all` | `test` plus `concurrency` |
+| `just fuzz-all` / `just fuzz-list` | Run every fuzz target / list the targets |
+| `just jepsen-suite <suite>` | A Jepsen suite (`all`, `single`, `crash`, `replication`, `raft`, `raft-extended`) |
+
+Tests run through `cargo nextest`. Deeper contributor guidance lives in the [Architecture](/architecture/architecture/) section.
+
+## See also
+
+<CardGrid>
+  <LinkCard title="Test suite results" description="Redis regression coverage and intentional exclusions" href="/compatibility/test-suite/" />
+  <LinkCard title="Command matrix" description="Per-command supported / partial / unsupported status" href="/compatibility/command-matrix/" />
+  <LinkCard title="Consistency" description="FrogDB's consistency model" href="/architecture/consistency/" />
+  <LinkCard title="Replication" description="Primary/replica replication design" href="/architecture/replication/" />
+  <LinkCard title="Clustering" description="Raft-coordinated cluster design" href="/architecture/clustering/" />
+</CardGrid>

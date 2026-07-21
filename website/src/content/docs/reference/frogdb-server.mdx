@@ -3,6 +3,7 @@ title: frogdb-server
 description: Command-line options for the FrogDB server
 ---
 
+import CliOptionsTable from '../../../components/CliOptionsTable.astro';
 import { LinkCard, CardGrid } from '@astrojs/starlight/components';
 
 The main FrogDB server process.
@@ -13,30 +14,9 @@ frogdb-server [OPTIONS]
 
 ## Options
 
-| Option | Short | Type | Default | Description |
-|---|---|---|---|---|
-| `--config <FILE>` | `-c` | path | | Path to TOML configuration file |
-| `--bind <ADDR>` | `-b` | string | `127.0.0.1` | Bind address |
-| `--port <PORT>` | `-p` | integer | `6379` | Listen port |
-| `--shards <N>` | `-s` | string | `1` | Number of shards. `auto` = number of CPU cores |
-| `--log-level <LEVEL>` | `-l` | enum | `info` | Log level: `trace`, `debug`, `info`, `warn`, `error` |
-| `--log-format <FORMAT>` | | enum | `pretty` | Log format: `pretty`, `json` |
-| `--admin-bind <ADDR>` | | string | | Admin bind address (overrides config) |
-| `--admin-port <PORT>` | | integer | | Admin port (implies `admin.enabled = true`) |
-| `--http-bind <ADDR>` | | string | | HTTP server bind address (overrides config) |
-| `--http-port <PORT>` | | integer | | HTTP server port (overrides config) |
-| `--http-token <TOKEN>` | | string | | Bearer token for protected HTTP endpoints (`/admin/*`, `/debug/*`) |
-| `--tls-enabled` | | flag | `false` | Enable TLS |
-| `--tls-cert-file <FILE>` | | path | | TLS certificate file (PEM) |
-| `--tls-key-file <FILE>` | | path | | TLS private key file (PEM) |
-| `--tls-ca-file <FILE>` | | path | | TLS CA certificate file (PEM) for client verification |
-| `--tls-port <PORT>` | | integer | | TLS listen port |
-| `--tls-require-client-cert <MODE>` | | enum | | Client certificate mode: `none`, `optional`, `required` |
-| `--tls-replication` | | flag | `false` | Encrypt replication connections with TLS |
-| `--tls-cluster` | | flag | `false` | Encrypt cluster bus connections with TLS |
-| `--generate-config` | | flag | | Print default configuration to stdout and exit |
-| `--intrinsic-latency <SECS>` | | integer | | Run latency test for N seconds and exit |
-| `--startup-latency-check` | | flag | `false` | Run latency check before accepting connections |
+Generated from the `Cli` struct in `frogdb-server/crates/server/src/cli.rs`. A flag given on the command line overrides the same setting in the config file; see [Configuration Reference](/reference/configuration/) for the config-file equivalent of each override.
+
+<CliOptionsTable source="frogdb-server-cli" />
 
 ## Examples
 
@@ -44,40 +24,33 @@ frogdb-server [OPTIONS]
 # Start with defaults
 frogdb-server
 
-# Start with config file
+# Start with a config file
 frogdb-server --config /etc/frogdb/frogdb.toml
 
-# Auto-detect shards, bind to all interfaces
+# Auto-detect shard count, bind to all interfaces
 frogdb-server -b 0.0.0.0 -s auto
 
-# Generate default config
+# Generate the default configuration
 frogdb-server --generate-config > frogdb.toml
 
 # Enable TLS
 frogdb-server --tls-enabled --tls-cert-file server.crt --tls-key-file server.key
 
-# Enable debug UI with auth token
+# Serve the HTTP metrics/admin endpoint with a bearer token
 frogdb-server --http-port 9090 --http-token my-secret-token
 
-# Run intrinsic latency test
+# Run the intrinsic latency test for 10 seconds and exit
 frogdb-server --intrinsic-latency 10
 ```
 
-## Environment Variables
+## Environment variables
 
-All configuration fields can be overridden via environment variables with the `FROGDB_` prefix. Use double underscores (`__`) to separate nested keys:
+All configuration fields accept a `FROGDB_`-prefixed environment variable, with `__` separating nested keys (e.g. `FROGDB_SERVER__PORT`). See [Operations → Configuration](/operations/configuration/) for the full mapping and precedence rules.
 
-```bash
-FROGDB_SERVER__BIND=0.0.0.0
-FROGDB_SERVER__PORT=6380
-FROGDB_PERSISTENCE__DURABILITY_MODE=sync
-FROGDB_MEMORY__MAXMEMORY=4294967296
-```
-
-## See Also
+## See also
 
 <CardGrid>
   <LinkCard title="Configuration Reference" description="All configuration options" href="/reference/configuration/" />
-  <LinkCard title="Reference Config File" description="Complete config with defaults" href="/reference/reference-config/" />
+  <LinkCard title="Example config file" description="A complete, generated config file" href="/reference/example-config/" />
   <LinkCard title="frogctl" description="Operational CLI tool" href="/reference/frogctl/" />
 </CardGrid>

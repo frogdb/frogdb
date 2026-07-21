@@ -16,6 +16,7 @@ pub mod hyperloglog;
 pub mod json;
 pub mod metrics;
 pub mod redirect;
+pub mod redis_version;
 pub mod skiplist;
 pub mod sync;
 pub mod tdigest;
@@ -47,6 +48,7 @@ pub use json::{
     DEFAULT_JSON_MAX_DEPTH, DEFAULT_JSON_MAX_SIZE, JsonError, JsonLimits, JsonType, JsonValue,
     estimate_json_size,
 };
+pub use redis_version::{ADVERTISED_REDIS_VERSION, REDIS_COMPAT_TARGET};
 pub use sync::{LockError, MutexExt, RwLockExt};
 pub use tdigest::TDigestValue;
 pub use timeseries::{

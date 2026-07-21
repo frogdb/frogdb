@@ -51,7 +51,7 @@ impl InfoSection for ServerSection {
 
         let mut w = SectionWriter::new("Server");
         w.field("frogdb_version", env!("CARGO_PKG_VERSION"))
-            .field("redis_version", "7.2.0")
+            .field("redis_version", frogdb_core::ADVERTISED_REDIS_VERSION)
             .field("redis_git_sha1", "00000000")
             .field("redis_git_dirty", 0)
             .field("redis_build_id", 0)
@@ -409,7 +409,10 @@ impl InfoSection for ReplicationSection {
             if r.is_replica {
                 w.field_opt("master_host", r.master_host.as_deref())
                     .field_opt("master_port", r.master_port)
-                    .field("master_link_status", "up");
+                    .field(
+                        "master_link_status",
+                        if r.master_link_up { "up" } else { "down" },
+                    );
             }
             w.field("connected_slaves", 0)
                 .field("master_failover_state", "no-failover")
@@ -912,16 +915,31 @@ mod tests {
     }
 
     #[test]
-    fn replication_replica_renders_master_link() {
+    fn replication_replica_renders_master_link_up_when_streaming() {
         let mut src = sources();
         src.replication.is_replica = true;
         src.replication.master_host = Some("10.0.0.1".to_string());
         src.replication.master_port = Some(6380);
+        src.replication.master_link_up = true;
         let out = render(&ReplicationSection, &src);
         assert!(out.contains("role:slave\r\n"), "{out}");
         assert!(out.contains("master_host:10.0.0.1\r\n"), "{out}");
         assert!(out.contains("master_port:6380\r\n"), "{out}");
         assert!(out.contains("master_link_status:up\r\n"), "{out}");
+    }
+
+    #[test]
+    fn replication_replica_renders_master_link_down_when_not_streaming() {
+        // The link starts (and stays) down until the replica connection
+        // machinery reaches the Streaming state — must never default to "up".
+        let mut src = sources();
+        src.replication.is_replica = true;
+        src.replication.master_host = Some("10.0.0.1".to_string());
+        src.replication.master_port = Some(6380);
+        src.replication.master_link_up = false;
+        let out = render(&ReplicationSection, &src);
+        assert!(out.contains("role:slave\r\n"), "{out}");
+        assert!(out.contains("master_link_status:down\r\n"), "{out}");
     }
 
     #[test]

@@ -143,6 +143,7 @@ impl ConnectionHandler {
             primary,
             master_host: shards.master_host.clone(),
             master_port: shards.master_port,
+            master_link_up: shards.master_link_up,
             secondary_window,
         };
 
