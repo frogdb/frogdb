@@ -1,0 +1,6 @@
+# Configuration for actionlint (run by the Actionlint job in test.yml).
+self-hosted-runner:
+  # Blacksmith runner labels (see .github/workflows/test-unit-tests-testbox.yml).
+  labels:
+    - blacksmith-8vcpu-ubuntu-2404-arm
+    - blacksmith-16vcpu-ubuntu-2404-arm

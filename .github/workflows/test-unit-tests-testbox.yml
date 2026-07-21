@@ -1,0 +1,44 @@
+name: Blacksmith Testbox
+on:
+  workflow_dispatch:
+    inputs:
+      testbox_id:
+        type: string
+        description: "Testbox session ID"
+        required: true
+env:
+  CARGO_TERM_COLOR: always
+  # Incremental artifacts are large and useless across testbox lifetimes; keep
+  # target/ lean so builds and cache save/restore stay fast.
+  CARGO_INCREMENTAL: "0"
+jobs:
+  unit-tests:
+    name: Unit Tests
+    runs-on: blacksmith-8vcpu-ubuntu-2404-arm
+    steps:
+      - name: Begin Testbox
+        uses: useblacksmith/begin-testbox@v2
+        with:
+          testbox_id: ${{ inputs.testbox_id }}
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+        with:
+          install: 'true'
+          install_args: just cargo:cargo-nextest
+          cache: 'true'
+          experimental: 'true'
+      - name: Install Rust 1.92.0
+        uses: dtolnay/rust-toolchain@1.92.0
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev pkg-config libssl-dev
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+        with:
+          shared-key: testbox-arm
+      - name: Prebuild workspace test binaries
+        run: cargo nextest run --no-run --workspace
+      - name: Run Testbox
+        uses: useblacksmith/run-testbox@v2
+        if: always()
