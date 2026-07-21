@@ -7,68 +7,105 @@ hero:
     file: ../../assets/frogdb-logo.png
     alt: FrogDB Logo
   title: '<span class="accent">Redis 8.x</span> compatible. Memory-first. Built in Rust.'
-  tagline: FrogDB implements *all* Redis 8.x types, is wire compatible with existing Redis clients, supports replication and cluster mode operation, and persistence with hot/warm tiering if desired. Extensively tested for Redis compatibility and correctness.
+  tagline: FrogDB is an in-memory database written in Rust. It implements RESP2 and RESP3, targets compatibility with Redis 8.x commands, supports replication and cluster mode, and stores data with RocksDB-backed persistence — shipped as a single binary.
   actions:
     - text: Get Started
       link: /getting-started/quickstart/
       icon: right-arrow
       variant: primary
     - text: View on GitHub
-      link: https://github.com/frogdb/frogdb
+      link: https://github.com/nathanjordan/frogdb
       icon: external
       variant: secondary
 ---
 
-import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+import { CardGrid, LinkCard, Aside } from '@astrojs/starlight/components';
 import Card from 'starlight-plugin-icons/components/Card.astro';
+
+<Aside type="caution" title="Pre-release">
+FrogDB is unreleased, pre-production software under active development. It is
+suitable for evaluation and lab use, not production workloads. APIs, defaults,
+and on-disk formats may change.
+</Aside>
 
 ## Features
 
 <CardGrid stagger>
-	<Card title="Redis 8.x Compatible">
-		Full support for all Redis types, including search, scripts, streams, multi, geo, vectors, timeseries, pubsub, etc. Wire-compatibility with Redis: use your existing clients.
+	<Card title="Redis compatible">
+		Implements RESP2 and RESP3 and targets compatibility with Redis 8.x
+		commands, so existing Redis clients connect unchanged. See the
+		[compatibility overview](/compatibility/overview/) for behavioral
+		deltas and the [command matrix](/compatibility/command-matrix/) for
+		per-command status.
 	</Card>
-	<Card title="Clustering & Replication">
-		Cluster mode and replication support. Cluster state managed via Raft consensus.
+	<Card title="Clustering & replication">
+		Supports [primary/replica replication](/operations/replication/) and
+		[cluster mode](/operations/clustering/). Cluster metadata is
+		coordinated with Raft — see [Architecture →
+		Clustering](/architecture/clustering/).
 	</Card>
-	<Card title="Persistent Storage">
-		RocksDB-backed persistence with configurable durability (write-through or async). Hot/warm tier support for memory to SSD spillover.
+	<Card title="Persistent storage">
+		[RocksDB-backed persistence](/operations/persistence/) with configurable
+		durability modes, plus optional two-tier hot/warm storage (off by
+		default).
 	</Card>
 	<Card title="Operations">
-		Modern observability. Prometheus metrics, Grafana dashboards, OpenTelemetry, DTrace, HTTP debug UI, performance profiling bundles and more. Management CLI. Kube operator coming soon.
+		Prometheus metrics and OTLP export
+		([observability](/operations/observability/)), an HTTP debug UI and
+		diagnostic bundles ([diagnostics](/operations/diagnostics/)), and the
+		`frogctl` management CLI.
 	</Card>
-	<Card title="Extensively tested">
-		Full Redis compatibility suite ported to Rust. Concurrency/fault testing via Jepsen and an extensive shuttle/turmoil test suite. Custom linearizability/serializability checkers. Fuzz testing.
+	<Card title="Tested for correctness">
+		Randomized concurrency simulation, network fault injection, Jepsen
+		distributed testing, fuzzing, and ported Redis regression suites. See
+		[Testing methodology](/compatibility/testing-methodology/) for the full
+		picture.
 	</Card>
 	<Card title="Built with Rust">
-		Memory-safe, high-performance, and maybe a neck beard.
+		Memory-safe, compiled to a single self-contained binary.
 	</Card>
 </CardGrid>
 
-## Redis 8.x Data Structures
+## Data structures and command families
 
-FrogDB supports the full Redis 8.x feature set:
+FrogDB implements the core Redis data types along with several extension command
+families. Consult the [command matrix](/compatibility/command-matrix/) for the
+exact supported / partial / unsupported status of any individual command.
 
-- **Core types** — Strings, Lists, Sets, Sorted Sets, Hashes, Streams
-- **Bitmaps & Bitfields** — BITCOUNT, BITOP, BITPOS, BITFIELD
-- **JSON** — RedisJSON-compatible document storage with JSONPath
-- **Time Series** — Gorilla-compressed time series with aggregation and downsampling
-- **Vector Sets** — Approximate nearest-neighbor search
-- **Probabilistic** — Bloom filters, Cuckoo filters, HyperLogLog, Count-Min Sketch, Top-K, T-Digest
-- **Geospatial** — Geohash indexing and distance queries
-- **Pub/Sub** — Channel and pattern-based publish/subscribe, event sourcing
-- **Scripting & Transactions** — Lua scripting, MULTI/EXEC
-- **Search** — Full text search, secondary indexing, vector search, aggregations
+**Core Redis types**
+
+- Strings, Lists, Sets, Sorted Sets, Hashes
+- Streams
+- Bitmaps and Bitfields
+- Geospatial (geohash indexing and distance queries)
+- Pub/Sub (channel and pattern-based)
+- Scripting (Lua) and Transactions (MULTI/EXEC)
+
+**Extension families** — see the [Extensions overview](/extensions/overview/).
+These are Redis-Stack-compatible except Event Sourcing, which is
+FrogDB-original:
+
+- JSON — document storage with JSONPath
+- Time Series — compressed time series with aggregation and downsampling
+- Search (FT.\*) — full-text search, secondary indexing, and vector search
+- Probabilistic — Bloom filters, Cuckoo filters, Count-Min Sketch, Top-K, T-Digest
+- Vector Sets — approximate nearest-neighbor search
+- Event Sourcing (ES.\*) — FrogDB-original; see [Extensions →
+  Event Sourcing](/extensions/event-sourcing/)
 
 ## Testing
 
-FrogDB is verified with extensive deterministic concurrency simulation, distributed-systems testing, and a ported Redis regression suite that runs on every commit.
+Compatibility and correctness are established by evidence, not assertion. FrogDB
+is exercised by a layered test strategy: unit and integration tests, Shuttle
+randomized concurrency simulation, Turmoil network simulation, Jepsen
+(Knossos/Elle) testing of replication and Raft-cluster topologies, cargo-fuzz
+targets across input paths, ported Redis regression suites, and history-based
+consistency checking.
 
-* Redis compatibility test suite ported from official distribution
-* Jepsen Knossos and Elle black box tests for concurrency correctness and failure modes
-* Shuttle and Turmoil tests for white box testing for concurrency correctness and failure modes
-* Fuzz testing on all input paths (app requests, cluster state, replication, recovery, etc)
-
+For what each layer covers and how the results are produced, see [Testing
+methodology](/compatibility/testing-methodology/) and the generated [command
+matrix](/compatibility/command-matrix/) and [test suite
+results](/compatibility/test-suite/).
 
 ## Quick Example
 
@@ -86,11 +123,13 @@ OK
 "Hello from FrogDB!"
 ```
 
+The [Quickstart](/getting-started/quickstart/) is the full walkthrough.
+
 ## Next Steps
 
 <CardGrid>
-  <LinkCard title="Installation" description="Install FrogDB on your system" href="/getting-started/installation/" />
-  <LinkCard title="Quickstart" description="Get up and running in 5 minutes" href="/getting-started/quickstart/" />
-  <LinkCard title="Configuration" description="All configuration options" href="/reference/configuration/" />
-  <LinkCard title="Redis Differences" description="Differences from Redis to be aware of" href="/compatibility/redis-differences/" />
+  <LinkCard title="Installation" description="Docker, Debian package, or source build" href="/getting-started/installation/" />
+  <LinkCard title="Quickstart" description="Start the server, connect, and run commands" href="/getting-started/quickstart/" />
+  <LinkCard title="Compatibility & Correctness" description="The compatibility target and behavioral differences from Redis" href="/compatibility/overview/" />
+  <LinkCard title="Architecture" description="The shard-per-task design and why it was chosen" href="/architecture/architecture/" />
 </CardGrid>
