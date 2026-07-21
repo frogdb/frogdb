@@ -53,6 +53,6 @@ Known causes of a closed shard channel, exhaustively:
 - [x] Human decision recorded here (option + rationale) — option 4 (4a+4c now, 2b durability-phase)
 - [ ] If option 1: consistency caveat documented in the appropriate CONTEXT.md/spec
 - [ ] If option 2/2b/4: follow-up implementation issue(s) filed in the durability phase (txn framing, intent record, recovery policy; escalation path + shutdown-race guard for option 4)
-- [ ] 4a (worker supervision + health signal) considered as an immediate standalone fix regardless of option chosen — the zombie-node gap exists today independent of VLL
+- [x] 4a+4c IMPLEMENTED (2026-07-21, merged `da1c0838`): `server/shard_supervisor.rs` — live supervision, injectable `FailStopHandler`, production abort with pre-abort `eprintln!` diagnostic, shutdown guard via `HealthChecker::is_shutting_down()`; reviewed + merged
 - [ ] EXEC phase-4 timeout ambiguity (commits despite timeout error reply) documented wherever cross-shard EXEC semantics are specified
 - [ ] Phase-6 planning note: replica-side multi-shard atomicity (Dragonfly PR #598 precedent) regardless of option chosen

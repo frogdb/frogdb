@@ -20,9 +20,22 @@ Redis solves this with per-key state: `signalModifiedKey`/`keyModified` → `tou
 - A lazy-purge effects seam: when the store reports a lazy removal, the worker (not the store — store stays version-ignorant, F3 encapsulation constraint) applies the same effects as active expiry: version/watch invalidation + stream-waiter drain.
 - Discipline: each gap needs a **real-path (turmoil) repro before its fix lands** (D8 rule). Gap 2 and 3 repros likely mirror `watch_lazy_expiry_false_negative_realpath` (note the turmoil clock trap: TTL is real-clock `Instant`; use `std::thread::sleep`).
 
+## Stage-1 verdicts (D8 verification, 2026-07-21, commit `29454617` merged `1644ea6e`)
+
+**All 4 gaps CONFIRMED.** Repros (all `#[ignore]`d, run with `--run-ignored all`):
+- Gap 1: `s5_gap1_lazy_read_does_not_drain_xreadgroup` (shard-driver; turmoil argued unreachable — observing non-drain needs the BLOCK deadline, a real-`Instant` sleep of undefined resolution under turmoil).
+- Gap 2: `s5_gap2_lazy_read_nullifies_active_drain` (shard-driver).
+- Gap 3: `watch_read_lazy_purge_no_bump_realpath` (turmoil; EXEC commits `*1\r\n+OK\r\n`, flip target `$-1\r\n`).
+- Gap 4: `watch_second_watcher_under_abort_realpath` (turmoil; Notify-handshake-forced ordering).
+
+**Design constraints discovered (bind the fix stage):**
+1. Only value reads via `get_with_expiry_check` → `check_and_delete_expired` → `uninstall` physically purge. `TYPE` (`key_type`), `EXISTS`/`TOUCH` (`exists_unexpired`), and the FirstKey-hit seam read expiry non-destructively. Anchor the effects seam at the **physical-removal site**, not a per-command is-a-read predicate.
+2. The seam must not rely solely on the sweep's `deleted_keys` (gap 2 shows lazy purge starves it).
+3. Gap 4 requires per-key `wk->expired` state — a coarse per-shard bump cannot distinguish the stale watcher (must not abort) from the live one (must abort).
+
 ## Acceptance criteria
 
-- [ ] Turmoil real-path repro (or reasoned unreachability note) for each of gaps 1-4
+- [x] Turmoil real-path repro (or reasoned unreachability note) for each of gaps 1-4 — all CONFIRMED, see Stage-1 verdicts
 - [ ] Lazy purge produces the same externally observable effects as active expiry (WATCH abort, XREADGROUP NOGROUP drain) on all paths
 - [ ] Store remains version- and wait-queue-ignorant (worker-seam only)
 - [ ] Shard-driver scenarios extended to cover the closed gaps (S2 lazy arm, S5 lazy arm)
