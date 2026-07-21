@@ -546,7 +546,7 @@ impl ShardWorker {
                     results.clear();
                     for _ in 0..commands.len() {
                         results.push(Response::error(
-                            "EXECABRT transaction aborted due to WAL failure",
+                            "EXECABORT transaction aborted due to WAL failure",
                         ));
                     }
                     return TransactionResult::Success(results);
