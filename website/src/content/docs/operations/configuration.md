@@ -91,11 +91,11 @@ file to stdout and exits — it does not write a file itself:
 frogdb-server --generate-config > frogdb.toml
 ```
 
-The emitted template is a hand-maintained string, generated separately from the `Config`
-struct's own defaults, and it does not cover every valid section (some sections that are
-otherwise fully configurable are simply absent from the template's output). Treat it as a
-convenient starting point, not an exhaustive reference — for the complete section and
-field list, use [Configuration reference](/reference/configuration/).
+The emitted template is `toml::to_string(&Config::default())` — a direct serialization of
+the same `Config` struct's defaults, not a hand-maintained copy — so it always covers every
+section and field. A test suite in `frogdb-server/crates/server/src/config/loader.rs`
+round-trips the output back into a `Config` and asserts it equals `Config::default()`, so
+the template cannot silently fall behind the struct.
 
 ## Environment variables
 

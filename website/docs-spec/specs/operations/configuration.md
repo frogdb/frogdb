@@ -99,12 +99,13 @@ source at write time; do not trust "60" or "61" as a literal to type.
 
 **`--generate-config` (S4) prints to stdout and exits — it does NOT write a
 file** despite its clap help text. Show `frogdb-server --generate-config >
-frogdb.toml`. IMPORTANT caveat the page must state honestly: the emitted
-template is a **hand-maintained string** (`default_toml_impl()` in `loader.rs`),
-separate from `Config::default()`, and it **omits several valid sections**
-(`blocking`, `hotshards`, `debug-bundle`, `compat`, `tiered-storage`,
-`monitor`). So "the example config is not exhaustive; the Configuration
-reference is the complete list." (This is also a drift risk flagged below.)
+frogdb.toml`. `default_toml_impl()` in `loader.rs` now serializes
+`Config::default()` directly via `toml::to_string()` (fixed; previously a
+hand-maintained string that omitted `blocking`, `hotshards`, `debug-bundle`,
+`compat`, `tiered-storage`, `monitor`) — it is a full, section-complete
+serialization, guarded by a round-trip test asserting the output parses back
+to a `Config` equal to `Config::default()`. The example config page can now
+be described as generated and exhaustive, not merely illustrative.
 
 **`deny_unknown_fields`** is set on the root config — an unknown TOML key aborts
 startup. Worth a one-line "typos fail fast" note.
@@ -163,11 +164,13 @@ Drift guards:
   has a test cross-checking the live runtime param list against
   `config_param_registry()`. These keep the registry and runtime behavior in
   sync; the page can rely on the registry being authoritative.
-- **Known drift risk to call out for future maintainers:** the
-  `--generate-config` template (`default_toml_impl()`) is hand-maintained and
-  separate from `Config::default()`; there is no `--check` tying it to the real
-  section list, so it can silently omit sections (it currently omits `blocking`,
-  `hotshards`, `debug-bundle`, `compat`, `tiered-storage`, `monitor`). The page
-  must not present the example config as exhaustive, and S4 should ideally add a
-  check. Flag this to the doc reviewer.
+- **Formerly a known drift risk, now closed:** the `--generate-config` template
+  (`default_toml_impl()`) used to be a hand-maintained string, separate from
+  `Config::default()`, that silently omitted sections (`blocking`, `hotshards`,
+  `debug-bundle`, `compat`, `tiered-storage`, `monitor`). It now serializes
+  `Config::default()` directly and three tests in `loader.rs`
+  (`default_toml_round_trips_to_config_default`,
+  `default_toml_contains_every_config_section`,
+  `default_toml_contains_previously_missing_sections`) fail on any future
+  key- or section-level drift. No further caveat is needed on the page.
 - No hardcoded parameter counts, version numbers, or crate counts in prose (§6).
