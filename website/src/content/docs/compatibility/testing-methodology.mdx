@@ -86,7 +86,7 @@ Every ported test runs on each commit. Intentional exclusions are documented in 
 
 ## History-based consistency checking
 
-The `frogdb-server/crates/testing/` crate records operation histories and checks them for linearizability. The checker (`frogdb-server/crates/testing/src/checker.rs`) implements the Wing–Gong linearizability (WGL) algorithm — the same approach used by [Porcupine](https://github.com/anishathalye/porcupine) — searching for a valid linearization of a recorded history (`frogdb-server/crates/testing/src/history.rs`) against a sequential specification model.
+The `frogdb-server/crates/testing/` crate records operation histories and checks them for linearizability. The checker (`frogdb-server/crates/testing/src/checker.rs`) implements the Wing–Gong–Larus (WGL) linearizability algorithm — the same approach used by [Porcupine](https://github.com/anishathalye/porcupine) — searching for a valid linearization of a recorded history (`frogdb-server/crates/testing/src/history.rs`) against a sequential specification model.
 
 Scope of the guarantees the checker verifies:
 

@@ -68,7 +68,7 @@ See [Clustering](/operations/clustering/) for bootstrap steps, the admin API, an
 
 FrogDB partitions keys across internal shards even in standalone mode, so multi-key operations are subject to slot rules that plain single-node Redis does not enforce.
 
-In **cluster mode**, multi-key commands (`MGET`, `MSET`, and similar) require all keys to hash to the same slot, or they return `-CROSSSLOT`. In **standalone mode**, cross-slot multi-key operations are served by scatter-gather by default. Set `server.allow-cross-slot-standalone = true` to make that behavior explicit; note that `MSETNX` always requires same-slot keys.
+In **cluster mode**, multi-key commands (`MGET`, `MSET`, and similar) require all keys to hash to the same slot, or they return `-CROSSSLOT`. In **standalone mode**, cross-slot multi-key operations also return `-CROSSSLOT` by default. Set `server.allow-cross-slot-standalone = true` to allow them via scatter-gather; note that `MSETNX` always requires same-slot keys.
 
 ### Transactions
 
@@ -99,7 +99,7 @@ EVAL "return redis.call('GET', 'mykey')" 0
 
 ### Single-shard requirement
 
-All keys accessed by a script must hash to the same shard. A script spanning multiple shards returns a `CROSSSLOT` error.
+By default, all keys accessed by a script must hash to the same shard; a script spanning multiple shards returns a `CROSSSLOT` error. As with multi-key commands, setting `server.allow-cross-slot-standalone = true` permits cross-shard scripts.
 
 ### Other differences
 
