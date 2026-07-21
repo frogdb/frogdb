@@ -95,20 +95,36 @@ FrogDB is organized as a Cargo workspace of many crates, grouped by layer (the
 authoritative member list is `Cargo.toml`'s `workspace.members`). The core
 dependency graph:
 
+`frogdb-core` is the aggregator: it depends on the feature crates (scripting,
+persistence, vll, replication, cluster, acl, search) plus protocol and types, and
+`frogdb-server` depends on core. The feature crates do **not** depend on core —
+they build on the foundation crates (`frogdb-types`, `frogdb-protocol`):
+
 ```mermaid
 graph TD
     SERVER[frogdb-server<br/>Binary]
-    PROTO[frogdb-protocol<br/>Library]
-    CORE[frogdb-core<br/>Library]
-    LUA[frogdb-scripting<br/>Library]
-    PERSIST[frogdb-persistence<br/>Library]
+    CORE[frogdb-core<br/>Aggregator library]
+    LUA[frogdb-scripting]
+    PERSIST[frogdb-persistence]
+    VLL[frogdb-vll]
+    REPL[frogdb-replication]
+    PROTO[frogdb-protocol]
+    TYPES[frogdb-types]
 
-    SERVER --> PROTO
     SERVER --> CORE
-    SERVER --> LUA
-    SERVER --> PERSIST
-    LUA --> CORE
-    PERSIST --> CORE
+    SERVER --> PROTO
+    CORE --> LUA
+    CORE --> PERSIST
+    CORE --> VLL
+    CORE --> REPL
+    CORE --> PROTO
+    CORE --> TYPES
+    LUA --> TYPES
+    PERSIST --> TYPES
+    VLL --> PROTO
+    REPL --> PROTO
+    REPL --> TYPES
+    REPL --> PERSIST
 ```
 
 ### Workspace Layout

@@ -11,10 +11,10 @@ High-level component-interaction diagrams showing how requests move between majo
 - `frogdb-server/crates/server/src/connection.rs` -- `ConnectionHandler`
 - `frogdb-server/crates/core/src/shard/` -- `ShardWorker` (`worker.rs`, `event_loop.rs`), `ShardMessage` (`message.rs`), scatter op types (`types.rs`), key routing (`partition.rs`)
 - `frogdb-server/crates/server/src/scatter/executor.rs` -- `ScatterGatherExecutor`
-- `frogdb-server/crates/vll/src/` -- `Coordinator` (`coordinator.rs`), `LockTable` (`lock_table.rs`), transaction queue (`queue.rs`)
+- `frogdb-server/crates/vll/src/` -- `VllCoordinator<S, M>` (`coordinator.rs`), `LockTable` (`lock_table.rs`), transaction queue (`queue.rs`)
 - `frogdb-server/crates/core/src/pubsub.rs` -- `PubSubMessage`, `ShardSubscriptions`
 - `frogdb-server/crates/replication/src/` -- `PrimaryReplicationHandler`, `ReplicaReplicationHandler`, `ReplicationFrame` (`frame.rs`); `ReplicaCommandExecutor` lives in `frogdb-server/crates/server/src/replication/executor.rs`
-- `frogdb-server/crates/cluster/src/` -- `ClusterStateMachine`, `ClusterState` (`state.rs`), `ClusterCommand` (`commands.rs`); `ClusterRaft` is defined in `frogdb-server/crates/cluster/src/lib.rs`
+- `frogdb-server/crates/cluster/src/` -- `ClusterStateMachine`, `ClusterState` (`state.rs`), `ClusterCommand` (`types.rs`); `ClusterRaft` is defined in `frogdb-server/crates/cluster/src/lib.rs`
 
 ---
 

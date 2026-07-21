@@ -399,9 +399,9 @@ The overall multi-shard operation is bounded by a single configurable timeout:
 |---------|---------|-------|
 | `scatter-gather-timeout-ms` | 5000 | Total multi-shard operation time |
 
-Finer-grained VLL lock timeouts (`per_shard_lock_timeout_ms`,
-`lock_acquisition_timeout_ms`) nest inside this bound; they are validated to be
-strictly ordered below it. See the configuration reference and
+Finer-grained VLL lock timeouts (`vll.per-shard-lock-timeout-ms`,
+`vll.lock-acquisition-timeout-ms`) nest inside this bound; they are validated to
+be strictly ordered below it. See the configuration reference and
 [vll.md](/architecture/vll/) for those.
 
 ### Client Error Handling
