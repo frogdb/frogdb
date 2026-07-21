@@ -22,7 +22,10 @@ use tracing::{info, warn};
 use crate::config::Config;
 use crate::config_persister::{ConfigPersister, ConfigUpdate};
 
-use frogdb_config::{ClientCertMode, ConfigParam, DynParam, Propagation, TlsProtocol};
+use frogdb_config::{
+    ClientCertMode, ConfigParam, DynParam, ImmutableParamId, MutableParamId, Propagation,
+    TlsProtocol,
+};
 
 /// CONFIG error type, defined alongside the parameter lifecycle in `frogdb-config`
 /// and re-exported here so existing `runtime_config::ConfigError` paths keep working.
@@ -687,32 +690,48 @@ impl ConfigManager {
 
     /// Build the parameter registry.
     fn build_param_registry() -> Vec<ParamMeta> {
-        vec![
+        ImmutableParamId::ALL
+            .iter()
+            .map(|&id| Self::readonly_param_meta(id))
+            .collect()
+    }
+
+    /// Build the read-only [`ParamMeta`] getter for a single immutable parameter.
+    ///
+    /// Exhaustive over [`ImmutableParamId`]: a new immutable identity with no arm
+    /// is a `non-exhaustive patterns` compile error, and a duplicated arm is an
+    /// unreachable-pattern error. This is the compile-time replacement for the
+    /// former runtime "every immutable metadata row is served by
+    /// build_param_registry" partition check. The wire name comes from
+    /// `id.name()`, pinning each literal to its identity.
+    fn readonly_param_meta(id: ImmutableParamId) -> ParamMeta {
+        use ImmutableParamId::*;
+        match id {
             // Every mutable parameter now lives in the typed registry
             // (`build_typed_params`); only immutable, read-only parameters remain
             // in this legacy string-getter registry.
-            ParamMeta {
-                name: "bind",
+            Bind => ParamMeta {
+                name: id.name(),
                 getter: |mgr| mgr.static_config.bind.clone(),
                 toml_getter: |mgr| mgr.static_config.bind.to_toml_value(),
             },
-            ParamMeta {
-                name: "port",
+            Port => ParamMeta {
+                name: id.name(),
                 getter: |mgr| mgr.static_config.port.to_string(),
                 toml_getter: |mgr| mgr.static_config.port.to_toml_value(),
             },
-            ParamMeta {
-                name: "num-shards",
+            NumShards => ParamMeta {
+                name: id.name(),
                 getter: |mgr| mgr.static_config.num_shards.to_string(),
                 toml_getter: |mgr| mgr.static_config.num_shards.to_toml_value(),
             },
-            ParamMeta {
-                name: "dir",
+            Dir => ParamMeta {
+                name: id.name(),
                 getter: |mgr| mgr.static_config.data_dir.clone(),
                 toml_getter: |mgr| mgr.static_config.data_dir.to_toml_value(),
             },
-            ParamMeta {
-                name: "persistence-enabled",
+            PersistenceEnabled => ParamMeta {
+                name: id.name(),
                 getter: |mgr| {
                     if mgr.static_config.persistence_enabled {
                         "yes".to_string()
@@ -722,8 +741,8 @@ impl ConfigManager {
                 },
                 toml_getter: |mgr| mgr.static_config.persistence_enabled.to_toml_value(),
             },
-            ParamMeta {
-                name: "flush-compact-range",
+            FlushCompactRange => ParamMeta {
+                name: id.name(),
                 getter: |mgr| {
                     if mgr.static_config.flush_compact_range {
                         "yes".to_string()
@@ -733,8 +752,8 @@ impl ConfigManager {
                 },
                 toml_getter: |mgr| mgr.static_config.flush_compact_range.to_toml_value(),
             },
-            ParamMeta {
-                name: "metrics-enabled",
+            MetricsEnabled => ParamMeta {
+                name: id.name(),
                 getter: |mgr| {
                     if mgr.static_config.metrics_enabled {
                         "yes".to_string()
@@ -744,42 +763,42 @@ impl ConfigManager {
                 },
                 toml_getter: |mgr| mgr.static_config.metrics_enabled.to_toml_value(),
             },
-            ParamMeta {
-                name: "metrics-port",
+            MetricsPort => ParamMeta {
+                name: id.name(),
                 getter: |mgr| mgr.static_config.metrics_port.to_string(),
                 toml_getter: |mgr| mgr.static_config.metrics_port.to_toml_value(),
             },
             // TLS parameters (all read-only)
-            ParamMeta {
-                name: "tls-port",
+            TlsPort => ParamMeta {
+                name: id.name(),
                 getter: |mgr| mgr.static_config.tls_port.to_string(),
                 toml_getter: |mgr| mgr.static_config.tls_port.to_toml_value(),
             },
-            ParamMeta {
-                name: "tls-cert-file",
+            TlsCertFile => ParamMeta {
+                name: id.name(),
                 getter: |mgr| mgr.static_config.tls_cert_file.clone(),
                 toml_getter: |mgr| mgr.static_config.tls_cert_file.to_toml_value(),
             },
-            ParamMeta {
-                name: "tls-key-file",
+            TlsKeyFile => ParamMeta {
+                name: id.name(),
                 getter: |mgr| mgr.static_config.tls_key_file.clone(),
                 toml_getter: |mgr| mgr.static_config.tls_key_file.to_toml_value(),
             },
-            ParamMeta {
-                name: "tls-ca-cert-file",
+            TlsCaCertFile => ParamMeta {
+                name: id.name(),
                 getter: |mgr| mgr.static_config.tls_ca_file.clone(),
                 toml_getter: |mgr| mgr.static_config.tls_ca_file.to_toml_value(),
             },
-            ParamMeta {
-                name: "tls-auth-clients",
+            TlsAuthClients => ParamMeta {
+                name: id.name(),
                 getter: |mgr| mgr.static_config.tls_auth_clients.clone(),
                 // Renders the TOML file's own enum encoding ("none"/"optional"/
                 // "required"), not the CONFIG GET display string above -- see
                 // `StaticConfig::tls_require_client_cert`.
                 toml_getter: |mgr| mgr.static_config.tls_require_client_cert.to_toml_value(),
             },
-            ParamMeta {
-                name: "tls-replication",
+            TlsReplication => ParamMeta {
+                name: id.name(),
                 getter: |mgr| {
                     if mgr.static_config.tls_replication {
                         "yes".to_string()
@@ -789,8 +808,8 @@ impl ConfigManager {
                 },
                 toml_getter: |mgr| mgr.static_config.tls_replication.to_toml_value(),
             },
-            ParamMeta {
-                name: "tls-cluster",
+            TlsCluster => ParamMeta {
+                name: id.name(),
                 getter: |mgr| {
                     if mgr.static_config.tls_cluster {
                         "yes".to_string()
@@ -800,15 +819,15 @@ impl ConfigManager {
                 },
                 toml_getter: |mgr| mgr.static_config.tls_cluster.to_toml_value(),
             },
-            ParamMeta {
-                name: "tls-protocols",
+            TlsProtocols => ParamMeta {
+                name: id.name(),
                 getter: |mgr| mgr.static_config.tls_protocols.clone(),
                 // Renders a proper TOML array in the file's own encoding
                 // ("1.2"/"1.3"), not the space-joined CONFIG GET display string
                 // above -- see `StaticConfig::tls_protocol_list`.
                 toml_getter: |mgr| mgr.static_config.tls_protocol_list.to_toml_value(),
             },
-        ]
+        }
     }
 
     /// Build the typed parameter-lifecycle registry.
@@ -818,10 +837,26 @@ impl ConfigManager {
     /// This registry holds every mutable parameter; immutable, read-only
     /// parameters live in [`build_param_registry`](Self::build_param_registry).
     fn build_typed_params() -> Vec<Param> {
-        vec![
+        MutableParamId::ALL
+            .iter()
+            .map(|&id| Self::build_typed_param(id))
+            .collect()
+    }
+
+    /// Build the [`DynParam`] lifecycle for a single mutable parameter.
+    ///
+    /// Exhaustive over [`MutableParamId`]: a new mutable identity with no arm is
+    /// a `non-exhaustive patterns` compile error, and a duplicated arm is an
+    /// unreachable-pattern error. This is the compile-time replacement for the
+    /// former runtime "every mutable metadata row is served by build_typed_params"
+    /// partition check. The wire name comes from `id.name()`, pinning each literal
+    /// to its identity.
+    fn build_typed_param(id: MutableParamId) -> Param {
+        use MutableParamId::*;
+        match id {
             // === Memory / eviction family ===
-            Box::new(ConfigParam::<u64, ConfigManager> {
-                name: "maxmemory",
+            Maxmemory => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
                 parse: |s| {
                     s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
                         param: "maxmemory".to_string(),
@@ -838,8 +873,8 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::Eviction,
             }),
-            Box::new(ConfigParam::<EvictionPolicy, ConfigManager> {
-                name: "maxmemory-policy",
+            MaxmemoryPolicy => Box::new(ConfigParam::<EvictionPolicy, ConfigManager> {
+                name: id.name(),
                 // Legal values = whatever `EvictionPolicy::from_str` accepts; the
                 // enum is the single source of truth. The message lists
                 // `all_names()` to stay byte-identical with the prior setter.
@@ -863,8 +898,8 @@ impl ConfigManager {
                 render: |p| p.as_str().to_string(),
                 propagation: Propagation::Eviction,
             }),
-            Box::new(ConfigParam::<usize, ConfigManager> {
-                name: "maxmemory-samples",
+            MaxmemorySamples => Box::new(ConfigParam::<usize, ConfigManager> {
+                name: id.name(),
                 parse: |s| {
                     s.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
                         param: "maxmemory-samples".to_string(),
@@ -890,8 +925,8 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::Eviction,
             }),
-            Box::new(ConfigParam::<u8, ConfigManager> {
-                name: "lfu-log-factor",
+            LfuLogFactor => Box::new(ConfigParam::<u8, ConfigManager> {
+                name: id.name(),
                 parse: |s| {
                     s.parse::<u8>().map_err(|_| ConfigError::InvalidValue {
                         param: "lfu-log-factor".to_string(),
@@ -908,8 +943,8 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::Eviction,
             }),
-            Box::new(ConfigParam::<u64, ConfigManager> {
-                name: "lfu-decay-time",
+            LfuDecayTime => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
                 parse: |s| {
                     s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
                         param: "lfu-decay-time".to_string(),
@@ -926,8 +961,8 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::Eviction,
             }),
-            Box::new(ConfigParam::<String, ConfigManager> {
-                name: "maxmemory-clients",
+            MaxmemoryClients => Box::new(ConfigParam::<String, ConfigManager> {
+                name: id.name(),
                 // `parse` only checks the value is well-formed; `apply` re-resolves
                 // against live maxmemory and triggers eviction.
                 parse: |s| {
@@ -963,8 +998,8 @@ impl ConfigManager {
                 propagation: Propagation::None,
             }),
             // === Logging family ===
-            Box::new(ConfigParam::<String, ConfigManager> {
-                name: "loglevel",
+            Loglevel => Box::new(ConfigParam::<String, ConfigManager> {
+                name: id.name(),
                 // Legal values = `frogdb_config::logging::LOG_LEVELS`, the single
                 // source of truth shared with config-file startup validation.
                 parse: |s| {
@@ -996,8 +1031,8 @@ impl ConfigManager {
                 render: |v| v.clone(),
                 propagation: Propagation::None,
             }),
-            Box::new(ConfigParam::<bool, ConfigManager> {
-                name: "per-request-spans",
+            PerRequestSpans => Box::new(ConfigParam::<bool, ConfigManager> {
+                name: id.name(),
                 parse: |s| match s.to_lowercase().as_str() {
                     "yes" | "true" | "1" | "on" => Ok(true),
                     "no" | "false" | "0" | "off" => Ok(false),
@@ -1024,8 +1059,8 @@ impl ConfigManager {
                 propagation: Propagation::None,
             }),
             // === Persistence family ===
-            Box::new(ConfigParam::<String, ConfigManager> {
-                name: "durability-mode",
+            DurabilityMode => Box::new(ConfigParam::<String, ConfigManager> {
+                name: id.name(),
                 // Legal values = `frogdb_config::persistence::DURABILITY_MODES`,
                 // shared with `PersistenceConfig::validate`.
                 parse: |s| {
@@ -1051,8 +1086,8 @@ impl ConfigManager {
                 render: |v| v.clone(),
                 propagation: Propagation::None,
             }),
-            Box::new(ConfigParam::<String, ConfigManager> {
-                name: "wal-failure-policy",
+            WalFailurePolicy => Box::new(ConfigParam::<String, ConfigManager> {
+                name: id.name(),
                 // Legal values = `frogdb_config::persistence::WAL_FAILURE_POLICIES`,
                 // shared with `PersistenceConfig::validate`.
                 parse: |s| {
@@ -1071,12 +1106,18 @@ impl ConfigManager {
                 validate: ConfigParam::no_validate,
                 default: || "continue".to_string(),
                 get: |mgr| {
-                    WalFailurePolicy::from_u8(mgr.wal_failure_policy.load(Ordering::Relaxed))
-                        .as_config_str()
-                        .to_string()
+                    // Fully qualified: the `use MutableParamId::*` above shadows
+                    // the bare `WalFailurePolicy` type with the same-named identity
+                    // variant.
+                    frogdb_core::persistence::WalFailurePolicy::from_u8(
+                        mgr.wal_failure_policy.load(Ordering::Relaxed),
+                    )
+                    .as_config_str()
+                    .to_string()
                 },
                 apply: |mgr, v| {
-                    let policy_val = WalFailurePolicy::from_config_str(&v).as_u8();
+                    let policy_val =
+                        frogdb_core::persistence::WalFailurePolicy::from_config_str(&v).as_u8();
                     mgr.wal_failure_policy.store(policy_val, Ordering::Relaxed);
                     info!(policy = %v, "WAL failure policy updated");
                     Ok(())
@@ -1084,8 +1125,8 @@ impl ConfigManager {
                 render: |v| v.clone(),
                 propagation: Propagation::None,
             }),
-            Box::new(ConfigParam::<u64, ConfigManager> {
-                name: "sync-interval-ms",
+            SyncIntervalMs => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
                 parse: |s| {
                     s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
                         param: "sync-interval-ms".to_string(),
@@ -1102,8 +1143,8 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::None,
             }),
-            Box::new(ConfigParam::<u64, ConfigManager> {
-                name: "batch-timeout-ms",
+            BatchTimeoutMs => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
                 parse: |s| {
                     s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
                         param: "batch-timeout-ms".to_string(),
@@ -1121,8 +1162,8 @@ impl ConfigManager {
                 propagation: Propagation::None,
             }),
             // === Server family ===
-            Box::new(ConfigParam::<u64, ConfigManager> {
-                name: "scatter-gather-timeout-ms",
+            ScatterGatherTimeoutMs => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
                 parse: |s| {
                     s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
                         param: "scatter-gather-timeout-ms".to_string(),
@@ -1140,8 +1181,8 @@ impl ConfigManager {
                 propagation: Propagation::None,
             }),
             // === Replication family ===
-            Box::new(ConfigParam::<u32, ConfigManager> {
-                name: "min-replicas-to-write",
+            MinReplicasToWrite => Box::new(ConfigParam::<u32, ConfigManager> {
+                name: id.name(),
                 parse: |s| {
                     s.parse::<u32>().map_err(|_| ConfigError::InvalidValue {
                         param: "min-replicas-to-write".to_string(),
@@ -1159,8 +1200,8 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::None,
             }),
-            Box::new(ConfigParam::<MinReplicasMaxLagSecs, ConfigManager> {
-                name: "min-replicas-max-lag",
+            MinReplicasMaxLag => Box::new(ConfigParam::<MinReplicasMaxLagSecs, ConfigManager> {
+                name: id.name(),
                 // Redis reports/accepts this in seconds; stored internally in ms.
                 // `get`/`render` round-trip in seconds; `apply` converts to ms.
                 // The seconds->ms conversion needed to persist this into the
@@ -1199,8 +1240,8 @@ impl ConfigManager {
                 propagation: Propagation::None,
             }),
             // === Slowlog family ===
-            Box::new(ConfigParam::<i64, ConfigManager> {
-                name: "slowlog-log-slower-than",
+            SlowlogLogSlowerThan => Box::new(ConfigParam::<i64, ConfigManager> {
+                name: id.name(),
                 parse: |s| {
                     s.parse::<i64>().map_err(|_| ConfigError::InvalidValue {
                         param: "slowlog-log-slower-than".to_string(),
@@ -1217,8 +1258,8 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::None,
             }),
-            Box::new(ConfigParam::<usize, ConfigManager> {
-                name: "slowlog-max-len",
+            SlowlogMaxLen => Box::new(ConfigParam::<usize, ConfigManager> {
+                name: id.name(),
                 parse: |s| {
                     s.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
                         param: "slowlog-max-len".to_string(),
@@ -1235,8 +1276,8 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::None,
             }),
-            Box::new(ConfigParam::<usize, ConfigManager> {
-                name: "slowlog-max-arg-len",
+            SlowlogMaxArgLen => Box::new(ConfigParam::<usize, ConfigManager> {
+                name: id.name(),
                 parse: |s| {
                     s.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
                         param: "slowlog-max-arg-len".to_string(),
@@ -1255,8 +1296,8 @@ impl ConfigManager {
             }),
             // === Encoding-threshold family (listpack atomics, read lock-free by
             // shard workers) ===
-            Box::new(ConfigParam::<u64, ConfigManager> {
-                name: "set-max-listpack-entries",
+            SetMaxListpackEntries => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
                 parse: |s| {
                     s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
                         param: "set-max-listpack-entries".to_string(),
@@ -1273,8 +1314,8 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::None,
             }),
-            Box::new(ConfigParam::<u64, ConfigManager> {
-                name: "set-max-listpack-value",
+            SetMaxListpackValue => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
                 parse: |s| {
                     s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
                         param: "set-max-listpack-value".to_string(),
@@ -1291,8 +1332,8 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::None,
             }),
-            Box::new(ConfigParam::<u64, ConfigManager> {
-                name: "hash-max-ziplist-entries",
+            HashMaxZiplistEntries => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
                 parse: |s| {
                     s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
                         param: "hash-max-ziplist-entries".to_string(),
@@ -1309,8 +1350,8 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::None,
             }),
-            Box::new(ConfigParam::<u64, ConfigManager> {
-                name: "hash-max-ziplist-value",
+            HashMaxZiplistValue => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
                 parse: |s| {
                     s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
                         param: "hash-max-ziplist-value".to_string(),
@@ -1327,8 +1368,8 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::None,
             }),
-            Box::new(ConfigParam::<u64, ConfigManager> {
-                name: "hash-max-listpack-entries",
+            HashMaxListpackEntries => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
                 parse: |s| {
                     s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
                         param: "hash-max-listpack-entries".to_string(),
@@ -1345,8 +1386,8 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::None,
             }),
-            Box::new(ConfigParam::<u64, ConfigManager> {
-                name: "hash-max-listpack-value",
+            HashMaxListpackValue => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
                 parse: |s| {
                     s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
                         param: "hash-max-listpack-value".to_string(),
@@ -1364,8 +1405,8 @@ impl ConfigManager {
                 propagation: Propagation::None,
             }),
             // === Misc runtime family ===
-            Box::new(ConfigParam::<u64, ConfigManager> {
-                name: "lua-time-limit",
+            LuaTimeLimit => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
                 parse: |s| {
                     s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
                         param: "lua-time-limit".to_string(),
@@ -1382,8 +1423,8 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::None,
             }),
-            Box::new(ConfigParam::<u64, ConfigManager> {
-                name: "maxclients",
+            Maxclients => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
                 parse: |s| {
                     s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
                         param: "maxclients".to_string(),
@@ -1400,8 +1441,8 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::None,
             }),
-            Box::new(ConfigParam::<bool, ConfigManager> {
-                name: "latency-tracking",
+            LatencyTracking => Box::new(ConfigParam::<bool, ConfigManager> {
+                name: id.name(),
                 parse: |s| match s.to_lowercase().as_str() {
                     "yes" | "1" | "true" => Ok(true),
                     "no" | "0" | "false" => Ok(false),
@@ -1426,8 +1467,8 @@ impl ConfigManager {
                 },
                 propagation: Propagation::None,
             }),
-            Box::new(ConfigParam::<Vec<f64>, ConfigManager> {
-                name: "latency-tracking-info-percentiles",
+            LatencyTrackingInfoPercentiles => Box::new(ConfigParam::<Vec<f64>, ConfigManager> {
+                name: id.name(),
                 parse: |s| {
                     let trimmed = s.trim();
                     if trimmed.is_empty() {
@@ -1470,8 +1511,8 @@ impl ConfigManager {
                 },
                 propagation: Propagation::None,
             }),
-            Box::new(ConfigParam::<u32, ConfigManager> {
-                name: "notify-keyspace-events",
+            NotifyKeyspaceEvents => Box::new(ConfigParam::<u32, ConfigManager> {
+                name: id.name(),
                 parse: |s| {
                     let flags = KeyspaceEventFlags::from_flag_string(s).ok_or_else(|| {
                         ConfigError::InvalidValue {
@@ -1491,8 +1532,8 @@ impl ConfigManager {
                 render: |v| KeyspaceEventFlags::from_bits_truncate(*v).to_flag_string(),
                 propagation: Propagation::None,
             }),
-            Box::new(ConfigParam::<String, ConfigManager> {
-                name: "requirepass",
+            Requirepass => Box::new(ConfigParam::<String, ConfigManager> {
+                name: id.name(),
                 // Any value is accepted; the ACL manager performs the real
                 // validation and storage in `apply`.
                 parse: |s| Ok(s.to_string()),
@@ -1510,8 +1551,8 @@ impl ConfigManager {
                 render: |v| v.clone(),
                 propagation: Propagation::None,
             }),
-            Box::new(ConfigParam::<bool, ConfigManager> {
-                name: "key-memory-histograms",
+            KeyMemoryHistograms => Box::new(ConfigParam::<bool, ConfigManager> {
+                name: id.name(),
                 parse: |s| match s.to_lowercase().as_str() {
                     "yes" | "1" | "true" => Ok(true),
                     "no" | "0" | "false" => Ok(false),
@@ -1556,63 +1597,63 @@ impl ConfigManager {
             // === Redis-compatibility no-op parameters ===
             // Accepted for compatibility with Redis test suites; ignored by
             // FrogDB. Strict-config gating hides them via the metadata registry.
-            Box::new(NoopParam {
-                name: "save",
+            Save => Box::new(NoopParam {
+                name: id.name(),
                 value: "",
             }),
-            Box::new(NoopParam {
-                name: "set-max-intset-entries",
+            SetMaxIntsetEntries => Box::new(NoopParam {
+                name: id.name(),
                 value: "512",
             }),
-            Box::new(NoopParam {
-                name: "list-max-listpack-size",
+            ListMaxListpackSize => Box::new(NoopParam {
+                name: id.name(),
                 value: "-2",
             }),
-            Box::new(NoopParam {
-                name: "list-compress-depth",
+            ListCompressDepth => Box::new(NoopParam {
+                name: id.name(),
                 value: "0",
             }),
-            Box::new(NoopParam {
-                name: "list-max-ziplist-size",
+            ListMaxZiplistSize => Box::new(NoopParam {
+                name: id.name(),
                 value: "-2",
             }),
-            Box::new(NoopParam {
-                name: "latency-monitor-threshold",
+            LatencyMonitorThreshold => Box::new(NoopParam {
+                name: id.name(),
                 value: "0",
             }),
-            Box::new(NoopParam {
-                name: "busy-reply-threshold",
+            BusyReplyThreshold => Box::new(NoopParam {
+                name: id.name(),
                 value: "5000",
             }),
-            Box::new(NoopParam {
-                name: "hz",
+            Hz => Box::new(NoopParam {
+                name: id.name(),
                 value: "10",
             }),
-            Box::new(NoopParam {
-                name: "activedefrag",
+            Activedefrag => Box::new(NoopParam {
+                name: id.name(),
                 value: "no",
             }),
-            Box::new(NoopParam {
-                name: "close-on-oom",
+            CloseOnOom => Box::new(NoopParam {
+                name: id.name(),
                 value: "no",
             }),
-            Box::new(NoopParam {
-                name: "zset-max-ziplist-entries",
+            ZsetMaxZiplistEntries => Box::new(NoopParam {
+                name: id.name(),
                 value: "128",
             }),
-            Box::new(NoopParam {
-                name: "zset-max-ziplist-value",
+            ZsetMaxZiplistValue => Box::new(NoopParam {
+                name: id.name(),
                 value: "64",
             }),
-            Box::new(NoopParam {
-                name: "zset-max-listpack-entries",
+            ZsetMaxListpackEntries => Box::new(NoopParam {
+                name: id.name(),
                 value: "128",
             }),
-            Box::new(NoopParam {
-                name: "zset-max-listpack-value",
+            ZsetMaxListpackValue => Box::new(NoopParam {
+                name: id.name(),
                 value: "64",
             }),
-        ]
+        }
     }
 
     /// Look up a mutable parameter's typed lifecycle by (already-normalized) name.
@@ -2173,51 +2214,27 @@ mod tests {
 
     #[test]
     fn test_param_registry_consistency() {
-        // The config crate's metadata registry is the single source of truth for
-        // which parameters exist and their mutable/noop flags. Every name there
-        // must be served by exactly one server-side registry (typed or legacy),
-        // and every server-side name must exist in the metadata registry.
-        let legacy = ConfigManager::build_param_registry();
+        // What this test used to guard is now enforced earlier and more strongly,
+        // so only the residual gap remains here:
+        //
+        // * The mutable/immutable **partition** (every mutable metadata row is
+        //   served by the typed registry and never the legacy one, and vice
+        //   versa) is now a *compile-time* guarantee. `build_typed_params` is an
+        //   exhaustive `match` over `MutableParamId::ALL` and `build_param_registry`
+        //   an exhaustive `match` over `ImmutableParamId::ALL`, so a missing
+        //   handler is a `non-exhaustive patterns` error. That the two identity
+        //   rosters equal the registry's mutable/immutable partitions (and are
+        //   disjoint) is pinned by `frogdb_config::param_id`'s own tests. Together
+        //   these make the former name-set and partition assertions redundant.
+        //
+        // * The **noop ⟺ NoopParam** correspondence is *not* compiler-enforced:
+        //   nothing stops a `#[param(noop)]`/virtual-noop identity's match arm
+        //   from building a real `ConfigParam` (or vice versa). Guard only that
+        //   here, keyed off the derived metadata `noop` flag and the runtime
+        //   `DynParam::is_noop()` accessor.
         let typed = ConfigManager::build_typed_params();
         let config_params = frogdb_config::config_param_registry();
 
-        let mut server_names: Vec<&str> = legacy.iter().map(|p| p.name).collect();
-        server_names.extend(typed.iter().map(|p| p.name()));
-
-        // No name is served by both registries.
-        for name in &server_names {
-            let count = server_names.iter().filter(|n| *n == name).count();
-            assert_eq!(count, 1, "param '{}' is registered more than once", name);
-        }
-
-        // Every config param is served by the server.
-        for config_param in config_params {
-            assert!(
-                server_names.contains(&config_param.name),
-                "config param '{}' missing from server registries",
-                config_param.name
-            );
-        }
-
-        // Every server param exists in the config metadata registry.
-        for name in &server_names {
-            assert!(
-                config_params.iter().any(|p| p.name == *name),
-                "server param '{}' missing from config_param_registry",
-                name
-            );
-        }
-
-        // --- Partition assertions (proposal 13, step 1) ---
-        //
-        // Name-set membership above is too weak: it passes even if a
-        // `mutable: true` param is (wrongly) served only by the immutable
-        // legacy registry, which clears the mutability gate but then fails the
-        // typed lookup at runtime, returning `ImmutableParameter` for a param
-        // the metadata advertises as settable. Pin the actual partition so that
-        // drift is a red test rather than a runtime lie.
-        let typed_names: Vec<&str> = typed.iter().map(|p| p.name()).collect();
-        let legacy_names: Vec<&str> = legacy.iter().map(|p| p.name).collect();
         // Names of the typed entries that are Redis-compat no-ops.
         let noop_names: Vec<&str> = typed
             .iter()
@@ -2226,32 +2243,6 @@ mod tests {
             .collect();
 
         for info in config_params {
-            if info.mutable {
-                // mutable ⟺ served by the typed registry (and never the legacy one).
-                assert!(
-                    typed_names.contains(&info.name),
-                    "'{}' is mutable in metadata but not served by build_typed_params",
-                    info.name
-                );
-                assert!(
-                    !legacy_names.contains(&info.name),
-                    "'{}' is mutable but also served by the immutable build_param_registry",
-                    info.name
-                );
-            } else {
-                // !mutable ⟺ served by the legacy registry (and never the typed one).
-                assert!(
-                    legacy_names.contains(&info.name),
-                    "'{}' is immutable in metadata but not served by build_param_registry",
-                    info.name
-                );
-                assert!(
-                    !typed_names.contains(&info.name),
-                    "'{}' is immutable but also served by the mutable build_typed_params",
-                    info.name
-                );
-            }
-
             // noop ⟺ the serving typed entry is a NoopParam.
             if info.noop {
                 assert!(
