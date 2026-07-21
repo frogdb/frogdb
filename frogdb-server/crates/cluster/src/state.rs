@@ -296,23 +296,21 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
                     results.push(ClusterResponse::Ok);
                 }
                 EntryPayload::Normal(cmd) => {
-                    // Check for self-demotion before applying
-                    if let Some(self_id) = self.self_node_id
+                    // A SetRole self-demotion emits a DemotionEvent. Capture the
+                    // event data before apply consumes cmd; emit only if apply
+                    // succeeds (a rejected mutation must not fire a demotion).
+                    let set_role_demotion = if let Some(self_id) = self.self_node_id
                         && let ClusterCommand::SetRole {
                             node_id,
                             role: NodeRole::Replica,
                             primary_id,
                         } = &cmd
                         && *node_id == self_id
-                        && let Some(ref tx) = self.demotion_tx
                     {
-                        let epoch = self.state.config_epoch();
-                        let _ = tx.send(DemotionEvent {
-                            demoted_node_id: self_id,
-                            new_primary_id: *primary_id,
-                            epoch,
-                        });
-                    }
+                        Some((self_id, *primary_id))
+                    } else {
+                        None
+                    };
 
                     // A graceful Failover demotes the old primary as part of the
                     // composite transition. Capture the event data before apply
@@ -350,6 +348,18 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
                         tracing::warn!(error = %e, "Failed to apply cluster command");
                         ClusterResponse::Error(e.to_string())
                     });
+
+                    // Emit demotion event for a successful self-demotion via SetRole
+                    if let Some((demoted_id, new_primary_id)) = set_role_demotion
+                        && !matches!(result, ClusterResponse::Error(_))
+                        && let Some(ref tx) = self.demotion_tx
+                    {
+                        let _ = tx.send(DemotionEvent {
+                            demoted_node_id: demoted_id,
+                            new_primary_id,
+                            epoch: self.state.config_epoch(),
+                        });
+                    }
 
                     // Emit demotion event for a successful graceful failover of self
                     if let Some((demoted_id, new_primary_id)) = failover_demotion
@@ -768,6 +778,40 @@ mod tests {
         sm.apply(vec![entry]).await.unwrap();
 
         // No event for node 1 watching
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_demotion_detection_not_fired_for_rejected_set_role() {
+        let cluster = ClusterState::new();
+        let mut sm = ClusterStateMachine::with_state(cluster);
+        let mut rx = sm.enable_demotion_detection(2); // self = node 2
+
+        // Only node 1 exists; node 2 (self) was never added to the topology.
+        let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        sm.state()
+            .apply_command(ClusterCommand::AddNode { node: node1 })
+            .unwrap();
+
+        // SetRole self-demotion whose target node is absent -> apply_command
+        // rejects it with NodeNotFound. A rejected mutation must NOT emit a
+        // demotion event into the role machinery.
+        let entry = openraft::Entry::<TypeConfig> {
+            log_id: openraft::LogId {
+                leader_id: openraft::CommittedLeaderId::new(1, 1),
+                index: 1,
+            },
+            payload: EntryPayload::Normal(ClusterCommand::SetRole {
+                node_id: 2,
+                role: NodeRole::Replica,
+                primary_id: Some(1),
+            }),
+        };
+
+        let responses = sm.apply(vec![entry]).await.unwrap();
+
+        // Response is an error and no demotion event was emitted.
+        assert!(matches!(responses[0], ClusterResponse::Error(_)));
         assert!(rx.try_recv().is_err());
     }
 
