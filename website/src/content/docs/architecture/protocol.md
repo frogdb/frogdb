@@ -1,106 +1,93 @@
 ---
 title: "Protocol Integration"
-description: "RESP2/RESP3 frame processing, zero-copy design, and wire protocol details for contributors."
+description: "RESP2/RESP3 frame processing, the FrogDbResp2 codec, and wire protocol details for contributors."
 sidebar:
   order: 12
 ---
-RESP2/RESP3 frame processing, zero-copy design, and wire protocol details for contributors.
+How FrogDB parses and serializes the Redis wire protocol, for contributors.
 
-## Crate Configuration
+## Overview
 
-```toml
-[dependencies]
-redis-protocol = { version = "5", features = ["bytes", "codec"] }
-```
+FrogDB implements RESP2 and RESP3 and targets compatibility with Redis 8.x
+commands. On the inbound path, wire bytes are decoded into a `ParsedCommand`; on
+the outbound path, a command handler's `Response` is encoded as RESP2 or RESP3
+frames depending on the version negotiated for that connection. Parsing is built
+on the `redis-protocol` crate (the wire codec) wrapped by a FrogDB-specific
+codec that tolerates the protocol edge cases real Redis clients emit. The
+`redis-protocol` version is pinned in the workspace `Cargo.toml`; it is not
+restated here because it is a drift liability (it has already changed once).
 
-**Features:**
-- `bytes` - Zero-copy parsing using `Bytes` type
-- `codec` - Tokio codec for async streaming
+After parsing, command dispatch and execution are covered by
+[request-flows.md](/architecture/request-flows/) and
+[execution.md](/architecture/execution/). This page covers the codec and type
+system only, not per-command RESP shapes (those are documented by redis.io and
+the command matrix).
 
-## Frame Processing
+## Decoding: the FrogDbResp2 codec
 
-### Inbound: Frame -> ParsedCommand
-
-The `redis-protocol` crate decodes wire data into `BytesFrame`. We convert to our internal `ParsedCommand`:
+A command decodes into an internal representation
+(`frogdb-server/crates/protocol/src/command.rs`):
 
 ```rust
-use redis_protocol::resp2::types::BytesFrame;
-
 pub struct ParsedCommand {
     pub name: Bytes,
     pub args: Vec<Bytes>,
 }
-
-pub enum ProtocolError {
-    EmptyCommand,
-    ExpectedArray,
-    InvalidFrame,
-    Incomplete,
-}
-
-impl TryFrom<BytesFrame> for ParsedCommand {
-    type Error = ProtocolError;
-
-    fn try_from(frame: BytesFrame) -> Result<Self, Self::Error> {
-        match frame {
-            BytesFrame::Array(frames) => {
-                let mut iter = frames.into_iter();
-                let name = iter.next()
-                    .and_then(|f| f.as_bytes())
-                    .ok_or(ProtocolError::EmptyCommand)?;
-                let args = iter
-                    .filter_map(|f| f.as_bytes())
-                    .collect();
-                Ok(ParsedCommand { name, args })
-            }
-            _ => Err(ProtocolError::ExpectedArray),
-        }
-    }
-}
 ```
 
-### Outbound: Response -> Frame
+The connection does not drive the upstream codec directly. It uses `FrogDbResp2`
+(`frogdb-server/crates/server/src/connection/codec.rs`), a wrapper that holds the
+upstream `redis_protocol::codec::Resp2` in an `inner` field and pre-processes the
+raw `BytesMut` buffer before handing it to the strict upstream decoder. The
+upstream decoder rejects inputs that Redis itself tolerates; `FrogDbResp2`
+handles those cases so behavior matches Redis:
 
-The `Response` enum includes both RESP2 types and RESP3 types:
+- **Empty lines** (`\r\n` with no type prefix) are silently consumed.
+- **Negative multibulk counts** (`*-N\r\n` with `N < -1`) are silently consumed;
+  `*-1\r\n` is the RESP2 null array.
+- **Oversized multibulk counts** (`*N` with `N > PROTO_MAX_MULTIBULK_LEN`) are
+  rejected with a protocol error; the offending line is consumed so the
+  connection can continue.
+- **Oversized bulk lengths** (`$N` with `N > PROTO_MAX_BULK_LEN`), including bulk
+  elements nested inside a multibulk, are rejected the same way — the buffer is
+  pre-scanned so the upstream decoder never waits for `N` bytes that will never
+  be valid.
+- **Inline (telnet-style) commands** — any top-level line whose first byte is not
+  a RESP type prefix (`* $ + - :`) is parsed with Redis `sdssplitargs` semantics
+  into a multibulk request, bounded by `PROTO_INLINE_MAX_SIZE` (64 KiB). This
+  inline handling is scoped to client connections; replication apply and slot
+  migration drive strict decoders that never see this wrapper.
 
-```rust
-pub enum Response {
-    // === RESP2 Types ===
-    Simple(Bytes),              // +OK\r\n
-    Error(Bytes),               // -ERR message\r\n
-    Integer(i64),               // :1000\r\n
-    Bulk(Option<Bytes>),        // $5\r\nhello\r\n or $-1\r\n (null)
-    Array(Vec<Response>),       // *2\r\n...
+Decoding produces a RESP2 `BytesFrame`, which `ParsedCommand::try_from` converts.
+RESP3 output is produced separately on the encode path (see
+[the response type system](#the-response-type-system)). Parse failures are
+reported as `ProtocolError`
+(`frogdb-server/crates/protocol/src/error.rs`):
 
-    // === RESP3 Types ===
-    Null,                       // _\r\n
-    Double(f64),                // ,3.14159\r\n
-    Boolean(bool),              // #t\r\n or #f\r\n
-    BlobError(Bytes),           // !<len>\r\n<bytes>\r\n
-    VerbatimString {            // =<len>\r\n<fmt>:<data>\r\n
-        format: [u8; 3],
-        data: Bytes,
-    },
-    Map(Vec<(Response, Response)>),  // %<count>\r\n<key><value>...
-    Set(Vec<Response>),              // ~<count>\r\n<elements>...
-    Attribute(Box<Response>),        // |<count>\r\n<attr-map><data>
-    Push(Vec<Response>),             // ><count>\r\n<elements>...
-    BigNumber(Bytes),                // (<big-integer>\r\n
-}
+| Variant | Meaning |
+|---------|---------|
+| `EmptyCommand` | Command array had no command name |
+| `ExpectedArray` | Top-level frame was not an array |
+| `InvalidFrame` | Frame was malformed |
+| `Incomplete` | Need more bytes; the codec buffers and waits |
+| `FrameTooLarge` | Frame exceeded a protocol limit |
 
-pub enum ProtocolVersion {
-    Resp2,  // Default
-    Resp3,  // Negotiated via HELLO command
-}
-```
+## The response type system
 
----
+Command handlers return a `Response`
+(`frogdb-server/crates/protocol/src/response.rs`). The wire-serializable subset
+is modeled by `WireResponse`, whose `to_resp2_frame()` / `to_resp3_frame()`
+methods cannot panic over the frames they encode. `Response` additionally carries
+internal, non-wire control-flow variants (`BlockingNeeded`, `RaftNeeded`,
+`MigrateNeeded`, `SlotMigrationNeeded`) that dispatch intercepts before
+serialization — they never reach the wire.
 
-## RESP3 Type Reference
+`WireResponse` covers the RESP2 types (`Simple`, `Error`, `Integer`, `Bulk`,
+`Array`) and the RESP3 types below, plus `NullArray`:
 
 | Type | Wire Format | Use Case |
 |------|-------------|----------|
-| Null | `_\r\n` | Explicit null (vs RESP2's overloaded `$-1`) |
+| Null | `_\r\n` | Explicit null (RESP3) |
 | Double | `,3.14\r\n` | Floating point (scores, etc.) |
 | Boolean | `#t\r\n` / `#f\r\n` | True/false values |
 | Map | `%<n>\r\n...` | Key-value pairs (HGETALL, etc.) |
@@ -108,83 +95,98 @@ pub enum ProtocolVersion {
 | Push | `><n>\r\n...` | Out-of-band pub/sub messages |
 | BigNumber | `(<num>\r\n` | Arbitrary precision integers |
 | VerbatimString | `=<n>\r\n<fmt>:...` | Formatted text (markdown, etc.) |
-| Attribute | `|<n>\r\n...` | Metadata without breaking clients |
+| Attribute | `\|<n>\r\n...` | Metadata without breaking clients |
+
+### RESP2 has two distinct null shapes
+
+RESP2 distinguishes a **null bulk** (`$-1\r\n`) from a **null array**
+(`*-1\r\n`), and RESP3 adds a third, explicit null (`_\r\n`):
+
+- `WireResponse::Bulk(None)` encodes `$-1\r\n`.
+- `WireResponse::NullArray` encodes `*-1\r\n` (used, e.g., by `LPOP`/`RPOP` with
+  a count against a missing key). The upstream crate cannot produce `*-1\r\n`
+  (its null frame is always `$-1\r\n`), so a top-level `NullArray` is diverted to
+  the codec's `Resp2Outbound::NullArray` path; a *nested* `NullArray` encodes as
+  the nested null `$-1\r\n`.
+- `WireResponse::Null` encodes the RESP3 `_\r\n`.
 
 ### Benefits of RESP3
 
-- **Type-rich responses**: Maps, sets, booleans reduce client parsing ambiguity
-- **Out-of-band push**: Cleaner pub/sub without inline message interleaving
-- **Explicit nulls**: `_\r\n` vs RESP2's overloaded `$-1\r\n`
-- **Native doubles**: No string conversion needed for ZSCORE, etc.
+- **Type-rich responses**: maps, sets, and booleans reduce client parsing
+  ambiguity.
+- **Out-of-band push**: cleaner pub/sub without inline message interleaving.
+- **Explicit nulls**: `_\r\n` instead of RESP2's overloaded `$-1\r\n` / `*-1\r\n`.
+- **Native doubles**: no string conversion for `ZSCORE` and similar.
 
----
+## Protocol negotiation (HELLO)
 
-## Protocol Negotiation
+New connections start in RESP2. A client sends `HELLO 3` to switch to RESP3 (or
+`HELLO 2` to switch back). `handle_hello`
+(`frogdb-server/crates/server/src/connection/auth_conn_command.rs`) validates the
+requested version before mutating anything:
 
-All new connections start in RESP2 mode. Clients send `HELLO 3` to upgrade to RESP3.
+| HELLO argument | Behavior |
+|----------------|----------|
+| `HELLO` (no version) | Return connection info in the current protocol |
+| `HELLO 2` | Set the connection to RESP2, return info in RESP2 |
+| `HELLO 3` | Set the connection to RESP3, return info in RESP3 |
+| version outside `2..=3` (including 0, 1, 4+) | `-NOPROTO sorry, this protocol version is not supported` |
 
-| HELLO Version | Behavior |
-|---------------|----------|
-| `HELLO` (no version) | Return connection info in current protocol |
-| `HELLO 2` | Downgrade to RESP2 (if in RESP3), return info in RESP2 |
-| `HELLO 3` | Upgrade to RESP3, return info in RESP3 |
-| `HELLO 4+` | Return `-NOPROTO unsupported protocol version` |
+The protocol version is set unconditionally once validated, so **downgrade is
+allowed**: a connection that did `HELLO 3` may `HELLO 2` back to RESP2 within the
+same session. Clients that never send `HELLO` behave exactly as with Redis
+(default RESP2). A rejected version leaves the connection's protocol untouched.
 
-Once a connection has upgraded to RESP3, it cannot downgrade within the same session. Clients that never send HELLO operate exactly as they would with Redis (default RESP2).
+## Client tracking (server-assisted caching)
 
-### Client Tracking
+FrogDB supports server-assisted client-side caching over RESP3 push
+invalidation. When a client reads a key with tracking enabled, the server records
+the association; when the key is later modified, the server sends an invalidation
+push frame so the client can evict its cache.
 
-Server-assisted client-side caching via RESP3 Push invalidation messages. When a client reads a key with tracking enabled, the server records the association. When that key is later modified, the server sends a `>invalidate [keys]` Push frame so the client can evict its local cache.
+Tracking has one mode enum plus separate flags — the seven `CLIENT TRACKING`
+options are not all "modes"
+(`frogdb-server/crates/server/src/connection/state.rs`):
 
-**Supported modes:** Default, OPTIN, OPTOUT, NOLOOP, BCAST, PREFIX, REDIRECT.
+- `TrackingMode` enum values: `Default`, `OptIn`, `OptOut`, `Broadcast`.
+- `NOLOOP` is a boolean (do not invalidate keys this connection itself modified).
+- `PREFIX` populates a list of registered prefixes (BCAST mode).
+- `REDIRECT` is a target connection id (`0` = no redirect).
 
-## Tokio Codec
+Validation rules (`TrackingEnableError`) mirror Redis:
 
-Use the built-in codec for connection handling:
+- `PREFIX` requires `BCAST`.
+- `OPTIN` and `OPTOUT` are mutually exclusive, and neither is compatible with
+  `BCAST`.
+- You cannot switch `BCAST` on/off, or switch between `OPTIN`/`OPTOUT`, without
+  first disabling tracking.
+- Prefixes registered on one connection must not overlap.
 
-```rust
-use redis_protocol::resp2::codec::Resp2;
-use tokio_util::codec::Framed;
+## Protocol limits
 
-let framed = Framed::new(socket, Resp2::default());
-```
+The frame limits are compile-time constants in the codec, not `CONFIG`-tunable
+fields (`frogdb-server/crates/server/src/connection/codec.rs`):
 
-## Error Handling
+| Constant | Value | Meaning |
+|----------|-------|---------|
+| `PROTO_MAX_BULK_LEN` | 512 MiB (`536870912`) | Maximum single bulk-string length |
+| `PROTO_MAX_MULTIBULK_LEN` | `1048576` (1024×1024) | Maximum elements in a multibulk request |
+| `PROTO_INLINE_MAX_SIZE` | 64 KiB | Maximum inline (telnet-style) line length |
 
-| Error Type | Handling |
-|------------|----------|
-| Incomplete frame | Codec buffers, waits for more data |
-| Malformed frame | Return `-ERR` response, continue |
-| Invalid command | Return `-ERR unknown command`, continue |
+Exceeding a bulk or multibulk limit yields a `redis-protocol` decode error whose
+offending line is consumed so the connection can continue (see below). There is
+no `frame_timeout_ms`, `max_frame_size`, or `max_array_elements` config field.
 
-Connections are not closed on protocol errors (matches Redis behavior).
+## Error handling and framing recovery
 
-### Framing Error Recovery
+Command-level errors (wrong type, wrong arity, unknown command) are returned as
+`-ERR ...` replies and never close the connection, matching Redis.
 
-**Recoverable Errors (Send -ERR, Continue):**
-
-| Error | Response | Continue? |
-|-------|----------|-----------|
-| Empty array | `-ERR empty command` | Yes |
-| Non-array top-level | `-ERR commands must be arrays` | Yes |
-| Non-bulk-string args | `-ERR arguments must be bulk strings` | Yes |
-| Command too long | `-ERR command too long` | Yes |
-
-**Unrecoverable Errors (Close Connection):**
-
-| Error | Close Reason |
-|-------|--------------|
-| Invalid type byte | Protocol corruption |
-| Negative bulk length | Protocol corruption |
-| Overflow length | DoS protection |
-| Invalid integer parse | Protocol corruption |
-| Missing CRLF terminator | Protocol corruption |
-
-### Configuration
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `frame_timeout_ms` | 30000 | Timeout for incomplete frames |
-| `max_frame_size` | 536870912 | Maximum frame size (512MB, matches Redis) |
-| `max_bulk_string_length` | 536870912 | Maximum bulk string length |
-| `max_array_elements` | 1000000 | Maximum array elements |
+Framing errors are also recoverable in FrogDB. When the codec returns a decode
+error (empty command, non-array top level, oversized bulk/multibulk length), the
+connection replies with `-ERR Protocol error: ...` — using the error's `details()`
+so the wire form omits the upstream `Decode Error:` kind prefix — and **continues
+reading** rather than closing. The malformed leading line has already been
+consumed by `FrogDbResp2`, so the stream can resynchronize. The connection closes
+on client disconnect or an unrecoverable write/flush failure, not on ordinary
+protocol errors.

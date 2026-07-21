@@ -15,7 +15,13 @@ Design rationale and details of FrogDB's shared-nothing threading architecture, 
 | **Tokio Task** | A lightweight async task scheduled by Tokio (many tasks can run on one thread) |
 | **Thread-per-core** | Architecture style where work is partitioned to minimize cross-thread coordination |
 
-FrogDB uses Tokio's multi-threaded runtime. Each shard worker is a Tokio task, not a dedicated OS thread. However, the runtime typically pins long-running tasks to threads, achieving thread-per-core characteristics. The critical property is that each shard's data is accessed by exactly one async task (shard worker), eliminating data races without locks.
+FrogDB uses Tokio's multi-threaded runtime. Each shard worker is a Tokio task,
+not a dedicated OS thread. Tokio's multi-threaded runtime is work-stealing and
+does not pin a task to a specific thread, so FrogDB does not guarantee strict
+thread-per-core placement. The property FrogDB does rely on is ownership, not
+placement: each shard's data is accessed by exactly one async task (its shard
+worker), so there are no data races and no locks are needed for data access,
+regardless of which OS thread runs the task at any moment.
 
 ---
 
@@ -82,18 +88,22 @@ Client Connection
 
 ## Key Hashing
 
-Keys are hashed to determine shard ownership:
+Keys are hashed to determine shard ownership. The routing functions live in
+`frogdb-server/crates/core/src/shard/partition.rs`:
 
 ```rust
-fn shard_for_key(key: &[u8], num_shards: usize) -> usize {
+pub fn shard_for_key(key: &[u8], num_shards: usize) -> usize {
     let hash_key = extract_hash_tag(key).unwrap_or(key);
-    let slot = crc16_xmodem(hash_key) as usize % 16384;
+    let slot = crc16::State::<crc16::XMODEM>::calculate(hash_key) as usize % 16384;
     slot % num_shards
 }
 ```
 
-The internal shard is derived from the key's hash slot (CRC16, same XMODEM variant as Redis
-Cluster), reduced modulo the shard count — not from a separate hash function.
+The internal shard is derived from the key's cluster hash slot (CRC16, the same
+XMODEM variant Redis Cluster uses), reduced modulo the shard count — not from a
+separate hash function. The `xxhash64` hash elsewhere in the codebase is used
+only by probabilistic structures (bloom, cuckoo, count-min, top-k); it is never
+used for key routing.
 
 ---
 
@@ -161,6 +171,11 @@ fn extract_hash_tag(key: &[u8]) -> Option<&[u8]> {
 
 ## Message Types
 
+The `ShardMessage` enum has dozens of variants (command execution, pub/sub,
+blocking, scripting, VLL, cluster, diagnostics, and more). The excerpt below is
+an **illustrative subset**; the full enum lives in
+`frogdb-server/crates/core/src/shard/message.rs`.
+
 ```rust
 pub enum ShardMessage {
     /// Execute command on this shard, return via oneshot
@@ -199,8 +214,7 @@ pub enum ShardMessage {
     /// Execute operation after locks acquired
     VllExecute {
         txid: u64,
-        command: VllCommand,
-        result_tx: oneshot::Sender<VllShardResult>,
+        response_tx: oneshot::Sender<PartialResult>,
     },
 
     /// Abort transaction (release locks, no rollback)
@@ -222,11 +236,14 @@ See [vll.md](/architecture/vll/) for full VLL type definitions.
 
 ## Channel Configuration
 
-Shard message channels use bounded capacity for backpressure:
+Shard message channels use bounded capacity for backpressure. The capacity is a
+compile-time constant in `frogdb-server/crates/server/src/server/util.rs`, not a
+runtime `CONFIG` parameter:
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `shard-channel-capacity` | 1024 | Messages buffered per shard |
+```rust
+pub const SHARD_CHANNEL_CAPACITY: usize = 1024;   // messages buffered per shard
+pub const NEW_CONN_CHANNEL_CAPACITY: usize = 256; // pending new-connection handoffs
+```
 
 ### Backpressure Behavior
 
@@ -288,7 +305,7 @@ Client: MGET key1 key2 key3
          |   Shard 2: [key2]
          |
          +-- Await all responses (fail-all semantics)
-         |   - Configurable timeout (default: 1000ms)
+         |   - Bounded by scatter-gather-timeout-ms (default: 5000ms)
          |   - If any shard fails OR times out, entire operation fails
          |
          +-- Gather results, reorder by original key position
@@ -328,17 +345,14 @@ fn acquire_txid() -> u64 {
 }
 ```
 
-**Scalability Analysis:**
+Allocating a txid is a single atomic fetch-add. This is cheap relative to the
+network and store work each transaction performs; the counter is not expected to
+be a contention point before network I/O becomes the limiting factor. DragonflyDB
+uses a similar global counter in its transaction machinery.
 
-| Factor | Impact |
-|--------|--------|
-| **Operation cost** | ~10-50 cycles on x86-64 (LOCK XADD instruction) |
-| **Throughput ceiling** | ~50-100M txids/second per core accessing |
-| **Real-world bottleneck** | Unlikely before network I/O becomes limiting |
-
-**Why SeqCst?** Sequential consistency ensures all threads observe txids in the same order, critical for VLL correctness. Weaker orderings could cause ordering anomalies.
-
-**DragonflyDB Comparison:** DragonflyDB uses a similar global counter without reported scaling issues. At 1M ops/second, counter acquisition is ~0.01% of operation latency.
+**Why SeqCst?** Sequential consistency ensures all threads observe txids in the
+same total order, which VLL correctness depends on. Weaker orderings could allow
+ordering anomalies between shards.
 
 ### Per-Shard Transaction Queues
 
@@ -379,12 +393,16 @@ impl ShardTransactionQueue {
 
 ### Timeout Configuration
 
-FrogDB has two independent timeout types:
+The overall multi-shard operation is bounded by a single configurable timeout:
 
 | Setting | Default | Scope |
 |---------|---------|-------|
 | `scatter-gather-timeout-ms` | 5000 | Total multi-shard operation time |
-| `client-timeout-ms` | 0 (disabled) | Idle time between client commands |
+
+Finer-grained VLL lock timeouts (`vll.per-shard-lock-timeout-ms`,
+`vll.lock-acquisition-timeout-ms`) nest inside this bound; they are validated to
+be strictly ordered below it. See the configuration reference and
+[vll.md](/architecture/vll/) for those.
 
 ### Client Error Handling
 
