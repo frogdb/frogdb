@@ -106,6 +106,7 @@ impl ShardReceiver {
     /// coordinator task is buffered and returned without yielding, so pumping
     /// one queued message never lets another task interleave mid-pump.
     #[cfg(any(test, feature = "shard-driver"))]
+    #[doc(hidden)]
     pub fn try_recv(&mut self) -> Option<Envelope> {
         self.inner.try_recv().ok()
     }
