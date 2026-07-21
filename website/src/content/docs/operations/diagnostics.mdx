@@ -1,0 +1,294 @@
+---
+title: Diagnostics
+description: Slowlog, LATENCY tooling, hot-key detection, server status, and the debug web UI
+sidebar:
+  order: 7
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+FrogDB includes built-in tools for finding out what a running server is doing: the slowlog,
+the `LATENCY` command suite and latency bands, `HOTKEYS` for hot-key detection, the `STATUS`
+command, an authenticated debug web UI with a JSON API, and downloadable diagnostic bundles.
+For the metrics/tracing/logging pipeline, see [Observability](/operations/observability/).
+
+## Slowlog
+
+The slowlog captures commands that exceed a configurable execution time threshold.
+
+```toml
+[slowlog]
+log-slower-than = 10000   # Threshold in microseconds (10ms). -1 = disabled, 0 = log all.
+max-len = 128              # Maximum number of entries retained
+max-arg-len = 128          # Maximum length of logged argument strings
+```
+
+```redis
+SLOWLOG GET [count]    # Get recent entries (default 10, -1 = all)
+SLOWLOG LEN            # Total entries across all shards
+SLOWLOG RESET          # Clear all slow query logs
+SLOWLOG HELP           # Show help text
+```
+
+Each entry contains:
+
+| Field | Description |
+|---|---|
+| `id` | Unique entry ID |
+| `timestamp` | UNIX timestamp when the command was logged |
+| `duration_us` | Execution time in microseconds |
+| `command` | Command and arguments (truncated to `max-arg-len`) |
+| `client_addr` | Client IP address |
+| `client_name` | Client name (if set via `CLIENT SETNAME`) |
+
+Also available as JSON: `GET /debug/api/slowlog` (see [Debug JSON API](#debug-json-api)).
+
+Implemented in `frogdb-server/crates/server/src/connection/observability_conn_command.rs`;
+config in `frogdb-server/crates/config/src/slowlog.rs`. See
+[Configuration Reference → Slow Log](/reference/configuration/#slow-log).
+
+## Latency tooling
+
+FrogDB implements the Redis `LATENCY` command suite for tracking latency-inducing events, plus
+a FrogDB-specific `BANDS` subcommand:
+
+```redis
+LATENCY LATEST              # Most recent latency events
+LATENCY HISTORY <event>     # Historical samples for an event
+LATENCY GRAPH <event>       # ASCII art graph
+LATENCY RESET [event ...]   # Reset latency data
+LATENCY DOCTOR              # Human-readable latency analysis
+LATENCY BANDS                # Latency-band snapshot (requires latency-bands.enabled)
+LATENCY HELP
+```
+
+Tracked events include `command`, `fork`, `aof-fsync`, `expire-cycle`, `eviction-cycle`, and
+`snapshot-io`.
+
+<Aside type="note">
+`LATENCY HISTOGRAM` is accepted but always returns an empty result — it requires per-command
+latency tracking that FrogDB has not implemented yet. Use `frogdb_commands_duration_seconds`
+(a Prometheus histogram, see [Observability](/operations/observability/)) for command-latency
+distributions instead.
+</Aside>
+
+### Latency bands
+
+Latency bands provide SLO-focused tracking by counting requests into configurable cumulative
+time buckets. Disabled by default:
+
+```toml
+[latency-bands]
+enabled = false
+bands = [1, 5, 10, 50, 100, 500]   # Millisecond thresholds
+```
+
+With the default bands, `LATENCY BANDS` reports cumulative counts for `<=1ms`, `<=5ms`,
+`<=10ms`, `<=50ms`, `<=100ms`, `<=500ms`, plus a `>500ms` overflow bucket. The same data is
+exported as a Prometheus gauge, one sample per band, labeled by cumulative threshold:
+
+```
+frogdb_latency_band_requests_total{le="<=5ms"} 123456
+frogdb_latency_band_requests_total{le=">500ms"} 42
+```
+
+This is a **gauge snapshot** at scrape time, not a counter — don't wrap it in `rate()`; graph
+the raw values or compare successive scrapes.
+
+### Intrinsic / startup latency
+
+Measure the baseline latency of the underlying system (OS scheduling, hypervisor jitter) before
+FrogDB starts accepting connections:
+
+```bash
+# Run a 10-second latency test and exit
+frogdb-server --intrinsic-latency 10
+
+# Run a latency check at startup, before accepting connections
+frogdb-server --startup-latency-check
+```
+
+```toml
+[latency]
+startup-test = false
+startup-test-duration-secs = 5
+warning-threshold-us = 2000    # Warn if baseline latency exceeds this
+```
+
+See [Configuration Reference → Latency Testing](/reference/configuration/#latency-testing) and
+[→ Latency Bands](/reference/configuration/#latency-bands).
+
+## Hot-key detection
+
+`HOTKEYS` runs a time-boxed sampling session and reports the most-accessed keys:
+
+```redis
+HOTKEYS START [METRICS <n> cpu|net [cpu|net]] [COUNT <n>] [DURATION <ms>] [SAMPLE <ratio>] [SLOTS <n> <slot> ...]
+HOTKEYS STOP
+HOTKEYS RESET
+HOTKEYS GET
+```
+
+- `METRICS <n> ...` — which cost dimensions to rank by: `cpu` (CPU time), `net` (bytes
+  transferred), or both (`n` is `1` or `2`, followed by that many metric names)
+- `COUNT <n>` — how many top keys to report (default `16`, range 1–100)
+- `DURATION <ms>` — session length in milliseconds (`0` = run until `STOP`)
+- `SAMPLE <ratio>` — sample 1-in-`ratio` accesses instead of every access, to reduce overhead
+- `SLOTS <n> <slot> ...` — restrict sampling to specific hash slots (cluster mode only; `n` is
+  the slot count, followed by that many slot numbers 0–16383)
+
+The report includes, per key: access count, total CPU time (µs), and total network bytes, along
+with the session's configured metrics/count/duration/sample-ratio.
+
+Implemented in `frogdb-server/crates/server/src/connection/hotkeys.rs`.
+
+<Aside type="caution">
+Earlier drafts of this page documented `DEBUG HOTSHARDS [PERIOD <seconds>]` for per-shard
+traffic analysis. It is not a runnable command — the `DEBUG` dispatch table has no `HOTSHARDS`
+arm, so it returns an unknown-subcommand error. The underlying report machinery
+(`frogdb-server/crates/debug/src/hotshards.rs`) and its config section (`[hotshards]`, in
+`frogdb-server/crates/config/src/status.rs`) exist and are threaded down to each connection, but
+nothing currently invokes them — the field is unused. Do not rely on `DEBUG HOTSHARDS` or
+`[hotshards]`.
+</Aside>
+
+For per-shard (rather than per-key) imbalance, watch the Prometheus ratio of the busiest shard
+to the average:
+
+```
+max(frogdb_shard_keys) / avg(frogdb_shard_keys)
+```
+
+A ratio well above `1.0` indicates skewed key distribution across shards; alert thresholds are
+workload-dependent.
+
+## Server status
+
+`STATUS` gives a comprehensive server and shard health overview, available over both the Redis
+protocol and HTTP:
+
+```redis
+STATUS           # Shows help (a bare STATUS is not a status dump — this differs from typical Redis-style commands)
+STATUS JSON      # Machine-readable JSON status
+```
+
+```
+GET /status/json    # Same document over HTTP, unauthenticated
+```
+
+Both paths render from the same status collector, so the RESP and HTTP forms always agree.
+The JSON document is organized into sections: `frogdb` (version, uptime, pid, timestamp),
+`cluster`, `health`, `clients`, `memory`, `persistence`, `shards` (a per-shard array),
+`keyspace`, `commands`.
+
+Warning thresholds:
+
+```toml
+[status]
+memory-warning-percent = 90
+connection-warning-percent = 90
+durability-lag-warning-ms = 5000
+durability-lag-critical-ms = 30000
+```
+
+Implemented in `frogdb-server/crates/server/src/connection/observability_conn_command.rs`;
+config in `frogdb-server/crates/config/src/status.rs`. See
+[Configuration Reference → Status](/reference/configuration/#status).
+
+## Debug web UI
+
+Enable the HTTP server and set a token to protect the debug and admin endpoints:
+
+```toml
+[http]
+enabled = true
+bind = "127.0.0.1"
+port = 9090
+token = "my-secret-token"
+```
+
+Then open `http://<host>:9090/debug/` in a browser. The UI shows server/cluster overview,
+performance (slowlog, latency), configuration, connected clients, per-shard stats, and
+diagnostic bundle generation.
+
+**Auth model.** `/debug/*` and `/admin/*` require `Authorization: Bearer <token>` only when
+`http.token` is set. `http.bind` defaults to `127.0.0.1`, so an unauthenticated debug endpoint
+is loopback-only out of the box — the same trust model as local `redis-cli` without `AUTH`, not
+an oversight. To expose the debug UI beyond localhost:
+
+1. Set `http.bind` to a routable address and `http.token` to a strong secret.
+2. Put a TLS-terminating reverse proxy in front of it — configuration validation warns if a
+   token is set while `http.bind = "0.0.0.0"`, because the bearer token would otherwise travel
+   in plaintext.
+
+See [Security](/operations/security/) for TLS and network-security guidance.
+
+## Debug JSON API
+
+All `/debug/api/*` endpoints require the same bearer token as the UI:
+
+```bash
+curl -H "Authorization: Bearer my-secret-token" http://localhost:9090/debug/api/metrics
+```
+
+| Endpoint | Description |
+|---|---|
+| `GET /debug/api/server` | Server status snapshot: version, role, uptime, shard count, replication (`/debug/api/cluster` is an alias for this same handler — it does not return topology) |
+| `GET /debug/api/cluster/overview` | Cluster topology: nodes and their state (cluster mode only; reports `{"enabled": false}` outside cluster mode) |
+| `GET /debug/api/cluster/node/:id` | Detail for a single cluster node |
+| `GET /debug/api/config` | Current configuration values |
+| `GET /debug/api/metrics` | Current metrics snapshot (JSON) |
+| `GET /debug/api/clients` | Connected clients list |
+| `GET /debug/api/slowlog` | Slowlog entries |
+| `GET /debug/api/latency` | Latency statistics |
+| `GET /debug/api/shard-stats` | Per-shard key count, memory, hot/warm key counts |
+
+`shard-stats` is the same per-shard data the debug UI's shard view renders — it's a live,
+scatter-gathered snapshot (`ShardStats`), unrelated to the dead `DEBUG HOTSHARDS`/`[hotshards]`
+machinery described above.
+
+Routes are defined in `frogdb-server/crates/debug/src/web_ui/routes.rs`.
+
+## Diagnostic bundles
+
+Generate a downloadable archive containing server state, configuration, metrics, slowlog
+entries, and recent traces — useful when filing a bug report or handing off to another
+operator:
+
+| Endpoint | Description |
+|---|---|
+| `GET /debug/api/bundle/generate` | Generate and download a new diagnostic bundle |
+| `GET /debug/api/bundle/list` | List previously generated bundles |
+| `GET /debug/api/bundle/{id}` | Download a specific bundle by ID |
+
+```bash
+# Generate and download a bundle
+curl -H "Authorization: Bearer my-secret-token" \
+  http://localhost:9090/debug/api/bundle/generate -o bundle.tar.gz
+
+# List available bundles
+curl -H "Authorization: Bearer my-secret-token" \
+  http://localhost:9090/debug/api/bundle/list
+```
+
+Retention and content limits:
+
+```toml
+[debug-bundle]
+directory = "frogdb-data/bundles"
+max-bundles = 10
+bundle-ttl-secs = 3600        # 1 hour
+max-slowlog-entries = 256
+max-trace-entries = 100
+```
+
+See [Configuration Reference → Debug Bundle](/reference/configuration/#debug-bundle).
+
+## See also
+
+<CardGrid>
+  <LinkCard title="Observability" description="Prometheus metrics, OTLP export, tracing, and logging" href="/operations/observability/" />
+  <LinkCard title="Security" description="TLS and debug-endpoint authentication" href="/operations/security/" />
+  <LinkCard title="Configuration Reference" description="All [slowlog], [latency], [status], and [debug-bundle] keys" href="/reference/configuration/" />
+  <LinkCard title="Metrics Reference" description="Complete list of Prometheus metrics" href="/reference/metrics/" />
+</CardGrid>
