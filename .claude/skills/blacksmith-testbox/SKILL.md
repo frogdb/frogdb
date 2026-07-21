@@ -33,11 +33,14 @@ This repo wraps the testbox lifecycle so boxes are always cleaned up:
   production). `just` recipes work unchanged on the box.
 
 Why use the testbox: offload heavy compiles/tests/benches so the local macbook stays
-responsive and parallel agents don't contend for disk/memory. FrogDB tests have no
-secret/service dependencies, so local runs remain fine for quick iteration — reach for the
-testbox for full-suite runs, expensive builds, Linux-specific validation, and anything
-long-running. (The generic guidance below saying tests must "never" run locally does not
-apply to this repo.)
+responsive and parallel agents don't contend for disk/memory. The remote-vs-local split is
+defined in CLAUDE.md ("Remote execution: Blacksmith testboxes") — in short: full builds,
+whole-suite tests, clippy, concurrency suites, benchmarks go remote; fmt and single-crate
+iteration loops stay local. (The generic guidance below saying tests must "never" run locally
+does not apply to this repo — FrogDB tests have no secret/service dependencies.)
+
+Concurrency caveat: run only one `tb-run` at a time per worktree — concurrent runs race the
+rsync sync. Agents in different worktrees get separate boxes automatically.
 
 ## Install the CLI
 
