@@ -14,6 +14,7 @@ path = "src/main.rs"
 frogdb-config.workspace = true
 frogdb-core.workspace = true
 frogdb-server = { path = "../../crates/server" }
+frogdb-telemetry = { path = "../../crates/telemetry" }
 frogdb-types.workspace = true
 schemars.workspace = true
 serde.workspace = true

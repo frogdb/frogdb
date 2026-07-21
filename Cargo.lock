@@ -1325,6 +1325,7 @@ dependencies = [
  "frogdb-config",
  "frogdb-core",
  "frogdb-server",
+ "frogdb-telemetry",
  "frogdb-types",
  "schemars",
  "serde",

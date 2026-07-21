@@ -255,6 +255,27 @@ pub fn define_metrics(input: TokenStream) -> TokenStream {
             quote! { &[#(#label_names),*] }
         };
 
+        // Label value types, for introspection (e.g. by the docs generator):
+        // free-form `&str` labels report "string", enum labels report their
+        // type name (e.g. "RejectionReason").
+        let label_types: Vec<String> = labels
+            .iter()
+            .map(|l| {
+                let ty = &l.ty;
+                let is_str_ref = matches!(ty, Type::Reference(r) if matches!(&*r.elem, Type::Path(p) if p.path.is_ident("str")));
+                if is_str_ref {
+                    "string".to_string()
+                } else {
+                    quote!(#ty).to_string()
+                }
+            })
+            .collect();
+        let label_types_tokens = if label_types.is_empty() {
+            quote! { &[] }
+        } else {
+            quote! { &[#(#label_types),*] }
+        };
+
         // Generate method parameters for labels
         let label_params: Vec<_> = labels
             .iter()
@@ -393,6 +414,7 @@ pub fn define_metrics(input: TokenStream) -> TokenStream {
                 metric_type: #metric_type_variant,
                 labels: #label_names_tokens,
                 handle: #handle_str,
+                label_types: #label_types_tokens,
             }
         });
     }

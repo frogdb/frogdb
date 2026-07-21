@@ -77,6 +77,10 @@ pub struct MetricDefinition {
     pub metric_type: MetricType,
     /// Label names for this metric, in emission order.
     pub labels: &'static [&'static str],
+    /// Label value types, in the same order as `labels` (e.g. `"string"` for
+    /// a free-form `&str` label, or the label enum's type name for a fixed
+    /// set of values, e.g. `"RejectionReason"`).
+    pub label_types: &'static [&'static str],
     /// The generated handle struct's name (e.g., "CommandsTotal"), used by
     /// the verification test to prove every metric is emitted through its
     /// typed handle.
