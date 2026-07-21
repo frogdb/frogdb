@@ -12,6 +12,7 @@ use proptest::prelude::*;
 
 use super::generator::{Choice, Sender, Step, Tick, replay, schedule_strategy};
 use super::harness::{ShardDriver, cmd};
+use frogdb_core::shard::WatchEntry;
 use frogdb_core::shard::types::TransactionResult;
 
 /// Deterministic pin: a multi-write EXEC is atomic even with an expiry tick and
@@ -129,7 +130,11 @@ proptest! {
                     shard: 0,
                     conn_id: 1,
                     commands: vec![cmd("SET", &["a", "9"]), cmd("SET", &["b", "9"])],
-                    watches: vec![(Bytes::from_static(b"a"), watch_version)],
+                    watches: vec![WatchEntry {
+                        key: Bytes::from_static(b"a"),
+                        version: watch_version,
+                        live_at_watch: true,
+                    }],
                 }]),
                 Sender::new(vec![Step::Execute {
                     shard: 0,

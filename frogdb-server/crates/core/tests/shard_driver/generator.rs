@@ -18,6 +18,7 @@ use frogdb_protocol::ParsedCommand;
 use proptest::prelude::*;
 
 use super::harness::ShardDriver;
+use frogdb_core::shard::WatchEntry;
 use frogdb_core::types::BlockingOp;
 
 /// A per-shard tick pseudo-event (C4). Ticks never preempt a dispatch.
@@ -50,7 +51,7 @@ pub enum Step {
         shard: usize,
         conn_id: u64,
         commands: Vec<ParsedCommand>,
-        watches: Vec<(Bytes, u64)>,
+        watches: Vec<WatchEntry>,
     },
     /// Register a blocking waiter (C2 exempt: no immediate reply). The receiver
     /// is dropped by the harness; scenarios that need the reply build the

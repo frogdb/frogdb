@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64};
 
-use bytes::Bytes;
 use frogdb_protocol::Response;
 use tokio::sync::mpsc;
 
@@ -21,7 +20,7 @@ use super::active_expiry::ActiveExpiryCoordinator;
 use super::builder::ShardWorkerBuilder;
 use super::connection::NewConnection;
 use super::keyspace_coordinator::KeyspaceNotificationCoordinator;
-use super::message::{ShardReceiver, ShardSender};
+use super::message::{ShardReceiver, ShardSender, WatchEntry};
 use super::search::lifecycle::IndexLifecycleManager;
 use super::types::{
     ShardCluster, ShardEviction, ShardIdentity, ShardObservability, ShardPersistence,
@@ -459,10 +458,18 @@ impl ShardWorker {
     }
 
     /// Check if watched keys have changed since they were watched.
-    pub(crate) fn check_watches(&self, watches: &[(Bytes, u64)]) -> bool {
-        watches
-            .iter()
-            .all(|(key, watched_ver)| self.get_key_version(key) == *watched_ver)
+    ///
+    /// Behavior-neutral (Task 3): `live_at_watch` is plumbed through but ignored
+    /// here — the check stays a pure per-shard version compare. Task 4 adds the
+    /// per-key liveness clause that honors it (gap 4).
+    pub(crate) fn check_watches(&self, watches: &[WatchEntry]) -> bool {
+        watches.iter().all(
+            |WatchEntry {
+                 key,
+                 version,
+                 live_at_watch: _,
+             }| self.get_key_version(key) == *version,
+        )
     }
 
     /// Lazily purge any watched keys whose TTL has elapsed, bumping the shard
@@ -478,8 +485,8 @@ impl ShardWorker {
     /// [`crate::store::Store::purge_if_expired`], the version bump lives here.
     /// One bump per call regardless of how many keys purge, mirroring active
     /// expiry's one-bump-per-cycle.
-    pub(crate) fn purge_expired_watches(&mut self, watches: &[(Bytes, u64)]) {
-        for (key, _watched_ver) in watches {
+    pub(crate) fn purge_expired_watches(&mut self, watches: &[WatchEntry]) {
+        for WatchEntry { key, .. } in watches {
             self.store.purge_if_expired(key);
         }
         // Apply the bump + drain for any watched key that expired during the

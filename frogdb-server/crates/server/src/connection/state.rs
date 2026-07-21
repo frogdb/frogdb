@@ -14,8 +14,8 @@ use std::net::SocketAddr;
 use bytes::Bytes;
 use frogdb_core::{
     AuthenticatedUser, ClientStatsDelta, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
-    MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION, shard_for_key,
-    slot_for_key,
+    MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION, WatchEntry,
+    shard_for_key, slot_for_key,
 };
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 
@@ -129,8 +129,12 @@ impl TxnSlotAccumulator {
 pub struct TransactionState {
     /// Queue of commands to execute at EXEC time (None = not in transaction).
     pub queue: Option<Vec<ParsedCommand>>,
-    /// Watched keys: key -> (shard_id, version_at_watch_time).
-    pub watches: HashMap<Bytes, (usize, u64)>,
+    /// Watched keys: key -> (shard_id, version_at_watch_time, live_at_watch).
+    /// `live_at_watch` is the `wk->expired` inverse — whether the key was
+    /// present and unexpired when watched — carried per key into EXEC via
+    /// [`WatchEntry`]. `shard_id` stays connection-side only (it drives the
+    /// EXEC target fold, not the wire watch set).
+    pub watches: HashMap<Bytes, (usize, u64, bool)>,
     /// Co-location accumulator: folds queued keys (and watched shards) into the
     /// target shard(s), owning the `Multi`-promotion rule.
     slots: TxnSlotAccumulator,
@@ -431,8 +435,8 @@ pub enum TxnError {
 pub struct TxnSummary {
     /// Queued commands, in submission order.
     pub queue: Vec<ParsedCommand>,
-    /// Watched keys with their watch-time versions.
-    pub watches: Vec<(Bytes, u64)>,
+    /// Watched keys with their watch-time version and liveness.
+    pub watches: Vec<WatchEntry>,
     /// Target shard(s) folded from the queued commands and watches.
     pub target: TransactionTarget,
     /// Whether a command failed during queuing (EXEC must abort).
@@ -863,9 +867,11 @@ impl ConnectionState {
             .add_keys(keys, num_shards, is_cluster);
     }
 
-    /// Record a watched key with its watch-time version and shard.
-    pub fn watch_key(&mut self, key: Bytes, shard_id: usize, version: u64) {
-        self.transaction.watches.insert(key, (shard_id, version));
+    /// Record a watched key with its watch-time version, shard, and liveness.
+    pub fn watch_key(&mut self, key: Bytes, shard_id: usize, version: u64, live_at_watch: bool) {
+        self.transaction
+            .watches
+            .insert(key, (shard_id, version, live_at_watch));
     }
 
     /// Forget all watched keys (UNWATCH).
@@ -885,7 +891,7 @@ impl ConnectionState {
         // false-negative commit), while an UNWATCH inside MULTI that cleared the
         // watches contributes nothing, leaving no stale fold to spuriously
         // CROSSSLOT an otherwise single-shard EXEC.
-        for &(shard_id, _) in self.transaction.watches.values() {
+        for &(shard_id, _, _) in self.transaction.watches.values() {
             self.transaction.slots.fold_shard(shard_id);
         }
         let txn = std::mem::take(&mut self.transaction);
@@ -894,7 +900,11 @@ impl ConnectionState {
             watches: txn
                 .watches
                 .into_iter()
-                .map(|(key, (_, version))| (key, version))
+                .map(|(key, (_, version, live_at_watch))| WatchEntry {
+                    key,
+                    version,
+                    live_at_watch,
+                })
                 .collect(),
             target: txn.slots.target,
             exec_abort: txn.exec_abort,
@@ -1353,12 +1363,19 @@ mod tests {
         s.push_queued_command(cmd(b"GET"));
         s.push_queued_command(cmd(b"SET"));
         s.transaction.slots.fold_shard(2);
-        s.watch_key(Bytes::from_static(b"k"), 2, 7);
+        s.watch_key(Bytes::from_static(b"k"), 2, 7, true);
 
         let summary = s.take_transaction().expect("in transaction");
         assert_eq!(summary.queue.len(), 2);
         assert!(!summary.exec_abort);
-        assert_eq!(summary.watches, vec![(Bytes::from_static(b"k"), 7)]);
+        assert_eq!(
+            summary.watches,
+            vec![WatchEntry {
+                key: Bytes::from_static(b"k"),
+                version: 7,
+                live_at_watch: true,
+            }]
+        );
         assert!(matches!(summary.target, TransactionTarget::Single(2)));
 
         // take_transaction leaves the state clean (all five fields reset).
@@ -1376,8 +1393,8 @@ mod tests {
         let mut s = state();
 
         // WATCH before MULTI: each WATCH only records the key + shard (no fold).
-        s.watch_key(Bytes::from_static(b"{t0}kv0"), 0, 11);
-        s.watch_key(Bytes::from_static(b"{t1}kv1"), 1, 22);
+        s.watch_key(Bytes::from_static(b"{t0}kv0"), 0, 11, true);
+        s.watch_key(Bytes::from_static(b"{t1}kv1"), 1, 22, true);
 
         s.begin_transaction().expect("MULTI after WATCH");
         // Queue a single-shard command (shard 1), as seed 8 does (DEL {t1}kv1).
@@ -1407,7 +1424,7 @@ mod tests {
         // by a stale shard-0 watch fold.
         let mut s = state();
 
-        s.watch_key(Bytes::from_static(b"{t0}kv0"), 0, 11);
+        s.watch_key(Bytes::from_static(b"{t0}kv0"), 0, 11, true);
         s.begin_transaction().expect("MULTI after WATCH");
         // UNWATCH inside MULTI clears the live watch set (dispatched immediately).
         s.unwatch_all();
@@ -1444,7 +1461,7 @@ mod tests {
         let mut s = state();
         s.begin_transaction().unwrap();
         s.push_queued_command(cmd(b"GET"));
-        s.watch_key(Bytes::from_static(b"k"), 0, 1);
+        s.watch_key(Bytes::from_static(b"k"), 0, 1, true);
 
         let metrics = s.discard_transaction().expect("in transaction");
         assert_eq!(metrics.queued_count, 1);

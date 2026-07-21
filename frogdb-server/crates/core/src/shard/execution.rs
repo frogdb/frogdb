@@ -6,7 +6,7 @@ use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 
 use frogdb_types::metrics::definitions::{KeyspaceHits, KeyspaceMisses, WalRollbacks};
 
-use super::message::ScatterOp;
+use super::message::{ScatterOp, WatchEntry};
 use super::post_execution::{EffectScope, WalPhase, WriteSummary};
 use super::rollback::WriteSnapshot;
 use super::types::{PartialResult, TransactionResult};
@@ -459,7 +459,7 @@ impl ShardWorker {
     pub(crate) async fn execute_transaction(
         &mut self,
         commands: Vec<ParsedCommand>,
-        watches: &[(Bytes, u64)],
+        watches: &[WatchEntry],
         conn_id: u64,
         protocol_version: ProtocolVersion,
     ) -> TransactionResult {

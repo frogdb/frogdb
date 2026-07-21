@@ -9,6 +9,7 @@ use std::time::Duration;
 use bytes::Bytes;
 
 use super::harness::{ShardDriver, cmd};
+use frogdb_core::shard::WatchEntry;
 use frogdb_core::shard::types::TransactionResult;
 
 /// What happens in the WATCH→EXEC gap.
@@ -65,7 +66,11 @@ async fn run_case(interleave: Interleave) -> (bool, bool) {
             0,
             1,
             vec![cmd("SET", &["k", "x"])],
-            vec![(Bytes::from_static(b"k"), v0)],
+            vec![WatchEntry {
+                key: Bytes::from_static(b"k"),
+                version: v0,
+                live_at_watch: true,
+            }],
         )
         .await;
     let aborted = matches!(result, TransactionResult::WatchAborted);
@@ -137,7 +142,11 @@ async fn s2_f3_lazy_expiry_watched_key_aborts() {
             0,
             1,
             vec![cmd("SET", &["k", "x"])],
-            vec![(Bytes::from_static(b"k"), v0)],
+            vec![WatchEntry {
+                key: Bytes::from_static(b"k"),
+                version: v0,
+                live_at_watch: true,
+            }],
         )
         .await;
 
@@ -179,7 +188,11 @@ async fn regression_gap3_third_party_lazy_read_aborts_watch() {
             0,
             1,
             vec![cmd("SET", &["k", "x"])],
-            vec![(Bytes::from_static(b"k"), v0)],
+            vec![WatchEntry {
+                key: Bytes::from_static(b"k"),
+                version: v0,
+                live_at_watch: true,
+            }],
         )
         .await;
     assert!(
