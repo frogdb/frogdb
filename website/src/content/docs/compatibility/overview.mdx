@@ -79,7 +79,7 @@ In **cluster mode**, multi-key commands (`MGET`, `MSET`, and similar) require al
 ### Blocking commands
 
 - Blocking list and stream commands (`BLPOP`, `BRPOP`, `BLMOVE`, and similar) require their keys on the same shard.
-- A cross-shard blocking call returns `-CROSSSLOT`.
+- A cross-shard blocking call returns `-CROSSSLOT`. This holds even in standalone mode with `server.allow-cross-slot-standalone = true`: the escape hatch does not extend to blocking commands, because a blocking wait must be registered on a single shard that owns all the watched keys.
 
 ## Lua scripting
 
@@ -113,6 +113,8 @@ In cluster mode:
 
 - **Regular Pub/Sub** messages are forwarded across cluster nodes, so a subscriber on any node receives them — matching Redis behavior.
 - **Sharded Pub/Sub** (`SSUBSCRIBE`/`SPUBLISH`) routes messages to the shard that owns the channel's hash slot, consistent with Redis Cluster.
+
+Unlike Redis, FrogDB enforces a per-client subscription cap, configurable via `blocking.max-subscriptions-per-client` (Redis has no built-in per-client limit).
 
 ## Database model
 

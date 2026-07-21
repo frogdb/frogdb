@@ -126,7 +126,7 @@ There is **no fencing-timeout config knob**; fencing is governed by these boolea
 **Limitations:** all keys in a transaction must resolve to the same internal shard (use hash tags); cross-shard transactions are not supported. There is no rollback — a command that fails at runtime does not undo earlier commands in the transaction (matching Redis).
 
 ### Transaction Durability — [Tested]
-A transaction is applied as a single RocksDB `WriteBatch` (atomic at the storage layer), so its durability follows the [durability mode](#durability): `async`/`periodic` return before the batch is durable, `sync` blocks until fsync.
+A transaction is applied as a single RocksDB `WriteBatch` (atomic at the storage layer), so its durability follows the [durability mode](#durability--tested): `async`/`periodic` return before the batch is durable, `sync` blocks until fsync.
 
 ### WATCH — [Tested]
 `WATCH` provides optimistic locking: `EXEC` aborts (returns nil) if a watched key was modified by another client. Watched keys must be on the same internal shard as the transaction's keys. Verified in `integration_transactions.rs` (`test_watch_exec_success`, `test_watch_exec_abort`, and the PFADD watch-version regression tests).

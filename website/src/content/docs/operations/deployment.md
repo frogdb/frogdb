@@ -1,8 +1,6 @@
 ---
 title: "Deployment"
 description: "Deploy FrogDB with the published Docker image, the Debian package, or the Helm chart."
-sidebar:
-  order: 1
 ---
 FrogDB is distributed three ways: a Docker image, a Debian package with a systemd unit,
 and a Helm chart for Kubernetes. A separate, experimental operator can also manage FrogDB
@@ -155,6 +153,21 @@ A `FrogDB` resource's `spec.mode` field selects `"standalone"` or `"cluster"` â€
 separate `FrogDBCluster` kind. The operator also has an unused `ServiceMonitor` builder
 (present in source, not yet wired into reconciliation) and does not implement backing up
 data to S3 or GCS.
+
+## Rolling upgrades
+
+FrogDB exposes two FrogDB-original commands for coordinating a rolling binary upgrade:
+
+- `FROGDB.VERSION` returns three fields: `binary_version` (the running binary), `cluster_version`
+  (the minimum binary version across all cluster nodes; equal to the binary version in standalone
+  or replication mode), and `active_version` (the finalized feature-gate version, empty until a
+  finalize has run). Use it to confirm every node has been restarted onto the new binary before
+  finalizing.
+- `FROGDB.FINALIZE <version>` finalizes the upgrade to `<version>`, activating any version-gated
+  behavior. It is an admin, write command and is **irreversible**. The argument must be a valid
+  semver string. In cluster mode the finalize is proposed through Raft and is rejected while any
+  node still reports an older version, so run it only after `FROGDB.VERSION` shows a uniform
+  `cluster_version`.
 
 ## OS tuning
 

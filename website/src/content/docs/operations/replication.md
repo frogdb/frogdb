@@ -1,8 +1,6 @@
 ---
 title: "Replication"
 description: "Set up FrogDB primary-replica replication, configure write quorum, and monitor replication state."
-sidebar:
-  order: 3
 ---
 
 FrogDB implements asynchronous primary-replica replication using the Redis PSYNC2 protocol. The standard replication commands (`REPLICAOF`, `ROLE`, `INFO replication`) behave as documented by the [Redis replication docs](https://redis.io/docs/latest/operate/oss_and_stack/management/replication/); this page covers setup, write quorum, the sync mechanism, and monitoring. Cluster metadata and failover coordination live one layer up in [Clustering](/operations/clustering/); replication is the data plane beneath it.

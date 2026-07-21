@@ -1,8 +1,6 @@
 ---
 title: "Security"
 description: "Configure authentication, ACLs, per-user rate limiting, and TLS in FrogDB."
-sidebar:
-  order: 7
 ---
 
 FrogDB supports [Redis ACLs](https://redis.io/docs/latest/operate/oss_and_stack/management/security/acl/) for authentication and access control, TLS via rustls, and a FrogDB-specific per-user rate-limit extension. This page covers each and is explicit about the one area that is not yet automated: certificate hot-reload. Base ACL rule syntax is documented by redis.io; this page documents the FrogDB deltas.

@@ -1,8 +1,6 @@
 ---
 title: "Persistence"
 description: "FrogDB's durability modes, WAL failure policy, snapshots, startup recovery, and tiered storage."
-sidebar:
-  order: 2
 ---
 FrogDB persists every shard to its own RocksDB instance. This page covers the three
 durability modes, the WAL failure policy, how forkless snapshots work and what triggers

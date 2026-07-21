@@ -332,7 +332,7 @@ GET-only; there is no POST topology-push endpoint.
 
 The `/admin/*` and `/debug/*` routes can be protected with a bearer token (`[http]` `token`
 config). Topology mutations are Raft commands, not HTTP verbs. See
-[Operations: Debug UI & HTTP API](/operations/debug-ui/) and the
+[Operations: Diagnostics](/operations/diagnostics/) and the
 [Metrics reference](/reference/metrics/).
 
 ---

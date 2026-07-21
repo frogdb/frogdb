@@ -1,8 +1,6 @@
 ---
 title: "Backup and Restore"
 description: "FrogDB backup strategies and recovery procedures."
-sidebar:
-  order: 6
 ---
 
 FrogDB backs up by copying RocksDB snapshots off-host, or by keeping a dedicated replica as a

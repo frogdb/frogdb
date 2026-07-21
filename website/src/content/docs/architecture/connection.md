@@ -111,7 +111,7 @@ family plus `PING`, `QUIT`, and `RESET`; RESP3 lifts this restriction. While a
 blocking command is in flight the connection is awaiting its result and issues no
 other command until it returns. Command semantics inside these modes follow Redis;
 the deltas that matter are documented under
-[Compatibility & Correctness](/compatibility/redis-differences/).
+[Compatibility & Correctness](/compatibility/overview/).
 
 **No idle-connection timeout.** FrogDB does not currently run a server-side idle
 reaper — there is no Redis-style `timeout` that disconnects idle clients, and no

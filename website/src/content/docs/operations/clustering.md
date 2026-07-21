@@ -1,8 +1,6 @@
 ---
 title: "Clustering"
 description: "Bootstrap a Raft-coordinated FrogDB cluster, understand slot ownership and the admin API, and know the failure modes."
-sidebar:
-  order: 4
 ---
 
 A FrogDB cluster shards the keyspace across nodes using 16384 hash slots. Cluster *metadata* — membership, slot ownership, failover decisions, and config epochs — is coordinated by Raft consensus, while the *data* itself is replicated over the PSYNC data plane. This page covers the architecture split, slot routing, bootstrapping, topology management, the admin API, and failure modes. For the data-sync mechanics beneath the cluster, see [Replication](/operations/replication/).
@@ -47,7 +45,7 @@ SET {user:123}:settings "..."
 MGET {user:123}:profile {user:123}:settings
 ```
 
-Multi-key operations whose keys span more than one slot are rejected. See [Redis compatibility differences](/compatibility/redis-differences/) for cross-slot behavior.
+Multi-key operations whose keys span more than one slot are rejected. See [Redis compatibility differences](/compatibility/overview/) for cross-slot behavior.
 
 ## Node roles
 
