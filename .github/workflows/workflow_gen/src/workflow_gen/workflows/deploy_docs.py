@@ -46,6 +46,7 @@ def deploy_docs_workflow() -> Workflow:
     )
 
     w.jobs["build"] = Job(
+        runs_on="blacksmith-2vcpu-ubuntu-2404",
         steps=[
             checkout_step(),
             mise_setup_step(install_args=MISE_INSTALL_ARGS),
