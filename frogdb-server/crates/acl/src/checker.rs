@@ -39,79 +39,13 @@ impl PermissionResult {
     }
 }
 
-/// Trait for ACL permission checking.
-pub trait AclChecker: Send + Sync {
-    /// Check if a command is allowed for the user.
-    fn check_command(
-        &self,
-        user: &AuthenticatedUser,
-        cmd: &str,
-        subcmd: Option<&str>,
-    ) -> PermissionResult;
-
-    /// Check if key access is allowed for the user.
-    fn check_key_access(
-        &self,
-        user: &AuthenticatedUser,
-        key: &[u8],
-        access: KeyAccessType,
-    ) -> PermissionResult;
-
-    /// Check if channel access is allowed for the user.
-    fn check_channel_access(&self, user: &AuthenticatedUser, channel: &[u8]) -> PermissionResult;
-
-    /// Check if authentication is required.
-    fn requires_auth(&self) -> bool;
-
-    /// Check if a command is allowed without authentication.
-    /// These commands can run before AUTH (e.g., AUTH, QUIT, HELLO).
-    fn is_auth_exempt(&self, cmd: &str) -> bool {
-        let cmd_lower = cmd.to_lowercase();
-        matches!(cmd_lower.as_str(), "auth" | "quit" | "hello")
-    }
-}
-
-/// ACL checker that always allows all operations.
-/// Used when no authentication is configured.
-#[derive(Debug, Default, Clone)]
-pub struct AllowAllChecker;
-
-impl AllowAllChecker {
-    /// Create a new AllowAllChecker.
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl AclChecker for AllowAllChecker {
-    fn check_command(
-        &self,
-        _user: &AuthenticatedUser,
-        _cmd: &str,
-        _subcmd: Option<&str>,
-    ) -> PermissionResult {
-        PermissionResult::Allowed
-    }
-
-    fn check_key_access(
-        &self,
-        _user: &AuthenticatedUser,
-        _key: &[u8],
-        _access: KeyAccessType,
-    ) -> PermissionResult {
-        PermissionResult::Allowed
-    }
-
-    fn check_channel_access(&self, _user: &AuthenticatedUser, _channel: &[u8]) -> PermissionResult {
-        PermissionResult::Allowed
-    }
-
-    fn requires_auth(&self) -> bool {
-        false
-    }
-}
-
 /// Full ACL checker with permission enforcement.
+///
+/// Turns a `bool` permission decision (delegated to [`AuthenticatedUser`]'s
+/// snapshot of [`PermissionSet`](crate::permissions::PermissionSet)) into the
+/// canonical [`AclError`] reply — the module's load-bearing responsibility.
+/// It is the single production ACL checker; there is no polymorphism seam
+/// around it.
 #[derive(Debug, Clone)]
 pub struct FullAclChecker {
     /// Whether authentication is required.
@@ -130,10 +64,9 @@ impl FullAclChecker {
             requires_auth: manager.requires_auth(),
         }
     }
-}
 
-impl AclChecker for FullAclChecker {
-    fn check_command(
+    /// Check if a command is allowed for the user.
+    pub fn check_command(
         &self,
         user: &AuthenticatedUser,
         cmd: &str,
@@ -155,7 +88,8 @@ impl AclChecker for FullAclChecker {
         }
     }
 
-    fn check_key_access(
+    /// Check if key access is allowed for the user.
+    pub fn check_key_access(
         &self,
         user: &AuthenticatedUser,
         key: &[u8],
@@ -168,7 +102,12 @@ impl AclChecker for FullAclChecker {
         }
     }
 
-    fn check_channel_access(&self, user: &AuthenticatedUser, channel: &[u8]) -> PermissionResult {
+    /// Check if channel access is allowed for the user.
+    pub fn check_channel_access(
+        &self,
+        user: &AuthenticatedUser,
+        channel: &[u8],
+    ) -> PermissionResult {
         if user.check_channel_access(channel) {
             PermissionResult::Allowed
         } else {
@@ -176,7 +115,8 @@ impl AclChecker for FullAclChecker {
         }
     }
 
-    fn requires_auth(&self) -> bool {
+    /// Check if authentication is required.
+    pub fn requires_auth(&self) -> bool {
         self.requires_auth
     }
 }
@@ -222,25 +162,6 @@ mod tests {
             all_channels: false,
         };
         AuthenticatedUser::new("restricted", Arc::new(perms), None)
-    }
-
-    #[test]
-    fn test_allow_all_checker() {
-        let checker = AllowAllChecker::new();
-        let user = create_test_user(false, false, false);
-
-        assert!(checker.check_command(&user, "GET", None).is_allowed());
-        assert!(
-            checker
-                .check_key_access(&user, b"any:key", KeyAccessType::Read)
-                .is_allowed()
-        );
-        assert!(
-            checker
-                .check_channel_access(&user, b"any:channel")
-                .is_allowed()
-        );
-        assert!(!checker.requires_auth());
     }
 
     #[test]
@@ -359,17 +280,6 @@ mod tests {
             err.to_string(),
             "NOPERM this user has no permissions to run the 'flushall' command"
         );
-    }
-
-    #[test]
-    fn test_auth_exempt_commands() {
-        let checker = FullAclChecker::new(true);
-        assert!(checker.is_auth_exempt("AUTH"));
-        assert!(checker.is_auth_exempt("auth"));
-        assert!(checker.is_auth_exempt("QUIT"));
-        assert!(checker.is_auth_exempt("HELLO"));
-        assert!(!checker.is_auth_exempt("GET"));
-        assert!(!checker.is_auth_exempt("SET"));
     }
 
     #[test]
