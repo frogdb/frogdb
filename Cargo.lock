@@ -1322,6 +1322,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "frogctl",
  "frogdb-config",
  "frogdb-core",
  "frogdb-server",

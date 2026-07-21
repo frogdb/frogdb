@@ -4,13 +4,15 @@
 //! `Config` struct to produce a `config-reference.json` file, version
 //! identifiers to produce a `versions.json` file, the full command
 //! registry to produce a `commands.json` file, the typed metrics
-//! registry to produce a `metrics.json` file, and the annotated example
+//! registry to produce a `metrics.json` file, the annotated example
 //! config (identical to `frogdb-server --generate-config`) to produce
-//! an `example-config.toml` file, all consumed by the Astro/Starlight
-//! documentation site.
+//! an `example-config.toml` file, and the `clap::Command` definitions
+//! for both binaries to produce `frogdb-server-cli.json` and
+//! `frogctl-cli.json`, all consumed by the Astro/Starlight documentation
+//! site.
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use frogdb_config::{Config, config_param_registry};
 use frogdb_core::{Arity, CommandRegistry, ExecutionStrategy};
 use frogdb_server::config::ConfigLoader;
@@ -220,6 +222,58 @@ struct LabelInfo {
     values: Vec<String>,
 }
 
+/// Top-level output structure for `frogdb-server-cli.json` / `frogctl-cli.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CliReference {
+    /// Machine-readable notice that this file is generated.
+    #[serde(rename = "_generated")]
+    generated: GeneratedNotice,
+    command: CliCommandInfo,
+}
+
+/// A single command or subcommand in a `clap::Command` tree.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CliCommandInfo {
+    /// The command's name, e.g. `frogctl` at the root, `config` for a
+    /// subcommand.
+    name: String,
+    /// Short help text, if declared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    about: Option<String>,
+    /// Arguments and flags declared directly on this command.
+    args: Vec<CliArgInfo>,
+    /// Nested subcommands, in clap declaration order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
+    subcommands: Vec<CliCommandInfo>,
+}
+
+/// A single argument or flag on a `clap::Command`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CliArgInfo {
+    /// The argument's clap id, e.g. `tls_enabled`.
+    name: String,
+    /// Long flag, e.g. `tls-enabled` for `--tls-enabled`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    long: Option<String>,
+    /// Short flag, e.g. `'p'` for `-p`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    short: Option<char>,
+    /// Placeholder shown for the argument's value in `--help` (e.g. `PORT`),
+    /// absent for boolean flags that take no value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value_name: Option<String>,
+    /// Default value, if clap declares one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default: Option<String>,
+    /// Environment variable clap falls back to, if declared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    env: Option<String>,
+    /// Help text, if declared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    help: Option<String>,
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -252,6 +306,27 @@ fn main() -> Result<()> {
         &output_dir,
         "example-config.toml",
         &example_config,
+        args.check,
+    )?;
+
+    let server_cli = generate_cli_reference(
+        frogdb_server::cli::Cli::command(),
+        "frogdb-server/crates/server/src/cli.rs",
+    );
+    let server_cli_json = serde_json::to_string_pretty(&server_cli)?;
+    write_or_check(
+        &output_dir,
+        "frogdb-server-cli.json",
+        &server_cli_json,
+        args.check,
+    )?;
+
+    let frogctl_cli = generate_cli_reference(frogctl::cli::Cli::command(), "frogctl/src/cli.rs");
+    let frogctl_cli_json = serde_json::to_string_pretty(&frogctl_cli)?;
+    write_or_check(
+        &output_dir,
+        "frogctl-cli.json",
+        &frogctl_cli_json,
         args.check,
     )?;
 
@@ -470,6 +545,70 @@ fn generate_metrics() -> MetricsOutput {
         },
         count: metrics.len(),
         metrics,
+    }
+}
+
+/// Walk a `clap::Command` tree (built via `CommandFactory::command()`, never
+/// by parsing `--help` output) and dump its arguments and subcommand
+/// hierarchy to a diff-stable structure. Iteration order follows clap's own
+/// declaration order, which is already stable.
+fn generate_cli_reference(mut command: clap::Command, source: &str) -> CliReference {
+    // `CommandFactory::command()` returns a Command whose derived state
+    // (e.g. per-arg `num_args`) is only fully resolved by `build()` — the
+    // same step clap runs internally before parsing or rendering `--help`.
+    command.build();
+
+    CliReference {
+        generated: GeneratedNotice {
+            warning: "DO NOT EDIT — this file is auto-generated from Rust source code".into(),
+            source: source.into(),
+            regenerate: "just docs-gen".into(),
+        },
+        command: build_cli_command(&command),
+    }
+}
+
+fn build_cli_command(command: &clap::Command) -> CliCommandInfo {
+    CliCommandInfo {
+        name: command.get_name().to_string(),
+        about: command.get_about().map(|s| s.to_string()),
+        args: command.get_arguments().map(build_cli_arg).collect(),
+        // `Command::build()` auto-generates a "help" subcommand whose own
+        // subcommand list is a full mirror of its parent's tree (clap's
+        // machinery for `frogctl help <subcommand>...`), not a command any
+        // of these binaries declare. Skip it — including it would double
+        // the size of the tree with a redundant copy of every subcommand.
+        subcommands: command
+            .get_subcommands()
+            .filter(|sc| sc.get_name() != "help")
+            .map(build_cli_command)
+            .collect(),
+    }
+}
+
+fn build_cli_arg(arg: &clap::Arg) -> CliArgInfo {
+    // Boolean flags (`num_args == 0`) get an auto-derived value name from
+    // clap even though they never take a value on the command line; only
+    // report `value_name` for args that actually consume one, so the JSON
+    // doesn't claim `--tls-enabled` accepts a `TLS_ENABLED` argument.
+    let takes_value = arg.get_num_args().is_some_and(|range| range.takes_values());
+
+    CliArgInfo {
+        name: arg.get_id().to_string(),
+        long: arg.get_long().map(str::to_string),
+        short: arg.get_short(),
+        value_name: takes_value
+            .then(|| arg.get_value_names().and_then(|names| names.first()))
+            .flatten()
+            .map(|name| name.to_string()),
+        default: arg
+            .get_default_values()
+            .first()
+            .map(|value| value.as_os_str().to_string_lossy().into_owned()),
+        env: arg
+            .get_env()
+            .map(|value| value.to_string_lossy().into_owned()),
+        help: arg.get_help().map(|s| s.to_string()),
     }
 }
 

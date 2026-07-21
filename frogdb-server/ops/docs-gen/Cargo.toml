@@ -11,6 +11,7 @@ name = "docs-gen"
 path = "src/main.rs"
 
 [dependencies]
+frogctl = { path = "../../../frogctl" }
 frogdb-config.workspace = true
 frogdb-core.workspace = true
 frogdb-server = { path = "../../crates/server" }

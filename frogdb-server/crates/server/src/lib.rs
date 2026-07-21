@@ -5,6 +5,7 @@
 
 pub mod acceptor;
 pub mod admin;
+pub mod cli;
 pub mod cluster_bus;
 pub mod cluster_pubsub;
 pub mod commands;
