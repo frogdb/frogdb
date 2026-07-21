@@ -441,7 +441,7 @@ This is the constraint-3 "per-key `wk->expired` state." FrogDB has no server-sid
 - `frogdb-server/crates/server/src/connection/transaction.rs` + `replication/executor.rs` — call-site updates.
 - `frogdb-server/crates/core/tests/shard_driver/harness.rs` — `exec_transaction` helper signature.
 
-**Design note — encoding.** Extend the watch element from `(Bytes, u64)` to a 3-tuple `(Bytes, u64, bool)` where the `bool` is `live_at_watch`. (A named `WatchEntry { key, version, live_at_watch }` struct in `frogdb-core::shard` is an acceptable alternative and reads better across the plumbing; if you introduce it, put it beside the `ExecTransaction` message definition and use it end-to-end. The tuple is the lower-churn choice and is used in the sketches below.) The `GetVersion` reply becomes `(u64, Vec<bool>)`: the shard version plus one `live_at_watch` flag per requested key, in `keys` order.
+**Design note — encoding (per [Design rulings](#design-rulings-2026-07-21-nathan), ruling 2).** Extend the watch element from `(Bytes, u64)` to a named `WatchEntry { key: Bytes, version: u64, live_at_watch: bool }` struct, defined beside the `ExecTransaction` message in `frogdb-server/crates/core/src/shard/message.rs`, and used end-to-end through the plumbing (connection state, `ExecTransaction.watches`, `check_watches`, the harness `exec_transaction` helper). This is the decision, not an alternative — the 3-tuple `(Bytes, u64, bool)` shown in the sketches below is superseded; implementers adapt each sketch to construct/destructure `WatchEntry { key, version, live_at_watch }` instead of a positional tuple. The `GetVersion` reply becomes `(u64, Vec<bool>)`: the shard version plus one `live_at_watch` flag per requested key, in `keys` order.
 
 - [ ] **Step 1: `GetVersion` reply carries per-key liveness.** In `message.rs`, change `GetVersion`'s response channel (`message.rs:154`) from `oneshot::Sender<u64>` to `oneshot::Sender<(u64, Vec<bool>)>`. Update the doc comment: the `Vec<bool>` aligns with `keys` and reports, per key, whether it was live (present and unexpired) at watch time — the `wk->expired` discriminator.
 
@@ -485,11 +485,13 @@ This is the constraint-3 "per-key `wk->expired` state." FrogDB has no server-sid
   - `transaction.rs` `run_shard_transaction` (`transaction.rs:323`): build `ExecTransaction` with the 3-tuple `watches`.
   - `replication/executor.rs:94`: `watches: Vec::new()` is still valid (empty vec of the new element type) — confirm it compiles; no semantic change (replicas replay validated txns).
 
-- [ ] **Step 5: Harness plumbing.** In `frogdb-server/crates/core/tests/shard_driver/harness.rs`, `exec_transaction` (`harness.rs:162`) currently takes `watches: Vec<(Bytes, u64)>`. Widen to `Vec<(Bytes, u64, bool)>` and forward. Update the existing S2/S8 callers (`scenario_s2.rs`, `scenario_s8.rs`) that build `watches` to pass the flag — for a key snapshotted while live pass `true`; this is behavior-neutral because `check_watches` still ignores it. (Grep `exec_transaction(` under `tests/shard_driver/` for all call sites.)
+- [ ] **Step 5: Harness plumbing.** In `frogdb-server/crates/core/tests/shard_driver/harness.rs`, `exec_transaction` (`harness.rs:162`) currently takes `watches: Vec<(Bytes, u64)>`. Widen to `Vec<WatchEntry>` (or `Vec<(Bytes, u64, bool)>` per sketch, adapted to `WatchEntry` per ruling 2) and forward. Update the existing S2/S8 callers (`scenario_s2.rs`, `scenario_s8.rs`) that build `watches` to pass the flag — for a key snapshotted while live pass `true`; this is behavior-neutral because `check_watches` still ignores it. (Grep `exec_transaction(` under `tests/shard_driver/` for all call sites.)
 
-- [ ] **Step 6: Verify behavior-neutral.** `just check frogdb-core` and `just check frogdb-server` (the plumbing compiles). Then `just test frogdb-core s2` / `s5` / `s8` and `just concurrency-turmoil 'watch_lazy_expiry_false_negative|regression_watch_read_lazy_purge'` — all green, unchanged. Gap-4 repro `watch_second_watcher_under_abort_realpath` stays `#[ignore]`.
+- [ ] **Step 6: Add the `watch_keys` harness helper (behavior-neutral; used by Task 4 per ruling 4).** In the same `harness.rs`, next to `get_version`, add `async fn watch_keys(&mut self, shard: usize, keys: &[&str]) -> (u64, Vec<bool>)` — mirrors `get_version` but sends a `GetVersion` with a non-empty `keys` list (rather than `get_version`'s empty-`keys` pure probe) and returns the `(shard_version, live_at_watch_flags)` reply from Step 1/2 of this task. This is the one seam that both (a) lets Task 4's live watcher (B) snapshot real per-key liveness instead of hardcoding `true`, and (b) — reused as a keyed `GetVersion` call — drives the WATCH-time no-bump purge as the other watcher's (A's) purge-trigger. Landing it here keeps Task 4 focused on the `check_watches` behavior change; this step only adds a helper, it does not change any behavior.
 
-- [ ] **Step 7: Format, lint, commit.**
+- [ ] **Step 7: Verify behavior-neutral.** `just check frogdb-core` and `just check frogdb-server` (the plumbing compiles). Then `just test frogdb-core s2` / `s5` / `s8` and `just concurrency-turmoil 'watch_lazy_expiry_false_negative|regression_watch_read_lazy_purge'` — all green, unchanged. Gap-4 repro `watch_second_watcher_under_abort_realpath` stays `#[ignore]`.
+
+- [ ] **Step 8: Format, lint, commit.**
 
 Run: `just fmt frogdb-core && just fmt frogdb-server && just lint frogdb-core && just lint frogdb-server`
 
@@ -540,7 +542,7 @@ git commit -m "test(core): thread per-key live_at_watch through WATCH/EXEC plumb
 
 - [ ] **Step 4: Flip the gap-4 turmoil repro.** In `simulation.rs`, `watch_second_watcher_under_abort_realpath`: remove `#[ignore]`, rename to `regression_watch_second_watcher_aborts_realpath`, invert the terminal assertion from `COMMITTED` to `ABORTED = b"$-1\r\n"`. Keep the `std::thread::sleep(50ms)`, `DEBUG SET-ACTIVE-EXPIRE 0`, and the B→A→B Notify handshake exactly as-is (only ignore/name/assertion change). The comment should note this is the case unfixable at the coarse version, now closed by per-key `live_at_watch`.
 
-- [ ] **Step 5: Add the shard-driver two-watcher arm** (belt-and-suspenders; the turmoil repro is the real-path pin). In `scenario_s2.rs`, express the two-watcher race via the harness. The live watcher snapshots its version+liveness while `k` is live; the stale watcher's WATCH runs after `k` expired (its `GetVersion` no-bump purge removes `k`); the live watcher's EXEC must abort:
+- [ ] **Step 5: Add the shard-driver two-watcher arm** (per [Design rulings](#design-rulings-2026-07-21-nathan), ruling 4: the full two-watcher interleave is REQUIRED, not belt-and-suspenders — the shard-driver harness is synchronous, so there is no interleaving hazard, and the turmoil repro remains the second, real-path pin). In `scenario_s2.rs`, express the two-watcher race via the harness's `watch_keys` helper (Task 3, Step 6). The live watcher (B) snapshots its version+liveness while `k` is live; the stale watcher's (A's) keyed `watch_keys` call drives the WATCH-time no-bump purge that removes `k`; B's EXEC must abort:
 
 ```rust
     /// Regression pin (gap 4): B watches k while live; k expires; A's WATCH-time
@@ -552,19 +554,35 @@ git commit -m "test(core): thread per-key live_at_watch through WATCH/EXEC plumb
         let mut d = ShardDriver::new(1);
         let _ = d.execute(0, "SET", &["k", "v0"]).await;
         let _ = d.execute(0, "PEXPIRE", &["k", "1"]).await;
-        // B watches k LIVE: version snapshot + live_at_watch = true.
-        let vb = d.get_version(0).await;
+        // B watches k LIVE: real version + liveness snapshot via watch_keys
+        // (not a hardcoded `true` — watch_keys reports actual live_at_watch).
+        let (vb, live) = d.watch_keys(0, &["k"]).await;
+        assert_eq!(live, vec![true], "gap 4 setup: k must be live when B watches it");
         tokio::time::sleep(Duration::from_millis(3)).await; // elapse the TTL
 
-        // A watches k already-expired: GetVersion no-bump purge removes k.
-        // (Model A's WATCH-time purge via the same GetVersion path a WATCH takes.)
-        let _ = d.get_version(0).await; // TODO: confirm harness get_version drives the keyed GetVersion purge;
-                                        // if it does not (pure probe), drive ShardMessage::GetVersion { keys:[k] }
-                                        // directly so A's no-bump purge fires.
+        // A watches k already-expired: the keyed GetVersion call is A's
+        // purge-trigger — it demonstrably fires the WATCH-time no-bump purge
+        // (dispatch_core.rs GetVersion handler: `for key in &keys { self.store.purge_if_expired(key); }`).
+        let _ = d.watch_keys(0, &["k"]).await;
+
+        // Prove the purge physically fired: k must be absent from the raw store
+        // (not merely logically expired) before B's EXEC runs.
+        // (Verify accessor name: `d.worker(0).store.contains(b"k")` — Store::contains
+        // is the raw, non-expiry-aware presence check; harness.rs:98 exposes
+        // `worker(shard) -> &mut ShardWorker`, whose `store` field is `pub`.)
+        assert!(
+            !d.worker(0).store.contains(b"k"),
+            "gap 4: A's WATCH-time purge must have physically removed k before B's EXEC"
+        );
 
         // B's EXEC watching k live at vb must abort.
         let result = d
-            .exec_transaction(0, 1, vec![cmd("SET", &["k", "x"])], vec![(Bytes::from_static(b"k"), vb, true)])
+            .exec_transaction(
+                0,
+                1,
+                vec![cmd("SET", &["k", "x"])],
+                vec![WatchEntry { key: Bytes::from_static(b"k"), version: vb, live_at_watch: true }],
+            )
             .await;
         assert!(
             matches!(result, TransactionResult::WatchAborted),
@@ -573,7 +591,7 @@ git commit -m "test(core): thread per-key live_at_watch through WATCH/EXEC plumb
     }
 ```
 
-**Implementer note:** the harness `get_version(shard)` sends `GetVersion` with an **empty** `keys` vec (a pure probe — no purge). To reproduce A's WATCH-time purge you must send `ShardMessage::GetVersion { keys: vec![Bytes::from_static(b"k")], response_tx }` via `d.dispatch(...)` (add a small `watch_keys(shard, keys)` helper to the harness if cleaner). Verify this drives the no-bump purge; if the two-watcher ordering proves awkward in the single-task shard driver, the turmoil repro (Step 4) is the authoritative gap-4 pin and this arm may be simplified to assert the `check_watches` clause directly against a manually-expired watched key. Do not weaken the turmoil pin to compensate.
+**Implementer note (per ruling 4):** the two-watcher interleave is fully expressible and REQUIRED — the shard driver is synchronous (the test drives every message; `dispatch()` = `drive(msg)`), so there is no hidden-ordering hazard between A's watch and B's EXEC. The keyed `watch_keys` call is confirmed to drive the WATCH-time no-bump purge (`dispatch_core.rs` `GetVersion` handler purges every key in the request). The `!d.worker(0).store.contains(b"k")` assertion after A's watch is required — it proves the purge physically fired, not merely that a version-compare happened to work out. The fallback (asserting the `check_watches` clause directly against a manually-expired watched key, skipping the two-watcher interleave) is permitted **only** on an unforeseen blocker in this harness path, and if taken **must** additionally prove the abort originates from the new `live_at_watch` clause alone — key physically absent AND version unchanged at EXEC — because a merely-expired-but-present key would instead be purged+bumped by the EXEC-time F3 seam (`purge_expired_watches` → `apply_lazy_purge_effects`) and abort through the old version-compare path, which would give false coverage of the new clause without exercising it. Do not weaken the turmoil pin (Step 4) to compensate either way.
 
 - [ ] **Step 6: Run.**
   - `just test frogdb-core 'regression_gap4|s2_'` — expected PASS (new arm + all S2 arms including F3 base + characterization).
@@ -655,8 +673,26 @@ git commit -m "docs(proposal): lazy-expiry parity fix stage complete — 4 gaps 
 
 1. **Reads now bump the shard version (Mechanism 1).** A third party's lazy-expiry-triggering read incrementing `shard_version` is a new source of WATCH over-aborts for *unrelated* watchers on the same shard. This is the accepted coarse-version envelope and matches Redis's touch-on-expiry for the expired key, but it is a behavior change. **Confirm acceptable**, or require Mechanism 1's WATCH invalidation to also go per-key (larger change, folds into Mechanism 2).
 
+**RESOLVED — see [Design rulings](#design-rulings-2026-07-21-nathan), ruling 1: ACCEPTED.**
+
 2. **Watch-tuple encoding: `(Bytes, u64, bool)` vs a named `WatchEntry` struct.** Task 3 uses the tuple to minimize churn across ~8 files. A struct reads better and is easier to extend (e.g. if lazy-expiry keyspace-notification parity later needs more per-watch state). **Pick one before Task 3** — switching mid-plumbing is costly.
+
+**RESOLVED — see [Design rulings](#design-rulings-2026-07-21-nathan), ruling 2: named `WatchEntry` struct REQUIRED.**
 
 3. **Effect scope (Honest Scoping item 1).** This plan intentionally omits keyspace-notification / client-tracking / search-index effects for lazy purge (idempotency + scope). **Confirm** that lazy-expiry `expired` keyspace notifications are acceptable to defer, or promote that parity into this stage (adds a canonical single-drain-point refactor + new D8 repros).
 
+**RESOLVED — see [Design rulings](#design-rulings-2026-07-21-nathan), ruling 3: DEFERRED, tracked in `.scratch/concurrency-testing/proposals/lazy-expiry-effect-scope.md`.**
+
 4. **Gap-4 shard-driver arm expressibility (Task 4 Step 5).** The two-watcher race may be awkward to drive deterministically in the single-task shard driver (the stale watcher's WATCH-time purge must land between B's version snapshot and B's EXEC). The turmoil repro is the authoritative real-path pin. **Confirm** it is acceptable for the shard-driver arm to assert the `check_watches` clause more directly (manually-expired watched key) if the full two-watcher interleave is not cleanly expressible, rather than adding harness machinery.
+
+**RESOLVED — see [Design rulings](#design-rulings-2026-07-21-nathan), ruling 4: full two-watcher interleave REQUIRED (option B).**
+
+## Design rulings (2026-07-21, Nathan)
+
+1. **Read-triggered version bumps: ACCEPTED.** Lazy-expiry-triggering reads bumping the shard version (new coarse over-aborts for unrelated same-shard watchers) is the accepted envelope; matches Redis `signalModifiedKey` behavior on expiry-at-lookup.
+
+2. **Watch-entry encoding: named struct REQUIRED.** Use `WatchEntry { key: Bytes, version: u64, live_at_watch: bool }`, defined beside the `ExecTransaction` message in `frogdb-server/crates/core/src/shard/message.rs`, used end-to-end through the plumbing (connection state, `ExecTransaction.watches`, `check_watches`, the harness `exec_transaction` helper). The 3-tuple `(Bytes, u64, bool)` in the Task 3/4 sketches is superseded — implementers adapt the sketches to `WatchEntry`.
+
+3. **Effect scope: DEFERRED, tracked separately.** Keyspace-notification / client-tracking / search-index parity for lazy purge is out of scope for this plan and tracked in `.scratch/concurrency-testing/proposals/lazy-expiry-effect-scope.md`.
+
+4. **Gap-4 shard-driver arm: full two-watcher interleave REQUIRED (option B).** The uncertainty in the Task 4 Step 5 implementer note is resolved: the harness is synchronous (the test drives every message; `dispatch()` = `drive(msg)`), so there is no interleaving hazard, and a keyed `GetVersion` demonstrably fires the WATCH-time no-bump purge (`dispatch_core.rs` `GetVersion` handler: `for key in &keys { self.store.purge_if_expired(key); }`). Requirements: (i) Task 3 adds a harness helper `watch_keys(shard, keys) -> (u64, Vec<bool>)` mirroring `get_version` but with keys — used both for B's snapshot (real liveness instead of hardcoding `true`) and as A's purge-trigger; (ii) Task 4 Step 5 asserts the key is physically absent after A's watch (via `worker(shard)` raw store access) to prove the purge fired; (iii) the fallback (direct `check_watches` clause test) is permitted ONLY on an unforeseen blocker, and then MUST prove the abort originates from the new `live_at_watch` clause alone — key physically absent AND version unchanged at EXEC — because a merely-expired-but-present key would be purged+bumped by the EXEC-time F3 seam and abort through the old version-compare path, giving false coverage of the new clause; (iv) the turmoil pin is never weakened.

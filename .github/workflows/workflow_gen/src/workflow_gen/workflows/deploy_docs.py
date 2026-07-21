@@ -18,7 +18,6 @@ from workflow_gen.schema import (
     Environment,
     Job,
     Permissions,
-    PushTrigger,
     Step,
     Trigger,
     Workflow,
@@ -37,10 +36,9 @@ MISE_INSTALL_ARGS = "node bun python uv just"
 def deploy_docs_workflow() -> Workflow:
     w = Workflow(
         name="Deploy docs to GitHub Pages",
-        on=Trigger(
-            push=PushTrigger(branches=["main"], paths=["website/**"]),
-            push_first=True,
-        ),
+        # Manual trigger only: auto-deploying docs on every website/** merge burns
+        # paid Blacksmith minutes the pre-production project doesn't need.
+        on=Trigger(),
         permissions=Permissions(contents="read", pages="write", id_token="write"),
         concurrency=Concurrency(group="pages", cancel_in_progress=True),
     )

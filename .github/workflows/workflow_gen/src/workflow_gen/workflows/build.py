@@ -9,19 +9,15 @@ from workflow_gen.helpers import (
     setup_buildx_step,
     setup_qemu_step,
 )
-from workflow_gen.schema import Job, Permissions, Trigger, Workflow, WorkflowRunTrigger
+from workflow_gen.schema import Job, Permissions, Trigger, Workflow
 
 
 def build_workflow() -> Workflow:
     w = Workflow(
         name="Build",
-        on=Trigger(
-            workflow_run=WorkflowRunTrigger(
-                workflows=["Test"],
-                types=["completed"],
-                branches=["main"],
-            ),
-        ),
+        # Manual trigger only: auto-building on every main merge burns paid
+        # Blacksmith minutes the pre-production project doesn't need.
+        on=Trigger(),
         env=docker_env(),
     )
 

@@ -30,6 +30,26 @@ just fmt-py                             # format Python code
   `just test frogdb-server test_name`
 - If you encounter an error with `sccache`, rerun the command prefixed with `RUSTC_WRAPPER=""`
 
+### Remote execution: Blacksmith testboxes
+
+Heavy compute belongs on a remote Linux testbox, not this machine — it keeps the laptop
+responsive and stops parallel agents from contending for CPU/disk/memory. See the
+`blacksmith-testbox` skill for details.
+
+- **Run remotely** (`just tb-run "<command>"`): full-workspace builds, `just test` (whole
+  suite), `just lint` (clippy compiles everything), concurrency/turmoil suites, benchmarks,
+  and anything else expected to take >2 minutes of compute.
+- **Run locally**: `just fmt`/`fmt-check` (no compilation), single-crate check/test iteration
+  loops (`just check <crate>`, `just test <crate> <pattern>`), and other sub-minute commands.
+- Lifecycle: `just tb-warmup` at task start (5-minute idle timeout; records the box ID so a
+  SessionEnd hook cleans it up). Never call `blacksmith testbox warmup` directly — that
+  bypasses the auto-cleanup. Re-warm freely after idle expiry; re-hydration restores from
+  cache.
+- **One `tb-run` at a time per worktree**: concurrent runs race the rsync sync. Agents in
+  different worktrees get separate boxes automatically (IDs are recorded per-worktree).
+- The box is aarch64 Linux (matches production better than macOS); RocksDB builds from
+  vendored source there, not Homebrew.
+
 ### Long-Running Commands (watchdog rules)
 
 - **Known issue (root-caused 2026-07-12)**: background shell tasks are spawned at Darwin

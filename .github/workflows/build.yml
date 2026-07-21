@@ -12,13 +12,6 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 'on':
   workflow_dispatch: {}
-  workflow_run:
-    workflows:
-    - Test
-    types:
-    - completed
-    branches:
-    - main
 jobs:
   docker:
     name: Docker Build
