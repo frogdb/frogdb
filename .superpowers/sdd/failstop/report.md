@@ -72,3 +72,22 @@ GREEN (real impl): both pass. No test calls process::abort in-process.
   commit until txn framing + abort-on-recovery lands. Deferred by the decision.
 - Early-return treated as fatal: `ShardWorker::run` only returns on Shutdown today, so outside
   shutdown this only fires on a genuine bug — matches intent.
+
+## Reviewer fixes (post-approval)
+
+1. **Abort-time diagnostic survives file-only logging.** `AbortFailStop::on_shard_failure` now
+   takes a `reason: &str` and `eprintln!`s the shard id + panic payload straight to stderr
+   *before* the tracing `error!` and `std::process::abort()`. The file layer's buffered
+   `tracing_appender` non-blocking writer (WorkerGuard) will not flush before SIGABRT, and console
+   output can be `LogOutput::None` — the direct stderr write guarantees the diagnostic. The panic
+   payload is threaded from the supervisor into the handler (trait signature gained `reason`), and
+   the unit test now asserts the payload (`"shard 1 boom"`) reaches the handler.
+2. **Implicit-invariant comment.** `AbortFailStop`'s doc now records the coupling: the shutdown
+   guard rests on `alive` being cleared before workers are told to stop, and the failed-startup
+   path (`run_until` early-return) never flips `alive` — safe only because `ShardWorker::run` never
+   returns on channel close. If that ever changes, the error path must flip `alive` first.
+3. **Helper.** Added `HealthChecker::is_shutting_down()` (telemetry/src/health.rs); the supervisor
+   guard uses it instead of `!check_live().is_ok()`.
+
+Re-verified: `cargo test -p frogdb-server --lib shard_supervisor` 2/2 pass; `just lint
+frogdb-server` clean; `just fmt frogdb-server` + `frogdb-telemetry` applied.

@@ -26,9 +26,10 @@ use crate::net::{JoinHandle, spawn};
 /// process. The production default is [`AbortFailStop`].
 pub trait FailStopHandler: Send + Sync + 'static {
     /// A shard worker (`shard_id`) terminated unexpectedly while the node was
-    /// live. The supervisor has already logged the event at CRITICAL; this
-    /// performs the fail-stop action (production: abort the process).
-    fn on_shard_failure(&self, shard_id: usize);
+    /// live; `reason` is the panic payload (or an early-return description). The
+    /// supervisor has already logged the event at CRITICAL; this performs the
+    /// fail-stop action (production: abort the process).
+    fn on_shard_failure(&self, shard_id: usize, reason: &str);
 }
 
 /// Production fail-stop: abort the process.
@@ -36,15 +37,29 @@ pub trait FailStopHandler: Send + Sync + 'static {
 /// A dead shard worker means part of the keyspace is permanently unreachable
 /// and blocked waiters will never wake — the node is a zombie. Aborting turns a
 /// silent zombie into a clean crash an orchestrator can detect and restart.
+///
+/// Invariant this fail-stop relies on: the supervisor's shutdown guard
+/// distinguishes a crash from clean teardown via the node's `alive` flag, which
+/// `shutdown_subsystems` clears *before* telling workers to stop. The
+/// failed-startup path (`run_until`'s early return on `start_subsystems()?`)
+/// never flips `alive`, and today that is safe only because a shard worker's
+/// `run()` loop never returns on channel close (its `select!` interval-tick
+/// branches keep it alive; the `else => break` arm is unreachable). If `run()`
+/// is ever changed to return on channel close, that error path MUST flip `alive`
+/// first, or a benign teardown would be misread here as a crash and abort.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AbortFailStop;
 
 impl FailStopHandler for AbortFailStop {
-    fn on_shard_failure(&self, shard_id: usize) {
-        // The supervisor already emitted the CRITICAL detail line. Log the
-        // abort decision (tracing writes to stderr, which is unbuffered) then
-        // hard-abort: no unwinding, no destructors, immediate SIGABRT.
-        error!(shard_id, "shard-worker fail-stop: aborting process");
+    fn on_shard_failure(&self, shard_id: usize, reason: &str) {
+        // The supervisor already emitted the CRITICAL detail line via tracing,
+        // but the file layer uses a buffered non-blocking writer whose
+        // `WorkerGuard` will not flush before SIGABRT, and console output may be
+        // disabled entirely. Write the diagnostic straight to stderr first so it
+        // survives regardless of the tracing sink, then keep the structured log.
+        eprintln!("FATAL: shard {shard_id} worker died ({reason}); aborting process (fail-stop)");
+        error!(shard_id, reason, "shard-worker fail-stop: aborting process");
+        // Hard-abort: no unwinding, no destructors, immediate SIGABRT.
         std::process::abort();
     }
 }
@@ -98,24 +113,23 @@ async fn supervise(
         handles = remaining;
         let shard_id = shard_ids.remove(idx);
 
-        // Reuse the node's existing shutdown signal: `check_live()` is ok while
-        // the node is alive and not-ok once `HealthChecker::shutdown()` ran.
-        let shutting_down = !health_checker.check_live().is_ok();
-
+        // Reuse the node's existing shutdown signal (see `AbortFailStop` for the
+        // invariant this guard depends on).
         match result {
-            _ if shutting_down => {
+            _ if health_checker.is_shutting_down() => {
                 // Expected: graceful shutdown sends each worker `Shutdown` only
                 // after flipping the health flag, so any completion observed
                 // here during shutdown is benign teardown, panic or not.
                 debug!(shard_id, "shard worker exited during shutdown (expected)");
             }
             Ok(()) => {
+                let reason = "worker returned early";
                 error!(
                     shard_id,
                     "CRITICAL: shard worker returned unexpectedly while node is live; \
                      1/N of the keyspace is now unreachable — invoking fail-stop"
                 );
-                handler.on_shard_failure(shard_id);
+                handler.on_shard_failure(shard_id, reason);
             }
             Err(join_err) => {
                 let payload = panic_payload(join_err);
@@ -125,7 +139,7 @@ async fn supervise(
                     "CRITICAL: shard worker panicked while node is live; 1/N of the \
                      keyspace is now unreachable — invoking fail-stop"
                 );
-                handler.on_shard_failure(shard_id);
+                handler.on_shard_failure(shard_id, &payload);
             }
         }
     }
@@ -137,11 +151,11 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Notify;
 
-    /// Test handler that records the shard ids it was invoked with (instead of
-    /// aborting) and notifies a waiter after each invocation.
+    /// Test handler that records the `(shard_id, reason)` pairs it was invoked
+    /// with (instead of aborting) and notifies a waiter after each invocation.
     #[derive(Default)]
     struct RecordingFailStop {
-        calls: std::sync::Mutex<Vec<usize>>,
+        calls: std::sync::Mutex<Vec<(usize, String)>>,
         count: AtomicUsize,
         notify: Notify,
     }
@@ -150,14 +164,25 @@ mod tests {
         fn new() -> Arc<Self> {
             Arc::new(Self::default())
         }
-        fn calls(&self) -> Vec<usize> {
+        fn calls(&self) -> Vec<(usize, String)> {
             self.calls.lock().unwrap().clone()
+        }
+        fn shard_ids(&self) -> Vec<usize> {
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(id, _)| *id)
+                .collect()
         }
     }
 
     impl FailStopHandler for RecordingFailStop {
-        fn on_shard_failure(&self, shard_id: usize) {
-            self.calls.lock().unwrap().push(shard_id);
+        fn on_shard_failure(&self, shard_id: usize, reason: &str) {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((shard_id, reason.to_string()));
             self.count.fetch_add(1, Ordering::SeqCst);
             self.notify.notify_one();
         }
@@ -187,11 +212,13 @@ mod tests {
             .expect("fail-stop handler was not invoked");
 
         assert_eq!(
-            handler.calls(),
+            handler.shard_ids(),
             vec![1],
             "handler must fire once for shard 1"
         );
         assert_eq!(handler.count.load(Ordering::SeqCst), 1);
+        // The panic payload is threaded through to the handler as the reason.
+        assert_eq!(handler.calls()[0].1, "shard 1 boom");
 
         sup.abort();
     }
