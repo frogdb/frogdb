@@ -1,6 +1,6 @@
 # 03 — `just lint` never clippy-lints turmoil test bodies; S7 doc-comment rationale wrong
 
-Status: needs-triage
+Status: done
 Type: AFK
 Origin: phase-4b task-14 implementer + reviewer findings
 
@@ -13,8 +13,8 @@ Two small related cleanups:
 
 ## Acceptance criteria
 
-- [ ] `just lint` (or a recipe it calls) clippy-checks the server crate with `--features turmoil --tests`, zero warnings
-- [ ] S7 doc comment states the real-clock-TTL rationale and notes OBJECT ENCODING/REFCOUNT observe physical presence
+- [x] `just lint` (or a recipe it calls) clippy-checks the server crate with `--features turmoil --tests`, zero warnings
+- [x] S7 doc comment states the real-clock-TTL rationale and notes OBJECT ENCODING/REFCOUNT observe physical presence
 
 ## Blocked by
 

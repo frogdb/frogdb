@@ -119,8 +119,15 @@ fmt-check crate="":
     cargo fmt {{ if crate != "" { "-p " + crate } else { "--all" } }} -- --check
 
 # Run clippy lints (optionally for a specific crate)
-lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint
+lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-turmoil
     {{dyld-env}} {{rocksdb-env}} cargo clippy {{ if crate != "" { "-p " + crate } else { "--all-targets" } }} -- -D warnings
+
+# Gate: turmoil-featured test bodies (frogdb-server/crates/server/tests/simulation.rs)
+# are behind #[cfg(feature = "turmoil")], a non-default feature the plain clippy
+# pass above never enables — those bodies escape clippy entirely and only surface
+# rustc warnings via the nextest build. Lint them explicitly with the feature on.
+lint-turmoil:
+    {{dyld-env}} {{rocksdb-env}} cargo clippy -p frogdb-server --features turmoil --tests -- -D warnings
 
 # Gate: INFO section content must come from a renderer (crates/server/src/info),
 # never a post-hoc string patch. Rejects placeholder-anchor rewrites in the

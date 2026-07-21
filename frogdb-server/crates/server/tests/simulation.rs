@@ -3834,14 +3834,30 @@ fn watch_second_watcher_under_abort_realpath() {
 ///
 /// ## Expiry sub-assertion: intentionally dropped (brief fallback)
 /// The brief permits observing `expiry_paused` suppression only if the harness
-/// exposes a *deterministic client-visible* way to see it; it does not.
-/// `HashMapStore::check_and_delete_expired` (store/hashmap.rs:421-435) returns
-/// `true` (logically expired) for an elapsed key even when `expiry_suppressed`
-/// is set — it merely skips the *physical* delete / counter / replication. So
-/// `get_with_expiry_check` (:1024) still returns `None` to a client `GET` on a
-/// suppressed-but-elapsed key: suppression is indistinguishable from real expiry
-/// over the wire. The suppression that matters (skipping the active sweep to
-/// avoid master/replica divergence) is internal and is covered by the
+/// exposes a *deterministic client-visible* way to see it; it does not, but not
+/// for the reason it might look like at first glance. `GET` alone would in fact
+/// be ambiguous: `HashMapStore::check_and_delete_expired` (store/hashmap.rs:
+/// 421-435) returns `true` (logically expired) for an elapsed key even when
+/// `expiry_suppressed` is set — it merely skips the *physical* delete / counter
+/// / replication — so `get_with_expiry_check` (:1024) still returns `None` to a
+/// client `GET` on a suppressed-but-elapsed key, same as real expiry over the
+/// wire. But `GET` is not the only client-visible probe: `OBJECT ENCODING`
+/// (commands/generic.rs:334-340, via raw `Store::get`, hashmap.rs:824-833) and
+/// `OBJECT REFCOUNT` (commands/generic.rs:438-448, via raw `Store::contains`,
+/// hashmap.rs:847-849) both skip the expiry-aware path entirely — neither calls
+/// `get_with_expiry_check` nor `check_and_delete_expired`, and REFCOUNT doesn't
+/// even use the expiry-aware `exists_unexpired` (:851-859) — so they *would*
+/// observe the physical presence of a suppressed-but-elapsed key and *would*
+/// distinguish suppression from real expiry. So the sub-assertion is not
+/// dropped because it is unobservable; it is dropped because constructing the
+/// scenario at all requires a real-clock TTL to actually elapse while the test
+/// runs under turmoil's virtual clock. Per the "Clock findings" above, `Instant`
+/// (real) and turmoil's sim clock (virtual) do not advance together, so driving
+/// a key past its real-clock TTL deadline deterministically from inside a
+/// turmoil sim is exactly the cross-clock race this test otherwise avoids by
+/// construction (explicit `CLIENT UNPAUSE` instead of deadline auto-expiry).
+/// The suppression that matters (skipping the active sweep to avoid
+/// master/replica divergence) is internal and is covered by the
 /// `run_active_expiry` pause gate (shard/event_loop.rs:124-133, unit path). We
 /// therefore assert only the two write/read invariants here, per the brief.
 ///
