@@ -79,7 +79,7 @@ def release_workflow() -> Workflow:
                 name="Extract Linux binaries from image",
                 run=script("""\
                     IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}"
-                    BINARIES=(frogdb-server frog frogdb-admin)
+                    BINARIES=(frogdb-server frogctl frogdb-admin)
                     for arch in amd64 arm64; do
                       docker pull --platform "linux/${arch}" "${IMAGE}"
                       CONTAINER=$(docker create --platform "linux/${arch}" "${IMAGE}")

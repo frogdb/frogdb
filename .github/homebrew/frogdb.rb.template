@@ -31,7 +31,7 @@ class Frogdb < Formula
 
   def install
     bin.install "frogdb-server"
-    bin.install "frog"
+    bin.install "frogctl"
     bin.install "frogdb-admin"
   end
 
