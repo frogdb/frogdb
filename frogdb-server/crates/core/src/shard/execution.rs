@@ -600,7 +600,6 @@ impl ShardWorker {
         TransactionResult::Success(results)
     }
 
-    /// Execute part of a scatter-gather operation.
     /// Execute one shard's slice of a cross-shard scatter operation.
     ///
     /// Wraps [`Self::execute_scatter_part_body`] so that any keys a scatter part

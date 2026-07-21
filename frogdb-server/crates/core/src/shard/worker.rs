@@ -479,18 +479,13 @@ impl ShardWorker {
     /// One bump per call regardless of how many keys purge, mirroring active
     /// expiry's one-bump-per-cycle.
     pub(crate) fn purge_expired_watches(&mut self, watches: &[(Bytes, u64)]) {
-        let mut purged = false;
         for (key, _watched_ver) in watches {
-            if self.store.purge_if_expired(key) {
-                purged = true;
-            }
+            self.store.purge_if_expired(key);
         }
-        // Task 1: discard the report (the explicit bump below preserves F3).
-        // Task 2 replaces both with apply_lazy_purge_effects().
-        self.discard_lazy_purges();
-        if purged {
-            self.increment_version();
-        }
+        // Apply the bump + drain for any watched key that expired during the
+        // WATCH window — this must run before check_watches so the version
+        // change is visible (F3). Subsumes the previous explicit increment.
+        self.apply_lazy_purge_effects();
     }
 
     /// Drain and apply the effects of any lazy purges the store reported during
@@ -501,10 +496,23 @@ impl ShardWorker {
     ///
     /// Both effects are idempotent (a second bump only advances the counter; a
     /// second drain finds no waiters), so calling this at more than one seam is
-    /// safe. Task 1 lands it as drain-and-discard; Task 2 fills in the effects.
+    /// safe.
     pub(crate) fn apply_lazy_purge_effects(&mut self) {
         let purged = self.store.take_lazily_purged();
-        let _ = purged; // Task 2: apply version bump + drain_stream_waiters_with_error.
+        if purged.is_empty() {
+            return;
+        }
+        // Drain blocked XREADGROUP waiters for each lazily-removed stream key,
+        // mirroring the DEL write path and the F1 active-expiry drain
+        // (drain_stream_waiters_with_error → NOGROUP; plain XREAD waiters stay
+        // blocked). No-op for non-stream keys.
+        for key in &purged {
+            self.drain_stream_waiters_with_error(key);
+        }
+        // One version bump for the batch, mirroring active expiry's
+        // one-bump-per-cycle: a watched key that died lazily is now observed
+        // changed by check_watches (gap 3).
+        self.increment_version();
     }
 
     /// Drain and DISCARD any lazy-purge report without applying effects — used
