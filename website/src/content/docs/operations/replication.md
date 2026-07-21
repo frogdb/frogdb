@@ -99,7 +99,7 @@ redis-cli INFO replication
 
 A primary reports `role:master`, `connected_slaves`, `master_replid`, `master_replid2`, `master_repl_offset`, `second_repl_offset`, and the `repl_backlog_*` fields. A replica additionally reports `master_host`, `master_port`, and `master_link_status`.
 
-To measure lag, compare `master_repl_offset` on the primary with `master_repl_offset` reported by the replica — **both sides expose the offset under the same field name** (`master_repl_offset`); there is no `slave_repl_offset` field. A replica whose `master_link_status` is not `up`, or whose offset falls persistently behind the primary's, indicates a replication problem.
+To measure lag, compare `master_repl_offset` on the primary with `master_repl_offset` reported by the replica — **both sides expose the offset under the same field name** (`master_repl_offset`); there is no `slave_repl_offset` field. An offset that falls persistently behind the primary's is the signal to act on, alongside the primary's `connected_slaves` count and any write rejections from self-fencing. Note that `master_link_status` currently always reports `up` and is not yet a usable health signal — do not alert on it; rely on the offset gap and the primary-side indicators instead.
 
 | Symptom | Likely cause | What to check |
 |---|---|---|
