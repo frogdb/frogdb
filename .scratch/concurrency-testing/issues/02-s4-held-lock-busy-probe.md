@@ -1,6 +1,6 @@
 # 02 — S4: assert `-ERR shard busy` for a third conn DURING held continuation lock
 
-Status: needs-triage
+Status: done
 Type: AFK
 Origin: phase-4b task-11 review (coverage gap)
 
@@ -10,8 +10,8 @@ Origin: phase-4b task-11 review (coverage gap)
 
 ## Acceptance criteria
 
-- [ ] While both shards' continuation locks are held, a third conn's `Execute` observes the shard-busy error (assert on the reply, not on lock introspection alone)
-- [ ] Existing S4 panic/release/resume assertions unchanged and green
+- [x] While both shards' continuation locks are held, a third conn's `Execute` observes the shard-busy error (assert on the reply, not on lock introspection alone)
+- [x] Existing S4 panic/release/resume assertions unchanged and green
 
 ## Blocked by
 
