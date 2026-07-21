@@ -493,42 +493,26 @@ impl ConnectionHandler {
     /// execute using the same Lua script executor. It will only kill functions
     /// that were called via FCALL_RO (read-only execution).
     async fn handle_function_kill(&self) -> Response {
-        // Send ScriptKill to all shards (only one can be running a script at a time per shard)
-        // We check all shards since we don't track which shard is running the function
-        let mut responses = Vec::with_capacity(self.num_shards);
-
-        for sender in self.core.shard_senders.iter() {
-            let (response_tx, response_rx) = oneshot::channel();
-            let msg = ShardMessage::ScriptKill { response_tx };
-
-            if sender.send(msg).await.is_err() {
-                continue;
+        // Send ScriptKill to every shard (only one can be running a script at a
+        // time per shard) and stop at the first decisive reply — a kill or a
+        // hard error — skipping NOTBUSY / dropped / timed-out shards. The
+        // per-shard await that once had no timeout is bounded structurally inside
+        // `find_first`, so this can no longer hang on a wedged ShardWorker
+        // (mirrors SCRIPT KILL). The three-way NOTBUSY / UNKILLABLE / OK
+        // precedence is classified here at the call site, unchanged.
+        match self
+            .scatter_gather()
+            .find_first(
+                |_shard, response_tx| ShardMessage::ScriptKill { response_tx },
+                |reply| !matches!(reply, Err(e) if e.contains("NOTBUSY")),
+            )
+            .await
+        {
+            Some(Ok(())) => Response::ok(),
+            Some(Err(e)) if e.contains("UNKILLABLE") => {
+                Response::error("UNKILLABLE The busy script was not running in read-only mode.")
             }
-
-            // Bound each per-shard await by the scatter-gather timeout so a wedged
-            // ShardWorker cannot hang FUNCTION KILL forever (mirrors SCRIPT KILL).
-            // A dropped receiver or a timeout skips that shard, preserving the
-            // gather-then-scan reply semantics below.
-            match tokio::time::timeout(self.scatter_gather_timeout, response_rx).await {
-                Ok(Ok(result)) => responses.push(result),
-                Ok(Err(_)) | Err(_) => continue,
-            }
+            _ => Response::error("NOTBUSY No scripts in execution right now."),
         }
-
-        // Check if any shard was running a script
-        for response in responses {
-            match response {
-                Ok(()) => return Response::ok(),
-                Err(e) if e.contains("UNKILLABLE") => {
-                    return Response::error(
-                        "UNKILLABLE The busy script was not running in read-only mode.",
-                    );
-                }
-                Err(_) => {} // NOTBUSY - continue checking other shards
-            }
-        }
-
-        // No shard had a running script
-        Response::error("NOTBUSY No scripts in execution right now.")
     }
 }

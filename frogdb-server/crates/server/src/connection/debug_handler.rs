@@ -73,168 +73,72 @@ impl DebugProvider for ConnectionHandler {
     /// The executor validated `shard_filter` and formats the reply.
     fn gather_vll<'a>(&'a self, shard_filter: Option<usize>) -> BoxFuture<'a, Vec<VllQueueInfo>> {
         Box::pin(async move {
-            use tokio::sync::oneshot;
-
-            let mut results = Vec::new();
-            let timeout = std::time::Duration::from_secs(5);
-
-            let shard_ids: Vec<usize> = match shard_filter {
-                Some(id) => vec![id],
-                None => (0..self.core.shard_senders.len()).collect(),
-            };
-
-            for shard_id in shard_ids {
-                let (response_tx, response_rx) = oneshot::channel();
-
-                let send_result = self.core.shard_senders[shard_id]
-                    .send(frogdb_core::shard::ShardMessage::GetVllQueueInfo { response_tx })
-                    .await;
-
-                if send_result.is_err() {
-                    tracing::warn!(shard_id, "Failed to send GetVllQueueInfo message");
-                    continue;
+            match shard_filter {
+                // Single-shard DEBUG VLL <shard_id>: route the one round-trip
+                // through the same timed send/timeout helper (best-effort — an
+                // unavailable shard yields an empty snapshot).
+                Some(id) => {
+                    let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+                    let msg = frogdb_core::shard::ShardMessage::GetVllQueueInfo { response_tx };
+                    match self.scatter_gather().query_one(id, msg, response_rx).await {
+                        Ok(info) => vec![info],
+                        Err(_) => Vec::new(),
+                    }
                 }
-
-                match tokio::time::timeout(timeout, response_rx).await {
-                    Ok(Ok(info)) => {
-                        results.push(info);
-                    }
-                    Ok(Err(_)) => {
-                        tracing::warn!(shard_id, "Channel closed while waiting for VLL info");
-                    }
-                    Err(_) => {
-                        tracing::warn!(shard_id, "Timeout waiting for VLL info");
-                    }
+                None => {
+                    self.scatter_gather()
+                        .gather_all(|_shard, response_tx| {
+                            frogdb_core::shard::ShardMessage::GetVllQueueInfo { response_tx }
+                        })
+                        .await
                 }
             }
-
-            results
         })
     }
 
     /// DEBUG LOCKTABLE — gather the VLL lock-table snapshot from every shard.
     fn gather_lock_table<'a>(&'a self) -> BoxFuture<'a, Vec<LockTableInfo>> {
         Box::pin(async move {
-            use tokio::sync::oneshot;
-
-            let mut results = Vec::new();
-            let timeout = std::time::Duration::from_secs(5);
-
-            for shard_id in 0..self.core.shard_senders.len() {
-                let (response_tx, response_rx) = oneshot::channel();
-                if self.core.shard_senders[shard_id]
-                    .send(frogdb_core::shard::ShardMessage::GetLockTableInfo { response_tx })
-                    .await
-                    .is_err()
-                {
-                    tracing::warn!(shard_id, "Failed to send GetLockTableInfo message");
-                    continue;
-                }
-                match tokio::time::timeout(timeout, response_rx).await {
-                    Ok(Ok(info)) => results.push(info),
-                    Ok(Err(_)) => {
-                        tracing::warn!(shard_id, "Channel closed while waiting for lock-table info")
-                    }
-                    Err(_) => tracing::warn!(shard_id, "Timeout waiting for lock-table info"),
-                }
-            }
-            results
+            self.scatter_gather()
+                .gather_all(|_shard, response_tx| {
+                    frogdb_core::shard::ShardMessage::GetLockTableInfo { response_tx }
+                })
+                .await
         })
     }
 
     /// DEBUG WAITQUEUE — gather the blocking-waiter snapshot from every shard.
     fn gather_wait_queue<'a>(&'a self) -> BoxFuture<'a, Vec<WaitQueueInfo>> {
         Box::pin(async move {
-            use tokio::sync::oneshot;
-
-            let mut results = Vec::new();
-            let timeout = std::time::Duration::from_secs(5);
-
-            for shard_id in 0..self.core.shard_senders.len() {
-                let (response_tx, response_rx) = oneshot::channel();
-                if self.core.shard_senders[shard_id]
-                    .send(frogdb_core::shard::ShardMessage::GetWaitQueueInfo { response_tx })
-                    .await
-                    .is_err()
-                {
-                    tracing::warn!(shard_id, "Failed to send GetWaitQueueInfo message");
-                    continue;
-                }
-                match tokio::time::timeout(timeout, response_rx).await {
-                    Ok(Ok(info)) => results.push(info),
-                    Ok(Err(_)) => {
-                        tracing::warn!(shard_id, "Channel closed while waiting for wait-queue info")
-                    }
-                    Err(_) => tracing::warn!(shard_id, "Timeout waiting for wait-queue info"),
-                }
-            }
-            results
+            self.scatter_gather()
+                .gather_all(|_shard, response_tx| {
+                    frogdb_core::shard::ShardMessage::GetWaitQueueInfo { response_tx }
+                })
+                .await
         })
     }
 
     /// DEBUG MEMORY-CHECK — gather tracked-vs-recomputed memory from every shard.
     fn memory_check<'a>(&'a self) -> BoxFuture<'a, Vec<MemoryCheckInfo>> {
         Box::pin(async move {
-            use tokio::sync::oneshot;
-
-            let mut results = Vec::new();
-            let timeout = std::time::Duration::from_secs(5);
-
-            for shard_id in 0..self.core.shard_senders.len() {
-                let (response_tx, response_rx) = oneshot::channel();
-                if self.core.shard_senders[shard_id]
-                    .send(frogdb_core::shard::ShardMessage::MemoryCheck { response_tx })
-                    .await
-                    .is_err()
-                {
-                    tracing::warn!(shard_id, "Failed to send MemoryCheck message");
-                    continue;
-                }
-                match tokio::time::timeout(timeout, response_rx).await {
-                    Ok(Ok(info)) => results.push(info),
-                    Ok(Err(_)) => {
-                        tracing::warn!(
-                            shard_id,
-                            "Channel closed while waiting for memory-check info"
-                        )
-                    }
-                    Err(_) => tracing::warn!(shard_id, "Timeout waiting for memory-check info"),
-                }
-            }
-            results
+            self.scatter_gather()
+                .gather_all(
+                    |_shard, response_tx| frogdb_core::shard::ShardMessage::MemoryCheck {
+                        response_tx,
+                    },
+                )
+                .await
         })
     }
 
     /// DEBUG EXPIRY-INDEX-CHECK — gather the expiry-index audit from every shard.
     fn expiry_index_check<'a>(&'a self) -> BoxFuture<'a, Vec<ExpiryIndexCheckInfo>> {
         Box::pin(async move {
-            use tokio::sync::oneshot;
-
-            let mut results = Vec::new();
-            let timeout = std::time::Duration::from_secs(5);
-
-            for shard_id in 0..self.core.shard_senders.len() {
-                let (response_tx, response_rx) = oneshot::channel();
-                if self.core.shard_senders[shard_id]
-                    .send(frogdb_core::shard::ShardMessage::ExpiryIndexCheck { response_tx })
-                    .await
-                    .is_err()
-                {
-                    tracing::warn!(shard_id, "Failed to send ExpiryIndexCheck message");
-                    continue;
-                }
-                match tokio::time::timeout(timeout, response_rx).await {
-                    Ok(Ok(info)) => results.push(info),
-                    Ok(Err(_)) => tracing::warn!(
-                        shard_id,
-                        "Channel closed while waiting for expiry-index-check info"
-                    ),
-                    Err(_) => {
-                        tracing::warn!(shard_id, "Timeout waiting for expiry-index-check info")
-                    }
-                }
-            }
-            results
+            self.scatter_gather()
+                .gather_all(|_shard, response_tx| {
+                    frogdb_core::shard::ShardMessage::ExpiryIndexCheck { response_tx }
+                })
+                .await
         })
     }
 
@@ -364,19 +268,18 @@ impl DebugProvider for ConnectionHandler {
     /// DEBUG SET-ACTIVE-EXPIRE 0|1 — toggle active expiration across all shards.
     fn set_active_expire<'a>(&'a self, enabled: bool) -> BoxFuture<'a, ()> {
         Box::pin(async move {
-            for sender in self.core.shard_senders.iter() {
-                let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-                if sender
-                    .send(frogdb_core::ShardMessage::SetActiveExpire {
+            // Await-and-discard: the replies are only a barrier confirming every
+            // shard applied the toggle. Bounded by the shared deadline (was
+            // unbounded).
+            let _ = self
+                .scatter_gather()
+                .gather_all(
+                    |_shard, response_tx| frogdb_core::ShardMessage::SetActiveExpire {
                         enabled,
                         response_tx,
-                    })
-                    .await
-                    .is_ok()
-                {
-                    let _ = response_rx.await;
-                }
-            }
+                    },
+                )
+                .await;
         })
     }
 
@@ -384,16 +287,16 @@ impl DebugProvider for ConnectionHandler {
     fn keysizes_snapshot<'a>(&'a self) -> BoxFuture<'a, KeysizeHistograms> {
         Box::pin(async move {
             let mut merged = KeysizeHistograms::new();
-            for sender in self.core.shard_senders.iter() {
-                let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-                if sender
-                    .send(frogdb_core::ShardMessage::KeysizesSnapshot { response_tx })
-                    .await
-                    .is_ok()
-                    && let Ok(Some(snap)) = response_rx.await
-                {
-                    merged.merge(&snap);
-                }
+            let snapshots = self
+                .scatter_gather()
+                .gather_all(
+                    |_shard, response_tx| frogdb_core::ShardMessage::KeysizesSnapshot {
+                        response_tx,
+                    },
+                )
+                .await;
+            for snap in snapshots.into_iter().flatten() {
+                merged.merge(&snap);
             }
             merged
         })
@@ -402,19 +305,16 @@ impl DebugProvider for ConnectionHandler {
     /// DEBUG ALLOCSIZE-SLOTS-ASSERT — total allocated memory for keys in `slot`.
     fn allocsize_in_slot<'a>(&'a self, slot: u16) -> BoxFuture<'a, usize> {
         Box::pin(async move {
-            let mut total = 0usize;
-            for sender in self.core.shard_senders.iter() {
-                let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-                if sender
-                    .send(frogdb_core::ShardMessage::AllocsizeInSlot { slot, response_tx })
-                    .await
-                    .is_ok()
-                    && let Ok(size) = response_rx.await
-                {
-                    total += size;
-                }
-            }
-            total
+            self.scatter_gather()
+                .gather_all(
+                    |_shard, response_tx| frogdb_core::ShardMessage::AllocsizeInSlot {
+                        slot,
+                        response_tx,
+                    },
+                )
+                .await
+                .into_iter()
+                .sum()
         })
     }
 }

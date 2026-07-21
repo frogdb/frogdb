@@ -3,7 +3,6 @@
 use bytes::Bytes;
 use frogdb_core::ShardMessage;
 use frogdb_protocol::Response;
-use tokio::sync::oneshot;
 
 use crate::connection::ConnectionHandler;
 use crate::scatter::{AllOk, BoolOr, ShardZeroReply};
@@ -97,31 +96,27 @@ impl ConnectionHandler {
 
     /// Handle SCRIPT KILL.
     ///
-    /// Sequential first-success walk (not a fan-out): return on the first shard
-    /// that kills a running script, skipping shards that report `NOTBUSY` or
-    /// that drop / time out. The per-shard await is now bounded by the
-    /// scatter-gather timeout (fixes round-2 flag F2's missing KILL timeout).
+    /// First-success walk over the shared broadcast seam: return on the first
+    /// shard that produces a decisive reply — a kill (`Ok(())`) or a hard error —
+    /// skipping shards that report `NOTBUSY` or that drop / time out. The
+    /// per-shard await is bounded by the scatter-gather timeout inside
+    /// [`find_first`](crate::scatter::ScatterGather::find_first) (fixes round-2
+    /// flag F2's missing KILL timeout), so there is no per-shard await left to
+    /// forget.
     async fn handle_script_kill(&self) -> Response {
-        for sender in self.core.shard_senders.iter() {
-            let (response_tx, response_rx) = oneshot::channel();
-            if sender
-                .send(ShardMessage::ScriptKill { response_tx })
-                .await
-                .is_err()
-            {
-                continue;
-            }
-
-            match tokio::time::timeout(self.scatter_gather_timeout, response_rx).await {
-                Ok(Ok(Ok(()))) => return Response::ok(),
-                Ok(Ok(Err(e))) if e.contains("NOTBUSY") => continue, // Try next shard
-                Ok(Ok(Err(e))) => return Response::error(e),
-                // Shard dropped the request or timed out: try the next shard.
-                Ok(Err(_)) | Err(_) => continue,
-            }
+        match self
+            .scatter_gather()
+            .find_first(
+                |_shard, response_tx| ShardMessage::ScriptKill { response_tx },
+                // Stop at the first shard whose reply is not a NOTBUSY skip.
+                |reply| !matches!(reply, Err(e) if e.contains("NOTBUSY")),
+            )
+            .await
+        {
+            Some(Ok(())) => Response::ok(),
+            Some(Err(e)) => Response::error(e),
+            None => Response::error("NOTBUSY No scripts in execution right now."),
         }
-
-        Response::error("NOTBUSY No scripts in execution right now.")
     }
 
     /// Handle SCRIPT HELP.

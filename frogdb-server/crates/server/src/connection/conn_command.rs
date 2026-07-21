@@ -34,13 +34,13 @@ use frogdb_core::{
     LookupSpec, ShardMessage, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
-use tokio::sync::oneshot;
 
 use crate::connection::ConnectionHandler;
 use crate::connection::deps::{AdminDeps, ClusterDeps, CoreDeps, ObservabilityDeps};
 use crate::connection::observability_conn_command::MemoryDiag;
 use crate::cursor_store::AggregateCursorStore;
 use crate::runtime_config::ConfigManager;
+use crate::scatter::{DEFAULT_SCATTER_GATHER_TIMEOUT, ScatterGather};
 
 // Re-export the core seam under this module path so existing call sites
 // (`crate::connection::conn_command::{ConnCtx, ConnectionCommand}`) keep
@@ -330,16 +330,11 @@ async fn config_set(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
 /// `INFO`-facing latency histograms, and rebases the operator-visible
 /// keyspace hit/miss counters (Prometheus `_total` counters stay monotonic).
 async fn config_resetstat(ctx: &ConnCtx<'_>) -> Response {
-    for sender in ctx.shard_senders.iter() {
-        let (response_tx, response_rx) = oneshot::channel();
-        if sender
-            .send(ShardMessage::ResetStats { response_tx })
-            .await
-            .is_ok()
-        {
-            let _ = response_rx.await;
-        }
-    }
+    // Await-and-discard: the replies are only a barrier confirming every shard
+    // reset its stats. Bounded by the shared deadline (was unbounded).
+    let _ = ScatterGather::new(ctx.shard_senders, DEFAULT_SCATTER_GATHER_TIMEOUT, 0)
+        .gather_all(|_shard, response_tx| ShardMessage::ResetStats { response_tx })
+        .await;
     ctx.client_registry.reset_command_call_counts();
     ctx.client_registry.error_stats.reset();
     ctx.latency_histograms.reset();

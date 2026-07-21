@@ -14,6 +14,7 @@ use frogdb_core::ClientMemoryUsage;
 
 use super::ConnectionHandler;
 use super::state::{STATS_SYNC_INTERVAL_COMMANDS, STATS_SYNC_INTERVAL_MS};
+use crate::scatter::ScatterGather;
 
 /// Client-tracking IO plumbing owned by the connection handler: the
 /// invalidation delivery channel and the optional REDIRECT forwarding task.
@@ -129,26 +130,22 @@ impl ClientTrackingProvider for TrackingIo {
             // Register with all shards. Broadcast registration is additive
             // shard-side, so each call sends only its own (new) prefix batch.
             if bcast {
-                for shard_sender in shard_senders.iter() {
-                    let _ = shard_sender
-                        .send(ShardMessage::TrackingBroadcastRegister {
-                            conn_id,
-                            sender: sender.clone(),
-                            noloop,
-                            prefixes: prefixes.clone(),
-                        })
-                        .await;
-                }
+                ScatterGather::broadcast(shard_senders)
+                    .broadcast_all(|_shard| ShardMessage::TrackingBroadcastRegister {
+                        conn_id,
+                        sender: sender.clone(),
+                        noloop,
+                        prefixes: prefixes.clone(),
+                    })
+                    .await;
             } else {
-                for shard_sender in shard_senders.iter() {
-                    let _ = shard_sender
-                        .send(ShardMessage::TrackingRegister {
-                            conn_id,
-                            sender: sender.clone(),
-                            noloop,
-                        })
-                        .await;
-                }
+                ScatterGather::broadcast(shard_senders)
+                    .broadcast_all(|_shard| ShardMessage::TrackingRegister {
+                        conn_id,
+                        sender: sender.clone(),
+                        noloop,
+                    })
+                    .await;
             }
         })
     }
@@ -162,11 +159,9 @@ impl ClientTrackingProvider for TrackingIo {
         shard_senders: &'a [ShardSender],
     ) -> BoxFuture<'a, ()> {
         Box::pin(async move {
-            for shard_sender in shard_senders.iter() {
-                let _ = shard_sender
-                    .send(ShardMessage::TrackingUnregister { conn_id })
-                    .await;
-            }
+            ScatterGather::broadcast(shard_senders)
+                .broadcast_all(|_shard| ShardMessage::TrackingUnregister { conn_id })
+                .await;
             self.teardown_local();
         })
     }
@@ -195,13 +190,11 @@ impl ConnectionHandler {
 
         // Notify shards if we had subscriptions or tracking enabled
         if self.state.in_pubsub_mode() || self.state.tracking().enabled {
-            for sender in self.core.shard_senders.iter() {
-                let _ = sender
-                    .send(ShardMessage::ConnectionClosed {
-                        conn_id: self.state.id,
-                    })
-                    .await;
-            }
+            ScatterGather::broadcast(self.core.shard_senders.as_slice())
+                .broadcast_all(|_shard| ShardMessage::ConnectionClosed {
+                    conn_id: self.state.id,
+                })
+                .await;
         }
 
         // Unregister any blocking waits

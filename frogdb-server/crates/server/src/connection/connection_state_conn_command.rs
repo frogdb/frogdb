@@ -37,6 +37,7 @@ use frogdb_core::{
 use frogdb_protocol::Response;
 
 use crate::connection::ShardMessage;
+use crate::scatter::ScatterGather;
 
 /// Build a `CommandSpec` for a connection-state command. All four share the same
 /// shape (no keys, no WAL, `ConnectionLevel(ConnectionState)` strategy) and
@@ -135,11 +136,9 @@ async fn handle_reset(ctx: &mut ConnCtx<'_>) -> Response {
     // Notify shards to remove subscriptions and/or tracking state. The original
     // handle_reset sent ConnectionClosed once if either was active.
     if outcome.was_in_pubsub || outcome.tracking_was_enabled {
-        for sender in shard_senders.iter() {
-            let _ = sender
-                .send(ShardMessage::ConnectionClosed { conn_id })
-                .await;
-        }
+        ScatterGather::broadcast(shard_senders)
+            .broadcast_all(|_shard| ShardMessage::ConnectionClosed { conn_id })
+            .await;
     }
 
     // Clear the client name in the registry (local state already cleared by
