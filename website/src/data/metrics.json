@@ -1,0 +1,641 @@
+{
+  "_generated": {
+    "warning": "DO NOT EDIT — this file is auto-generated from Rust source code",
+    "source": "frogdb-server/crates/telemetry/src/definitions.rs",
+    "regenerate": "just docs-gen"
+  },
+  "count": 72,
+  "metrics": [
+    {
+      "name": "frogdb_active_version",
+      "type": "gauge",
+      "help": "Current active (finalized) version (info gauge, always 1)",
+      "group": "active",
+      "labels": [
+        {
+          "name": "version",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_binary_version",
+      "type": "gauge",
+      "help": "Binary version of this node (info gauge, always 1)",
+      "group": "binary",
+      "labels": [
+        {
+          "name": "version",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_blocked_clients",
+      "type": "gauge",
+      "help": "Number of currently blocked clients",
+      "group": "blocked",
+      "labels": []
+    },
+    {
+      "name": "frogdb_blocked_keys",
+      "type": "gauge",
+      "help": "Number of keys being watched for blocking",
+      "group": "blocked",
+      "labels": []
+    },
+    {
+      "name": "frogdb_blocked_satisfied_total",
+      "type": "counter",
+      "help": "Total blocking commands satisfied",
+      "group": "blocked",
+      "labels": []
+    },
+    {
+      "name": "frogdb_blocked_timeout_total",
+      "type": "counter",
+      "help": "Total blocking commands timed out",
+      "group": "blocked",
+      "labels": []
+    },
+    {
+      "name": "frogdb_cluster_mixed_version",
+      "type": "gauge",
+      "help": "Whether nodes report different binary versions (1 = mixed, 0 = uniform)",
+      "group": "cluster",
+      "labels": []
+    },
+    {
+      "name": "frogdb_commands_duration_seconds",
+      "type": "histogram",
+      "help": "Command execution duration in seconds",
+      "group": "commands",
+      "labels": [
+        {
+          "name": "command",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_commands_errors_total",
+      "type": "counter",
+      "help": "Total command errors",
+      "group": "commands",
+      "labels": [
+        {
+          "name": "command",
+          "type": "string"
+        },
+        {
+          "name": "error",
+          "type": "ErrorType",
+          "values": [
+            "timeout",
+            "oom",
+            "wrongtype",
+            "auth",
+            "syntax",
+            "busy",
+            "cluster",
+            "script",
+            "nokey",
+            "invalid_arg"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "frogdb_commands_total",
+      "type": "counter",
+      "help": "Total commands executed",
+      "group": "commands",
+      "labels": [
+        {
+          "name": "command",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_connections_current",
+      "type": "gauge",
+      "help": "Current number of connected clients",
+      "group": "connections",
+      "labels": []
+    },
+    {
+      "name": "frogdb_connections_max",
+      "type": "gauge",
+      "help": "Maximum configured connections",
+      "group": "connections",
+      "labels": []
+    },
+    {
+      "name": "frogdb_connections_rejected_total",
+      "type": "counter",
+      "help": "Total rejected connections",
+      "group": "connections",
+      "labels": [
+        {
+          "name": "reason",
+          "type": "RejectionReason",
+          "values": [
+            "maxclients",
+            "auth_required",
+            "shutdown"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "frogdb_connections_total",
+      "type": "counter",
+      "help": "Total connections accepted",
+      "group": "connections",
+      "labels": []
+    },
+    {
+      "name": "frogdb_cpu_system_seconds_total",
+      "type": "counter",
+      "help": "Total system CPU time in seconds",
+      "group": "cpu",
+      "labels": []
+    },
+    {
+      "name": "frogdb_cpu_user_seconds_total",
+      "type": "counter",
+      "help": "Total user CPU time in seconds",
+      "group": "cpu",
+      "labels": []
+    },
+    {
+      "name": "frogdb_eviction_bytes_total",
+      "type": "counter",
+      "help": "Total bytes evicted",
+      "group": "eviction",
+      "labels": []
+    },
+    {
+      "name": "frogdb_eviction_keys_total",
+      "type": "counter",
+      "help": "Total keys evicted",
+      "group": "eviction",
+      "labels": []
+    },
+    {
+      "name": "frogdb_eviction_oom_total",
+      "type": "counter",
+      "help": "Total out-of-memory rejections",
+      "group": "eviction",
+      "labels": []
+    },
+    {
+      "name": "frogdb_eviction_samples_total",
+      "type": "counter",
+      "help": "Total eviction samples",
+      "group": "eviction",
+      "labels": []
+    },
+    {
+      "name": "frogdb_info",
+      "type": "gauge",
+      "help": "Server information",
+      "group": "info",
+      "labels": [
+        {
+          "name": "version",
+          "type": "string"
+        },
+        {
+          "name": "mode",
+          "type": "ServerMode",
+          "values": [
+            "standalone",
+            "cluster"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "frogdb_keys_expired_total",
+      "type": "counter",
+      "help": "Total keys expired",
+      "group": "keys",
+      "labels": []
+    },
+    {
+      "name": "frogdb_keys_total",
+      "type": "gauge",
+      "help": "Total number of keys",
+      "group": "keys",
+      "labels": []
+    },
+    {
+      "name": "frogdb_keys_with_expiry",
+      "type": "gauge",
+      "help": "Number of keys with expiry set",
+      "group": "keys",
+      "labels": []
+    },
+    {
+      "name": "frogdb_keyspace_hits_total",
+      "type": "counter",
+      "help": "Total keyspace cache hits",
+      "group": "keyspace",
+      "labels": []
+    },
+    {
+      "name": "frogdb_keyspace_misses_total",
+      "type": "counter",
+      "help": "Total keyspace cache misses",
+      "group": "keyspace",
+      "labels": []
+    },
+    {
+      "name": "frogdb_latency_band_requests_total",
+      "type": "counter",
+      "help": "Requests by latency band",
+      "group": "latency",
+      "labels": [
+        {
+          "name": "band",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_lua_scripts_cache_hits_total",
+      "type": "counter",
+      "help": "Total Lua script cache hits",
+      "group": "lua",
+      "labels": []
+    },
+    {
+      "name": "frogdb_lua_scripts_cache_misses_total",
+      "type": "counter",
+      "help": "Total Lua script cache misses",
+      "group": "lua",
+      "labels": []
+    },
+    {
+      "name": "frogdb_lua_scripts_duration_seconds",
+      "type": "histogram",
+      "help": "Lua script execution duration in seconds",
+      "group": "lua",
+      "labels": []
+    },
+    {
+      "name": "frogdb_lua_scripts_errors_total",
+      "type": "counter",
+      "help": "Total Lua script errors",
+      "group": "lua",
+      "labels": []
+    },
+    {
+      "name": "frogdb_lua_scripts_total",
+      "type": "counter",
+      "help": "Total Lua scripts executed",
+      "group": "lua",
+      "labels": []
+    },
+    {
+      "name": "frogdb_memory_fragmentation_ratio",
+      "type": "gauge",
+      "help": "Memory fragmentation ratio",
+      "group": "memory",
+      "labels": []
+    },
+    {
+      "name": "frogdb_memory_maxmemory_bytes",
+      "type": "gauge",
+      "help": "Maximum memory limit in bytes",
+      "group": "memory",
+      "labels": []
+    },
+    {
+      "name": "frogdb_memory_peak_bytes",
+      "type": "gauge",
+      "help": "Peak memory usage in bytes",
+      "group": "memory",
+      "labels": []
+    },
+    {
+      "name": "frogdb_memory_rss_bytes",
+      "type": "gauge",
+      "help": "Resident set size memory in bytes",
+      "group": "memory",
+      "labels": []
+    },
+    {
+      "name": "frogdb_memory_used_bytes",
+      "type": "gauge",
+      "help": "Currently used memory in bytes",
+      "group": "memory",
+      "labels": []
+    },
+    {
+      "name": "frogdb_net_input_bytes_total",
+      "type": "counter",
+      "help": "Total network input bytes",
+      "group": "net",
+      "labels": []
+    },
+    {
+      "name": "frogdb_net_output_bytes_total",
+      "type": "counter",
+      "help": "Total network output bytes",
+      "group": "net",
+      "labels": []
+    },
+    {
+      "name": "frogdb_persistence_errors_total",
+      "type": "counter",
+      "help": "Total persistence errors",
+      "group": "persistence",
+      "labels": [
+        {
+          "name": "error_type",
+          "type": "PersistenceErrorType",
+          "values": [
+            "wal_write",
+            "wal_sync",
+            "snapshot",
+            "recovery"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "frogdb_pubsub_channels",
+      "type": "gauge",
+      "help": "Number of active pub/sub channels",
+      "group": "pubsub",
+      "labels": []
+    },
+    {
+      "name": "frogdb_pubsub_messages_total",
+      "type": "counter",
+      "help": "Total pub/sub messages published",
+      "group": "pubsub",
+      "labels": []
+    },
+    {
+      "name": "frogdb_pubsub_patterns",
+      "type": "gauge",
+      "help": "Number of active pub/sub patterns",
+      "group": "pubsub",
+      "labels": []
+    },
+    {
+      "name": "frogdb_pubsub_subscribers",
+      "type": "gauge",
+      "help": "Total pub/sub subscribers",
+      "group": "pubsub",
+      "labels": []
+    },
+    {
+      "name": "frogdb_scatter_gather_duration_seconds",
+      "type": "histogram",
+      "help": "Scatter-gather operation duration in seconds",
+      "group": "scatter",
+      "labels": []
+    },
+    {
+      "name": "frogdb_scatter_gather_shards",
+      "type": "histogram",
+      "help": "Number of shards involved in scatter-gather",
+      "group": "scatter",
+      "labels": []
+    },
+    {
+      "name": "frogdb_scatter_gather_total",
+      "type": "counter",
+      "help": "Total scatter-gather operations",
+      "group": "scatter",
+      "labels": [
+        {
+          "name": "status",
+          "type": "ScatterGatherStatus",
+          "values": [
+            "success",
+            "error",
+            "timeout",
+            "partial"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "frogdb_shard_keys",
+      "type": "gauge",
+      "help": "Number of keys per shard",
+      "group": "shard",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_shard_memory_bytes",
+      "type": "gauge",
+      "help": "Memory usage per shard in bytes",
+      "group": "shard",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_shard_queue_depth",
+      "type": "gauge",
+      "help": "Queue depth per shard",
+      "group": "shard",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_shard_queue_latency_seconds",
+      "type": "histogram",
+      "help": "Shard queue latency in seconds",
+      "group": "shard",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_snapshot_duration_seconds",
+      "type": "histogram",
+      "help": "Snapshot duration in seconds",
+      "group": "snapshot",
+      "labels": []
+    },
+    {
+      "name": "frogdb_snapshot_in_progress",
+      "type": "gauge",
+      "help": "Whether a snapshot is currently in progress",
+      "group": "snapshot",
+      "labels": []
+    },
+    {
+      "name": "frogdb_snapshot_last_timestamp",
+      "type": "gauge",
+      "help": "Timestamp of last successful snapshot",
+      "group": "snapshot",
+      "labels": []
+    },
+    {
+      "name": "frogdb_snapshot_size_bytes",
+      "type": "gauge",
+      "help": "Snapshot size in bytes",
+      "group": "snapshot",
+      "labels": []
+    },
+    {
+      "name": "frogdb_split_brain_events_total",
+      "type": "counter",
+      "help": "Total split-brain events detected",
+      "group": "split",
+      "labels": []
+    },
+    {
+      "name": "frogdb_split_brain_ops_discarded_total",
+      "type": "counter",
+      "help": "Total operations discarded during split-brain recovery",
+      "group": "split",
+      "labels": []
+    },
+    {
+      "name": "frogdb_split_brain_recovery_pending",
+      "type": "gauge",
+      "help": "Whether an unprocessed split-brain log file exists (1 = yes, 0 = no)",
+      "group": "split",
+      "labels": []
+    },
+    {
+      "name": "frogdb_transactions_duration_seconds",
+      "type": "histogram",
+      "help": "Transaction duration in seconds",
+      "group": "transactions",
+      "labels": []
+    },
+    {
+      "name": "frogdb_transactions_queued_commands",
+      "type": "histogram",
+      "help": "Number of queued commands in transactions",
+      "group": "transactions",
+      "labels": []
+    },
+    {
+      "name": "frogdb_transactions_total",
+      "type": "counter",
+      "help": "Total transactions by outcome",
+      "group": "transactions",
+      "labels": [
+        {
+          "name": "outcome",
+          "type": "TransactionOutcome",
+          "values": [
+            "committed",
+            "discarded",
+            "execabort",
+            "watchfailed"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "frogdb_uptime_seconds",
+      "type": "gauge",
+      "help": "Server uptime in seconds",
+      "group": "uptime",
+      "labels": []
+    },
+    {
+      "name": "frogdb_version_gate_active",
+      "type": "gauge",
+      "help": "Whether a specific version gate is active (1) or suppressed (0)",
+      "group": "version",
+      "labels": [
+        {
+          "name": "gate",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_wal_bytes_total",
+      "type": "counter",
+      "help": "Total WAL bytes written",
+      "group": "wal",
+      "labels": []
+    },
+    {
+      "name": "frogdb_wal_durability_lag_ms",
+      "type": "gauge",
+      "help": "WAL durability lag in milliseconds",
+      "group": "wal",
+      "labels": []
+    },
+    {
+      "name": "frogdb_wal_flush_duration_seconds",
+      "type": "histogram",
+      "help": "WAL flush duration in seconds",
+      "group": "wal",
+      "labels": []
+    },
+    {
+      "name": "frogdb_wal_last_flush_timestamp",
+      "type": "gauge",
+      "help": "Timestamp of last WAL flush",
+      "group": "wal",
+      "labels": []
+    },
+    {
+      "name": "frogdb_wal_last_sync_timestamp",
+      "type": "gauge",
+      "help": "Timestamp of last WAL sync",
+      "group": "wal",
+      "labels": []
+    },
+    {
+      "name": "frogdb_wal_pending_bytes",
+      "type": "gauge",
+      "help": "Number of pending WAL bytes",
+      "group": "wal",
+      "labels": []
+    },
+    {
+      "name": "frogdb_wal_pending_ops",
+      "type": "gauge",
+      "help": "Number of pending WAL operations",
+      "group": "wal",
+      "labels": []
+    },
+    {
+      "name": "frogdb_wal_sync_lag_ms",
+      "type": "gauge",
+      "help": "WAL sync lag in milliseconds",
+      "group": "wal",
+      "labels": []
+    },
+    {
+      "name": "frogdb_wal_writes_total",
+      "type": "counter",
+      "help": "Total WAL writes",
+      "group": "wal",
+      "labels": []
+    }
+  ]
+}
