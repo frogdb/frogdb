@@ -110,11 +110,18 @@ Op vocabulary (v1):
 - Sim config gains `persistence.mode = fake` (see persistence seam) replacing today's
   `enabled: false`.
 
-### 4. Shard-driver harness (`frogdb-server/crates/core/tests/`)
+### 4. Shard-driver harness (`frogdb-server/crates/core/tests/shard_driver/`, integration-test crate)
 
 - Drives a real `ShardWorker` (and a real `VllCoordinator`) directly with controlled
   `ShardMessage` ordering; proptest-shrinkable permutations for races too narrow for
-  schedule sampling to hit reliably.
+  schedule sampling to hit reliably. The harness needs `frogdb-commands` (added as a
+  `frogdb-core` dev-dependency) to populate a real `CommandRegistry`, and that dev-dep
+  cycle compiles `frogdb-core` twice — an in-crate `#[cfg(test)]` harness touching both
+  copies trips E0308. The integration test links the single normal build and reaches the
+  seams through feature-gated public `drive*` wrappers on `ShardWorker` (and
+  `ShardReceiver::try_recv`), each `#[cfg(any(test, feature = "shard-driver"))]
+  #[doc(hidden)] pub`, with the `shard-driver` feature enabled by the crate's
+  self-dev-dep.
 - Bypasses the connection layer by design (that is the turmoil harness's job).
   Known risk: hand-crafted message orders can represent interleavings the real
   coordinator never produces. Mitigations: derive permutation constraints from real
@@ -194,7 +201,9 @@ Each a named test, proptest-permuted around its critical window:
 
 1. **Dual-timeout race**: LPUSH arrives in the same tick as the waiter deadline / after
    the coordinator timeout but before `UnregisterWait` → element neither lost nor
-   double-delivered.
+   double-delivered. The lost-element race is already closed (`drive_satisfaction`
+   re-validates deadline + `is_closed()` before consuming); 4b pins the closure under
+   permutation rather than hunting a known bug.
 2. **WATCH vs expiry vs unrelated write**: no false negative; over-abort characterized.
 3. **VLL phase-2/3 failure with sparse participants** (e.g. shards `[2,5,7]`): all real
    shard ids aborted; lock table empty afterward.
@@ -202,11 +211,20 @@ Each a named test, proptest-permuted around its critical window:
 5. **XREADGROUP blocked + key dies via TTL vs explicit DEL**: pin both paths; fix the
    NOGROUP-on-expiry gap (expiry currently never drains stream waiters).
 6. **Persist-failure mid-transaction in rollback mode**: snapshots restored in reverse
-   order; `EXECABORT` response shape.
-7. **CLIENT PAUSE WRITE vs in-flight EXEC**: no write-containing EXEC slips past the
-   pause check.
+   order; `EXECABORT` response shape. The WAL-rollback reply code was corrected from the
+   truncated `EXECABRT` to `EXECABORT` (F2) as part of 4b.
+7. **CLIENT PAUSE WRITE vs in-flight EXEC**: the CLIENT PAUSE gate is purely
+   connection-side pre-dispatch, so an EXEC already in a shard queue is by construction
+   past the gate and the case is not expressible in the shard driver. Re-scoped to a
+   targeted turmoil-level test in `crates/server/tests/` (pause engaged concurrently
+   with write-EXEC issuance; invariant: no write-containing EXEC issued-after-pause
+   commits before unpause; reads proceed under WRITE mode; `expiry_paused` suppresses
+   sweeps).
 8. **Expiry sweep interleaved with EXEC on the same shard**: serialization holds;
-   notifications and version consistent.
+   notifications and version consistent. The "keyspace notifications consistent with
+   the chosen order" half of this goal is not yet pinned: the shard-driver harness has
+   no notification-capture seam; deferred to a future phase (candidate: phase 4c pubsub
+   oracle work).
 
 ## Bug workflow
 

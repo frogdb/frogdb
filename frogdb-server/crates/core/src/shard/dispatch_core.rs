@@ -56,7 +56,17 @@ impl ShardWorker {
                 let result = self.execute_scatter_part(&keys, &operation, conn_id).await;
                 let _ = response_tx.send(result);
             }
-            ShardMessage::GetVersion { response_tx } => {
+            ShardMessage::GetVersion { keys, response_tx } => {
+                // Lazily purge any already-expired watched keys WITHOUT bumping
+                // the version: watching an already-stale key must record a
+                // "nonexistent" watch, so a later EXEC does not treat the key's
+                // (already-due) removal as a modification. A key still live here
+                // is left in place; if it expires during the WATCH window it is
+                // purged (and the version bumped) at EXEC by
+                // `purge_expired_watches` (F3). See the `GetVersion` doc.
+                for key in &keys {
+                    self.store.purge_if_expired(key);
+                }
                 let _ = response_tx.send(self.shard_version);
             }
             ShardMessage::ExecTransaction {

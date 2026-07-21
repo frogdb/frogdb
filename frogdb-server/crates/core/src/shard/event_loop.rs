@@ -1,10 +1,13 @@
 use std::time::{Duration, Instant};
 
+use bytes::Bytes;
 use frogdb_types::metrics::definitions::{FieldsExpired, KeysExpired, ShardQueueLatency};
 
 use crate::keyspace_event::KeyspaceEventFlags;
 
 use super::active_expiry::ExpiryResult;
+#[cfg(any(test, feature = "shard-driver"))]
+use super::message::Envelope;
 use super::message::ShardMessage;
 use super::worker::ShardWorker;
 
@@ -120,7 +123,7 @@ impl ShardWorker {
     /// and stay here; the decision + deletion half is delegated to
     /// [`ActiveExpiryCoordinator::run_cycle`], and the side effects are applied
     /// past the seam from the returned [`ExpiryResult`].
-    fn run_active_expiry(&mut self) {
+    pub(crate) fn run_active_expiry(&mut self) {
         // Sync the expiry_paused flag to the store for passive expiry suppression.
         let paused = self
             .expiry_paused
@@ -148,7 +151,7 @@ impl ShardWorker {
     /// deliberately blind to — client tracking, search indexes, keyspace
     /// notifications, USDT probes, metrics, and the version counter — and drives
     /// them from the `ExpiryResult`.
-    fn apply_expiry_effects(&mut self, result: ExpiryResult) {
+    pub(crate) fn apply_expiry_effects(&mut self, result: ExpiryResult) {
         // Keys whose own TTL elapsed: full effect set.
         for key in &result.deleted_keys {
             // Invalidate tracked clients for expired key
@@ -188,6 +191,20 @@ impl ShardWorker {
             );
         }
 
+        // F1: TTL/active-expiry must drain blocked XREADGROUP waiters for any
+        // removed stream key, mirroring the DEL write path
+        // (drain_stream_waiters_with_error → NOGROUP; XREAD waiters stay
+        // blocked). apply_expiry_effects previously never touched wait_queue.
+        let removed_keys: Vec<Bytes> = result
+            .deleted_keys
+            .iter()
+            .chain(result.emptied_keys.iter())
+            .cloned()
+            .collect();
+        for key in &removed_keys {
+            self.drain_stream_waiters_with_error(key);
+        }
+
         // Record expired keys metric and increment version.
         if result.is_empty() {
             return;
@@ -214,7 +231,7 @@ impl ShardWorker {
 
     /// Dispatch a shard message to the appropriate handler.
     /// Returns `true` if the event loop should break (shutdown).
-    async fn dispatch_message(&mut self, msg: ShardMessage) -> bool {
+    pub(crate) async fn dispatch_message(&mut self, msg: ShardMessage) -> bool {
         use ShardMessage::*;
         match msg {
             Execute { .. } | ScatterRequest { .. } | GetVersion { .. } | ExecTransaction { .. } => {
@@ -300,6 +317,62 @@ impl ShardWorker {
                 true
             }
         }
+    }
+
+    /// Shard-driver harness seam: dispatch one message, returning the event
+    /// loop's shutdown signal (`true` == break). Wraps [`Self::dispatch_message`].
+    #[cfg(any(test, feature = "shard-driver"))]
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub async fn drive(&mut self, msg: ShardMessage) -> bool {
+        self.dispatch_message(msg).await
+    }
+
+    /// Shard-driver harness seam: run one active-expiry cycle synchronously,
+    /// without waiting on the event loop's 100 ms timer. Wraps
+    /// [`Self::run_active_expiry`].
+    #[cfg(any(test, feature = "shard-driver"))]
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn drive_expiry_tick(&mut self) {
+        self.run_active_expiry();
+    }
+
+    /// Shard-driver harness seam: fire one blocking-waiter timeout sweep,
+    /// without waiting on the event loop's 100 ms timer. Wraps
+    /// [`Self::check_waiter_timeouts`].
+    #[cfg(any(test, feature = "shard-driver"))]
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn drive_waiter_timeout_tick(&mut self) {
+        self.check_waiter_timeouts();
+    }
+
+    /// Shard-driver harness seam mirroring the event loop's continuation-release
+    /// arm (`event_loop.rs:88-91`): await the stored release signal — fired when
+    /// the coordinator's `ContinuationGuard` drops — then clear the lock.
+    ///
+    /// Only call when a continuation lock is held and its guard has been (or is
+    /// about to be) dropped; with no lock held `await_continuation_release`
+    /// resolves to `pending()` and this future never completes. The shard-driver
+    /// harness pumps this per shard, in a permuted order, after inducing the
+    /// guard drop (scenario 4).
+    #[cfg(any(test, feature = "shard-driver"))]
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub async fn drive_continuation_release(&mut self) {
+        self.vll.await_continuation_release().await;
+        self.vll.clear_continuation_lock();
+    }
+
+    /// Shard-driver harness seam: non-blocking receive of the next queued
+    /// envelope off this worker's own message channel. See
+    /// [`ShardReceiver::try_recv`](super::message::ShardReceiver::try_recv).
+    #[cfg(any(test, feature = "shard-driver"))]
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn try_recv_queued(&mut self) -> Option<Envelope> {
+        self.message_rx.try_recv()
     }
 }
 
@@ -469,5 +542,165 @@ mod effect_tests {
         assert_eq!(recorder.counter_value("frogdb_keys_expired_total"), None);
         assert_eq!(recorder.counter_value("frogdb_fields_expired_total"), None);
         assert_eq!(worker.store.expired_keys(), 0);
+    }
+}
+
+#[cfg(test)]
+mod seam_reachability_tests {
+    use std::sync::Arc;
+
+    use bytes::Bytes;
+    use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
+    use tokio::sync::mpsc;
+    use tokio::sync::oneshot;
+
+    use crate::command::{Arity, Command, CommandContext, CommandFlags, WaiterWake, WalStrategy};
+    use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec};
+    use crate::keyspace_event::KeyspaceEventFlags;
+    use crate::registry::CommandRegistry;
+    use crate::shard::builder::ShardWorkerBuilder;
+    use crate::shard::connection::NewConnection;
+    use crate::shard::message::{Envelope, ShardMessage, ShardReceiver, ShardSender};
+    use crate::shard::worker::ShardWorker;
+    use crate::types::Value;
+
+    /// Minimal in-crate `SET`: `frogdb-core` has no real command
+    /// implementations of its own (those live downstream in `frogdb-commands`,
+    /// which depends on `frogdb-core` and so cannot be pulled in here without a
+    /// cycle) — this stand-in exercises the same `dispatch_message` ->
+    /// `dispatch_core` -> `execute_command` -> registry lookup path a real
+    /// command would.
+    struct MockSet;
+    impl Command for MockSet {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "SET",
+                arity: Arity::AtLeast(2),
+                flags: CommandFlags::WRITE,
+                keys: KeySpec::First,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::PersistFirstKey,
+                wakes: WaiterWake::All,
+                event: EventSpec::Emits {
+                    class: KeyspaceEventFlags::STRING,
+                    name: "set",
+                },
+                requires_same_slot: false,
+                lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
+                strategy: crate::command::ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+
+        fn execute(
+            &self,
+            ctx: &mut CommandContext,
+            args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            ctx.store
+                .set(args[0].clone(), Value::string(args[1].clone()));
+            Ok(Response::ok())
+        }
+    }
+
+    /// Minimal in-crate `GET` counterpart to [`MockSet`] — same rationale.
+    struct MockGet;
+    impl Command for MockGet {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "GET",
+                arity: Arity::Fixed(1),
+                flags: CommandFlags::READONLY,
+                keys: KeySpec::First,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::NoOp,
+                wakes: WaiterWake::None,
+                event: EventSpec::NotApplicable,
+                requires_same_slot: false,
+                lookup: LookupSpec::FirstKey,
+                mutation: crate::command::ConnMutation::None,
+                strategy: crate::command::ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+
+        fn execute(
+            &self,
+            ctx: &mut CommandContext,
+            args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            match ctx
+                .store
+                .get(&args[0])
+                .and_then(|v| v.as_string().map(|s| s.as_bytes().clone()))
+            {
+                Some(b) => Ok(Response::bulk(b)),
+                None => Ok(Response::null()),
+            }
+        }
+    }
+
+    fn worker() -> ShardWorker {
+        let (_mtx, mrx) = mpsc::channel::<Envelope>(8);
+        let (_ntx, nrx) = mpsc::channel::<NewConnection>(8);
+        let (msg_tx, _msg_rx) = mpsc::channel::<Envelope>(8);
+        let mut registry = CommandRegistry::new();
+        registry.register(MockSet);
+        registry.register(MockGet);
+        ShardWorkerBuilder::new(0, 1)
+            .with_message_rx(ShardReceiver::new(mrx))
+            .with_new_conn_rx(nrx)
+            .with_shard_senders(Arc::new(vec![ShardSender::new(msg_tx)]))
+            .with_registry(Arc::new(registry))
+            .build()
+    }
+
+    #[tokio::test]
+    async fn promoted_seams_are_reachable_in_crate() {
+        let mut w = worker();
+
+        // `dispatch_message` (now pub(crate)) round-trips a SET then a GET.
+        let (tx, rx) = oneshot::channel();
+        let set = ShardMessage::Execute {
+            command: Arc::new(ParsedCommand::new(
+                Bytes::from_static(b"SET"),
+                vec![Bytes::from_static(b"k"), Bytes::from_static(b"v")],
+            )),
+            conn_id: 1,
+            txid: None,
+            protocol_version: ProtocolVersion::Resp3,
+            track_reads: false,
+            no_touch: false,
+            response_tx: tx,
+        };
+        assert!(
+            !w.dispatch_message(set).await,
+            "SET must not signal shutdown"
+        );
+        assert!(matches!(rx.await.unwrap(), Response::Simple(_)));
+
+        let (tx, rx) = oneshot::channel();
+        let get = ShardMessage::Execute {
+            command: Arc::new(ParsedCommand::new(
+                Bytes::from_static(b"GET"),
+                vec![Bytes::from_static(b"k")],
+            )),
+            conn_id: 1,
+            txid: None,
+            protocol_version: ProtocolVersion::Resp3,
+            track_reads: false,
+            no_touch: false,
+            response_tx: tx,
+        };
+        w.dispatch_message(get).await;
+        assert_eq!(
+            rx.await.unwrap(),
+            Response::Bulk(Some(Bytes::from_static(b"v")))
+        );
+
+        // Tick seams (now pub(crate)) run without a timer.
+        w.run_active_expiry();
+        w.check_waiter_timeouts();
     }
 }

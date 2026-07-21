@@ -1680,6 +1680,8 @@ dependencies = [
  "dashmap",
  "frogdb-acl",
  "frogdb-cluster",
+ "frogdb-commands",
+ "frogdb-core",
  "frogdb-persistence",
  "frogdb-protocol",
  "frogdb-replication",

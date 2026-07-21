@@ -316,7 +316,7 @@ impl ShardWorker {
     /// matching Redis behaviour where a plain XREAD client stays blocked when
     /// the stream key is deleted or expires. It will either time-out or be
     /// woken when a new stream is created under the same key.
-    fn drain_stream_waiters_with_error(&mut self, key: &Bytes) {
+    pub(crate) fn drain_stream_waiters_with_error(&mut self, key: &Bytes) {
         while let Some(entry) = self.wait_queue.pop_oldest_xreadgroup_waiter(key) {
             let response = match &entry.op {
                 BlockingOp::XReadGroup { group, .. } => Response::error(format!(

@@ -15,6 +15,7 @@ use crate::registry::CommandRegistry;
 use crate::replication::SharedBroadcaster;
 use crate::scripting::{ScriptExecutor, ScriptingConfig};
 use crate::store::HashMapStore;
+use crate::store::Store;
 
 use super::active_expiry::ActiveExpiryCoordinator;
 use super::builder::ShardWorkerBuilder;
@@ -462,6 +463,31 @@ impl ShardWorker {
         watches
             .iter()
             .all(|(key, watched_ver)| self.get_key_version(key) == *watched_ver)
+    }
+
+    /// Lazily purge any watched keys whose TTL has elapsed, bumping the shard
+    /// version once if a removal occurred (F3).
+    ///
+    /// A key that expired only lazily is still physically present until some
+    /// access purges it, so the version-based [`Self::check_watches`] cannot
+    /// see the expiry on its own. Calling this at the EXEC watch-validation
+    /// seam makes the removal bump the shard version, so a watched key that
+    /// transitioned live -> gone aborts the transaction — matching active
+    /// expiry (`apply_expiry_effects`) and Redis/Valkey/Dragonfly. The store
+    /// stays version-ignorant: the removal is decided by
+    /// [`crate::store::Store::purge_if_expired`], the version bump lives here.
+    /// One bump per call regardless of how many keys purge, mirroring active
+    /// expiry's one-bump-per-cycle.
+    pub(crate) fn purge_expired_watches(&mut self, watches: &[(Bytes, u64)]) {
+        let mut purged = false;
+        for (key, _watched_ver) in watches {
+            if self.store.purge_if_expired(key) {
+                purged = true;
+            }
+        }
+        if purged {
+            self.increment_version();
+        }
     }
 
     /// Check if this connection can execute during a continuation lock.

@@ -89,7 +89,6 @@ pub enum WalMode {
 ///     .with_metrics(metrics_recorder)
 ///     .with_eviction(eviction_config)
 ///     .with_persistence(rocks_store, wal_config)
-///     .enable_vll()
 ///     .build();
 /// ```
 pub struct ShardWorkerBuilder {
@@ -115,10 +114,11 @@ pub struct ShardWorkerBuilder {
     raft: Option<Arc<ClusterRaft>>,
     network_factory: Option<Arc<ClusterNetworkFactory>>,
     quorum_checker: Option<Arc<dyn QuorumChecker>>,
-    enable_vll: bool,
     queue_depth: Option<Arc<AtomicUsize>>,
     per_request_spans: Option<Arc<AtomicBool>>,
     wal_failure_policy: Option<Arc<AtomicU8>>,
+    #[cfg(any(test, feature = "fake-wal"))]
+    fake_wal_failure: crate::persistence::FakeFailure,
     is_replica: bool,
 }
 
@@ -148,10 +148,11 @@ impl ShardWorkerBuilder {
             raft: None,
             network_factory: None,
             quorum_checker: None,
-            enable_vll: false,
             queue_depth: None,
             per_request_spans: None,
             wal_failure_policy: None,
+            #[cfg(any(test, feature = "fake-wal"))]
+            fake_wal_failure: crate::persistence::FakeFailure::None,
             is_replica: false,
         }
     }
@@ -262,12 +263,6 @@ impl ShardWorkerBuilder {
         self
     }
 
-    /// Enable VLL (Virtual Lock Loom) for transaction coordination.
-    pub fn enable_vll(mut self) -> Self {
-        self.enable_vll = true;
-        self
-    }
-
     /// Set the shared queue depth counter.
     pub fn with_queue_depth(mut self, depth: Arc<AtomicUsize>) -> Self {
         self.queue_depth = Some(depth);
@@ -289,6 +284,15 @@ impl ShardWorkerBuilder {
     /// Set the WAL failure policy toggle (shared with ConfigManager for runtime CONFIG SET).
     pub fn with_wal_failure_policy(mut self, policy: Arc<AtomicU8>) -> Self {
         self.wal_failure_policy = Some(policy);
+        self
+    }
+
+    /// Inject a fake-WAL write failure (test / `fake-wal` only). Only takes
+    /// effect together with [`WalMode::Fake`]. Enables the persist-failure /
+    /// rollback (`EXECABORT`) branch to be exercised deterministically.
+    #[cfg(any(test, feature = "fake-wal"))]
+    pub fn with_fake_wal_failure(mut self, failure: crate::persistence::FakeFailure) -> Self {
+        self.fake_wal_failure = failure;
         self
     }
 
@@ -384,7 +388,10 @@ impl ShardWorkerBuilder {
             WalMode::Fake => {
                 #[cfg(any(test, feature = "fake-wal"))]
                 {
-                    let sink = crate::persistence::FakeWalSink::new(shard_id);
+                    let sink = crate::persistence::FakeWalSink::with_failure(
+                        shard_id,
+                        self.fake_wal_failure.clone(),
+                    );
                     crate::shard::fake_wal_registry::FakeWalRegistry::install(shard_id, sink.log());
                     Some(Box::new(sink) as Box<dyn WalSink>)
                 }

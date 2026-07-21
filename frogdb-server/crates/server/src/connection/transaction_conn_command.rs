@@ -297,10 +297,18 @@ async fn handle_watch(ctx: &mut ConnCtx<'_>, args: &[Bytes]) -> Response {
         Err(crossslot) => return crossslot,
     };
 
-    // Get the current version from the shard.
+    // Get the current version from the shard. Pass the watched keys so the
+    // shard lazily purges any that are ALREADY expired (aligning physical to
+    // logical state) before snapshotting the version — without bumping it. This
+    // records an already-stale key as a "nonexistent" watch, so a later EXEC
+    // does not treat its (already-due) removal as a modification, while a key
+    // still live here that expires during the window is caught at EXEC (F3).
     let (response_tx, response_rx) = oneshot::channel();
     if shard_senders[shard]
-        .send(ShardMessage::GetVersion { response_tx })
+        .send(ShardMessage::GetVersion {
+            keys: args.to_vec(),
+            response_tx,
+        })
         .await
         .is_err()
     {
