@@ -1,6 +1,6 @@
 # 05 — Design decision: durable partial commit on VLL phase-3 dispatch failure
 
-Status: ready-for-human
+Status: ready-for-agent
 Type: HITL
 Origin: phase-4b task-10 review (controller flag; documented design, not a bug)
 
@@ -44,9 +44,13 @@ Known causes of a closed shard channel, exhaustively:
 1. **Panic unwinding the worker task** (a bug, deterministic per triggering input; workspace has no `panic = "abort"`, tokio contains the panic). This is the "already zombified — crash" case; also note the client whose EXEC hit phase-3 failure got an error reply while some shards committed, so a retry **double-applies** the executed portion — retry amplification on top of partiality.
 2. **Graceful-shutdown race** (benign): subsystem teardown drops workers while a scatter is in flight. Any 4c implementation must check shutdown-in-progress before aborting, so clean shutdowns don't register as crashes.
 
+## Decision (2026-07-21, Nathan)
+
+**Option 4 accepted** — fail-stop: "If the node is already broken/zombified, we should crash." Confirmed after trigger analysis showed the path cannot fire from normal transactional behavior (backpressure never errors; slowness lands in atomicity-preserving phase-4 timeout). Implement now: **4a supervision + 4c abort with the shutdown-in-progress guard** (4b fence is subsumed while 4c is unconditional — revisit only if a degrade mode is ever added). **2b (txn framing + abort-on-recovery)** deferred to the durability phase, filed alongside the rollback-mode WAL partial-append work, so recovery stops resurrecting the pre-abort partial commit. Phase-4 timeout ambiguity + phase-6 replica-atomicity notes remain as documentation criteria below.
+
 ## Acceptance criteria
 
-- [ ] Human decision recorded here (option + rationale)
+- [x] Human decision recorded here (option + rationale) — option 4 (4a+4c now, 2b durability-phase)
 - [ ] If option 1: consistency caveat documented in the appropriate CONTEXT.md/spec
 - [ ] If option 2/2b/4: follow-up implementation issue(s) filed in the durability phase (txn framing, intent record, recovery policy; escalation path + shutdown-race guard for option 4)
 - [ ] 4a (worker supervision + health signal) considered as an immediate standalone fix regardless of option chosen — the zombie-node gap exists today independent of VLL
