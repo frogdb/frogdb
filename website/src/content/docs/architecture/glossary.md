@@ -1,233 +1,239 @@
 ---
 title: "Glossary"
-description: "Terminology definitions used throughout FrogDB documentation."
+description: "Terminology, wire error codes, and abbreviations used throughout FrogDB documentation."
 sidebar:
   order: 16
 ---
-Terminology definitions used throughout FrogDB documentation.
+Terminology, wire error codes, and abbreviations used throughout FrogDB
+documentation. Each term links to the page that explains it in depth; the error
+codes are quoted from source.
 
 ---
 
-## Architecture Terms
+## Architecture terms
 
 ### Internal Shard
-A thread-local partition within a single FrogDB node. Each internal shard has its own:
-- HashMap (key-value store)
-- Memory budget
-- Expiry index
-- WAL writer
+A thread-local partition within a single FrogDB node. Each internal shard owns its
+own key-value store, memory budget, expiry index, and WAL writer, and is driven by
+one worker task.
 
-Keys are assigned to internal shards via: `internal_shard = CRC16(key) % 16384 % num_shards`
-(the key's hash slot, reduced modulo the shard count)
+Keys map to internal shards through the cluster slot, not a separate hash:
+`internal_shard = CRC16(key) % 16384 % num_shards`. The CRC16 slot is computed
+once and reused, so a key's slot and its internal shard are derived from the same
+value.
 
-**Not to be confused with:** Hash slot (cluster-level distribution).
-
-See: [storage.md](/architecture/storage/), [concurrency.md](/architecture/concurrency/)
+See [Concurrency Model](/architecture/concurrency/),
+[Storage Engine](/architecture/storage/).
 
 ### Hash Slot
-A logical partition (0-16383) for distributing data across nodes in cluster mode. Redis Cluster compatible.
+A logical partition (0–16383) used to distribute keys across nodes in cluster mode,
+compatible with Redis Cluster. `slot = CRC16(key) % 16384`.
 
-Keys are assigned to slots via: `slot = CRC16(key) % 16384`
+**Relationship:** `key → slot(key) → node → internal_shard(key)`.
 
-**Relationship:** `key -> hash_slot(key) -> node -> internal_shard(key)`
+See [Clustering](/architecture/clustering/).
 
-See: [storage.md](/architecture/storage/), [clustering.md](/architecture/clustering/)
+### Slot vs Shard: quick reference
 
-### Slot vs Shard: Quick Reference
-
-| Term | Scope | Algorithm | Range | Purpose |
+| Term | Scope | Derivation | Range | Answers |
 |------|-------|-----------|-------|---------|
-| **Hash Slot** | Cluster (multi-node) | CRC16 | 0-16383 | Which node owns a key |
-| **Internal Shard** | Node (multi-thread) | CRC16 (via hash slot) | 0 to num_shards | Which thread processes a key |
+| **Hash Slot** | Cluster (multi-node) | `CRC16(key) % 16384` | 0–16383 | Which node owns a key |
+| **Internal Shard** | Node (multi-thread) | `slot % num_shards` | 0 to num_shards−1 | Which worker processes a key |
 
-**Key distinctions:**
-- Transactions require same **internal shard** (all keys on same thread)
-- Multi-key commands (MGET/MSET) check **hash slots** by default
-- `allow-cross-slot-standalone` relaxes slot checks, but not shard requirements for transactions
-- `-CROSSSLOT` error uses "slot" terminology for Redis compatibility
+The `-CROSSSLOT` error uses "slot" terminology for Redis compatibility even when
+the underlying constraint is at the internal-shard level.
 
 ### Hash Tag
-A `{tag}` syntax in key names that controls hash slot assignment. Only the content between the first `{` and `}` is hashed.
+A `{tag}` substring in a key name that controls slot assignment: only the content
+between the first `{` and the next `}` is hashed. `{user:123}:profile` and
+`{user:123}:sessions` therefore share a slot, enabling multi-key operations on
+related keys.
 
-**Example:** `{user:123}:profile` and `{user:123}:sessions` hash to the same slot.
-
-**Purpose:** Enables multi-key operations (MGET, transactions) on related keys.
-
-See: [storage.md](/architecture/storage/)
-
-### Terminology Note: Cross-Shard vs Cross-Slot
-
-| Term | Level | Context |
-|------|-------|---------|
-| **Hash slot** | Cluster | 16,384 slots for cluster routing |
-| **Internal shard** | Node | Thread-local partitions within a node |
-
-**Error codes:**
-- `-CROSSSLOT` is always used (Redis compatibility), even for internal shard violations
-
-### Raft Metadata Plane
-FrogDB nodes self-coordinate cluster metadata via embedded Raft (openraft): topology, slot
-ownership, node roles, and the config epoch. Responsibilities include:
-- Failover decisions
-- Slot migration coordination
-- Topology versioning (config epoch)
-
-FrogDB uses embedded consensus rather than gossip protocol (like Redis Cluster) or an external
-orchestrator service (like DragonflyDB). The data path never goes through Raft — consensus
-applies to metadata only.
-
-**Note:** older documents may refer to an external "Orchestrator"; that design was superseded
-by the embedded Raft metadata plane.
-
-See: [clustering.md](/architecture/clustering/)
+See [Storage Engine](/architecture/storage/).
 
 ### VLL (Very Lightweight Locking)
-A synchronization mechanism for coordinating multi-shard operations without traditional locks. Ensures atomicity across shards while maintaining the shared-nothing architecture.
+FrogDB's mechanism for coordinating atomic operations across internal shards
+without a global lock, using declared key intents, a total transaction-id order,
+and Selective Contention Analysis.
 
-See: [vll.md](/architecture/vll/)
+See [VLL](/architecture/vll/).
+
+### Raft
+The consensus protocol (via the `openraft` library) that FrogDB uses for the
+cluster control plane — slot ownership, membership, and epoch changes are agreed
+through Raft, not a gossip protocol. Data replication itself uses PSYNC, not Raft.
+
+See [Clustering](/architecture/clustering/).
 
 ---
 
-## Persistence Terms
+## Persistence terms
 
 ### WAL (Write-Ahead Log)
-FrogDB's per-shard durability buffer. Despite the name, it is a redo-of-current-state buffer
-rather than a classic operation log: the shard serializes a key's *current* state, and a flush
-thread batches entries into RocksDB write batches. Crash durability underneath is provided by
-**RocksDB's own WAL** — a second, storage-engine-level log. When precision matters, qualify
-which one is meant: *FrogDB WAL* (shard flush buffer) vs *RocksDB WAL* (engine crash log).
+A sequential log of write operations backed by RocksDB, providing durability and
+crash recovery. Durability is set by `DurabilityMode`:
 
-**Modes:**
-- `async`: WAL writes queued, fsync by OS
-- `periodic`: fsync every N milliseconds (default: 1000ms)
-- `sync`: fsync after every write
+- `async` — the OS flushes on its own schedule
+- `periodic` — fsync on a fixed interval (default 1000 ms)
+- `sync` — fsync before acknowledging each write
 
-See: [persistence.md](/architecture/persistence/)
+See [Persistence & Durability](/architecture/persistence/).
 
 ### Snapshot
-A forkless, point-in-time capture of all key-value data: a RocksDB checkpoint cut at a single
-sequence number (`RocksStore::create_checkpoint`), plus a search-index sidecar and
-`metadata.json`. FrogDB does not write RDB files.
+A point-in-time capture of all key-value data. FrogDB produces snapshots without
+forking the process (forkless), coordinated by epoch rather than by an OS
+copy-on-write fork.
 
-**FrogDB approach:** RocksDB's own checkpoint machinery (hard-linked SST files pinned to a
-sequence number) instead of Redis's fork-based physical point-in-time snapshot. No in-memory
-buffering of pre-snapshot values is involved — concurrent writes proceed against the live
-store while the checkpoint is cut.
+See [Persistence & Durability](/architecture/persistence/).
 
-### Snapshot Epoch
-A monotonic counter that numbers and names one snapshot run (`snapshot_NNNNN` directory,
-`SnapshotEpoch` metric). Distinct from the cluster's **config epoch** (topology version
-counter) — avoid bare "epoch". Sequence:
-1. The snapshot scheduler claims the next epoch.
-2. A pre-snapshot hook runs (flushes search indexes, persists the replication offset).
-3. The coordinator cuts a RocksDB checkpoint at the current sequence number.
+### Epoch
+A logical marker used to coordinate a snapshot: the epoch is recorded when a
+snapshot begins, shards write values as of that epoch, and concurrent writes are
+captured by the WAL.
+
+See [Persistence & Durability](/architecture/persistence/).
+
+### COW (Copy-on-Write)
+Copying data only when it is modified. FrogDB uses explicit copy-on-write buffers
+for forkless snapshots instead of relying on a `fork()` copy-on-write address
+space.
+
+See [Storage Engine](/architecture/storage/).
 
 ---
 
-## Protocol Terms
+## Protocol terms
 
 ### RESP (Redis Serialization Protocol)
-The wire protocol used by Redis and compatible systems.
+The wire protocol FrogDB speaks. RESP2 covers simple strings, errors, integers,
+bulk strings, and arrays; RESP3 adds maps, sets, booleans, doubles, big numbers,
+verbatim strings, and out-of-band push messages.
 
-| Version | Features |
-|---------|----------|
-| RESP2 | Simple strings, errors, integers, bulk strings, arrays |
-| RESP3 | Adds maps, sets, booleans, doubles, push messages, attributes |
-
-See: [protocol.md](/architecture/protocol/)
+See [Protocol](/architecture/protocol/).
 
 ### CROSSSLOT
-An error returned when a multi-key operation references keys in different hash slots.
-
-```
--CROSSSLOT Keys in request don't hash to the same slot
-```
-
-**Solution:** Use hash tags to colocate related keys.
+The error returned when a multi-key operation references keys in different slots.
+Resolve it by colocating the keys with a hash tag.
 
 ### Error Code Reference
 
-| Error | Context | Meaning |
-|-------|---------|---------|
-| `-CROSSSLOT` | Multi-key ops, transactions, Lua | Keys don't hash to same slot |
-| `-MOVED slot host:port` | Cluster mode | Key's slot is on different node |
-| `-ASK slot host:port` | Cluster migration | Key is being migrated |
-| `-WRONGTYPE` | Type mismatch | Operation against wrong data type |
-| `-OOM` | Memory limit | Out of memory, writes rejected |
-| `-TIMEOUT` | VLL queue | Operation timed out waiting for locks |
-| `-NOSCRIPT` | Lua scripting | Script not found in cache |
-| `-BUSY` | Lua scripting | Script exceeded time limit |
+Wire error strings are quoted from source; the canonical registry is
+`CommandError` in `frogdb-server/crates/types/src/error.rs`, with ACL codes in
+`frogdb-server/crates/acl/src/error.rs` and scripting codes in
+`frogdb-server/crates/core/src/scripting/error.rs`.
 
-**Note:** FrogDB uses `-CROSSSLOT` (not `-CROSSSHARD`) for Redis compatibility, even when the underlying check is at the internal shard level.
+| Error | Emitted message | Context |
+|-------|-----------------|---------|
+| `-CROSSSLOT` | `CROSSSLOT Keys in request don't hash to the same slot` | Multi-key op spanning slots |
+| `-MOVED` | `MOVED <slot> <host>:<port>` | Slot owned by another node (redirect) |
+| `-ASK` | `ASK <slot> <host>:<port>` | Key being migrated (one-shot redirect) |
+| `-WRONGTYPE` | `WRONGTYPE Operation against a key holding the wrong kind of value` | Wrong data type for command |
+| `-OOM` | `OOM command not allowed when used memory > 'maxmemory'` | Write rejected under maxmemory |
+| `-CLUSTERDOWN` | `CLUSTERDOWN The cluster is down` | Cluster unavailable / slot unserved |
+| `-TRYAGAIN` | `TRYAGAIN Multiple keys request during rehashing of slot` | Multi-key op mid-migration |
+| `-READONLY` | `READONLY You can't write against a read only replica.` | Write sent to a replica |
+| `-NOAUTH` | `NOAUTH Authentication required.` | Command before AUTH |
+| `-NOPERM` | `NOPERM this user has no permissions to run the '<command>' command` | ACL denial (command / key / channel variants) |
+| `-NOPROTO` | `NOPROTO sorry, this protocol version is not supported` | HELLO with an unsupported RESP version |
+| `-BUSYKEY` | `BUSYKEY Target key name already exists` | Destination key exists (e.g. RESTORE) |
+| `-BUSYGROUP` | `BUSYGROUP Consumer Group name already exists` | XGROUP CREATE on existing group |
+| `-NOGROUP` | `NOGROUP No such consumer group` | Stream group missing |
+| `-NOSCRIPT` | `NOSCRIPT No matching script. Please use EVAL.` | EVALSHA on unknown SHA |
+| `-BUSY` | `ERR BUSY Lua script running. Allow up to <ms>ms for it to finish.` | A script is still running |
+| `-EXECABORT` | `EXECABORT Transaction discarded because of previous errors.` | EXEC after a queued error |
+| `-VERSIONMISMATCH` | `VERSIONMISMATCH expected <expected> actual <actual>` | Optimistic version check failed |
+
+**Not emitted by FrogDB.** `MASTERDOWN`, `NOREPLICAS`, and `LOADING` exist only as
+passthrough *labels* used when deciding whether to wrap a Lua error — FrogDB never
+produces them (there is no RDB-load phase). `MISCONF` and `NOREPL` do not exist at
+all. Timeouts are reported with the generic `ERR` prefix (for example
+`ERR timeout …`); there is no `-TIMEOUT` code and no VLL lock-timeout wire error.
 
 ---
 
-## Eviction Terms
+## Eviction terms
 
 ### LRU (Least Recently Used)
-An eviction policy that removes keys based on last access time. FrogDB uses **sampling LRU** (like Redis) rather than exact LRU.
+An eviction policy that removes keys by last-access time. FrogDB approximates LRU
+by sampling, as Redis does, rather than maintaining an exact ordering.
+
+See [Storage Engine](/architecture/storage/).
 
 ### LFU (Least Frequently Used)
-An eviction policy that removes keys based on access frequency. Uses a logarithmic counter with decay.
+An eviction policy that removes keys by access frequency, using a logarithmic
+counter with decay.
 
-### Eviction Pool
-A buffer of eviction candidates maintained across sampling rounds. Improves eviction accuracy by accumulating worst candidates over time.
+See [Storage Engine](/architecture/storage/).
 
 ---
 
-## Data Structure Terms
-
-### Dashtable
-A segment-based hash table used by DragonflyDB. 30-60% more memory efficient than Redis. FrogDB uses `griddle::HashMap` currently; Dashtable is a future consideration.
+## Data-structure terms
 
 ### Griddle
-A Rust crate providing incremental-resize HashMap. Spreads resize cost across inserts to avoid latency spikes.
+A Rust hash-map implementation with incremental resize: the cost of growing the
+table is spread across subsequent inserts to avoid a single large rehash latency
+spike.
 
-See: [storage.md](/architecture/storage/)
+See [Storage Engine](/architecture/storage/).
 
 ---
 
-## Transaction Terms
+## Transaction terms
 
 ### MULTI/EXEC
-Redis transaction commands. MULTI starts queuing, EXEC executes atomically.
+Redis transaction commands: `MULTI` begins queuing commands and `EXEC` runs the
+queued batch. FrogDB provides execution atomicity (no interleaving) but does not
+roll back on a mid-batch error; durability follows the configured WAL mode.
 
-**FrogDB guarantees:**
-- Execution atomicity: Yes (no interleaving)
-- Durability: Configurable (depends on sync mode)
-- Rollback: No (partial failures don't undo prior commands)
+See [Consistency Model](/architecture/consistency/).
 
 ### WATCH
-Optimistic locking command. Monitors keys for changes; EXEC fails if watched keys were modified.
+Optimistic locking: watched keys are recorded with the version observed at WATCH
+time, and a subsequent `EXEC` aborts if any watched key changed.
 
 ### Pipelining
-Sending multiple commands without waiting for responses. Reduces round-trip latency. Not transactional; commands may interleave with other clients.
+Sending several commands without waiting for each reply, to amortize round-trip
+latency. Pipelining is not transactional — pipelined commands may interleave with
+other clients' commands.
 
 ---
 
-## Replication Terms
+## Replication terms
 
 ### Primary
-The node accepting writes for a set of hash slots. Also called "master" in Redis terminology.
+A node that accepts writes for its slots (also called "master" in Redis
+terminology).
+
+See [Replication](/architecture/replication/).
 
 ### Replica
-A node receiving replicated data from a primary. Serves read traffic and can be promoted on failover.
+A node that applies data streamed from a primary, serves reads, and can be promoted
+on failover.
 
 ### PSYNC
-Partial synchronization protocol for replication. Allows replicas to catch up from replication backlog without full sync.
+The partial-synchronization protocol a replica uses to resume from its last offset
+after a brief disconnect instead of taking a full resync.
 
 ### Replication Backlog
-A circular buffer of recent write operations. Enables PSYNC when a replica reconnects after brief disconnection.
+A bounded ring buffer of recent RESP-encoded writes, indexed by replication offset,
+that backs PSYNC partial resync (and split-brain reconciliation). It is distinct
+from the live broadcast channel that streams writes to currently-connected
+replicas.
+
+See [Replication](/architecture/replication/).
+
+### Replication ID
+An identifier for a replication history line, used with the offset to decide
+whether a reconnecting replica can PSYNC or must fully resync.
 
 ---
 
-## Metrics Terms
-
-### Tail Latency
-The latency experienced by the slowest requests (e.g., p99, p999). FrogDB optimizes via shared-nothing architecture, incremental resize (griddle), and sampling eviction.
+## Metrics terms
 
 ### Throughput
-Operations per second. FrogDB targets high throughput via thread-per-core model, connection pinning, and batched WAL writes.
+Operations completed per unit time. Used qualitatively in these docs to describe
+design trade-offs; FrogDB publishes no throughput figures until reproducible
+benchmarks exist.
 
 ---
 
@@ -242,4 +248,5 @@ Operations per second. FrogDB targets high throughput via thread-per-core model,
 | ACL | Access Control List |
 | TLS | Transport Layer Security |
 | FIFO | First In, First Out |
-| CRC16 | Cyclic Redundancy Check (16-bit) |
+| CRC16 | Cyclic Redundancy Check, 16-bit (slot hashing) |
+| USDT | User Statically-Defined Tracing (probes) |
