@@ -1323,6 +1323,8 @@ dependencies = [
  "anyhow",
  "clap",
  "frogdb-config",
+ "frogdb-core",
+ "frogdb-server",
  "frogdb-types",
  "schemars",
  "serde",

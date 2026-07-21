@@ -12,6 +12,8 @@ path = "src/main.rs"
 
 [dependencies]
 frogdb-config.workspace = true
+frogdb-core.workspace = true
+frogdb-server = { path = "../../crates/server" }
 frogdb-types.workspace = true
 schemars.workspace = true
 serde.workspace = true

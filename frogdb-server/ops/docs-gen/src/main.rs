@@ -1,13 +1,15 @@
 //! Documentation data generator for FrogDB.
 //!
 //! Extracts configuration defaults and JSON Schema metadata from the
-//! `Config` struct to produce a `config-reference.json` file, and version
-//! identifiers to produce a `versions.json` file, both consumed by the
+//! `Config` struct to produce a `config-reference.json` file, version
+//! identifiers to produce a `versions.json` file, and the full command
+//! registry to produce a `commands.json` file, all consumed by the
 //! Astro/Starlight documentation site.
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use frogdb_config::{Config, config_param_registry};
+use frogdb_core::{Arity, CommandRegistry, ExecutionStrategy};
 use schemars::schema_for;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -105,6 +107,70 @@ struct RustToolchainSection {
     channel: String,
 }
 
+/// Top-level output structure for `commands.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CommandsOutput {
+    /// Machine-readable notice that this file is generated.
+    #[serde(rename = "_generated")]
+    generated: GeneratedNotice,
+    /// Number of entries in `commands` (both full and metadata-only).
+    count: usize,
+    commands: Vec<CommandInfo>,
+}
+
+/// A single command registry entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CommandInfo {
+    /// Upper-case command name (e.g. `GET`, `JSON.SET`).
+    name: String,
+    arity: ArityInfo,
+    /// `CommandFlags` bit names, in declaration order (e.g. `WRITE`, `FAST`).
+    flags: Vec<String>,
+    /// Namespace derived from a dotted command name (e.g. `JSON.GET` -> `JSON`).
+    /// `None` for core Redis-compatible commands, which have no such prefix.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    family: Option<String>,
+    /// How the command is executed (`standard`, `blocking`, `scatter_gather`, ...).
+    execution_strategy: String,
+    /// Whether this is a full command (has `execute()`) versus a metadata-only
+    /// entry handled at the connection level (e.g. SUBSCRIBE, MULTI).
+    full: bool,
+}
+
+/// JSON-friendly view of `frogdb_core::Arity`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ArityInfo {
+    /// `fixed`, `at_least`, or `range`.
+    kind: String,
+    /// Minimum number of arguments after the command name.
+    min: usize,
+    /// Maximum number of arguments, if bounded (`fixed` and `range`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max: Option<usize>,
+}
+
+impl From<Arity> for ArityInfo {
+    fn from(arity: Arity) -> Self {
+        match arity {
+            Arity::Fixed(n) => ArityInfo {
+                kind: "fixed".to_string(),
+                min: n,
+                max: Some(n),
+            },
+            Arity::AtLeast(n) => ArityInfo {
+                kind: "at_least".to_string(),
+                min: n,
+                max: None,
+            },
+            Arity::Range { min, max } => ArityInfo {
+                kind: "range".to_string(),
+                min,
+                max: Some(max),
+            },
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -123,6 +189,10 @@ fn main() -> Result<()> {
     let versions = generate_versions(&workspace_root)?;
     let versions_json = serde_json::to_string_pretty(&versions)?;
     write_or_check(&output_dir, "versions.json", &versions_json, args.check)?;
+
+    let commands = generate_commands();
+    let commands_json = serde_json::to_string_pretty(&commands)?;
+    write_or_check(&output_dir, "commands.json", &commands_json, args.check)?;
 
     Ok(())
 }
@@ -257,6 +327,68 @@ fn generate_versions(workspace_root: &std::path::Path) -> Result<VersionsInfo> {
         advertised_redis_version: frogdb_types::ADVERTISED_REDIS_VERSION.to_string(),
         redis_compat_target: frogdb_types::REDIS_COMPAT_TARGET.to_string(),
     })
+}
+
+/// Build the full command registry the same way the server does, then dump
+/// every entry (data-structure commands plus server-specific ones) to a
+/// diff-stable, name-sorted list.
+fn generate_commands() -> CommandsOutput {
+    let mut registry = CommandRegistry::new();
+    frogdb_server::register_commands(&mut registry);
+
+    let mut commands: Vec<CommandInfo> = registry
+        .iter()
+        .map(|(name, entry)| CommandInfo {
+            name: name.to_string(),
+            arity: ArityInfo::from(entry.arity()),
+            flags: entry
+                .flags()
+                .iter_names()
+                .map(|(flag_name, _)| flag_name.to_string())
+                .collect(),
+            family: derive_family(name),
+            execution_strategy: execution_strategy_name(&entry.execution_strategy()).to_string(),
+            full: entry.is_full(),
+        })
+        .collect();
+
+    commands.sort_by(|a, b| a.name.cmp(&b.name));
+
+    CommandsOutput {
+        generated: GeneratedNotice {
+            warning: "DO NOT EDIT — this file is auto-generated from Rust source code".into(),
+            source: "frogdb-server/crates/commands/src/lib.rs, \
+                     frogdb-server/crates/server/src/server/register.rs"
+                .into(),
+            regenerate: "just docs-gen".into(),
+        },
+        count: commands.len(),
+        commands,
+    }
+}
+
+/// Derive a command's family from its dot-namespaced prefix, e.g.
+/// `JSON.GET` -> `JSON`, matching the convention FrogDB's Redis-Stack-style
+/// extension commands already use (JSON, FT, BF, CF, CMS, TS, TDIGEST, TOPK,
+/// ES, FROGDB). Core Redis-compatible commands (GET, HSET, ZADD, ...) have no
+/// such prefix and are left unclassified: the registry has no other
+/// family/category field to derive one from, and hand-maintaining a
+/// per-command table would duplicate the module layout instead of reading it.
+fn derive_family(name: &str) -> Option<String> {
+    name.split_once('.').map(|(prefix, _)| prefix.to_string())
+}
+
+/// Map an `ExecutionStrategy` to a stable, JSON-friendly name.
+fn execution_strategy_name(strategy: &ExecutionStrategy) -> &'static str {
+    match strategy {
+        ExecutionStrategy::Standard => "standard",
+        ExecutionStrategy::ConnectionLevel(_) => "connection_level",
+        ExecutionStrategy::Blocking { .. } => "blocking",
+        ExecutionStrategy::ScatterGather(_) => "scatter_gather",
+        ExecutionStrategy::RaftConsensus => "raft_consensus",
+        ExecutionStrategy::AsyncExternal => "async_external",
+        ExecutionStrategy::ServerWide(_) => "server_wide",
+    }
 }
 
 fn extract_fields(
