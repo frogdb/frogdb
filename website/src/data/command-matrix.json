@@ -693,7 +693,7 @@
             "kind": "at_least",
             "min": 1
           },
-          "note": "33 of 8 regression tests excluded (Cluster Differences)."
+          "note": "Regression tests excluded (Cluster Differences)."
         },
         {
           "name": "PERSIST",
@@ -800,7 +800,7 @@
             "kind": "at_least",
             "min": 1
           },
-          "note": "3 of 33 regression tests excluded (Cluster Differences)."
+          "note": "Regression tests excluded (Cluster Differences)."
         },
         {
           "name": "SORT_RO",
@@ -838,7 +838,7 @@
             "min": 1,
             "max": 1
           },
-          "note": "33 of 8 regression tests excluded (Cluster Differences)."
+          "note": "Regression tests excluded (Cluster Differences)."
         },
         {
           "name": "UNLINK",
@@ -1798,7 +1798,7 @@
             "kind": "at_least",
             "min": 2
           },
-          "note": "24 of 117 regression tests excluded (Scripting Differences)."
+          "note": "Regression tests excluded (Scripting Differences)."
         },
         {
           "name": "EVALSHA",
@@ -1807,7 +1807,7 @@
             "kind": "at_least",
             "min": 2
           },
-          "note": "24 of 117 regression tests excluded (Scripting Differences)."
+          "note": "Regression tests excluded (Scripting Differences)."
         },
         {
           "name": "EVALSHA_RO",
@@ -1861,7 +1861,7 @@
             "kind": "at_least",
             "min": 1
           },
-          "note": "24 of 108 regression tests excluded (Scripting Differences)."
+          "note": "Regression tests excluded (Scripting Differences)."
         }
       ]
     },
@@ -2245,7 +2245,7 @@
             "kind": "at_least",
             "min": 0
           },
-          "note": "49 of 40 regression tests excluded (Cluster Differences)."
+          "note": "Regression tests excluded (Cluster Differences)."
         },
         {
           "name": "LASTSAVE",
@@ -2630,7 +2630,7 @@
             "kind": "at_least",
             "min": 3
           },
-          "note": "39 of 104 regression tests excluded (Scripting Differences)."
+          "note": "Regression tests excluded (Scripting Differences)."
         },
         {
           "name": "ZCARD",
@@ -2769,7 +2769,7 @@
             "kind": "at_least",
             "min": 3
           },
-          "note": "39 of 104 regression tests excluded (Scripting Differences)."
+          "note": "Regression tests excluded (Scripting Differences)."
         },
         {
           "name": "ZRANGEBYLEX",
@@ -2805,7 +2805,7 @@
             "kind": "at_least",
             "min": 2
           },
-          "note": "39 of 104 regression tests excluded (Scripting Differences)."
+          "note": "Regression tests excluded (Scripting Differences)."
         },
         {
           "name": "ZREM",
@@ -2814,7 +2814,7 @@
             "kind": "at_least",
             "min": 2
           },
-          "note": "39 of 104 regression tests excluded (Scripting Differences)."
+          "note": "Regression tests excluded (Scripting Differences)."
         },
         {
           "name": "ZREMRANGEBYLEX",
@@ -2899,7 +2899,7 @@
             "min": 2,
             "max": 2
           },
-          "note": "39 of 104 regression tests excluded (Scripting Differences)."
+          "note": "Regression tests excluded (Scripting Differences)."
         },
         {
           "name": "ZUNION",

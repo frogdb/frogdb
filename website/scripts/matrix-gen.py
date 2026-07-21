@@ -161,14 +161,19 @@ def command_family(
 
 
 def exclusion_note(categories: dict[str, dict], impact: dict) -> str:
-    """One-line note for a `partial` command, built from its actual
-    excluded-test counts and category labels (never invented prose)."""
+    """One-line note for a `partial` command, built from its exclusion
+    category labels (never invented prose).
+
+    Deliberately omits `impact["total_tests"]` / `impact["total_excluded"]`:
+    those are suite-level aggregates (see `compat-gen.py`'s `command_data`
+    comment) copied verbatim onto every command a suite covers, and
+    "ported" vs. "excluded" are disjoint counts from the upstream test
+    corpus, not a subset/total pair — there is no honest "N of M excluded"
+    ratio to report per command from this metadata.
+    """
     hits = sorted(set(impact["categories"]) & FUNCTIONAL_CATEGORIES)
     labels = [categories[cat]["label"] for cat in hits]
-    return (
-        f"{impact['total_excluded']} of {impact['total_tests']} regression tests "
-        f"excluded ({'; '.join(labels)})."
-    )
+    return f"Regression tests excluded ({'; '.join(labels)})."
 
 
 def build_matrix(

@@ -342,7 +342,16 @@ def generate(tests_dir: Path) -> dict:
                 }
             )
 
-        # Build command impact data
+        # Build command impact data. NOTE: `FILE_TO_COMMANDS` maps a whole
+        # suite (file) to every command it exercises, and doc-comment
+        # exclusions aren't tagged to a specific command within a
+        # multi-command file — so `total_tests`/`total_excluded` below are
+        # the *suite's* totals, copied as-is onto each of that suite's
+        # commands (not divided or attributed per command). A command
+        # covered by several suites gets those suite totals summed. Do not
+        # present these as a per-command "N of M tests excluded" ratio
+        # downstream (see `matrix-gen.py`'s `exclusion_note`) — the
+        # metadata doesn't support that claim.
         for cmd in commands:
             if cmd not in command_data:
                 command_data[cmd] = {
