@@ -2,7 +2,16 @@
 //! per-shard version (worker.rs:459-469): any same-shard write or active-expiry
 //! removal bumps the version and aborts EXEC. Invariant: zero false negatives
 //! (a genuine change to the watched key MUST abort). Over-aborts are legal and
-//! characterized. F3 (lazy-expiry false negative) is covered in Tasks 8-9.
+//! characterized. F3 (lazy-expiry false negative on the watcher's own
+//! EXEC-time purge) is closed and pinned (`s2_f3_lazy_expiry_watched_key_aborts`).
+//! Lazy-expiry parity closes two further gaps at this seam: gap 3 — a THIRD
+//! party's lazy value read of a watched key now bumps the shard version via
+//! `apply_lazy_purge_effects`, so the watcher's EXEC aborts
+//! (`regression_gap3_third_party_lazy_read_aborts_watch`) — and gap 4 — a
+//! second watcher who watched the key while live still aborts on the first
+//! watcher's no-bump WATCH-time purge, via the per-key `live_at_watch` clause
+//! in `check_watches` (`regression_gap4_second_watcher_aborts`), which a coarse
+//! per-shard bump alone cannot express.
 
 use std::time::Duration;
 
