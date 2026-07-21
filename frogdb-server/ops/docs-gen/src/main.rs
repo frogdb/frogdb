@@ -3,14 +3,17 @@
 //! Extracts configuration defaults and JSON Schema metadata from the
 //! `Config` struct to produce a `config-reference.json` file, version
 //! identifiers to produce a `versions.json` file, the full command
-//! registry to produce a `commands.json` file, and the typed metrics
-//! registry to produce a `metrics.json` file, all consumed by the
-//! Astro/Starlight documentation site.
+//! registry to produce a `commands.json` file, the typed metrics
+//! registry to produce a `metrics.json` file, and the annotated example
+//! config (identical to `frogdb-server --generate-config`) to produce
+//! an `example-config.toml` file, all consumed by the Astro/Starlight
+//! documentation site.
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use frogdb_config::{Config, config_param_registry};
 use frogdb_core::{Arity, CommandRegistry, ExecutionStrategy};
+use frogdb_server::config::ConfigLoader;
 use frogdb_telemetry::ALL_METRICS;
 use schemars::schema_for;
 use serde::{Deserialize, Serialize};
@@ -244,6 +247,14 @@ fn main() -> Result<()> {
     let metrics_json = serde_json::to_string_pretty(&metrics)?;
     write_or_check(&output_dir, "metrics.json", &metrics_json, args.check)?;
 
+    let example_config = generate_example_config();
+    write_or_check(
+        &output_dir,
+        "example-config.toml",
+        &example_config,
+        args.check,
+    )?;
+
     Ok(())
 }
 
@@ -357,6 +368,13 @@ fn generate_config_reference() -> Result<ConfigReference> {
         },
         sections,
     })
+}
+
+/// Generate the annotated example config, byte-identical to what
+/// `frogdb-server --generate-config` prints to stdout (the `println!` there
+/// contributes the trailing newline).
+fn generate_example_config() -> String {
+    format!("{}\n", Config::default_toml())
 }
 
 fn generate_versions(workspace_root: &std::path::Path) -> Result<VersionsInfo> {
