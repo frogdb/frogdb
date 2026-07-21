@@ -38,10 +38,11 @@ also set in the environment, and `--bind 127.0.0.1` is passed on the command lin
 server binds to `127.0.0.1` — the CLI flag wins.
 
 `CONFIG SET` is a **separate axis**, applied to the already-running process. It does not
-participate in this startup merge and does not rewrite the TOML file — it mutates
+participate in this startup merge and does not itself touch the TOML file — it mutates
 in-memory state only. A parameter changed with `CONFIG SET` reverts to whatever the
-file/env/CLI merge produces the next time the server starts, unless you also update the
-file.
+file/env/CLI merge produces the next time the server starts, unless you persist it first
+with `CONFIG REWRITE` (see the Runtime configuration section below) or update the
+file/environment/CLI invocation yourself.
 
 ## TOML configuration file
 
@@ -139,8 +140,17 @@ The [Configuration reference](/reference/configuration/) tables include a runtim
 column, generated from this same registry, for every parameter that has a `CONFIG`
 name — check there rather than assuming a given field is live-editable.
 
-`CONFIG SET` never writes back to the TOML file. If you want a runtime change to survive
-a restart, update the file (or the environment/CLI invocation) to match.
+`CONFIG SET` alone never writes back to the TOML file — it only mutates the running
+process's in-memory state. To persist runtime values, run `CONFIG REWRITE`. It merges the
+current value of every non-no-op parameter into the TOML document that was loaded at
+startup and atomically rewrites the file (temp file, `fsync`, rename), using a
+comment-preserving, order-preserving `toml_edit` merge — untouched keys, comments, and
+formatting are left exactly as they were
+(`frogdb-server/crates/server/src/config_persister.rs`). `CONFIG REWRITE` fails with `ERR
+The server is running without a config file` if the server started without `--config` and
+no implicit `frogdb.toml` was found. Parameters accepted as compatibility no-ops (see
+above) are excluded from the rewrite. If you'd rather not rewrite the file this way,
+update the TOML file, environment variables, or CLI invocation by hand and restart.
 
 ## See also
 

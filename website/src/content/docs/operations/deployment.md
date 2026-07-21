@@ -86,7 +86,10 @@ sudo apt install ./frogdb-server_<version>_<arch>.deb
 
 The package:
 
-- Installs `frogdb-server` at `/usr/bin/frogdb-server` (plus `frogdb-admin`).
+- Installs `frogdb-server` at `/usr/bin/frogdb-server`, plus the `frogdb-admin` and
+  `frogctl` CLIs. (The packaging manifest currently lists the third binary under the name
+  `frog`; that mismatch with the compiled binary's actual name, `frogctl`, is being fixed
+  separately.)
 - Creates a system user `frogdb` (`/usr/sbin/nologin`, no login shell).
 - Creates `/var/lib/frogdb/{data,snapshots,cluster}` and `/var/log/frogdb`, owned by
   `frogdb:frogdb`.
