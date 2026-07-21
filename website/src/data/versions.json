@@ -1,0 +1,11 @@
+{
+  "_generated": {
+    "warning": "DO NOT EDIT — this file is auto-generated from Rust source code",
+    "source": "frogdb-server/crates/types/src/redis_version.rs, rust-toolchain.toml",
+    "regenerate": "just docs-gen"
+  },
+  "workspace_version": "0.1.0",
+  "rust_toolchain": "1.92.0",
+  "advertised_redis_version": "7.2.0",
+  "redis_compat_target": "8.6.0"
+}
