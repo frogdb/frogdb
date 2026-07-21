@@ -15,7 +15,7 @@ frogdb-server --generate-config > frogdb.toml
 ```
 
 <Aside type="note">
-`--generate-config` prints `toml::to_string(&Config::default())` directly — the TOML below is a serialization of the same `Config` struct that drives [Configuration Reference](/reference/configuration/), not a hand-maintained copy. It cannot fall out of sync with the config-struct field list: a test in `frogdb-server/crates/server/src/config/loader.rs` round-trips this output back into a `Config` and asserts it is equal to `Config::default()`, and a second test asserts every top-level section is present. Fields whose default is "unset" (e.g. `tls.cert-file`, `tls.key-file`, `tls.ca-file`, `tls.client-cert-file`, `tls.client-key-file`, `http.token`, `logging.file-path`, `logging.rotation`) are omitted below, since TOML has no null literal — see the Configuration Reference for their syntax.
+`--generate-config` prints `toml::to_string(&Config::default())` directly — the TOML below is a serialization of the same `Config` struct that drives [Configuration Reference](/reference/configuration/), not a hand-maintained copy. It cannot fall out of sync with the config-struct field list: a test in `frogdb-server/crates/server/src/config/loader.rs` round-trips this output back into a `Config` and asserts it is equal to `Config::default()`, and a second test asserts every top-level section is present. Fields whose default is "unset" (e.g. `tls.ca-file`, `tls.client-cert-file`, `tls.client-key-file`, `http.token`, `logging.file-path`, `logging.rotation`) are omitted below, since TOML has no null literal — see the Configuration Reference for their syntax.
 </Aside>
 
 ## Full configuration

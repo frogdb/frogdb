@@ -386,11 +386,11 @@ const DEFAULT_TOML_HEADER: &str = "\
 # frogdb-server/crates/server/src/config/loader.rs). Regenerate an identical
 # copy at any time with `frogdb-server --generate-config`.
 #
-# Optional fields whose default is \"unset\" (e.g. tls.cert-file, tls.key-file,
-# tls.ca-file, tls.client-cert-file, tls.client-key-file, http.token,
-# logging.file-path, logging.rotation) are omitted below — TOML has no null
-# literal, so an unset value is represented by the key's absence. See
-# reference/configuration for their syntax and defaults.
+# Optional fields whose default is \"unset\" (e.g. tls.ca-file,
+# tls.client-cert-file, tls.client-key-file, http.token, logging.file-path,
+# logging.rotation) are omitted below — TOML has no null literal, so an
+# unset value is represented by the key's absence. See reference/configuration
+# for their syntax and defaults.
 ";
 
 fn default_toml_impl() -> String {
