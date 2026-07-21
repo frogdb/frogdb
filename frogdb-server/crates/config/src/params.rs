@@ -903,4 +903,90 @@ mod tests {
             }
         }
     }
+
+    /// Per-STRUCT coverage guard (issue 13-02).
+    ///
+    /// `#[derive(ConfigSections)]` on the root [`crate::Config`] emits
+    /// `Config::SECTION_PARAMS` — one `PARAMS` slice per `#[section]` field. This
+    /// asserts the hand-spliced [`config_param_registry`] covers **exactly** that
+    /// derived set of section rows (the serde-backed rows; virtual rows are
+    /// excluded, being disjoint by `section: None`).
+    ///
+    /// This closes the gap the derive's compile-time completeness link cannot
+    /// catch: the link only forces a `#[section]` field's type to *have*
+    /// `PARAMS`, not that the assembly actually *splices* it in. A new section
+    /// struct classified `#[section]` but never wired into `config_param_registry`
+    /// leaves its rows in `SECTION_PARAMS` yet absent from the registry, turning
+    /// the silent hole into a red test.
+    #[test]
+    fn test_registry_covers_derived_sections() {
+        let registry = config_param_registry();
+
+        // Registry rows with a serde backing (non-virtual). Virtual rows have
+        // `section: None` and are disjoint from section rows, so filtering them
+        // out by identity leaves exactly the section-derived rows.
+        let mut registry_section_rows: Vec<ConfigParamInfo> = registry
+            .iter()
+            .filter(|p| !VIRTUAL_PARAMS.contains(p))
+            .copied()
+            .collect();
+
+        // Union of every derived section's PARAMS (sections with all-`skip`
+        // fields contribute an empty slice and drop out).
+        let mut derived_rows: Vec<ConfigParamInfo> = crate::Config::SECTION_PARAMS
+            .iter()
+            .flat_map(|params| params.iter())
+            .copied()
+            .collect();
+
+        // Param names are globally unique, so sorting by name yields a stable
+        // total order and set-equality reduces to sorted-Vec equality.
+        registry_section_rows.sort_by_key(|p| p.name);
+        derived_rows.sort_by_key(|p| p.name);
+
+        assert_eq!(
+            registry_section_rows, derived_rows,
+            "config_param_registry() must cover exactly the section set derived from \
+             Config::SECTION_PARAMS — a new #[section] struct not wired into the \
+             assembly (or an assembly row from a non-derived section) breaks this",
+        );
+    }
+
+    /// Guards the [`crate::Config`] `#[derive(ConfigSections)]` against silently
+    /// dropping a section, and documents the current section count.
+    #[test]
+    fn test_section_params_counts_every_section() {
+        #[cfg(not(feature = "turmoil"))]
+        assert_eq!(
+            crate::Config::SECTION_PARAMS.len(),
+            26,
+            "expected one SECTION_PARAMS entry per #[section] field of Config"
+        );
+        #[cfg(feature = "turmoil")]
+        assert_eq!(
+            crate::Config::SECTION_PARAMS.len(),
+            27,
+            "expected one SECTION_PARAMS entry per #[section] field of Config (incl. chaos)"
+        );
+    }
+
+    /// UI-lite exercise of `#[derive(ConfigSections)]`: `#[section(skip)]`
+    /// contributes nothing, and `#[section]` contributes exactly its field type's
+    /// `PARAMS`. A field missing both attributes is a compile error (the point of
+    /// the derive); that path is documented rather than unit-tested, since the
+    /// crate has no trybuild harness.
+    #[derive(frogdb_config_derive::ConfigSections)]
+    #[allow(dead_code)]
+    struct SectionsSmoke {
+        #[section(skip)]
+        not_a_section: u64,
+        #[section]
+        smoke: DeriveSmoke,
+    }
+
+    #[test]
+    fn test_derive_sections_smoke() {
+        assert_eq!(SectionsSmoke::SECTION_PARAMS.len(), 1);
+        assert_eq!(SectionsSmoke::SECTION_PARAMS[0], DeriveSmoke::PARAMS);
+    }
 }

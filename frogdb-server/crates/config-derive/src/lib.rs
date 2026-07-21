@@ -1,12 +1,16 @@
-//! Proc macro for the FrogDB CONFIG GET/SET parameter registry.
+//! Proc macros for the FrogDB CONFIG GET/SET parameter registry.
 //!
-//! Provides `#[derive(ConfigParams)]`, which turns a serde config-section
-//! struct into the single source of truth for its CONFIG parameters. Every
-//! field MUST carry either a `#[param(...)]` attribute (the field is exposed as
-//! a CONFIG parameter) or `#[param(skip)]` (the field is internal and has no
-//! CONFIG parameter). A field lacking both is a compile error — this is the
-//! whole point of the derive: a new serde field can no longer silently miss the
-//! registry.
+//! Provides two complementary derives:
+//!
+//! - `#[derive(ConfigParams)]` — per-**field** coverage. Turns a serde
+//!   config-section struct into the single source of truth for its CONFIG
+//!   parameters. Every field MUST carry either a `#[param(...)]` attribute (the
+//!   field is exposed as a CONFIG parameter) or `#[param(skip)]` (the field is
+//!   internal and has no CONFIG parameter). A field lacking both is a compile
+//!   error — a new serde field can no longer silently miss the registry.
+//! - `#[derive(ConfigSections)]` — per-**struct** coverage. Applied to the root
+//!   `Config`, it makes an unclassified *section* (a new field on `Config`) a
+//!   compile error. See that derive's docs below.
 //!
 //! # Grammar
 //!
@@ -56,6 +60,59 @@ use syn::{Attribute, Data, DeriveInput, Fields, LitStr, Token, parse_macro_input
 pub fn derive_config_params(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match expand(&input) {
+        Ok(ts) => ts.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+/// Derive per-**struct** coverage for the root `Config`.
+///
+/// This is the per-struct analogue of the per-field guarantee `ConfigParams`
+/// provides. `ConfigParams` makes an unclassified *field* a compile error;
+/// `ConfigSections` makes an unclassified *section* (a new field on the root
+/// `Config`) a compile error, so a new config section can no longer be added
+/// without deciding whether it contributes CONFIG parameters.
+///
+/// # Grammar
+///
+/// ```ignore
+/// #[derive(ConfigSections)]
+/// pub struct Config {
+///     #[section(skip)]                 // not a CONFIG-param section (e.g. an
+///     pub config_source_path: ...,     // internal / programmatic field)
+///
+///     #[section]                       // a section whose type has `PARAMS`
+///     pub server: ServerConfig,        // (i.e. it carries #[derive(ConfigParams)])
+///     // ...
+/// }
+/// ```
+///
+/// Every field MUST carry either `#[section]` or `#[section(skip)]`. A field
+/// lacking both is a compile error — this is the whole point of the derive.
+///
+/// # What it emits
+///
+/// An `impl Config { pub const SECTION_PARAMS: &'static [&'static
+/// [ConfigParamInfo]]; }` referencing each `#[section]` field's
+/// `<FieldType>::PARAMS`. That reference does double duty:
+///
+/// 1. **Compile-time completeness link.** A `#[section]` field whose type has no
+///    `PARAMS` const (i.e. is not a `#[derive(ConfigParams)]` section) fails to
+///    compile with "no associated item named `PARAMS`". Classifying a field as a
+///    section therefore forces it through the per-field coverage guarantee.
+/// 2. **Test hook.** `frogdb_config`'s `params.rs` asserts that the hand-spliced,
+///    order-preserving `config_param_registry()` assembly covers *exactly* this
+///    derived section set (`tests::test_registry_covers_derived_sections`), so a
+///    new section that is classified but never wired into the assembly is a red
+///    test rather than a silent hole.
+///
+/// The derive deliberately does **not** generate the registry assembly itself:
+/// the row order is historical and load-bearing (pinned by a golden snapshot),
+/// so assembly stays hand-written while this derive enforces coverage.
+#[proc_macro_derive(ConfigSections, attributes(section))]
+pub fn derive_config_sections(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match expand_sections(&input) {
         Ok(ts) => ts.into(),
         Err(err) => err.to_compile_error().into(),
     }
@@ -156,6 +213,112 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
             ];
         }
     })
+}
+
+fn expand_sections(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    let struct_ident = &input.ident;
+
+    let fields = match &input.data {
+        Data::Struct(data) => match &data.fields {
+            Fields::Named(named) => &named.named,
+            _ => {
+                return Err(syn::Error::new_spanned(
+                    struct_ident,
+                    "ConfigSections can only be derived for structs with named fields",
+                ));
+            }
+        },
+        _ => {
+            return Err(syn::Error::new_spanned(
+                struct_ident,
+                "ConfigSections can only be derived for structs",
+            ));
+        }
+    };
+
+    // Types of the fields classified as sections, in declaration order. Each
+    // contributes `<Type>::PARAMS` to the emitted `SECTION_PARAMS` table.
+    let mut section_types = Vec::new();
+
+    for field in fields {
+        let field_ident = field
+            .ident
+            .as_ref()
+            .expect("named field always has an ident");
+
+        match parse_section_opts(field)? {
+            // Every field MUST opt in or out. This is the invariant the derive
+            // exists to enforce: a new section with no decision is a hard error.
+            None => {
+                return Err(syn::Error::new_spanned(
+                    field_ident,
+                    format!(
+                        "field `{field_ident}` is missing a `#[section]` or `#[section(skip)]` \
+                         attribute; every root config field must declare whether it is a CONFIG \
+                         parameter section",
+                    ),
+                ));
+            }
+            // `#[section(skip)]`: not a CONFIG-param section, contributes nothing.
+            Some(true) => continue,
+            // `#[section]`: its type must expose `PARAMS`.
+            Some(false) => section_types.push(&field.ty),
+        }
+    }
+
+    Ok(quote! {
+        impl #struct_ident {
+            /// Per-section CONFIG parameter tables, one `PARAMS` slice per
+            /// `#[section]` field of the root config.
+            ///
+            /// Generated by `#[derive(ConfigSections)]`. Referencing each
+            /// section type's `PARAMS` here is a compile-time completeness link:
+            /// a field classified `#[section]` whose type is not a
+            /// `#[derive(ConfigParams)]` section fails to compile. Consumed by
+            /// `frogdb_config`'s `config_param_registry` coverage test to prove
+            /// the hand-spliced assembly covers exactly this derived set.
+            pub const SECTION_PARAMS: &'static [&'static [crate::params::ConfigParamInfo]] = &[
+                #( <#section_types>::PARAMS ),*
+            ];
+        }
+    })
+}
+
+/// Parse the `#[section]` / `#[section(skip)]` attribute for a root config field.
+///
+/// Returns `None` when the field carries no `#[section]` attribute (a compile
+/// error, handled by the caller), `Some(true)` for `#[section(skip)]`, and
+/// `Some(false)` for a bare `#[section]` marker.
+fn parse_section_opts(field: &syn::Field) -> syn::Result<Option<bool>> {
+    let mut found = false;
+    let mut skip = false;
+
+    for attr in &field.attrs {
+        if !attr.path().is_ident("section") {
+            continue;
+        }
+        found = true;
+
+        // Bare `#[section]` (a path meta) means "this is a param section".
+        if matches!(attr.meta, syn::Meta::Path(_)) {
+            continue;
+        }
+
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("skip") {
+                skip = true;
+                Ok(())
+            } else {
+                Err(meta.error("unknown `section` option; expected `skip`"))
+            }
+        })?;
+    }
+
+    if !found {
+        return Ok(None);
+    }
+
+    Ok(Some(skip))
 }
 
 /// Parse `#[params(section = "...")]` from the struct attributes.

@@ -61,128 +61,165 @@ pub use tls::{ClientCertMode, TlsConfig, TlsProtocol};
 pub use vll::VllConfig;
 
 use anyhow::Result;
+use frogdb_config_derive::ConfigSections;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Main configuration struct.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
+///
+/// `#[derive(ConfigSections)]` enforces per-**struct** CONFIG coverage: every
+/// field below MUST carry either `#[section]` (its type is a
+/// `#[derive(ConfigParams)]` section, contributing its `PARAMS` to the registry)
+/// or `#[section(skip)]` (an internal / non-parameter field). Adding a new
+/// section without classifying it is a compile error — the per-struct analogue
+/// of the per-field guarantee `ConfigParams` provides. See the derive's docs in
+/// `frogdb-config-derive` and the assembly/coverage tests in `params.rs`.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, ConfigSections)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Config {
     /// Path to the TOML config file used at startup (None if defaults only).
     /// Skipped from serde and schema since it is set programmatically.
     #[serde(skip)]
     #[schemars(skip)]
+    #[section(skip)]
     pub config_source_path: Option<PathBuf>,
 
     /// Server configuration.
     #[serde(default)]
+    #[section]
     pub server: ServerConfig,
 
     /// Logging configuration.
     #[serde(default)]
+    #[section]
     pub logging: LoggingConfig,
 
     /// Persistence configuration.
     #[serde(default)]
+    #[section]
     pub persistence: PersistenceConfig,
 
     /// Snapshot configuration.
     #[serde(default)]
+    #[section]
     pub snapshot: SnapshotConfig,
 
     /// HTTP server configuration (metrics, health, debug UI, admin REST API).
     #[serde(default)]
+    #[section]
     pub http: HttpConfig,
 
     /// Metrics configuration (OTLP export settings).
     #[serde(default)]
+    #[section]
     pub metrics: MetricsConfig,
 
     /// Admin port configuration.
     #[serde(default)]
+    #[section]
     pub admin: AdminConfig,
 
     /// Distributed tracing configuration.
     #[serde(default)]
+    #[section]
     pub tracing: TracingConfig,
 
     /// Memory configuration.
     #[serde(default)]
+    #[section]
     pub memory: MemoryConfig,
 
     /// Security configuration.
     #[serde(default)]
+    #[section]
     pub security: SecurityConfig,
 
     /// ACL configuration.
     #[serde(default)]
+    #[section]
     pub acl: AclFileConfig,
 
     /// Blocking commands configuration.
     #[serde(default)]
+    #[section]
     pub blocking: BlockingConfig,
 
     /// VLL (Very Lightweight Locking) configuration.
     #[serde(default)]
+    #[section]
     pub vll: VllConfig,
 
     /// Replication configuration.
     #[serde(default)]
+    #[section]
     pub replication: ReplicationConfigSection,
 
     /// Slow query log configuration.
     #[serde(default)]
+    #[section]
     pub slowlog: SlowlogConfig,
 
     /// JSON configuration.
     #[serde(default)]
+    #[section]
     pub json: JsonConfig,
 
     /// Cluster configuration.
     #[serde(default)]
+    #[section]
     pub cluster: ClusterConfigSection,
 
     /// Status endpoint configuration.
     #[serde(default)]
+    #[section]
     pub status: StatusConfig,
 
     /// Hot shard detection configuration.
     #[serde(default)]
+    #[section]
     pub hotshards: HotShardsConfig,
 
     /// Latency testing configuration.
     #[serde(default)]
+    #[section]
     pub latency: LatencyConfig,
 
     /// Latency bands configuration for SLO monitoring.
     #[serde(default)]
+    #[section]
     pub latency_bands: LatencyBandsConfig,
 
     /// Debug bundle configuration.
     #[serde(default)]
+    #[section]
     pub debug_bundle: DebugBundleConfig,
 
     /// Compatibility configuration.
     #[serde(default)]
+    #[section]
     pub compat: CompatConfig,
 
     /// Tiered storage configuration (hot/warm two-tier storage).
     #[serde(default)]
+    #[section]
     pub tiered_storage: TieredStorageConfig,
 
     /// MONITOR command configuration.
     #[serde(default)]
+    #[section]
     pub monitor: MonitorConfig,
 
     /// TLS configuration.
     #[serde(default)]
+    #[section]
     pub tls: TlsConfig,
 
     /// Chaos testing configuration (turmoil simulation only).
     #[cfg(feature = "turmoil")]
     #[serde(default, skip)]
     #[schemars(skip)]
+    #[section]
     pub chaos: ChaosConfig,
 }
 
