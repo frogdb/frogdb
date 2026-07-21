@@ -801,7 +801,15 @@ impl Command for SrandmemberCommand {
         let key = &args[0];
 
         let count = if args.len() > 1 {
-            Some(parse_i64(&args[1])?)
+            let c = parse_i64(&args[1])?;
+            // Redis rejects i64::MIN: SRANDMEMBER negates a negative count to get
+            // |count|, and negating i64::MIN overflows. Mirrors the ZRANDMEMBER guard.
+            if c == i64::MIN {
+                return Err(CommandError::InvalidArgument {
+                    message: "value is out of range".to_string(),
+                });
+            }
+            Some(c)
         } else {
             None
         };
