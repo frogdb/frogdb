@@ -110,6 +110,18 @@ impl ShardIdentity {
         self.primary_target().map(|addr| addr.port())
     }
 
+    /// Whether the replication link to [`Self::master_host`] is currently up
+    /// (connected past PSYNC and streaming), for INFO's `master_link_status`.
+    /// Derived live from the same [`RoleController`](crate::command::RoleController)
+    /// as `master_host`/`master_port` — see their docs for why this is a live
+    /// derivation rather than a per-shard copy. `false` with no controller
+    /// wired or on a primary/standalone node.
+    pub(crate) fn master_link_up(&self) -> bool {
+        self.role_controller
+            .as_ref()
+            .is_some_and(|c| c.master_link_up())
+    }
+
     fn primary_target(&self) -> Option<std::net::SocketAddr> {
         self.role_controller.as_ref()?.primary_target()
     }
@@ -833,6 +845,9 @@ pub struct InfoShardSnapshot {
     pub master_host: Option<String>,
     /// Primary port, set when this shard is running as a replica.
     pub master_port: Option<u16>,
+    /// Whether the replication link to the primary is connected and
+    /// streaming (mirrors `RoleController::master_link_up`).
+    pub master_link_up: bool,
 }
 
 /// Response for VLL queue info query.
@@ -1164,7 +1179,7 @@ mod cluster_tests {
 }
 
 #[cfg(test)]
-pub(crate) struct FixedRoleController(pub Option<std::net::SocketAddr>);
+pub(crate) struct FixedRoleController(pub Option<std::net::SocketAddr>, pub bool);
 
 #[cfg(test)]
 impl crate::command::RoleController for FixedRoleController {
@@ -1172,6 +1187,9 @@ impl crate::command::RoleController for FixedRoleController {
     fn request_demote(&self, _primary: std::net::SocketAddr) {}
     fn primary_target(&self) -> Option<std::net::SocketAddr> {
         self.0
+    }
+    fn master_link_up(&self) -> bool {
+        self.1
     }
 }
 
@@ -1209,7 +1227,7 @@ mod identity_tests {
     fn master_address_derives_from_role_controller() {
         let mut id = ShardIdentity::new(0, 1, false);
         let target: std::net::SocketAddr = "10.0.0.5:6390".parse().unwrap();
-        id.set_role_controller(Arc::new(FixedRoleController(Some(target))));
+        id.set_role_controller(Arc::new(FixedRoleController(Some(target), false)));
         assert_eq!(id.master_host().as_deref(), Some("10.0.0.5"));
         assert_eq!(id.master_port(), Some(6390));
     }
@@ -1221,6 +1239,29 @@ mod identity_tests {
         let id = ShardIdentity::new(0, 1, true);
         assert_eq!(id.master_host(), None);
         assert_eq!(id.master_port(), None);
+    }
+
+    /// `master_link_up` is derived the same way as `master_host`/`master_port`
+    /// — live from the role controller — and must not be conflated with
+    /// merely having a target: a replica can know its primary's address while
+    /// still mid-handshake or fully disconnected.
+    #[test]
+    fn master_link_up_derives_from_role_controller() {
+        let mut id = ShardIdentity::new(0, 1, false);
+        let target: std::net::SocketAddr = "10.0.0.5:6390".parse().unwrap();
+        id.set_role_controller(Arc::new(FixedRoleController(Some(target), true)));
+        assert!(id.master_link_up());
+
+        let mut down = ShardIdentity::new(0, 1, false);
+        down.set_role_controller(Arc::new(FixedRoleController(Some(target), false)));
+        assert!(!down.master_link_up());
+    }
+
+    /// No role controller wired -> down, not a fabricated `up`.
+    #[test]
+    fn master_link_up_false_without_role_controller() {
+        let id = ShardIdentity::new(0, 1, true);
+        assert!(!id.master_link_up());
     }
 }
 

@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::sync::{RwLock, mpsc};
@@ -57,6 +57,15 @@ pub struct ReplicaReplicationHandler {
     data_dir: PathBuf,
     shared_offset: Option<Arc<AtomicU64>>,
     connect_factory: ConnectFactory,
+    /// Whether the connection to the primary is currently up: TCP-connected,
+    /// past the PSYNC handshake, and streaming live WAL frames — the same
+    /// condition [`ConnectionState::Streaming`] names, published here so
+    /// readers outside the connect/reconnect loop (INFO replication) can
+    /// observe it without reaching into a `ReplicaConnection` that only lives
+    /// for the duration of one connection attempt. Starts `false` and is
+    /// reset to `false` whenever [`Self::connect_and_sync`] returns for any
+    /// reason (clean close, error, or a fresh attempt not yet past PSYNC).
+    link_up: Arc<AtomicBool>,
 }
 
 impl ReplicaReplicationHandler {
@@ -81,8 +90,19 @@ impl ReplicaReplicationHandler {
             data_dir,
             shared_offset: None,
             connect_factory: plain_tcp_connect_factory(),
+            link_up: Arc::new(AtomicBool::new(false)),
         };
         (handler, frame_rx)
+    }
+
+    /// Whether the replica currently has a live, streaming connection to its
+    /// primary. This is the source of truth behind INFO's
+    /// `master_link_status`: `true` only once the PSYNC handshake has
+    /// completed and WAL frames are flowing ([`ConnectionState::Streaming`]);
+    /// `false` at every other point, including mid-handshake, mid-full-sync,
+    /// and after the link drops while the reconnect loop backs off.
+    pub fn link_up(&self) -> bool {
+        self.link_up.load(Ordering::Acquire)
     }
 
     /// Persist the replica's replication identity + offset to the state file.
@@ -173,17 +193,27 @@ impl ReplicaReplicationHandler {
             connection_state: ConnectionState::Connected,
             data_dir: self.data_dir.clone(),
             shared_offset: self.shared_offset.clone(),
+            link_up: self.link_up.clone(),
         };
-        conn.handshake(self.listening_port).await?;
-        let sync_type = conn.psync().await?;
-        match sync_type {
-            SyncType::FullSyncRdb { rdb_size } => conn.receive_rdb(rdb_size).await?,
-            SyncType::FullSyncCheckpoint { file_count } => {
-                conn.receive_checkpoint(file_count).await?
+        // Whatever ends this attempt — clean close, a handshake/sync error, or
+        // the caller dropping the stream — the link is no longer up. `conn`
+        // only ever flips `link_up` to `true`; this is the one place it comes
+        // back down, so a stale `true` can never survive past this function.
+        let result = async {
+            conn.handshake(self.listening_port).await?;
+            let sync_type = conn.psync().await?;
+            match sync_type {
+                SyncType::FullSyncRdb { rdb_size } => conn.receive_rdb(rdb_size).await?,
+                SyncType::FullSyncCheckpoint { file_count } => {
+                    conn.receive_checkpoint(file_count).await?
+                }
+                SyncType::PartialSync => {}
             }
-            SyncType::PartialSync => {}
+            conn.stream_replication(&self.frame_tx).await
         }
-        conn.stream_replication(&self.frame_tx).await
+        .await;
+        self.link_up.store(false, Ordering::Release);
+        result
     }
 
     /// Signal the reconnect loop in [`Self::start`] to stop.

@@ -100,6 +100,7 @@ impl ShardWorker {
             wal_lag: self.collect_wal_lag_stats().lag_stats,
             master_host: self.identity.master_host(),
             master_port: self.identity.master_port(),
+            master_link_up: self.identity.master_link_up(),
         }
     }
 

@@ -227,6 +227,7 @@ impl ShardWorker {
             role_controller: self.identity.role_controller().cloned(),
             master_host: self.identity.master_host(),
             master_port: self.identity.master_port(),
+            master_link_up: self.identity.master_link_up(),
             effects: Default::default(),
         }
     }
@@ -504,12 +505,16 @@ mod command_context_tests {
         let mut worker = minimal_worker();
         worker.set_is_replica(true);
         let target: std::net::SocketAddr = "10.0.0.5:6390".parse().unwrap();
-        worker.set_role_controller(Arc::new(FixedRoleController(Some(target))));
+        worker.set_role_controller(Arc::new(FixedRoleController(Some(target), true)));
 
         let ctx = worker.command_context(42, ProtocolVersion::Resp2);
         assert!(ctx.is_replica, "built context must report replica role");
         assert_eq!(ctx.master_host.as_deref(), Some("10.0.0.5"));
         assert_eq!(ctx.master_port, Some(6390));
+        assert!(
+            ctx.master_link_up,
+            "built context must report the role controller's link status"
+        );
         assert_eq!(ctx.conn_id, 42);
         assert!(ctx.command_registry.is_some(), "registry must be wired");
         assert!(
@@ -526,5 +531,6 @@ mod command_context_tests {
         assert!(!ctx.is_replica);
         assert_eq!(ctx.master_host, None);
         assert_eq!(ctx.master_port, None);
+        assert!(!ctx.master_link_up);
     }
 }

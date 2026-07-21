@@ -77,6 +77,9 @@ pub struct NodeStateSnapshot {
     pub master_host: Option<String>,
     /// Primary port when running as a replica (from shard identity).
     pub master_port: Option<u16>,
+    /// Whether the replication link to the primary is connected and
+    /// streaming (from shard identity; identical across all shards).
+    pub master_link_up: bool,
     /// Per-shard rows, in shard order.
     pub per_shard: Vec<ShardState>,
 }
@@ -109,6 +112,7 @@ impl NodeStateSnapshot {
         if self.master_port.is_none() {
             self.master_port = snap.master_port;
         }
+        self.master_link_up = snap.master_link_up;
         self.per_shard.push(ShardState {
             shard_id: snap.shard_id,
             keys: snap.memory.keys,
@@ -228,6 +232,7 @@ mod tests {
             wal_lag: None,
             master_host: None,
             master_port: None,
+            master_link_up: false,
         }
     }
 
@@ -255,6 +260,16 @@ mod tests {
         assert_eq!(agg.per_shard[1].peak_memory, 200);
         assert_eq!(agg.per_shard[1].hot_keys, 4);
         assert_eq!(agg.per_shard[1].warm_keys, 3);
+    }
+
+    #[test]
+    fn absorb_carries_master_link_up_from_shard_identity() {
+        let mut agg = NodeStateSnapshot::default();
+        assert!(!agg.master_link_up);
+        let mut up = shard_snap(0);
+        up.master_link_up = true;
+        agg.absorb(up);
+        assert!(agg.master_link_up);
     }
 
     #[test]

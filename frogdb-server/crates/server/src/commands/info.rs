@@ -433,7 +433,10 @@ fn build_replication_info(ctx: &CommandContext) -> String {
             if let Some(port) = ctx.master_port {
                 info.push_str(&format!("master_port:{}\r\n", port));
             }
-            info.push_str("master_link_status:up\r\n");
+            info.push_str(&format!(
+                "master_link_status:{}\r\n",
+                if ctx.master_link_up { "up" } else { "down" }
+            ));
         }
 
         info.push_str(&format!(

@@ -271,6 +271,17 @@ pub trait RoleController: Send + Sync {
     /// replication stream — never a boot-only snapshot that goes stale after a
     /// runtime role change.
     fn primary_target(&self) -> Option<std::net::SocketAddr>;
+
+    /// Whether the inbound replication stream from [`Self::primary_target`]
+    /// is currently up: connected past PSYNC and streaming WAL frames, not
+    /// merely dialing, handshaking, or transferring a full sync. `false` for
+    /// a primary/standalone node (no inbound stream to report) and for a
+    /// replica whose stream has not reached streaming yet or has dropped.
+    ///
+    /// The single source of truth behind INFO's `master_link_status`: real
+    /// connection state rather than a hardcoded literal, so an operator can
+    /// trust it to actually go `down` when the link breaks.
+    fn master_link_up(&self) -> bool;
 }
 
 /// Trait for checking if the local node can form a quorum.
@@ -1197,6 +1208,12 @@ pub struct CommandContext<'a> {
     /// Primary port (set when running as a replica, for INFO replication).
     pub master_port: Option<u16>,
 
+    /// Whether the replication link to `master_host` is currently up
+    /// (connected past PSYNC and streaming), for INFO's `master_link_status`.
+    /// `false` on a primary/standalone node. See
+    /// [`RoleController::master_link_up`].
+    pub master_link_up: bool,
+
     /// Everything this execution *produces* besides the [`Response`] — the
     /// command's out-buffer, drained as one value by the execution seam via
     /// `std::mem::take(&mut ctx.effects)`. See [`CommandEffects`].
@@ -1232,6 +1249,7 @@ impl<'a> CommandContext<'a> {
             role_controller: None,
             master_host: None,
             master_port: None,
+            master_link_up: false,
             effects: CommandEffects::default(),
         }
     }
