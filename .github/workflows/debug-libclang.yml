@@ -1,0 +1,62 @@
+name: Debug libclang
+'on':
+  pull_request:
+    paths:
+    - '.github/workflows/debug-libclang.yml'
+permissions:
+  contents: read
+jobs:
+  minimal:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Install Rust 1.92.0
+      uses: dtolnay/rust-toolchain@1.92.0
+    - name: Install libclang
+      run: sudo apt-get install -y libclang-dev
+    - name: Filesystem and env diagnostics
+      run: |
+        set -x
+        env | grep -iE 'clang|llvm|LD_LIBRARY' || true
+        command -v llvm-config clang || true
+        llvm-config --prefix || true
+        dpkg -l | grep -iE 'libclang|llvm' || true
+        ls -la /usr/lib/llvm-*/lib/ 2>/dev/null | grep -iE 'libclang[.-]' || true
+        ls -la /usr/lib/x86_64-linux-gnu/ | grep -iE 'libclang[.-]' || true
+        ls -la /usr/local/lib 2>/dev/null || true
+        readlink -f /usr/lib/llvm-18/lib/libclang.so || true
+    - name: Minimal clang-sys build
+      run: |
+        cargo new /tmp/csys-test --lib
+        cd /tmp/csys-test
+        cargo add clang-sys@1.8.1
+        cargo build -vv 2>&1 | grep -iE 'clang-sys|libclang|error' | tail -30
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      with:
+        install: 'true'
+        install_args: node bun python uv just
+        cache: 'true'
+        experimental: 'true'
+    - name: Install Rust 1.92.0
+      uses: dtolnay/rust-toolchain@1.92.0
+    - name: Install libclang
+      run: sudo apt-get install -y libclang-dev
+    - name: Cache Rust build artifacts
+      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      with:
+        shared-key: stable
+    - name: Filesystem and env diagnostics
+      run: |
+        set -x
+        env | grep -iE 'clang|llvm|LD_LIBRARY' || true
+        llvm-config --prefix || true
+        dpkg -l | grep -iE 'libclang' || true
+        ls -la /usr/lib/llvm-*/lib/ 2>/dev/null | grep -iE 'libclang[.-]' || true
+        ls -la /usr/lib/x86_64-linux-gnu/ | grep -iE 'libclang[.-]' || true
+    - name: Build librocksdb-sys
+      run: cargo build -p librocksdb-sys 2>&1 | tail -40
