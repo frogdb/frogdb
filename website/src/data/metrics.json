@@ -4,7 +4,7 @@
     "source": "frogdb-server/crates/telemetry/src/definitions.rs",
     "regenerate": "just docs-gen"
   },
-  "count": 72,
+  "count": 90,
   "metrics": [
     {
       "name": "frogdb_active_version",
@@ -33,30 +33,62 @@
     {
       "name": "frogdb_blocked_clients",
       "type": "gauge",
-      "help": "Number of currently blocked clients",
+      "help": "Number of currently blocked clients per shard",
       "group": "blocked",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_blocked_keys",
       "type": "gauge",
-      "help": "Number of keys being watched for blocking",
+      "help": "Number of keys being watched for blocking per shard",
       "group": "blocked",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_blocked_migration_moved_total",
+      "type": "counter",
+      "help": "Total blocked clients redirected with -MOVED after slot migration",
+      "group": "blocked",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_blocked_satisfied_total",
       "type": "counter",
       "help": "Total blocking commands satisfied",
       "group": "blocked",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_blocked_timeout_total",
       "type": "counter",
       "help": "Total blocking commands timed out",
       "group": "blocked",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_cluster_mixed_version",
@@ -89,19 +121,7 @@
         },
         {
           "name": "error",
-          "type": "ErrorType",
-          "values": [
-            "timeout",
-            "oom",
-            "wrongtype",
-            "auth",
-            "syntax",
-            "busy",
-            "cluster",
-            "script",
-            "nokey",
-            "invalid_arg"
-          ]
+          "type": "string"
         }
       ]
     },
@@ -157,15 +177,15 @@
     },
     {
       "name": "frogdb_cpu_system_seconds_total",
-      "type": "counter",
-      "help": "Total system CPU time in seconds",
+      "type": "gauge",
+      "help": "Cumulative system CPU time in seconds (monotonic; sampled from getrusage)",
       "group": "cpu",
       "labels": []
     },
     {
       "name": "frogdb_cpu_user_seconds_total",
-      "type": "counter",
-      "help": "Total user CPU time in seconds",
+      "type": "gauge",
+      "help": "Cumulative user CPU time in seconds (monotonic; sampled from getrusage)",
       "group": "cpu",
       "labels": []
     },
@@ -174,33 +194,97 @@
       "type": "counter",
       "help": "Total bytes evicted",
       "group": "eviction",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_eviction_keys_total",
       "type": "counter",
       "help": "Total keys evicted",
       "group": "eviction",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        },
+        {
+          "name": "policy",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_eviction_oom_total",
       "type": "counter",
       "help": "Total out-of-memory rejections",
       "group": "eviction",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_eviction_samples_total",
       "type": "counter",
-      "help": "Total eviction samples",
+      "help": "Total keys sampled by the eviction policy",
       "group": "eviction",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        },
+        {
+          "name": "policy",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_fields_expired_total",
+      "type": "counter",
+      "help": "Total hash fields expired",
+      "group": "fields",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_flush_compact_completed_total",
+      "type": "counter",
+      "help": "reclamation passes still running or a stuck compaction.",
+      "group": "flush",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_flush_compact_started_total",
+      "type": "counter",
+      "help": "same shard/tier does not increment this.",
+      "group": "flush",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_info",
       "type": "gauge",
-      "help": "Server information",
+      "help": "Server information (constant 1, labeled with version and mode)",
       "group": "info",
       "labels": [
         {
@@ -209,11 +293,7 @@
         },
         {
           "name": "mode",
-          "type": "ServerMode",
-          "values": [
-            "standalone",
-            "cluster"
-          ]
+          "type": "string"
         }
       ]
     },
@@ -222,21 +302,36 @@
       "type": "counter",
       "help": "Total keys expired",
       "group": "keys",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_keys_total",
       "type": "gauge",
-      "help": "Total number of keys",
+      "help": "Number of keys per shard",
       "group": "keys",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_keys_with_expiry",
       "type": "gauge",
-      "help": "Number of keys with expiry set",
+      "help": "Number of keys with expiry set per shard",
       "group": "keys",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_keyspace_hits_total",
@@ -253,13 +348,25 @@
       "labels": []
     },
     {
-      "name": "frogdb_latency_band_requests_total",
+      "name": "frogdb_keyspace_notifications_dropped_total",
       "type": "counter",
-      "help": "Requests by latency band",
+      "help": "Total keyspace notifications dropped (coordinator channel full)",
+      "group": "keyspace",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_latency_band_requests_total",
+      "type": "gauge",
+      "help": "from the band tracker at scrape time",
       "group": "latency",
       "labels": [
         {
-          "name": "band",
+          "name": "le",
           "type": "string"
         }
       ]
@@ -269,40 +376,90 @@
       "type": "counter",
       "help": "Total Lua script cache hits",
       "group": "lua",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_lua_scripts_cache_misses_total",
       "type": "counter",
       "help": "Total Lua script cache misses",
       "group": "lua",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_lua_scripts_duration_seconds",
       "type": "histogram",
       "help": "Lua script execution duration in seconds",
       "group": "lua",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        },
+        {
+          "name": "kind",
+          "type": "ScriptKind",
+          "values": [
+            "eval",
+            "evalsha"
+          ]
+        }
+      ]
     },
     {
       "name": "frogdb_lua_scripts_errors_total",
       "type": "counter",
       "help": "Total Lua script errors",
       "group": "lua",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        },
+        {
+          "name": "error",
+          "type": "ScriptError",
+          "values": [
+            "not_available",
+            "execution",
+            "noscript"
+          ]
+        }
+      ]
     },
     {
       "name": "frogdb_lua_scripts_total",
       "type": "counter",
       "help": "Total Lua scripts executed",
       "group": "lua",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        },
+        {
+          "name": "kind",
+          "type": "ScriptKind",
+          "values": [
+            "eval",
+            "evalsha"
+          ]
+        }
+      ]
     },
     {
       "name": "frogdb_memory_fragmentation_ratio",
       "type": "gauge",
-      "help": "Memory fragmentation ratio",
+      "help": "Memory fragmentation ratio (RSS / used)",
       "group": "memory",
       "labels": []
     },
@@ -316,9 +473,14 @@
     {
       "name": "frogdb_memory_peak_bytes",
       "type": "gauge",
-      "help": "Peak memory usage in bytes",
+      "help": "Peak memory usage in bytes per shard",
       "group": "memory",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_memory_rss_bytes",
@@ -330,23 +492,14 @@
     {
       "name": "frogdb_memory_used_bytes",
       "type": "gauge",
-      "help": "Currently used memory in bytes",
+      "help": "Currently used memory in bytes per shard",
       "group": "memory",
-      "labels": []
-    },
-    {
-      "name": "frogdb_net_input_bytes_total",
-      "type": "counter",
-      "help": "Total network input bytes",
-      "group": "net",
-      "labels": []
-    },
-    {
-      "name": "frogdb_net_output_bytes_total",
-      "type": "counter",
-      "help": "Total network output bytes",
-      "group": "net",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_persistence_errors_total",
@@ -369,44 +522,91 @@
     {
       "name": "frogdb_pubsub_channels",
       "type": "gauge",
-      "help": "Number of active pub/sub channels",
+      "help": "Number of active pub/sub channels per shard",
       "group": "pubsub",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_pubsub_messages_total",
       "type": "counter",
       "help": "Total pub/sub messages published",
       "group": "pubsub",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_pubsub_patterns",
       "type": "gauge",
-      "help": "Number of active pub/sub patterns",
+      "help": "Number of active pub/sub patterns per shard",
       "group": "pubsub",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_pubsub_shard_limit_warnings_total",
+      "type": "counter",
+      "help": "Total warnings for pub/sub resources approaching per-shard limits",
+      "group": "pubsub",
+      "labels": [
+        {
+          "name": "resource",
+          "type": "PubsubLimitResource",
+          "values": [
+            "total_subscriptions",
+            "unique_channels",
+            "unique_patterns"
+          ]
+        }
+      ]
     },
     {
       "name": "frogdb_pubsub_subscribers",
       "type": "gauge",
-      "help": "Total pub/sub subscribers",
+      "help": "Total pub/sub subscribers per shard",
       "group": "pubsub",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_scatter_gather_duration_seconds",
       "type": "histogram",
       "help": "Scatter-gather operation duration in seconds",
       "group": "scatter",
-      "labels": []
+      "labels": [
+        {
+          "name": "command",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_scatter_gather_shards",
       "type": "histogram",
       "help": "Number of shards involved in scatter-gather",
       "group": "scatter",
-      "labels": []
+      "labels": [
+        {
+          "name": "command",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_scatter_gather_total",
@@ -415,14 +615,12 @@
       "group": "scatter",
       "labels": [
         {
+          "name": "command",
+          "type": "string"
+        },
+        {
           "name": "status",
-          "type": "ScatterGatherStatus",
-          "values": [
-            "success",
-            "error",
-            "timeout",
-            "partial"
-          ]
+          "type": "string"
         }
       ]
     },
@@ -482,6 +680,13 @@
       "labels": []
     },
     {
+      "name": "frogdb_snapshot_epoch",
+      "type": "gauge",
+      "help": "Monotonic epoch of the most recent snapshot attempt",
+      "group": "snapshot",
+      "labels": []
+    },
+    {
       "name": "frogdb_snapshot_in_progress",
       "type": "gauge",
       "help": "Whether a snapshot is currently in progress",
@@ -491,7 +696,7 @@
     {
       "name": "frogdb_snapshot_last_timestamp",
       "type": "gauge",
-      "help": "Timestamp of last successful snapshot",
+      "help": "Timestamp of last successful snapshot (unix seconds)",
       "group": "snapshot",
       "labels": []
     },
@@ -524,18 +729,144 @@
       "labels": []
     },
     {
+      "name": "frogdb_task_dropped_count",
+      "type": "gauge",
+      "help": "Number of instrumented tasks dropped in the last interval",
+      "group": "task",
+      "labels": [
+        {
+          "name": "task",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_task_instrumented_count",
+      "type": "gauge",
+      "help": "Number of tasks instrumented by this monitor in the last interval",
+      "group": "task",
+      "labels": [
+        {
+          "name": "task",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_task_mean_poll_duration_seconds",
+      "type": "gauge",
+      "help": "Mean task poll duration in seconds over the last interval",
+      "group": "task",
+      "labels": [
+        {
+          "name": "task",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_task_total_idle_duration_seconds",
+      "type": "gauge",
+      "help": "Total time tasks spent idle in seconds over the last interval",
+      "group": "task",
+      "labels": [
+        {
+          "name": "task",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_task_total_poll_duration_seconds",
+      "type": "gauge",
+      "help": "Total task poll duration in seconds over the last interval",
+      "group": "task",
+      "labels": [
+        {
+          "name": "task",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_task_total_scheduled_duration_seconds",
+      "type": "gauge",
+      "help": "Total time tasks spent scheduled (runnable but waiting) in seconds over the last interval",
+      "group": "task",
+      "labels": [
+        {
+          "name": "task",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_tiered_bytes_spilled_total",
+      "type": "counter",
+      "help": "Total bytes freed by spilling keys to the cold tier",
+      "group": "tiered",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_tiered_spills_total",
+      "type": "counter",
+      "help": "Total keys spilled to the cold tier instead of evicted",
+      "group": "tiered",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        },
+        {
+          "name": "policy",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_tls_handshake_errors_total",
+      "type": "counter",
+      "help": "Total TLS handshake failures",
+      "group": "tls",
+      "labels": [
+        {
+          "name": "reason",
+          "type": "TlsHandshakeError",
+          "values": [
+            "handshake_error",
+            "timeout"
+          ]
+        }
+      ]
+    },
+    {
       "name": "frogdb_transactions_duration_seconds",
       "type": "histogram",
       "help": "Transaction duration in seconds",
       "group": "transactions",
-      "labels": []
+      "labels": [
+        {
+          "name": "outcome",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_transactions_queued_commands",
       "type": "histogram",
       "help": "Number of queued commands in transactions",
       "group": "transactions",
-      "labels": []
+      "labels": [
+        {
+          "name": "outcome",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_transactions_total",
@@ -545,13 +876,7 @@
       "labels": [
         {
           "name": "outcome",
-          "type": "TransactionOutcome",
-          "values": [
-            "committed",
-            "discarded",
-            "execabort",
-            "watchfailed"
-          ]
+          "type": "string"
         }
       ]
     },
@@ -579,33 +904,101 @@
       "type": "counter",
       "help": "Total WAL bytes written",
       "group": "wal",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_wal_durability_lag_ms",
       "type": "gauge",
       "help": "WAL durability lag in milliseconds",
       "group": "wal",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_wal_flush_duration_seconds",
       "type": "histogram",
       "help": "WAL flush duration in seconds",
       "group": "wal",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_wal_flush_failures_total",
+      "type": "counter",
+      "help": "Total failed WAL flush attempts",
+      "group": "wal",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_wal_last_flush_ok",
+      "type": "gauge",
+      "help": "Whether the most recent WAL flush attempt succeeded (1 = ok)",
+      "group": "wal",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_wal_last_flush_timestamp",
       "type": "gauge",
-      "help": "Timestamp of last WAL flush",
+      "help": "Timestamp of last WAL flush (unix milliseconds)",
       "group": "wal",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
-      "name": "frogdb_wal_last_sync_timestamp",
-      "type": "gauge",
-      "help": "Timestamp of last WAL sync",
+      "name": "frogdb_wal_lost_bytes_total",
+      "type": "counter",
+      "help": "Total estimated bytes dropped in failed WAL flushes",
+      "group": "wal",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_wal_lost_ops_total",
+      "type": "counter",
+      "help": "Total WAL entries dropped in failed flushes (permanent losses)",
+      "group": "wal",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_wal_merge_operands_total",
+      "type": "counter",
+      "help": "full value Put).",
       "group": "wal",
       "labels": []
     },
@@ -614,19 +1007,29 @@
       "type": "gauge",
       "help": "Number of pending WAL bytes",
       "group": "wal",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "frogdb_wal_pending_ops",
       "type": "gauge",
       "help": "Number of pending WAL operations",
       "group": "wal",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     },
     {
-      "name": "frogdb_wal_sync_lag_ms",
-      "type": "gauge",
-      "help": "WAL sync lag in milliseconds",
+      "name": "frogdb_wal_rollbacks_total",
+      "type": "counter",
+      "help": "Total store mutations rolled back after a WAL append failure",
       "group": "wal",
       "labels": []
     },
@@ -635,7 +1038,12 @@
       "type": "counter",
       "help": "Total WAL writes",
       "group": "wal",
-      "labels": []
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        }
+      ]
     }
   ]
 }

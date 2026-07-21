@@ -570,6 +570,12 @@
           "description": "Maximum number of RocksDB write buffers."
         },
         {
+          "name": "mode",
+          "type": "string",
+          "default": "rocksdb",
+          "description": "WAL implementation to use: `\"rocksdb\"` (default, production) or `\"fake\"`\n(deterministic in-process sink for simulation tests). `\"fake\"` requires\n`enabled = true`."
+        },
+        {
           "name": "sync-interval-ms",
           "type": "integer",
           "default": 1000,
@@ -724,7 +730,7 @@
           "name": "split-brain-log-enabled",
           "type": "boolean",
           "default": true,
-          "description": "Enable split-brain discarded-writes logging.\nWhen a primary is demoted, divergent writes are logged before resync."
+          "description": "Enable split-brain discarded-writes logging (log-only).\n\nWhen a demoted primary diverged from the new primary, its divergent\nwrites are logged before resync. This flag controls ONLY that logging;\nit does not affect cluster behavior. Automatic Role Demotion during\nfailover always runs in cluster mode regardless of this setting — the\nkill-switch for cluster behavior is `cluster.enabled`, not this flag."
         },
         {
           "name": "state-file",
@@ -896,7 +902,7 @@
       ]
     },
     "tiered-storage": {
-      "description": "Tiered storage configuration for two-tier (hot/warm) storage.\n\nWhen enabled, eviction policies `tiered-lru` and `tiered-lfu` demote values\nto a RocksDB warm tier instead of deleting them.",
+      "description": "Tiered storage configuration for two-tier (hot/warm) storage.\n\nWhen enabled, eviction policies `tiered-lru` and `tiered-lfu` spill values\nto a RocksDB warm tier instead of deleting them.",
       "fields": [
         {
           "name": "enabled",
