@@ -16,7 +16,8 @@
         "ADMIN"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "APPEND",
@@ -30,7 +31,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ASKING",
@@ -44,7 +46,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "AUTH",
@@ -57,7 +60,8 @@
         "FAST"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BF.ADD",
@@ -72,7 +76,8 @@
       ],
       "family": "BF",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BF.CARD",
@@ -86,7 +91,8 @@
       ],
       "family": "BF",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BF.EXISTS",
@@ -101,7 +107,8 @@
       ],
       "family": "BF",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BF.INFO",
@@ -115,7 +122,8 @@
       ],
       "family": "BF",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BF.INSERT",
@@ -128,7 +136,8 @@
       ],
       "family": "BF",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BF.LOADCHUNK",
@@ -142,7 +151,8 @@
       ],
       "family": "BF",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BF.MADD",
@@ -155,7 +165,8 @@
       ],
       "family": "BF",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BF.MEXISTS",
@@ -168,7 +179,8 @@
       ],
       "family": "BF",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BF.RESERVE",
@@ -181,7 +193,8 @@
       ],
       "family": "BF",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BF.SCANDUMP",
@@ -195,7 +208,8 @@
       ],
       "family": "BF",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BGREWRITEAOF",
@@ -208,7 +222,8 @@
         "ADMIN"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": true
     },
     {
       "name": "BGSAVE",
@@ -221,7 +236,8 @@
         "ADMIN"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BITCOUNT",
@@ -234,7 +250,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BITFIELD",
@@ -246,7 +263,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BITFIELD_RO",
@@ -258,7 +276,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BITOP",
@@ -270,7 +289,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BITPOS",
@@ -283,7 +303,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BLMOVE",
@@ -297,7 +318,8 @@
         "BLOCKING"
       ],
       "execution_strategy": "blocking",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BLMPOP",
@@ -310,7 +332,8 @@
         "BLOCKING"
       ],
       "execution_strategy": "blocking",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BLPOP",
@@ -324,7 +347,8 @@
         "BLOCKING"
       ],
       "execution_strategy": "blocking",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BRPOP",
@@ -338,7 +362,8 @@
         "BLOCKING"
       ],
       "execution_strategy": "blocking",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BRPOPLPUSH",
@@ -352,7 +377,8 @@
         "BLOCKING"
       ],
       "execution_strategy": "blocking",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BZMPOP",
@@ -365,7 +391,8 @@
         "BLOCKING"
       ],
       "execution_strategy": "blocking",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BZPOPMAX",
@@ -379,7 +406,8 @@
         "BLOCKING"
       ],
       "execution_strategy": "blocking",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "BZPOPMIN",
@@ -393,7 +421,8 @@
         "BLOCKING"
       ],
       "execution_strategy": "blocking",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "CF.ADD",
@@ -408,7 +437,8 @@
       ],
       "family": "CF",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "CF.ADDNX",
@@ -423,7 +453,8 @@
       ],
       "family": "CF",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "CF.COUNT",
@@ -438,7 +469,8 @@
       ],
       "family": "CF",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "CF.DEL",
@@ -453,7 +485,8 @@
       ],
       "family": "CF",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "CF.EXISTS",
@@ -468,7 +501,8 @@
       ],
       "family": "CF",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "CF.INFO",
@@ -482,7 +516,8 @@
       ],
       "family": "CF",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "CF.INSERT",
@@ -495,7 +530,8 @@
       ],
       "family": "CF",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "CF.INSERTNX",
@@ -508,7 +544,8 @@
       ],
       "family": "CF",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "CF.LOADCHUNK",
@@ -522,7 +559,8 @@
       ],
       "family": "CF",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "CF.MEXISTS",
@@ -535,7 +573,8 @@
       ],
       "family": "CF",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "CF.RESERVE",
@@ -548,7 +587,8 @@
       ],
       "family": "CF",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "CF.SCANDUMP",
@@ -562,7 +602,8 @@
       ],
       "family": "CF",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "CLIENT",
@@ -577,7 +618,8 @@
         "ADMIN"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "CLUSTER",
@@ -590,7 +632,8 @@
         "ADMIN"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "CMS.INCRBY",
@@ -604,7 +647,8 @@
       ],
       "family": "CMS",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "CMS.INFO",
@@ -618,7 +662,8 @@
       ],
       "family": "CMS",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "CMS.INITBYDIM",
@@ -632,7 +677,8 @@
       ],
       "family": "CMS",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "CMS.INITBYPROB",
@@ -646,7 +692,8 @@
       ],
       "family": "CMS",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "CMS.MERGE",
@@ -659,7 +706,8 @@
       ],
       "family": "CMS",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "CMS.QUERY",
@@ -673,7 +721,8 @@
       ],
       "family": "CMS",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "COMMAND",
@@ -687,7 +736,8 @@
         "STALE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "CONFIG",
@@ -702,7 +752,8 @@
         "ADMIN"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "COPY",
@@ -714,7 +765,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "DBSIZE",
@@ -728,7 +780,8 @@
         "FAST"
       ],
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "DEBUG",
@@ -743,7 +796,8 @@
         "ADMIN"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "DECR",
@@ -757,7 +811,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "DECRBY",
@@ -771,7 +826,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "DEL",
@@ -783,7 +839,8 @@
         "WRITE"
       ],
       "execution_strategy": "scatter_gather",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "DELEX",
@@ -797,7 +854,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "DIGEST",
@@ -811,7 +869,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "DISCARD",
@@ -826,7 +885,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "DUMP",
@@ -839,7 +899,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ECHO",
@@ -853,7 +914,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ES.ALL",
@@ -866,7 +928,8 @@
       ],
       "family": "ES",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ES.APPEND",
@@ -879,7 +942,8 @@
       ],
       "family": "ES",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ES.INFO",
@@ -893,7 +957,8 @@
       ],
       "family": "ES",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ES.READ",
@@ -906,7 +971,8 @@
       ],
       "family": "ES",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ES.REPLAY",
@@ -919,7 +985,8 @@
       ],
       "family": "ES",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ES.SNAPSHOT",
@@ -933,7 +1000,8 @@
       ],
       "family": "ES",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "EVAL",
@@ -947,7 +1015,8 @@
         "MOVABLEKEYS"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "EVALSHA",
@@ -961,7 +1030,8 @@
         "MOVABLEKEYS"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "EVALSHA_RO",
@@ -976,7 +1046,8 @@
         "MOVABLEKEYS"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "EVAL_RO",
@@ -991,7 +1062,8 @@
         "MOVABLEKEYS"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "EXEC",
@@ -1005,7 +1077,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "EXISTS",
@@ -1018,7 +1091,8 @@
         "FAST"
       ],
       "execution_strategy": "scatter_gather",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "EXPIRE",
@@ -1032,7 +1106,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "EXPIREAT",
@@ -1046,7 +1121,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "EXPIRETIME",
@@ -1060,7 +1136,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FCALL",
@@ -1075,7 +1152,8 @@
         "MOVABLEKEYS"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FCALL_RO",
@@ -1091,7 +1169,8 @@
         "MOVABLEKEYS"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FLUSHALL",
@@ -1104,7 +1183,8 @@
         "WRITE"
       ],
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FLUSHDB",
@@ -1117,7 +1197,8 @@
         "WRITE"
       ],
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FROGDB.FINALIZE",
@@ -1132,7 +1213,8 @@
       ],
       "family": "FROGDB",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FROGDB.VERSION",
@@ -1149,7 +1231,8 @@
       ],
       "family": "FROGDB",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.AGGREGATE",
@@ -1162,7 +1245,8 @@
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.ALIASADD",
@@ -1176,7 +1260,8 @@
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.ALIASDEL",
@@ -1190,7 +1275,8 @@
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.ALIASUPDATE",
@@ -1204,7 +1290,8 @@
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.ALTER",
@@ -1217,7 +1304,8 @@
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.CONFIG",
@@ -1230,7 +1318,8 @@
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.CREATE",
@@ -1243,7 +1332,8 @@
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.CURSOR",
@@ -1256,7 +1346,8 @@
       ],
       "family": "FT",
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.DICTADD",
@@ -1269,7 +1360,8 @@
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.DICTDEL",
@@ -1282,7 +1374,8 @@
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.DICTDUMP",
@@ -1296,7 +1389,8 @@
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.DROPINDEX",
@@ -1309,7 +1403,8 @@
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.EXPLAIN",
@@ -1322,7 +1417,8 @@
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.EXPLAINCLI",
@@ -1335,7 +1431,8 @@
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.HYBRID",
@@ -1348,7 +1445,8 @@
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.INFO",
@@ -1362,7 +1460,8 @@
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.PROFILE",
@@ -1375,7 +1474,8 @@
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.SEARCH",
@@ -1388,7 +1488,8 @@
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.SPELLCHECK",
@@ -1401,7 +1502,8 @@
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.SUGADD",
@@ -1414,7 +1516,8 @@
       ],
       "family": "FT",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.SUGDEL",
@@ -1428,7 +1531,8 @@
       ],
       "family": "FT",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.SUGGET",
@@ -1441,7 +1545,8 @@
       ],
       "family": "FT",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.SUGLEN",
@@ -1455,7 +1560,8 @@
       ],
       "family": "FT",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.SYNDUMP",
@@ -1469,7 +1575,8 @@
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.SYNUPDATE",
@@ -1482,7 +1589,8 @@
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT.TAGVALS",
@@ -1496,7 +1604,8 @@
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FT._LIST",
@@ -1510,7 +1619,8 @@
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "FUNCTION",
@@ -1522,7 +1632,8 @@
         "NOSCRIPT"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "GEOADD",
@@ -1534,7 +1645,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "GEODIST",
@@ -1547,7 +1659,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "GEOHASH",
@@ -1559,7 +1672,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "GEOPOS",
@@ -1571,7 +1685,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "GEORADIUS",
@@ -1583,7 +1698,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "GEORADIUSBYMEMBER",
@@ -1595,7 +1711,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "GEORADIUSBYMEMBER_RO",
@@ -1607,7 +1724,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "GEORADIUS_RO",
@@ -1619,7 +1737,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "GEOSEARCH",
@@ -1631,7 +1750,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "GEOSEARCHSTORE",
@@ -1643,7 +1763,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "GET",
@@ -1658,7 +1779,8 @@
         "TRACKS_KEYSPACE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "GETBIT",
@@ -1672,7 +1794,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "GETDEL",
@@ -1687,7 +1810,8 @@
         "TRACKS_KEYSPACE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "GETEX",
@@ -1701,7 +1825,8 @@
         "TRACKS_KEYSPACE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "GETRANGE",
@@ -1714,7 +1839,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "GETSET",
@@ -1728,7 +1854,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HDEL",
@@ -1741,7 +1868,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HELLO",
@@ -1756,7 +1884,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HEXISTS",
@@ -1770,7 +1899,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HEXPIRE",
@@ -1783,7 +1913,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HEXPIREAT",
@@ -1796,7 +1927,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HEXPIRETIME",
@@ -1809,7 +1941,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HGET",
@@ -1824,7 +1957,8 @@
         "TRACKS_KEYSPACE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HGETALL",
@@ -1837,7 +1971,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HGETDEL",
@@ -1850,7 +1985,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HGETEX",
@@ -1863,7 +1999,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HINCRBY",
@@ -1877,7 +2014,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HINCRBYFLOAT",
@@ -1891,7 +2029,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HKEYS",
@@ -1904,7 +2043,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HLEN",
@@ -1918,7 +2058,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HMGET",
@@ -1931,7 +2072,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HMSET",
@@ -1944,7 +2086,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HOTKEYS",
@@ -1959,7 +2102,8 @@
         "ADMIN"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HPERSIST",
@@ -1972,7 +2116,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HPEXPIRE",
@@ -1985,7 +2130,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HPEXPIREAT",
@@ -1998,7 +2144,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HPEXPIRETIME",
@@ -2011,7 +2158,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HPTTL",
@@ -2024,7 +2172,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HRANDFIELD",
@@ -2036,7 +2185,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HSCAN",
@@ -2048,7 +2198,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HSET",
@@ -2061,7 +2212,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HSETEX",
@@ -2074,7 +2226,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HSETNX",
@@ -2088,7 +2241,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HSTRLEN",
@@ -2102,7 +2256,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HTTL",
@@ -2115,7 +2270,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "HVALS",
@@ -2128,7 +2284,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "INCR",
@@ -2142,7 +2299,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "INCRBY",
@@ -2156,7 +2314,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "INCRBYFLOAT",
@@ -2170,7 +2329,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "INFO",
@@ -2184,7 +2344,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "JSON.ARRAPPEND",
@@ -2197,7 +2358,8 @@
       ],
       "family": "JSON",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "JSON.ARRINDEX",
@@ -2210,7 +2372,8 @@
       ],
       "family": "JSON",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "JSON.ARRINSERT",
@@ -2223,7 +2386,8 @@
       ],
       "family": "JSON",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "JSON.ARRLEN",
@@ -2236,7 +2400,8 @@
       ],
       "family": "JSON",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "JSON.ARRPOP",
@@ -2249,7 +2414,8 @@
       ],
       "family": "JSON",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "JSON.ARRTRIM",
@@ -2263,7 +2429,8 @@
       ],
       "family": "JSON",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "JSON.CLEAR",
@@ -2276,7 +2443,8 @@
       ],
       "family": "JSON",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "JSON.DEBUG",
@@ -2290,7 +2458,8 @@
       ],
       "family": "JSON",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "JSON.DEL",
@@ -2303,7 +2472,8 @@
       ],
       "family": "JSON",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "JSON.GET",
@@ -2317,7 +2487,8 @@
       ],
       "family": "JSON",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "JSON.MERGE",
@@ -2331,7 +2502,8 @@
       ],
       "family": "JSON",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "JSON.MGET",
@@ -2344,7 +2516,8 @@
       ],
       "family": "JSON",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "JSON.NUMINCRBY",
@@ -2358,7 +2531,8 @@
       ],
       "family": "JSON",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "JSON.NUMMULTBY",
@@ -2372,7 +2546,8 @@
       ],
       "family": "JSON",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "JSON.OBJKEYS",
@@ -2385,7 +2560,8 @@
       ],
       "family": "JSON",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "JSON.OBJLEN",
@@ -2398,7 +2574,8 @@
       ],
       "family": "JSON",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "JSON.SET",
@@ -2411,7 +2588,8 @@
       ],
       "family": "JSON",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "JSON.STRAPPEND",
@@ -2424,7 +2602,8 @@
       ],
       "family": "JSON",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "JSON.STRLEN",
@@ -2437,7 +2616,8 @@
       ],
       "family": "JSON",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "JSON.TOGGLE",
@@ -2450,7 +2630,8 @@
       ],
       "family": "JSON",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "JSON.TYPE",
@@ -2464,7 +2645,8 @@
       ],
       "family": "JSON",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "KEYS",
@@ -2477,7 +2659,8 @@
         "READONLY"
       ],
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "LASTSAVE",
@@ -2493,7 +2676,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "LATENCY",
@@ -2508,7 +2692,8 @@
         "ADMIN"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "LCS",
@@ -2520,7 +2705,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "LINDEX",
@@ -2534,7 +2720,8 @@
         "TRACKS_KEYSPACE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "LINSERT",
@@ -2547,7 +2734,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "LLEN",
@@ -2561,7 +2749,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "LMOVE",
@@ -2574,7 +2763,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "LMPOP",
@@ -2586,7 +2776,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "LOLWUT",
@@ -2599,7 +2790,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "LPOP",
@@ -2613,7 +2805,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "LPOS",
@@ -2625,7 +2818,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "LPUSH",
@@ -2638,7 +2832,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "LPUSHX",
@@ -2651,7 +2846,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "LRANGE",
@@ -2664,7 +2860,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "LREM",
@@ -2677,7 +2874,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "LSET",
@@ -2690,7 +2888,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "LTRIM",
@@ -2703,7 +2902,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "MEMORY",
@@ -2716,7 +2916,8 @@
         "RANDOM"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "MGET",
@@ -2729,7 +2930,8 @@
         "FAST"
       ],
       "execution_strategy": "scatter_gather",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "MIGRATE",
@@ -2742,7 +2944,8 @@
         "NOSCRIPT"
       ],
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "MODULE",
@@ -2755,7 +2958,8 @@
         "ADMIN"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": true
     },
     {
       "name": "MONITOR",
@@ -2768,7 +2972,8 @@
         "ADMIN"
       ],
       "execution_strategy": "connection_level",
-      "full": false
+      "full": false,
+      "is_stub": false
     },
     {
       "name": "MOVE",
@@ -2782,7 +2987,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": true
     },
     {
       "name": "MSET",
@@ -2794,7 +3000,8 @@
         "WRITE"
       ],
       "execution_strategy": "scatter_gather",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "MSETEX",
@@ -2807,7 +3014,8 @@
         "MOVABLEKEYS"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "MSETNX",
@@ -2819,7 +3027,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "MULTI",
@@ -2834,7 +3043,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "OBJECT",
@@ -2846,7 +3056,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "PERSIST",
@@ -2860,7 +3071,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "PEXPIRE",
@@ -2874,7 +3086,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "PEXPIREAT",
@@ -2888,7 +3101,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "PEXPIRETIME",
@@ -2902,7 +3116,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "PFADD",
@@ -2915,7 +3130,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "PFCOUNT",
@@ -2927,7 +3143,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "PFDEBUG",
@@ -2941,7 +3158,8 @@
         "ADMIN"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "PFMERGE",
@@ -2953,7 +3171,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "PFSELFTEST",
@@ -2967,7 +3186,8 @@
         "ADMIN"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "PING",
@@ -2983,7 +3203,8 @@
         "STALE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "PSETEX",
@@ -2997,7 +3218,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "PSUBSCRIBE",
@@ -3011,7 +3233,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": false
+      "full": false,
+      "is_stub": false
     },
     {
       "name": "PSYNC",
@@ -3025,7 +3248,8 @@
         "ADMIN"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "PTTL",
@@ -3039,7 +3263,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "PUBLISH",
@@ -3055,7 +3280,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": false
+      "full": false,
+      "is_stub": false
     },
     {
       "name": "PUBSUB",
@@ -3069,7 +3295,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": false
+      "full": false,
+      "is_stub": false
     },
     {
       "name": "PUNSUBSCRIBE",
@@ -3083,7 +3310,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": false
+      "full": false,
+      "is_stub": false
     },
     {
       "name": "QUIT",
@@ -3099,7 +3327,8 @@
         "STALE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "RANDOMKEY",
@@ -3113,7 +3342,8 @@
         "RANDOM"
       ],
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "READONLY",
@@ -3128,7 +3358,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "READWRITE",
@@ -3143,7 +3374,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "RENAME",
@@ -3156,7 +3388,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "RENAMENX",
@@ -3169,7 +3402,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "REPLCONF",
@@ -3184,7 +3418,8 @@
         "ADMIN"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "REPLICAOF",
@@ -3199,7 +3434,8 @@
         "ADMIN"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "RESET",
@@ -3215,7 +3451,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": false
+      "full": false,
+      "is_stub": false
     },
     {
       "name": "RESTORE",
@@ -3227,7 +3464,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ROLE",
@@ -3244,7 +3482,8 @@
         "STALE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "RPOP",
@@ -3258,7 +3497,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "RPOPLPUSH",
@@ -3271,7 +3511,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "RPUSH",
@@ -3284,7 +3525,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "RPUSHX",
@@ -3297,7 +3539,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SADD",
@@ -3310,7 +3553,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SAVE",
@@ -3324,7 +3568,8 @@
         "ADMIN"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": true
     },
     {
       "name": "SCAN",
@@ -3336,7 +3581,8 @@
         "READONLY"
       ],
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SCARD",
@@ -3350,7 +3596,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SCRIPT",
@@ -3364,7 +3611,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SDIFF",
@@ -3376,7 +3624,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SDIFFSTORE",
@@ -3388,7 +3637,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SELECT",
@@ -3403,7 +3653,8 @@
         "STALE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": true
     },
     {
       "name": "SET",
@@ -3416,7 +3667,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SETBIT",
@@ -3430,7 +3682,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SETEX",
@@ -3444,7 +3697,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SETNX",
@@ -3458,7 +3712,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SETRANGE",
@@ -3471,7 +3726,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SHUTDOWN",
@@ -3487,7 +3743,8 @@
         "ADMIN"
       ],
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SINTER",
@@ -3499,7 +3756,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SINTERCARD",
@@ -3511,7 +3769,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SINTERSTORE",
@@ -3523,7 +3782,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SISMEMBER",
@@ -3537,7 +3797,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SLAVEOF",
@@ -3552,7 +3813,8 @@
         "ADMIN"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SLOWLOG",
@@ -3568,7 +3830,8 @@
         "ADMIN"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SMEMBERS",
@@ -3581,7 +3844,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SMISMEMBER",
@@ -3594,7 +3858,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SMOVE",
@@ -3607,7 +3872,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SORT",
@@ -3620,7 +3886,8 @@
         "MOVABLEKEYS"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SORT_RO",
@@ -3632,7 +3899,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SPOP",
@@ -3645,7 +3913,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SPUBLISH",
@@ -3661,7 +3930,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": false
+      "full": false,
+      "is_stub": false
     },
     {
       "name": "SRANDMEMBER",
@@ -3673,7 +3943,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SREM",
@@ -3686,7 +3957,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SSCAN",
@@ -3698,7 +3970,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SSUBSCRIBE",
@@ -3712,7 +3985,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": false
+      "full": false,
+      "is_stub": false
     },
     {
       "name": "STATUS",
@@ -3728,7 +4002,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "STRLEN",
@@ -3742,7 +4017,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SUBSCRIBE",
@@ -3756,7 +4032,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": false
+      "full": false,
+      "is_stub": false
     },
     {
       "name": "SUBSTR",
@@ -3769,7 +4046,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SUNION",
@@ -3781,7 +4059,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SUNIONSTORE",
@@ -3793,7 +4072,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "SUNSUBSCRIBE",
@@ -3807,7 +4087,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": false
+      "full": false,
+      "is_stub": false
     },
     {
       "name": "SWAPDB",
@@ -3821,7 +4102,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": true
     },
     {
       "name": "SYNC",
@@ -3836,7 +4118,8 @@
         "ADMIN"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": true
     },
     {
       "name": "TDIGEST.ADD",
@@ -3849,7 +4132,8 @@
       ],
       "family": "TDIGEST",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TDIGEST.CDF",
@@ -3862,7 +4146,8 @@
       ],
       "family": "TDIGEST",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TDIGEST.CREATE",
@@ -3875,7 +4160,8 @@
       ],
       "family": "TDIGEST",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TDIGEST.INFO",
@@ -3889,7 +4175,8 @@
       ],
       "family": "TDIGEST",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TDIGEST.MAX",
@@ -3904,7 +4191,8 @@
       ],
       "family": "TDIGEST",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TDIGEST.MERGE",
@@ -3917,7 +4205,8 @@
       ],
       "family": "TDIGEST",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TDIGEST.MIN",
@@ -3932,7 +4221,8 @@
       ],
       "family": "TDIGEST",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TDIGEST.QUANTILE",
@@ -3945,7 +4235,8 @@
       ],
       "family": "TDIGEST",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TDIGEST.RANK",
@@ -3958,7 +4249,8 @@
       ],
       "family": "TDIGEST",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TDIGEST.RESET",
@@ -3972,7 +4264,8 @@
       ],
       "family": "TDIGEST",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TDIGEST.REVRANK",
@@ -3985,7 +4278,8 @@
       ],
       "family": "TDIGEST",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TDIGEST.TRIMMED_MEAN",
@@ -3999,7 +4293,8 @@
       ],
       "family": "TDIGEST",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TIME",
@@ -4015,7 +4310,8 @@
         "STALE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TOPK.ADD",
@@ -4029,7 +4325,8 @@
       ],
       "family": "TOPK",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TOPK.COUNT",
@@ -4043,7 +4340,8 @@
       ],
       "family": "TOPK",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TOPK.INCRBY",
@@ -4057,7 +4355,8 @@
       ],
       "family": "TOPK",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TOPK.INFO",
@@ -4071,7 +4370,8 @@
       ],
       "family": "TOPK",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TOPK.LIST",
@@ -4085,7 +4385,8 @@
       ],
       "family": "TOPK",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TOPK.QUERY",
@@ -4099,7 +4400,8 @@
       ],
       "family": "TOPK",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TOPK.RESERVE",
@@ -4113,7 +4415,8 @@
       ],
       "family": "TOPK",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TOUCH",
@@ -4126,7 +4429,8 @@
         "FAST"
       ],
       "execution_strategy": "scatter_gather",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TS.ADD",
@@ -4140,7 +4444,8 @@
       ],
       "family": "TS",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TS.ALTER",
@@ -4153,7 +4458,8 @@
       ],
       "family": "TS",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TS.CREATE",
@@ -4166,7 +4472,8 @@
       ],
       "family": "TS",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TS.CREATERULE",
@@ -4180,7 +4487,8 @@
       ],
       "family": "TS",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TS.DECRBY",
@@ -4194,7 +4502,8 @@
       ],
       "family": "TS",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TS.DEL",
@@ -4208,7 +4517,8 @@
       ],
       "family": "TS",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TS.DELETERULE",
@@ -4222,7 +4532,8 @@
       ],
       "family": "TS",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TS.GET",
@@ -4237,7 +4548,8 @@
       ],
       "family": "TS",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TS.INCRBY",
@@ -4251,7 +4563,8 @@
       ],
       "family": "TS",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TS.INFO",
@@ -4265,7 +4578,8 @@
       ],
       "family": "TS",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TS.MADD",
@@ -4278,7 +4592,8 @@
       ],
       "family": "TS",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TS.MGET",
@@ -4291,7 +4606,8 @@
       ],
       "family": "TS",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TS.MRANGE",
@@ -4304,7 +4620,8 @@
       ],
       "family": "TS",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TS.MREVRANGE",
@@ -4317,7 +4634,8 @@
       ],
       "family": "TS",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TS.QUERYINDEX",
@@ -4330,7 +4648,8 @@
       ],
       "family": "TS",
       "execution_strategy": "server_wide",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TS.RANGE",
@@ -4343,7 +4662,8 @@
       ],
       "family": "TS",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TS.REVRANGE",
@@ -4356,7 +4676,8 @@
       ],
       "family": "TS",
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TTL",
@@ -4370,7 +4691,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "TYPE",
@@ -4384,7 +4706,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "UNLINK",
@@ -4397,7 +4720,8 @@
         "FAST"
       ],
       "execution_strategy": "scatter_gather",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "UNSUBSCRIBE",
@@ -4411,7 +4735,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": false
+      "full": false,
+      "is_stub": false
     },
     {
       "name": "UNWATCH",
@@ -4426,7 +4751,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "VADD",
@@ -4438,7 +4764,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "VCARD",
@@ -4452,7 +4779,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "VDIM",
@@ -4466,7 +4794,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "VEMB",
@@ -4480,7 +4809,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "VGETATTR",
@@ -4494,7 +4824,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "VINFO",
@@ -4508,7 +4839,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "VLINKS",
@@ -4521,7 +4853,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "VRANDMEMBER",
@@ -4534,7 +4867,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "VRANGE",
@@ -4547,7 +4881,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "VREM",
@@ -4560,7 +4895,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "VSETATTR",
@@ -4573,7 +4909,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "VSIM",
@@ -4585,7 +4922,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "WAIT",
@@ -4598,7 +4936,8 @@
         "NOSCRIPT"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "WAITAOF",
@@ -4611,7 +4950,8 @@
         "NOSCRIPT"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": true
     },
     {
       "name": "WATCH",
@@ -4625,7 +4965,8 @@
         "STALE"
       ],
       "execution_strategy": "connection_level",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "XACK",
@@ -4638,7 +4979,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "XACKDEL",
@@ -4651,7 +4993,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "XADD",
@@ -4664,7 +5007,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "XAUTOCLAIM",
@@ -4676,7 +5020,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "XCLAIM",
@@ -4688,7 +5033,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "XDEL",
@@ -4701,7 +5047,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "XDELEX",
@@ -4714,7 +5061,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "XGROUP",
@@ -4726,7 +5074,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "XINFO",
@@ -4738,7 +5087,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "XLEN",
@@ -4752,7 +5102,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "XPENDING",
@@ -4764,7 +5115,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "XRANGE",
@@ -4777,7 +5129,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "XREAD",
@@ -4790,7 +5143,8 @@
         "MOVABLEKEYS"
       ],
       "execution_strategy": "blocking",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "XREADGROUP",
@@ -4803,7 +5157,8 @@
         "MOVABLEKEYS"
       ],
       "execution_strategy": "blocking",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "XREVRANGE",
@@ -4816,7 +5171,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "XSETID",
@@ -4829,7 +5185,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "XTRIM",
@@ -4841,7 +5198,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZADD",
@@ -4854,7 +5212,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZCARD",
@@ -4868,7 +5227,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZCOUNT",
@@ -4882,7 +5242,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZDIFF",
@@ -4894,7 +5255,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZDIFFSTORE",
@@ -4906,7 +5268,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZINCRBY",
@@ -4920,7 +5283,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZINTER",
@@ -4932,7 +5296,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZINTERCARD",
@@ -4944,7 +5309,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZINTERSTORE",
@@ -4956,7 +5322,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZLEXCOUNT",
@@ -4970,7 +5337,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZMPOP",
@@ -4982,7 +5350,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZMSCORE",
@@ -4995,7 +5364,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZPOPMAX",
@@ -5008,7 +5378,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZPOPMIN",
@@ -5021,7 +5392,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZRANDMEMBER",
@@ -5033,7 +5405,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZRANGE",
@@ -5045,7 +5418,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZRANGEBYLEX",
@@ -5057,7 +5431,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZRANGEBYSCORE",
@@ -5069,7 +5444,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZRANGESTORE",
@@ -5081,7 +5457,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZRANK",
@@ -5094,7 +5471,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZREM",
@@ -5107,7 +5485,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZREMRANGEBYLEX",
@@ -5120,7 +5499,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZREMRANGEBYRANK",
@@ -5133,7 +5513,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZREMRANGEBYSCORE",
@@ -5146,7 +5527,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZREVRANGE",
@@ -5158,7 +5540,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZREVRANGEBYLEX",
@@ -5170,7 +5553,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZREVRANGEBYSCORE",
@@ -5182,7 +5566,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZREVRANK",
@@ -5195,7 +5580,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZSCAN",
@@ -5207,7 +5593,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZSCORE",
@@ -5221,7 +5608,8 @@
         "FAST"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZUNION",
@@ -5233,7 +5621,8 @@
         "READONLY"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     },
     {
       "name": "ZUNIONSTORE",
@@ -5245,7 +5634,8 @@
         "WRITE"
       ],
       "execution_strategy": "standard",
-      "full": true
+      "full": true,
+      "is_stub": false
     }
   ]
 }

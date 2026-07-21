@@ -142,6 +142,11 @@ struct CommandInfo {
     /// Whether this is a full command (has `execute()`) versus a metadata-only
     /// entry handled at the connection level (e.g. SUBSCRIBE, MULTI).
     full: bool,
+    /// Whether this is a deliberate stub (registered so clients get a
+    /// specific error instead of "unknown command", but not a real
+    /// implementation) — see `Command::is_stub`. `false` for metadata-only
+    /// entries, which are intentional, not unimplemented.
+    is_stub: bool,
 }
 
 /// JSON-friendly view of `frogdb_core::Arity`.
@@ -492,6 +497,7 @@ fn generate_commands() -> CommandsOutput {
             family: derive_family(name),
             execution_strategy: execution_strategy_name(&entry.execution_strategy()).to_string(),
             full: entry.is_full(),
+            is_stub: entry.is_stub(),
         })
         .collect();
 
