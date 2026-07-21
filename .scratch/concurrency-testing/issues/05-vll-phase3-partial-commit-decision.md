@@ -51,8 +51,8 @@ Known causes of a closed shard channel, exhaustively:
 ## Acceptance criteria
 
 - [x] Human decision recorded here (option + rationale) — option 4 (4a+4c now, 2b durability-phase)
-- [ ] If option 1: consistency caveat documented in the appropriate CONTEXT.md/spec
-- [ ] If option 2/2b/4: follow-up implementation issue(s) filed in the durability phase (txn framing, intent record, recovery policy; escalation path + shutdown-race guard for option 4)
+- [ ] If option 1: consistency caveat documented in the appropriate CONTEXT.md/spec — N/A, option 1 not chosen
+- [x] If option 2/2b/4: follow-up implementation issue(s) filed in the durability phase (txn framing, intent record, recovery policy; escalation path + shutdown-race guard for option 4) — filed as [issue 06](./06-durability-txn-framing-abort-on-recovery.md) (`.scratch/concurrency-testing/issues/06-durability-txn-framing-abort-on-recovery.md`); 4a+4c's escalation/shutdown-race guard already covered by the line below
 - [x] 4a+4c IMPLEMENTED (2026-07-21, merged `da1c0838`): `server/shard_supervisor.rs` — live supervision, injectable `FailStopHandler`, production abort with pre-abort `eprintln!` diagnostic, shutdown guard via `HealthChecker::is_shutting_down()`; reviewed + merged
-- [ ] EXEC phase-4 timeout ambiguity (commits despite timeout error reply) documented wherever cross-shard EXEC semantics are specified
-- [ ] Phase-6 planning note: replica-side multi-shard atomicity (Dragonfly PR #598 precedent) regardless of option chosen
+- [x] EXEC phase-4 timeout ambiguity (commits despite timeout error reply) documented wherever cross-shard EXEC semantics are specified — `website/src/content/docs/architecture/vll.md`, new "Phase-4 result timeout vs phase-3 dispatch failure" subsection (atomicity table also updated to split the two failure classes into separate rows)
+- [x] Phase-6 planning note: replica-side multi-shard atomicity (Dragonfly PR #598 precedent) regardless of option chosen — `docs/superpowers/specs/2026-07-17-concurrency-invariant-testing-design.md`, "Planning note — replica-side multi-shard transaction atomicity" paragraph in the Phase 6 section
