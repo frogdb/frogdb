@@ -105,3 +105,44 @@ async fn s2_zero_false_negatives_and_over_abort_characterized() {
         "expected the per-shard-version over-abort to be observable"
     );
 }
+
+/// F3: a watched key whose TTL elapses with no active sweep and no touch until
+/// EXEC. Lazy expiry removed it (observed by the EXEC's own watch validation),
+/// so the watch MUST abort — Redis/Valkey/Dragonfly all abort here (redis PR
+/// #7920 / issue #7918: an expired watched key counts as modified at EXEC).
+///
+/// Ordering (adjudicated): PEXPIRE runs BEFORE the watch snapshot because
+/// PEXPIRE on a live key is itself a write that bumps the shard version. If we
+/// snapshotted `v0` before PEXPIRE, EXEC watching `(k, v0)` would abort on the
+/// PEXPIRE bump alone — masking the lazy-expiry seam and passing even without
+/// the fix (wrong seam). So we SET -> PEXPIRE -> snapshot v0 (post-PEXPIRE) ->
+/// let it expire lazily -> EXEC. The ONLY thing that can invalidate the watch
+/// in the window is the lazy-expiry purge under test, mirroring the Task-8
+/// turmoil ordering.
+#[tokio::test]
+async fn s2_f3_lazy_expiry_watched_key_aborts() {
+    let mut d = ShardDriver::new(1);
+    let _ = d.execute(0, "SET", &["k", "v0"]).await;
+
+    // Set a 1ms TTL FIRST (this write bumps the version), then snapshot the
+    // post-PEXPIRE version as the watch baseline. Wait past the TTL. Do NOT
+    // tick active expiry and do NOT touch k — the key is only observed
+    // lazily-expired at EXEC time.
+    let _ = d.execute(0, "PEXPIRE", &["k", "1"]).await;
+    let v0 = d.get_version(0).await;
+    tokio::time::sleep(Duration::from_millis(3)).await;
+
+    let result = d
+        .exec_transaction(
+            0,
+            1,
+            vec![cmd("SET", &["k", "x"])],
+            vec![(Bytes::from_static(b"k"), v0)],
+        )
+        .await;
+
+    assert!(
+        matches!(result, TransactionResult::WatchAborted),
+        "F3: an expired watched key touched only at EXEC must abort the transaction, got {result:?}"
+    );
+}

@@ -442,6 +442,22 @@ impl ShardWorker {
         conn_id: u64,
         protocol_version: ProtocolVersion,
     ) -> TransactionResult {
+        // F3: a watched key may have expired only *lazily* — its TTL elapsed
+        // with no active sweep and no access to trigger a purge since it was
+        // watched. WATCH is validated against the per-shard version, not the
+        // keys themselves, and `check_watches` below is a pure version compare;
+        // it cannot see a still-physically-present but logically-expired key.
+        // Purge any expired watched keys here, at the EXEC watch-validation
+        // seam, so a removal bumps the shard version and the check below
+        // observes the change. This must run BEFORE `check_watches`: the queued
+        // commands' own lazy purges happen only after this point, too late for
+        // this EXEC's watch check. `HashMapStore` stays version-ignorant — the
+        // version bump lives at this worker seam, mirroring active expiry
+        // (`apply_expiry_effects`, event_loop.rs). Matches Redis/Valkey/
+        // Dragonfly, where an expired watched key counts as modified at EXEC
+        // (redis PR #7920 / issue #7918).
+        self.purge_expired_watches(watches);
+
         // Check WATCH conditions
         if !self.check_watches(watches) {
             return TransactionResult::WatchAborted;

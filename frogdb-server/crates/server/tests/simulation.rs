@@ -3123,18 +3123,22 @@ fn test_role_command_standalone() {
 // F3 — WATCH lazy-expiry false negative (real connection path)
 // =============================================================================
 
-/// Real-path repro for production bug F3: a watched key that expires only
-/// *lazily* inside the WATCH window fails to abort the following `EXEC`.
+/// Real-path regression guard for production bug F3 (now fixed): a watched key
+/// that expires only *lazily* inside the WATCH window MUST abort the following
+/// `EXEC`.
 ///
 /// Correct behavior: a watched key that transitions live -> gone (even via
 /// passive/lazy expiry) is a modification of the watch, so `EXEC` must ABORT.
-/// FrogDB's lazy expiry (`purge_if_expired` -> store `check_and_delete_expired`)
-/// never bumps the per-shard WATCH version, while active expiry
-/// (`apply_expiry_effects` -> `increment_version`, event_loop.rs ~:214) does.
-/// So a key that expires only lazily inside the WATCH window does not dirty the
-/// shard WATCH version and `EXEC` commits over the dead key — the false
-/// negative this test documents on the full connection path (turmoil), proving
-/// F3 is not a shard-driver artifact.
+/// Before the F3 fix, FrogDB's lazy expiry (`purge_if_expired` -> store
+/// `check_and_delete_expired`) never bumped the per-shard WATCH version, while
+/// active expiry (`apply_expiry_effects` -> `increment_version`,
+/// event_loop.rs ~:214) did — so a key that expired only lazily inside the
+/// WATCH window did not dirty the shard WATCH version and `EXEC` committed over
+/// the dead key (the false negative). Task 9 closed the seam: EXEC's own watch
+/// validation now purges expired watched keys and bumps the version
+/// (`purge_expired_watches`, worker.rs), so `EXEC` aborts. This test verifies
+/// that on the full connection path (turmoil), proving the fix is not a
+/// shard-driver artifact.
 ///
 /// Reference behavior (Redis 7/8, Valkey, DragonflyDB all ABORT here):
 /// - Redis: `lookupKey` -> `expireIfNeeded` -> `deleteExpiredKeyAndPropagate`
@@ -3158,14 +3162,15 @@ fn test_role_command_standalone() {
 ///
 /// Determinism: active expiry is disabled up front with
 /// `DEBUG SET-ACTIVE-EXPIRE 0` (debug.rs -> ShardMessage::SetActiveExpire), so
-/// no sim sweep tick can race the TTL-elapse-to-EXEC window. The observed reply
-/// is fully deterministic under turmoil's virtual clock.
+/// no sim sweep tick can race the TTL-elapse-to-EXEC window. Key expiry is
+/// evaluated against the real wall clock (`std::time::Instant`), not turmoil's
+/// virtual clock, so the window is advanced with a real 50ms `std::thread::sleep`
+/// (see the call site) — a `tokio::time::sleep` would advance only virtual time
+/// and leave k physically live. 50ms >> the 10ms TTL gives a wide, robust margin.
 #[test]
-#[ignore = "F3 real-path repro: documents current false-negative; fixed + inverted in Task 9"]
 fn watch_lazy_expiry_false_negative_realpath() {
-    // NOTE: This documents the CURRENT (incorrect) behavior on the real
-    // connection path. Once F3 is fixed (Task 9), flip the assertion to require
-    // an ABORT and drop #[ignore]. Redis/Valkey/Dragonfly all ABORT here.
+    // Verifies the FIXED behavior on the real connection path: an `EXEC` over a
+    // lazily-expired watched key ABORTS. Redis/Valkey/Dragonfly all ABORT here.
     let mut sim = Builder::new()
         .tick_duration(Duration::from_millis(1))
         .build();
@@ -3243,11 +3248,18 @@ fn watch_lazy_expiry_false_negative_realpath() {
             "WATCH k should reply +OK, got {reply:?}"
         );
 
-        // Advance virtual time well past the 10ms TTL WITHOUT touching k and
-        // (with active expiry off) without any sweep removing it. k is now
-        // logically expired but still physically present; only a lazy check
-        // will remove it.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Advance WALL-CLOCK time well past the 10ms TTL WITHOUT touching k and
+        // (with active expiry off) without any sweep removing it. Key expiry is
+        // evaluated against `std::time::Instant::now()` (KeyMetadata::is_expired,
+        // types/src/types/mod.rs), the real wall clock — NOT tokio's virtual
+        // clock. A `tokio::time::sleep` under turmoil advances only virtual time
+        // (~microseconds of real time), so it would leave k physically live and
+        // EXEC would commit over a *live* key — not the F3 scenario at all. We
+        // therefore block the sim thread for 50ms of REAL time (50ms >> 10ms TTL,
+        // a wide deterministic margin): k is now logically expired but still
+        // physically present, because active expiry is off and nothing has
+        // accessed it. Only a lazy check will remove it.
+        std::thread::sleep(Duration::from_millis(50));
 
         // MULTI ; SET k x ; EXEC — none of the queued commands touch k before
         // EXEC runs, and the correct outcome is an ABORT because k expired
@@ -3278,29 +3290,27 @@ fn watch_lazy_expiry_false_negative_realpath() {
 
     sim.run().unwrap();
 
-    // Assert the CURRENTLY OBSERVED behavior on the real connection path.
+    // Assert the FIXED behavior on the real connection path.
     let reply = exec_reply.lock().unwrap().clone();
     assert!(!reply.is_empty(), "client never captured an EXEC reply");
 
-    // FrogDB currently COMMITS the single queued `SET k x`, so EXEC returns a
-    // one-element array whose sole reply is `+OK` (`*1\r\n+OK\r\n`).
-    const COMMITTED: &[u8] = b"*1\r\n+OK\r\n";
-    // A correct implementation ABORTS. NOTE for Task 9: FrogDB's WATCH-abort
-    // reply is `Response::null()`, which serializes to the RESP2 null *bulk*
-    // string `$-1\r\n` (not the null *array* `*-1\r\n` Redis uses for an
-    // aborted EXEC). When Task 9 inverts this assertion, expect `$-1\r\n` unless
-    // the abort encoding is also corrected to `*-1\r\n`.
+    // FrogDB signals a WATCH abort with `Response::null()`, which serializes to
+    // the RESP2 null *bulk* string `$-1\r\n` (not the null *array* `*-1\r\n`
+    // Redis uses for an aborted EXEC — a known encoding divergence tracked
+    // separately; the abort semantics are what F3 is about).
+    const ABORTED: &[u8] = b"$-1\r\n";
 
-    // BUG(F3): lazy expiry never bumps the per-shard WATCH version, so the watch
-    // is not invalidated and EXEC commits over the lazily-expired key. Redis /
-    // Valkey / Dragonfly all ABORT here. Task 9 fixes the seam and inverts this
-    // assertion (require an abort / null) + drops #[ignore].
+    // F3 FIXED: EXEC's watch validation lazily purges the expired watched key
+    // (`purge_expired_watches`, worker.rs), bumping the per-shard WATCH version
+    // so the watch is invalidated and EXEC ABORTS over the dead key — matching
+    // Redis / Valkey / Dragonfly. Before the fix FrogDB committed the queued
+    // `SET k x` (`*1\r\n+OK\r\n`).
     assert_eq!(
         reply.as_slice(),
-        COMMITTED,
-        "F3 real-path repro: expected FrogDB to CURRENTLY commit the transaction \
-         over the lazily-expired watched key (the bug). Got {reply:?}. If this is \
-         now an abort (`$-1\\r\\n` or `*-1\\r\\n`), F3 is fixed on the real path — \
-         update Task 9.",
+        ABORTED,
+        "F3 regression guard: expected FrogDB to ABORT the transaction over the \
+         lazily-expired watched key (WATCH-abort null `$-1\\r\\n`). Got {reply:?}. \
+         A committed `*1\\r\\n+OK\\r\\n` here means the F3 lazy-expiry watch seam \
+         has regressed.",
     );
 }

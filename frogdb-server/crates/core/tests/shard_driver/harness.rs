@@ -144,11 +144,17 @@ impl ShardDriver {
         rx.await.expect("execute response")
     }
 
-    /// Read a shard's WATCH version.
+    /// Read a shard's WATCH version (pure probe: no keys, so no lazy purge).
     pub async fn get_version(&mut self, shard: usize) -> u64 {
         let (tx, rx) = oneshot::channel();
-        self.dispatch(shard, ShardMessage::GetVersion { response_tx: tx })
-            .await;
+        self.dispatch(
+            shard,
+            ShardMessage::GetVersion {
+                keys: vec![],
+                response_tx: tx,
+            },
+        )
+        .await;
         rx.await.expect("version")
     }
 
