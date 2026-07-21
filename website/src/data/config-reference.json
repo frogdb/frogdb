@@ -556,6 +556,14 @@
           "mutable": false
         },
         {
+          "name": "flush-compact-range",
+          "type": "boolean",
+          "default": true,
+          "description": "Reclaim disk eagerly after FLUSHDB/FLUSHALL: follow the range tombstone\nwith an asynchronous DeleteFilesInRange + CompactRange over the cleared\ncolumn families. Without it, flushed SST bytes are only reclaimed when\na compaction happens to cover the range.",
+          "config_param": "flush-compact-range",
+          "mutable": false
+        },
+        {
           "name": "max-write-buffer-number",
           "type": "integer",
           "default": 4,
