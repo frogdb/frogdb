@@ -18,7 +18,7 @@ testbox (`just tb-warmup` / `just tb-run`); `just concurrency` + `just lint` run
 - [x] Task 1 — Store reports lazy removals (behavior-neutral seam) — `64e8b3d0` APPROVED
 - [x] Task 2 — Apply lazy-purge effects (gaps 1-3) + flip repros + S2 lazy arm — `8ffc47d7` APPROVED
 - [x] Task 3 — Per-key `live_at_watch` plumbing via `WatchEntry` (behavior-neutral) + `watch_keys` helper — `0609aa85` APPROVED
-- [ ] Task 4 — `check_watches` honors `live_at_watch` (gap 4) + flip repro + two-watcher arm
+- [x] Task 4 — `check_watches` honors `live_at_watch` (gap 4) + flip repro + two-watcher arm — `0eeea7ef` APPROVED
 - [ ] Task 5 — Proposal acceptance update + full verification (testbox + local concurrency/lint)
 
 ## Per-task record
@@ -32,3 +32,7 @@ Implementer (Opus): effects filled in (per-key XREADGROUP NOGROUP drain + one bu
 
 ### Task 3 — `0609aa85`
 Implementer (Opus): `WatchEntry` end-to-end; `GetVersion` reply `(u64, Vec<bool>)` with `exists_unexpired` probe before no-bump purge; `watch_keys` harness helper; 15 files. Deviations endorsed: re-export files added (lib.rs, shard/mod.rs, conn_command.rs trait); connection map stays `HashMap<Bytes,(usize,u64,bool)>` (shard_id connection-local, `WatchEntry` at boundary via `take_transaction`); replication executor was already `watches: Vec::new()` pre-commit (verified neutral); test sites hardcode `live_at_watch: true` (correct + ignored this task). Review (Opus): APPROVE — check_watches pure version compare preserved; handle_watch zip provably aligned (WATCH is single-shard by SlotValidator, one GetVersion covers all keys; re-WATCH overwrites with fresh liveness = Redis semantics); EXEC single-shard by construction (multi-shard watch set → CROSSSLOT). 9/9 + 43/43 transaction + 17/17 watch + 2/2 turmoil + lint green. Useful Task-4 fact: WATCH/EXEC are single-shard; `watch_keys` returns real computed liveness.
+
+### Task 4 — `0eeea7ef`
+Implementer (Opus): clause = version unchanged AND NOT (`live_at_watch && !exists_unexpired`); turmoil pin flipped (`regression_watch_second_watcher_aborts_realpath`, `$-1\r\n`); full-interleave S2 arm `regression_gap4_second_watcher_aborts` (no fallback needed — real liveness both sides asserted `[true]`/`[false]`, physical-absence assert, A-side non-abort sibling); pause-suppressed pin ADDED (`suppressed_expired_watched_key_still_aborts_via_clause`, execution.rs scatter_effect_tests, real worker path, version-unchanged asserted → abort provably clause-only; Task-2 LOW closed). Review (Opus): APPROVE — over-abort analysis: only no-bump removal path in FrogDB is the WATCH-time GetVersion purge = exactly the case Redis aborts (touchWatchedKey/isWatchedKeyExpired); every other removal bumps → clause redundant-never-wrong; no ABA (u64 wrapping). 11/11 + 3/3 turmoil + 43/43 + 17/17 + lints green. Nit (non-blocking): pause pin lives in module named `scatter_effect_tests`.
+All 4 gaps CLOSED with pins: gap1 `regression_gap1_lazy_read_drains_xreadgroup`, gap2 `regression_gap2_lazy_read_drains_before_sweep`, gap3 `regression_gap3_third_party_lazy_read_aborts_watch` + `regression_watch_read_lazy_purge_aborts_realpath`, gap4 `regression_gap4_second_watcher_aborts` + `regression_watch_second_watcher_aborts_realpath`.
