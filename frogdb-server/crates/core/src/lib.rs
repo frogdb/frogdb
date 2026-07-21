@@ -44,8 +44,8 @@ pub use frogdb_vll as vll;
 
 pub use acl::{
     AclChecker, AclConfig, AclError, AclLog, AclManager, AllowAllChecker, AuthenticatedUser,
-    CommandCategory, FullAclChecker, KeyAccessType, PermissionResult, RateLimitExceeded,
-    RateLimitState, User, UserPermissions, generate_password, hash_password,
+    CommandCategory, FullAclChecker, KeyAccessType, PermissionResult, PermissionSet,
+    RateLimitExceeded, RateLimitState, User, generate_password, hash_password,
 };
 pub use client_registry::{
     ClientFlags, ClientHandle, ClientInfo, ClientMemoryUsage, ClientRegistry, ClientStats,

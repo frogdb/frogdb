@@ -16,7 +16,7 @@ use super::error::AclError;
 use super::log::{AclLog, DEFAULT_ACL_LOG_MAX_LEN};
 use super::parser::{AclRule, hash_password, parse_acl_line};
 use super::ratelimit::RateLimitRegistry;
-use super::user::{AuthenticatedUser, User, UserPermissions};
+use super::user::{AuthenticatedUser, User};
 use frogdb_types::sync::RwLockExt;
 
 /// Configuration for the ACL manager.
@@ -137,7 +137,7 @@ impl AclManager {
 
         Ok(AuthenticatedUser::new(
             username.to_string(),
-            UserPermissions::from_user(user),
+            Arc::new(user.root_permissions.clone()),
             rate_limit,
         ))
     }

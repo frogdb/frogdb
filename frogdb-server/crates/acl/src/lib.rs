@@ -63,4 +63,4 @@ pub use permissions::{
 pub use ratelimit::{
     RateLimitConfig, RateLimitExceeded, RateLimitRegistry, RateLimitState, RateLimitStats,
 };
-pub use user::{AuthenticatedUser, User, UserInfoValue, UserPermissions};
+pub use user::{AuthenticatedUser, User, UserInfoValue};

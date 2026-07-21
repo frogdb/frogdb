@@ -184,48 +184,44 @@ impl AclChecker for FullAclChecker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::permissions::{ChannelPattern, KeyPattern, SubcommandRule};
-    use crate::user::UserPermissions;
-    use std::collections::HashSet;
+    use crate::permissions::{
+        ChannelPattern, CommandPermissions, KeyPattern, PermissionSet, SubcommandRule,
+    };
+    use std::sync::Arc;
 
     fn create_test_user(
         all_commands: bool,
         all_keys: bool,
         all_channels: bool,
     ) -> AuthenticatedUser {
-        let perms = UserPermissions {
-            allow_all_commands: all_commands,
-            allowed_commands: HashSet::new(),
-            denied_commands: HashSet::new(),
-            allowed_categories: HashSet::new(),
-            denied_categories: HashSet::new(),
-            key_patterns: vec![],
-            all_keys,
-            channel_patterns: vec![],
-            all_channels,
-            subcommand_rules: vec![],
+        let commands = if all_commands {
+            CommandPermissions::allow_all()
+        } else {
+            CommandPermissions::deny_all()
         };
-        AuthenticatedUser::new("test", perms, None)
+        let perms = PermissionSet {
+            commands,
+            key_patterns: vec![],
+            channel_patterns: vec![],
+            all_keys,
+            all_channels,
+        };
+        AuthenticatedUser::new("test", Arc::new(perms), None)
     }
 
     fn create_restricted_user() -> AuthenticatedUser {
-        let mut allowed_commands = HashSet::new();
-        allowed_commands.insert("get".to_string());
-        allowed_commands.insert("set".to_string());
+        let mut commands = CommandPermissions::deny_all();
+        commands.allowed_commands.insert("get".to_string());
+        commands.allowed_commands.insert("set".to_string());
 
-        let perms = UserPermissions {
-            allow_all_commands: false,
-            allowed_commands,
-            denied_commands: HashSet::new(),
-            allowed_categories: HashSet::new(),
-            denied_categories: HashSet::new(),
+        let perms = PermissionSet {
+            commands,
             key_patterns: vec![KeyPattern::new("user:*".to_string())],
-            all_keys: false,
             channel_patterns: vec![ChannelPattern::new("chat:*".to_string())],
+            all_keys: false,
             all_channels: false,
-            subcommand_rules: vec![],
         };
-        AuthenticatedUser::new("restricted", perms, None)
+        AuthenticatedUser::new("restricted", Arc::new(perms), None)
     }
 
     #[test]
@@ -320,23 +316,20 @@ mod tests {
         // The NOPERM reply (AclError Display) must use the lowercase `cmd|sub` fullname,
         // matching Redis and the ACL LOG object.
         let checker = FullAclChecker::new(true);
-        let perms = UserPermissions {
-            allow_all_commands: true,
-            allowed_commands: HashSet::new(),
-            denied_commands: HashSet::new(),
-            allowed_categories: HashSet::new(),
-            denied_categories: HashSet::new(),
+        let mut commands = CommandPermissions::allow_all();
+        commands.subcommand_rules.push(SubcommandRule {
+            command: "config".to_string(),
+            subcommand: "set".to_string(),
+            allowed: false,
+        });
+        let perms = PermissionSet {
+            commands,
             key_patterns: vec![],
-            all_keys: true,
             channel_patterns: vec![],
+            all_keys: true,
             all_channels: true,
-            subcommand_rules: vec![SubcommandRule {
-                command: "config".to_string(),
-                subcommand: "set".to_string(),
-                allowed: false,
-            }],
         };
-        let user = AuthenticatedUser::new("test", perms, None);
+        let user = AuthenticatedUser::new("test", Arc::new(perms), None);
 
         let result = checker.check_command(&user, "CONFIG", Some("SET"));
         let err = result.error().expect("CONFIG|SET should be denied").clone();
