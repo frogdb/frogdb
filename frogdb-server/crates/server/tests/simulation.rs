@@ -3118,3 +3118,189 @@ fn test_role_command_standalone() {
 
     sim.run().unwrap();
 }
+
+// =============================================================================
+// F3 — WATCH lazy-expiry false negative (real connection path)
+// =============================================================================
+
+/// Real-path repro for production bug F3: a watched key that expires only
+/// *lazily* inside the WATCH window fails to abort the following `EXEC`.
+///
+/// Correct behavior: a watched key that transitions live -> gone (even via
+/// passive/lazy expiry) is a modification of the watch, so `EXEC` must ABORT.
+/// FrogDB's lazy expiry (`purge_if_expired` -> store `check_and_delete_expired`)
+/// never bumps the per-shard WATCH version, while active expiry
+/// (`apply_expiry_effects` -> `increment_version`, event_loop.rs ~:214) does.
+/// So a key that expires only lazily inside the WATCH window does not dirty the
+/// shard WATCH version and `EXEC` commits over the dead key — the false
+/// negative this test documents on the full connection path (turmoil), proving
+/// F3 is not a shard-driver artifact.
+///
+/// Reference behavior (Redis 7/8, Valkey, DragonflyDB all ABORT here):
+/// - Redis: `lookupKey` -> `expireIfNeeded` -> `deleteExpiredKeyAndPropagate`
+///   -> `signalModifiedKey` (now `keyModified`) -> `touchWatchedKey`
+///   (multi.c). Fixed in redis/redis PR #7920 for issue #7918 ("WATCH no
+///   longer ignores keys which have expired for MULTI/EXEC"); the
+///   `keyModified` -> `touchWatchedKey` seam lives in db.c.
+/// - Valkey mirrors the same `keyModified`/`touchWatchedKey` seam.
+/// - DragonflyDB also aborts a transaction whose watched key expired.
+///
+/// CRITICAL ORDERING (why PEXPIRE runs BEFORE WATCH): `EXPIRE`/`PEXPIRE` on a
+/// live key is itself a write that bumps the shard version. If the TTL were set
+/// *after* `WATCH`, PEXPIRE would dirty the watch directly and `EXEC` would
+/// abort for that reason — masking the lazy-expiry seam entirely. FrogDB
+/// already tests exactly that (redis-regression `multi_tcl.rs`
+/// `tcl_watch_considers_expire_on_watched_key`: SET; WATCH; EXPIRE; EXEC ->
+/// aborted). To isolate F3 we set the TTL first, `WATCH` the still-live key
+/// (snapshotting the post-PEXPIRE version), then let it expire *lazily* inside
+/// the window with no touch and no active sweep. The only thing that removes
+/// `k` in the window is the lazy check under test.
+///
+/// Determinism: active expiry is disabled up front with
+/// `DEBUG SET-ACTIVE-EXPIRE 0` (debug.rs -> ShardMessage::SetActiveExpire), so
+/// no sim sweep tick can race the TTL-elapse-to-EXEC window. The observed reply
+/// is fully deterministic under turmoil's virtual clock.
+#[test]
+#[ignore = "F3 real-path repro: documents current false-negative; fixed + inverted in Task 9"]
+fn watch_lazy_expiry_false_negative_realpath() {
+    // NOTE: This documents the CURRENT (incorrect) behavior on the real
+    // connection path. Once F3 is fixed (Task 9), flip the assertion to require
+    // an ABORT and drop #[ignore]. Redis/Valkey/Dragonfly all ABORT here.
+    let mut sim = Builder::new()
+        .tick_duration(Duration::from_millis(1))
+        .build();
+
+    // Single shard: WATCH is validated against the per-shard version, so a
+    // single-shard server isolates the lazy-vs-active version-bump seam.
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
+
+    // Captures the exact raw bytes of the EXEC reply for the report + assertion.
+    let exec_reply: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let exec_reply_client = exec_reply.clone();
+
+    sim.client("client1", async move {
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        // Read exactly one reply for a command and return the raw bytes.
+        async fn round_trip(
+            stream: &mut TcpStream,
+            buf: &mut [u8],
+            cmd: &Bytes,
+        ) -> Result<Vec<u8>, BoxError> {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            stream.write_all(cmd).await?;
+            let n = stream.read(buf).await?;
+            Ok(buf[..n].to_vec())
+        }
+
+        // Disable active expiry so no sweep can race the window; only the lazy
+        // path may remove k.
+        let reply = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"DEBUG", b"SET-ACTIVE-EXPIRE", b"0"]),
+        )
+        .await?;
+        assert!(
+            matches!(parse_simple_response(&reply), OperationResult::Ok),
+            "DEBUG SET-ACTIVE-EXPIRE 0 should reply +OK, got {reply:?}"
+        );
+
+        // SET k v
+        let reply = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"SET", b"k", b"v"]),
+        )
+        .await?;
+        assert!(
+            matches!(parse_simple_response(&reply), OperationResult::Ok),
+            "SET k v should reply +OK, got {reply:?}"
+        );
+
+        // PEXPIRE k 10 — set the TTL BEFORE watching (see CRITICAL ORDERING in
+        // the doc comment): this write bumps the shard version now, so the
+        // subsequent WATCH snapshots the post-PEXPIRE version and PEXPIRE cannot
+        // be what dirties the watch. k is still live (10ms TTL).
+        let reply = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"PEXPIRE", b"k", b"10"]),
+        )
+        .await?;
+        assert!(
+            matches!(parse_simple_response(&reply), OperationResult::Integer(1)),
+            "PEXPIRE k 10 should reply :1, got {reply:?}"
+        );
+
+        // WATCH k while still live — records the current (post-PEXPIRE) per-shard
+        // version for k.
+        let reply = round_trip(&mut stream, &mut buf, &encode_command(&[b"WATCH", b"k"])).await?;
+        assert!(
+            matches!(parse_simple_response(&reply), OperationResult::Ok),
+            "WATCH k should reply +OK, got {reply:?}"
+        );
+
+        // Advance virtual time well past the 10ms TTL WITHOUT touching k and
+        // (with active expiry off) without any sweep removing it. k is now
+        // logically expired but still physically present; only a lazy check
+        // will remove it.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // MULTI ; SET k x ; EXEC — none of the queued commands touch k before
+        // EXEC runs, and the correct outcome is an ABORT because k expired
+        // (live -> gone) while watched.
+        let reply = round_trip(&mut stream, &mut buf, &encode_command(&[b"MULTI"])).await?;
+        assert!(
+            matches!(parse_simple_response(&reply), OperationResult::Ok),
+            "MULTI should reply +OK, got {reply:?}"
+        );
+
+        let reply = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"SET", b"k", b"x"]),
+        )
+        .await?;
+        assert_eq!(
+            reply.as_slice(),
+            b"+QUEUED\r\n",
+            "SET k x inside MULTI should reply +QUEUED, got {reply:?}"
+        );
+
+        let reply = round_trip(&mut stream, &mut buf, &encode_command(&[b"EXEC"])).await?;
+        *exec_reply_client.lock().unwrap() = reply;
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+
+    // Assert the CURRENTLY OBSERVED behavior on the real connection path.
+    let reply = exec_reply.lock().unwrap().clone();
+    assert!(!reply.is_empty(), "client never captured an EXEC reply");
+
+    // FrogDB currently COMMITS the single queued `SET k x`, so EXEC returns a
+    // one-element array whose sole reply is `+OK` (`*1\r\n+OK\r\n`).
+    const COMMITTED: &[u8] = b"*1\r\n+OK\r\n";
+    // A correct implementation ABORTS. NOTE for Task 9: FrogDB's WATCH-abort
+    // reply is `Response::null()`, which serializes to the RESP2 null *bulk*
+    // string `$-1\r\n` (not the null *array* `*-1\r\n` Redis uses for an
+    // aborted EXEC). When Task 9 inverts this assertion, expect `$-1\r\n` unless
+    // the abort encoding is also corrected to `*-1\r\n`.
+
+    // BUG(F3): lazy expiry never bumps the per-shard WATCH version, so the watch
+    // is not invalidated and EXEC commits over the lazily-expired key. Redis /
+    // Valkey / Dragonfly all ABORT here. Task 9 fixes the seam and inverts this
+    // assertion (require an abort / null) + drops #[ignore].
+    assert_eq!(
+        reply.as_slice(),
+        COMMITTED,
+        "F3 real-path repro: expected FrogDB to CURRENTLY commit the transaction \
+         over the lazily-expired watched key (the bug). Got {reply:?}. If this is \
+         now an abort (`$-1\\r\\n` or `*-1\\r\\n`), F3 is fixed on the real path — \
+         update Task 9.",
+    );
+}
