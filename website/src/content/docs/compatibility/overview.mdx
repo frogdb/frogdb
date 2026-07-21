@@ -1,0 +1,151 @@
+---
+title: Overview & Differences
+description: FrogDB's Redis compatibility target and the honest list of behavioral differences.
+---
+
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+import versions from '../../../data/versions.json';
+
+FrogDB implements RESP2 and RESP3 and targets compatibility with the Redis {versions.redis_compat_target} command set. Standard Redis client libraries connect without modification. This page documents only the behavioral differences; for standard Redis behavior, see the [Redis documentation](https://redis.io/docs/). For the exact per-command support status, see the [Command matrix](/compatibility/command-matrix/); for the regression evidence behind the compatibility claim, see [Test suite results](/compatibility/test-suite/) and [Testing methodology](/compatibility/testing-methodology/).
+
+FrogDB advertises `redis_version:{versions.advertised_redis_version}` in `INFO` and to the Lua `REDIS_VERSION` binding, so client libraries that feature-detect on the reported version behave as they would against that Redis release. The compatibility *target* — the command set and regression suite FrogDB is measured against — is Redis {versions.redis_compat_target}.
+
+## Architecture
+
+| | Redis | FrogDB |
+|---|---|---|
+| Command processing | Single-threaded (separate I/O threads for socket reads/writes) | Shared-nothing, sharded worker threads |
+| Storage engine | In-memory with RDB/AOF files | In-memory with a RocksDB write-ahead log and SST files |
+| Cluster coordination | Gossip protocol | Raft consensus with an orchestrated control plane |
+| Configuration format | `redis.conf` | `frogdb.toml` (TOML) |
+| Allocator | jemalloc | jemalloc |
+| Lua version | 5.1 | 5.4 |
+
+## Persistence
+
+FrogDB persists data through RocksDB rather than Redis RDB snapshots and AOF logs:
+
+- **No RDB or AOF files.** Data lives in RocksDB SST files fronted by a write-ahead log.
+- **Forkless `BGSAVE`.** `BGSAVE` triggers a snapshot without a `fork()` of the server process.
+- **No `BGREWRITEAOF`.** RocksDB manages WAL rotation and compaction internally.
+- **Durability modes** are `async`, `periodic`, and `sync` (`persistence.durability-mode`), replacing Redis `appendfsync always/everysec/no`. In `sync` mode the server waits for an fsync before acknowledging a write.
+- **Redis RDB files cannot be imported.** The on-disk formats are unrelated.
+
+See [Persistence & durability](/operations/persistence/) for configuration and recovery details.
+
+## Configuration
+
+FrogDB is configured with a TOML file instead of `redis.conf`. Common mappings:
+
+| redis.conf | frogdb.toml |
+|---|---|
+| `bind 0.0.0.0` | `server.bind = "0.0.0.0"` |
+| `port 6379` | `server.port = 6379` |
+| `requirepass secret` | `security.requirepass = "secret"` |
+| `maxmemory 1gb` | `memory.maxmemory = "1gb"` |
+| `maxclients 10000` | `server.max-clients = 10000` |
+| `appendonly yes` | `persistence.enabled = true` |
+| `appendfsync everysec` | `persistence.durability-mode = "periodic"` |
+| `save 900 1` | `snapshot.snapshot-interval-secs = 900` |
+
+Environment variables use the `FROGDB_` prefix with double underscores for nesting, e.g. `FROGDB_SERVER__PORT=6380`. Runtime changes made with `CONFIG SET` can be written back to the TOML file with `CONFIG REWRITE`, which merges the current runtime values into the existing document and preserves its comments.
+
+See [Configuration](/operations/configuration/) for the four configuration surfaces and precedence, and the [Configuration reference](/reference/configuration/) for every parameter.
+
+## Clustering
+
+FrogDB coordinates cluster membership with Raft consensus rather than Redis Cluster's gossip protocol:
+
+- **Orchestrated control plane.** There is no `CLUSTER MEET`; topology is managed through the admin API.
+- **Deterministic failover.** Raft leader election replaces gossip-based failover.
+- **Two-level sharding.** The 16384 cluster hash slots are mapped onto internal shard workers.
+- `CLUSTER BUMPEPOCH` is not supported.
+- Replica migration is manual rather than automatic.
+
+See [Clustering](/operations/clustering/) for bootstrap steps, the admin API, and failure modes.
+
+## Cross-slot & multi-shard operations
+
+FrogDB partitions keys across internal shards even in standalone mode, so multi-key operations are subject to slot rules that plain single-node Redis does not enforce.
+
+In **cluster mode**, multi-key commands (`MGET`, `MSET`, and similar) require all keys to hash to the same slot, or they return `-CROSSSLOT`. In **standalone mode**, cross-slot multi-key operations also return `-CROSSSLOT` by default. Set `server.allow-cross-slot-standalone = true` to allow them via scatter-gather; note that `MSETNX` always requires same-slot keys.
+
+### Transactions
+
+- `MULTI`/`EXEC` requires all keys in the same hash slot in cluster mode.
+- In standalone mode, cross-shard transactions obtain atomicity through [VLL](/architecture/vll/).
+- `WATCH` uses per-key version tracking.
+
+### Blocking commands
+
+- Blocking list and stream commands (`BLPOP`, `BRPOP`, `BLMOVE`, and similar) require their keys on the same shard.
+- A cross-shard blocking call returns `-CROSSSLOT`.
+
+## Lua scripting
+
+FrogDB runs scripts on an embedded Lua 5.4 interpreter (Redis uses Lua 5.1), which introduces a few edge-case syntax and semantic differences at the language level. The FrogDB-specific behavioral differences are:
+
+### Strict key declaration
+
+Every key a script accesses must be declared through `KEYS[]`. Accessing an undeclared key returns an error (`script tried to access undeclared key`). Redis permits undeclared key access but documents it as unsupported.
+
+```lua
+-- Works: the key is declared
+EVAL "return redis.call('GET', KEYS[1])" 1 mykey
+
+-- Errors in FrogDB (accepted by Redis): 'mykey' is not declared
+EVAL "return redis.call('GET', 'mykey')" 0
+```
+
+### Single-shard requirement
+
+By default, all keys accessed by a script must hash to the same shard; a script spanning multiple shards returns a `CROSSSLOT` error. As with multi-key commands, setting `server.allow-cross-slot-standalone = true` permits cross-shard scripts.
+
+### Other differences
+
+- `redis.setresp()` is not supported and returns an error.
+
+## Pub/Sub
+
+In standalone mode, `PUBLISH`/`SUBSCRIBE` and pattern subscriptions (`PSUBSCRIBE`) behave identically to Redis.
+
+In cluster mode:
+
+- **Regular Pub/Sub** messages are forwarded across cluster nodes, so a subscriber on any node receives them — matching Redis behavior.
+- **Sharded Pub/Sub** (`SSUBSCRIBE`/`SPUBLISH`) routes messages to the shard that owns the channel's hash slot, consistent with Redis Cluster.
+
+## Database model
+
+FrogDB exposes a single logical database (`db0`). `SELECT 0` is a no-op; `SELECT` with a non-zero index returns an error. `MOVE` and `SWAPDB` are not supported.
+
+## Not supported
+
+The following commands and features are intentionally absent because they do not fit FrogDB's architecture. The [Command matrix](/compatibility/command-matrix/) is the exhaustive per-command view.
+
+| Command / feature | Reason |
+|---|---|
+| `SELECT` (non-zero index) | Single-database model |
+| `MOVE`, `SWAPDB` | Single-database model |
+| `MODULE *` | No loadable-module architecture |
+| `BGREWRITEAOF` | No AOF; RocksDB manages WAL lifecycle |
+| `SYNC` | Legacy full-sync; superseded by `PSYNC` |
+| `CLUSTER BUMPEPOCH` | Raft manages epochs, not manual bumping |
+| `DEBUG SEGFAULT` / `RELOAD` / `CRASH-AND-RECOVER` | Unsafe debug subcommands are disabled |
+| `redis.setresp()` in Lua | Not implemented |
+| ACL selectors v2 (`(...)`, `clearselectors`) | Not supported; use separate users instead |
+| Diskless replication | Not applicable; FrogDB does not replicate via RDB transfer |
+
+## Tiered storage
+
+FrogDB offers a two-tier hot/warm store as an alternative to eviction. With the `tiered-lru` or `tiered-lfu` eviction policy, instead of deleting a key under memory pressure FrogDB serializes its value to the RocksDB warm tier (a *spill*); the key's metadata stays in memory and reads transparently deserialize the value back (an *unspill*).
+
+Tiered storage requires persistence to be enabled. Open-source Redis has no equivalent — it only evicts (deletes) keys when memory is full. See the [Configuration reference](/reference/configuration/) for the tiered-storage settings.
+
+## See also
+
+<CardGrid>
+  <LinkCard title="Command matrix" description="Per-command supported / partial / unsupported status" href="/compatibility/command-matrix/" />
+  <LinkCard title="Test suite results" description="Redis regression coverage and intentional exclusions" href="/compatibility/test-suite/" />
+  <LinkCard title="Testing methodology" description="How compatibility and correctness are verified" href="/compatibility/testing-methodology/" />
+  <LinkCard title="Configuration reference" description="Every configuration parameter" href="/reference/configuration/" />
+</CardGrid>
