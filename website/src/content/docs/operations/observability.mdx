@@ -1,21 +1,29 @@
 ---
 title: Observability
-description: Prometheus metrics, OpenTelemetry tracing, DTrace probes, and logging
+description: Prometheus metrics, OTLP export, distributed tracing, health endpoints, and logging
 sidebar:
   order: 6
 ---
 
 import { LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-FrogDB provides comprehensive observability through Prometheus metrics, OpenTelemetry (OTLP) export, distributed tracing, DTrace/USDT probes, and structured logging.
+FrogDB exposes Prometheus metrics, OTLP export, distributed tracing, HTTP health/status
+endpoints, structured logging, and optional USDT probes. The metric catalog itself lives in
+[Metrics Reference](/reference/metrics/) — this page covers how to enable and configure each
+observability channel. For interactive diagnostics (slowlog, `LATENCY`, hot-key detection, the
+debug web UI), see [Diagnostics](/operations/diagnostics/).
 
-## Prometheus Metrics
+## Prometheus metrics
 
-FrogDB exports metrics in Prometheus format on the HTTP endpoint (default port `9090`):
+FrogDB exports metrics in Prometheus text format (`version=0.0.4`) on the HTTP server:
 
 ```
 GET http://<host>:9090/metrics
 ```
+
+The listener is controlled by `[http]`, not `[metrics]` — `[metrics]` only configures OTLP
+export (below). `/metrics` shares the same HTTP server as the health, status, and debug
+endpoints:
 
 ```toml
 [http]
@@ -24,16 +32,19 @@ bind = "127.0.0.1"
 port = 9090
 ```
 
-See [Metrics Reference](/reference/metrics/) for the complete list of all exported metrics.
+`/metrics` is always unauthenticated and always returns `200`, regardless of `http.token`. See
+[Metrics Reference](/reference/metrics/) for the complete, generated list of exported metrics —
+this page does not duplicate metric names.
 
-## OTLP Export
+## OTLP export
 
-Metrics can be exported to any OpenTelemetry-compatible collector via OTLP/gRPC:
+In addition to the pull-based `/metrics` endpoint, FrogDB can push metrics to any
+OpenTelemetry-compatible collector via OTLP/gRPC on an interval:
 
 ```toml
 [metrics]
-otlp-enabled = true
-otlp-endpoint = "http://otel-collector:4317"
+otlp-enabled = false
+otlp-endpoint = "http://localhost:4317"
 otlp-interval-secs = 15
 ```
 
@@ -43,30 +54,38 @@ otlp-interval-secs = 15
 | `otlp-endpoint` | string | `http://localhost:4317` | gRPC endpoint of the OTLP collector |
 | `otlp-interval-secs` | integer | `15` | Export interval in seconds |
 
-## Distributed Tracing
+This `otlp-endpoint` is distinct from `tracing.otlp-endpoint` below — metrics and traces are
+exported independently and can point at different collectors.
 
-FrogDB supports OpenTelemetry distributed tracing with configurable span granularity.
+See [Configuration Reference → Metrics](/reference/configuration/#metrics).
+
+## Distributed tracing
+
+FrogDB supports OpenTelemetry distributed tracing with configurable span granularity:
 
 ```toml
 [tracing]
-enabled = true
-otlp-endpoint = "http://jaeger:4317"
-sampling-rate = 0.1           # Sample 10% of requests
+enabled = false
+otlp-endpoint = "http://localhost:4317"
+sampling-rate = 1.0
 service-name = "frogdb"
 scatter-gather-spans = false  # Child spans per shard for MGET/MSET
 shard-spans = false           # Spans inside shard workers
 persistence-spans = false     # WAL/snapshot spans
 ```
 
-### Span Hierarchy
+Tracing is disabled by default; `sampling-rate` defaults to `1.0` (sample everything) once
+enabled — lower it in production to control span volume.
+
+### Span hierarchy
 
 When tracing is enabled, FrogDB emits spans at three levels:
 
-1. **Request span** — created at connection handler, covers the full command lifecycle
+1. **Request span** — created at the connection handler, covers the full command lifecycle
 2. **Shard execution span** — created in the shard worker, covers command processing
 3. **Store operation span** — individual data structure operations
 
-### Semantic Conventions
+### Semantic conventions
 
 FrogDB uses OpenTelemetry database semantic conventions:
 
@@ -79,15 +98,117 @@ FrogDB uses OpenTelemetry database semantic conventions:
 | `frogdb.connection_id` | `42` |
 | `frogdb.key_count` | `1` |
 
-### Recent Traces
+### Recent traces
 
-FrogDB keeps the last 100 traces in memory for debugging (configurable via `tracing.recent-traces-max`). These are available through the [Debug UI](/operations/debug-ui/).
+FrogDB keeps the last `tracing.recent-traces-max` traces (default `100`) in memory for
+debugging. These feed the recent-traces view in the [debug web UI](/operations/diagnostics/#debug-web-ui).
 
-## DTrace / USDT Probes
+See [Configuration Reference → Distributed Tracing](/reference/configuration/#distributed-tracing).
 
-FrogDB includes USDT (User Statically Defined Tracing) probes for low-overhead, production-safe tracing on macOS and Linux. Enable at build time with `--features usdt-probes`.
+## Health and status endpoints
 
-### Available Probes
+All endpoints below are served on the `[http]` listener (default port `9090`) and are
+unauthenticated regardless of `http.token`:
+
+| Endpoint | Description | Response |
+|---|---|---|
+| `GET /health/live` | Liveness — process is running | `200` if alive, `503` after shutdown begins |
+| `GET /health/ready` | Readiness — accepting commands | `503` until the server signals ready, `200` once ready, `503` again during shutdown |
+| `GET /healthz` | Alias for `/health/live` | Same as `/health/live` |
+| `GET /readyz` | Alias for `/health/ready` | Same as `/health/ready` |
+| `GET /status/json` | Full server status (JSON) | `200` with the status document |
+
+`/health/ready` starts **not ready** and only flips to `200` once the server finishes startup —
+this is intentional for readiness-gated rollouts (don't route traffic to a node that hasn't
+finished recovery). `/status/json` is documented in full in
+[Diagnostics → Server status](/operations/diagnostics/#server-status); it's listed here only to
+complete the endpoint table.
+
+Bearer-token-protected routes (`/debug/*`, `/admin/*`) only require `Authorization: Bearer
+<token>` when `http.token` is configured — otherwise they're open on whatever `http.bind` allows
+(`127.0.0.1` by default, so loopback-only out of the box). See
+[Diagnostics → Debug web UI](/operations/diagnostics/#debug-web-ui) for the full auth story.
+
+Kubernetes probe configuration:
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health/live
+    port: 9090
+  initialDelaySeconds: 5
+readinessProbe:
+  httpGet:
+    path: /health/ready
+    port: 9090
+  initialDelaySeconds: 5
+```
+
+## INFO sections
+
+`INFO` returns the standard Redis-compatible sections plus FrogDB extras. Default sections
+(returned by a bare `INFO`):
+
+```
+INFO server|clients|memory|persistence|stats|replication|cpu|keyspace|ratelimit
+```
+
+`ratelimit` is a FrogDB extension: it only renders when per-user ACL rate limiting is active
+(fields `ratelimit_users_configured`, `ratelimit_total_commands_rejected`,
+`ratelimit_total_bytes_rejected` — see [Security](/operations/security/)).
+
+Extra sections available via `INFO all` / `INFO everything`:
+
+```
+INFO commandstats|errorstats|latencystats|latency_baseline|tiered|keysizes
+```
+
+For the meaning of the standard Redis fields within each section, see the
+[Redis INFO documentation](https://redis.io/docs/latest/commands/info/); this page documents
+only where FrogDB's section list differs.
+
+## Logging
+
+FrogDB uses structured logging with configurable output format and level:
+
+```toml
+[logging]
+level = "info"                  # trace, debug, info, warn, error
+format = "pretty"               # "pretty" or "json"
+output = "stdout"               # "stdout", "stderr", or "none"
+per-request-spans = false       # Per-request tracing spans
+file-path = "/var/log/frogdb/frogdb.log"
+
+[logging.rotation]
+max-size-mb = 100
+frequency = "daily"             # "daily", "hourly", or "never"
+max-files = 5
+```
+
+`per-request-spans` adds a tracing span around every request; enabling it adds measurable CPU
+overhead and is intended for short diagnostic windows rather than continuous production use.
+Rotation requires `file-path` to be set and at least one of `max-size-mb` or `frequency` to be
+active.
+
+### Runtime level changes
+
+The log level can be changed at runtime without a restart:
+
+```bash
+redis-cli CONFIG SET loglevel debug
+```
+
+`loglevel` accepts the same five levels as `logging.level`.
+
+See [Configuration Reference → Logging](/reference/configuration/#logging).
+
+## USDT / DTrace probes
+
+FrogDB includes USDT (User Statically Defined Tracing) probes for low-overhead,
+production-safe tracing on macOS and Linux. They compile to no-ops unless the server is built
+with `--features usdt-probes`.
+
+### Available probes
 
 | Probe | Arguments | Description |
 |---|---|---|
@@ -104,7 +225,10 @@ FrogDB includes USDT (User Statically Defined Tracing) probes for low-overhead, 
 | `pubsub__publish` | channel, subscribers | Message published to a channel |
 | `connection__accept` | conn_id, addr | New client connection accepted |
 
-### Usage Examples
+Probes are defined in `frogdb-server/crates/core/src/probes.rs` under the `frogdb` USDT
+provider.
+
+### Usage examples
 
 ```bash
 # List all FrogDB probes (macOS)
@@ -123,37 +247,26 @@ sudo dtrace -n 'frogdb*:::memory-pressure { printf("used=%d max=%d action=%s\n",
 sudo bpftrace -e 'usdt:./frogdb-server:frogdb:command__start { printf("%s %s\n", str(arg0), str(arg1)); }'
 ```
 
-## Logging
+## Key metrics to watch
 
-FrogDB uses structured logging with configurable output format and level.
+A short, qualitative starting point — treat the thresholds as examples to tune for your
+workload, not SLAs:
 
-```toml
-[logging]
-level = "info"                  # trace, debug, info, warn, error
-format = "json"                 # "json" or "pretty"
-output = "stdout"               # "stdout", "stderr", or "none"
-per-request-spans = false       # Per-request tracing spans (~13% CPU overhead)
-file-path = "/var/log/frogdb/frogdb.log"
+| Metric | Watch for |
+|---|---|
+| `frogdb_memory_used_bytes` / `frogdb_memory_maxmemory_bytes` | Approaching the configured limit |
+| `histogram_quantile(0.99, rate(frogdb_commands_duration_seconds_bucket[5m]))` | Sustained increases in tail command latency |
+| `frogdb_persistence_errors_total` | Any increase (WAL/snapshot I/O trouble) |
+| `frogdb_connections_rejected_total` | Any increase (hitting `maxclients` or auth failures) |
 
-[logging.rotation]
-max-size-mb = 100
-frequency = "daily"             # "daily", "hourly", or "never"
-max-files = 5
-```
+All four metric names are validated against the generated
+[Metrics Reference](/reference/metrics/) catalog.
 
-### Runtime Level Changes
-
-The log level can be changed at runtime without restart:
-
-```bash
-redis-cli CONFIG SET loglevel debug
-```
-
-## See Also
+## See also
 
 <CardGrid>
-  <LinkCard title="Metrics Reference" description="Complete list of Prometheus metrics" href="/reference/metrics/" />
-  <LinkCard title="Monitoring" description="Alerting thresholds and dashboards" href="/operations/monitoring/" />
-  <LinkCard title="Debug UI & HTTP API" description="Web-based diagnostics" href="/operations/debug-ui/" />
-  <LinkCard title="Performance Tools" description="Slowlog, latency bands, and profiling" href="/operations/performance/" />
+  <LinkCard title="Metrics Reference" description="Complete, generated list of Prometheus metrics" href="/reference/metrics/" />
+  <LinkCard title="Diagnostics" description="Slowlog, LATENCY, hot-key detection, and the debug web UI" href="/operations/diagnostics/" />
+  <LinkCard title="Configuration Reference" description="All [http], [metrics], [tracing], and [logging] keys" href="/reference/configuration/" />
+  <LinkCard title="Clustering" description="Cluster topology and coordination" href="/operations/clustering/" />
 </CardGrid>

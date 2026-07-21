@@ -23,8 +23,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     ADVERTISED_REDIS_VERSION, AccessSpec, Arity, Command, CommandContext, CommandError,
-    CommandFlags, CommandSpec, ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, LookupSpec,
-    WaiterWake, WalStrategy,
+    CommandFlags, CommandSpec, ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec,
+    LookupSpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::collections::HashSet;
