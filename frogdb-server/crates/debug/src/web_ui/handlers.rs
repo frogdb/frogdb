@@ -58,27 +58,17 @@ pub struct ServerResponse {
 
 /// Handle GET /debug/api/server (formerly /api/cluster)
 pub fn handle_api_server(state: &DebugState) -> Response<Full<Bytes>> {
-    let (connected_replicas, master_host, master_port, replication_offset) =
-        if let Some(ref repl) = state.replication_info {
-            (
-                repl.connected_replicas(),
-                repl.master_host(),
-                repl.master_port(),
-                repl.replication_offset(),
-            )
-        } else {
-            (0, None, None, 0)
-        };
+    let repl = state.replication();
 
     let response = ServerResponse {
         version: state.server_info.version.clone(),
-        role: state.role().to_string(),
+        role: repl.role.clone(),
         uptime_seconds: state.uptime_seconds(),
         num_shards: state.server_info.num_shards,
-        connected_replicas,
-        master_host,
-        master_port,
-        replication_offset,
+        connected_replicas: repl.connected_replicas,
+        master_host: repl.master_host.clone(),
+        master_port: repl.master_port,
+        replication_offset: repl.replication_offset,
         bind_addr: state.server_info.bind_addr.clone(),
         port: state.server_info.port,
     };
@@ -182,8 +172,9 @@ pub async fn handle_api_latency(state: &DebugState) -> Response<Full<Bytes>> {
 fn render_cluster_html(state: &DebugState) -> String {
     let uptime = state.uptime_seconds();
     let uptime_str = format_duration(uptime);
-    let role = state.role();
-    let (role_badge_class, role_label, role_tooltip) = match role {
+    let repl = state.replication();
+    let role = repl.role.clone();
+    let (role_badge_class, role_label, role_tooltip) = match role.as_str() {
         "standalone" => (
             "tag-success",
             "Standalone Mode",
@@ -196,35 +187,28 @@ fn render_cluster_html(state: &DebugState) -> String {
         ),
         _ => (
             "tag-info",
-            role,
+            role.as_str(),
             "This server is a read replica connected to a primary node",
         ),
     };
 
-    let (replicas_html, master_html) = if let Some(ref repl) = state.replication_info {
-        let replicas = format!(
-            r#"<div class="stat-item">
+    let replicas_html = format!(
+        r#"<div class="stat-item">
                 <div class="stat-label">Connected Replicas</div>
                 <div class="stat-value">{}</div>
             </div>"#,
-            repl.connected_replicas()
-        );
-
-        let master = if let (Some(host), Some(port)) = (repl.master_host(), repl.master_port()) {
-            format!(
-                r#"<div class="stat-item">
+        repl.connected_replicas
+    );
+    let master_html = if let (Some(host), Some(port)) = (&repl.master_host, repl.master_port) {
+        format!(
+            r#"<div class="stat-item">
                     <div class="stat-label">Master</div>
                     <div class="stat-value">{}:{}</div>
                 </div>"#,
-                host, port
-            )
-        } else {
-            String::new()
-        };
-
-        (replicas, master)
+            host, port
+        )
     } else {
-        (String::new(), String::new())
+        String::new()
     };
 
     format!(
@@ -468,6 +452,60 @@ async fn render_latency_html(state: &DebugState) -> String {
             </div>"#
         )
     }
+}
+
+/// Render per-shard statistics HTML fragment (no card wrapper).
+async fn render_shard_stats_html(state: &DebugState) -> String {
+    let stats = state.get_shard_stats().await;
+
+    let rows: String = if stats.is_empty() {
+        r#"<tr><td colspan="6" style="text-align: center; color: var(--text-light);">No shard statistics available</td></tr>"#.to_string()
+    } else {
+        stats
+            .iter()
+            .map(|s| {
+                format!(
+                    r#"<tr>
+                        <td>{}</td>
+                        <td>{}</td>
+                        <td>{}</td>
+                        <td>{}</td>
+                        <td>{}</td>
+                        <td>{}</td>
+                    </tr>"#,
+                    s.shard_id,
+                    format_number(s.keys),
+                    format_bytes(s.memory_bytes),
+                    format_bytes(s.peak_memory_bytes),
+                    format_number(s.hot_keys),
+                    format_number(s.warm_keys),
+                )
+            })
+            .collect()
+    };
+
+    format!(
+        r#"<div class="section-header">
+            <h3>Shard Statistics</h3>
+        </div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Shard</th>
+                        <th>Keys</th>
+                        <th>Memory</th>
+                        <th>Peak Memory</th>
+                        <th>Hot Keys</th>
+                        <th>Warm Keys</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows}
+                </tbody>
+            </table>
+        </div>"#
+    )
 }
 
 // ============================================================================
@@ -916,6 +954,23 @@ pub async fn handle_partial_latency(state: &DebugState) -> Response<Full<Bytes>>
     html_response(render_latency_html(state).await)
 }
 
+/// Shard-stats API response.
+#[derive(Serialize)]
+pub struct ShardStatsResponse {
+    pub shards: Vec<super::state::ShardStats>,
+}
+
+/// Handle GET /debug/api/shard-stats
+pub async fn handle_api_shard_stats(state: &DebugState) -> Response<Full<Bytes>> {
+    let shards = state.get_shard_stats().await;
+    json_response(&ShardStatsResponse { shards })
+}
+
+/// Handle GET /debug/partials/shard-stats
+pub async fn handle_partial_shard_stats(state: &DebugState) -> Response<Full<Bytes>> {
+    html_response(render_shard_stats_html(state).await)
+}
+
 /// Handle GET /debug/partials/overview - combined cluster + metrics + endpoints.
 pub fn handle_partial_overview(
     state: &DebugState,
@@ -927,11 +982,12 @@ pub fn handle_partial_overview(
     html_response(format!("{cluster}\n{metrics}\n{endpoints}"))
 }
 
-/// Handle GET /debug/partials/performance - combined latency + slowlog.
+/// Handle GET /debug/partials/performance - combined shard stats + latency + slowlog.
 pub async fn handle_partial_performance(state: &DebugState) -> Response<Full<Bytes>> {
+    let shard_stats = render_shard_stats_html(state).await;
     let latency = render_latency_html(state).await;
     let slowlog = render_slowlog_html(state).await;
-    html_response(format!("{latency}\n{slowlog}"))
+    html_response(format!("{shard_stats}\n{latency}\n{slowlog}"))
 }
 
 // ============================================================================

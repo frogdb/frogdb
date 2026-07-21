@@ -555,6 +555,12 @@ impl MetricsRecorder for PrometheusRecorder {
         self.get_counter_value(name).map(|v| v as u64)
     }
 
+    fn gauge_value(&self, name: &str) -> Option<f64> {
+        // Reuse the registry-gathering reader so status surfaces report exactly
+        // what Prometheus would scrape for this gauge.
+        self.get_gauge_value(name)
+    }
+
     fn record_command_latency_ms(&self, latency_ms: u64) {
         if let Some(tracker) = &self.band_tracker {
             tracker.record(latency_ms);

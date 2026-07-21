@@ -17,27 +17,39 @@
 // Submodules
 pub(crate) mod acl_conn_command;
 pub(crate) mod auth_conn_command;
+mod blocking;
 mod builder;
 pub(crate) mod client_conn_command;
+pub(crate) mod cluster;
 pub(crate) mod codec;
 pub(crate) mod conn_command;
 pub(crate) mod connection_state_conn_command;
 pub(crate) mod debug_conn_command;
+mod debug_handler;
 pub mod deps;
 pub(crate) mod dispatch;
 mod frame_io;
 pub(crate) mod guards;
-pub mod handlers;
+pub(crate) mod hotkeys;
 pub(crate) mod info_conn_command;
+mod info_handler;
 mod lifecycle;
 pub(crate) mod monitor_conn_command;
 pub(crate) mod observability_conn_command;
 pub(crate) mod permission_guard;
 pub(crate) mod persistence_conn_command;
+pub(crate) mod persistence_handler;
 pub(crate) mod pubsub_conn_command;
 pub(crate) mod routing;
+pub(crate) mod scatter;
+pub(crate) mod scripting;
 pub(crate) mod scripting_conn_command;
+pub(crate) mod search;
+mod slowlog;
 pub mod state;
+pub(crate) mod status_handler;
+pub(crate) mod timeseries_scatter;
+pub(crate) mod transaction;
 pub(crate) mod transaction_conn_command;
 pub(crate) mod util;
 
@@ -74,10 +86,10 @@ use tracing::{Instrument, debug, info, trace, warn};
 #[cfg(feature = "turmoil")]
 use crate::config::ChaosConfigExt;
 use crate::net::ConnectionStream;
-// Re-export next_txid for handler modules
+// Re-export next_txid for the command-execution submodules
 pub use crate::server::next_txid;
 
-// Re-export utility functions used by handler submodules and internally
+// Re-export utility functions used by connection submodules and internally
 pub(crate) use util::{estimate_command_size, estimate_resp2_frame_size};
 
 /// Connection handler that processes client commands.

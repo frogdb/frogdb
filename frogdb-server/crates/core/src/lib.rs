@@ -78,8 +78,8 @@ pub use conn_command::{
     BoxFuture, ClientTrackingProvider, ConfigProvider, ConnCtx, ConnStateMut, ConnectionCommand,
     CursorReadBatch, CursorRow, CursorStoreProvider, DebugProvider, HotkeyClusterProvider,
     InfoProvider, MemoryDiagProvider, MonitorProvider, NoopInfoProvider, NoopScriptingProvider,
-    PubSubProvider, ResetOutcome, ScriptingProvider, TrackingInfoView, TrackingModeView,
-    TxnDiscardOutcome,
+    NoopStatusProvider, PubSubProvider, ResetOutcome, ScriptingProvider, StatusProvider,
+    TrackingInfoView, TrackingModeView, TxnDiscardOutcome,
 };
 pub use error::FrogDbError;
 pub use eviction::{
@@ -134,7 +134,7 @@ pub use scripting::{
     CachedScript, LuaVm, ScriptCache, ScriptError, ScriptExecutor, ScriptingConfig,
 };
 pub use shard::{
-    BigKeyInfo, BigKeysScanResponse, HotShardStatsResponse, IndexLifecycleManager,
+    BigKeyInfo, BigKeysScanResponse, Envelope, HotShardStatsResponse, IndexLifecycleManager,
     InfoShardSnapshot, LifecycleError, PartialResult, REDIS_CLUSTER_SLOTS,
     REPLICA_INTERNAL_CONN_ID, RecoveryOutcome, RecoveryResult, ScatterOp, ShardBuilderError,
     ShardClusterDeps, ShardConfig, ShardCoreDeps, ShardMemoryStats, ShardMessage,

@@ -46,6 +46,38 @@ impl Server {
         // Capture server start time
         let start_time = std::time::Instant::now();
 
+        // Determine node role once — the single source of truth for both the
+        // status collector and (when HTTP is enabled) the debug node-state
+        // provider.
+        let mode = if self.config.cluster.enabled {
+            "cluster".to_string()
+        } else if self.config.replication.is_primary() {
+            "primary".to_string()
+        } else if self.config.replication.is_replica() {
+            "replica".to_string()
+        } else {
+            "standalone".to_string()
+        };
+
+        // Single status collector shared by the HTTP `/status` endpoint and the
+        // STATUS JSON connection command, so the two surfaces can never disagree.
+        // Built unconditionally over the object-safe metrics recorder so STATUS
+        // JSON works even when the HTTP server is disabled (the no-op recorder
+        // reports absent counters as 0, never faked).
+        let status_collector = Arc::new(StatusCollector::new(
+            self.config.status.to_collector_config(),
+            self.health_checker.clone(),
+            self.shard_senders.clone(),
+            self.client_registry.clone(),
+            self.metrics_recorder.clone(),
+            start_time,
+            self.config_manager.max_clients_flag(),
+            self.config.memory.maxmemory,
+            self.config.persistence.enabled,
+            self.config.persistence.durability_mode.clone(),
+            mode.clone(),
+        ));
+
         // Start HTTP server if enabled (metrics, health, debug, admin REST)
         let http_server_handle = if let Some(ref prometheus) = self.prometheus_recorder {
             // Create debug state for the debug web UI
@@ -71,6 +103,27 @@ impl Server {
                     value: self.config.http.port.to_string(),
                 },
             ];
+            // Master identity, when this node is a configured replica.
+            let (master_host, master_port) = if self.config.replication.is_replica() {
+                (
+                    Some(self.config.replication.primary_host.clone()),
+                    Some(self.config.replication.primary_port),
+                )
+            } else {
+                (None, None)
+            };
+
+            // Single coherent node-state provider (replication, clients, cluster).
+            let node_state_provider = Arc::new(crate::debug_providers::ServerDebugProvider::new(
+                self.client_registry.clone(),
+                self.cluster_state.clone(),
+                self.node_id,
+                self.replication_tracker.clone(),
+                mode.clone(),
+                master_host,
+                master_port,
+            ));
+
             let debug_state = DebugState::new(
                 ServerInfo {
                     version: env!("CARGO_PKG_VERSION").to_string(),
@@ -81,44 +134,8 @@ impl Server {
                 },
                 config_entries,
             )
-            .with_client_info(self.client_registry.clone());
-
-            // Wire up cluster info if cluster mode is enabled
-            let debug_state = if let Some(ref cluster_state) = self.cluster_state {
-                debug_state.with_cluster_info(Arc::new(
-                    crate::debug_providers::ClusterStateProvider::new(
-                        cluster_state.clone(),
-                        self.node_id,
-                    ),
-                ))
-            } else {
-                debug_state
-            };
-
-            // Create status collector for /status/json endpoint
-            let status_collector_config = self.config.status.to_collector_config();
-            let mode = if self.config.cluster.enabled {
-                "cluster".to_string()
-            } else if self.config.replication.is_primary() {
-                "primary".to_string()
-            } else if self.config.replication.is_replica() {
-                "replica".to_string()
-            } else {
-                "standalone".to_string()
-            };
-            let status_collector = Arc::new(StatusCollector::new(
-                status_collector_config,
-                self.health_checker.clone(),
-                self.shard_senders.clone(),
-                self.client_registry.clone(),
-                prometheus.clone(),
-                start_time,
-                self.config_manager.max_clients_flag(),
-                self.config.memory.maxmemory,
-                self.config.persistence.enabled,
-                self.config.persistence.durability_mode.clone(),
-                mode,
-            ));
+            .with_node_state(node_state_provider)
+            .with_shard_senders(self.shard_senders.clone());
 
             // SAFETY: http_listener is Some when prometheus_recorder is Some
             // (both are gated on config.http.enabled in Server::new()).
@@ -161,7 +178,7 @@ impl Server {
             )
             .with_listener(http_listener)
             .with_debug_state(debug_state)
-            .with_status_collector(status_collector);
+            .with_status_collector(status_collector.clone());
 
             if let Some(admin_state) = admin_state {
                 server = server.with_admin_state(admin_state);
@@ -294,6 +311,15 @@ impl Server {
             let shard_senders = self.shard_senders.clone();
             let num_shards = self.config.server.num_shards.max(1);
 
+            // Adopt this boot-spawned handler into the RoleManager, before the
+            // acceptor (spawned later in this function) can start serving
+            // client connections — so no REPLICAOF can race ahead of this
+            // call. Without this, promoting away from a boot-spawned Replica
+            // would leave its reconnect loop dialing the old primary forever,
+            // since RoleManager otherwise has no idea this handler exists.
+            self.role_manager_handle
+                .register_boot_replica_handler(handler.clone(), handler.primary_addr());
+
             // Get shared replication state for the frame consumer to update active_version
             let replication_state = Some(handler.shared_state());
 
@@ -416,6 +442,7 @@ impl Server {
                 latency_histograms: latency_histograms.clone(),
                 hotkey_session: hotkey_session.clone(),
                 keyspace_stats: self.keyspace_stats.clone(),
+                status_collector: Some(status_collector.clone()),
             },
             new_conn_senders: std::mem::take(&mut self.new_conn_senders),
             allow_cross_slot: self.config.server.allow_cross_slot_standalone,
@@ -615,14 +642,15 @@ impl Server {
                 Err(e) => error!(error = %e, "Failed to persist replication state on shutdown"),
             }
         }
-        if let Some(ref handler) = self.replica_handler {
-            match handler.save_state().await {
-                Ok(()) => info!("Replica replication state persisted on shutdown"),
-                Err(e) => {
-                    error!(error = %e, "Failed to persist replica replication state on shutdown")
-                }
-            }
-        }
+        // Note: deliberately no save-on-shutdown for `self.replica_handler`
+        // here (there used to be dead code attempting it). `start_subsystems`
+        // already `take()`s the handler before spawning the connection/
+        // consumer tasks, so `self.replica_handler` is always `None` by the
+        // time shutdown runs — the old block could never execute. There is
+        // currently no replacement persistence hook for replica state (unlike
+        // the primary handler's pre-snapshot hook above); a clean restart
+        // resumes from the last-recovered offset rather than the exact
+        // shutdown offset. Tracked separately from this fix.
 
         // Final flush of RocksDB
         if let Some(ref rocks) = self.rocks_store {

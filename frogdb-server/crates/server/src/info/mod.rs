@@ -5,7 +5,7 @@
 //! bundle that is gathered exactly once per INFO request. There is no
 //! placeholder string, no `.replace`, no `.replace_range`, and no re-parsing of
 //! a buffer the code just emitted — the stub-and-patch contract that used to
-//! span `commands/info.rs` and `connection/handlers/scatter.rs` is gone.
+//! span `commands/info.rs` and `connection/scatter.rs` is gone.
 //!
 //! Layout invariants (`# Title\r\n`, `field:value\r\n`, trailing blank line)
 //! live in [`SectionWriter`]; section selection (`default`/`all`/`everything`,
@@ -26,12 +26,11 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use frogdb_core::{
-    ClusterState, CommandLatencyHistograms, InfoShardSnapshot, KeysizeHistograms, MetricsRecorder,
-    ServerCommandStats, ShardMessage, ShardSender, TieredCounts, WalLagAggregate,
+    ClusterState, CommandLatencyHistograms, MetricsRecorder, ServerCommandStats, ShardSender,
 };
 use frogdb_protocol::Response;
-use frogdb_telemetry::definitions::{WalBytes, WalWrites};
-use tokio::sync::oneshot;
+use frogdb_telemetry::definitions::{CommandsTotal, WalBytes, WalWrites};
+use frogdb_telemetry::{NodeStateSnapshot, ShardScatterError};
 use tracing::warn;
 
 // ============================================================================
@@ -232,69 +231,6 @@ impl InfoBuilder {
 // Sources
 // ============================================================================
 
-/// Aggregated per-shard data, collected with a single fleet scatter
-/// (see [`gather_shard_snapshot`]) that replaces the previous two passes
-/// (`MemoryStats` + `KeysizesSnapshot`). Adding a future per-shard INFO field
-/// is a new field here (and on `frogdb_core::InfoShardSnapshot`), not a new
-/// round trip.
-#[derive(Debug, Clone, Default)]
-pub struct ShardInfoSnapshot {
-    /// Total data memory across all shards (bytes).
-    pub used_memory: usize,
-    /// Sum of per-shard peak memory high-water marks (bytes).
-    pub peak_memory: u64,
-    /// Total number of keys across all shards.
-    pub keys: usize,
-    /// Total keys evicted across all shards.
-    pub evicted_keys: u64,
-    /// Total keys expired across all shards.
-    pub expired_keys: u64,
-    /// Total objects freed via lazyfree across all shards.
-    pub lazyfreed_objects: u64,
-    /// Total writes since last snapshot across all shards.
-    pub dirty: u64,
-    /// Summed tiered-storage counters.
-    pub tiered: TieredCounts,
-    /// Keysize histograms merged across all shards.
-    pub keysizes: KeysizeHistograms,
-    /// Aggregated WAL lag; `None` when persistence is disabled on every shard.
-    pub wal: Option<WalLagAggregate>,
-    /// Primary host when running as a replica (from shard identity).
-    pub master_host: Option<String>,
-    /// Primary port when running as a replica (from shard identity).
-    pub master_port: Option<u16>,
-}
-
-impl ShardInfoSnapshot {
-    /// Fold one shard's reply into the aggregate.
-    pub fn absorb(&mut self, snap: InfoShardSnapshot) {
-        self.used_memory += snap.memory.data_memory;
-        self.peak_memory += snap.memory.peak_memory;
-        self.keys += snap.memory.keys;
-        self.evicted_keys += snap.memory.evicted_keys;
-        self.expired_keys += snap.memory.expired_keys;
-        self.lazyfreed_objects += snap.memory.lazyfreed_objects;
-        self.dirty += snap.dirty;
-        self.tiered.hot_keys += snap.tiered.hot_keys;
-        self.tiered.warm_keys += snap.tiered.warm_keys;
-        self.tiered.unspills += snap.tiered.unspills;
-        self.tiered.spills += snap.tiered.spills;
-        self.tiered.expired_on_unspill += snap.tiered.expired_on_unspill;
-        self.keysizes.merge(&snap.keysizes);
-        if let Some(lag) = snap.wal_lag {
-            self.wal
-                .get_or_insert_with(WalLagAggregate::new)
-                .absorb(&lag);
-        }
-        if self.master_host.is_none() {
-            self.master_host = snap.master_host;
-        }
-        if self.master_port.is_none() {
-            self.master_port = snap.master_port;
-        }
-    }
-}
-
 /// Client-registry counts for the Clients section.
 #[derive(Debug, Clone, Default)]
 pub struct ClientsSnapshot {
@@ -463,7 +399,7 @@ pub struct InfoSources {
     pub(crate) memory_config: MemoryConfigSnapshot,
     pub(crate) baseline: Option<BaselineSnapshot>,
     pub(crate) key_memory_enabled: bool,
-    pub(crate) shards: ShardInfoSnapshot,
+    pub(crate) shards: NodeStateSnapshot,
     /// The resettable keyspace hit/miss accumulator (proposal 24). Counted at
     /// the execution seam, so it is live even when metrics are disabled.
     pub(crate) keyspace_stats: Arc<frogdb_core::KeyspaceStats>,
@@ -485,6 +421,14 @@ impl InfoSources {
         Some(self.keyspace_stats.reported_misses())
     }
 
+    /// Total commands processed, summed across the `command` label of the same
+    /// `frogdb_commands_total` counter Prometheus scrapes and the `/status`
+    /// endpoint reports — so INFO, `/metrics`, and `/status` never disagree.
+    /// `None` when metrics are disabled (nothing to report).
+    pub fn total_commands_processed(&self) -> Option<u64> {
+        self.metrics.counter_value(CommandsTotal::NAME)
+    }
+
     /// Total WAL writes, from the same counter Prometheus scrapes.
     pub fn wal_writes_total(&self) -> Option<u64> {
         self.metrics.counter_value(WalWrites::NAME)
@@ -496,7 +440,7 @@ impl InfoSources {
     }
 
     /// Aggregated per-shard data (memory, keys, eviction, keysizes, WAL).
-    pub fn shards(&self) -> &ShardInfoSnapshot {
+    pub fn shards(&self) -> &NodeStateSnapshot {
         &self.shards
     }
 
@@ -567,50 +511,35 @@ impl InfoSources {
 
 /// The one place INFO talks to shards.
 ///
-/// Sends a single combined [`ShardMessage::InfoSnapshot`] request to every
-/// shard and folds the replies into a [`ShardInfoSnapshot`], so adding a
-/// per-shard field never adds a round trip. All replies are awaited under a
-/// single shared deadline; a missing shard is an error, never a silently
+/// Delegates to the shared [`NodeStateSnapshot::collect`] — the single
+/// `InfoSnapshot` fleet scatter that telemetry `/status` and the debug UI also
+/// use — and maps its per-shard [`ShardScatterError`] to the INFO wire error and
+/// warn log. INFO is strict: a missing shard is an error, never a silently
 /// under-reported aggregate.
 pub async fn gather_shard_snapshot(
     senders: &[ShardSender],
     timeout: Duration,
     conn_id: u64,
-) -> Result<ShardInfoSnapshot, Response> {
-    let mut rxs = Vec::with_capacity(senders.len());
-    for (shard_id, sender) in senders.iter().enumerate() {
-        let (response_tx, rx) = oneshot::channel();
-        if sender
-            .send(ShardMessage::InfoSnapshot { response_tx })
-            .await
-            .is_err()
-        {
-            warn!(conn_id, shard_id, cmd = "INFO", "shard unavailable");
-            return Err(Response::error("ERR shard unavailable"));
-        }
-        rxs.push((shard_id, rx));
-    }
-
-    // One deadline for the whole gather, not one-per-receiver.
-    let deadline = tokio::time::sleep(timeout);
-    tokio::pin!(deadline);
-    let mut aggregate = ShardInfoSnapshot::default();
-    for (shard_id, rx) in rxs {
-        tokio::select! {
-            reply = rx => match reply {
-                Ok(snap) => aggregate.absorb(snap),
-                Err(_) => {
-                    warn!(conn_id, shard_id, cmd = "INFO", "shard dropped request");
-                    return Err(Response::error("ERR shard dropped request"));
+) -> Result<NodeStateSnapshot, Response> {
+    NodeStateSnapshot::collect(senders, timeout)
+        .await
+        .map_err(|err| {
+            let shard_id = err.shard_id();
+            match err {
+                ShardScatterError::Unavailable { .. } => {
+                    warn!(conn_id, shard_id, cmd = "INFO", "shard unavailable");
+                    Response::error("ERR shard unavailable")
                 }
-            },
-            _ = &mut deadline => {
-                warn!(conn_id, shard_id, cmd = "INFO", "scatter timeout");
-                return Err(Response::error("ERR timeout"));
+                ShardScatterError::Dropped { .. } => {
+                    warn!(conn_id, shard_id, cmd = "INFO", "shard dropped request");
+                    Response::error("ERR shard dropped request")
+                }
+                ShardScatterError::Timeout { .. } => {
+                    warn!(conn_id, shard_id, cmd = "INFO", "scatter timeout");
+                    Response::error("ERR timeout")
+                }
             }
-        }
-    }
-    Ok(aggregate)
+        })
 }
 
 #[cfg(test)]
@@ -644,7 +573,7 @@ pub(crate) mod test_support {
             },
             baseline: None,
             key_memory_enabled: true,
-            shards: ShardInfoSnapshot::default(),
+            shards: NodeStateSnapshot::default(),
             keyspace_stats: Arc::new(frogdb_core::KeyspaceStats::new()),
         }
     }
@@ -654,7 +583,10 @@ pub(crate) mod test_support {
 mod tests {
     use super::test_support::sources;
     use super::*;
-    use frogdb_core::{ShardMemoryStats, ShardReceiver, WalLagStats};
+    use frogdb_core::{
+        InfoShardSnapshot, KeysizeHistograms, ShardMemoryStats, ShardMessage, ShardReceiver,
+        TieredCounts,
+    };
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::mpsc;
 
@@ -791,68 +723,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn shard_snapshot_absorb_sums_counters() {
-        let mut agg = ShardInfoSnapshot::default();
-        agg.absorb(shard_snap(0));
-        agg.absorb(shard_snap(1));
-        assert_eq!(agg.used_memory, 200);
-        assert_eq!(agg.peak_memory, 400);
-        assert_eq!(agg.keys, 20);
-        assert_eq!(agg.evicted_keys, 2);
-        assert_eq!(agg.expired_keys, 4);
-        assert_eq!(agg.lazyfreed_objects, 6);
-        assert_eq!(agg.dirty, 10);
-        assert_eq!(agg.tiered.hot_keys, 8);
-        assert_eq!(agg.tiered.spills, 2);
-        assert!(agg.wal.is_none());
-    }
-
-    #[test]
-    fn wal_aggregate_sums_pending_maxes_lag_and_mins_timestamps() {
-        let lag = |pending, dlag, flush, failures, lost, ok| WalLagStats {
-            pending_ops: pending,
-            pending_bytes: pending * 10,
-            durability_lag_ms: dlag,
-            sequence: 0,
-            durable_sequence: 0,
-            flush_failures: failures,
-            lost_ops: lost,
-            lost_bytes: lost * 100,
-            last_flush_ok: ok,
-            shard_id: 0,
-            last_flush_timestamp_ms: flush,
-        };
-        let mut snap_a = shard_snap(0);
-        snap_a.wal_lag = Some(lag(3, 50, 1_000, 2, 1, true));
-        let mut snap_b = shard_snap(1);
-        snap_b.wal_lag = Some(lag(4, 80, 800, 3, 2, false));
-
-        let mut agg = ShardInfoSnapshot::default();
-        agg.absorb(snap_a);
-        agg.absorb(snap_b);
-        let wal = agg.wal.expect("wal aggregate present");
-        assert_eq!(wal.pending_ops, 7);
-        assert_eq!(wal.pending_bytes, 70);
-        assert_eq!(wal.max_durability_lag_ms, 80, "lag takes the worst shard");
-        assert_eq!(wal.flush_failures, 5, "failures sum across shards");
-        assert_eq!(wal.lost_ops, 3, "lost ops sum across shards");
-        assert!(
-            !wal.last_flush_ok,
-            "one failing shard makes the aggregate status err"
-        );
-        assert_eq!(
-            wal.last_flush_time_ms, 800,
-            "flush time takes the oldest shard"
-        );
-    }
-
-    #[test]
-    fn wal_aggregate_none_when_no_shard_has_persistence() {
-        let mut agg = ShardInfoSnapshot::default();
-        agg.absorb(shard_snap(0));
-        assert!(agg.wal.is_none());
-    }
+    // The per-shard fold (`absorb`) and WAL aggregation now live on
+    // `frogdb_telemetry::NodeStateSnapshot` and are unit-tested there; INFO only
+    // wraps `NodeStateSnapshot::collect` with its wire-error mapping, exercised
+    // by the scatter tests below.
 
     // -------------------------------------------------------------------
     // Single-scatter invariant

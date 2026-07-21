@@ -16,7 +16,7 @@ use crate::vll::{LockMode, ShardReadyResult};
 use super::counters::HotShardStatsResponse;
 use super::types::{
     BigKeysScanResponse, InfoShardSnapshot, PartialResult, PubSubLimitsInfo, ShardMemoryStats,
-    TransactionResult, VllQueueInfo, WalLagStatsResponse,
+    TransactionResult, VllQueueInfo,
 };
 
 /// A timestamped wrapper around [`ShardMessage`] for measuring queue latency.
@@ -425,12 +425,6 @@ pub enum ShardMessage {
         response_tx: oneshot::Sender<ShardMemoryStats>,
     },
 
-    /// Get WAL lag statistics from this shard.
-    WalLagStats {
-        /// Response channel.
-        response_tx: oneshot::Sender<WalLagStatsResponse>,
-    },
-
     /// Get the combined INFO snapshot from this shard (memory, eviction,
     /// keysizes, tiered counters, WAL lag, and replica identity) in one reply.
     ///
@@ -678,7 +672,6 @@ impl ShardMessage {
             ShardMessage::SlowlogAdd { .. } => "SlowlogAdd",
             ShardMessage::MemoryUsage { .. } => "MemoryUsage",
             ShardMessage::MemoryStats { .. } => "MemoryStats",
-            ShardMessage::WalLagStats { .. } => "WalLagStats",
             ShardMessage::InfoSnapshot { .. } => "InfoSnapshot",
             ShardMessage::ScanBigKeys { .. } => "ScanBigKeys",
             ShardMessage::LatencyLatest { .. } => "LatencyLatest",

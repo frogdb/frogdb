@@ -37,6 +37,17 @@ pub trait MetricsRecorder: Send + Sync {
         None
     }
 
+    /// Read back the current value of a gauge, summed across all label sets.
+    ///
+    /// Returns `None` when the recorder cannot read gauge values back (e.g. the
+    /// no-op recorder used when metrics are disabled) or the gauge has never been
+    /// recorded. Lets status/observability surfaces report the same gauge values
+    /// Prometheus scrapes instead of a second source of truth. Default is a no-op
+    /// that returns `None`.
+    fn gauge_value(&self, _name: &str) -> Option<f64> {
+        None
+    }
+
     /// Record a command latency for SLO band tracking.
     ///
     /// Implementations with latency band support will bucket this into

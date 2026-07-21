@@ -32,6 +32,15 @@ pub(super) struct ClusterInitResult {
     /// injected into shard workers so `REPLICAOF` can drive Role
     /// Promotion/Demotion, and used by the demotion-event consumer.
     pub role_controller: Arc<dyn frogdb_core::RoleController>,
+    /// The offset atomic the cluster-bus HealthProbe answers with. In cluster
+    /// mode this is always `Some` (minted here if replication did not vend one)
+    /// and is shared with the runtime replica streamer so a runtime-demoted
+    /// node keeps publishing its offset to the failure detector.
+    pub shared_replication_offset: Option<Arc<frogdb_core::sync::AtomicU64>>,
+    /// The concrete `RoleManagerHandle` (not just the trait object above), so
+    /// `Server::start_subsystems` can register the boot-spawned replica
+    /// handler with it — a capability outside `frogdb_core::RoleController`.
+    pub role_manager_handle: crate::role_manager::RoleManagerHandle,
 }
 
 /// Initialize cluster state, Raft, failure detector, and background tasks.
@@ -51,6 +60,12 @@ pub(super) async fn init_cluster(
     primary_replication_handler: Option<&Arc<crate::replication::PrimaryReplicationHandler>>,
     replication_tracker: &Option<Arc<ReplicationTrackerImpl>>,
     metrics_recorder: &Arc<dyn MetricsRecorder>,
+    // The resolved `replicaof` primary address when this node boots as a
+    // replica (`None` otherwise); resolved once by `init_replication` and
+    // threaded here to seed the `RoleManager`'s `primary_target` — the
+    // single source `ROLE`/INFO read, live, for the whole process lifetime.
+    boot_primary_addr: Option<std::net::SocketAddr>,
+    shared_replication_offset: Option<Arc<frogdb_core::sync::AtomicU64>>,
     #[cfg(not(feature = "turmoil"))] tls_manager: &Option<Arc<crate::tls::TlsManager>>,
 ) -> Result<ClusterInitResult> {
     // Create the shared is_replica flag and the RoleManager that owns it. This
@@ -62,16 +77,32 @@ pub(super) async fn init_cluster(
     let is_replica_flag = Arc::new(std::sync::atomic::AtomicBool::new(
         config.replication.is_replica(),
     ));
+    // The single offset atomic the cluster-bus HealthProbe answers with. In
+    // cluster mode it must always exist so a runtime-demoted node (which may
+    // have booted as a primary or standalone, i.e. with no boot-time replica
+    // offset) can publish its replication offset to the failure detector the
+    // same way a boot-configured replica does. Reuse the boot-time atomic when
+    // present; otherwise mint one here.
+    let shared_replication_offset = if config.cluster.enabled {
+        Some(
+            shared_replication_offset
+                .unwrap_or_else(|| Arc::new(frogdb_core::sync::AtomicU64::new(0))),
+        )
+    } else {
+        shared_replication_offset
+    };
     let streamer: Arc<dyn crate::role_manager::ReplicaStreamer> =
         Arc::new(crate::role_manager::RealReplicaStreamer::new(
             config,
             shard_senders.clone(),
             num_shards,
             is_replica_flag.clone(),
+            shared_replication_offset.clone(),
             #[cfg(not(feature = "turmoil"))]
             tls_manager,
         ));
-    let role_manager = crate::role_manager::RoleManager::new(is_replica_flag.clone(), streamer);
+    let role_manager =
+        crate::role_manager::RoleManager::new(is_replica_flag.clone(), streamer, boot_primary_addr);
     let role_handle = crate::role_manager::RoleManagerHandle::new(role_manager);
     let role_controller: Arc<dyn frogdb_core::RoleController> = Arc::new(role_handle.clone());
 
@@ -101,12 +132,12 @@ pub(super) async fn init_cluster(
         cluster.set_self_node_id(node_id);
         let mut state_machine = ClusterStateMachine::with_state(cluster.clone());
 
-        // Enable demotion detection for split-brain logging
-        let demotion_rx = if config.replication.split_brain_log_enabled {
-            Some(state_machine.enable_demotion_detection(node_id))
-        } else {
-            None
-        };
+        // Enable demotion detection unconditionally. The demotion-event consumer
+        // performs a real data-path Role Demotion (via `request_demote`) during
+        // failover, so it must run whenever cluster mode is on — the kill-switch
+        // is `cluster.enabled` itself. `split_brain_log_enabled` gates ONLY the
+        // split-brain log line inside the consumer, never the demotion behavior.
+        let demotion_rx = state_machine.enable_demotion_detection(node_id);
 
         // Enable slot migration completion notifications for blocked client handling
         let migration_rx = state_machine.enable_migration_complete_notification();
@@ -463,118 +494,36 @@ pub(super) async fn init_cluster(
             });
         }
 
-        // Spawn split-brain demotion handler if enabled
-        if let Some(mut demotion_rx) = demotion_rx {
-            let data_dir = config.persistence.data_dir.clone();
-            let broadcaster: SharedBroadcaster = replication_broadcaster.clone();
-            // Backlog introspection lives on the concrete primary handler, not
-            // the frame-emit broadcaster trait. Only a primary reaches the
-            // demotion path with divergent writes to extract; a replica's
-            // handler is `None` and yields nothing (matching the old Noop path).
-            let primary_handler = primary_replication_handler.cloned();
-            let tracker = replication_tracker.clone();
-            let metrics = metrics_recorder.clone();
-            // Capture the role controller + a cluster-state handle so the
-            // consumer can reconfigure the local data path (not just log) when
-            // Raft demotes this node — resolving the new primary's client
-            // address from the committed topology.
-            let demotion_role_controller = role_controller.clone();
-            let demotion_cluster_state = cluster.clone();
+        // Spawn the demotion-event consumer. It ALWAYS runs in cluster mode: it
+        // performs the real data-path Role Demotion during failover. Split-brain
+        // *logging* is an optional side-effect gated by `split_brain_log_enabled`
+        // (modeled as `Option<SplitBrainLogger>`) — disabling the log must never
+        // disable the demotion behavior.
+        {
+            let mut demotion_rx = demotion_rx;
+            let split_brain_logger = if config.replication.split_brain_log_enabled {
+                Some(SplitBrainLogger {
+                    data_dir: config.persistence.data_dir.clone(),
+                    broadcaster: replication_broadcaster.clone(),
+                    // Backlog introspection lives on the concrete primary handler,
+                    // not the frame-emit broadcaster trait. Only a primary reaches
+                    // the demotion path with divergent writes to extract; a
+                    // replica's handler is `None` and yields nothing.
+                    primary_handler: primary_replication_handler.cloned(),
+                    tracker: replication_tracker.clone(),
+                    metrics: metrics_recorder.clone(),
+                })
+            } else {
+                None
+            };
+            let consumer = DemotionConsumer {
+                split_brain_logger,
+                cluster_state: cluster.clone(),
+                role_controller: role_controller.clone(),
+            };
             spawn(async move {
                 while let Some(event) = demotion_rx.recv().await {
-                    tracing::warn!(
-                        demoted_node = event.demoted_node_id,
-                        new_primary = ?event.new_primary_id,
-                        epoch = event.epoch,
-                        "Split-brain demotion detected"
-                    );
-
-                    // Determine divergence boundary
-                    let min_acked = tracker
-                        .as_ref()
-                        .and_then(|t| t.min_acked_offset())
-                        .unwrap_or(0);
-                    let current = broadcaster.current_offset();
-
-                    if current > min_acked {
-                        let divergent = primary_handler
-                            .as_ref()
-                            .map(|h| h.extract_divergent_writes(min_acked))
-                            .unwrap_or_default();
-                        if !divergent.is_empty() {
-                            let header = frogdb_replication::split_brain_log::SplitBrainLogHeader {
-                                timestamp: String::new(),
-                                old_primary: format!("{:x}", event.demoted_node_id),
-                                new_primary: event
-                                    .new_primary_id
-                                    .map(|id| format!("{:x}", id))
-                                    .unwrap_or_else(|| "unknown".to_string()),
-                                epoch_old: event.epoch,
-                                epoch_new: event.epoch.saturating_add(1),
-                                seq_diverge_start: min_acked,
-                                seq_diverge_end: current,
-                                ops_discarded: divergent.len(),
-                            };
-
-                            match frogdb_replication::split_brain_log::write_log(
-                                &data_dir, header, &divergent,
-                            ) {
-                                Ok(path) => {
-                                    tracing::warn!(
-                                        ops = divergent.len(),
-                                        path = %path.display(),
-                                        "Split-brain: {} divergent writes logged to {}",
-                                        divergent.len(),
-                                        path.display()
-                                    );
-                                }
-                                Err(e) => {
-                                    tracing::error!(
-                                        error = %e,
-                                        "Failed to write split-brain log"
-                                    );
-                                }
-                            }
-
-                            frogdb_telemetry::definitions::SplitBrainEventsTotal::inc(&*metrics);
-                            frogdb_telemetry::definitions::SplitBrainOpsDiscardedTotal::inc_by(
-                                &*metrics,
-                                divergent.len() as u64,
-                            );
-                            frogdb_telemetry::definitions::SplitBrainRecoveryPending::set(
-                                &*metrics, 1.0,
-                            );
-                        }
-                    }
-
-                    // Reconfigure the local data path to match consensus: this
-                    // node was demoted, so become a replica of the committed new
-                    // primary. Previously this consumer only *logged* divergent
-                    // writes and left the data path behaving as a primary. The
-                    // Raft plane owns the decision (ADR-0001); the RoleManager
-                    // only reflects it onto the data path here.
-                    if let Some(new_id) = event.new_primary_id {
-                        match demotion_cluster_state
-                            .snapshot()
-                            .nodes
-                            .get(&new_id)
-                            .map(|n| n.addr)
-                        {
-                            Some(addr) => {
-                                tracing::warn!(
-                                    new_primary = %addr,
-                                    "Role Demotion: reconfiguring data path to replicate from new primary"
-                                );
-                                demotion_role_controller.request_demote(addr);
-                            }
-                            None => {
-                                tracing::warn!(
-                                    new_primary = new_id,
-                                    "Demotion event: new primary not yet in cluster state; cannot reconfigure data path"
-                                );
-                            }
-                        }
-                    }
+                    consumer.handle(&event);
                 }
             });
         }
@@ -646,5 +595,280 @@ pub(super) async fn init_cluster(
         failure_detector_handle,
         is_replica_flag,
         role_controller,
+        shared_replication_offset,
+        role_manager_handle: role_handle,
     })
+}
+
+/// Split-brain divergent-write logger: the optional side-effect of a demotion.
+///
+/// Constructed only when `split_brain_log_enabled` is set. Holds exactly the
+/// collaborators the log path needs; when logging is disabled the
+/// [`DemotionConsumer`] holds `None` here and the demotion still runs.
+struct SplitBrainLogger {
+    data_dir: std::path::PathBuf,
+    broadcaster: SharedBroadcaster,
+    primary_handler: Option<Arc<crate::replication::PrimaryReplicationHandler>>,
+    tracker: Option<Arc<ReplicationTrackerImpl>>,
+    metrics: Arc<dyn MetricsRecorder>,
+}
+
+impl SplitBrainLogger {
+    /// Emit the split-brain log line and, if this node diverged from the new
+    /// primary, persist the divergent writes and bump the split-brain telemetry.
+    fn log(&self, event: &frogdb_core::DemotionEvent) {
+        tracing::warn!(
+            demoted_node = event.demoted_node_id,
+            new_primary = ?event.new_primary_id,
+            epoch = event.epoch,
+            "Split-brain demotion detected"
+        );
+
+        // Determine divergence boundary.
+        let min_acked = self
+            .tracker
+            .as_ref()
+            .and_then(|t| t.min_acked_offset())
+            .unwrap_or(0);
+        let current = self.broadcaster.current_offset();
+
+        if current > min_acked {
+            let divergent = self
+                .primary_handler
+                .as_ref()
+                .map(|h| h.extract_divergent_writes(min_acked))
+                .unwrap_or_default();
+            if !divergent.is_empty() {
+                let header = frogdb_replication::split_brain_log::SplitBrainLogHeader {
+                    timestamp: String::new(),
+                    old_primary: format!("{:x}", event.demoted_node_id),
+                    new_primary: event
+                        .new_primary_id
+                        .map(|id| format!("{:x}", id))
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    epoch_old: event.epoch,
+                    epoch_new: event.epoch.saturating_add(1),
+                    seq_diverge_start: min_acked,
+                    seq_diverge_end: current,
+                    ops_discarded: divergent.len(),
+                };
+
+                match frogdb_replication::split_brain_log::write_log(
+                    &self.data_dir,
+                    header,
+                    &divergent,
+                ) {
+                    Ok(path) => {
+                        tracing::warn!(
+                            ops = divergent.len(),
+                            path = %path.display(),
+                            "Split-brain: {} divergent writes logged to {}",
+                            divergent.len(),
+                            path.display()
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to write split-brain log");
+                    }
+                }
+
+                frogdb_telemetry::definitions::SplitBrainEventsTotal::inc(&*self.metrics);
+                frogdb_telemetry::definitions::SplitBrainOpsDiscardedTotal::inc_by(
+                    &*self.metrics,
+                    divergent.len() as u64,
+                );
+                frogdb_telemetry::definitions::SplitBrainRecoveryPending::set(&*self.metrics, 1.0);
+            }
+        }
+    }
+}
+
+/// Consumes `DemotionEvent`s from the Raft Metadata Plane and reflects each onto
+/// the local data path via a real Role Demotion.
+///
+/// Split-brain *logging* is an optional side-effect (`split_brain_logger`, gated
+/// by config); the demotion it performs is not. This is the seam that decouples
+/// cluster failover behavior from logging configuration (issue 07): whether or
+/// not the logger is present, [`Self::handle`] always issues the demotion.
+struct DemotionConsumer {
+    split_brain_logger: Option<SplitBrainLogger>,
+    cluster_state: ClusterState,
+    role_controller: Arc<dyn frogdb_core::RoleController>,
+}
+
+impl DemotionConsumer {
+    /// Process one demotion event: optionally log the split-brain divergence,
+    /// then reconfigure the local data path to replicate from the committed new
+    /// primary. The Raft plane owns the decision (ADR-0001); this only reflects
+    /// it onto the data path.
+    fn handle(&self, event: &frogdb_core::DemotionEvent) {
+        // Split-brain logging is opt-out; the demotion below is not.
+        if let Some(logger) = &self.split_brain_logger {
+            logger.log(event);
+        }
+
+        if let Some(new_id) = event.new_primary_id {
+            match self
+                .cluster_state
+                .snapshot()
+                .nodes
+                .get(&new_id)
+                .map(|n| n.addr)
+            {
+                Some(addr) => {
+                    tracing::warn!(
+                        new_primary = %addr,
+                        "Role Demotion: reconfiguring data path to replicate from new primary"
+                    );
+                    self.role_controller.request_demote(addr);
+                }
+                None => {
+                    tracing::warn!(
+                        new_primary = new_id,
+                        "Demotion event: new primary not yet in cluster state; cannot reconfigure data path"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use frogdb_core::DemotionEvent;
+    use frogdb_core::RoleController;
+    use frogdb_core::cluster::{ClusterCommand, NodeInfo};
+    use std::net::SocketAddr;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A `RoleController` that records every transition request, so tests can
+    /// assert the demotion consumer drove the data path.
+    #[derive(Default)]
+    struct RecordingController {
+        demotes: Mutex<Vec<SocketAddr>>,
+        promotes: AtomicUsize,
+    }
+    impl RoleController for RecordingController {
+        fn request_promote(&self) {
+            self.promotes.fetch_add(1, Ordering::SeqCst);
+        }
+        fn request_demote(&self, primary: SocketAddr) {
+            self.demotes.lock().unwrap().push(primary);
+        }
+        fn primary_target(&self) -> Option<SocketAddr> {
+            self.demotes.lock().unwrap().last().copied()
+        }
+    }
+
+    fn addr(s: &str) -> SocketAddr {
+        s.parse().unwrap()
+    }
+
+    /// A cluster state that knows the new primary `new_id` at client `client_addr`.
+    fn cluster_with_primary(new_id: u64, client_addr: SocketAddr) -> ClusterState {
+        let cluster = ClusterState::new();
+        let node = NodeInfo::new_primary(new_id, client_addr, addr("127.0.0.1:17000"));
+        cluster
+            .apply_local(ClusterCommand::AddNode { node })
+            .expect("seed new primary");
+        cluster
+    }
+
+    fn demotion_event(new_primary: Option<u64>) -> DemotionEvent {
+        DemotionEvent {
+            demoted_node_id: 1,
+            new_primary_id: new_primary,
+            epoch: 3,
+        }
+    }
+
+    /// Criterion 1: with split-brain logging DISABLED, a demotion event still
+    /// demotes the node (the bug this issue fixes — a disabled log line used to
+    /// silently disable automatic failover demotion).
+    #[test]
+    fn demotion_fires_when_split_brain_log_disabled() {
+        let new_id = 2u64;
+        let primary = addr("127.0.0.1:7002");
+        let controller = Arc::new(RecordingController::default());
+        let consumer = DemotionConsumer {
+            split_brain_logger: None, // logging disabled
+            cluster_state: cluster_with_primary(new_id, primary),
+            role_controller: controller.clone(),
+        };
+
+        consumer.handle(&demotion_event(Some(new_id)));
+
+        assert_eq!(
+            *controller.demotes.lock().unwrap(),
+            vec![primary],
+            "demotion must fire even with split-brain logging disabled"
+        );
+    }
+
+    /// A real `SplitBrainLogger` wired with no-op collaborators. Its `log()`
+    /// runs (emitting the split-brain log line) but, with a zero broadcaster
+    /// offset and no primary handler, takes the no-divergence fast path — so the
+    /// test exercises the logger-present arm without staging divergent writes.
+    fn noop_logger() -> SplitBrainLogger {
+        SplitBrainLogger {
+            data_dir: std::env::temp_dir(),
+            broadcaster: Arc::new(frogdb_core::NoopBroadcaster),
+            primary_handler: None,
+            tracker: None,
+            metrics: Arc::new(frogdb_core::NoopMetricsRecorder),
+        }
+    }
+
+    /// Criterion 2: with logging ENABLED (a real logger present) the demotion
+    /// behavior is identical to the disabled case. Same event, same topology,
+    /// only the logger presence differs — the resulting demotion must match.
+    #[test]
+    fn demotion_identical_whether_or_not_log_enabled() {
+        let new_id = 2u64;
+        let primary = addr("127.0.0.1:7002");
+
+        let controller_off = Arc::new(RecordingController::default());
+        DemotionConsumer {
+            split_brain_logger: None, // logging disabled
+            cluster_state: cluster_with_primary(new_id, primary),
+            role_controller: controller_off.clone(),
+        }
+        .handle(&demotion_event(Some(new_id)));
+
+        let controller_on = Arc::new(RecordingController::default());
+        DemotionConsumer {
+            split_brain_logger: Some(noop_logger()), // logging enabled
+            cluster_state: cluster_with_primary(new_id, primary),
+            role_controller: controller_on.clone(),
+        }
+        .handle(&demotion_event(Some(new_id)));
+
+        assert_eq!(*controller_on.demotes.lock().unwrap(), vec![primary]);
+        assert_eq!(
+            *controller_off.demotes.lock().unwrap(),
+            *controller_on.demotes.lock().unwrap(),
+            "demotion behavior must be identical regardless of the log gate"
+        );
+    }
+
+    /// A demotion event whose new primary is not yet in the committed topology
+    /// cannot resolve an address, so no demotion is issued (and nothing panics).
+    #[test]
+    fn no_demotion_when_new_primary_absent_from_topology() {
+        let controller = Arc::new(RecordingController::default());
+        let consumer = DemotionConsumer {
+            split_brain_logger: None,
+            cluster_state: ClusterState::new(), // empty topology
+            role_controller: controller.clone(),
+        };
+
+        consumer.handle(&demotion_event(Some(99)));
+
+        assert!(
+            controller.demotes.lock().unwrap().is_empty(),
+            "unknown new primary must not trigger a demotion"
+        );
+    }
 }

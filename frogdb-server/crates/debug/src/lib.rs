@@ -24,6 +24,7 @@ pub use bundle::{
 
 // Web UI re-exports
 pub use web_ui::{
-    ClientInfoProvider, ClientSnapshot, ClusterInfoProvider, ClusterNodeSnapshot,
-    ClusterOverviewSnapshot, ConfigEntry, DebugState, MigrationSnapshot, ServerInfo,
+    ClientSnapshot, ClusterNodeSnapshot, ClusterOverviewSnapshot, ConfigEntry, DebugState,
+    MigrationSnapshot, NodeStateProvider, ReplicationView, ServerInfo,
+    client_snapshots_from_registry,
 };

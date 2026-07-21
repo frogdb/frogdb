@@ -1,34 +1,79 @@
-//! Debug UI data providers.
+//! Debug UI node-state provider.
 //!
-//! Adapters that implement the debug crate's provider traits using
-//! the server's internal state types.
+//! A single server-side adapter that implements the debug crate's
+//! [`NodeStateProvider`] trait — the coherent seam that replaced the former
+//! `ReplicationInfoProvider` / `ClientInfoProvider` / `ClusterInfoProvider`
+//! trio. It reads replication identity from the replication tracker, connected
+//! clients from the client registry, and cluster topology from the shared
+//! [`ClusterState`], so every debug panel is fed from one place.
 
 use std::sync::Arc;
 
 use frogdb_cluster::types::{ClusterSnapshot, NodeFlags, NodeRole, SlotMigration};
-use frogdb_core::{CLUSTER_SLOTS, ClusterState, NodeInfo};
+use frogdb_core::{CLUSTER_SLOTS, ClientRegistry, ClusterState, NodeInfo, ReplicationTrackerImpl};
 use frogdb_debug::{
-    ClusterInfoProvider, ClusterNodeSnapshot, ClusterOverviewSnapshot, MigrationSnapshot,
+    ClientSnapshot, ClusterNodeSnapshot, ClusterOverviewSnapshot, MigrationSnapshot,
+    NodeStateProvider, ReplicationView, client_snapshots_from_registry,
 };
 
-/// Adapter that provides cluster information to the debug web UI.
-pub struct ClusterStateProvider {
-    cluster_state: Arc<ClusterState>,
+/// Composite adapter feeding node-observable state to the debug web UI.
+pub struct ServerDebugProvider {
+    client_registry: Arc<ClientRegistry>,
+    cluster_state: Option<Arc<ClusterState>>,
     self_node_id: Option<u64>,
+    replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
+    role: String,
+    master_host: Option<String>,
+    master_port: Option<u16>,
 }
 
-impl ClusterStateProvider {
-    pub fn new(cluster_state: Arc<ClusterState>, self_node_id: Option<u64>) -> Self {
+impl ServerDebugProvider {
+    /// Build a provider. `cluster_state` is `Some` only in cluster mode;
+    /// `replication_tracker` is `Some` only when replication is configured.
+    pub fn new(
+        client_registry: Arc<ClientRegistry>,
+        cluster_state: Option<Arc<ClusterState>>,
+        self_node_id: Option<u64>,
+        replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
+        role: String,
+        master_host: Option<String>,
+        master_port: Option<u16>,
+    ) -> Self {
         Self {
+            client_registry,
             cluster_state,
             self_node_id,
+            replication_tracker,
+            role,
+            master_host,
+            master_port,
         }
     }
 }
 
-impl ClusterInfoProvider for ClusterStateProvider {
-    fn cluster_overview(&self) -> ClusterOverviewSnapshot {
-        let snapshot = self.cluster_state.snapshot();
+impl NodeStateProvider for ServerDebugProvider {
+    fn replication(&self) -> ReplicationView {
+        let (connected_replicas, replication_offset) = self
+            .replication_tracker
+            .as_ref()
+            .map(|t| (t.get_all_replicas().len(), t.current_offset()))
+            .unwrap_or((0, 0));
+        ReplicationView {
+            role: self.role.clone(),
+            connected_replicas,
+            master_host: self.master_host.clone(),
+            master_port: self.master_port,
+            replication_offset,
+        }
+    }
+
+    fn client_snapshots(&self) -> Vec<ClientSnapshot> {
+        client_snapshots_from_registry(&self.client_registry)
+    }
+
+    fn cluster_overview(&self) -> Option<ClusterOverviewSnapshot> {
+        let cluster_state = self.cluster_state.as_ref()?;
+        let snapshot = cluster_state.snapshot();
         let nodes: Vec<ClusterNodeSnapshot> = snapshot
             .nodes
             .values()
@@ -41,7 +86,7 @@ impl ClusterInfoProvider for ClusterStateProvider {
             .map(convert_migration)
             .collect();
 
-        ClusterOverviewSnapshot {
+        Some(ClusterOverviewSnapshot {
             enabled: true,
             self_node_id: self.self_node_id,
             nodes,
@@ -51,11 +96,12 @@ impl ClusterInfoProvider for ClusterStateProvider {
             leader_id: snapshot.leader_id,
             active_version: snapshot.active_version.clone(),
             migrations,
-        }
+        })
     }
 
     fn node_detail(&self, node_id: u64) -> Option<ClusterNodeSnapshot> {
-        let snapshot = self.cluster_state.snapshot();
+        let cluster_state = self.cluster_state.as_ref()?;
+        let snapshot = cluster_state.snapshot();
         let node = snapshot.nodes.get(&node_id)?;
         Some(convert_node(node, &snapshot))
     }

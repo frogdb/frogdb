@@ -98,7 +98,7 @@ impl ShardWorker {
             },
             keysizes: self.store.keysizes().clone(),
             wal_lag: self.collect_wal_lag_stats().lag_stats,
-            master_host: self.identity.master_host().cloned(),
+            master_host: self.identity.master_host(),
             master_port: self.identity.master_port(),
         }
     }

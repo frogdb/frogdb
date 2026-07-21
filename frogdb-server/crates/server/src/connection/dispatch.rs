@@ -159,7 +159,7 @@ impl ConnectionHandler {
     ///
     /// `pub(crate)` because EXEC also routes here: server-wide commands queued
     /// in a MULTI are deferred past the shard transaction and dispatched
-    /// through this same match (see `handlers::transaction::execute_transaction`).
+    /// through this same match (see `transaction::execute_transaction`).
     pub(crate) async fn dispatch_server_wide(
         &mut self,
         op: ServerWideOp,
@@ -173,7 +173,11 @@ impl ConnectionHandler {
             ServerWideOp::FlushDb => self.handle_flushdb(args).await,
             ServerWideOp::FlushAll => self.handle_flushall(args).await,
             ServerWideOp::Migrate => self.handle_migrate(args).await,
-            ServerWideOp::Shutdown => self.handle_shutdown(args).await,
+            // SHUTDOWN: signaling the main server is not wired up in this mode,
+            // so we return a directive error rather than tearing down here.
+            ServerWideOp::Shutdown => Response::error(
+                "ERR SHUTDOWN is not supported in this mode. Use Ctrl+C to stop the server.",
+            ),
             ServerWideOp::TsQueryIndex => self.handle_ts_queryindex(args).await,
             ServerWideOp::TsMGet => self.handle_ts_mget(args).await,
             ServerWideOp::TsMRange => self.handle_ts_mrange(args, false).await,

@@ -31,10 +31,6 @@ pub(crate) struct ShardIdentity {
     /// Pre-formatted shard ID label for metrics (avoids per-message allocation).
     shard_label: String,
     is_replica: Arc<AtomicBool>,
-    /// Primary host (set when this server is a replica).
-    master_host: Option<String>,
-    /// Primary port (set when this server is a replica).
-    master_port: Option<u16>,
     /// Server data directory (for search indexes, etc.).
     data_dir: Option<std::path::PathBuf>,
     /// Handle to request a runtime role transition (`REPLICAOF`). Shared,
@@ -49,8 +45,6 @@ impl ShardIdentity {
             num_shards,
             shard_label: shard_id.to_string(),
             is_replica: Arc::new(AtomicBool::new(is_replica)),
-            master_host: None,
-            master_port: None,
             data_dir: None,
             role_controller: None,
         }
@@ -98,18 +92,26 @@ impl ShardIdentity {
         self.is_replica = flag;
     }
 
-    pub(crate) fn master_host(&self) -> Option<&String> {
-        self.master_host.as_ref()
+    /// The primary host this server currently replicates from, if any.
+    ///
+    /// Derived live from the shared [`RoleController`](crate::command::RoleController)
+    /// — the RoleManager, cloned into every shard's identity — rather than a
+    /// per-shard copy: there is exactly one source of truth for the current
+    /// replication target, and it is always fresh (seeded at boot, updated by
+    /// every runtime Role Demotion), so `ROLE` / INFO can never report a
+    /// stale primary after `REPLICAOF host port`.
+    pub(crate) fn master_host(&self) -> Option<String> {
+        self.primary_target().map(|addr| addr.ip().to_string())
     }
 
+    /// The primary port this server currently replicates from, if any. See
+    /// [`Self::master_host`].
     pub(crate) fn master_port(&self) -> Option<u16> {
-        self.master_port
+        self.primary_target().map(|addr| addr.port())
     }
 
-    /// Record the primary address (replica mode, for INFO replication).
-    pub(crate) fn set_master_address(&mut self, host: String, port: u16) {
-        self.master_host = Some(host);
-        self.master_port = Some(port);
+    fn primary_target(&self) -> Option<std::net::SocketAddr> {
+        self.role_controller.as_ref()?.primary_target()
     }
 
     /// The shared role-transition controller (clone into each `CommandContext`).
@@ -1162,6 +1164,18 @@ mod cluster_tests {
 }
 
 #[cfg(test)]
+pub(crate) struct FixedRoleController(pub Option<std::net::SocketAddr>);
+
+#[cfg(test)]
+impl crate::command::RoleController for FixedRoleController {
+    fn request_promote(&self) {}
+    fn request_demote(&self, _primary: std::net::SocketAddr) {}
+    fn primary_target(&self) -> Option<std::net::SocketAddr> {
+        self.0
+    }
+}
+
+#[cfg(test)]
 mod identity_tests {
     use super::*;
 
@@ -1188,12 +1202,25 @@ mod identity_tests {
         assert!(!shared.load(std::sync::atomic::Ordering::Relaxed));
     }
 
+    /// `master_host`/`master_port` are derived live from the shared
+    /// `RoleController` (the RoleManager), not a per-shard copy: wiring the
+    /// controller is enough for both getters to report its current target.
     #[test]
-    fn master_address_round_trip() {
+    fn master_address_derives_from_role_controller() {
         let mut id = ShardIdentity::new(0, 1, false);
-        id.set_master_address("primary.local".to_string(), 6390);
-        assert_eq!(id.master_host().map(String::as_str), Some("primary.local"));
+        let target: std::net::SocketAddr = "10.0.0.5:6390".parse().unwrap();
+        id.set_role_controller(Arc::new(FixedRoleController(Some(target))));
+        assert_eq!(id.master_host().as_deref(), Some("10.0.0.5"));
         assert_eq!(id.master_port(), Some(6390));
+    }
+
+    /// No role controller wired (e.g. a bare test harness) -> no master
+    /// address, rather than a stale or fabricated one.
+    #[test]
+    fn master_address_absent_without_role_controller() {
+        let id = ShardIdentity::new(0, 1, true);
+        assert_eq!(id.master_host(), None);
+        assert_eq!(id.master_port(), None);
     }
 }
 

@@ -558,6 +558,39 @@ fn test_scheduler_request_after_finish_starts() {
     assert!(s.in_progress());
 }
 
+/// Pin the exact former lost-wakeup window. A requester observed
+/// `in_progress == true`, but by the time it arms the follow-up the runner has
+/// already finished and consumed nothing (its `scheduled.swap` ran before the
+/// arm). `arm_follow_up` is entered with the runner *already exited* — the
+/// precise interleaving the black-box `request` re-load would hide.
+///
+/// Old behaviour: `arm_follow_up` would leave `scheduled == true` with no runner
+/// and report `Coalesced` — a lost wakeup. Fixed behaviour: it detects the
+/// exited runner, reclaims the flag, and `Started`s the guaranteed post-request
+/// run, leaving the schedule flag clear.
+#[test]
+fn test_scheduler_arm_follow_up_after_runner_exit_starts() {
+    let s = SnapshotScheduler::with_epoch(0);
+    // A save ran and finished, consuming nothing (the window: our observe-running
+    // happened-before, its finish landed before our arm).
+    assert_eq!(s.try_begin(), Some(1));
+    assert_eq!(s.finish_and_maybe_rebegin(), None);
+    assert!(!s.in_progress());
+
+    // Now the delayed arm lands. It must not lose the wakeup: it starts the run.
+    assert_eq!(s.arm_follow_up(), SnapshotRequest::Started(2));
+    assert!(s.in_progress(), "the reclaiming request owns the slot");
+    assert!(
+        !s.is_scheduled(),
+        "no dangling schedule flag: the wakeup became a real run"
+    );
+
+    // And that run finishes cleanly with nothing left armed.
+    assert_eq!(s.finish_and_maybe_rebegin(), None);
+    assert!(!s.in_progress());
+    assert!(!s.is_scheduled());
+}
+
 /// The legacy `schedule()` protocol only arms a follow-up while a save runs.
 #[test]
 fn test_scheduler_schedule_only_while_running() {
@@ -585,7 +618,9 @@ fn test_scheduler_epoch_monotonic_across_cycle() {
 /// randomized interleavings the invariants must hold:
 ///   * every epoch that runs is unique and contiguous from 1 (no skip/reuse),
 ///   * exactly one runner is ever active (the slot is never double-claimed),
-///   * the scheduler is fully idle at quiescence.
+///   * the scheduler is fully idle at quiescence — `in_progress` released *and*
+///     no follow-up left armed (the closed lost-wakeup guarantee: a request that
+///     coalesced never strands `scheduled == true` with no runner to drain it).
 ///
 /// This is the only place the `finish_and_maybe_rebegin` re-CAS-failure branch
 /// (another thread stole the slot in the release↔re-CAS window) is exercised.
@@ -622,6 +657,11 @@ fn test_scheduler_concurrent_request_storm() {
         }
 
         assert!(!sched.in_progress(), "slot must be released at quiescence");
+        assert!(
+            !sched.is_scheduled(),
+            "no follow-up may be left armed at quiescence: a coalesced request \
+             must never strand `scheduled == true` with no runner (lost wakeup)"
+        );
         let mut ran = ran.lock().unwrap().clone();
         assert!(!ran.is_empty(), "at least one run must happen");
         ran.sort_unstable();

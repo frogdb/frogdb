@@ -187,6 +187,13 @@ pub struct Server {
     /// connection handlers.
     is_replica_flag: Arc<std::sync::atomic::AtomicBool>,
 
+    /// Handle to the `RoleManager` that owns `is_replica_flag` and the
+    /// replication streaming lifecycle. `start_subsystems` uses this to
+    /// register the boot-spawned replica handler (see
+    /// `role_manager::RoleManager::register_boot_replica_handler`) so a later
+    /// Role Promotion also stops its reconnect loop.
+    role_manager_handle: crate::role_manager::RoleManagerHandle,
+
     /// Shared maxmemory value for SystemMetricsCollector.
     shared_maxmemory: Arc<AtomicU64>,
 
@@ -246,8 +253,10 @@ impl Server {
             let _ = infra.repl_state_save_slot.set(handler.clone());
         }
 
-        // Phase 3: Cluster/Raft initialization + background tasks
-        let shared_replication_offset = repl.shared_replication_offset;
+        // Phase 3: Cluster/Raft initialization + background tasks.
+        // `init_cluster` may mint the HealthProbe offset atomic (when the node
+        // booted primary/standalone in cluster mode) and shares it with the
+        // runtime replica streamer, so read the effective one back off its result.
         let cluster = cluster_init::init_cluster(
             &config,
             infra.recovered_raft_storage,
@@ -259,10 +268,13 @@ impl Server {
             repl.primary_replication_handler.as_ref(),
             &repl.replication_tracker,
             &infra.metrics_recorder,
+            repl.primary_addr,
+            repl.shared_replication_offset,
             #[cfg(not(feature = "turmoil"))]
             &infra.tls_manager,
         )
         .await?;
+        let shared_replication_offset = cluster.shared_replication_offset.clone();
 
         // Phase 4: Spawn shard workers
         let shard_handles = shards::spawn_shard_workers(shards::ShardSpawnContext {
@@ -370,6 +382,7 @@ impl Server {
             _task_monitor_handle: Some(task_monitor_handle),
             shared_replication_offset,
             is_replica_flag: cluster.is_replica_flag,
+            role_manager_handle: cluster.role_manager_handle,
             shared_maxmemory: infra.shared_maxmemory,
             shard_memory_used: infra.shard_memory_used,
             #[cfg(not(feature = "turmoil"))]

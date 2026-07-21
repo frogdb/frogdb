@@ -12,7 +12,7 @@
 //! [`cancel`](Self::cancel) commit `ClusterCommand::*SlotMigration` entries
 //! through Raft. They handle `ForwardToLeader` errors by forwarding the write
 //! through the cluster bus or returning a `REDIRECT` to the caller, mirroring
-//! the existing pattern used by [`crate::connection::handlers::cluster::handle_raft_command`].
+//! the existing pattern used by [`crate::connection::cluster::handle_raft_command`].
 //!
 //! ## Routing
 //!
@@ -124,7 +124,7 @@ impl SlotMigrationCoordinator {
 
     /// Submit a slot-migration `ClusterCommand` through Raft, with the same
     /// `ForwardToLeader` handling as
-    /// [`crate::connection::handlers::cluster::handle_raft_command`]. Returns
+    /// [`crate::connection::cluster::handle_raft_command`]. Returns
     /// `Response::ok()` on success, or a properly formatted error response.
     async fn commit(&self, cmd: ClusterCommand) -> Response {
         let cmd_clone = cmd.clone();

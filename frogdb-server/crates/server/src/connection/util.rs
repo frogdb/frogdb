@@ -1,7 +1,7 @@
 //! Standalone utility functions for the connection module.
 //!
 //! These functions have no coupling to `ConnectionHandler` and are used
-//! by various handler submodules.
+//! by various connection submodules.
 
 use bytes::Bytes;
 use frogdb_core::{
@@ -160,51 +160,6 @@ pub(crate) fn estimate_command_size(cmd: &ParsedCommand) -> usize {
         .sum();
 
     header + name_size + args_size
-}
-
-/// Format a Unix timestamp as ISO 8601 string.
-pub(crate) fn format_timestamp_iso(secs: u64) -> String {
-    let days_since_epoch = secs / 86400;
-    let time_of_day = secs % 86400;
-    let hours = time_of_day / 3600;
-    let minutes = (time_of_day % 3600) / 60;
-    let seconds = time_of_day % 60;
-
-    // Calculate date from days since epoch (1970-01-01)
-    let mut year = 1970i32;
-    let mut remaining_days = days_since_epoch as i32;
-
-    loop {
-        let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-        let days_in_year = if is_leap { 366 } else { 365 };
-        if remaining_days < days_in_year {
-            break;
-        }
-        remaining_days -= days_in_year;
-        year += 1;
-    }
-
-    let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-    let days_in_months: [i32; 12] = if is_leap {
-        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-
-    let mut month = 1;
-    for &days_in_month in &days_in_months {
-        if remaining_days < days_in_month {
-            break;
-        }
-        remaining_days -= days_in_month;
-        month += 1;
-    }
-    let day = remaining_days + 1;
-
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        year, month, day, hours, minutes, seconds
-    )
 }
 
 /// Convert protocol RaftClusterOp to core ClusterCommand.

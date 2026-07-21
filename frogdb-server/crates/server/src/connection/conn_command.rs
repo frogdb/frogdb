@@ -21,7 +21,7 @@
 //! seams (`dispatch_server_wide` / `dispatch_scatter`), which is their proper
 //! home, and (b) work a migrated connection command cannot reach through the
 //! narrow `ConnCtx` — EXEC's transaction orchestration
-//! (`handlers::transaction::execute_transaction`) and the scripting/search
+//! (`transaction::execute_transaction`) and the scripting/search
 //! helpers a `ScriptingProvider` / server-wide op delegates into. What is gone
 //! is the name-keyed router that once *selected* a `handle_*` for every command;
 //! what remains is those handler bodies, reached from the typed-op dispatch or
@@ -174,16 +174,19 @@ impl ConnectionHandler {
             self.num_shards,
         );
         match mutation {
-            ConnMutation::None => base.with_full_reads(
-                self,
-                self,
-                // DEBUG dispatches through this read-only view; wire its
-                // handler-only capabilities (tracer, per-shard round-trips,
-                // bundle generation, subscription counts, the debug gate).
-                Some(self),
-                self.state.protocol_version,
-                self.state.username(),
-            ),
+            ConnMutation::None => base
+                .with_full_reads(
+                    self,
+                    self,
+                    // DEBUG dispatches through this read-only view; wire its
+                    // handler-only capabilities (tracer, per-shard round-trips,
+                    // bundle generation, subscription counts, the debug gate).
+                    Some(self),
+                    self.state.protocol_version,
+                    self.state.username(),
+                )
+                // STATUS JSON renders from the shared status collector via `self`.
+                .with_status(self),
             ConnMutation::Auth => base.with_conn_state(&mut self.state),
             ConnMutation::Client => base
                 .with_conn_state(&mut self.state)

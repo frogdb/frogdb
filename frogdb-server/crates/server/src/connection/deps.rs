@@ -252,6 +252,12 @@ pub struct ObservabilityDeps {
     /// workers. `INFO stats` reads it and `CONFIG RESETSTAT` advances its
     /// baseline.
     pub keyspace_stats: Arc<frogdb_core::KeyspaceStats>,
+
+    /// Machine-readable server-status collector, shared with the HTTP `/status`
+    /// endpoint so the STATUS JSON command renders from the same source (never a
+    /// second hand-assembled scatter). `None` only for the test-default deps,
+    /// where STATUS JSON has no collector to render.
+    pub status_collector: Option<Arc<frogdb_telemetry::StatusCollector>>,
 }
 
 impl Default for ObservabilityDeps {
@@ -264,6 +270,7 @@ impl Default for ObservabilityDeps {
             latency_histograms: Arc::new(CommandLatencyHistograms::new(true)),
             hotkey_session: new_shared_hotkey_session(),
             keyspace_stats: Arc::new(frogdb_core::KeyspaceStats::new()),
+            status_collector: None,
         }
     }
 }

@@ -105,23 +105,62 @@ impl ReplicaReplicationHandler {
         self.shared_offset = Some(offset);
     }
 
+    /// The cluster-bus HealthProbe offset handle this replica publishes into, if
+    /// wired. Mirrors the primary handler's `shared_offset()`; lets callers
+    /// assert that a runtime-demoted replica advertises its offset to the failure
+    /// detector the same way a boot-configured replica does.
+    pub fn shared_offset(&self) -> Option<Arc<AtomicU64>> {
+        self.shared_offset.clone()
+    }
+
+    /// Run the connect/sync/reconnect loop until the primary connection
+    /// closes normally or [`Self::stop`] is called.
+    ///
+    /// Selects on the `shutdown` watch at every point the loop could block
+    /// (an in-flight connect/handshake/stream, and the backoff sleep between
+    /// attempts) so `stop()` breaks the loop directly — no `task.abort()`
+    /// required, which matters for a boot-spawned handler whose reconnect
+    /// loop otherwise keeps dialing a primary this node has since been
+    /// promoted away from.
     pub async fn start(&self) -> io::Result<()> {
         let mut backoff = Duration::from_millis(100);
         let max_backoff = Duration::from_secs(30);
+        let mut shutdown_rx = self.shutdown.subscribe();
+
+        // Stop was requested before the loop even started.
+        if *shutdown_rx.borrow() {
+            return Ok(());
+        }
+
         loop {
-            match self.connect_and_sync().await {
-                Ok(()) => {
-                    tracing::info!("Replication connection closed normally");
-                    break;
+            tokio::select! {
+                biased;
+                _ = shutdown_rx.changed() => {
+                    tracing::info!("Replica replication stopped via shutdown watch");
+                    return Ok(());
                 }
-                Err(e) => {
-                    tracing::warn!(error = %e, backoff_ms = backoff.as_millis(), "Replication connection failed, retrying");
-                    tokio::time::sleep(backoff).await;
-                    backoff = std::cmp::min(backoff * 2, max_backoff);
+                result = self.connect_and_sync() => {
+                    match result {
+                        Ok(()) => {
+                            tracing::info!("Replication connection closed normally");
+                            return Ok(());
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, backoff_ms = backoff.as_millis(), "Replication connection failed, retrying");
+                            tokio::select! {
+                                biased;
+                                _ = shutdown_rx.changed() => {
+                                    tracing::info!("Replica replication stopped via shutdown watch during backoff");
+                                    return Ok(());
+                                }
+                                _ = tokio::time::sleep(backoff) => {}
+                            }
+                            backoff = std::cmp::min(backoff * 2, max_backoff);
+                        }
+                    }
                 }
             }
         }
-        Ok(())
     }
 
     async fn connect_and_sync(&self) -> io::Result<()> {
@@ -147,9 +186,25 @@ impl ReplicaReplicationHandler {
         conn.stream_replication(&self.frame_tx).await
     }
 
+    /// Signal the reconnect loop in [`Self::start`] to stop.
+    ///
+    /// Uses `send_replace` rather than `send`: a plain `send` is a silent
+    /// no-op whenever the watch channel currently has zero receivers (see
+    /// `tokio::sync::watch::Sender::send`), which is exactly the state right
+    /// after [`Self::new`] (the constructor's own receiver is dropped
+    /// immediately) and before [`Self::start`] has run far enough to
+    /// `subscribe()`. `send_replace` always stores the value, so a `stop()`
+    /// that races ahead of `start()` is still observed once `start()` does
+    /// subscribe, instead of being silently lost.
     pub fn stop(&self) {
-        let _ = self.shutdown.send(true);
+        self.shutdown.send_replace(true);
     }
+
+    /// The primary this handler connects/reconnects to.
+    pub fn primary_addr(&self) -> SocketAddr {
+        self.primary_addr
+    }
+
     pub async fn state(&self) -> ReplicationState {
         self.state.read().await.clone()
     }

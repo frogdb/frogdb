@@ -98,7 +98,7 @@ impl ClientTrackingProvider for TrackingIo {
             let sender = if redirect > 0 {
                 let (fwd_tx, mut fwd_rx) = mpsc::unbounded_channel::<InvalidationMessage>();
                 let broadcast_shard =
-                    shard_senders[crate::connection::handlers::pubsub::BROADCAST_SHARD].clone();
+                    shard_senders[crate::connection::pubsub_conn_command::BROADCAST_SHARD].clone();
                 let task = tokio::spawn(async move {
                     while let Some(msg) = fwd_rx.recv().await {
                         let payload = match &msg {

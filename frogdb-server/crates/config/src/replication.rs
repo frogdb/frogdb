@@ -83,8 +83,13 @@ pub struct ReplicationConfigSection {
     #[serde(default = "default_fullresync_cooldown_secs")]
     pub fullresync_cooldown_secs: u64,
 
-    /// Enable split-brain discarded-writes logging.
-    /// When a primary is demoted, divergent writes are logged before resync.
+    /// Enable split-brain discarded-writes logging (log-only).
+    ///
+    /// When a demoted primary diverged from the new primary, its divergent
+    /// writes are logged before resync. This flag controls ONLY that logging;
+    /// it does not affect cluster behavior. Automatic Role Demotion during
+    /// failover always runs in cluster mode regardless of this setting — the
+    /// kill-switch for cluster behavior is `cluster.enabled`, not this flag.
     #[serde(default = "default_split_brain_log_enabled")]
     pub split_brain_log_enabled: bool,
 

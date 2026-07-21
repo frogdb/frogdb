@@ -4,28 +4,28 @@
 //! [`crate::connection::conn_command`] and the CONFIG executor there for the
 //! template). Each reads only the observability subsystems it needs through
 //! [`ConnCtx`] — `shard_senders` for scatter-gather, `metrics_recorder` for SLO
-//! latency bands, `memory_diag` for MEMORY DOCTOR, `client_registry`/`num_shards`/
-//! `max_clients` for STATUS — instead of taking `&ConnectionHandler`, so each is
-//! unit-testable in isolation (see `tests`).
+//! latency bands, `memory_diag` for MEMORY DOCTOR, `status` for STATUS JSON —
+//! instead of taking `&ConnectionHandler`, so each is unit-testable in isolation
+//! (see `tests`).
 //!
 //! These are read/aggregate commands with no connection-state mutation; MEMORY
-//! and STATUS broadcast to shards. Each is its own [`ConnectionCommand`] with its
-//! own [`CommandSpec`], registered separately via
+//! broadcasts to shards, and STATUS JSON renders from the shared status collector
+//! (see [`crate::connection::status_handler`]) — the same source the HTTP
+//! `/status` endpoint uses. Each is its own [`ConnectionCommand`] with its own
+//! [`CommandSpec`], registered separately via
 //! [`frogdb_core::CommandRegistry::register_connection`].
 
 use std::collections::HashMap;
 
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, BoxFuture, ClientFlags, CommandFlags, CommandSpec, ConnCtx,
-    ConnectionCommand, ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, LatencyEvent,
-    LatencySample, LookupSpec, MemoryDiagProvider, ShardMemoryStats, ShardMessage, ShardSender,
-    WaiterWake, WalStrategy, generate_latency_graph, shard_for_key,
+    AccessSpec, Arity, BoxFuture, CommandFlags, CommandSpec, ConnCtx, ConnectionCommand,
+    ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, LatencyEvent, LatencySample,
+    LookupSpec, MemoryDiagProvider, ShardMemoryStats, ShardMessage, ShardSender, WaiterWake,
+    WalStrategy, generate_latency_graph, shard_for_key,
 };
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
-
-use crate::connection::util::format_timestamp_iso;
 
 /// Adapts the server's [`frogdb_debug::MemoryDiagConfig`] to the core
 /// [`MemoryDiagProvider`] seam so the MEMORY executor can produce a DOCTOR report
@@ -51,7 +51,7 @@ impl MemoryDiagProvider for MemoryDiag {
 // Shared shard-aggregation helpers (were pub(crate) methods on ConnectionHandler)
 // =============================================================================
 
-/// Gather memory stats from all shards. Used by both MEMORY STATS and STATUS JSON.
+/// Gather memory stats from all shards. Used by MEMORY STATS.
 async fn gather_memory_stats(shard_senders: &[ShardSender]) -> Vec<ShardMemoryStats> {
     let mut stats = Vec::new();
 
@@ -891,92 +891,13 @@ impl ConnectionCommand for StatusConnCommand {
 }
 
 /// STATUS JSON — return machine-readable server status.
+///
+/// Renders from the shared [`frogdb_core::StatusProvider`] — the same
+/// [`frogdb_telemetry::StatusCollector`] the HTTP `/status` endpoint uses (see
+/// [`crate::connection::status_handler`]) — so the two surfaces always agree.
+/// There is no per-command scatter or field assembly here.
 async fn status_json(ctx: &ConnCtx<'_>) -> Response {
-    // Gather shard stats
-    let shard_stats = gather_memory_stats(ctx.shard_senders).await;
-
-    // Build status response
-    let now = std::time::SystemTime::now();
-    let timestamp = now
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
-    // Calculate ISO 8601 timestamp
-    let timestamp_iso = format_timestamp_iso(timestamp);
-
-    // Get client info
-    let clients = ctx.client_registry.list();
-    let blocked_clients = clients
-        .iter()
-        .filter(|c| c.flags.contains(ClientFlags::BLOCKED))
-        .count();
-
-    // Calculate totals from shard stats
-    let total_keys: usize = shard_stats.iter().map(|s| s.keys).sum();
-    let used_bytes: u64 = shard_stats.iter().map(|s| s.data_memory as u64).sum();
-    let peak_bytes: u64 = shard_stats.iter().map(|s| s.peak_memory).sum();
-
-    // Build shards array
-    let shards: Vec<serde_json::Value> = shard_stats
-        .iter()
-        .enumerate()
-        .map(|(id, stats)| {
-            serde_json::json!({
-                "id": id,
-                "keys": stats.keys,
-                "memory_bytes": stats.data_memory,
-                "peak_memory_bytes": stats.peak_memory
-            })
-        })
-        .collect();
-
-    // Build the status JSON
-    let status = serde_json::json!({
-        "frogdb": {
-            "version": env!("CARGO_PKG_VERSION"),
-            "uptime_secs": 0, // Would need start_time tracking
-            "process_id": std::process::id(),
-            "timestamp": timestamp,
-            "timestamp_iso": timestamp_iso
-        },
-        "cluster": {
-            "database_available": true,
-            "mode": "standalone",
-            "num_shards": ctx.num_shards
-        },
-        "health": {
-            "status": "healthy",
-            "issues": []
-        },
-        "clients": {
-            "connected": clients.len(),
-            "max_clients": ctx.max_clients,
-            "blocked": blocked_clients
-        },
-        "memory": {
-            "used_bytes": used_bytes,
-            "peak_bytes": peak_bytes,
-            "limit_bytes": 0, // Would need config access
-            "fragmentation_ratio": 1.0
-        },
-        "persistence": {
-            "enabled": false
-        },
-        "shards": shards,
-        "keyspace": {
-            "total_keys": total_keys,
-            "expired_keys_total": 0
-        },
-        "commands": {
-            "total_processed": 0,
-            "ops_per_sec": 0.0
-        }
-    });
-
-    // Pretty-print the JSON
-    let json_str = serde_json::to_string_pretty(&status).unwrap_or_else(|_| "{}".to_string());
-    Response::bulk(Bytes::from(json_str))
+    ctx.status.status_json().await
 }
 
 /// STATUS HELP — show subcommand help.
@@ -1000,6 +921,7 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::connection::ClusterDeps;
+    use crate::connection::status_handler::StatusCollectorProvider;
     use crate::cursor_store::AggregateCursorStore;
     use crate::runtime_config::ConfigManager;
     use frogdb_core::persistence::NoopSnapshotCoordinator;
@@ -1007,12 +929,16 @@ mod tests {
         ClientRegistry, CommandLatencyHistograms, KeyspaceStats, NoopMetricsRecorder,
         SharedHotkeySession, new_shared_hotkey_session,
     };
+    use frogdb_telemetry::{HealthChecker, StatusCollector, StatusCollectorConfig};
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
 
     /// Build a `ConnCtx` over fixture dependencies — no socket, no
     /// `ConnectionHandler`. These commands run with no shards (`shard_senders`
     /// empty), so scatter-gather subcommands return empty aggregates; the
     /// subcommand parsing, help text, and metrics-band paths are exercised
-    /// directly.
+    /// directly. STATUS JSON renders from `status_provider`, a real collector so
+    /// the command exercises the shared render path (see `status_handler`).
     struct Fixture {
         config_manager: ConfigManager,
         client_registry: ClientRegistry,
@@ -1026,10 +952,33 @@ mod tests {
         memory_diag: MemoryDiag,
         acl_manager: std::sync::Arc<frogdb_core::AclManager>,
         command_registry: frogdb_core::CommandRegistry,
+        status_provider: StatusCollectorProvider,
+    }
+
+    /// An empty-shard, standalone, persistence-off status collector for fixtures
+    /// that don't exercise STATUS JSON's field values.
+    fn default_status_collector() -> Arc<StatusCollector> {
+        Arc::new(StatusCollector::new(
+            StatusCollectorConfig::default(),
+            HealthChecker::new(),
+            Arc::new(vec![]),
+            Arc::new(ClientRegistry::new()),
+            Arc::new(frogdb_telemetry::PrometheusRecorder::new()),
+            std::time::Instant::now(),
+            Arc::new(AtomicU64::new(0)),
+            0,
+            false,
+            "async".to_string(),
+            "standalone".to_string(),
+        ))
     }
 
     impl Fixture {
         fn new() -> Self {
+            Self::with_status_collector(default_status_collector())
+        }
+
+        fn with_status_collector(collector: Arc<StatusCollector>) -> Self {
             Self {
                 config_manager: ConfigManager::new(&Config::default()),
                 client_registry: ClientRegistry::new(),
@@ -1043,6 +992,7 @@ mod tests {
                 memory_diag: MemoryDiag(frogdb_debug::MemoryDiagConfig::default()),
                 acl_manager: frogdb_core::AclManager::new(Default::default()),
                 command_registry: frogdb_core::CommandRegistry::new(),
+                status_provider: StatusCollectorProvider(collector),
             }
         }
 
@@ -1066,6 +1016,7 @@ mod tests {
                 false,
             )
             .with_username("default")
+            .with_status(&self.status_provider)
         }
     }
 
@@ -1340,6 +1291,66 @@ mod tests {
             .execute(&mut fx.ctx(), &[arg("NOPE")])
             .await;
         assert!(matches!(resp, Response::Error(_)));
+    }
+
+    /// STATUS JSON renders from the shared collector with live values — proving
+    /// the formerly-hardcoded fields (`cluster.mode`, `persistence.enabled`,
+    /// `commands.total_processed`) now reflect their real source, and that the
+    /// command output agrees with the HTTP `/status` render from the same
+    /// collector.
+    #[tokio::test]
+    async fn status_json_renders_from_shared_collector_and_agrees_with_http() {
+        use frogdb_telemetry::definitions::CommandsTotal;
+
+        let recorder = Arc::new(frogdb_telemetry::PrometheusRecorder::new());
+        CommandsTotal::inc_by(&*recorder, 5, "GET");
+        CommandsTotal::inc_by(&*recorder, 2, "SET");
+
+        let collector = Arc::new(StatusCollector::new(
+            StatusCollectorConfig::default(),
+            HealthChecker::new(),
+            Arc::new(vec![]),
+            Arc::new(ClientRegistry::new()),
+            recorder,
+            std::time::Instant::now(),
+            Arc::new(AtomicU64::new(0)),
+            0,
+            true, // persistence enabled (was hardcoded false)
+            "async".to_string(),
+            "cluster".to_string(), // mode (was hardcoded "standalone")
+        ));
+
+        let fx = Fixture::with_status_collector(collector.clone());
+        let resp = StatusConnCommand
+            .execute(&mut fx.ctx(), &[arg("JSON")])
+            .await;
+        let bytes = match resp {
+            Response::Bulk(Some(b)) => b,
+            other => panic!("expected bulk JSON, got {other:?}"),
+        };
+        let v: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON");
+
+        // Live values, not the old hardcoded constants.
+        assert_eq!(v["cluster"]["mode"], "cluster");
+        assert_eq!(v["persistence"]["enabled"], true);
+        assert_eq!(v["commands"]["total_processed"], 7);
+
+        // Agrees field-for-field with the HTTP `/status` render from the same
+        // collector (time-varying `frogdb` block excepted).
+        let http = collector.collect().await;
+        let http_v: serde_json::Value =
+            serde_json::from_str(&collector.to_json(&http)).expect("valid JSON");
+        for section in [
+            "cluster",
+            "health",
+            "clients",
+            "memory",
+            "persistence",
+            "keyspace",
+            "commands",
+        ] {
+            assert_eq!(v[section], http_v[section], "section {section} disagrees");
+        }
     }
 
     // ---- specs ----

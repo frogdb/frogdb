@@ -123,16 +123,20 @@ FrogDB uses [`griddle::HashMap`](https://crates.io/crates/griddle) instead of `s
 
 Griddle spreads resize work across inserts, ensuring no single operation pays the full cost. The trade-off is slightly slower reads during active resizing (must check both old and new tables).
 
-### Total Memory (Including COW Buffers)
+### Memory During Snapshots
 
-FrogDB uses forkless snapshots with explicit Copy-on-Write (COW) buffering. Unlike Redis's fork-based approach, COW buffer memory is **explicitly tracked and included in maxmemory enforcement**. Total memory usage includes both the store (keys + values) and the snapshot COW buffer (old values pending serialization).
+FrogDB's snapshots are forkless: they cut a RocksDB checkpoint at a sequence number
+(`RocksStore::create_checkpoint`) rather than forking the process. There is no in-memory
+copy-on-write buffer holding pre-snapshot values, and nothing snapshot-related is counted
+toward `maxmemory` — memory accounting during a snapshot is the same as at any other time.
+See [Forkless Snapshot Algorithm](/architecture/persistence/#forkless-snapshot-algorithm) for
+the full mechanism.
 
 | Aspect | Redis | FrogDB |
 |--------|-------|--------|
-| Snapshot method | Fork-based COW | Forkless epoch-based COW |
-| COW memory tracking | OS-level (not explicit) | Explicit in `total_memory_used()` |
-| maxmemory includes COW | No (operators provision headroom) | Yes (prevents OOM) |
-| Memory predictability | Can spike to 2x | Bounded by `cow-buffer-max-bytes` |
+| Snapshot method | Fork-based COW (OS page-level) | Forkless RocksDB checkpoint at a sequence number |
+| Extra memory during snapshot | OS-level COW pages, can spike to 2x | None — no buffer, no fork |
+| maxmemory accounting | Unaffected by snapshotting | Unaffected by snapshotting |
 
 ---
 
