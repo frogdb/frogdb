@@ -8,7 +8,7 @@
 
 use serde::Serialize;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use frogdb_core::{
@@ -325,6 +325,56 @@ pub struct CommandsStatus {
     pub ops_per_sec: Option<f64>,
 }
 
+/// Live view of this node's operating mode for the status surfaces.
+///
+/// Cluster mode is config-static, but the primary/replica axis flips at runtime
+/// (`REPLICAOF` promote/demote via the `RoleManager`). This reads the same
+/// `Arc<AtomicBool>` the write guard, `ROLE`, and INFO key on, so `/status`,
+/// `STATUS JSON`, and the debug node-state provider can never disagree with INFO.
+#[derive(Clone)]
+pub struct LiveMode {
+    cluster_enabled: bool,
+    is_replica: Arc<AtomicBool>,
+    /// Mode reported when the node is not currently a replica. A node that
+    /// booted as a primary *or* replica passes `"primary"` here — a boot replica
+    /// promoted via `REPLICAOF NO ONE` is a real primary and must match INFO's
+    /// `role:master` — while a standalone node passes `"standalone"`.
+    non_replica_label: &'static str,
+}
+
+impl LiveMode {
+    /// Build a live mode view over the shared role flag.
+    pub fn new(
+        cluster_enabled: bool,
+        is_replica: Arc<AtomicBool>,
+        non_replica_label: &'static str,
+    ) -> Self {
+        Self {
+            cluster_enabled,
+            is_replica,
+            non_replica_label,
+        }
+    }
+
+    /// The current operating mode: `"cluster"` (config-static), else `"replica"`
+    /// when the live role flag is set, else the non-replica label.
+    pub fn current(&self) -> &'static str {
+        if self.cluster_enabled {
+            "cluster"
+        } else if self.is_replica.load(Ordering::Acquire) {
+            "replica"
+        } else {
+            self.non_replica_label
+        }
+    }
+
+    /// Live replica-flag read, independent of the cluster label. Matches how
+    /// INFO/ROLE gate primary-target reporting.
+    pub fn is_replica(&self) -> bool {
+        self.is_replica.load(Ordering::Acquire)
+    }
+}
+
 /// Collects status information from various server components.
 pub struct StatusCollector {
     config: StatusCollectorConfig,
@@ -345,7 +395,7 @@ pub struct StatusCollector {
     maxmemory: u64,
     persistence_enabled: bool,
     durability_mode: String,
-    mode: String,
+    mode: LiveMode,
 }
 
 impl StatusCollector {
@@ -362,7 +412,7 @@ impl StatusCollector {
         maxmemory: u64,
         persistence_enabled: bool,
         durability_mode: String,
-        mode: String,
+        mode: LiveMode,
     ) -> Self {
         Self {
             config,
@@ -451,7 +501,7 @@ impl StatusCollector {
             },
             cluster: ClusterStatus {
                 database_available: self.health_checker.check_ready().is_ok(),
-                mode: self.mode.clone(),
+                mode: self.mode.current().to_string(),
                 num_shards: self.shard_senders.len(),
             },
             health: health_status,
@@ -880,7 +930,7 @@ mod tests {
             0,
             persistence_enabled,
             "async".to_string(),
-            "standalone".to_string(),
+            LiveMode::new(false, Arc::new(AtomicBool::new(false)), "standalone"),
         )
     }
 
@@ -1038,6 +1088,50 @@ mod tests {
             !json.contains("ops_per_sec"),
             "ops_per_sec must be absent, got:\n{json}"
         );
+    }
+
+    #[tokio::test]
+    async fn status_mode_tracks_live_role_flag() {
+        // The cluster.mode field must follow the shared role flag at runtime, not
+        // freeze at its boot value — after a REPLICAOF demotion `/status` and
+        // STATUS JSON must report "replica" (matching INFO's role:slave), and flip
+        // back to "primary" on REPLICAOF NO ONE.
+        let recorder = Arc::new(PrometheusRecorder::new());
+        let flag = Arc::new(AtomicBool::new(false));
+        let collector = StatusCollector::new(
+            StatusCollectorConfig::default(),
+            HealthChecker::new(),
+            Arc::new(vec![]),
+            Arc::new(ClientRegistry::new()),
+            recorder as Arc<dyn MetricsRecorder>,
+            Instant::now(),
+            Arc::new(AtomicU64::new(0)),
+            0,
+            false,
+            "async".to_string(),
+            LiveMode::new(false, flag.clone(), "primary"),
+        );
+
+        // Boot role: not a replica -> the non-replica label.
+        assert_eq!(collector.collect().await.cluster.mode, "primary");
+
+        // Runtime demotion flips the shared flag -> "replica".
+        flag.store(true, Ordering::Release);
+        assert_eq!(collector.collect().await.cluster.mode, "replica");
+
+        // Runtime promotion clears it -> back to the non-replica label.
+        flag.store(false, Ordering::Release);
+        assert_eq!(collector.collect().await.cluster.mode, "primary");
+    }
+
+    #[test]
+    fn live_mode_cluster_is_static_regardless_of_flag() {
+        // Cluster mode is config-only: the role flag never overrides it.
+        let flag = Arc::new(AtomicBool::new(true));
+        let mode = LiveMode::new(true, flag.clone(), "primary");
+        assert_eq!(mode.current(), "cluster");
+        flag.store(false, Ordering::Release);
+        assert_eq!(mode.current(), "cluster");
     }
 
     #[test]

@@ -1094,6 +1094,91 @@ async fn test_role_and_info_report_real_primary_after_demotion(#[case] persisten
     target.shutdown().await;
 }
 
+/// Extract `cluster.mode` from a `STATUS JSON` bulk reply.
+fn status_json_mode(response: &Response) -> Option<String> {
+    let bytes = match response {
+        Response::Bulk(Some(b)) => b,
+        _ => return None,
+    };
+    let v: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    v["cluster"]["mode"].as_str().map(String::from)
+}
+
+/// Fetch `cluster.mode` from the HTTP `/status/json` endpoint.
+async fn http_status_mode(server: &TestServer) -> String {
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let body: serde_json::Value = client
+        .get(format!("http://{}/status/json", server.metrics_addr()))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    body["cluster"]["mode"]
+        .as_str()
+        .expect("status JSON must carry cluster.mode")
+        .to_string()
+}
+
+/// Issue 12: the `cluster.mode` field on both status surfaces must track a
+/// runtime `REPLICAOF` demotion/promotion instead of freezing at the boot role,
+/// so it agrees with INFO/ROLE (issue 05) after a role change. The `STATUS
+/// JSON` connection command and the HTTP `/status/json` endpoint render from the
+/// same shared collector (issue 11), so both must flip together.
+#[tokio::test]
+async fn test_status_mode_tracks_runtime_replicaof() {
+    let target = TestServer::start_primary().await;
+    let node = TestServer::start_primary().await;
+
+    // Boot role: primary on ROLE and both status surfaces.
+    assert_eq!(
+        role_name(&node.send("ROLE", &[]).await).as_deref(),
+        Some("master")
+    );
+    assert_eq!(
+        status_json_mode(&node.send("STATUS", &["JSON"]).await).as_deref(),
+        Some("primary")
+    );
+    assert_eq!(http_status_mode(&node).await, "primary");
+
+    // Runtime demotion.
+    let target_port = target.port().to_string();
+    assert_ok(&node.send("REPLICAOF", &["127.0.0.1", &target_port]).await);
+
+    // ROLE now reports slave, and so must both status surfaces.
+    assert_eq!(
+        role_name(&node.send("ROLE", &[]).await).as_deref(),
+        Some("slave")
+    );
+    assert_eq!(
+        status_json_mode(&node.send("STATUS", &["JSON"]).await).as_deref(),
+        Some("replica"),
+        "STATUS JSON must report replica after runtime REPLICAOF"
+    );
+    assert_eq!(
+        http_status_mode(&node).await,
+        "replica",
+        "HTTP /status must report replica after runtime REPLICAOF"
+    );
+
+    // REPLICAOF NO ONE flips both surfaces back to primary.
+    assert_ok(&node.send("REPLICAOF", &["NO", "ONE"]).await);
+    assert_eq!(
+        role_name(&node.send("ROLE", &[]).await).as_deref(),
+        Some("master")
+    );
+    assert_eq!(
+        status_json_mode(&node.send("STATUS", &["JSON"]).await).as_deref(),
+        Some("primary"),
+        "STATUS JSON must flip back to primary after REPLICAOF NO ONE"
+    );
+    assert_eq!(http_status_mode(&node).await, "primary");
+
+    node.shutdown().await;
+    target.shutdown().await;
+}
+
 /// Round-8 P05: a boot-configured replica (`replicaof` in config, no runtime
 /// `REPLICAOF`) must report the same real `master_host`/`master_port` on
 /// both `ROLE` and `INFO replication` as a runtime-demoted node — the

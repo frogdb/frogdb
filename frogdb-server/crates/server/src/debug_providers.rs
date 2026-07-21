@@ -15,6 +15,9 @@ use frogdb_debug::{
     ClientSnapshot, ClusterNodeSnapshot, ClusterOverviewSnapshot, MigrationSnapshot,
     NodeStateProvider, ReplicationView, client_snapshots_from_registry,
 };
+use frogdb_telemetry::LiveMode;
+
+use crate::role_manager::RoleManagerHandle;
 
 /// Composite adapter feeding node-observable state to the debug web UI.
 pub struct ServerDebugProvider {
@@ -22,9 +25,11 @@ pub struct ServerDebugProvider {
     cluster_state: Option<Arc<ClusterState>>,
     self_node_id: Option<u64>,
     replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
-    role: String,
-    master_host: Option<String>,
-    master_port: Option<u16>,
+    /// Live operating mode, shared with `/status`; follows runtime role changes.
+    mode: LiveMode,
+    /// Owns the live primary target, so master host/port track runtime
+    /// `REPLICAOF` promote/demote instead of freezing at the boot config.
+    role_manager: RoleManagerHandle,
 }
 
 impl ServerDebugProvider {
@@ -35,18 +40,16 @@ impl ServerDebugProvider {
         cluster_state: Option<Arc<ClusterState>>,
         self_node_id: Option<u64>,
         replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
-        role: String,
-        master_host: Option<String>,
-        master_port: Option<u16>,
+        mode: LiveMode,
+        role_manager: RoleManagerHandle,
     ) -> Self {
         Self {
             client_registry,
             cluster_state,
             self_node_id,
             replication_tracker,
-            role,
-            master_host,
-            master_port,
+            mode,
+            role_manager,
         }
     }
 }
@@ -58,11 +61,19 @@ impl NodeStateProvider for ServerDebugProvider {
             .as_ref()
             .map(|t| (t.get_all_replicas().len(), t.current_offset()))
             .unwrap_or((0, 0));
+        let role = self.mode.current();
+        // Report the primary only while the live replica flag is set (not the
+        // cluster-label string), matching how INFO/ROLE gate master_host/master_port.
+        let master = self
+            .mode
+            .is_replica()
+            .then(|| self.role_manager.primary_target())
+            .flatten();
         ReplicationView {
-            role: self.role.clone(),
+            role: role.to_string(),
             connected_replicas,
-            master_host: self.master_host.clone(),
-            master_port: self.master_port,
+            master_host: master.map(|addr| addr.ip().to_string()),
+            master_port: master.map(|addr| addr.port()),
             replication_offset,
         }
     }
@@ -188,5 +199,100 @@ mod tests {
         };
         let result = flags_to_strings(&flags);
         assert_eq!(result, vec!["fail", "pfail", "handshake", "noaddr"]);
+    }
+
+    /// Issue 12: the debug node-state provider must draw role and master
+    /// host/port from the shared live source (the RoleManager's flag + primary
+    /// target), so a runtime `REPLICAOF` promote/demote is reflected instead of
+    /// freezing at the boot config.
+    #[test]
+    fn replication_view_tracks_live_role_and_primary_target() {
+        use crate::role_manager::{ReplicaStream, ReplicaStreamer, RoleManager};
+        use frogdb_core::RoleController;
+        use std::net::SocketAddr;
+        use std::sync::atomic::AtomicBool;
+
+        struct NoopStream;
+        impl ReplicaStream for NoopStream {}
+        struct NoopStreamer;
+        impl ReplicaStreamer for NoopStreamer {
+            fn start(&self, _primary: SocketAddr) -> Box<dyn ReplicaStream> {
+                Box::new(NoopStream)
+            }
+        }
+
+        let flag = Arc::new(AtomicBool::new(false));
+        let handle =
+            RoleManagerHandle::new(RoleManager::new(flag.clone(), Arc::new(NoopStreamer), None));
+        let provider = ServerDebugProvider::new(
+            Arc::new(ClientRegistry::new()),
+            None,
+            None,
+            None,
+            LiveMode::new(false, flag.clone(), "primary"),
+            handle.clone(),
+        );
+
+        // Boot: primary, no master reported.
+        let view = provider.replication();
+        assert_eq!(view.role, "primary");
+        assert!(view.master_host.is_none());
+        assert!(view.master_port.is_none());
+
+        // Runtime demotion flips the shared flag and records the target.
+        let primary: SocketAddr = "127.0.0.1:7000".parse().unwrap();
+        handle.request_demote(primary);
+        let view = provider.replication();
+        assert_eq!(view.role, "replica");
+        assert_eq!(view.master_host.as_deref(), Some("127.0.0.1"));
+        assert_eq!(view.master_port, Some(7000));
+
+        // Promotion clears both back to the primary shape.
+        handle.request_promote();
+        let view = provider.replication();
+        assert_eq!(view.role, "primary");
+        assert!(view.master_host.is_none());
+        assert!(view.master_port.is_none());
+    }
+
+    /// Issue 12 follow-up: in cluster mode `LiveMode::current()` reports
+    /// `"cluster"`, but a boot-configured replica must still surface its
+    /// primary target — the master gate reads the live replica flag directly,
+    /// not the cluster-labeled role string.
+    #[test]
+    fn replication_view_reports_master_in_cluster_mode_when_replica_flag_set() {
+        use crate::role_manager::{ReplicaStream, ReplicaStreamer, RoleManager};
+        use frogdb_core::RoleController;
+        use std::net::SocketAddr;
+        use std::sync::atomic::AtomicBool;
+
+        struct NoopStream;
+        impl ReplicaStream for NoopStream {}
+        struct NoopStreamer;
+        impl ReplicaStreamer for NoopStreamer {
+            fn start(&self, _primary: SocketAddr) -> Box<dyn ReplicaStream> {
+                Box::new(NoopStream)
+            }
+        }
+
+        let flag = Arc::new(AtomicBool::new(false));
+        let handle =
+            RoleManagerHandle::new(RoleManager::new(flag.clone(), Arc::new(NoopStreamer), None));
+        let provider = ServerDebugProvider::new(
+            Arc::new(ClientRegistry::new()),
+            None,
+            None,
+            None,
+            LiveMode::new(true, flag.clone(), "primary"),
+            handle.clone(),
+        );
+
+        let primary: SocketAddr = "127.0.0.1:7000".parse().unwrap();
+        handle.request_demote(primary);
+
+        let view = provider.replication();
+        assert_eq!(view.role, "cluster");
+        assert_eq!(view.master_host.as_deref(), Some("127.0.0.1"));
+        assert_eq!(view.master_port, Some(7000));
     }
 }
