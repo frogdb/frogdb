@@ -47,6 +47,7 @@ pub(crate) mod scripting_conn_command;
 pub(crate) mod search;
 mod slowlog;
 pub mod state;
+pub(crate) mod status_handler;
 pub(crate) mod timeseries_scatter;
 pub(crate) mod transaction;
 pub(crate) mod transaction_conn_command;

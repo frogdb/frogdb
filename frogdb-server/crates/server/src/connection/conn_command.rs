@@ -174,16 +174,19 @@ impl ConnectionHandler {
             self.num_shards,
         );
         match mutation {
-            ConnMutation::None => base.with_full_reads(
-                self,
-                self,
-                // DEBUG dispatches through this read-only view; wire its
-                // handler-only capabilities (tracer, per-shard round-trips,
-                // bundle generation, subscription counts, the debug gate).
-                Some(self),
-                self.state.protocol_version,
-                self.state.username(),
-            ),
+            ConnMutation::None => base
+                .with_full_reads(
+                    self,
+                    self,
+                    // DEBUG dispatches through this read-only view; wire its
+                    // handler-only capabilities (tracer, per-shard round-trips,
+                    // bundle generation, subscription counts, the debug gate).
+                    Some(self),
+                    self.state.protocol_version,
+                    self.state.username(),
+                )
+                // STATUS JSON renders from the shared status collector via `self`.
+                .with_status(self),
             ConnMutation::Auth => base.with_conn_state(&mut self.state),
             ConnMutation::Client => base
                 .with_conn_state(&mut self.state)

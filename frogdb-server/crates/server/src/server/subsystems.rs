@@ -46,6 +46,38 @@ impl Server {
         // Capture server start time
         let start_time = std::time::Instant::now();
 
+        // Determine node role once — the single source of truth for both the
+        // status collector and (when HTTP is enabled) the debug node-state
+        // provider.
+        let mode = if self.config.cluster.enabled {
+            "cluster".to_string()
+        } else if self.config.replication.is_primary() {
+            "primary".to_string()
+        } else if self.config.replication.is_replica() {
+            "replica".to_string()
+        } else {
+            "standalone".to_string()
+        };
+
+        // Single status collector shared by the HTTP `/status` endpoint and the
+        // STATUS JSON connection command, so the two surfaces can never disagree.
+        // Built unconditionally over the object-safe metrics recorder so STATUS
+        // JSON works even when the HTTP server is disabled (the no-op recorder
+        // reports absent counters as 0, never faked).
+        let status_collector = Arc::new(StatusCollector::new(
+            self.config.status.to_collector_config(),
+            self.health_checker.clone(),
+            self.shard_senders.clone(),
+            self.client_registry.clone(),
+            self.metrics_recorder.clone(),
+            start_time,
+            self.config_manager.max_clients_flag(),
+            self.config.memory.maxmemory,
+            self.config.persistence.enabled,
+            self.config.persistence.durability_mode.clone(),
+            mode.clone(),
+        ));
+
         // Start HTTP server if enabled (metrics, health, debug, admin REST)
         let http_server_handle = if let Some(ref prometheus) = self.prometheus_recorder {
             // Create debug state for the debug web UI
@@ -71,18 +103,6 @@ impl Server {
                     value: self.config.http.port.to_string(),
                 },
             ];
-            // Determine node role for both the debug provider and the status
-            // collector (single source of truth).
-            let mode = if self.config.cluster.enabled {
-                "cluster".to_string()
-            } else if self.config.replication.is_primary() {
-                "primary".to_string()
-            } else if self.config.replication.is_replica() {
-                "replica".to_string()
-            } else {
-                "standalone".to_string()
-            };
-
             // Master identity, when this node is a configured replica.
             let (master_host, master_port) = if self.config.replication.is_replica() {
                 (
@@ -116,22 +136,6 @@ impl Server {
             )
             .with_node_state(node_state_provider)
             .with_shard_senders(self.shard_senders.clone());
-
-            // Create status collector for /status/json endpoint
-            let status_collector_config = self.config.status.to_collector_config();
-            let status_collector = Arc::new(StatusCollector::new(
-                status_collector_config,
-                self.health_checker.clone(),
-                self.shard_senders.clone(),
-                self.client_registry.clone(),
-                prometheus.clone(),
-                start_time,
-                self.config_manager.max_clients_flag(),
-                self.config.memory.maxmemory,
-                self.config.persistence.enabled,
-                self.config.persistence.durability_mode.clone(),
-                mode,
-            ));
 
             // SAFETY: http_listener is Some when prometheus_recorder is Some
             // (both are gated on config.http.enabled in Server::new()).
@@ -174,7 +178,7 @@ impl Server {
             )
             .with_listener(http_listener)
             .with_debug_state(debug_state)
-            .with_status_collector(status_collector);
+            .with_status_collector(status_collector.clone());
 
             if let Some(admin_state) = admin_state {
                 server = server.with_admin_state(admin_state);
@@ -438,6 +442,7 @@ impl Server {
                 latency_histograms: latency_histograms.clone(),
                 hotkey_session: hotkey_session.clone(),
                 keyspace_stats: self.keyspace_stats.clone(),
+                status_collector: Some(status_collector.clone()),
             },
             new_conn_senders: std::mem::take(&mut self.new_conn_senders),
             allow_cross_slot: self.config.server.allow_cross_slot_standalone,

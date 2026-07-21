@@ -78,8 +78,8 @@ pub use conn_command::{
     BoxFuture, ClientTrackingProvider, ConfigProvider, ConnCtx, ConnStateMut, ConnectionCommand,
     CursorReadBatch, CursorRow, CursorStoreProvider, DebugProvider, HotkeyClusterProvider,
     InfoProvider, MemoryDiagProvider, MonitorProvider, NoopInfoProvider, NoopScriptingProvider,
-    PubSubProvider, ResetOutcome, ScriptingProvider, TrackingInfoView, TrackingModeView,
-    TxnDiscardOutcome,
+    NoopStatusProvider, PubSubProvider, ResetOutcome, ScriptingProvider, StatusProvider,
+    TrackingInfoView, TrackingModeView, TxnDiscardOutcome,
 };
 pub use error::FrogDbError;
 pub use eviction::{

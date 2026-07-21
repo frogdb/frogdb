@@ -11,14 +11,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use frogdb_core::{ClientFlags, ClientRegistry, ShardSender, ShardWalLag, WalLagAggregate};
+use frogdb_core::{
+    ClientFlags, ClientRegistry, MetricsRecorder, ShardSender, ShardWalLag, WalLagAggregate,
+};
 
 use crate::definitions::{
     CommandsTotal, SnapshotInProgress, SnapshotLastTimestamp, WalBytes, WalWrites,
 };
 use crate::health::HealthChecker;
 use crate::node_state::{NodeStateSnapshot, ShardState};
-use crate::prometheus_recorder::PrometheusRecorder;
 
 /// Deadline for the single node-state scatter behind `/status`. `/status` is a
 /// best-effort health surface: a shard that misses this deadline yields an empty
@@ -331,8 +332,13 @@ pub struct StatusCollector {
     shard_senders: Arc<Vec<ShardSender>>,
     client_registry: Arc<ClientRegistry>,
     /// Metrics recorder — the single source of truth shared with `/metrics` and
-    /// INFO, so all three views of a counter can never disagree.
-    recorder: Arc<PrometheusRecorder>,
+    /// INFO, so all three views of a counter can never disagree. Held as the
+    /// object-safe trait (not the concrete `PrometheusRecorder`) so the collector
+    /// is buildable in every server configuration: the same collector renders the
+    /// HTTP `/status` endpoint and the STATUS JSON command, and when metrics are
+    /// disabled the no-op recorder reports absent counters as `0`/`None` rather
+    /// than faking them.
+    recorder: Arc<dyn MetricsRecorder>,
     start_time: Instant,
     // Configuration values needed for status
     max_clients: Arc<AtomicU64>,
@@ -350,7 +356,7 @@ impl StatusCollector {
         health_checker: HealthChecker,
         shard_senders: Arc<Vec<ShardSender>>,
         client_registry: Arc<ClientRegistry>,
-        recorder: Arc<PrometheusRecorder>,
+        recorder: Arc<dyn MetricsRecorder>,
         start_time: Instant,
         max_clients: Arc<AtomicU64>,
         maxmemory: u64,
@@ -413,26 +419,20 @@ impl StatusCollector {
 
         // Recorder-sourced counters/gauges — the shared source of truth with
         // `/metrics` and INFO. Absent families (nothing emitted yet) read as 0.
-        let wal_total_writes = self
-            .recorder
-            .get_counter_value(WalWrites::NAME)
-            .unwrap_or(0.0) as u64;
-        let wal_total_bytes = self
-            .recorder
-            .get_counter_value(WalBytes::NAME)
-            .unwrap_or(0.0) as u64;
+        let wal_total_writes = self.recorder.counter_value(WalWrites::NAME).unwrap_or(0);
+        let wal_total_bytes = self.recorder.counter_value(WalBytes::NAME).unwrap_or(0);
         let commands_total_processed = self
             .recorder
-            .get_counter_value(CommandsTotal::NAME)
-            .unwrap_or(0.0) as u64;
+            .counter_value(CommandsTotal::NAME)
+            .unwrap_or(0);
         let snapshot_in_progress = self
             .recorder
-            .get_gauge_value(SnapshotInProgress::NAME)
+            .gauge_value(SnapshotInProgress::NAME)
             .is_some_and(|v| v > 0.5);
         // Last successful-snapshot unix timestamp; 0/absent means "never".
         let snapshot_last_timestamp = self
             .recorder
-            .get_gauge_value(SnapshotLastTimestamp::NAME)
+            .gauge_value(SnapshotLastTimestamp::NAME)
             .filter(|v| *v > 0.0)
             .map(|v| v as u64);
 
@@ -858,6 +858,7 @@ mod tests {
     // per-shard stats INFO also reads), not a stub.
     // ------------------------------------------------------------------------
 
+    use crate::prometheus_recorder::PrometheusRecorder;
     use frogdb_core::{
         ClientRegistry, Envelope, InfoShardSnapshot, ShardMemoryStats, ShardMessage, ShardSender,
     };
@@ -873,7 +874,7 @@ mod tests {
             HealthChecker::new(),
             Arc::new(shard_senders),
             Arc::new(ClientRegistry::new()),
-            recorder,
+            recorder as Arc<dyn MetricsRecorder>,
             Instant::now(),
             Arc::new(AtomicU64::new(0)),
             0,

@@ -168,6 +168,29 @@ impl InfoProvider for NoopInfoProvider {
     }
 }
 
+/// Machine-readable server-status rendering (STATUS JSON), abstracted so the
+/// connection-command seam can live in `core` without naming the server's status
+/// collector or telemetry's `ServerStatus` type. Like [`InfoProvider`], the whole
+/// gather-and-render runs server-side behind one method: STATUS JSON and the HTTP
+/// `/status` endpoint share the *same* collector, so the two surfaces can never
+/// disagree. The server implements this for its `ConnectionHandler`.
+pub trait StatusProvider: Send + Sync {
+    /// Collect and render the current server status as the machine-readable JSON
+    /// bulk-string response. Returns a boxed future (for object safety).
+    fn status_json<'a>(&'a self) -> BoxFuture<'a, Response>;
+}
+
+/// A no-op [`StatusProvider`] for `ConnCtx` fixtures whose command under test is
+/// not STATUS. `status_json` returns an error, so a fixture can rely on the
+/// default without wiring up a status collector.
+pub struct NoopStatusProvider;
+
+impl StatusProvider for NoopStatusProvider {
+    fn status_json<'a>(&'a self) -> BoxFuture<'a, Response> {
+        Box::pin(async { Response::error("ERR status unavailable") })
+    }
+}
+
 /// The scripting/function entry points a [`ConnectionCommand`] needs to drive
 /// EVAL/EVALSHA/SCRIPT/FCALL/FUNCTION, abstracted so the connection-command seam
 /// can live in `core` without naming the server's script executor, Lua VM,
@@ -635,6 +658,11 @@ pub struct ConnCtx<'a> {
     pub username: &'a str,
     /// Fleet-and-connection INFO aggregation/rendering (INFO). Read-only.
     pub info: &'a dyn InfoProvider,
+    /// Machine-readable server-status rendering (STATUS JSON). Read-only; shares
+    /// the same collector as the HTTP `/status` endpoint. Defaults to the no-op
+    /// provider; the read-only dispatch path layers the live one via
+    /// [`with_status`](Self::with_status).
+    pub status: &'a dyn StatusProvider,
     /// Scripting/function entry points (EVAL/EVALSHA/SCRIPT/FCALL/FUNCTION).
     /// Read-only: the executor / function registry / cross-shard EVAL
     /// coordinator all live behind [`ScriptingProvider`].
@@ -704,10 +732,11 @@ impl<'a> ConnCtx<'a> {
         max_clients: u64,
         cluster_enabled: bool,
     ) -> Self {
-        // The no-op defaults, authored once (both providers are zero-sized, so
+        // The no-op defaults, authored once (the providers are zero-sized, so
         // the references promote to `'static`).
         const NOOP_INFO: &NoopInfoProvider = &NoopInfoProvider;
         const NOOP_SCRIPTING: &NoopScriptingProvider = &NoopScriptingProvider;
+        const NOOP_STATUS: &NoopStatusProvider = &NoopStatusProvider;
         ConnCtx {
             config,
             client_registry,
@@ -731,6 +760,7 @@ impl<'a> ConnCtx<'a> {
             protocol_version: ProtocolVersion::default(),
             username: "",
             info: NOOP_INFO,
+            status: NOOP_STATUS,
             scripting: NOOP_SCRIPTING,
             conn_state: None,
             tracking: None,
@@ -771,6 +801,15 @@ impl<'a> ConnCtx<'a> {
     /// that read identity without the `conn_state` capability, e.g. ACL WHOAMI).
     pub fn with_username(mut self, username: &'a str) -> Self {
         self.username = username;
+        self
+    }
+
+    /// Layer the live server-status provider (STATUS JSON) onto the ambient view.
+    /// The read-only dispatch path calls this so STATUS renders from the same
+    /// collector as the HTTP `/status` endpoint; fixtures use it to inject a
+    /// collector-backed provider.
+    pub fn with_status(mut self, status: &'a dyn StatusProvider) -> Self {
+        self.status = status;
         self
     }
 
