@@ -16,6 +16,7 @@ members = [
     "frogdb-server/crates/debug",
     "frogdb-server/crates/telemetry",
     "frogdb-server/crates/metrics-derive",
+    "frogdb-server/crates/config-derive",
     "frogdb-server/crates/testing",
     "frogdb-server/crates/browser-tests",
     "frogdb-server/crates/frogdb-macros",
@@ -135,6 +136,7 @@ frogdb-persistence = { path = "frogdb-server/crates/persistence" }
 frogdb-acl = { path = "frogdb-server/crates/acl" }
 frogdb-scripting = { path = "frogdb-server/crates/scripting" }
 frogdb-config = { path = "frogdb-server/crates/config" }
+frogdb-config-derive = { path = "frogdb-server/crates/config-derive" }
 frogdb-core = { path = "frogdb-server/crates/core" }
 frogdb-debug = { path = "frogdb-server/crates/debug" }
 frogdb-telemetry = { path = "frogdb-server/crates/telemetry" }

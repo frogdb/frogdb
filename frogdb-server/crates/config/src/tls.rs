@@ -1,6 +1,7 @@
 //! TLS configuration.
 
 use anyhow::Result;
+use frogdb_config_derive::ConfigParams;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -30,80 +31,99 @@ pub enum ClientCertMode {
 }
 
 /// TLS configuration section.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
+#[params(section = "tls")]
 #[serde(rename_all = "kebab-case")]
 pub struct TlsConfig {
     /// Whether TLS is enabled.
     #[serde(default)]
+    #[param(skip)]
     pub enabled: bool,
 
     /// Path to the server certificate file (PEM format).
     #[serde(default)]
+    #[param(name = "tls-cert-file")]
     pub cert_file: PathBuf,
 
     /// Path to the server private key file (PEM format).
     #[serde(default)]
+    #[param(name = "tls-key-file")]
     pub key_file: PathBuf,
 
     /// Path to the CA certificate file for client certificate verification (PEM format).
     /// Required when `require_client_cert` is not `none`.
     #[serde(default)]
+    #[param(name = "tls-ca-cert-file")]
     pub ca_file: Option<PathBuf>,
 
     /// Port for TLS connections.
     #[serde(default = "default_tls_port")]
+    #[param]
     pub tls_port: u16,
 
     /// Client certificate authentication mode.
     #[serde(default)]
+    #[param(name = "tls-auth-clients")]
     pub require_client_cert: ClientCertMode,
 
     /// Allowed TLS protocol versions.
     #[serde(default = "default_protocols")]
+    #[param(name = "tls-protocols")]
     pub protocols: Vec<TlsProtocol>,
 
     /// Allowed ciphersuites. Empty means use rustls defaults.
     #[serde(default)]
+    #[param(skip)]
     pub ciphersuites: Vec<String>,
 
     /// Whether to encrypt replication connections.
     #[serde(default)]
+    #[param]
     pub tls_replication: bool,
 
     /// Whether to encrypt cluster bus connections.
     #[serde(default)]
+    #[param]
     pub tls_cluster: bool,
 
     /// Whether to enable dual-accept mode for rolling TLS cluster migration.
     #[serde(default)]
+    #[param(skip)]
     pub tls_cluster_migration: bool,
 
     /// Whether to keep the admin port as plaintext even when TLS is enabled.
     #[serde(default = "default_true")]
+    #[param(skip)]
     pub no_tls_on_admin_port: bool,
 
     /// Whether to keep the HTTP server as plaintext even when TLS is enabled.
     #[serde(default = "default_true")]
+    #[param(skip)]
     pub no_tls_on_http: bool,
 
     /// Path to client certificate for outgoing replication/cluster connections.
     #[serde(default)]
+    #[param(skip)]
     pub client_cert_file: Option<PathBuf>,
 
     /// Path to client private key for outgoing replication/cluster connections.
     #[serde(default)]
+    #[param(skip)]
     pub client_key_file: Option<PathBuf>,
 
     /// Whether to watch certificate files for changes and auto-reload.
     #[serde(default = "default_true")]
+    #[param(skip)]
     pub watch_certs: bool,
 
     /// Debounce interval in milliseconds for certificate file watcher.
     #[serde(default = "default_watch_debounce_ms")]
+    #[param(skip)]
     pub watch_debounce_ms: u64,
 
     /// TLS handshake timeout in milliseconds.
     #[serde(default = "default_handshake_timeout_ms")]
+    #[param(skip)]
     pub handshake_timeout_ms: u64,
 }
 

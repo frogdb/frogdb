@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use frogdb_config_derive::ConfigParams;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -61,34 +62,45 @@ fn default_max_files() -> u32 {
 }
 
 /// Logging configuration.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
+#[params(section = "logging")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct LoggingConfig {
     /// Log level (trace, debug, info, warn, error).
     #[serde(default = "default_log_level")]
+    #[param(mutable, name = "loglevel")]
     pub level: String,
 
     /// Log format (pretty, json).
     #[serde(default = "default_log_format")]
+    #[param(skip)]
     pub format: String,
 
     /// Console output destination (stdout, stderr, none).
     #[serde(default)]
+    #[param(skip)]
     pub output: LogOutput,
 
     /// Enable per-request tracing spans (cmd_read, cmd_execute, cmd_route, etc.).
     /// Disabled by default for production performance (~7% CPU savings).
     /// Enable for debugging or when distributed tracing is needed.
     #[serde(default)]
+    #[param(mutable)]
     pub per_request_spans: bool,
 
     /// File path for log output. When set, logs are written to this file
     /// in addition to console output. Use `output = "none"` to disable console.
     #[serde(default)]
+    #[param(skip)]
     pub file_path: Option<PathBuf>,
 
     /// Log file rotation settings. Only meaningful when `file_path` is set.
+    //
+    // The nested `RotationConfig` fields are not individually exposed as CONFIG
+    // parameters, so the whole field is skipped (the sub-struct is deliberately
+    // not `#[derive(ConfigParams)]`).
     #[serde(default)]
+    #[param(skip)]
     pub rotation: Option<RotationConfig>,
 }
 

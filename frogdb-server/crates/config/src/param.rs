@@ -128,6 +128,15 @@ pub trait DynParam<C: ?Sized>: Send + Sync {
     fn set(&self, ctx: &C, raw: &str) -> Result<(), ConfigError>;
     /// How a successful set propagates to shards.
     fn propagation(&self) -> Propagation;
+    /// Whether this is a Redis-compatibility no-op parameter (accepts and
+    /// ignores any value). Real lifecycle params return `false`; the dedicated
+    /// no-op impl overrides this. Lets a consumer partition the registry by
+    /// no-op-ness without downcasting through the `dyn` boundary — used by the
+    /// server's `test_param_registry_consistency` to pin `info.noop` against the
+    /// serving entry.
+    fn is_noop(&self) -> bool {
+        false
+    }
 }
 
 impl<T: 'static, C: ?Sized> DynParam<C> for ConfigParam<T, C> {

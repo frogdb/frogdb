@@ -1,18 +1,25 @@
 //! Blocking commands configuration.
 
+use frogdb_config_derive::ConfigParams;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Blocking commands configuration.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+//
+// No fields are exposed as CONFIG GET/SET parameters; each carries an explicit
+// `#[param(skip)]` to satisfy the per-field coverage guarantee.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
+#[params(section = "blocking")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct BlockingConfig {
     /// Maximum waiters per key (0 = unlimited).
     #[serde(default = "default_max_waiters_per_key")]
+    #[param(skip)]
     pub max_waiters_per_key: usize,
 
     /// Maximum total blocked connections (0 = unlimited).
     #[serde(default = "default_max_blocked_connections")]
+    #[param(skip)]
     pub max_blocked_connections: usize,
 }
 

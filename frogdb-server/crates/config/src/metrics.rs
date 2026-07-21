@@ -1,35 +1,43 @@
 //! Metrics configuration.
 
 use anyhow::Result;
+use frogdb_config_derive::ConfigParams;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Metrics configuration.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
+#[params(section = "metrics")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct MetricsConfig {
     /// Whether metrics are enabled.
     #[serde(default = "default_metrics_enabled")]
+    #[param(name = "metrics-enabled")]
     pub enabled: bool,
 
     /// Bind address for the metrics HTTP server.
     #[serde(default = "default_metrics_bind")]
+    #[param(skip)]
     pub bind: String,
 
     /// Port for the metrics HTTP server.
     #[serde(default = "default_metrics_port")]
+    #[param(name = "metrics-port")]
     pub port: u16,
 
     /// Whether OTLP export is enabled.
     #[serde(default)]
+    #[param(skip)]
     pub otlp_enabled: bool,
 
     /// OTLP endpoint URL.
     #[serde(default = "default_otlp_endpoint")]
+    #[param(skip)]
     pub otlp_endpoint: String,
 
     /// OTLP push interval in seconds.
     #[serde(default = "default_otlp_interval_secs")]
+    #[param(skip)]
     pub otlp_interval_secs: u64,
 }
 

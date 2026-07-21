@@ -1,5 +1,6 @@
 //! JSON configuration.
 
+use frogdb_config_derive::ConfigParams;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -10,15 +11,21 @@ pub const DEFAULT_JSON_MAX_DEPTH: usize = 128;
 pub const DEFAULT_JSON_MAX_SIZE: usize = 64 * 1024 * 1024;
 
 /// JSON configuration.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+//
+// No fields are exposed as CONFIG GET/SET parameters; each carries an explicit
+// `#[param(skip)]` to satisfy the per-field coverage guarantee.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
+#[params(section = "json")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct JsonConfig {
     /// Maximum nesting depth for JSON documents.
     #[serde(default = "default_json_max_depth")]
+    #[param(skip)]
     pub max_depth: usize,
 
     /// Maximum size in bytes for JSON documents.
     #[serde(default = "default_json_max_size")]
+    #[param(skip)]
     pub max_size: usize,
 }
 

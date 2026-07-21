@@ -1,5 +1,6 @@
 //! Debug bundle configuration.
 
+use frogdb_config_derive::ConfigParams;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -21,27 +22,36 @@ pub const DEFAULT_MAX_TRACE_ENTRIES: usize = 100;
 /// Debug bundle configuration.
 ///
 /// Controls the generation and storage of diagnostic bundles for troubleshooting.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+//
+// No fields are exposed as CONFIG GET/SET parameters; each carries an explicit
+// `#[param(skip)]` to satisfy the per-field coverage guarantee.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
+#[params(section = "debug-bundle")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct DebugBundleConfig {
     /// Directory for storing bundles.
     #[serde(default = "default_bundle_directory")]
+    #[param(skip)]
     pub directory: String,
 
     /// Maximum number of bundles to retain.
     #[serde(default = "default_max_bundles")]
+    #[param(skip)]
     pub max_bundles: usize,
 
     /// Bundle TTL in seconds before automatic cleanup.
     #[serde(default = "default_bundle_ttl_secs")]
+    #[param(skip)]
     pub bundle_ttl_secs: u64,
 
     /// Maximum slowlog entries to include in bundles.
     #[serde(default = "default_max_slowlog_entries")]
+    #[param(skip)]
     pub max_slowlog_entries: usize,
 
     /// Maximum trace entries to include in bundles.
     #[serde(default = "default_max_trace_entries")]
+    #[param(skip)]
     pub max_trace_entries: usize,
 }
 

@@ -1,5 +1,6 @@
 //! Slow query log configuration.
 
+use frogdb_config_derive::ConfigParams;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -14,20 +15,24 @@ pub const DEFAULT_SLOWLOG_MAX_ARG_LEN: usize = 128;
 pub const DEFAULT_SLOWLOG_LOG_SLOWER_THAN: i64 = 10000;
 
 /// Slow query log configuration.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
+#[params(section = "slowlog")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct SlowlogConfig {
     /// Threshold in microseconds. Commands slower than this are logged.
     /// Set to 0 to log all commands, -1 to disable logging.
     #[serde(default = "default_slowlog_log_slower_than")]
+    #[param(mutable, name = "slowlog-log-slower-than")]
     pub log_slower_than: i64,
 
     /// Maximum number of entries per shard.
     #[serde(default = "default_slowlog_max_len")]
+    #[param(mutable, name = "slowlog-max-len")]
     pub max_len: usize,
 
     /// Maximum characters per argument before truncation.
     #[serde(default = "default_slowlog_max_arg_len")]
+    #[param(mutable, name = "slowlog-max-arg-len")]
     pub max_arg_len: usize,
 }
 

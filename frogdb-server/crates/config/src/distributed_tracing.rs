@@ -1,43 +1,56 @@
 //! Distributed tracing configuration.
 
 use anyhow::Result;
+use frogdb_config_derive::ConfigParams;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Distributed tracing configuration.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+//
+// No fields are exposed as CONFIG GET/SET parameters; each carries an explicit
+// `#[param(skip)]` to satisfy the per-field coverage guarantee.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
+#[params(section = "tracing")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct TracingConfig {
     /// Whether distributed tracing is enabled.
     #[serde(default)]
+    #[param(skip)]
     pub enabled: bool,
 
     /// OTLP endpoint for trace export.
     #[serde(default = "default_tracing_endpoint")]
+    #[param(skip)]
     pub otlp_endpoint: String,
 
     /// Sampling rate (0.0 to 1.0). 1.0 = sample all, 0.1 = sample 10%.
     #[serde(default = "default_sampling_rate")]
+    #[param(skip)]
     pub sampling_rate: f64,
 
     /// Service name in traces.
     #[serde(default = "default_service_name")]
+    #[param(skip)]
     pub service_name: String,
 
     /// Enable scatter-gather operation spans (child spans per shard for MGET/MSET).
     #[serde(default)]
+    #[param(skip)]
     pub scatter_gather_spans: bool,
 
     /// Enable shard execution spans (spans inside shard workers).
     #[serde(default)]
+    #[param(skip)]
     pub shard_spans: bool,
 
     /// Enable persistence spans (WAL writes, snapshots).
     #[serde(default)]
+    #[param(skip)]
     pub persistence_spans: bool,
 
     /// Maximum number of recent traces to retain for DEBUG TRACING RECENT.
     #[serde(default = "default_recent_traces_max")]
+    #[param(skip)]
     pub recent_traces_max: usize,
 }
 

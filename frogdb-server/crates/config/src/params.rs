@@ -5,9 +5,31 @@
 //! It is the single source of truth consumed by:
 //! - `docs-gen` (documentation generation)
 //! - `runtime_config.rs` (runtime CONFIG command handling)
+//!
+//! # Assembly (derive-macro migration, complete)
+//!
+//! Historically this file was one hand-maintained 61-row table, independent of
+//! the serde section structs — a field could be added to a struct with no
+//! matching row and nothing failed. Every struct-backed section now carries
+//! `#[derive(ConfigParams)]`, where every field must declare `#[param(...)]` or
+//! `#[param(skip)]` (an unannotated field is a compile error). Each struct emits
+//! a `PARAMS` table, and [`config_param_registry`] assembles the final list from:
+//! 1. the derived per-section `PARAMS` tables (`MemoryConfig`, `ServerConfig`,
+//!    `PersistenceConfig`, `LoggingConfig`, `ReplicationConfigSection`,
+//!    `SlowlogConfig`, `SecurityConfig`, `MetricsConfig`, `TlsConfig`), and
+//! 2. the hand-maintained [`VIRTUAL_PARAMS`] rows.
+//!
+//! [`VIRTUAL_PARAMS`] is the single home for the rows that have no serde backing
+//! field (`field: None`); these can never be derived from a struct.
+//!
+//! Row **order** is load-bearing (it fixes CONFIG HELP output). Because the
+//! historical order interleaves individual section rows with virtual rows, the
+//! assembly splices them by hand; the result is pinned byte-for-byte against a
+//! snapshot of the original 61-row table by
+//! `tests::test_registry_matches_golden_snapshot`.
 
 /// Metadata for a CONFIG GET/SET parameter.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConfigParamInfo {
     /// CONFIG GET/SET parameter name (kebab-case).
     pub name: &'static str,
@@ -23,14 +45,297 @@ pub struct ConfigParamInfo {
     pub noop: bool,
 }
 
+/// "Virtual" CONFIG params — rows with no serde-backed config field
+/// (`section: None`, `field: None`). These cannot be produced by
+/// `#[derive(ConfigParams)]` (there is no struct field to attach `#[param]` to),
+/// so they stay a hand-maintained list. This is now the **single** home of these
+/// rows: [`config_param_registry`] splices slices of this list in between the
+/// derived per-section `PARAMS` tables to reproduce the historical ordering.
+/// [`VIRTUAL_PARAMS`] is validated as a faithful subset of the assembled registry
+/// by `tests::test_virtual_params_are_field_none_subset`.
+pub const VIRTUAL_PARAMS: &[ConfigParamInfo] = &[
+    ConfigParamInfo {
+        name: "lua-time-limit",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: false,
+    },
+    ConfigParamInfo {
+        name: "notify-keyspace-events",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: false,
+    },
+    ConfigParamInfo {
+        name: "set-max-listpack-entries",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: false,
+    },
+    ConfigParamInfo {
+        name: "set-max-listpack-value",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: false,
+    },
+    ConfigParamInfo {
+        name: "hash-max-ziplist-entries",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: false,
+    },
+    ConfigParamInfo {
+        name: "hash-max-ziplist-value",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: false,
+    },
+    ConfigParamInfo {
+        name: "hash-max-listpack-entries",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: false,
+    },
+    ConfigParamInfo {
+        name: "hash-max-listpack-value",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: false,
+    },
+    ConfigParamInfo {
+        name: "save",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: true,
+    },
+    ConfigParamInfo {
+        name: "set-max-intset-entries",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: true,
+    },
+    ConfigParamInfo {
+        name: "list-max-listpack-size",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: true,
+    },
+    ConfigParamInfo {
+        name: "list-compress-depth",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: true,
+    },
+    ConfigParamInfo {
+        name: "list-max-ziplist-size",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: true,
+    },
+    ConfigParamInfo {
+        name: "latency-tracking",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: false,
+    },
+    ConfigParamInfo {
+        name: "key-memory-histograms",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: false,
+    },
+    ConfigParamInfo {
+        name: "latency-tracking-info-percentiles",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: false,
+    },
+    ConfigParamInfo {
+        name: "latency-monitor-threshold",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: true,
+    },
+    ConfigParamInfo {
+        name: "busy-reply-threshold",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: true,
+    },
+    ConfigParamInfo {
+        name: "hz",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: true,
+    },
+    ConfigParamInfo {
+        name: "activedefrag",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: true,
+    },
+    ConfigParamInfo {
+        name: "close-on-oom",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: true,
+    },
+    ConfigParamInfo {
+        name: "zset-max-ziplist-entries",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: true,
+    },
+    ConfigParamInfo {
+        name: "zset-max-ziplist-value",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: true,
+    },
+    ConfigParamInfo {
+        name: "zset-max-listpack-entries",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: true,
+    },
+    ConfigParamInfo {
+        name: "zset-max-listpack-value",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: true,
+    },
+];
+
+/// Look up a single derived row by CONFIG name within a section's `PARAMS`.
+///
+/// Used by [`config_param_registry`] to splice individual struct-derived rows
+/// into the historical order (which interleaves sections rather than grouping
+/// them). Panics if the name is absent — that can only happen if a `#[param]`
+/// annotation was removed or renamed, which the golden-snapshot test also
+/// catches, so a clear panic here is the friendlier failure.
+fn pick(params: &'static [ConfigParamInfo], name: &str) -> ConfigParamInfo {
+    *params
+        .iter()
+        .find(|p| p.name == name)
+        .unwrap_or_else(|| panic!("CONFIG param '{name}' not found in derived section PARAMS"))
+}
+
 /// Returns the complete CONFIG GET/SET parameter registry.
 ///
 /// This is the single source of truth for which parameters are exposed
 /// via CONFIG GET/SET, whether they are mutable, and how they map to
 /// TOML configuration fields.
+///
+/// The list is assembled once from two sources: the derived per-section `PARAMS`
+/// tables (`#[derive(ConfigParams)]`) and the hand-maintained [`VIRTUAL_PARAMS`]
+/// rows that have no serde backing. The historical CONFIG HELP order interleaves
+/// individual section rows with virtual rows, so the assembly splices them by
+/// hand (via [`pick`] for single rows and slices of [`VIRTUAL_PARAMS`]); the
+/// exact order is pinned by `tests::test_registry_matches_golden_snapshot`.
 pub fn config_param_registry() -> &'static [ConfigParamInfo] {
-    &[
-        // === Mutable parameters backed by TOML config fields ===
+    use std::sync::LazyLock;
+
+    static REGISTRY: LazyLock<Vec<ConfigParamInfo>> = LazyLock::new(|| {
+        use crate::logging::LoggingConfig;
+        use crate::memory::MemoryConfig;
+        use crate::metrics::MetricsConfig;
+        use crate::persistence::PersistenceConfig;
+        use crate::replication::ReplicationConfigSection;
+        use crate::security::SecurityConfig;
+        use crate::server::ServerConfig;
+        use crate::slowlog::SlowlogConfig;
+        use crate::tls::TlsConfig;
+
+        let mut rows: Vec<ConfigParamInfo> = Vec::new();
+
+        // The row order below is load-bearing: it reproduces the original
+        // 61-row hand table byte-for-byte (see the golden-snapshot test). It
+        // deliberately interleaves sections and virtual rows.
+
+        // memory (all six rows, contiguous)
+        rows.extend_from_slice(MemoryConfig::PARAMS);
+
+        rows.push(pick(LoggingConfig::PARAMS, "loglevel"));
+        rows.push(pick(PersistenceConfig::PARAMS, "durability-mode"));
+        rows.push(pick(PersistenceConfig::PARAMS, "wal-failure-policy"));
+        rows.push(pick(PersistenceConfig::PARAMS, "sync-interval-ms"));
+        rows.push(pick(PersistenceConfig::PARAMS, "batch-timeout-ms"));
+        rows.push(pick(ServerConfig::PARAMS, "scatter-gather-timeout-ms"));
+
+        // replication (both registered rows, contiguous and in field order)
+        rows.extend_from_slice(ReplicationConfigSection::PARAMS);
+        // slowlog (all three rows, contiguous and in field order)
+        rows.extend_from_slice(SlowlogConfig::PARAMS);
+
+        rows.push(pick(LoggingConfig::PARAMS, "per-request-spans"));
+
+        rows.extend_from_slice(&VIRTUAL_PARAMS[0..2]); // lua-time-limit, notify-keyspace-events
+        rows.push(pick(ServerConfig::PARAMS, "maxclients"));
+        rows.extend_from_slice(&VIRTUAL_PARAMS[2..8]); // set/hash listpack threshold rows
+        rows.push(pick(SecurityConfig::PARAMS, "requirepass"));
+        rows.extend_from_slice(&VIRTUAL_PARAMS[8..25]); // save … zset-max-listpack-value
+
+        rows.push(pick(ServerConfig::PARAMS, "bind"));
+        rows.push(pick(ServerConfig::PARAMS, "port"));
+        rows.push(pick(ServerConfig::PARAMS, "num-shards"));
+        rows.push(pick(PersistenceConfig::PARAMS, "dir"));
+        rows.push(pick(PersistenceConfig::PARAMS, "persistence-enabled"));
+        rows.push(pick(PersistenceConfig::PARAMS, "flush-compact-range"));
+
+        // metrics (both registered rows, contiguous and in field order)
+        rows.extend_from_slice(MetricsConfig::PARAMS);
+
+        // tls (8 rows; field order differs from the historical order, so splice
+        // by name rather than by slice)
+        rows.push(pick(TlsConfig::PARAMS, "tls-port"));
+        rows.push(pick(TlsConfig::PARAMS, "tls-cert-file"));
+        rows.push(pick(TlsConfig::PARAMS, "tls-key-file"));
+        rows.push(pick(TlsConfig::PARAMS, "tls-ca-cert-file"));
+        rows.push(pick(TlsConfig::PARAMS, "tls-auth-clients"));
+        rows.push(pick(TlsConfig::PARAMS, "tls-replication"));
+        rows.push(pick(TlsConfig::PARAMS, "tls-cluster"));
+        rows.push(pick(TlsConfig::PARAMS, "tls-protocols"));
+
+        rows
+    });
+
+    &REGISTRY
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Independent snapshot of the original hand-written 61-row table, captured
+    /// verbatim before the derive-macro migration. The assembled
+    /// [`config_param_registry`] must equal this exactly — same rows, same order
+    /// — so no migration step can silently change the registry a client sees.
+    const GOLDEN_SNAPSHOT: &[ConfigParamInfo] = &[
         ConfigParamInfo {
             name: "maxmemory",
             section: Some("memory"),
@@ -178,7 +483,6 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
             mutable: true,
             noop: false,
         },
-        // === Mutable listpack/encoding threshold params ===
         ConfigParamInfo {
             name: "set-max-listpack-entries",
             section: None,
@@ -221,7 +525,6 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
             mutable: true,
             noop: false,
         },
-        // === Security / ACL params ===
         ConfigParamInfo {
             name: "requirepass",
             section: Some("security"),
@@ -229,7 +532,6 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
             mutable: true,
             noop: false,
         },
-        // === Redis compat no-op mutable params ===
         ConfigParamInfo {
             name: "save",
             section: None,
@@ -349,7 +651,6 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
             mutable: true,
             noop: true,
         },
-        // === Immutable parameters backed by TOML config fields ===
         ConfigParamInfo {
             name: "bind",
             section: Some("server"),
@@ -462,12 +763,107 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
             mutable: false,
             noop: false,
         },
-    ]
-}
+    ];
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    #[test]
+    fn test_registry_matches_golden_snapshot() {
+        let registry = config_param_registry();
+        assert_eq!(
+            registry.len(),
+            GOLDEN_SNAPSHOT.len(),
+            "assembled registry has {} rows, golden snapshot has {}",
+            registry.len(),
+            GOLDEN_SNAPSHOT.len()
+        );
+        for (i, (got, want)) in registry.iter().zip(GOLDEN_SNAPSHOT.iter()).enumerate() {
+            assert_eq!(
+                got, want,
+                "registry row {i} diverged from golden snapshot:\n  got:  {got:?}\n  want: {want:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_golden_snapshot_is_61_rows() {
+        // Guards against accidental edits to the snapshot itself.
+        assert_eq!(GOLDEN_SNAPSHOT.len(), 61);
+    }
+
+    #[test]
+    fn test_virtual_params_are_field_none_subset() {
+        // Every virtual param must have no serde backing, and must appear in the
+        // live registry exactly as declared. This keeps the Phase 2 scaffold
+        // honest before it is wired into the assembly.
+        let registry = config_param_registry();
+        for vp in VIRTUAL_PARAMS {
+            assert!(
+                vp.section.is_none() && vp.field.is_none(),
+                "virtual param '{}' must have section: None and field: None",
+                vp.name
+            );
+            assert!(
+                registry.contains(vp),
+                "virtual param '{}' not found (identically) in the assembled registry",
+                vp.name
+            );
+        }
+    }
+
+    /// UI-lite exercise of `#[derive(ConfigParams)]` defaults, `mutable`,
+    /// `name` override, `#[serde(rename)]` field-name resolution, `noop`
+    /// (section/field cleared), and `skip` (row omitted).
+    #[derive(serde::Serialize, serde::Deserialize, frogdb_config_derive::ConfigParams)]
+    #[params(section = "smoke")]
+    #[serde(rename_all = "kebab-case")]
+    #[allow(dead_code)]
+    struct DeriveSmoke {
+        #[param(mutable)]
+        some_flag: u64,
+        #[param]
+        plain_field: u64,
+        #[serde(rename = "renamed-field")]
+        #[param(mutable, name = "custom-name")]
+        weird: u64,
+        #[param(mutable, noop)]
+        legacy_knob: u64,
+        #[param(skip)]
+        internal: u64,
+    }
+
+    #[test]
+    fn test_derive_smoke_params() {
+        let expected = &[
+            ConfigParamInfo {
+                name: "some-flag",
+                section: Some("smoke"),
+                field: Some("some-flag"),
+                mutable: true,
+                noop: false,
+            },
+            ConfigParamInfo {
+                name: "plain-field",
+                section: Some("smoke"),
+                field: Some("plain-field"),
+                mutable: false,
+                noop: false,
+            },
+            ConfigParamInfo {
+                name: "custom-name",
+                section: Some("smoke"),
+                field: Some("renamed-field"),
+                mutable: true,
+                noop: false,
+            },
+            ConfigParamInfo {
+                name: "legacy-knob",
+                section: None,
+                field: None,
+                mutable: true,
+                noop: true,
+            },
+        ];
+        assert_eq!(DeriveSmoke::PARAMS, expected);
+    }
 
     #[test]
     fn test_no_duplicate_param_names() {

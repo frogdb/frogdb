@@ -1,30 +1,40 @@
 //! VLL (Very Lightweight Locking) configuration.
 
+use frogdb_config_derive::ConfigParams;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// VLL (Very Lightweight Locking) configuration.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+//
+// No fields are exposed as CONFIG GET/SET parameters; each carries an explicit
+// `#[param(skip)]` to satisfy the per-field coverage guarantee.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
+#[params(section = "vll")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct VllConfig {
     /// Maximum queue depth per shard before rejecting new operations.
     #[serde(default = "default_vll_max_queue_depth")]
+    #[param(skip)]
     pub max_queue_depth: usize,
 
     /// Timeout for acquiring locks on all shards (ms).
     #[serde(default = "default_vll_lock_acquisition_timeout_ms")]
+    #[param(skip)]
     pub lock_acquisition_timeout_ms: u64,
 
     /// Per-shard lock acquisition timeout (ms).
     #[serde(default = "default_vll_per_shard_lock_timeout_ms")]
+    #[param(skip)]
     pub per_shard_lock_timeout_ms: u64,
 
     /// Interval for checking/cleaning up expired operations (ms).
     #[serde(default = "default_vll_timeout_check_interval_ms")]
+    #[param(skip)]
     pub timeout_check_interval_ms: u64,
 
     /// Maximum time a continuation lock can be held (ms).
     #[serde(default = "default_vll_max_continuation_lock_ms")]
+    #[param(skip)]
     pub max_continuation_lock_ms: u64,
 }
 

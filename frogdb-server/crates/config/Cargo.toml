@@ -10,6 +10,7 @@ description = "FrogDB configuration types and validation (no heavy runtime depen
 turmoil = []
 
 [dependencies]
+frogdb-config-derive.workspace = true
 serde = { workspace = true, features = ["derive"] }
 schemars = { workspace = true }
 serde_json.workspace = true

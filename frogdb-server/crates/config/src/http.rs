@@ -1,28 +1,37 @@
 //! HTTP server configuration.
 
 use anyhow::Result;
+use frogdb_config_derive::ConfigParams;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// HTTP server configuration for the unified observability/admin endpoint.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+//
+// No fields are exposed as CONFIG GET/SET parameters; each carries an explicit
+// `#[param(skip)]` to satisfy the per-field coverage guarantee.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
+#[params(section = "http")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct HttpConfig {
     /// Whether the HTTP server is enabled.
     #[serde(default = "default_http_enabled")]
+    #[param(skip)]
     pub enabled: bool,
 
     /// Bind address for the HTTP server.
     #[serde(default = "default_http_bind")]
+    #[param(skip)]
     pub bind: String,
 
     /// Port for the HTTP server.
     #[serde(default = "default_http_port")]
+    #[param(skip)]
     pub port: u16,
 
     /// Optional bearer token for protected endpoints (/admin/*, /debug/*).
     /// When set, requests to these paths must include `Authorization: Bearer <token>`.
     #[serde(default)]
+    #[param(skip)]
     pub token: Option<String>,
 }
 

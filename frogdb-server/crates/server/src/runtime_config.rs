@@ -384,6 +384,10 @@ impl DynParam<ConfigManager> for NoopParam {
     fn propagation(&self) -> Propagation {
         Propagation::None
     }
+
+    fn is_noop(&self) -> bool {
+        true
+    }
 }
 
 impl TomlRenderable for NoopParam {
@@ -2202,6 +2206,66 @@ mod tests {
                 "server param '{}' missing from config_param_registry",
                 name
             );
+        }
+
+        // --- Partition assertions (proposal 13, step 1) ---
+        //
+        // Name-set membership above is too weak: it passes even if a
+        // `mutable: true` param is (wrongly) served only by the immutable
+        // legacy registry, which clears the mutability gate but then fails the
+        // typed lookup at runtime, returning `ImmutableParameter` for a param
+        // the metadata advertises as settable. Pin the actual partition so that
+        // drift is a red test rather than a runtime lie.
+        let typed_names: Vec<&str> = typed.iter().map(|p| p.name()).collect();
+        let legacy_names: Vec<&str> = legacy.iter().map(|p| p.name).collect();
+        // Names of the typed entries that are Redis-compat no-ops.
+        let noop_names: Vec<&str> = typed
+            .iter()
+            .filter(|p| p.is_noop())
+            .map(|p| p.name())
+            .collect();
+
+        for info in config_params {
+            if info.mutable {
+                // mutable ⟺ served by the typed registry (and never the legacy one).
+                assert!(
+                    typed_names.contains(&info.name),
+                    "'{}' is mutable in metadata but not served by build_typed_params",
+                    info.name
+                );
+                assert!(
+                    !legacy_names.contains(&info.name),
+                    "'{}' is mutable but also served by the immutable build_param_registry",
+                    info.name
+                );
+            } else {
+                // !mutable ⟺ served by the legacy registry (and never the typed one).
+                assert!(
+                    legacy_names.contains(&info.name),
+                    "'{}' is immutable in metadata but not served by build_param_registry",
+                    info.name
+                );
+                assert!(
+                    !typed_names.contains(&info.name),
+                    "'{}' is immutable but also served by the mutable build_typed_params",
+                    info.name
+                );
+            }
+
+            // noop ⟺ the serving typed entry is a NoopParam.
+            if info.noop {
+                assert!(
+                    noop_names.contains(&info.name),
+                    "'{}' is noop in metadata but its typed entry is not a NoopParam",
+                    info.name
+                );
+            } else {
+                assert!(
+                    !noop_names.contains(&info.name),
+                    "'{}' is not noop in metadata but its typed entry is a NoopParam",
+                    info.name
+                );
+            }
         }
     }
 

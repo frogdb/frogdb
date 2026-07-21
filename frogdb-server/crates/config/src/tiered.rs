@@ -1,6 +1,7 @@
 //! Tiered storage configuration.
 
 use anyhow::Result;
+use frogdb_config_derive::ConfigParams;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -8,11 +9,16 @@ use serde::{Deserialize, Serialize};
 ///
 /// When enabled, eviction policies `tiered-lru` and `tiered-lfu` spill values
 /// to a RocksDB warm tier instead of deleting them.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
+//
+// No fields are exposed as CONFIG GET/SET parameters; each carries an explicit
+// `#[param(skip)]` to satisfy the per-field coverage guarantee.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, ConfigParams)]
+#[params(section = "tiered-storage")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct TieredStorageConfig {
     /// Enable tiered storage. Requires persistence to be enabled.
     #[serde(default)]
+    #[param(skip)]
     pub enabled: bool,
 }
 

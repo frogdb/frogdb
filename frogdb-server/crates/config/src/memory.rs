@@ -1,54 +1,71 @@
 //! Memory management configuration.
 
 use anyhow::Result;
+use frogdb_config_derive::ConfigParams;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Memory management configuration.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+//
+// The `#[param(...)]` / `#[param(skip)]` attributes are the single source of
+// truth for this section's CONFIG GET/SET parameters. `#[derive(ConfigParams)]`
+// turns them into `MemoryConfig::PARAMS`, which
+// `crate::config_param_registry` concatenates into the global registry. Every
+// field must carry one of the two attributes or the derive fails to compile.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
+#[params(section = "memory")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct MemoryConfig {
     /// Maximum memory limit in bytes. 0 means unlimited.
     /// Can use human-readable formats like "100mb", "1gb" in config files.
     #[serde(default = "default_maxmemory")]
+    #[param(mutable)]
     pub maxmemory: u64,
 
     /// Eviction policy when maxmemory is reached.
     /// Options: noeviction, volatile-lru, allkeys-lru, volatile-lfu, allkeys-lfu,
     ///          volatile-random, allkeys-random, volatile-ttl
     #[serde(default = "default_maxmemory_policy")]
+    #[param(mutable)]
     pub maxmemory_policy: String,
 
     /// Number of keys to sample when looking for eviction candidates.
     #[serde(default = "default_maxmemory_samples")]
+    #[param(mutable)]
     pub maxmemory_samples: usize,
 
     /// LFU log factor - higher values make counter increment less likely.
     #[serde(default = "default_lfu_log_factor")]
+    #[param(mutable)]
     pub lfu_log_factor: u8,
 
     /// LFU decay time in minutes - counter decays by 1 every N minutes.
     #[serde(default = "default_lfu_decay_time")]
+    #[param(mutable)]
     pub lfu_decay_time: u64,
 
     /// Threshold in bytes for MEMORY DOCTOR big key detection.
     /// Keys larger than this will be flagged.
     #[serde(default = "default_doctor_big_key_threshold")]
+    #[param(skip)]
     pub doctor_big_key_threshold: u64,
 
     /// Maximum number of big keys to report per shard in MEMORY DOCTOR.
     #[serde(default = "default_doctor_max_big_keys")]
+    #[param(skip)]
     pub doctor_max_big_keys: usize,
 
     /// Threshold for shard memory imbalance detection (coefficient of variation).
     /// Shards with memory CV higher than this will trigger a warning.
     #[serde(default = "default_doctor_imbalance_threshold")]
+    #[param(skip)]
     pub doctor_imbalance_threshold: f64,
 
     /// Maximum memory allowed for all client buffers combined.
     /// Supports: "0" (disabled), absolute values like "100mb"/"1gb",
     /// or a percentage of maxmemory like "5%".
     #[serde(default = "default_maxmemory_clients")]
+    #[param(mutable)]
     pub maxmemory_clients: String,
 }
 

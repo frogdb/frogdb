@@ -1,26 +1,35 @@
 //! Status endpoint and hot shards configuration.
 
+use frogdb_config_derive::ConfigParams;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Status endpoint configuration for health thresholds.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+//
+// No fields are exposed as CONFIG GET/SET parameters; each carries an explicit
+// `#[param(skip)]` to satisfy the per-field coverage guarantee.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
+#[params(section = "status")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct StatusConfig {
     /// Threshold percentage for memory warning (0-100).
     #[serde(default = "default_memory_warning_percent")]
+    #[param(skip)]
     pub memory_warning_percent: u8,
 
     /// Threshold percentage for connection warning (0-100).
     #[serde(default = "default_connection_warning_percent")]
+    #[param(skip)]
     pub connection_warning_percent: u8,
 
     /// Durability lag warning threshold in milliseconds.
     #[serde(default = "default_durability_lag_warning_ms")]
+    #[param(skip)]
     pub durability_lag_warning_ms: u64,
 
     /// Durability lag critical threshold in milliseconds.
     #[serde(default = "default_durability_lag_critical_ms")]
+    #[param(skip)]
     pub durability_lag_critical_ms: u64,
 }
 
@@ -77,19 +86,26 @@ impl StatusConfig {
 }
 
 /// Hot shard detection configuration.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+//
+// No fields are exposed as CONFIG GET/SET parameters; each carries an explicit
+// `#[param(skip)]` to satisfy the per-field coverage guarantee.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
+#[params(section = "hotshards")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct HotShardsConfig {
     /// Threshold percentage for "HOT" status.
     #[serde(default = "default_hot_threshold_percent")]
+    #[param(skip)]
     pub hot_threshold_percent: f64,
 
     /// Threshold percentage for "WARM" status.
     #[serde(default = "default_warm_threshold_percent")]
+    #[param(skip)]
     pub warm_threshold_percent: f64,
 
     /// Default period for stats collection in seconds.
     #[serde(default = "default_hotshards_period_secs")]
+    #[param(skip)]
     pub default_period_secs: u64,
 }
 

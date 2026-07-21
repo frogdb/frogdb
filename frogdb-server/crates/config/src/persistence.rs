@@ -1,58 +1,71 @@
 //! Persistence and snapshot configuration.
 
 use anyhow::Result;
+use frogdb_config_derive::ConfigParams;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Persistence configuration.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
+#[params(section = "persistence")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct PersistenceConfig {
     /// Whether persistence is enabled.
     #[serde(default = "default_persistence_enabled")]
+    #[param(name = "persistence-enabled")]
     pub enabled: bool,
 
     /// WAL implementation to use: `"rocksdb"` (default, production) or `"fake"`
     /// (deterministic in-process sink for simulation tests). `"fake"` requires
     /// `enabled = true`.
     #[serde(default = "default_persistence_mode")]
+    #[param(skip)]
     pub mode: String,
 
     /// Directory for data files.
     #[serde(default = "default_data_dir")]
+    #[param(name = "dir")]
     pub data_dir: PathBuf,
 
     /// Durability mode: "async", "periodic", or "sync".
     #[serde(default = "default_durability_mode")]
+    #[param(mutable)]
     pub durability_mode: String,
 
     /// Sync interval in milliseconds (for periodic mode).
     #[serde(default = "default_sync_interval_ms")]
+    #[param(mutable)]
     pub sync_interval_ms: u64,
 
     /// RocksDB write buffer size in MB.
     #[serde(default = "default_write_buffer_size_mb")]
+    #[param(skip)]
     pub write_buffer_size_mb: usize,
 
     /// Compression type: "none", "snappy", "lz4", "zstd".
     #[serde(default = "default_compression")]
+    #[param(skip)]
     pub compression: String,
 
     /// RocksDB block cache size in MB.
     #[serde(default = "default_block_cache_size_mb")]
+    #[param(skip)]
     pub block_cache_size_mb: usize,
 
     /// RocksDB bloom filter bits per key. Set to 0 to disable.
     #[serde(default = "default_bloom_filter_bits")]
+    #[param(skip)]
     pub bloom_filter_bits: i32,
 
     /// Maximum number of RocksDB write buffers.
     #[serde(default = "default_max_write_buffer_number")]
+    #[param(skip)]
     pub max_write_buffer_number: i32,
 
     /// RocksDB compaction rate limit in MB/s. 0 means unlimited.
     #[serde(default = "default_compaction_rate_limit_mb")]
+    #[param(skip)]
     pub compaction_rate_limit_mb: u64,
 
     /// Reclaim disk eagerly after FLUSHDB/FLUSHALL: follow the range tombstone
@@ -60,18 +73,22 @@ pub struct PersistenceConfig {
     /// column families. Without it, flushed SST bytes are only reclaimed when
     /// a compaction happens to cover the range.
     #[serde(default = "default_flush_compact_range")]
+    #[param]
     pub flush_compact_range: bool,
 
     /// Batch size threshold in KB before flushing.
     #[serde(default = "default_batch_size_threshold_kb")]
+    #[param(skip)]
     pub batch_size_threshold_kb: usize,
 
     /// Batch timeout in milliseconds before flushing.
     #[serde(default = "default_batch_timeout_ms")]
+    #[param(mutable)]
     pub batch_timeout_ms: u64,
 
     /// WAL failure policy: "continue" or "rollback".
     #[serde(default = "default_wal_failure_policy")]
+    #[param(mutable)]
     pub wal_failure_policy: String,
 }
 
@@ -242,19 +259,26 @@ impl PersistenceConfig {
 }
 
 /// Snapshot configuration.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+//
+// No fields are exposed as CONFIG GET/SET parameters today; each still carries
+// an explicit `#[param(skip)]` so the per-field coverage guarantee holds.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
+#[params(section = "snapshot")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct SnapshotConfig {
     /// Directory for storing snapshots.
     #[serde(default = "default_snapshot_dir")]
+    #[param(skip)]
     pub snapshot_dir: PathBuf,
 
     /// Interval between automatic snapshots in seconds (0 = disabled).
     #[serde(default = "default_snapshot_interval_secs")]
+    #[param(skip)]
     pub snapshot_interval_secs: u64,
 
     /// Maximum number of snapshots to retain (0 = unlimited).
     #[serde(default = "default_max_snapshots")]
+    #[param(skip)]
     pub max_snapshots: usize,
 }
 

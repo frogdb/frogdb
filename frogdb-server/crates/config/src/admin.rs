@@ -1,23 +1,31 @@
 //! Admin API configuration.
 
 use anyhow::Result;
+use frogdb_config_derive::ConfigParams;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Admin API configuration.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+//
+// No fields are exposed as CONFIG GET/SET parameters; each carries an explicit
+// `#[param(skip)]` to satisfy the per-field coverage guarantee.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
+#[params(section = "admin")]
 #[serde(rename_all = "kebab-case")]
 pub struct AdminConfig {
     /// Whether the admin API is enabled.
     #[serde(default)]
+    #[param(skip)]
     pub enabled: bool,
 
     /// Port for the admin RESP protocol listener.
     #[serde(default = "default_admin_port")]
+    #[param(skip)]
     pub port: u16,
 
     /// Bind address for the admin RESP protocol listener.
     #[serde(default = "default_admin_bind")]
+    #[param(skip)]
     pub bind: String,
 }
 

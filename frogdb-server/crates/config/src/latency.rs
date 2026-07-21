@@ -1,23 +1,31 @@
 //! Latency testing and SLO monitoring configuration.
 
+use frogdb_config_derive::ConfigParams;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Latency testing configuration.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+//
+// No fields are exposed as CONFIG GET/SET parameters; each carries an explicit
+// `#[param(skip)]` to satisfy the per-field coverage guarantee.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
+#[params(section = "latency")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct LatencyConfig {
     /// Run intrinsic latency test at startup before accepting connections.
     #[serde(default)]
+    #[param(skip)]
     pub startup_test: bool,
 
     /// Duration of the startup latency test in seconds.
     #[serde(default = "default_latency_test_duration_secs")]
+    #[param(skip)]
     pub startup_test_duration_secs: u64,
 
     /// Warning threshold for intrinsic latency in microseconds.
     /// If max latency exceeds this, a warning is logged.
     #[serde(default = "default_latency_warning_threshold_us")]
+    #[param(skip)]
     pub warning_threshold_us: u64,
 }
 
@@ -46,16 +54,22 @@ impl Default for LatencyConfig {
 ///
 /// Tracks cumulative request counts in configurable latency buckets,
 /// enabling direct SLO monitoring without external aggregation.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+//
+// No fields are exposed as CONFIG GET/SET parameters; each carries an explicit
+// `#[param(skip)]` to satisfy the per-field coverage guarantee.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
+#[params(section = "latency-bands")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct LatencyBandsConfig {
     /// Whether latency band tracking is enabled.
     #[serde(default)]
+    #[param(skip)]
     pub enabled: bool,
 
     /// Latency band thresholds in milliseconds.
     /// Requests are counted in cumulative buckets (<=1ms, <=5ms, etc.)
     #[serde(default = "default_latency_bands")]
+    #[param(skip)]
     pub bands: Vec<u64>,
 }
 
