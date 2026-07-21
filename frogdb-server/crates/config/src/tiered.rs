@@ -19,6 +19,7 @@ pub struct TieredStorageConfig {
     /// Enable tiered storage. Requires persistence to be enabled.
     #[serde(default)]
     #[param(skip)]
+    // skip: startup-only: tiered-storage subsystem initialized at boot, requires persistence; not live-toggleable
     pub enabled: bool,
 }
 

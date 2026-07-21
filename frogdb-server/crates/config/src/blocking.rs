@@ -15,11 +15,13 @@ pub struct BlockingConfig {
     /// Maximum waiters per key (0 = unlimited).
     #[serde(default = "default_max_waiters_per_key")]
     #[param(skip)]
+    // skip: borderline: FrogDB-specific blocking-command per-key waiter cap; no Redis analogue
     pub max_waiters_per_key: usize,
 
     /// Maximum total blocked connections (0 = unlimited).
     #[serde(default = "default_max_blocked_connections")]
     #[param(skip)]
+    // skip: borderline: FrogDB-specific blocked-connection resource cap; no Redis analogue
     pub max_blocked_connections: usize,
 }
 

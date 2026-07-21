@@ -74,11 +74,13 @@ pub struct LoggingConfig {
     /// Log format (pretty, json).
     #[serde(default = "default_log_format")]
     #[param(skip)]
+    // skip: borderline: log formatter built at startup; Redis has no log-format CONFIG
     pub format: String,
 
     /// Console output destination (stdout, stderr, none).
     #[serde(default)]
     #[param(skip)]
+    // skip: startup-fixed console sink (stdout/stderr/none); writer bound at startup
     pub output: LogOutput,
 
     /// Enable per-request tracing spans (cmd_read, cmd_execute, cmd_route, etc.).
@@ -101,6 +103,7 @@ pub struct LoggingConfig {
     // not `#[derive(ConfigParams)]`).
     #[serde(default)]
     #[param(skip)]
+    // skip: nested struct; sub-fields intentionally not ConfigParams; rotation wired at startup
     pub rotation: Option<RotationConfig>,
 }
 

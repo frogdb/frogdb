@@ -15,7 +15,7 @@ pub struct MonitorConfig {
     /// Bounded broadcast channel capacity (ring buffer size).
     /// Slow subscribers skip ahead rather than blocking the server.
     #[serde(default = "default_channel_capacity")]
-    #[param(skip)]
+    #[param(skip)] // skip: internal MONITOR broadcast ring-buffer capacity; no operator story
     pub channel_capacity: usize,
 }
 

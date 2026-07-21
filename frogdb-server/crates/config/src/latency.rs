@@ -14,18 +14,19 @@ use serde::{Deserialize, Serialize};
 pub struct LatencyConfig {
     /// Run intrinsic latency test at startup before accepting connections.
     #[serde(default)]
-    #[param(skip)]
+    #[param(skip)] // skip: startup-only intrinsic-latency self-test toggle; no runtime meaning
     pub startup_test: bool,
 
     /// Duration of the startup latency test in seconds.
     #[serde(default = "default_latency_test_duration_secs")]
-    #[param(skip)]
+    #[param(skip)] // skip: startup-only self-test duration; no runtime meaning
     pub startup_test_duration_secs: u64,
 
     /// Warning threshold for intrinsic latency in microseconds.
     /// If max latency exceeds this, a warning is logged.
     #[serde(default = "default_latency_warning_threshold_us")]
     #[param(skip)]
+    // skip: startup-only self-test warning threshold; only meaningful during boot test
     pub warning_threshold_us: u64,
 }
 

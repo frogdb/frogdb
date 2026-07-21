@@ -30,27 +30,30 @@ pub struct TracingConfig {
 
     /// Service name in traces.
     #[serde(default = "default_service_name")]
-    #[param(skip)]
+    #[param(skip)] // skip: borderline: static trace service-identity label, fixed at startup
     pub service_name: String,
 
     /// Enable scatter-gather operation spans (child spans per shard for MGET/MSET).
     #[serde(default)]
     #[param(skip)]
+    // skip: borderline: fine-grained span category; tracing pipeline wired at startup
     pub scatter_gather_spans: bool,
 
     /// Enable shard execution spans (spans inside shard workers).
     #[serde(default)]
     #[param(skip)]
+    // skip: borderline: fine-grained span category; tracing pipeline wired at startup
     pub shard_spans: bool,
 
     /// Enable persistence spans (WAL writes, snapshots).
     #[serde(default)]
     #[param(skip)]
+    // skip: borderline: fine-grained span category; tracing pipeline wired at startup
     pub persistence_spans: bool,
 
     /// Maximum number of recent traces to retain for DEBUG TRACING RECENT.
     #[serde(default = "default_recent_traces_max")]
-    #[param(skip)]
+    #[param(skip)] // skip: internal DEBUG TRACING RECENT ring-buffer size; no operator story
     pub recent_traces_max: usize,
 }
 

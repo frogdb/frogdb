@@ -17,6 +17,7 @@ pub struct CompatConfig {
     /// compatibility with Redis clients/tools that set these params.
     #[serde(default)]
     #[param(skip)]
+    // skip: borderline: FrogDB-specific CONFIG-strictness meta-toggle; no Redis analogue
     pub strict_config: bool,
 }
 

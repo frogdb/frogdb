@@ -31,7 +31,7 @@ pub struct HttpConfig {
     /// Optional bearer token for protected endpoints (/admin/*, /debug/*).
     /// When set, requests to these paths must include `Authorization: Bearer <token>`.
     #[serde(default)]
-    #[param(skip)]
+    #[param(skip)] // skip: security: bearer credential; must not surface via CONFIG GET
     pub token: Option<String>,
 }
 

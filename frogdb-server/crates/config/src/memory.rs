@@ -48,17 +48,20 @@ pub struct MemoryConfig {
     /// Keys larger than this will be flagged.
     #[serde(default = "default_doctor_big_key_threshold")]
     #[param(skip)]
+    // skip: internal MEMORY DOCTOR big-key heuristic threshold; no Redis analogue, weak operator story
     pub doctor_big_key_threshold: u64,
 
     /// Maximum number of big keys to report per shard in MEMORY DOCTOR.
     #[serde(default = "default_doctor_max_big_keys")]
     #[param(skip)]
+    // skip: internal MEMORY DOCTOR report cap; diagnostic heuristic, no operator story
     pub doctor_max_big_keys: usize,
 
     /// Threshold for shard memory imbalance detection (coefficient of variation).
     /// Shards with memory CV higher than this will trigger a warning.
     #[serde(default = "default_doctor_imbalance_threshold")]
     #[param(skip)]
+    // skip: internal MEMORY DOCTOR imbalance heuristic threshold; no Redis analogue
     pub doctor_imbalance_threshold: f64,
 
     /// Maximum memory allowed for all client buffers combined.

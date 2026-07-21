@@ -21,6 +21,7 @@ pub struct PersistenceConfig {
     /// `enabled = true`.
     #[serde(default = "default_persistence_mode")]
     #[param(skip)]
+    // skip: startup-only WAL backend selector (rocksdb/fake); 'fake' is a simulation-test sink, no runtime meaning; no Redis analogue
     pub mode: String,
 
     /// Directory for data files.
@@ -279,6 +280,7 @@ pub struct SnapshotConfig {
     /// Maximum number of snapshots to retain (0 = unlimited).
     #[serde(default = "default_max_snapshots")]
     #[param(skip)]
+    // skip: borderline: snapshot retention count, no Redis CONFIG analogue; snapshot subsystem liveness unverified
     pub max_snapshots: usize,
 }
 

@@ -94,11 +94,13 @@ pub struct TlsConfig {
     /// Whether to keep the admin port as plaintext even when TLS is enabled.
     #[serde(default = "default_true")]
     #[param(skip)]
+    // skip: startup listener wiring; plaintext/TLS on a bound port is fixed at bind time
     pub no_tls_on_admin_port: bool,
 
     /// Whether to keep the HTTP server as plaintext even when TLS is enabled.
     #[serde(default = "default_true")]
     #[param(skip)]
+    // skip: startup listener wiring; plaintext/TLS on a bound port is fixed at bind time
     pub no_tls_on_http: bool,
 
     /// Path to client certificate for outgoing replication/cluster connections.
@@ -113,12 +115,12 @@ pub struct TlsConfig {
 
     /// Whether to watch certificate files for changes and auto-reload.
     #[serde(default = "default_true")]
-    #[param(skip)]
+    #[param(skip)] // skip: borderline: cert file-watcher lifecycle established at startup
     pub watch_certs: bool,
 
     /// Debounce interval in milliseconds for certificate file watcher.
     #[serde(default = "default_watch_debounce_ms")]
-    #[param(skip)]
+    #[param(skip)] // skip: internal cert file-watcher debounce interval; no operator story
     pub watch_debounce_ms: u64,
 
     /// TLS handshake timeout in milliseconds.

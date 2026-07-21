@@ -32,26 +32,29 @@ pub struct DebugBundleConfig {
     /// Directory for storing bundles.
     #[serde(default = "default_bundle_directory")]
     #[param(skip)]
+    // skip: borderline: diagnostic-bundle output path; niche troubleshooting subsystem
     pub directory: String,
 
     /// Maximum number of bundles to retain.
     #[serde(default = "default_max_bundles")]
     #[param(skip)]
+    // skip: borderline: diagnostic-bundle retention count; niche, no Redis analogue
     pub max_bundles: usize,
 
     /// Bundle TTL in seconds before automatic cleanup.
     #[serde(default = "default_bundle_ttl_secs")]
     #[param(skip)]
+    // skip: borderline: diagnostic-bundle retention TTL; niche, no Redis analogue
     pub bundle_ttl_secs: u64,
 
     /// Maximum slowlog entries to include in bundles.
     #[serde(default = "default_max_slowlog_entries")]
-    #[param(skip)]
+    #[param(skip)] // skip: internal per-bundle slowlog content cap; no operator story
     pub max_slowlog_entries: usize,
 
     /// Maximum trace entries to include in bundles.
     #[serde(default = "default_max_trace_entries")]
-    #[param(skip)]
+    #[param(skip)] // skip: internal per-bundle trace content cap; no operator story
     pub max_trace_entries: usize,
 }
 

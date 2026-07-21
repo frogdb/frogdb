@@ -16,17 +16,18 @@ pub struct ReplicationConfigSection {
     /// - replica: Connect to a primary
     #[serde(default = "default_replication_role")]
     #[param(skip)]
+    // skip: replication role set via REPLICAOF/failover, not CONFIG (Redis has no role param)
     pub role: String,
 
     /// Primary host (for replica role).
     /// When role is "replica", this specifies the primary to connect to.
     #[serde(default)]
-    #[param(skip)]
+    #[param(skip)] // skip: bootstrap replication topology; set via REPLICAOF, not CONFIG
     pub primary_host: String,
 
     /// Primary port (for replica role).
     #[serde(default = "default_primary_port")]
-    #[param(skip)]
+    #[param(skip)] // skip: bootstrap replication topology; set via REPLICAOF, not CONFIG
     pub primary_port: u16,
 
     /// Minimum replicas required to acknowledge writes (for primary role).
@@ -64,26 +65,31 @@ pub struct ReplicationConfigSection {
     /// Stores replication ID and offset for partial sync recovery.
     #[serde(default = "default_replication_state_file")]
     #[param(skip)]
+    // skip: internal replication state file path; no Redis CONFIG analogue, no operator story
     pub state_file: String,
 
     /// Connection timeout for replica connecting to primary (milliseconds).
     #[serde(default = "default_connect_timeout_ms")]
     #[param(skip)]
+    // skip: borderline: internal replica-connect timeout Redis folds into repl-timeout
     pub connect_timeout_ms: u64,
 
     /// Handshake timeout during replication setup (milliseconds).
     #[serde(default = "default_handshake_timeout_ms")]
     #[param(skip)]
+    // skip: borderline: internal replication-handshake timeout Redis folds into repl-timeout
     pub handshake_timeout_ms: u64,
 
     /// Reconnection backoff - initial delay (milliseconds).
     #[serde(default = "default_reconnect_backoff_initial_ms")]
     #[param(skip)]
+    // skip: borderline: FrogDB reconnect backoff; Redis has no reconnect-backoff CONFIG
     pub reconnect_backoff_initial_ms: u64,
 
     /// Reconnection backoff - maximum delay (milliseconds).
     #[serde(default = "default_reconnect_backoff_max_ms")]
     #[param(skip)]
+    // skip: borderline: FrogDB reconnect backoff; Redis has no reconnect-backoff CONFIG
     pub reconnect_backoff_max_ms: u64,
 
     /// Max replication lag in bytes before proactive disconnect. 0 = disabled.
@@ -99,6 +105,7 @@ pub struct ReplicationConfigSection {
     /// Cooldown seconds after proactive lag disconnect before allowing another.
     #[serde(default = "default_fullresync_cooldown_secs")]
     #[param(skip)]
+    // skip: borderline: FrogDB-internal lag-disconnect cooldown; no Redis analogue
     pub fullresync_cooldown_secs: u64,
 
     /// Enable split-brain discarded-writes logging (log-only).
@@ -110,16 +117,18 @@ pub struct ReplicationConfigSection {
     /// kill-switch for cluster behavior is `cluster.enabled`, not this flag.
     #[serde(default = "default_split_brain_log_enabled")]
     #[param(skip)]
+    // skip: FrogDB-specific split-brain discarded-writes logging toggle; diagnostic, no Redis analogue
     pub split_brain_log_enabled: bool,
 
     /// Maximum number of recent commands to buffer for split-brain detection.
     #[serde(default = "default_split_brain_buffer_size")]
     #[param(skip)]
+    // skip: internal split-brain detection ring-buffer sizing; no operator story
     pub split_brain_buffer_size: usize,
 
     /// Maximum memory in MB for the split-brain command buffer.
     #[serde(default = "default_split_brain_buffer_max_mb")]
-    #[param(skip)]
+    #[param(skip)] // skip: internal split-brain detection buffer memory cap; no operator story
     pub split_brain_buffer_max_mb: usize,
 
     /// Reject writes when primary loses all replica ACK freshness.
@@ -139,6 +148,7 @@ pub struct ReplicationConfigSection {
     /// Forces TCP disconnect when iptables drops packets.
     #[serde(default = "default_replica_write_timeout_ms")]
     #[param(skip)]
+    // skip: borderline: internal replica-stream write timeout Redis folds into repl-timeout
     pub replica_write_timeout_ms: u64,
 }
 

@@ -37,6 +37,7 @@ pub struct ServerConfig {
     /// hash slots using scatter-gather. MSETNX always requires same-slot.
     #[serde(default = "default_allow_cross_slot_standalone")]
     #[param(skip)]
+    // skip: borderline: changes multi-key command semantics; startup-fixed behavior flag, no Redis analogue
     pub allow_cross_slot_standalone: bool,
 
     /// Timeout for scatter-gather operations in milliseconds.

@@ -23,24 +23,26 @@ pub struct ClusterConfigSection {
     /// This node's unique ID (0 = auto-generate from timestamp).
     #[serde(default)]
     #[param(skip)]
+    // skip: bootstrap node identity (auto-generated); Redis keeps node id in nodes.conf, not CONFIG
     pub node_id: u64,
 
     /// Address for client connections (host:port).
     /// Defaults to server.bind:server.port if not specified.
     #[serde(default)]
     #[param(skip)]
+    // skip: bootstrap cluster topology address, derived from server bind at startup
     pub client_addr: String,
 
     /// Address for cluster bus (Raft) communication.
     /// Typically server port + 10000 (e.g., 16379 for 6379).
     #[serde(default = "default_cluster_bus_addr")]
-    #[param(skip)]
+    #[param(skip)] // skip: startup Raft bus bind address; cannot rebind live
     pub cluster_bus_addr: String,
 
     /// Initial cluster nodes to connect to (for joining existing cluster).
     /// Format: ["host1:port1", "host2:port2"]
     #[serde(default)]
-    #[param(skip)]
+    #[param(skip)] // skip: bootstrap cluster seed list; join-time only
     pub initial_nodes: Vec<String>,
 
     /// Directory for storing cluster state (Raft logs, snapshots).
@@ -52,22 +54,24 @@ pub struct ClusterConfigSection {
     /// A leader must receive heartbeats within this time or election starts.
     #[serde(default = "default_election_timeout_ms")]
     #[param(skip)]
+    // skip: borderline: Raft election timing read at consensus init; live change risks split votes
     pub election_timeout_ms: u64,
 
     /// Heartbeat interval in milliseconds.
     /// Leader sends heartbeats at this interval.
     #[serde(default = "default_heartbeat_interval_ms")]
     #[param(skip)]
+    // skip: borderline: Raft heartbeat timing (coupled to election_timeout), read at init
     pub heartbeat_interval_ms: u64,
 
     /// Connection timeout for cluster bus in milliseconds.
     #[serde(default = "default_cluster_connect_timeout_ms")]
-    #[param(skip)]
+    #[param(skip)] // skip: borderline: Raft bus connect timing, read at init
     pub connect_timeout_ms: u64,
 
     /// Request timeout for cluster bus RPCs in milliseconds.
     #[serde(default = "default_cluster_request_timeout_ms")]
-    #[param(skip)]
+    #[param(skip)] // skip: borderline: Raft RPC timing, read at init
     pub request_timeout_ms: u64,
 
     /// Enable automatic failover when a primary fails.
@@ -80,6 +84,7 @@ pub struct ClusterConfigSection {
     /// Number of consecutive failures before marking a node as FAIL.
     #[serde(default = "default_fail_threshold")]
     #[param(skip)]
+    // skip: borderline: Raft failure-detector consecutive-failure count, init-time tuning
     pub fail_threshold: u32,
 
     /// Reject write commands when this node cannot form a quorum with reachable nodes.
