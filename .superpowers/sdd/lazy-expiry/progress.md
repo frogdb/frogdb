@@ -15,7 +15,7 @@ testbox (`just tb-warmup` / `just tb-run`); `just concurrency` + `just lint` run
 
 ## Task status
 
-- [ ] Task 1 — Store reports lazy removals (behavior-neutral seam)
+- [x] Task 1 — Store reports lazy removals (behavior-neutral seam) — `64e8b3d0` APPROVED
 - [ ] Task 2 — Apply lazy-purge effects (gaps 1-3) + flip repros + S2 lazy arm
 - [ ] Task 3 — Per-key `live_at_watch` plumbing via `WatchEntry` (behavior-neutral) + `watch_keys` helper
 - [ ] Task 4 — `check_watches` honors `live_at_watch` (gap 4) + flip repro + two-watcher arm
@@ -23,4 +23,5 @@ testbox (`just tb-warmup` / `just tb-run`); `just concurrency` + `just lint` run
 
 ## Per-task record
 
-(appended as tasks complete)
+### Task 1 — `64e8b3d0` (amended once)
+Implementer (Opus): seam per plan; deviations endorsed (test seeding via `set`+`set_expiry`, suppression-test ordering, wrapper doc comment). Review (Sonnet) round 1: REVISE — BLOCKER: `ScatterRequest`→`execute_scatter_part` path (MGET/DEL/Touch/Copy/Dump) reached lazy-purge sites with no drain; stale reports would misapply under Task 2. Fix: `execute_scatter_part` split into wrapper + `execute_scatter_part_body`, wrapper drains after every return path; two-part worker test `scatter_mget_drains_lazy_purge_report` (purge fired AND buffer drained). Round 2: APPROVE — body private, single caller, byte-identical elsewhere; 46/46 + F3 pin + lint green. Carried nit for Task 2: delete stale one-line doc comment at execution.rs:602-603 above `execute_scatter_part`.
