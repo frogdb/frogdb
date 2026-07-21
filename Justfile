@@ -539,6 +539,10 @@ docs-preview:
 docs-link-check: docs-build
     cd website && bunx lychee --config ../lychee.toml --root-dir "$(pwd)/dist" dist/
 
+# Verify repo code paths referenced in the docs actually exist (no build required)
+docs-path-check:
+    uv run website/scripts/docs-path-check.py
+
 # =============================================================================
 # Maintenance
 # =============================================================================
