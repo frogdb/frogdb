@@ -459,16 +459,31 @@ impl ShardWorker {
 
     /// Check if watched keys have changed since they were watched.
     ///
-    /// Behavior-neutral (Task 3): `live_at_watch` is plumbed through but ignored
-    /// here — the check stays a pure per-shard version compare. Task 4 adds the
-    /// per-key liveness clause that honors it (gap 4).
+    /// A watch is satisfied iff the key's version is unchanged AND it did not
+    /// transition live -> expired/gone. The version compare catches every write
+    /// and every expiry that bumped (active sweep, lazy read-path purge). The
+    /// second clause catches the one death that does NOT bump for this watcher:
+    /// a key watched while live that another watcher's no-bump WATCH-time purge
+    /// (or its own already-elapsed TTL) removed — the gap-4 second-watcher case.
+    /// `live_at_watch == false` means a stale/nonexistent watch (Redis
+    /// `wk->expired`), which must NOT abort when the key stays gone. Uses the
+    /// non-destructive `exists_unexpired` probe (constraint 1 — `check_watches`
+    /// must not physically purge).
     pub(crate) fn check_watches(&self, watches: &[WatchEntry]) -> bool {
         watches.iter().all(
             |WatchEntry {
                  key,
                  version,
-                 live_at_watch: _,
-             }| self.get_key_version(key) == *version,
+                 live_at_watch,
+             }| {
+                if self.get_key_version(key) != *version {
+                    return false; // changed via a version-bumping path
+                }
+                if *live_at_watch && !self.store.exists_unexpired(key) {
+                    return false; // watched live, now expired/gone with no bump (gap 4)
+                }
+                true
+            },
         )
     }
 

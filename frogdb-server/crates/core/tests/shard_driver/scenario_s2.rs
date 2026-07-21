@@ -11,6 +11,7 @@ use bytes::Bytes;
 use super::harness::{ShardDriver, cmd};
 use frogdb_core::shard::WatchEntry;
 use frogdb_core::shard::types::TransactionResult;
+use frogdb_core::store::Store;
 
 /// What happens in the WATCH→EXEC gap.
 #[derive(Debug, Clone, Copy)]
@@ -198,5 +199,92 @@ async fn regression_gap3_third_party_lazy_read_aborts_watch() {
     assert!(
         matches!(result, TransactionResult::WatchAborted),
         "gap 3: a third-party lazy read of an expired watched key must abort EXEC, got {result:?}"
+    );
+}
+
+/// Regression pin (gap 4): B watches k while live; k expires; A's WATCH-time
+/// no-bump purge removes k; B's EXEC must still abort (per-key `live_at_watch`),
+/// even though no version bump reached B. The coarse per-shard version cannot
+/// distinguish B (must abort) from A (must not) — only per-key expired-watch
+/// state can. Redis records `wk->expired` at WATCH time and fires
+/// `touchWatchedKey` on the lazy removal (redis PR #7920 / issue #7918).
+///
+/// The full two-watcher interleave (ruling 4): B snapshots version+liveness via
+/// `watch_keys` while k is live (real liveness, not a hardcoded `true`); the TTL
+/// elapses on the real clock; A's keyed `watch_keys` call is the purge-trigger —
+/// the `GetVersion` handler runs the WATCH-time no-bump purge that physically
+/// removes k (asserted via raw store access); B's EXEC then aborts through the
+/// new `live_at_watch` clause, with no version bump reaching B.
+#[tokio::test]
+async fn regression_gap4_second_watcher_aborts() {
+    let mut d = ShardDriver::new(1);
+    let _ = d.execute(0, "SET", &["k", "v0"]).await;
+    let _ = d.execute(0, "PEXPIRE", &["k", "1"]).await;
+    // B watches k LIVE: real version + liveness snapshot via watch_keys (not a
+    // hardcoded `true` — watch_keys reports the actual computed live_at_watch).
+    let (vb, live) = d.watch_keys(0, &["k"]).await;
+    assert_eq!(
+        live,
+        vec![true],
+        "gap 4 setup: k must be live when B watches it"
+    );
+    tokio::time::sleep(Duration::from_millis(3)).await; // elapse the real-clock TTL
+
+    // A watches k already-expired: this keyed GetVersion is A's purge-trigger —
+    // it fires the WATCH-time no-bump purge (dispatch_core.rs GetVersion handler:
+    // `for key in &keys { self.store.purge_if_expired(key); }`), which is
+    // deliberately version-ignorant (F3). A's own liveness snapshot is false.
+    let (_va, a_live) = d.watch_keys(0, &["k"]).await;
+    assert_eq!(
+        a_live,
+        vec![false],
+        "gap 4: A watches k already-expired, so its live_at_watch snapshot is false"
+    );
+
+    // Prove the purge physically fired: k must be absent from the raw store (not
+    // merely logically expired) before B's EXEC runs.
+    assert!(
+        !d.worker(0).store.contains(b"k"),
+        "gap 4: A's WATCH-time purge must have physically removed k before B's EXEC"
+    );
+
+    // B's EXEC watching k live at vb must abort — via the new live_at_watch
+    // clause alone (key physically absent, version unchanged since vb).
+    let result = d
+        .exec_transaction(
+            0,
+            1,
+            vec![cmd("SET", &["k", "x"])],
+            vec![WatchEntry {
+                key: Bytes::from_static(b"k"),
+                version: vb,
+                live_at_watch: true,
+            }],
+        )
+        .await;
+    assert!(
+        matches!(result, TransactionResult::WatchAborted),
+        "gap 4: second (live) watcher must abort after the first watcher's no-bump purge, got {result:?}"
+    );
+
+    // A-side non-abort (the other half of the Redis wk->expired semantics): a
+    // watcher that saw k already-dead (live_at_watch == false) commits when k
+    // stays gone — no version bump, no live->gone transition for A. Same shard,
+    // same absent key: proves the clause is per-key, not a shard-wide broadcast.
+    let a_result = d
+        .exec_transaction(
+            0,
+            2,
+            vec![cmd("SET", &["other", "y"])],
+            vec![WatchEntry {
+                key: Bytes::from_static(b"k"),
+                version: vb,
+                live_at_watch: false,
+            }],
+        )
+        .await;
+    assert!(
+        matches!(a_result, TransactionResult::Success(_)),
+        "gap 4: stale watcher A (watched k already-dead) must COMMIT when k stays gone, got {a_result:?}"
     );
 }

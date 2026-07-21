@@ -3658,12 +3658,14 @@ fn regression_watch_read_lazy_purge_aborts_realpath() {
 /// with a real 50ms `std::thread::sleep` (real-clock `Instant`); the B->A->B
 /// sequence is pinned with `tokio::sync::Notify` handshakes.
 ///
-/// Documents the CURRENT (buggy) behavior: B's EXEC COMMITS (`*1\r\n+OK\r\n`).
-/// Remove `#[ignore]` and flip to the aborted null bulk (`$-1\r\n`) when the
-/// per-key expired-watch fix lands.
+/// Regression pin (gap 4): the case unfixable at the coarse per-shard version,
+/// now closed by per-key `live_at_watch`. B watched k while live and it is now
+/// gone with no bump reaching B, so B's EXEC ABORTS (`$-1\r\n`) — matching
+/// Redis/Valkey/Dragonfly (`wk->expired` + `touchWatchedKey`). A's stale watch
+/// (k already expired) still records `live_at_watch == false` and still does not
+/// abort. Per-key state tells B (must abort) from A (must not) apart.
 #[test]
-#[ignore = "GAP 4 repro: second watcher under-aborts via first watcher's no-bump WATCH-time purge (documents current under-abort; unfixed)"]
-fn watch_second_watcher_under_abort_realpath() {
+fn regression_watch_second_watcher_aborts_realpath() {
     let mut sim = Builder::new()
         .tick_duration(Duration::from_millis(1))
         .build();
@@ -3772,16 +3774,15 @@ fn watch_second_watcher_under_abort_realpath() {
         "live watcher never captured an EXEC reply"
     );
 
-    const COMMITTED: &[u8] = b"*1\r\n+OK\r\n";
+    const ABORTED: &[u8] = b"$-1\r\n";
     assert_eq!(
         reply.as_slice(),
-        COMMITTED,
-        "GAP 4: current behavior — the first (stale) watcher's WATCH-time purge \
-         removed the key WITHOUT bumping the version, so the second (live) \
-         watcher's EXEC COMMITTED (`*1\\r\\n+OK\\r\\n`) over a live->gone key. \
-         Redis/Valkey/Dragonfly ABORT here (`$-1\\r\\n`). This is unfixable at the \
-         coarse per-shard version — flip the assertion and drop #[ignore] when \
-         per-key expired-watch tracking lands. Got {reply:?}.",
+        ABORTED,
+        "GAP 4: the first (stale) watcher's WATCH-time purge removed the key \
+         WITHOUT bumping the version, but B watched k while LIVE, so B's EXEC \
+         ABORTS (`$-1\\r\\n`) via per-key `live_at_watch` — the case unfixable at \
+         the coarse per-shard version. Redis/Valkey/Dragonfly ABORT here \
+         (`wk->expired` + `touchWatchedKey`). Got {reply:?}.",
     );
 }
 

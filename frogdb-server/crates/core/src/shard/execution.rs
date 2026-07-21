@@ -1706,6 +1706,74 @@ mod scatter_effect_tests {
             "execute_scatter_part must drain the lazy-purge report (no leak to the next message)"
         );
     }
+
+    /// Gap-4 clause coverage for the CLIENT-PAUSE-ALL under-abort window
+    /// (carried Task-2 observation): a logically-expired watched key whose
+    /// physical purge is *suppressed* (CLIENT PAUSE ALL → `expiry_suppressed`)
+    /// reports nothing at the EXEC-time seam, so `purge_expired_watches` does
+    /// NOT bump — the old version-compare `check_watches` would under-abort.
+    /// The new `live_at_watch && !exists_unexpired` clause closes it: the
+    /// non-destructive probe reads present-but-expired as not-live, so a watcher
+    /// that saw the key live still aborts. Pins both halves: no bump at the seam
+    /// AND the clause aborts. (CLIENT PAUSE is connection-side / pre-dispatch, so
+    /// this is only reachable as a store-level worker test, not a shard-driver
+    /// arm.)
+    #[tokio::test]
+    async fn suppressed_expired_watched_key_still_aborts_via_clause() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = scatter_worker(bc as SharedBroadcaster);
+
+        // Seed a live watched key and snapshot the watch baseline.
+        worker.store.set(
+            Bytes::from_static(b"k"),
+            Value::string(Bytes::from_static(b"v")),
+        );
+        let watched_ver = worker.get_key_version(b"k");
+
+        // The key's TTL elapses, but CLIENT PAUSE ALL suppresses physical purge:
+        // logically expired, still physically present.
+        worker
+            .store
+            .set_expiry(b"k", Instant::now() - Duration::from_secs(60));
+        worker.store.set_expiry_suppressed(true);
+
+        // EXEC-time watched-key purge seam: suppression means nothing is removed
+        // or reported, so no version bump — the under-abort window.
+        let watch = [WatchEntry {
+            key: Bytes::from_static(b"k"),
+            version: watched_ver,
+            live_at_watch: true,
+        }];
+        worker.purge_expired_watches(&watch);
+        assert!(
+            worker.store.contains(b"k"),
+            "suppression must keep the expired key physically present"
+        );
+        assert_eq!(
+            worker.get_key_version(b"k"),
+            watched_ver,
+            "suppressed purge must NOT bump the version (the under-abort window)"
+        );
+
+        // The new clause aborts anyway: exists_unexpired reads present-but-expired
+        // as not-live, so a live watcher's watch is dirty.
+        assert!(
+            !worker.check_watches(&watch),
+            "gap 4 clause: a live watcher of a suppressed-but-elapsed key must abort"
+        );
+
+        // Control: a stale watcher (live_at_watch == false) of the same key must
+        // NOT abort — Redis wk->expired semantics, no live->gone transition.
+        let stale = [WatchEntry {
+            key: Bytes::from_static(b"k"),
+            version: watched_ver,
+            live_at_watch: false,
+        }];
+        assert!(
+            worker.check_watches(&stale),
+            "gap 4 clause: a stale watcher (saw k already-dead) must NOT abort"
+        );
+    }
 }
 
 #[cfg(test)]
