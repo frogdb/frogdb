@@ -210,6 +210,11 @@ struct LabelInfo {
     /// label enum's type name for a fixed set of values (e.g. `RejectionReason`).
     #[serde(rename = "type")]
     value_type: String,
+    /// Every possible value this label can take, in declaration order.
+    /// Omitted for free-form `&str` labels, which have no fixed enumeration.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
+    values: Vec<String>,
 }
 
 fn main() -> Result<()> {
@@ -427,9 +432,11 @@ fn generate_metrics() -> MetricsOutput {
                 .labels
                 .iter()
                 .zip(m.label_types.iter())
-                .map(|(&name, &value_type)| LabelInfo {
+                .zip(m.label_values.iter())
+                .map(|((&name, &value_type), &values)| LabelInfo {
                     name: name.to_string(),
                     value_type: value_type.to_string(),
+                    values: values.iter().map(|v| v.to_string()).collect(),
                 })
                 .collect(),
         })

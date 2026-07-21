@@ -89,7 +89,19 @@
         },
         {
           "name": "error",
-          "type": "ErrorType"
+          "type": "ErrorType",
+          "values": [
+            "timeout",
+            "oom",
+            "wrongtype",
+            "auth",
+            "syntax",
+            "busy",
+            "cluster",
+            "script",
+            "nokey",
+            "invalid_arg"
+          ]
         }
       ]
     },
@@ -127,7 +139,12 @@
       "labels": [
         {
           "name": "reason",
-          "type": "RejectionReason"
+          "type": "RejectionReason",
+          "values": [
+            "maxclients",
+            "auth_required",
+            "shutdown"
+          ]
         }
       ]
     },
@@ -192,7 +209,11 @@
         },
         {
           "name": "mode",
-          "type": "ServerMode"
+          "type": "ServerMode",
+          "values": [
+            "standalone",
+            "cluster"
+          ]
         }
       ]
     },
@@ -335,7 +356,13 @@
       "labels": [
         {
           "name": "error_type",
-          "type": "PersistenceErrorType"
+          "type": "PersistenceErrorType",
+          "values": [
+            "wal_write",
+            "wal_sync",
+            "snapshot",
+            "recovery"
+          ]
         }
       ]
     },
@@ -389,7 +416,13 @@
       "labels": [
         {
           "name": "status",
-          "type": "ScatterGatherStatus"
+          "type": "ScatterGatherStatus",
+          "values": [
+            "success",
+            "error",
+            "timeout",
+            "partial"
+          ]
         }
       ]
     },
@@ -512,7 +545,13 @@
       "labels": [
         {
           "name": "outcome",
-          "type": "TransactionOutcome"
+          "type": "TransactionOutcome",
+          "values": [
+            "committed",
+            "discarded",
+            "execabort",
+            "watchfailed"
+          ]
         }
       ]
     },

@@ -42,6 +42,7 @@ pub fn derive_metric_label(input: TokenStream) -> TokenStream {
 
     let mut match_arms = Vec::new();
     let mut all_values = Vec::new();
+    let mut all_value_strs = Vec::new();
 
     for variant in variants {
         let variant_name = &variant.ident;
@@ -75,6 +76,7 @@ pub fn derive_metric_label(input: TokenStream) -> TokenStream {
         });
 
         all_values.push(quote! { #name::#variant_name });
+        all_value_strs.push(label_value);
     }
 
     let expanded = quote! {
@@ -91,6 +93,15 @@ pub fn derive_metric_label(input: TokenStream) -> TokenStream {
             pub const fn all_values() -> &'static [#name] {
                 &[#(#all_values),*]
             }
+
+            /// Get the string representation of all possible values of this
+            /// label, in the same order as `all_values()`. Used by
+            /// `define_metrics!` for metric introspection (e.g. the docs
+            /// generator), where only the string form — not `Self` — is
+            /// embeddable in a `'static` registry.
+            pub const fn all_values_str() -> &'static [&'static str] {
+                &[#(#all_value_strs),*]
+            }
         }
 
         impl std::fmt::Display for #name {
@@ -101,6 +112,12 @@ pub fn derive_metric_label(input: TokenStream) -> TokenStream {
     };
 
     TokenStream::from(expanded)
+}
+
+/// Whether a label's declared type is a free-form `&str` (as opposed to a
+/// `MetricLabel`-derived enum with a fixed set of values).
+fn is_str_type(ty: &Type) -> bool {
+    matches!(ty, Type::Reference(r) if matches!(&*r.elem, Type::Path(p) if p.path.is_ident("str")))
 }
 
 /// Input for a single metric definition in define_metrics!
@@ -262,8 +279,7 @@ pub fn define_metrics(input: TokenStream) -> TokenStream {
             .iter()
             .map(|l| {
                 let ty = &l.ty;
-                let is_str_ref = matches!(ty, Type::Reference(r) if matches!(&*r.elem, Type::Path(p) if p.path.is_ident("str")));
-                if is_str_ref {
+                if is_str_type(ty) {
                     "string".to_string()
                 } else {
                     quote!(#ty).to_string()
@@ -274,6 +290,27 @@ pub fn define_metrics(input: TokenStream) -> TokenStream {
             quote! { &[] }
         } else {
             quote! { &[#(#label_types),*] }
+        };
+
+        // Enumerated label values, for introspection: free-form `&str`
+        // labels have no fixed enumeration (empty slice), enum labels report
+        // every variant's string form via the `MetricLabel` derive's
+        // generated `all_values_str()`.
+        let label_values: Vec<_> = labels
+            .iter()
+            .map(|l| {
+                let ty = &l.ty;
+                if is_str_type(ty) {
+                    quote! { &[] }
+                } else {
+                    quote! { #ty::all_values_str() }
+                }
+            })
+            .collect();
+        let label_values_tokens = if label_values.is_empty() {
+            quote! { &[] }
+        } else {
+            quote! { &[#(#label_values),*] }
         };
 
         // Generate method parameters for labels
@@ -287,18 +324,20 @@ pub fn define_metrics(input: TokenStream) -> TokenStream {
             .collect();
 
         // Generate label array construction
-        let label_array_items: Vec<_> = labels.iter().map(|l| {
-            let name = &l.name;
-            let name_str = name.to_string();
-            // Check if type is an enum (implements as_str) or &str
-            let ty = &l.ty;
-            let is_str_ref = matches!(ty, Type::Reference(r) if matches!(&*r.elem, Type::Path(p) if p.path.is_ident("str")));
-            if is_str_ref {
-                quote! { (#name_str, #name) }
-            } else {
-                quote! { (#name_str, #name.as_str()) }
-            }
-        }).collect();
+        let label_array_items: Vec<_> = labels
+            .iter()
+            .map(|l| {
+                let name = &l.name;
+                let name_str = name.to_string();
+                // Check if type is an enum (implements as_str) or &str
+                let ty = &l.ty;
+                if is_str_type(ty) {
+                    quote! { (#name_str, #name) }
+                } else {
+                    quote! { (#name_str, #name.as_str()) }
+                }
+            })
+            .collect();
 
         let labels_slice = if labels.is_empty() {
             quote! { &[] }
@@ -415,6 +454,7 @@ pub fn define_metrics(input: TokenStream) -> TokenStream {
                 labels: #label_names_tokens,
                 handle: #handle_str,
                 label_types: #label_types_tokens,
+                label_values: #label_values_tokens,
             }
         });
     }
