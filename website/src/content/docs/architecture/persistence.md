@@ -12,7 +12,7 @@ For operator-facing configuration and recovery procedures, see [Operations: Pers
 
 ## RocksDB Topology
 
-FrogDB uses a **single shared RocksDB instance** with one column family per shard:
+FrogDB uses a **single shared RocksDB instance** with one column family per shard (`shard_<n>`), plus a shared write-ahead log:
 
 ```
 +----------------------------------------------------------+
@@ -32,74 +32,80 @@ FrogDB uses a **single shared RocksDB instance** with one column family per shar
 ### Design Rationale
 
 **Benefits:**
-- Single backup/restore operation for entire database
-- Shared WAL simplifies recovery
-- Atomic cross-shard operations possible via WriteBatch
+- Single backup/restore operation for the entire database.
+- A shared WAL simplifies recovery.
+- Cross-shard writes can be committed atomically via a RocksDB `WriteBatch` spanning column families.
 
 **Trade-off:**
-- Potential lock contention on WAL writes (mitigated by batching)
+- Potential contention on the shared WAL under write-heavy load (mitigated by batching).
+
+Optional warm (`warm_<n>`) and search-metadata (`search_meta_<n>`) column-family tiers exist alongside the main tier when their features are enabled.
 
 ---
 
 ## Key-Value Schema
 
-Each column family (shard) stores keys with this format:
+Each column family (shard) stores the user key directly and a serialized value frame (`frogdb-server/crates/persistence/src/serialization/`).
 
-**Key Format:**
-```
-[user_key_bytes]
-```
+**Key Format:** the raw user key bytes.
 
-**Value Format:**
+**Value Format:** a fixed 24-byte header followed by the type-specific payload:
+
 ```
 +---------------------------------------------------------+
 | Header (fixed 24 bytes)                                  |
 +---------------------------------------------------------+
-| type: u8           | Value type (0=String, 1=List, etc.) |
-| flags: u8          | Reserved for future use              |
-| expires_at: i64    | Unix timestamp ms (0 = no expiry)    |
+| type: u8           | Type marker (see table below)       |
+| flags: u8          | Reserved (currently 0)              |
+| expires_at: i64    | Unix timestamp ms (-1 = no expiry)   |
 | lfu_counter: u8    | LFU access counter                   |
 | padding: [u8; 5]   | Alignment padding                    |
-| value_len: u64     | Length of value data                  |
+| payload_len: u64   | Length of the payload                |
 +---------------------------------------------------------+
-| Value Data (variable)                                    |
+| Payload (variable)                                       |
 +---------------------------------------------------------+
 ```
 
-**Type Encoding:**
+**Type Markers:** the one-byte type marker is the stable on-disk **and** replication wire byte and must not change (`serialization/marker.rs`, pinned by `marker_bytes_are_stable`):
 
-| Type | Code | Serialization |
-|------|------|---------------|
-| String | 0 | Raw bytes |
-| List | 1 | `[len:u32][elem1_len:u32][elem1]...` |
-| Set | 2 | `[len:u32][member1_len:u32][member1]...` |
-| Hash | 3 | `[len:u32][k1_len:u32][k1][v1_len:u32][v1]...` |
-| SortedSet | 4 | `[len:u32][score:f64][member_len:u32][member]...` |
-| Stream | 5 | Full entry + consumer group state |
-| HyperLogLog | 6 | Sparse/dense encoding |
-| JSON | 7 | UTF-8 encoded JSON string (via `serde_json`) |
-| Bloom | 8 | `[num_bits:u64][num_hashes:u8][bits...]` |
-| TimeSeries | 9 | `[len:u32][timestamp:i64][value:f64]...` |
-| Geo | 10 | Stored as SortedSet with geohash scores |
+| Marker | Byte | Notes |
+|--------|------|-------|
+| `StringRaw` | 0 | Raw bytes |
+| `StringInt` | 1 | Integer-encoded string (i64) |
+| `SortedSet` | 2 | Also backs Geospatial (geohash scores) |
+| `Hash` | 3 | Field-value map |
+| `List` | 4 | |
+| `Set` | 5 | |
+| `Stream` | 6 | Entries + consumer-group state |
+| `Bloom` | 7 | |
+| `HyperLogLog` | 8 | Sparse/dense encoding |
+| `TimeSeries` | 9 | |
+| `Json` | 10 | |
+| `HashWithFieldExpiry` | 11 | Hash carrying per-field TTLs |
+| `Cuckoo` | 12 | |
+| `TopK` | 13 | |
+| `TDigest` | 14 | |
+| `Cms` | 15 | Count-Min Sketch |
+| `VectorSet` | 16 | |
 
-**Byte Order:** All multi-byte integers are stored in **little-endian** format.
+There is no distinct Bitmap or Geo marker: a Bitmap is stored as a `StringRaw`, and a Geospatial index is a `SortedSet`. These 17 markers cover the 15 [`Value` enum variants](/architecture/storage/#value-types) (String and Hash each have two markers).
+
+**Byte Order:** all multi-byte integers are stored in **little-endian** format. Decoding goes through a bounds-checked cursor (`FrameReader`) that never reads past the buffer, however the length prefixes are corrupted.
 
 ### Metadata Persistence
 
-- `lfu_counter` persisted with value
-- `last_access` (LRU) **NOT persisted** -- reset to recovery time on startup
+- `lfu_counter` is persisted in the header.
+- `last_access` (LRU) is **NOT persisted** -- keys read as fresh (idle time = 0) after recovery. This matches Redis behavior; eviction accuracy self-corrects as keys are accessed.
+- **Expiry index:** NOT persisted separately. It is rebuilt during recovery from each value's `expires_at` field.
+- **Recovery conversion:** persisted Unix millisecond timestamps are converted back to monotonic `std::time::Instant` values during recovery.
 
-After recovery, all keys appear "fresh" for LRU purposes (idle time = 0). This matches Redis behavior. Eviction accuracy self-corrects within minutes as keys are accessed during normal operation.
-
-**Expiry Index:** NOT persisted separately. Rebuilt during recovery from `expires_at` field in each value. Active expiry index is in-memory only.
-
-**Recovery Conversion:** Unix timestamps (persisted as `i64` milliseconds) are converted to `std::time::Instant` (monotonic clock) during recovery.
+The [storage layer](/architecture/storage/#key-metadata) is the single source for the LRU/LFU metadata story.
 
 ---
 
 ## Write-Ahead Log (WAL)
 
-Every write operation is appended to RocksDB's WAL before acknowledgment:
+Every write is appended to the WAL before acknowledgment:
 
 ```
 Client Write (SET key value)
@@ -109,8 +115,7 @@ Client Write (SET key value)
          |
          +-- 1. Apply to in-memory store
          |
-         +-- 2. Append to WAL (async batch)
-         |      +-- RocksDB WriteBatch
+         +-- 2. Append to WAL (RocksDB WriteBatch)
          |
          +-- 3. Return OK to client
 ```
@@ -120,55 +125,58 @@ Client Write (SET key value)
 | Failure Point | In-Memory State | Client Response | Recovery |
 |---------------|-----------------|-----------------|----------|
 | Before in-memory apply | Unchanged | Error returned | None needed |
-| After in-memory, WAL fails | **Write visible** | Error returned | May be lost on restart |
+| After in-memory, WAL fails (`continue`) | **Write visible** | OK returned | May be lost on restart |
 | After WAL, before fsync (Async) | Write visible | OK returned | May be lost on crash |
 | After fsync (Sync) | Write visible | OK returned | Guaranteed durable |
 
-**Design rationale:** In-memory is the source of truth during operation (for low latency). WAL provides durability, not correctness during normal operation. This matches Redis AOF semantics. The alternative (rollback on WAL failure) would require undo logs and complex rollback logic with significant performance overhead.
+**Design rationale:** in-memory is the source of truth during operation. The WAL provides durability, not correctness during normal operation — matching Redis AOF semantics. The alternative (rollback on every WAL failure) would require undo logs on the hot path.
 
 ### WAL Failure Policy
 
-FrogDB supports a configurable `wal-failure-policy`:
+The `wal-failure-policy` (`WalFailurePolicy`) selects what happens when a WAL append fails:
 
 | Policy | Behavior | Default |
 |--------|----------|---------|
-| `continue` | Log error, return success (Redis/DragonflyDB semantics) | Yes |
-| `rollback` | Undo in-memory state, return `IOERR` to client | No |
+| `continue` | Log the error, return success (Redis/DragonflyDB semantics) | Yes |
+| `rollback` | Undo the in-memory change, return `IOERR` to the client | No |
 
 **Rollback mode details:**
-- Before executing a write, affected keys' current state is snapshotted (cheap `Arc<Value>` clones)
-- If WAL fails: snapshot is restored, `IOERR` returned
-- Single-shard write commands only; scatter-gather always uses `continue`
-- Performance impact: `flush_async()` forces synchronous disk I/O per command (~0.1-2ms vs ~1-10us)
+- Before executing a write, the affected keys' current state is snapshotted (cheap `Arc<Value>` clones).
+- If the WAL append fails, the snapshot is restored and `IOERR` is returned.
+- Rollback applies to single-shard write commands only; scatter-gather paths always use `continue`.
+- Rollback forces a synchronous flush per command, so it is materially slower than `continue` — it trades throughput for the guarantee that an acknowledged write is on disk.
 
 ### WAL Corruption Recovery
 
 | Corruption Type | Detection | Default Recovery |
 |-----------------|-----------|------------------|
 | **Truncated entry** | Entry length exceeds remaining file bytes | Truncate WAL at corruption point |
-| **Checksum mismatch** | CRC32 of entry data doesn't match header | Truncate WAL at corruption point |
+| **Checksum mismatch** | Entry checksum does not match | Truncate WAL at corruption point |
 | **Invalid type marker** | Unknown operation type byte | Truncate WAL at corruption point |
-| **Sequence gap** | Expected sequence N, found N+k | Policy-dependent |
 
-**Why truncation is the default:** Crashes during write leave partial entries at WAL end. Truncation is safe, snapshots provide fallback, and this matches Redis AOF behavior.
+**Why truncation is the default:** a crash mid-write leaves a partial entry at the tail of the WAL. Truncating there is safe, the most recent snapshot provides a fallback, and this matches Redis AOF behavior.
 
 ---
 
 ## Durability Modes
 
-| Mode | Durability | Latency |
-|------|------------|---------|
-| `Async` | Best-effort (may lose data) | ~1-10 us |
-| `Periodic(1000ms)` | Bounded loss (~1s, matches Redis `appendfsync everysec`) | ~1-10 us |
-| `Sync` | Guaranteed (fsync per write) | ~100-500 us |
+The `DurabilityMode` (`frogdb-server/crates/persistence/src/wal/config.rs`) controls when data is flushed to disk. The default is `Periodic { interval_ms: 1000 }`.
+
+| Mode | Durability | Trade-off |
+|------|------------|-----------|
+| `Async` | Best-effort; unflushed writes may be lost on crash | Acknowledges immediately after the in-memory append — the fastest, least durable mode |
+| `Periodic { interval_ms }` | Bounded loss (up to one interval) | Flushes on a fixed timer (default 1000 ms); matches Redis `appendfsync everysec` |
+| `Sync` | Every acknowledged write is durable | Waits for an fsync before acknowledging — the most durable, slowest mode |
+
+FrogDB publishes no latency numbers for these modes yet; the ordering above (Async fastest, Sync slowest) is the qualitative trade-off, not a measured figure.
 
 ### Periodic Mode Timer Semantics
 
-The `Periodic` mode uses a **wall-clock timer** that fires on a fixed schedule (not reset-on-write). If previous fsync is still in progress when timer fires, that interval is skipped. This matches Redis `appendfsync everysec` behavior.
+`Periodic` uses a **wall-clock timer** that fires on a fixed schedule (not reset-on-write). If a previous fsync is still in progress when the timer fires, that interval is skipped. This matches Redis `appendfsync everysec`.
 
 ### Write Visibility
 
-In `Async` and `Periodic` modes, writes are visible to other clients BEFORE they are durably persisted. This is by design and matches Redis behavior.
+In `Async` and `Periodic` modes, writes are visible to other clients **before** they are durably persisted. This is by design and matches Redis.
 
 ---
 
@@ -177,19 +185,19 @@ In `Async` and `Periodic` modes, writes are visible to other clients BEFORE they
 FrogDB uses a forkless snapshot instead of Redis's fork-based approach, built on RocksDB's own
 checkpoint machinery rather than any in-memory copy-on-write buffer:
 
-1. The `SnapshotScheduler` claims the next **Snapshot Epoch** (a monotonic counter that only
+1. The `SnapshotScheduler` claims the next **snapshot epoch** (a monotonic counter that only
    numbers and names the run, e.g. `snapshot_00007`).
 2. The coordinator's `pre_snapshot_hook` runs: it flushes each shard's search indexes and
    persists the current replication offset, so both land in the same snapshot.
 3. `RocksStore::create_checkpoint` cuts a RocksDB checkpoint at the store's current
-   `latest_sequence_number()`. RocksDB hard-links the checkpoint's SST files and only the
-   still-mutable memtable/WAL data is copied, giving a consistent point-in-time view without
-   forking the process or freezing the keyspace.
-4. The checkpoint, sidecar, and `metadata.json` (recording the epoch and sequence number) are
-   staged under a temp directory and atomically renamed into place.
+   `latest_sequence_number()`. RocksDB hard-links the checkpoint's SST files and copies only the
+   still-mutable memtable/WAL data, giving a consistent point-in-time view without forking the
+   process or freezing the keyspace.
+4. The checkpoint and its `metadata.json` (recording the epoch and sequence number) are staged
+   under a temp directory and atomically renamed into place.
 
 Concurrent writes during the checkpoint are never diverted or buffered: they land in the
-**Store** and **FrogDB WAL** exactly as they would outside a snapshot. Nothing related to
+in-memory store and the WAL exactly as they would outside a snapshot. Nothing related to
 snapshotting is counted toward `maxmemory` — eviction during a snapshot behaves the same as at
 any other time.
 
@@ -197,22 +205,22 @@ any other time.
 
 ## Sequence Number Assignment
 
-Sequence numbers are assigned at WAL append time, not at command execution time. This ensures:
-- Monotonically increasing sequences for replication ordering
-- Gaps are possible if batched writes fail partially
-- Replicas can request resumption from any sequence number
+Sequence numbers are assigned at WAL append time, not at command execution time. This gives:
+- Monotonically increasing sequences for replication ordering.
+- Gaps are possible if a batched write fails partially.
+- Replicas can resume from a sequence number (see [Replication Internals](/architecture/replication/)).
+
+The `WalWriter` trait (`frogdb-server/crates/types/src/traits/wal.rs`) is intentionally small:
 
 ```rust
-impl WalWriter {
-    fn append(&mut self, operation: &Operation) -> u64 {
-        let batch = WriteBatch::new();
-        batch.put(/* key, value encoding */);
-        let seq = self.db.write(batch)?;
-        self.replication_notify.send(ReplicationEntry {
-            sequence: seq,
-            operation: operation.clone(),
-        });
-        seq
-    }
+pub trait WalWriter: Send + Sync {
+    /// Append an operation; returns the sequence number assigned to it.
+    fn append(&mut self, operation: &WalOperation) -> u64;
+    /// Flush pending writes to disk.
+    fn flush(&mut self) -> std::io::Result<()>;
+    /// The current (latest assigned) sequence number.
+    fn current_sequence(&self) -> u64;
 }
 ```
+
+`WalOperation` is the closed set of logged mutations: `Set`, `SetWithExpiry`, `Delete`, and `Expire`. The sequence returned by `append` is what replication uses to order and resume the stream.

@@ -1,220 +1,137 @@
 ---
 title: "Replication Internals"
-description: "Contributor-facing documentation for FrogDB's primary-replica replication system: WAL streaming internals, PSYNC protocol details, and the replication state ..."
+description: "Contributor-facing documentation for FrogDB's primary-replica replication: the PSYNC handshake, RocksDB checkpoint transfer, logical command streaming, and write fencing."
 sidebar:
   order: 7
 ---
-Contributor-facing documentation for FrogDB's primary-replica replication system: WAL streaming internals, PSYNC protocol details, and the replication state machine.
+Contributor-facing documentation for FrogDB's primary-replica replication: the PSYNC handshake, checkpoint transfer, logical command streaming, and write fencing.
 
 For operator-facing setup and failover procedures, see [Operations: Replication](/operations/replication/).
 
 ---
 
-## Architecture
+## Overview
 
-### Data Flow
+A primary accepts writes; each replica first receives a full copy of the dataset, then a continuous stream of replicated commands. Two distinct mechanisms are involved:
 
-```
-Primary: Write -> In-Memory -> WAL -> Replication Stream -> Replicas
-                                |
-                          WAL Archive (disk)
-```
+- **Initial sync is a RocksDB checkpoint transfer** — the primary cuts a checkpoint and streams its files to the replica.
+- **Steady-state replication is logical command replication** — each write is re-serialized to RESP and re-executed on the replica.
 
-### Sync Types
-
-| Type | Trigger | Mechanism |
-|------|---------|-----------|
-| FULLRESYNC | New replica, WAL gap too large | RocksDB checkpoint transfer |
-| PSYNC | Reconnection within backlog | Resume from last sequence number |
+Roles and offsets are tracked per connection. This page covers the data-plane mechanics; [Clustering Internals](/architecture/clustering/) covers how a Raft-coordinated cluster reuses this same data path, and [Operations: Replication](/operations/replication/) covers `REPLICAOF`/`ROLE` and runbooks.
 
 ---
 
-## Replication ID
+## Replication Identity
 
-Each dataset history has a unique identifier:
+Each dataset history has a unique **replication ID**: 20 random bytes rendered as 40 hex characters (`generate_replication_id`, `REPLICATION_ID_LEN = 40`, in `frogdb-server/crates/replication/src/state.rs`). A validity check requires exactly 40 ASCII hex digits.
 
-- **40-character hex string** (like Redis)
-- **Changes on failover**: New primary generates new ID
-- **Secondary ID**: Promoted replicas remember old primary's ID
+On promotion, a replica generates a *new* replication ID and remembers the old one as a **secondary ID** so the former primary's other replicas can re-attach without a full resync:
 
 ```
-Primary A (repl_id: abc123...)
+Primary A (replication_id: abc123...)
     |
     +-- Replica B (tracking abc123...)
     |
     [Primary A fails, B promoted]
     |
-Primary B (repl_id: def456..., secondary_id: abc123...)
+Primary B (replication_id: def456..., secondary_id: abc123...)
 ```
 
-This allows replicas of A to connect to B and continue incrementally.
-
-### Replication ID Generation
-
-```rust
-fn generate_replication_id() -> String {
-    let mut bytes = [0u8; 20];
-    getrandom::getrandom(&mut bytes).expect("random bytes");
-    hex::encode(bytes)  // 20 random bytes -> 40 hex characters
-}
-```
-
-### Secondary ID Usage
-
-When a replica is promoted:
-```rust
-fn on_promotion(&mut self) {
-    self.secondary_repl_id = Some(self.repl_id.clone());
-    self.secondary_repl_offset = self.repl_offset;
-    self.repl_id = generate_replication_id();
-}
-```
-
-Other replicas can PSYNC using either the new primary's ID or the secondary ID.
+`new_replication_id()` captures `secondary_id: Option<String>` (the old ID) and `secondary_offset: i64` (the offset at promotion; `-1` sentinel when unset), then regenerates `replication_id`. A reconnecting replica is eligible for a partial (offset-resume) sync when its requested `(id, offset)` falls inside the primary's window — `window_contains(requested_id, requested_offset, current_offset)` returns true when the ID matches the current replication ID and the requested offset is not ahead of the live offset, or matches the secondary ID within `secondary_offset`. Otherwise a full resync is required.
 
 ---
 
-## Full Synchronization (FULLRESYNC)
+## PSYNC Handshake
 
-```
-Primary                              Replica
-   |                                    |
-   |<---- PSYNC ? -1 ------------------| "I have no data"
-   |                                    |
-   |  Create RocksDB checkpoint         |
-   |                                    |
-   |----- FULLRESYNC <id> <seq> ------->|
-   |                                    |
-   |----- [checkpoint files] ---------->| Transfer checkpoint
-   |                                    |
-   |                                    | Load checkpoint
-   |                                    |
-   |<---- PSYNC <id> <seq> ------------|  Ready for incremental
-   |                                    |
-   |----- [WAL stream] --------------->|  Continue streaming
-```
-
-### Concurrent FULLRESYNC Requests
-
-If multiple replicas request FULLRESYNC simultaneously, FrogDB creates a **single RocksDB checkpoint** and streams it to all requesting replicas, amortizing the cost.
-
-### Checkpoint Transfer Format
-
-```
-1. FULLRESYNC response: +FULLRESYNC <repl_id> <sequence>\r\n
-2. Checkpoint header: $<total_size>\r\n
-3. File entries (repeated):
-   *3\r\n
-   $<name_len>\r\n<filename>\r\n
-   :<file_size>\r\n
-   $<file_size>\r\n<file_data>\r\n
-4. End marker: *1\r\n $3\r\nEOF\r\n
-5. Checksum footer: $40\r\n<sha256_hex_of_all_files>\r\n
-```
-
-**Checkpoint Integrity:** Primary computes SHA256 of all file contents. Replica verifies after receiving all files. Mismatch triggers retry.
-
----
-
-## PSYNC Handshake Sequence
+The replica drives the handshake (`frogdb-server/crates/replication/src/replica/connection.rs`):
 
 ```
 Replica                              Primary
    |                                    |
-   |----- AUTH [user] <password> ------>| (if primary_auth configured)
-   |<---- +OK -------------------------|
+   |-- REPLCONF listening-port <port> ->| (for INFO output)
+   |<- +OK ----------------------------|
    |                                    |
-   |----- REPLCONF listening-port 6379->| (optional, for INFO output)
-   |<---- +OK -------------------------|
+   |-- REPLCONF capa eof capa psync2 ->| (announce capabilities)
+   |<- +OK ----------------------------|
    |                                    |
-   |----- REPLCONF capa eof psync2 --->| (announce capabilities)
-   |<---- +OK -------------------------|
+   |-- REPLCONF frogdb-version <ver> ->|
+   |<- +OK ----------------------------|
    |                                    |
-   |----- PSYNC <repl_id> <seq> ------>| (initiate sync)
-   |<---- +FULLRESYNC or +CONTINUE ----|
+   |-- PSYNC <repl_id> <offset> ------>| (fresh replica sends PSYNC ? -1)
+   |<- +FULLRESYNC <id> <off>  --------|  or  +CONTINUE <id>
 ```
+
+Notes verified against source:
+- The capability line sends **two** `capa` tokens: `capa eof capa psync2`.
+- There is **no AUTH step** in this handshake code path.
+- `+FULLRESYNC <id> <offset>` triggers a checkpoint transfer; `+CONTINUE <id>` resumes streaming from the replica's offset.
 
 ---
 
-## WAL Streaming
+## Full Synchronization (Checkpoint Transfer)
 
-After initial sync, the primary continuously streams WAL entries to replicas. FrogDB uses RocksDB's `GetUpdatesSince()` for incremental sync.
+A full sync happens for a new replica, or when a replica has fallen outside the primary's replay window. The primary (`handle_full` in `replica_session.rs`) creates a **per-replica** RocksDB checkpoint directory (`fullsync_<replica_id>`) — there is no shared, amortized checkpoint across concurrent replicas — and streams it. The primary's session moves through a `Phase` state machine: `Connecting → PreparingCheckpoint → StreamingCheckpoint → Streaming → Disconnecting`.
 
-### TCP Backpressure Design
+### Wire framing
 
-FrogDB uses **TCP backpressure** (no buffer limits) to avoid the "full sync loop" problem that affects Redis:
+The stream (`CheckpointStreamCodec`, `fullsync.rs`) is:
 
-- If a replica is slow, TCP send buffer fills naturally
-- Primary blocks on write (does not buffer unboundedly)
-- No risk of exhausting memory with replication buffers
-- Slow replicas cause primary to slow down rather than trigger full resync
+```
+1. Prelude:      $FROGDB_CHECKPOINT\r\n <file_count>\r\n
+2. Per file (sorted by name):
+                 <file header: name, size>
+                 <raw file bytes>
+3. Metadata trailer:
+                 <rdb_size>:<checksum_hex>:<replication_id>:<replication_offset>
+```
 
-This is a deliberate departure from Redis, which uses bounded output buffers and disconnects slow replicas, sometimes causing repeated full resyncs.
+### Integrity
+
+The checksum is a **hash of hashes**, not a hash of the concatenated bytes: the primary SHA256s each file, then folds `SHA256(name_0 || hash_0 || name_1 || hash_1 || …)` in wire (name-sorted) order into a final 32-byte digest (64 hex chars). The replica recomputes it while receiving; on mismatch it deletes the incoming directory and errors (a fresh full sync happens on the next reconnect — there is no inline retry). On success the checkpoint is staged and committed by an atomic rename; the replica applies it on restart.
+
+When the store is not RocksDB-backed, an RDB fallback path is used instead of a checkpoint.
 
 ---
 
-## Synchronous Replication
+## Command Streaming (Steady State)
 
-When `min_replicas_to_write >= 1`, writes wait for replica acknowledgment:
+After the initial sync, replication is **logical command replication**. Each write on the primary is serialized to a RESP2 array (`serialize_command_to_resp`), wrapped in a `ReplicationFrame` (magic `FRPL`, version 2, 20-byte header carrying `shard_id` and a monotonic `sequence`), and published to a bounded tokio broadcast channel (`broadcast::channel(10000)` in `primary/mod.rs`). An `OffsetCoordinator` assigns the offset that advances `master_repl_offset`.
 
-```rust
-async fn execute_with_sync_replication(
-    cmd: &ParsedCommand,
-    handler: &dyn Command,
-    ctx: &mut CommandContext<'_>,
-) -> Response {
-    let result = handler.execute(ctx, &cmd.args);
-    let seq = ctx.wal.append(&result.operation)?;
+Replicas (`replica/streaming.rs`) decode each frame and **re-execute the command** against their own store, routing it to the origin shard tagged on the frame and running it under a reserved internal connection id (`REPLICA_INTERNAL_CONN_ID`) so the replayed write is not itself re-broadcast. MULTI/EXEC groups apply atomically.
 
-    if ctx.config.min_replicas_to_write == 0 {
-        return result.response;  // Async mode
-    }
-
-    let ack_future = ctx.replication_tracker.wait_for_acks(
-        seq,
-        ctx.config.min_replicas_to_write,
-    );
-
-    match tokio::time::timeout(ctx.config.replica_ack_timeout, ack_future).await {
-        Ok(Ok(_)) => result.response,
-        Ok(Err(_)) | Err(_) => {
-            // Write ALREADY committed on primary
-            Response::Error(Bytes::from_static(b"NOREPL Not enough replicas"))
-        }
-    }
-}
-```
-
-When `-NOREPL` is returned, the write has already succeeded on the primary and is in the WAL. The error indicates replication durability was not confirmed, not that the write failed.
+**Determinism.** Because replicas re-execute the literal command, correctness depends on the commands replicating deterministically as written. FrogDB does **not** rewrite nondeterministic commands to a canonical form before broadcast (there is no `SPOP`→`SREM` or `EXPIRE`→`PEXPIREAT` rewriting layer). The primary broadcasts the executed verb and arguments verbatim; a command that cannot replicate safely is instead tagged with the `NO_PROPAGATE` flag, which suppresses its replication entirely rather than rewriting it.
 
 ---
 
-## Replication State Machine
+## Backpressure and Lag
 
-### Node Roles
+Replication buffers are **bounded**, and a replica that cannot keep up is disconnected rather than allowed to stall the primary indefinitely:
 
-```rust
-pub enum NodeRole {
-    Primary,
-    Replica { primary_addr: SocketAddr },
-    Standalone,
-}
-```
+- The write-stream is served from a shared broadcast channel with a fixed capacity (`10000` frames). A replica whose consumer falls behind receives `RecvError::Lagged` and its session **breaks** — it must reconnect, and full-resync if its offset has fallen out of the replay window.
+- An optional per-write `write_timeout_ms` disconnects a replica whose socket write stalls beyond the timeout.
 
-### Replica Command Handling
+This is the same "resync a fallen-behind replica" model as Redis; FrogDB does not attempt unbounded buffering.
 
-| Command Type | Replica Behavior |
-|--------------|------------------|
-| Read (`READONLY` flag) | Execute locally, may return stale data |
-| Write (`WRITE` flag) | Return `-READONLY` error |
-| Replication commands | Execute (PSYNC, REPLCONF, etc.) |
-| Admin commands | Depends on command |
+---
 
-### Replication Metrics
+## Write Quorum and Fencing
 
-| Metric | Description |
-|--------|-------------|
-| `last_write_seq` | Sequence number of last write |
-| `pending_sync_writes` | Writes waiting for replica ACK |
-| `norepl_errors` | Writes that failed due to replica timeout |
-| `replica_ack_wait_time` | Time spent waiting for replica ACKs |
+Two independent mechanisms let a primary care about replica acknowledgment:
+
+**`WAIT numreplicas timeout`** blocks until at least `numreplicas` replicas have acknowledged the connection's last write, then returns the acknowledged count. It is served by `wait_for_acks(sequence, min_replicas) -> u32` (`tracker.rs`), which returns a plain ack count and **never errors on timeout** — the timeout is imposed by the caller and, on expiry, `WAIT` simply returns however many replicas had acked. Config `min-replicas-to-write` (default `0`) and `min-replicas-timeout-ms` (default `5000`) express the same intent declaratively.
+
+**Quorum fencing** is separate. `ReplicationQuorumChecker` (`frogdb-server/crates/server/src/replication_quorum.rs`) arms the first time a replica reaches the streaming phase and stays armed thereafter. Once armed, if no fresh streaming replica has acked within the freshness window, writes are rejected with `-CLUSTERDOWN` ("quorum lost, writes rejected"). This is gated by `self-fence-on-replica-loss` (default `true`). There is no `-NOREPL` error in FrogDB.
+
+---
+
+## Split-Brain Handling
+
+When a partition heals, a demoted former primary may hold **divergent writes** it accepted while isolated. Those writes are captured in a bounded ring buffer (`primary/ring_buffer.rs`: `ReplicationRingBuffer`, a `VecDeque` with FIFO eviction; default enabled, `max_entries` 10000, `max_bytes` 64 MiB). On demotion and re-sync they are **discarded** and recorded to an audit file `split_brain_discarded_<timestamp>.log` (`split_brain_log.rs`). The header records `old_primary`, `new_primary`, `epoch_old`, `epoch_new`, the divergent sequence range, and `ops_discarded`, followed by the raw RESP bytes of the discarded operations.
+
+This is a post-mortem audit artifact, not a hot-path fence. See [Consistency Model](/architecture/consistency/) for the guarantee-level discussion of what a split brain can and cannot lose.
+
+---
+
+## Observability
+
+Replication state is exposed through the `INFO replication` section (`frogdb-server/crates/server/src/commands/info.rs`), whose fields mirror Redis: `role`, `connected_slaves`, per-slave `slave<i>:ip=…,port=…,state=…,offset=…,lag=…` lines, `master_failover_state`, `master_replid`, `master_replid2`, `master_repl_offset`, `second_repl_offset`, and the `repl_backlog_*` fields. See [Operations: Replication](/operations/replication/) for monitoring guidance and the [Metrics reference](/reference/metrics/) for exported metrics.
