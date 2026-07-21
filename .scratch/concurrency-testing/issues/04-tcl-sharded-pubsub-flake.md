@@ -52,13 +52,20 @@ on `myself`).
 
 ## Fix
 
-`frogdb-server/crates/server/src/connection/guards.rs` — `run_pre_checks` now defers the
-replica read-only rejection to the cluster slot check when the write is slot-redirectable
-(new helper `write_defers_to_cluster_redirect`: cluster mode on + command not
-cluster-exempt + command has keys). Such writes then get `-MOVED`/`-CROSSSLOT`/`-ASK`
-from `validate_cluster_slots`, matching Redis. Keyless writes and standalone-replication
-writes are unchanged (still `-READONLY`). This makes the reply **deterministic** and
-independent of the async role-flag timing.
+`frogdb-server/crates/server/src/connection/guards.rs` — `run_pre_checks` defers the
+replica read-only rejection to the cluster slot check when the keyed write targets a
+slot **owned by another node** (helper `write_defers_to_cluster_redirect`: cluster mode
+on + command not cluster-exempt + has keys + `get_slot_owner(slot) == Some(other)`).
+Such writes then get `-MOVED`/`-CROSSSLOT`/`-ASK` from `validate_cluster_slots`, matching
+Redis. If this replica owns the slot, the slot is unassigned, or it's a keyless /
+standalone-replication write, the deferral does **not** fire and `-READONLY` still wins.
+This makes the reply **deterministic** (independent of the async role-flag timing) for
+the common case while keeping the safe answer for the pathological one.
+
+The deferral is deliberately **ownership-aware** rather than assuming the invariant "a
+replica never owns the slot for its keys". See "Adversarial review" — FrogDB auto-assigns
+slots to bootstrapping nodes, so a slot-owning replica is reachable; the ownership check
+makes the fix self-contained (no dependency on a topology-level invariant).
 
 ## Verification
 
@@ -70,10 +77,62 @@ independent of the async role-flag timing.
 - Fix-reverted probe: with the deferral disabled, the new test fails deterministically
   with `got READONLY You can't write against a read only replica.` — confirming the
   root cause and that the test guards it.
-- Stability: the original flaky test + the new regression test ran **25/25 consecutive
-  green**. Full `cluster_sharded_pubsub_tcl` suite (7 tests) green. `frogdb-server`
-  guards/dispatch/replica/replication tests (192) green. `cargo clippy -p frogdb-server`
-  clean.
+- Stability: original flaky test + new regression test **25/25 consecutive green**;
+  full `cluster_sharded_pubsub_tcl` suite (7 tests) **10/10 consecutive green, 0 retries**.
+  `frogdb-server` guards/dispatch/replica/replication tests (192) green.
+  `cargo clippy -p frogdb-server --all-targets` clean.
+
+## Adversarial review (round 2) — ownership-aware deferral
+
+Review found the first cut of the fix relied on a false invariant, "a replica never owns
+the slot for its keys", and would make the pathological case **worse**:
+
+- `CLUSTER REPLICATE` (`SetRole{Replica}`) flips only role/primary_id, never
+  `slot_assignment`, and FrogDB **auto-assigns slots to bootstrapping nodes**
+  (`cluster_init.rs`, gated by the lowest-node-id bootstrap heuristic). So a node that
+  self-assigned slots and later becomes a replica is a **reachable** slot-owning replica.
+  Confirmed empirically: the very harness `start_cluster_with_replicas` produces one
+  (a `wait_for_node_slotless` probe times out — the joined node keeps its slots).
+- A blanket "defer any keyed write on a replica" would then route `LocalServe` and
+  **execute** the write on the read-only replica (silent divergence) — strictly worse
+  than the old unconditional `-READONLY` (an accidental safety net).
+
+**Closure (self-contained, no topology change):** the deferral now checks committed slot
+ownership (`ClusterState::get_slot_owner`) and defers **only** when the slot is owned by a
+*different* node — exactly when `validate_cluster_slots` will emit `-MOVED`. A slot-owning
+replica (or unassigned slot) falls through to `-READONLY`, so a replica can never execute
+a keyed write locally. No dependency on any demotion-time invariant.
+
+**Rejected alternative — topology guard.** An earlier attempt rejected demoting a
+slot-owning node in `ClusterCommand::SetRole` apply
+(`ClusterError::NodeHasAssignedSlots`, Redis `clusterCommand` parity). It is correct for
+Redis (nodes start empty) but **breaks FrogDB**, whose freshly-joined nodes self-bootstrap
+slots — it rejected the harness's (and real deployments') legitimate replica creation
+(all replica sharded-pubsub tests timed out on role propagation). Reverted. The proper
+place to fix that mismatch is a dedicated cluster-formation issue (a node joining an
+existing cluster should not self-assign slots, or demotion should atomically shed empty
+slots to the new primary) — see follow-up note below. The graceful `Failover` command
+already transfers slots off the demoted node atomically, so that path was never at risk.
+
+**Follow-up (new issue recommended):** FrogDB's lowest-id bootstrap heuristic lets a
+dynamically-added node self-assign slots, producing slot-owning replicas after
+`CLUSTER REPLICATE`. Harmless to this flake now that the read path is ownership-aware, but
+it is a latent correctness/writes-to-owned-slot concern worth hardening at the
+formation/topology layer.
+
+**Residual (future hardening):** a slot MIGRATING import-target that is simultaneously a
+replica with `ASKING` set could `AcceptImporting` a local write; exotic, out of scope,
+noted in the `write_defers_to_cluster_redirect` doc comment context.
+
+**Harness check (point 4)**: `start_cluster_with_replicas` demotes only freshly
+`add_node`'d peers, which do CLUSTER MEET only and own zero slots — so the guard
+does not break the sharded-pubsub tcl setup (verified: `add_node` assigns no
+slots; sharded-pubsub tests stay green).
+
+**Residual (future hardening, not addressed)**: a slot MIGRATING import-target
+that is simultaneously a replica could `AcceptImporting` a local write. Exotic
+and out of scope for this flake; noted in the `write_defers_to_cluster_redirect`
+doc comment.
 
 ## Acceptance criteria
 
