@@ -4,11 +4,17 @@ from workflow_gen.constants import (
     DEPLOY_PAGES,
     UPLOAD_PAGES_ARTIFACT,
 )
-from workflow_gen.helpers import checkout_step, mise_setup_step, omap
+from workflow_gen.helpers import (
+    cargo_cache_step,
+    checkout_step,
+    libclang_step,
+    mise_setup_step,
+    omap,
+    run_step,
+    rust_toolchain_step,
+)
 from workflow_gen.schema import (
     Concurrency,
-    Defaults,
-    DefaultsRun,
     Environment,
     Job,
     Permissions,
@@ -17,6 +23,15 @@ from workflow_gen.schema import (
     Trigger,
     Workflow,
 )
+
+# `just docs-build` regenerates the config-reference, compat-exclusions, and
+# command-matrix JSON (via docs-gen, compat-gen, matrix-gen) before running
+# the Astro build, so this job needs the same toolchain those generators need
+# in CI (see docs-gen-check/compat-gen-check/matrix-gen-check in test.py) —
+# Rust (+ libclang, for docs-gen's frogdb-server dependency), Python/uv (for
+# the compat-gen.py/matrix-gen.py scripts), and just — on top of node/bun for
+# the site build itself.
+MISE_INSTALL_ARGS = "node bun python uv just"
 
 
 def deploy_docs_workflow() -> Workflow:
@@ -31,12 +46,14 @@ def deploy_docs_workflow() -> Workflow:
     )
 
     w.jobs["build"] = Job(
-        defaults=Defaults(run=DefaultsRun(working_directory="website")),
         steps=[
             checkout_step(),
-            mise_setup_step(install_args="node bun"),
-            Step(run="bun install"),
-            Step(run="bun run build"),
+            mise_setup_step(install_args=MISE_INSTALL_ARGS),
+            rust_toolchain_step(),
+            libclang_step(),
+            cargo_cache_step(shared_key="stable"),
+            run_step(name="Install site dependencies", run="just docs-install"),
+            run_step(name="Build documentation site", run="just docs-build"),
             Step(uses=UPLOAD_PAGES_ARTIFACT, with_=omap(path="website/dist")),
         ],
     )
