@@ -46,19 +46,19 @@ pub struct ReplicationConfigSection {
 
     /// ACK interval - how often replicas send ACKs to primary (milliseconds).
     #[serde(default = "default_ack_interval_ms")]
-    #[param(skip)]
+    #[param(skip)] // skip: config not yet consumed by server
     pub ack_interval_ms: u64,
 
     /// Full sync timeout (seconds).
     /// Maximum time to wait for a full sync operation.
     #[serde(default = "default_fullsync_timeout_secs")]
-    #[param(skip)]
+    #[param(skip)] // skip: config not yet consumed by server
     pub fullsync_timeout_secs: u64,
 
     /// Maximum memory for full sync buffering (MB).
     /// If exceeded, FULLRESYNC requests will be rejected.
     #[serde(default = "default_fullsync_max_memory_mb")]
-    #[param(skip)]
+    #[param(skip)] // skip: config not yet consumed by server
     pub fullsync_max_memory_mb: usize,
 
     /// Replication state file path.
@@ -94,12 +94,12 @@ pub struct ReplicationConfigSection {
 
     /// Max replication lag in bytes before proactive disconnect. 0 = disabled.
     #[serde(default)]
-    #[param(skip)]
+    #[param]
     pub replication_lag_threshold_bytes: u64,
 
     /// Max replication lag in seconds (since last ACK) before proactive disconnect. 0 = disabled.
     #[serde(default)]
-    #[param(skip)]
+    #[param]
     pub replication_lag_threshold_secs: u64,
 
     /// Cooldown seconds after proactive lag disconnect before allowing another.
@@ -134,14 +134,14 @@ pub struct ReplicationConfigSection {
     /// Reject writes when primary loses all replica ACK freshness.
     /// Prevents zombie writes during network partitions.
     #[serde(default = "default_self_fence_on_replica_loss")]
-    #[param(skip)]
+    #[param]
     pub self_fence_on_replica_loss: bool,
 
     /// Freshness timeout for replica ACKs (ms).
     /// If no replica ACKs within this window, the primary fences itself.
     /// Should be >= 3x ack_interval_ms to tolerate missed ACKs.
     #[serde(default = "default_replica_freshness_timeout_ms")]
-    #[param(skip)]
+    #[param]
     pub replica_freshness_timeout_ms: u64,
 
     /// Write timeout for streaming to replicas (ms). 0 = disabled.

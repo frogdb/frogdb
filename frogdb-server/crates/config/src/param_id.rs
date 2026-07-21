@@ -4,10 +4,10 @@
 //! by *mutability* — the one fact that decides which server-side lifecycle
 //! serves it:
 //!
-//! - [`MutableParamId`] — the 45 runtime-mutable parameters (31 real
+//! - [`MutableParamId`] — the 46 runtime-mutable parameters (32 real
 //!   `ConfigParam` lifecycles + 14 Redis-compat no-ops). Served by the server's
 //!   `build_typed_params`.
-//! - [`ImmutableParamId`] — the 38 restart-required parameters. Served by the
+//! - [`ImmutableParamId`] — the 58 restart-required parameters. Served by the
 //!   server's `build_param_registry`.
 //!
 //! # Why these are hand-written, not derived
@@ -133,6 +133,10 @@ param_id_enum! {
         ZsetMaxZiplistValue => "zset-max-ziplist-value",
         ZsetMaxListpackEntries => "zset-max-listpack-entries",
         ZsetMaxListpackValue => "zset-max-listpack-value",
+        // === 13-01 Pass 2b: 1 promote-mutable param (genuinely live) ===
+        // The ACL log length is re-read per append; the apply path reaches it
+        // through the already-injected `Arc<AclManager>`.
+        AcllogMaxLen => "acllog-max-len",
     }
 }
 
@@ -183,6 +187,30 @@ param_id_enum! {
         LatencyBands => "latency-bands",
         TlsEnabled => "tls-enabled",
         Logfile => "logfile",
+        // === 13-01 Pass 2b: 20 promote-immutable params (CONFIG GET-only) ===
+        // Startup-consumed values whose runtime SET has no propagation seam; the
+        // startup value is honest to report. Order mirrors the registry's
+        // Pass-2b appended block for review locality.
+        CompactionRateLimitMb => "compaction-rate-limit-mb",
+        BatchSizeThresholdKb => "batch-size-threshold-kb",
+        SnapshotIntervalSecs => "snapshot-interval-secs",
+        ReplicationLagThresholdBytes => "replication-lag-threshold-bytes",
+        ReplicationLagThresholdSecs => "replication-lag-threshold-secs",
+        SelfFenceOnReplicaLoss => "self-fence-on-replica-loss",
+        ReplicaFreshnessTimeoutMs => "replica-freshness-timeout-ms",
+        ClusterAutoFailover => "cluster-auto-failover",
+        ClusterSelfFenceOnQuorumLoss => "cluster-self-fence-on-quorum-loss",
+        ReplicaPriority => "replica-priority",
+        TlsClusterMigration => "tls-cluster-migration",
+        TlsClientCertFile => "tls-client-cert-file",
+        TlsClientKeyFile => "tls-client-key-file",
+        TlsHandshakeTimeoutMs => "tls-handshake-timeout-ms",
+        TracingSamplingRate => "tracing-sampling-rate",
+        StatusMemoryWarningPercent => "status-memory-warning-percent",
+        StatusConnectionWarningPercent => "status-connection-warning-percent",
+        StatusDurabilityLagWarningMs => "status-durability-lag-warning-ms",
+        StatusDurabilityLagCriticalMs => "status-durability-lag-critical-ms",
+        LatencyBandsEnabled => "latency-bands-enabled",
     }
 }
 
@@ -253,10 +281,14 @@ mod tests {
     /// Documents the current split so an accidental enum edit trips a test.
     #[test]
     fn id_counts_are_stable() {
-        assert_eq!(MutableParamId::ALL.len(), 45);
+        // 45 pre-existing mutable ids + 1 promote-mutable param (`acllog-max-len`)
+        // added by 13-01 Pass 2b (the sole survivor of the 35 Pass-1
+        // promote-mutable candidates after the propagation-truth audit).
+        assert_eq!(MutableParamId::ALL.len(), 46);
         // 16 original immutable ids + 22 promote-immutable params added by 13-01
         // Pass 2a (26 classified, minus 4 metrics OTLP/bind rows downgraded to
-        // justify as dead config).
-        assert_eq!(ImmutableParamId::ALL.len(), 38);
+        // justify as dead config) + 20 promote-immutable startup-consumed params
+        // added by 13-01 Pass 2b.
+        assert_eq!(ImmutableParamId::ALL.len(), 58);
     }
 }

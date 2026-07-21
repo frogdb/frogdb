@@ -71,6 +71,12 @@ macro_rules! impl_to_toml_value_via_i64 {
 }
 impl_to_toml_value_via_i64!(u8, u16, u32, u64, usize, i32, i64);
 
+impl ToTomlValue for f64 {
+    fn to_toml_value(&self) -> TomlValue {
+        TomlValue::from(*self)
+    }
+}
+
 impl ToTomlValue for bool {
     fn to_toml_value(&self) -> TomlValue {
         TomlValue::from(*self)
@@ -339,6 +345,51 @@ pub struct StaticConfig {
     pub latency_bands: Vec<u64>,
     /// Log file path (empty when logging to console only).
     pub logfile: String,
+
+    // --- 13-01 Pass 2b: immutable (CONFIG GET-only) startup-consumed params ---
+    // Each is copied once from `Config` at startup; CONFIG GET reports that
+    // startup value (honest — it is what the server runs with), but they carry
+    // no runtime-SET seam, so they live here rather than in the mutable registry.
+    /// RocksDB background-compaction rate limit in MB/s (0 = unlimited).
+    pub compaction_rate_limit_mb: u64,
+    /// WAL flush batch-size threshold in KB.
+    pub batch_size_threshold_kb: usize,
+    /// Periodic snapshot interval in seconds (0 = disabled).
+    pub snapshot_interval_secs: u64,
+    /// Replica byte-lag disconnect threshold.
+    pub replication_lag_threshold_bytes: u64,
+    /// Replica time-lag disconnect threshold in seconds.
+    pub replication_lag_threshold_secs: u64,
+    /// Whether the primary self-fences (refuses writes) on replica loss.
+    pub self_fence_on_replica_loss: bool,
+    /// Replica freshness window in ms used by self-fencing.
+    pub replica_freshness_timeout_ms: u64,
+    /// Whether cluster auto-failover is enabled.
+    pub cluster_auto_failover: bool,
+    /// Whether a node self-fences on Raft quorum loss.
+    pub cluster_self_fence_on_quorum_loss: bool,
+    /// Cluster replica failover priority (lower = preferred; 0 = never).
+    pub cluster_replica_priority: u32,
+    /// Whether dual-accept TLS cluster migration mode is enabled.
+    pub tls_cluster_migration: bool,
+    /// Outgoing (replication/cluster) client certificate path (empty when unset).
+    pub tls_client_cert_file: String,
+    /// Outgoing client private-key path (empty when unset).
+    pub tls_client_key_file: String,
+    /// TLS handshake timeout in ms.
+    pub tls_handshake_timeout_ms: u64,
+    /// Distributed-tracing sample rate (0.0-1.0).
+    pub tracing_sampling_rate: f64,
+    /// Status endpoint memory-warning threshold percent.
+    pub status_memory_warning_percent: u8,
+    /// Status endpoint connection-warning threshold percent.
+    pub status_connection_warning_percent: u8,
+    /// Status endpoint durability-lag warning threshold in ms.
+    pub status_durability_lag_warning_ms: u64,
+    /// Status endpoint durability-lag critical threshold in ms.
+    pub status_durability_lag_critical_ms: u64,
+    /// Whether SLO latency-band tracking is enabled.
+    pub latency_bands_enabled: bool,
 }
 
 impl StaticConfig {
@@ -413,6 +464,37 @@ impl StaticConfig {
                 .as_ref()
                 .map(|p| p.display().to_string())
                 .unwrap_or_default(),
+            // --- 13-01 Pass 2b: immutable startup-consumed params ---
+            compaction_rate_limit_mb: config.persistence.compaction_rate_limit_mb,
+            batch_size_threshold_kb: config.persistence.batch_size_threshold_kb,
+            snapshot_interval_secs: config.snapshot.snapshot_interval_secs,
+            replication_lag_threshold_bytes: config.replication.replication_lag_threshold_bytes,
+            replication_lag_threshold_secs: config.replication.replication_lag_threshold_secs,
+            self_fence_on_replica_loss: config.replication.self_fence_on_replica_loss,
+            replica_freshness_timeout_ms: config.replication.replica_freshness_timeout_ms,
+            cluster_auto_failover: config.cluster.auto_failover,
+            cluster_self_fence_on_quorum_loss: config.cluster.self_fence_on_quorum_loss,
+            cluster_replica_priority: config.cluster.replica_priority,
+            tls_cluster_migration: config.tls.tls_cluster_migration,
+            tls_client_cert_file: config
+                .tls
+                .client_cert_file
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
+            tls_client_key_file: config
+                .tls
+                .client_key_file
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
+            tls_handshake_timeout_ms: config.tls.handshake_timeout_ms,
+            tracing_sampling_rate: config.tracing.sampling_rate,
+            status_memory_warning_percent: config.status.memory_warning_percent,
+            status_connection_warning_percent: config.status.connection_warning_percent,
+            status_durability_lag_warning_ms: config.status.durability_lag_warning_ms,
+            status_durability_lag_critical_ms: config.status.durability_lag_critical_ms,
+            latency_bands_enabled: config.latency_bands.enabled,
         }
     }
 }
@@ -1033,6 +1115,155 @@ impl ConfigManager {
                 name: id.name(),
                 getter: |mgr| mgr.static_config.logfile.clone(),
                 toml_getter: |mgr| mgr.static_config.logfile.to_toml_value(),
+            },
+            // --- 13-01 Pass 2b: immutable startup-consumed params (GET-only) ---
+            CompactionRateLimitMb => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.compaction_rate_limit_mb.to_string(),
+                toml_getter: |mgr| mgr.static_config.compaction_rate_limit_mb.to_toml_value(),
+            },
+            BatchSizeThresholdKb => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.batch_size_threshold_kb.to_string(),
+                toml_getter: |mgr| mgr.static_config.batch_size_threshold_kb.to_toml_value(),
+            },
+            SnapshotIntervalSecs => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.snapshot_interval_secs.to_string(),
+                toml_getter: |mgr| mgr.static_config.snapshot_interval_secs.to_toml_value(),
+            },
+            ReplicationLagThresholdBytes => ParamMeta {
+                name: id.name(),
+                getter: |mgr| {
+                    mgr.static_config
+                        .replication_lag_threshold_bytes
+                        .to_string()
+                },
+                toml_getter: |mgr| {
+                    mgr.static_config
+                        .replication_lag_threshold_bytes
+                        .to_toml_value()
+                },
+            },
+            ReplicationLagThresholdSecs => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.replication_lag_threshold_secs.to_string(),
+                toml_getter: |mgr| {
+                    mgr.static_config
+                        .replication_lag_threshold_secs
+                        .to_toml_value()
+                },
+            },
+            SelfFenceOnReplicaLoss => ParamMeta {
+                name: id.name(),
+                getter: |mgr| yes_no(mgr.static_config.self_fence_on_replica_loss),
+                toml_getter: |mgr| mgr.static_config.self_fence_on_replica_loss.to_toml_value(),
+            },
+            ReplicaFreshnessTimeoutMs => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.replica_freshness_timeout_ms.to_string(),
+                toml_getter: |mgr| {
+                    mgr.static_config
+                        .replica_freshness_timeout_ms
+                        .to_toml_value()
+                },
+            },
+            ClusterAutoFailover => ParamMeta {
+                name: id.name(),
+                getter: |mgr| yes_no(mgr.static_config.cluster_auto_failover),
+                toml_getter: |mgr| mgr.static_config.cluster_auto_failover.to_toml_value(),
+            },
+            ClusterSelfFenceOnQuorumLoss => ParamMeta {
+                name: id.name(),
+                getter: |mgr| yes_no(mgr.static_config.cluster_self_fence_on_quorum_loss),
+                toml_getter: |mgr| {
+                    mgr.static_config
+                        .cluster_self_fence_on_quorum_loss
+                        .to_toml_value()
+                },
+            },
+            ReplicaPriority => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.cluster_replica_priority.to_string(),
+                toml_getter: |mgr| mgr.static_config.cluster_replica_priority.to_toml_value(),
+            },
+            TlsClusterMigration => ParamMeta {
+                name: id.name(),
+                getter: |mgr| yes_no(mgr.static_config.tls_cluster_migration),
+                toml_getter: |mgr| mgr.static_config.tls_cluster_migration.to_toml_value(),
+            },
+            TlsClientCertFile => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.tls_client_cert_file.clone(),
+                toml_getter: |mgr| mgr.static_config.tls_client_cert_file.to_toml_value(),
+            },
+            TlsClientKeyFile => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.tls_client_key_file.clone(),
+                toml_getter: |mgr| mgr.static_config.tls_client_key_file.to_toml_value(),
+            },
+            TlsHandshakeTimeoutMs => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.tls_handshake_timeout_ms.to_string(),
+                toml_getter: |mgr| mgr.static_config.tls_handshake_timeout_ms.to_toml_value(),
+            },
+            TracingSamplingRate => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.tracing_sampling_rate.to_string(),
+                toml_getter: |mgr| mgr.static_config.tracing_sampling_rate.to_toml_value(),
+            },
+            StatusMemoryWarningPercent => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.status_memory_warning_percent.to_string(),
+                toml_getter: |mgr| {
+                    mgr.static_config
+                        .status_memory_warning_percent
+                        .to_toml_value()
+                },
+            },
+            StatusConnectionWarningPercent => ParamMeta {
+                name: id.name(),
+                getter: |mgr| {
+                    mgr.static_config
+                        .status_connection_warning_percent
+                        .to_string()
+                },
+                toml_getter: |mgr| {
+                    mgr.static_config
+                        .status_connection_warning_percent
+                        .to_toml_value()
+                },
+            },
+            StatusDurabilityLagWarningMs => ParamMeta {
+                name: id.name(),
+                getter: |mgr| {
+                    mgr.static_config
+                        .status_durability_lag_warning_ms
+                        .to_string()
+                },
+                toml_getter: |mgr| {
+                    mgr.static_config
+                        .status_durability_lag_warning_ms
+                        .to_toml_value()
+                },
+            },
+            StatusDurabilityLagCriticalMs => ParamMeta {
+                name: id.name(),
+                getter: |mgr| {
+                    mgr.static_config
+                        .status_durability_lag_critical_ms
+                        .to_string()
+                },
+                toml_getter: |mgr| {
+                    mgr.static_config
+                        .status_durability_lag_critical_ms
+                        .to_toml_value()
+                },
+            },
+            LatencyBandsEnabled => ParamMeta {
+                name: id.name(),
+                getter: |mgr| yes_no(mgr.static_config.latency_bands_enabled),
+                toml_getter: |mgr| mgr.static_config.latency_bands_enabled.to_toml_value(),
             },
         }
     }
@@ -1860,6 +2091,29 @@ impl ConfigManager {
                 name: id.name(),
                 value: "64",
             }),
+            // === 13-01 Pass 2b: genuinely-live mutable param ===
+            // The ACL log length is re-read on every append; apply/get reach it
+            // through the already-injected `Arc<AclManager>`, so CONFIG SET
+            // actually changes runtime behavior (the log trims to the new bound).
+            AcllogMaxLen => Box::new(ConfigParam::<usize, ConfigManager> {
+                name: id.name(),
+                parse: |s| {
+                    s.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+                        param: "acllog-max-len".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || frogdb_config::security::DEFAULT_ACL_LOG_MAX_LEN,
+                get: |mgr| mgr.acl_manager.log().max_len(),
+                apply: |mgr, v| {
+                    mgr.acl_manager.log().set_max_len(v);
+                    info!(acllog_max_len = v, "ACL log max length updated");
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
         }
     }
 
@@ -2381,6 +2635,143 @@ mod tests {
                 "{name} should be listed among immutable params"
             );
         }
+    }
+
+    /// 13-01 Pass 2b: the 20 startup-consumed params downgraded to
+    /// promote-immutable are CONFIG GET-visible (reporting their honest startup
+    /// value) and reject CONFIG SET. Spot-checks a few known-default values, and
+    /// asserts GET-one-row + SET-rejected + immutable-listing for all 20.
+    #[test]
+    fn test_config_get_promoted_immutable_params_pass2b() {
+        let config = test_config(); // Config::default()
+        let manager = ConfigManager::new(&config);
+
+        // Exact GET values for params with stable, obvious defaults.
+        let spot: &[(&str, &str)] = &[
+            ("compaction-rate-limit-mb", "0"),  // persistence (0 = unlimited)
+            ("snapshot-interval-secs", "3600"), // snapshot
+            ("cluster-auto-failover", "no"),    // cluster (bool)
+            ("tls-handshake-timeout-ms", "10000"), // tls
+            ("tracing-sampling-rate", "1"),     // tracing (f64 1.0)
+            ("latency-bands-enabled", "no"),    // latency-bands (bool)
+        ];
+        for (name, want) in spot {
+            let got = manager.get(name);
+            assert_eq!(got.len(), 1, "CONFIG GET {name} should return one row");
+            assert_eq!(&got[0].1, want, "CONFIG GET {name} value mismatch");
+        }
+
+        // All 20 Pass-2b immutable params: exactly one GET row, SET rejected as
+        // ImmutableParameter, and present in the immutable-name list.
+        let all_pass2b: &[&str] = &[
+            "compaction-rate-limit-mb",
+            "batch-size-threshold-kb",
+            "snapshot-interval-secs",
+            "replication-lag-threshold-bytes",
+            "replication-lag-threshold-secs",
+            "self-fence-on-replica-loss",
+            "replica-freshness-timeout-ms",
+            "cluster-auto-failover",
+            "cluster-self-fence-on-quorum-loss",
+            "replica-priority",
+            "tls-cluster-migration",
+            "tls-client-cert-file",
+            "tls-client-key-file",
+            "tls-handshake-timeout-ms",
+            "tracing-sampling-rate",
+            "status-memory-warning-percent",
+            "status-connection-warning-percent",
+            "status-durability-lag-warning-ms",
+            "status-durability-lag-critical-ms",
+            "latency-bands-enabled",
+        ];
+        let immutable = manager.immutable_param_names();
+        for name in all_pass2b {
+            let got = manager.get(name);
+            assert_eq!(got.len(), 1, "CONFIG GET {name} should return one row");
+            assert_eq!(&got[0].0, name, "CONFIG GET returned wrong key for {name}");
+            let set = manager.set(name, "1");
+            assert!(
+                matches!(set, Err(ConfigError::ImmutableParameter(_))),
+                "CONFIG SET {name} should be rejected as ImmutableParameter, got {set:?}"
+            );
+            assert!(
+                immutable.contains(name),
+                "{name} should be listed among immutable params"
+            );
+        }
+    }
+
+    /// 13-01 Pass 2b: `acllog-max-len` is the sole promote-mutable survivor of the
+    /// propagation-truth audit. CONFIG SET must (a) be accepted, (b) be reflected
+    /// by CONFIG GET, and (c) actually change the propagated target -- the live
+    /// ACL-log length atomic the manager re-reads on every append.
+    #[test]
+    fn test_config_set_acllog_max_len_roundtrip() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+
+        // Default is visible via GET and mutable (listed as a settable param).
+        let before = manager.get("acllog-max-len");
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].0, "acllog-max-len");
+        assert_eq!(
+            before[0].1,
+            frogdb_config::security::DEFAULT_ACL_LOG_MAX_LEN.to_string()
+        );
+
+        // (a) SET accepted.
+        assert!(manager.set("acllog-max-len", "7").is_ok());
+        // (b) GET returns the new value.
+        assert_eq!(manager.get("acllog-max-len")[0].1, "7");
+        // (c) the propagated target changed: GET reads through the shared
+        // Arc<AclManager> atomic, so this value came from the live ACL log.
+        // Exercise the behavioral effect end-to-end: pushing more than 7 events
+        // trims the log to the new bound.
+        let log = manager.acl_manager.log();
+        assert_eq!(log.max_len(), 7);
+        for i in 0..20 {
+            log.log_command_denied(&format!("user{i}"), "127.0.0.1:1", "GET");
+        }
+        assert_eq!(log.len(), 7, "ACL log should trim to the CONFIG SET bound");
+
+        // Rejects a non-integer value.
+        assert!(matches!(
+            manager.set("acllog-max-len", "not-a-number"),
+            Err(ConfigError::InvalidValue { .. })
+        ));
+    }
+
+    /// 13-01 Pass 2b: CONFIG REWRITE persists the new mutable `acllog-max-len`
+    /// into the `[acl]` section using the file's own field name (`log-max-len`).
+    #[test]
+    fn test_rewrite_config_acllog_max_len() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("frogdb.toml");
+        std::fs::write(
+            &config_path,
+            r#"[server]
+bind = "127.0.0.1"
+port = 6379
+
+[acl]
+log-max-len = 128
+"#,
+        )
+        .unwrap();
+
+        let mut config = test_config();
+        config.config_source_path = Some(config_path.clone());
+        let manager = ConfigManager::new(&config);
+
+        manager.set("acllog-max-len", "42").unwrap();
+        assert!(manager.rewrite_config().is_ok());
+
+        let contents = std::fs::read_to_string(&config_path).unwrap();
+        assert!(
+            contents.contains("log-max-len = 42"),
+            "acllog-max-len not rewritten into [acl]; file:\n{contents}"
+        );
     }
 
     #[test]

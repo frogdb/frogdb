@@ -6,30 +6,32 @@ use serde::{Deserialize, Serialize};
 
 /// Status endpoint configuration for health thresholds.
 //
-// No fields are exposed as CONFIG GET/SET parameters; each carries an explicit
-// `#[param(skip)]` to satisfy the per-field coverage guarantee.
+// The four health thresholds are exposed CONFIG GET-only (immutable) as of
+// 13-01 Pass 2b: the status endpoint reads them from a startup snapshot
+// (`StatusCollectorConfig`), so their startup values are honest to report but a
+// runtime SET would not reach the collector without new propagation wiring.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
 #[params(section = "status")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct StatusConfig {
     /// Threshold percentage for memory warning (0-100).
     #[serde(default = "default_memory_warning_percent")]
-    #[param(skip)]
+    #[param(name = "status-memory-warning-percent")]
     pub memory_warning_percent: u8,
 
     /// Threshold percentage for connection warning (0-100).
     #[serde(default = "default_connection_warning_percent")]
-    #[param(skip)]
+    #[param(name = "status-connection-warning-percent")]
     pub connection_warning_percent: u8,
 
     /// Durability lag warning threshold in milliseconds.
     #[serde(default = "default_durability_lag_warning_ms")]
-    #[param(skip)]
+    #[param(name = "status-durability-lag-warning-ms")]
     pub durability_lag_warning_ms: u64,
 
     /// Durability lag critical threshold in milliseconds.
     #[serde(default = "default_durability_lag_critical_ms")]
-    #[param(skip)]
+    #[param(name = "status-durability-lag-critical-ms")]
     pub durability_lag_critical_ms: u64,
 }
 
@@ -95,17 +97,17 @@ impl StatusConfig {
 pub struct HotShardsConfig {
     /// Threshold percentage for "HOT" status.
     #[serde(default = "default_hot_threshold_percent")]
-    #[param(skip)]
+    #[param(skip)] // skip: config not yet consumed by server
     pub hot_threshold_percent: f64,
 
     /// Threshold percentage for "WARM" status.
     #[serde(default = "default_warm_threshold_percent")]
-    #[param(skip)]
+    #[param(skip)] // skip: config not yet consumed by server
     pub warm_threshold_percent: f64,
 
     /// Default period for stats collection in seconds.
     #[serde(default = "default_hotshards_period_secs")]
-    #[param(skip)]
+    #[param(skip)] // skip: config not yet consumed by server
     pub default_period_secs: u64,
 }
 

@@ -274,6 +274,7 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
         use crate::security::{AclFileConfig, SecurityConfig};
         use crate::server::ServerConfig;
         use crate::slowlog::SlowlogConfig;
+        use crate::status::StatusConfig;
         use crate::tls::TlsConfig;
 
         let mut rows: Vec<ConfigParamInfo> = Vec::new();
@@ -292,8 +293,18 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
         rows.push(pick(PersistenceConfig::PARAMS, "batch-timeout-ms"));
         rows.push(pick(ServerConfig::PARAMS, "scatter-gather-timeout-ms"));
 
-        // replication (both registered rows, contiguous and in field order)
-        rows.extend_from_slice(ReplicationConfigSection::PARAMS);
+        // replication: the two mutable rows only. 13-01 Pass 2b promoted four
+        // more replication fields to immutable; they are spliced by name in the
+        // Pass-2b block below, so this pair is picked by name (not by slice) to
+        // keep the historical first-61 order byte-identical.
+        rows.push(pick(
+            ReplicationConfigSection::PARAMS,
+            "min-replicas-to-write",
+        ));
+        rows.push(pick(
+            ReplicationConfigSection::PARAMS,
+            "min-replicas-max-lag",
+        ));
         // slowlog (all three rows, contiguous and in field order)
         rows.extend_from_slice(SlowlogConfig::PARAMS);
 
@@ -341,15 +352,65 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
         rows.push(pick(PersistenceConfig::PARAMS, "block-cache-size-mb"));
         rows.push(pick(PersistenceConfig::PARAMS, "bloom-filter-bits"));
         rows.push(pick(PersistenceConfig::PARAMS, "max-write-buffer-number"));
-        rows.extend_from_slice(SnapshotConfig::PARAMS); // snapshot-dir
+        // Pass 2a rows whose sections gained *more* params in Pass 2b are now
+        // picked by name (not by whole-section slice) so the 22 Pass-2a rows keep
+        // their exact positions and the Pass-2b additions land only in the
+        // appended block below.
+        rows.push(pick(SnapshotConfig::PARAMS, "snapshot-dir"));
         rows.extend_from_slice(HttpConfig::PARAMS); // http-enabled, http-bind, http-port
         rows.extend_from_slice(AdminConfig::PARAMS); // admin-enabled, admin-port, admin-bind
-        rows.extend_from_slice(TracingConfig::PARAMS); // tracing-enabled, tracing-otlp-endpoint
-        rows.extend_from_slice(AclFileConfig::PARAMS); // aclfile
-        rows.extend_from_slice(ClusterConfigSection::PARAMS); // cluster-enabled, cluster-data-dir
-        rows.extend_from_slice(LatencyBandsConfig::PARAMS); // latency-bands
+        rows.push(pick(TracingConfig::PARAMS, "tracing-enabled"));
+        rows.push(pick(TracingConfig::PARAMS, "tracing-otlp-endpoint"));
+        rows.push(pick(AclFileConfig::PARAMS, "aclfile"));
+        rows.push(pick(ClusterConfigSection::PARAMS, "cluster-enabled"));
+        rows.push(pick(ClusterConfigSection::PARAMS, "cluster-data-dir"));
+        rows.push(pick(LatencyBandsConfig::PARAMS, "latency-bands"));
         rows.push(pick(TlsConfig::PARAMS, "tls-enabled"));
         rows.push(pick(LoggingConfig::PARAMS, "logfile"));
+
+        // --- 13-01 Pass 2b: 20 promote-immutable (startup-consumed, CONFIG
+        // GET-only) rows + 1 promote-mutable row (`acllog-max-len`), appended
+        // after the Pass-2a block so the golden snapshot's first 83 rows stay
+        // byte-identical. Every promotion here passed the Pass-2b propagation
+        // audit: the 20 immutable rows are consumed once at startup (their
+        // startup value is honest to report via GET, but a runtime SET has no
+        // seam to reach the subsystem); `acllog-max-len` is genuinely live —
+        // the ACL log length is re-read per append via the already-injected
+        // `Arc<AclManager>`. (14 further Pass-1 promote-mutable candidates were
+        // dead config and stayed `#[param(skip)]`.)
+        rows.push(pick(PersistenceConfig::PARAMS, "compaction-rate-limit-mb"));
+        rows.push(pick(PersistenceConfig::PARAMS, "batch-size-threshold-kb"));
+        rows.push(pick(SnapshotConfig::PARAMS, "snapshot-interval-secs"));
+        rows.push(pick(
+            ReplicationConfigSection::PARAMS,
+            "replication-lag-threshold-bytes",
+        ));
+        rows.push(pick(
+            ReplicationConfigSection::PARAMS,
+            "replication-lag-threshold-secs",
+        ));
+        rows.push(pick(
+            ReplicationConfigSection::PARAMS,
+            "self-fence-on-replica-loss",
+        ));
+        rows.push(pick(
+            ReplicationConfigSection::PARAMS,
+            "replica-freshness-timeout-ms",
+        ));
+        rows.push(pick(ClusterConfigSection::PARAMS, "cluster-auto-failover"));
+        rows.push(pick(
+            ClusterConfigSection::PARAMS,
+            "cluster-self-fence-on-quorum-loss",
+        ));
+        rows.push(pick(ClusterConfigSection::PARAMS, "replica-priority"));
+        rows.push(pick(TlsConfig::PARAMS, "tls-cluster-migration"));
+        rows.push(pick(TlsConfig::PARAMS, "tls-client-cert-file"));
+        rows.push(pick(TlsConfig::PARAMS, "tls-client-key-file"));
+        rows.push(pick(TlsConfig::PARAMS, "tls-handshake-timeout-ms"));
+        rows.push(pick(TracingConfig::PARAMS, "tracing-sampling-rate"));
+        rows.extend_from_slice(StatusConfig::PARAMS); // status-{memory,connection}-warning-percent, status-durability-lag-{warning,critical}-ms
+        rows.push(pick(LatencyBandsConfig::PARAMS, "latency-bands-enabled"));
+        rows.push(pick(AclFileConfig::PARAMS, "acllog-max-len")); // mutable
 
         rows
     });
@@ -952,6 +1013,155 @@ mod tests {
             mutable: false,
             noop: false,
         },
+        // --- 13-01 Pass 2b: 20 promote-immutable rows + 1 promote-mutable row
+        // (`acllog-max-len`), appended after the Pass-2a block. ---
+        ConfigParamInfo {
+            name: "compaction-rate-limit-mb",
+            section: Some("persistence"),
+            field: Some("compaction-rate-limit-mb"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "batch-size-threshold-kb",
+            section: Some("persistence"),
+            field: Some("batch-size-threshold-kb"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "snapshot-interval-secs",
+            section: Some("snapshot"),
+            field: Some("snapshot-interval-secs"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "replication-lag-threshold-bytes",
+            section: Some("replication"),
+            field: Some("replication-lag-threshold-bytes"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "replication-lag-threshold-secs",
+            section: Some("replication"),
+            field: Some("replication-lag-threshold-secs"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "self-fence-on-replica-loss",
+            section: Some("replication"),
+            field: Some("self-fence-on-replica-loss"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "replica-freshness-timeout-ms",
+            section: Some("replication"),
+            field: Some("replica-freshness-timeout-ms"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "cluster-auto-failover",
+            section: Some("cluster"),
+            field: Some("auto-failover"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "cluster-self-fence-on-quorum-loss",
+            section: Some("cluster"),
+            field: Some("self-fence-on-quorum-loss"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "replica-priority",
+            section: Some("cluster"),
+            field: Some("replica-priority"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "tls-cluster-migration",
+            section: Some("tls"),
+            field: Some("tls-cluster-migration"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "tls-client-cert-file",
+            section: Some("tls"),
+            field: Some("client-cert-file"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "tls-client-key-file",
+            section: Some("tls"),
+            field: Some("client-key-file"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "tls-handshake-timeout-ms",
+            section: Some("tls"),
+            field: Some("handshake-timeout-ms"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "tracing-sampling-rate",
+            section: Some("tracing"),
+            field: Some("sampling-rate"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "status-memory-warning-percent",
+            section: Some("status"),
+            field: Some("memory-warning-percent"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "status-connection-warning-percent",
+            section: Some("status"),
+            field: Some("connection-warning-percent"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "status-durability-lag-warning-ms",
+            section: Some("status"),
+            field: Some("durability-lag-warning-ms"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "status-durability-lag-critical-ms",
+            section: Some("status"),
+            field: Some("durability-lag-critical-ms"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "latency-bands-enabled",
+            section: Some("latency-bands"),
+            field: Some("enabled"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "acllog-max-len",
+            section: Some("acl"),
+            field: Some("log-max-len"),
+            mutable: true,
+            noop: false,
+        },
     ];
 
     #[test]
@@ -977,8 +1187,10 @@ mod tests {
         // Guards against accidental edits to the snapshot itself. The original
         // migration captured 61 rows; 13-01 Pass 2a appended 22 promote-immutable
         // rows (26 classified, minus 4 metrics OTLP/bind rows downgraded to justify
-        // as dead config), giving 83.
-        assert_eq!(GOLDEN_SNAPSHOT.len(), 83);
+        // as dead config), giving 83. 13-01 Pass 2b appended 21 more (20
+        // promote-immutable startup-consumed rows + the mutable `acllog-max-len`),
+        // giving 104.
+        assert_eq!(GOLDEN_SNAPSHOT.len(), 104);
     }
 
     #[test]

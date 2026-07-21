@@ -5,6 +5,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use frogdb_types::sync::MutexExt;
@@ -161,8 +162,9 @@ pub enum AclLogValue {
 pub struct AclLog {
     /// Log entries (newest first).
     entries: Mutex<VecDeque<AclLogEntry>>,
-    /// Maximum number of entries to keep.
-    max_len: usize,
+    /// Maximum number of entries to keep. Atomic so `CONFIG SET acllog-max-len`
+    /// can retune it live: it is re-read on every append (see [`AclLog::log`]).
+    max_len: AtomicUsize,
     /// Next entry ID.
     next_id: Mutex<u64>,
 }
@@ -172,9 +174,22 @@ impl AclLog {
     pub fn new(max_len: usize) -> Self {
         Self {
             entries: Mutex::new(VecDeque::with_capacity(max_len)),
-            max_len,
+            max_len: AtomicUsize::new(max_len),
             next_id: Mutex::new(0),
         }
+    }
+
+    /// Current maximum number of entries retained (CONFIG GET acllog-max-len).
+    pub fn max_len(&self) -> usize {
+        self.max_len.load(Ordering::Relaxed)
+    }
+
+    /// Retune the maximum number of entries at runtime (CONFIG SET
+    /// acllog-max-len). Takes effect on the next append; the log is not eagerly
+    /// trimmed here (it drains naturally as new entries push old ones out), so
+    /// this cannot block the caller on a large existing log.
+    pub fn set_max_len(&self, max_len: usize) {
+        self.max_len.store(max_len, Ordering::Relaxed);
     }
 
     /// Log a security event.
@@ -207,8 +222,9 @@ impl AclLog {
         let entry = AclLogEntry::new(entry_id, entry_type, reason, username, client_info, object);
         entries.push_front(entry);
 
-        // Trim to max length
-        while entries.len() > self.max_len {
+        // Trim to max length (re-read live so CONFIG SET acllog-max-len applies).
+        let max_len = self.max_len.load(Ordering::Relaxed);
+        while entries.len() > max_len {
             entries.pop_back();
         }
     }
@@ -372,6 +388,25 @@ mod tests {
         assert_eq!(entries[0].username, "user4");
         assert_eq!(entries[1].username, "user3");
         assert_eq!(entries[2].username, "user2");
+    }
+
+    #[test]
+    fn test_acl_log_max_len_live_retune() {
+        // CONFIG SET acllog-max-len path: set_max_len takes effect on the next
+        // append (the trim re-reads max_len live).
+        let log = AclLog::new(10);
+        assert_eq!(log.max_len(), 10);
+
+        for i in 0..10 {
+            log.log_command_denied(&format!("user{i}"), "127.0.0.1:1", "GET");
+        }
+        assert_eq!(log.len(), 10);
+
+        // Shrink the cap; the next appends trim down to the new bound.
+        log.set_max_len(3);
+        assert_eq!(log.max_len(), 3);
+        log.log_command_denied("later", "127.0.0.1:1", "GET");
+        assert_eq!(log.len(), 3);
     }
 
     #[test]

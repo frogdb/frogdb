@@ -20,7 +20,9 @@
           "name": "log-max-len",
           "type": "integer",
           "default": 128,
-          "description": "Maximum number of entries in the ACL LOG."
+          "description": "Maximum number of entries in the ACL LOG.",
+          "config_param": "acllog-max-len",
+          "mutable": true
         }
       ]
     },
@@ -77,7 +79,9 @@
           "name": "auto-failover",
           "type": "boolean",
           "default": false,
-          "description": "Enable automatic failover when a primary fails.\nWhen enabled, the leader will automatically promote a replica to primary\nif the primary becomes unreachable."
+          "description": "Enable automatic failover when a primary fails.\nWhen enabled, the leader will automatically promote a replica to primary\nif the primary becomes unreachable.",
+          "config_param": "cluster-auto-failover",
+          "mutable": false
         },
         {
           "name": "client-addr",
@@ -147,7 +151,9 @@
           "name": "replica-priority",
           "type": "integer",
           "default": 100,
-          "description": "Priority for replica promotion during auto-failover.\nLower values are preferred. 0 means this replica will never be promoted."
+          "description": "Priority for replica promotion during auto-failover.\nLower values are preferred. 0 means this replica will never be promoted.",
+          "config_param": "replica-priority",
+          "mutable": false
         },
         {
           "name": "request-timeout-ms",
@@ -159,7 +165,9 @@
           "name": "self-fence-on-quorum-loss",
           "type": "boolean",
           "default": true,
-          "description": "Reject write commands when this node cannot form a quorum with reachable nodes.\nWhen enabled, writes return CLUSTERDOWN if quorum is lost, preventing\nsplit-brain data divergence. Reads remain available."
+          "description": "Reject write commands when this node cannot form a quorum with reachable nodes.\nWhen enabled, writes return CLUSTERDOWN if quorum is lost, preventing\nsplit-brain data divergence. Reads remain available.",
+          "config_param": "cluster-self-fence-on-quorum-loss",
+          "mutable": false
         }
       ]
     },
@@ -329,7 +337,9 @@
           "name": "enabled",
           "type": "boolean",
           "default": false,
-          "description": "Whether latency band tracking is enabled."
+          "description": "Whether latency band tracking is enabled.",
+          "config_param": "latency-bands-enabled",
+          "mutable": false
         }
       ]
     },
@@ -519,7 +529,9 @@
           "name": "batch-size-threshold-kb",
           "type": "integer",
           "default": 4096,
-          "description": "Batch size threshold in KB before flushing."
+          "description": "Batch size threshold in KB before flushing.",
+          "config_param": "batch-size-threshold-kb",
+          "mutable": false
         },
         {
           "name": "batch-timeout-ms",
@@ -549,7 +561,9 @@
           "name": "compaction-rate-limit-mb",
           "type": "integer",
           "default": 0,
-          "description": "RocksDB compaction rate limit in MB/s. 0 means unlimited."
+          "description": "RocksDB compaction rate limit in MB/s. 0 means unlimited.",
+          "config_param": "compaction-rate-limit-mb",
+          "mutable": false
         },
         {
           "name": "compression",
@@ -714,7 +728,9 @@
           "name": "replica-freshness-timeout-ms",
           "type": "integer",
           "default": 3000,
-          "description": "Freshness timeout for replica ACKs (ms).\nIf no replica ACKs within this window, the primary fences itself.\nShould be >= 3x ack_interval_ms to tolerate missed ACKs."
+          "description": "Freshness timeout for replica ACKs (ms).\nIf no replica ACKs within this window, the primary fences itself.\nShould be >= 3x ack_interval_ms to tolerate missed ACKs.",
+          "config_param": "replica-freshness-timeout-ms",
+          "mutable": false
         },
         {
           "name": "replica-write-timeout-ms",
@@ -726,13 +742,17 @@
           "name": "replication-lag-threshold-bytes",
           "type": "integer",
           "default": 0,
-          "description": "Max replication lag in bytes before proactive disconnect. 0 = disabled."
+          "description": "Max replication lag in bytes before proactive disconnect. 0 = disabled.",
+          "config_param": "replication-lag-threshold-bytes",
+          "mutable": false
         },
         {
           "name": "replication-lag-threshold-secs",
           "type": "integer",
           "default": 0,
-          "description": "Max replication lag in seconds (since last ACK) before proactive disconnect. 0 = disabled."
+          "description": "Max replication lag in seconds (since last ACK) before proactive disconnect. 0 = disabled.",
+          "config_param": "replication-lag-threshold-secs",
+          "mutable": false
         },
         {
           "name": "role",
@@ -744,7 +764,9 @@
           "name": "self-fence-on-replica-loss",
           "type": "boolean",
           "default": true,
-          "description": "Reject writes when primary loses all replica ACK freshness.\nPrevents zombie writes during network partitions."
+          "description": "Reject writes when primary loses all replica ACK freshness.\nPrevents zombie writes during network partitions.",
+          "config_param": "self-fence-on-replica-loss",
+          "mutable": false
         },
         {
           "name": "split-brain-buffer-max-mb",
@@ -906,7 +928,9 @@
           "name": "snapshot-interval-secs",
           "type": "integer",
           "default": 3600,
-          "description": "Interval between automatic snapshots in seconds (0 = disabled)."
+          "description": "Interval between automatic snapshots in seconds (0 = disabled).",
+          "config_param": "snapshot-interval-secs",
+          "mutable": false
         }
       ]
     },
@@ -917,25 +941,33 @@
           "name": "connection-warning-percent",
           "type": "integer",
           "default": 90,
-          "description": "Threshold percentage for connection warning (0-100)."
+          "description": "Threshold percentage for connection warning (0-100).",
+          "config_param": "status-connection-warning-percent",
+          "mutable": false
         },
         {
           "name": "durability-lag-critical-ms",
           "type": "integer",
           "default": 30000,
-          "description": "Durability lag critical threshold in milliseconds."
+          "description": "Durability lag critical threshold in milliseconds.",
+          "config_param": "status-durability-lag-critical-ms",
+          "mutable": false
         },
         {
           "name": "durability-lag-warning-ms",
           "type": "integer",
           "default": 5000,
-          "description": "Durability lag warning threshold in milliseconds."
+          "description": "Durability lag warning threshold in milliseconds.",
+          "config_param": "status-durability-lag-warning-ms",
+          "mutable": false
         },
         {
           "name": "memory-warning-percent",
           "type": "integer",
           "default": 90,
-          "description": "Threshold percentage for memory warning (0-100)."
+          "description": "Threshold percentage for memory warning (0-100).",
+          "config_param": "status-memory-warning-percent",
+          "mutable": false
         }
       ]
     },
@@ -979,13 +1011,17 @@
           "name": "client-cert-file",
           "type": "string",
           "default": null,
-          "description": "Path to client certificate for outgoing replication/cluster connections."
+          "description": "Path to client certificate for outgoing replication/cluster connections.",
+          "config_param": "tls-client-cert-file",
+          "mutable": false
         },
         {
           "name": "client-key-file",
           "type": "string",
           "default": null,
-          "description": "Path to client private key for outgoing replication/cluster connections."
+          "description": "Path to client private key for outgoing replication/cluster connections.",
+          "config_param": "tls-client-key-file",
+          "mutable": false
         },
         {
           "name": "enabled",
@@ -999,7 +1035,9 @@
           "name": "handshake-timeout-ms",
           "type": "integer",
           "default": 10000,
-          "description": "TLS handshake timeout in milliseconds."
+          "description": "TLS handshake timeout in milliseconds.",
+          "config_param": "tls-handshake-timeout-ms",
+          "mutable": false
         },
         {
           "name": "key-file",
@@ -1057,7 +1095,9 @@
           "name": "tls-cluster-migration",
           "type": "boolean",
           "default": false,
-          "description": "Whether to enable dual-accept mode for rolling TLS cluster migration."
+          "description": "Whether to enable dual-accept mode for rolling TLS cluster migration.",
+          "config_param": "tls-cluster-migration",
+          "mutable": false
         },
         {
           "name": "tls-port",
@@ -1124,7 +1164,9 @@
           "name": "sampling-rate",
           "type": "number",
           "default": 1.0,
-          "description": "Sampling rate (0.0 to 1.0). 1.0 = sample all, 0.1 = sample 10%."
+          "description": "Sampling rate (0.0 to 1.0). 1.0 = sample all, 0.1 = sample 10%.",
+          "config_param": "tracing-sampling-rate",
+          "mutable": false
         },
         {
           "name": "scatter-gather-spans",

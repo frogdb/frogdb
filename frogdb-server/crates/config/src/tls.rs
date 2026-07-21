@@ -73,7 +73,7 @@ pub struct TlsConfig {
 
     /// Allowed ciphersuites. Empty means use rustls defaults.
     #[serde(default)]
-    #[param(skip)]
+    #[param(skip)] // skip: config not yet consumed by server
     pub ciphersuites: Vec<String>,
 
     /// Whether to encrypt replication connections.
@@ -88,7 +88,7 @@ pub struct TlsConfig {
 
     /// Whether to enable dual-accept mode for rolling TLS cluster migration.
     #[serde(default)]
-    #[param(skip)]
+    #[param]
     pub tls_cluster_migration: bool,
 
     /// Whether to keep the admin port as plaintext even when TLS is enabled.
@@ -105,12 +105,12 @@ pub struct TlsConfig {
 
     /// Path to client certificate for outgoing replication/cluster connections.
     #[serde(default)]
-    #[param(skip)]
+    #[param(name = "tls-client-cert-file")]
     pub client_cert_file: Option<PathBuf>,
 
     /// Path to client private key for outgoing replication/cluster connections.
     #[serde(default)]
-    #[param(skip)]
+    #[param(name = "tls-client-key-file")]
     pub client_key_file: Option<PathBuf>,
 
     /// Whether to watch certificate files for changes and auto-reload.
@@ -125,7 +125,7 @@ pub struct TlsConfig {
 
     /// TLS handshake timeout in milliseconds.
     #[serde(default = "default_handshake_timeout_ms")]
-    #[param(skip)]
+    #[param(name = "tls-handshake-timeout-ms")]
     pub handshake_timeout_ms: u64,
 }
 

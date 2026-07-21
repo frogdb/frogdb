@@ -78,7 +78,7 @@ pub struct ClusterConfigSection {
     /// When enabled, the leader will automatically promote a replica to primary
     /// if the primary becomes unreachable.
     #[serde(default)]
-    #[param(skip)]
+    #[param(name = "cluster-auto-failover")]
     pub auto_failover: bool,
 
     /// Number of consecutive failures before marking a node as FAIL.
@@ -91,13 +91,13 @@ pub struct ClusterConfigSection {
     /// When enabled, writes return CLUSTERDOWN if quorum is lost, preventing
     /// split-brain data divergence. Reads remain available.
     #[serde(default = "default_self_fence_on_quorum_loss")]
-    #[param(skip)]
+    #[param(name = "cluster-self-fence-on-quorum-loss")]
     pub self_fence_on_quorum_loss: bool,
 
     /// Priority for replica promotion during auto-failover.
     /// Lower values are preferred. 0 means this replica will never be promoted.
     #[serde(default = "default_replica_priority")]
-    #[param(skip)]
+    #[param]
     pub replica_priority: u32,
 }
 

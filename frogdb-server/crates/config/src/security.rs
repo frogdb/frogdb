@@ -32,7 +32,7 @@ pub struct AclFileConfig {
 
     /// Maximum number of entries in the ACL LOG.
     #[serde(default = "default_acl_log_max_len")]
-    #[param(skip)]
+    #[param(mutable, name = "acllog-max-len")]
     pub log_max_len: usize,
 }
 

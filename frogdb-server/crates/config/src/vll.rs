@@ -14,27 +14,27 @@ use serde::{Deserialize, Serialize};
 pub struct VllConfig {
     /// Maximum queue depth per shard before rejecting new operations.
     #[serde(default = "default_vll_max_queue_depth")]
-    #[param(skip)]
+    #[param(skip)] // skip: config not yet consumed by server
     pub max_queue_depth: usize,
 
     /// Timeout for acquiring locks on all shards (ms).
     #[serde(default = "default_vll_lock_acquisition_timeout_ms")]
-    #[param(skip)]
+    #[param(skip)] // skip: config not yet consumed by server
     pub lock_acquisition_timeout_ms: u64,
 
     /// Per-shard lock acquisition timeout (ms).
     #[serde(default = "default_vll_per_shard_lock_timeout_ms")]
-    #[param(skip)]
+    #[param(skip)] // skip: config not yet consumed by server
     pub per_shard_lock_timeout_ms: u64,
 
     /// Interval for checking/cleaning up expired operations (ms).
     #[serde(default = "default_vll_timeout_check_interval_ms")]
-    #[param(skip)]
+    #[param(skip)] // skip: config not yet consumed by server
     pub timeout_check_interval_ms: u64,
 
     /// Maximum time a continuation lock can be held (ms).
     #[serde(default = "default_vll_max_continuation_lock_ms")]
-    #[param(skip)]
+    #[param(skip)] // skip: config not yet consumed by server
     pub max_continuation_lock_ms: u64,
 }
 

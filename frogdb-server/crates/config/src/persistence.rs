@@ -66,7 +66,7 @@ pub struct PersistenceConfig {
 
     /// RocksDB compaction rate limit in MB/s. 0 means unlimited.
     #[serde(default = "default_compaction_rate_limit_mb")]
-    #[param(skip)]
+    #[param]
     pub compaction_rate_limit_mb: u64,
 
     /// Reclaim disk eagerly after FLUSHDB/FLUSHALL: follow the range tombstone
@@ -79,7 +79,7 @@ pub struct PersistenceConfig {
 
     /// Batch size threshold in KB before flushing.
     #[serde(default = "default_batch_size_threshold_kb")]
-    #[param(skip)]
+    #[param]
     pub batch_size_threshold_kb: usize,
 
     /// Batch timeout in milliseconds before flushing.
@@ -274,7 +274,7 @@ pub struct SnapshotConfig {
 
     /// Interval between automatic snapshots in seconds (0 = disabled).
     #[serde(default = "default_snapshot_interval_secs")]
-    #[param(skip)]
+    #[param]
     pub snapshot_interval_secs: u64,
 
     /// Maximum number of snapshots to retain (0 = unlimited).

@@ -25,7 +25,7 @@ pub struct TracingConfig {
 
     /// Sampling rate (0.0 to 1.0). 1.0 = sample all, 0.1 = sample 10%.
     #[serde(default = "default_sampling_rate")]
-    #[param(skip)]
+    #[param(name = "tracing-sampling-rate")]
     pub sampling_rate: f64,
 
     /// Service name in traces.
