@@ -70,7 +70,7 @@ pub struct LatencyBandsConfig {
     /// Latency band thresholds in milliseconds.
     /// Requests are counted in cumulative buckets (<=1ms, <=5ms, etc.)
     #[serde(default = "default_latency_bands")]
-    #[param(skip)]
+    #[param(name = "latency-bands")]
     pub bands: Vec<u64>,
 }
 

@@ -37,7 +37,7 @@ pub enum ClientCertMode {
 pub struct TlsConfig {
     /// Whether TLS is enabled.
     #[serde(default)]
-    #[param(skip)]
+    #[param(name = "tls-enabled")]
     pub enabled: bool,
 
     /// Path to the server certificate file (PEM format).

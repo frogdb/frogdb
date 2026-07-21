@@ -15,12 +15,12 @@ use serde::{Deserialize, Serialize};
 pub struct TracingConfig {
     /// Whether distributed tracing is enabled.
     #[serde(default)]
-    #[param(skip)]
+    #[param(name = "tracing-enabled")]
     pub enabled: bool,
 
     /// OTLP endpoint for trace export.
     #[serde(default = "default_tracing_endpoint")]
-    #[param(skip)]
+    #[param(name = "tracing-otlp-endpoint")]
     pub otlp_endpoint: String,
 
     /// Sampling rate (0.0 to 1.0). 1.0 = sample all, 0.1 = sample 10%.

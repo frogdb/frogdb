@@ -12,7 +12,9 @@
           "name": "aclfile",
           "type": "string",
           "default": "",
-          "description": "Path to the ACL file for SAVE/LOAD operations.\nIf empty, ACL SAVE/LOAD will return an error."
+          "description": "Path to the ACL file for SAVE/LOAD operations.\nIf empty, ACL SAVE/LOAD will return an error.",
+          "config_param": "aclfile",
+          "mutable": false
         },
         {
           "name": "log-max-len",
@@ -29,19 +31,25 @@
           "name": "bind",
           "type": "string",
           "default": "127.0.0.1",
-          "description": "Bind address for the admin RESP protocol listener."
+          "description": "Bind address for the admin RESP protocol listener.",
+          "config_param": "admin-bind",
+          "mutable": false
         },
         {
           "name": "enabled",
           "type": "boolean",
           "default": false,
-          "description": "Whether the admin API is enabled."
+          "description": "Whether the admin API is enabled.",
+          "config_param": "admin-enabled",
+          "mutable": false
         },
         {
           "name": "port",
           "type": "integer",
           "default": 6382,
-          "description": "Port for the admin RESP protocol listener."
+          "description": "Port for the admin RESP protocol listener.",
+          "config_param": "admin-port",
+          "mutable": false
         }
       ]
     },
@@ -93,7 +101,9 @@
           "name": "data-dir",
           "type": "string",
           "default": "./frogdb-cluster",
-          "description": "Directory for storing cluster state (Raft logs, snapshots)."
+          "description": "Directory for storing cluster state (Raft logs, snapshots).",
+          "config_param": "cluster-data-dir",
+          "mutable": false
         },
         {
           "name": "election-timeout-ms",
@@ -105,7 +115,9 @@
           "name": "enabled",
           "type": "boolean",
           "default": false,
-          "description": "Whether cluster mode is enabled."
+          "description": "Whether cluster mode is enabled.",
+          "config_param": "cluster-enabled",
+          "mutable": false
         },
         {
           "name": "fail-threshold",
@@ -227,19 +239,25 @@
           "name": "bind",
           "type": "string",
           "default": "127.0.0.1",
-          "description": "Bind address for the HTTP server."
+          "description": "Bind address for the HTTP server.",
+          "config_param": "http-bind",
+          "mutable": false
         },
         {
           "name": "enabled",
           "type": "boolean",
           "default": true,
-          "description": "Whether the HTTP server is enabled."
+          "description": "Whether the HTTP server is enabled.",
+          "config_param": "http-enabled",
+          "mutable": false
         },
         {
           "name": "port",
           "type": "integer",
           "default": 9090,
-          "description": "Port for the HTTP server."
+          "description": "Port for the HTTP server.",
+          "config_param": "http-port",
+          "mutable": false
         },
         {
           "name": "token",
@@ -303,7 +321,9 @@
             100,
             500
           ],
-          "description": "Latency band thresholds in milliseconds.\nRequests are counted in cumulative buckets (<=1ms, <=5ms, etc.)"
+          "description": "Latency band thresholds in milliseconds.\nRequests are counted in cumulative buckets (<=1ms, <=5ms, etc.)",
+          "config_param": "latency-bands",
+          "mutable": false
         },
         {
           "name": "enabled",
@@ -320,7 +340,9 @@
           "name": "file-path",
           "type": "string",
           "default": null,
-          "description": "File path for log output. When set, logs are written to this file\nin addition to console output. Use `output = \"none\"` to disable console."
+          "description": "File path for log output. When set, logs are written to this file\nin addition to console output. Use `output = \"none\"` to disable console.",
+          "config_param": "logfile",
+          "mutable": false
         },
         {
           "name": "format",
@@ -511,13 +533,17 @@
           "name": "block-cache-size-mb",
           "type": "integer",
           "default": 256,
-          "description": "RocksDB block cache size in MB."
+          "description": "RocksDB block cache size in MB.",
+          "config_param": "block-cache-size-mb",
+          "mutable": false
         },
         {
           "name": "bloom-filter-bits",
           "type": "integer",
           "default": 10,
-          "description": "RocksDB bloom filter bits per key. Set to 0 to disable."
+          "description": "RocksDB bloom filter bits per key. Set to 0 to disable.",
+          "config_param": "bloom-filter-bits",
+          "mutable": false
         },
         {
           "name": "compaction-rate-limit-mb",
@@ -529,7 +555,9 @@
           "name": "compression",
           "type": "string",
           "default": "lz4",
-          "description": "Compression type: \"none\", \"snappy\", \"lz4\", \"zstd\"."
+          "description": "Compression type: \"none\", \"snappy\", \"lz4\", \"zstd\".",
+          "config_param": "compression",
+          "mutable": false
         },
         {
           "name": "data-dir",
@@ -567,7 +595,9 @@
           "name": "max-write-buffer-number",
           "type": "integer",
           "default": 4,
-          "description": "Maximum number of RocksDB write buffers."
+          "description": "Maximum number of RocksDB write buffers.",
+          "config_param": "max-write-buffer-number",
+          "mutable": false
         },
         {
           "name": "mode",
@@ -595,7 +625,9 @@
           "name": "write-buffer-size-mb",
           "type": "integer",
           "default": 64,
-          "description": "RocksDB write buffer size in MB."
+          "description": "RocksDB write buffer size in MB.",
+          "config_param": "write-buffer-size-mb",
+          "mutable": false
         }
       ]
     },
@@ -774,7 +806,9 @@
           "name": "enable-debug-command",
           "type": "boolean",
           "default": false,
-          "description": "Enable the DEBUG family of subcommands that are unsafe in production.\n\nCurrently gates `DEBUG SLEEP`, which parks the connection task for an\narbitrary duration and is a trivial denial-of-service vector if\nexposed to untrusted clients. Default: `false`. The test harness\ndefaults it to `true` so existing test-only DEBUG commands keep\nworking."
+          "description": "Enable the DEBUG family of subcommands that are unsafe in production.\n\nCurrently gates `DEBUG SLEEP`, which parks the connection task for an\narbitrary duration and is a trivial denial-of-service vector if\nexposed to untrusted clients. Default: `false`. The test harness\ndefaults it to `true` so existing test-only DEBUG commands keep\nworking.",
+          "config_param": "enable-debug-command",
+          "mutable": false
         },
         {
           "name": "max-clients",
@@ -816,7 +850,9 @@
           "enum_values": [
             "btreemap",
             "skiplist"
-          ]
+          ],
+          "config_param": "sorted-set-index",
+          "mutable": false
         }
       ]
     },
@@ -862,7 +898,9 @@
           "name": "snapshot-dir",
           "type": "string",
           "default": "./snapshots",
-          "description": "Directory for storing snapshots."
+          "description": "Directory for storing snapshots.",
+          "config_param": "snapshot-dir",
+          "mutable": false
         },
         {
           "name": "snapshot-interval-secs",
@@ -953,7 +991,9 @@
           "name": "enabled",
           "type": "boolean",
           "default": false,
-          "description": "Whether TLS is enabled."
+          "description": "Whether TLS is enabled.",
+          "config_param": "tls-enabled",
+          "mutable": false
         },
         {
           "name": "handshake-timeout-ms",
@@ -1056,13 +1096,17 @@
           "name": "enabled",
           "type": "boolean",
           "default": false,
-          "description": "Whether distributed tracing is enabled."
+          "description": "Whether distributed tracing is enabled.",
+          "config_param": "tracing-enabled",
+          "mutable": false
         },
         {
           "name": "otlp-endpoint",
           "type": "string",
           "default": "http://localhost:4317",
-          "description": "OTLP endpoint for trace export."
+          "description": "OTLP endpoint for trace export.",
+          "config_param": "tracing-otlp-endpoint",
+          "mutable": false
         },
         {
           "name": "persistence-spans",

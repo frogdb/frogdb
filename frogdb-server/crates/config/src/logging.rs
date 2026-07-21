@@ -93,7 +93,7 @@ pub struct LoggingConfig {
     /// File path for log output. When set, logs are written to this file
     /// in addition to console output. Use `output = "none"` to disable console.
     #[serde(default)]
-    #[param(skip)]
+    #[param(name = "logfile")]
     pub file_path: Option<PathBuf>,
 
     /// Log file rotation settings. Only meaningful when `file_path` is set.

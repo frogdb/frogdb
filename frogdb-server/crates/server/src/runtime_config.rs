@@ -69,7 +69,7 @@ macro_rules! impl_to_toml_value_via_i64 {
         )+
     };
 }
-impl_to_toml_value_via_i64!(u8, u16, u32, u64, usize, i64);
+impl_to_toml_value_via_i64!(u8, u16, u32, u64, usize, i32, i64);
 
 impl ToTomlValue for bool {
     fn to_toml_value(&self) -> TomlValue {
@@ -122,6 +122,14 @@ impl ToTomlValue for Vec<f64> {
     /// the `TomlRenderable` bound shared by every entry in `typed_params`.
     fn to_toml_value(&self) -> TomlValue {
         self.iter().copied().collect()
+    }
+}
+
+impl ToTomlValue for Vec<u64> {
+    /// Renders a TOML array of integers. Backs the immutable `latency-bands`
+    /// param (13-01), whose file field `latency-bands.bands` is a TOML int array.
+    fn to_toml_value(&self) -> TomlValue {
+        self.iter().map(|&v| v as i64).collect()
     }
 }
 
@@ -288,6 +296,49 @@ pub struct StaticConfig {
     /// REWRITE can render a proper TOML array in the file's own encoding
     /// ("1.2"/"1.3") instead of the CONFIG GET display string.
     pub tls_protocol_list: Vec<TlsProtocol>,
+
+    // --- 13-01 Pass 2a: immutable (CONFIG GET-only) startup-fixed params ---
+    /// Sorted-set index backend, rendered in the file's own encoding
+    /// ("skiplist"/"btreemap") for both CONFIG GET and REWRITE.
+    pub sorted_set_index: String,
+    /// RocksDB write buffer size in MB (applied at DB open).
+    pub write_buffer_size_mb: usize,
+    /// RocksDB column-family compression ("none"/"snappy"/"lz4"/"zstd").
+    pub compression: String,
+    /// RocksDB block cache size in MB (applied at DB open).
+    pub block_cache_size_mb: usize,
+    /// RocksDB bloom filter bits per key (0 = disabled).
+    pub bloom_filter_bits: i32,
+    /// RocksDB maximum number of write buffers.
+    pub max_write_buffer_number: i32,
+    /// Snapshot output directory.
+    pub snapshot_dir: String,
+    /// Whether the HTTP observability/admin server is enabled.
+    pub http_enabled: bool,
+    /// HTTP server bind address.
+    pub http_bind: String,
+    /// HTTP server port.
+    pub http_port: u16,
+    /// Whether the admin RESP listener is enabled.
+    pub admin_enabled: bool,
+    /// Admin RESP listener port.
+    pub admin_port: u16,
+    /// Admin RESP listener bind address.
+    pub admin_bind: String,
+    /// Whether distributed tracing is enabled.
+    pub tracing_enabled: bool,
+    /// Distributed-tracing OTLP export endpoint.
+    pub tracing_otlp_endpoint: String,
+    /// ACL file path (empty when unset).
+    pub aclfile: String,
+    /// Whether cluster mode is enabled.
+    pub cluster_enabled: bool,
+    /// Cluster (Raft) state directory.
+    pub cluster_data_dir: String,
+    /// Latency-band thresholds in milliseconds (SLO monitoring).
+    pub latency_bands: Vec<u64>,
+    /// Log file path (empty when logging to console only).
+    pub logfile: String,
 }
 
 impl StaticConfig {
@@ -333,8 +384,42 @@ impl StaticConfig {
                 .collect::<Vec<_>>()
                 .join(" "),
             tls_protocol_list: config.tls.protocols.clone(),
+            // --- 13-01 Pass 2a: immutable startup-fixed params ---
+            sorted_set_index: match config.server.sorted_set_index {
+                crate::config::server::SortedSetIndexConfig::Skiplist => "skiplist".to_string(),
+                crate::config::server::SortedSetIndexConfig::Btreemap => "btreemap".to_string(),
+            },
+            write_buffer_size_mb: config.persistence.write_buffer_size_mb,
+            compression: config.persistence.compression.clone(),
+            block_cache_size_mb: config.persistence.block_cache_size_mb,
+            bloom_filter_bits: config.persistence.bloom_filter_bits,
+            max_write_buffer_number: config.persistence.max_write_buffer_number,
+            snapshot_dir: config.snapshot.snapshot_dir.display().to_string(),
+            http_enabled: config.http.enabled,
+            http_bind: config.http.bind.clone(),
+            http_port: config.http.port,
+            admin_enabled: config.admin.enabled,
+            admin_port: config.admin.port,
+            admin_bind: config.admin.bind.clone(),
+            tracing_enabled: config.tracing.enabled,
+            tracing_otlp_endpoint: config.tracing.otlp_endpoint.clone(),
+            aclfile: config.acl.aclfile.clone(),
+            cluster_enabled: config.cluster.enabled,
+            cluster_data_dir: config.cluster.data_dir.display().to_string(),
+            latency_bands: config.latency_bands.bands.clone(),
+            logfile: config
+                .logging
+                .file_path
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
         }
     }
+}
+
+/// Render a bool as the Redis-style CONFIG GET display string ("yes"/"no").
+fn yes_no(v: bool) -> String {
+    if v { "yes" } else { "no" }.to_string()
 }
 
 /// Read-only metadata for an immutable parameter served by CONFIG GET.
@@ -826,6 +911,128 @@ impl ConfigManager {
                 // ("1.2"/"1.3"), not the space-joined CONFIG GET display string
                 // above -- see `StaticConfig::tls_protocol_list`.
                 toml_getter: |mgr| mgr.static_config.tls_protocol_list.to_toml_value(),
+            },
+
+            // === 13-01 Pass 2a: promote-immutable params (CONFIG GET-only) ===
+            SortedSetIndex => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.sorted_set_index.clone(),
+                toml_getter: |mgr| mgr.static_config.sorted_set_index.to_toml_value(),
+            },
+            EnableDebugCommand => ParamMeta {
+                name: id.name(),
+                getter: |mgr| yes_no(mgr.static_config.enable_debug_command),
+                toml_getter: |mgr| mgr.static_config.enable_debug_command.to_toml_value(),
+            },
+            WriteBufferSizeMb => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.write_buffer_size_mb.to_string(),
+                toml_getter: |mgr| mgr.static_config.write_buffer_size_mb.to_toml_value(),
+            },
+            Compression => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.compression.clone(),
+                toml_getter: |mgr| mgr.static_config.compression.to_toml_value(),
+            },
+            BlockCacheSizeMb => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.block_cache_size_mb.to_string(),
+                toml_getter: |mgr| mgr.static_config.block_cache_size_mb.to_toml_value(),
+            },
+            BloomFilterBits => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.bloom_filter_bits.to_string(),
+                toml_getter: |mgr| mgr.static_config.bloom_filter_bits.to_toml_value(),
+            },
+            MaxWriteBufferNumber => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.max_write_buffer_number.to_string(),
+                toml_getter: |mgr| mgr.static_config.max_write_buffer_number.to_toml_value(),
+            },
+            SnapshotDir => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.snapshot_dir.clone(),
+                toml_getter: |mgr| mgr.static_config.snapshot_dir.to_toml_value(),
+            },
+            HttpEnabled => ParamMeta {
+                name: id.name(),
+                getter: |mgr| yes_no(mgr.static_config.http_enabled),
+                toml_getter: |mgr| mgr.static_config.http_enabled.to_toml_value(),
+            },
+            HttpBind => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.http_bind.clone(),
+                toml_getter: |mgr| mgr.static_config.http_bind.to_toml_value(),
+            },
+            HttpPort => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.http_port.to_string(),
+                toml_getter: |mgr| mgr.static_config.http_port.to_toml_value(),
+            },
+            AdminEnabled => ParamMeta {
+                name: id.name(),
+                getter: |mgr| yes_no(mgr.static_config.admin_enabled),
+                toml_getter: |mgr| mgr.static_config.admin_enabled.to_toml_value(),
+            },
+            AdminPort => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.admin_port.to_string(),
+                toml_getter: |mgr| mgr.static_config.admin_port.to_toml_value(),
+            },
+            AdminBind => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.admin_bind.clone(),
+                toml_getter: |mgr| mgr.static_config.admin_bind.to_toml_value(),
+            },
+            TracingEnabled => ParamMeta {
+                name: id.name(),
+                getter: |mgr| yes_no(mgr.static_config.tracing_enabled),
+                toml_getter: |mgr| mgr.static_config.tracing_enabled.to_toml_value(),
+            },
+            TracingOtlpEndpoint => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.tracing_otlp_endpoint.clone(),
+                toml_getter: |mgr| mgr.static_config.tracing_otlp_endpoint.to_toml_value(),
+            },
+            Aclfile => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.aclfile.clone(),
+                toml_getter: |mgr| mgr.static_config.aclfile.to_toml_value(),
+            },
+            ClusterEnabled => ParamMeta {
+                name: id.name(),
+                getter: |mgr| yes_no(mgr.static_config.cluster_enabled),
+                toml_getter: |mgr| mgr.static_config.cluster_enabled.to_toml_value(),
+            },
+            ClusterDataDir => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.cluster_data_dir.clone(),
+                toml_getter: |mgr| mgr.static_config.cluster_data_dir.to_toml_value(),
+            },
+            LatencyBands => ParamMeta {
+                name: id.name(),
+                // CONFIG GET renders the thresholds space-joined (Redis-style,
+                // like `latency-tracking-info-percentiles`); CONFIG REWRITE writes
+                // the file's own TOML int array via `Vec<u64>::to_toml_value`.
+                getter: |mgr| {
+                    mgr.static_config
+                        .latency_bands
+                        .iter()
+                        .map(|b| b.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                },
+                toml_getter: |mgr| mgr.static_config.latency_bands.to_toml_value(),
+            },
+            TlsEnabled => ParamMeta {
+                name: id.name(),
+                getter: |mgr| yes_no(mgr.static_config.tls_enabled),
+                toml_getter: |mgr| mgr.static_config.tls_enabled.to_toml_value(),
+            },
+            Logfile => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.logfile.clone(),
+                toml_getter: |mgr| mgr.static_config.logfile.to_toml_value(),
             },
         }
     }
@@ -2115,6 +2322,65 @@ mod tests {
 
         let result = manager.set("bind", "0.0.0.0");
         assert!(matches!(result, Err(ConfigError::ImmutableParameter(_))));
+    }
+
+    /// 13-01 Pass 2a: the newly-promoted immutable params are CONFIG GET-visible
+    /// with their startup values and rejected by CONFIG SET with
+    /// `ImmutableParameter`. Samples span persistence, snapshot, http, admin,
+    /// cluster, tracing, server, tls, logging, latency-bands and acl so a
+    /// regression in any one section's wiring is caught.
+    #[test]
+    fn test_config_get_promoted_immutable_params() {
+        let config = test_config(); // Config::default()
+        let manager = ConfigManager::new(&config);
+
+        // (param name, expected CONFIG GET value at defaults).
+        let expected: &[(&str, &str)] = &[
+            ("write-buffer-size-mb", "64"),           // persistence
+            ("compression", "lz4"),                   // persistence
+            ("bloom-filter-bits", "10"),              // persistence
+            ("snapshot-dir", "./snapshots"),          // snapshot
+            ("http-enabled", "yes"),                  // http
+            ("http-port", "9090"),                    // http
+            ("admin-enabled", "no"),                  // admin
+            ("admin-port", "6382"),                   // admin
+            ("cluster-enabled", "no"),                // cluster
+            ("cluster-data-dir", "./frogdb-cluster"), // cluster
+            ("tracing-enabled", "no"),                // tracing
+            ("sorted-set-index", "skiplist"),         // server
+            ("enable-debug-command", "no"),           // server
+            ("tls-enabled", "no"),                    // tls
+            ("latency-bands", "1 5 10 50 100 500"),   // latency-bands
+            ("aclfile", ""),                          // acl (empty by default)
+            ("logfile", ""),                          // logging (console-only by default)
+        ];
+
+        for (name, want) in expected {
+            let got = manager.get(name);
+            assert_eq!(
+                got.len(),
+                1,
+                "CONFIG GET {name} should return exactly one row"
+            );
+            assert_eq!(&got[0].0, name, "CONFIG GET returned wrong key for {name}");
+            assert_eq!(&got[0].1, want, "CONFIG GET {name} value mismatch");
+
+            // Every promoted param is immutable: CONFIG SET must be rejected.
+            let set = manager.set(name, "1");
+            assert!(
+                matches!(set, Err(ConfigError::ImmutableParameter(_))),
+                "CONFIG SET {name} should be rejected as ImmutableParameter, got {set:?}"
+            );
+        }
+
+        // They are also reported under the immutable-name list, not the mutable one.
+        let immutable = manager.immutable_param_names();
+        for (name, _) in expected {
+            assert!(
+                immutable.contains(name),
+                "{name} should be listed among immutable params"
+            );
+        }
     }
 
     #[test]

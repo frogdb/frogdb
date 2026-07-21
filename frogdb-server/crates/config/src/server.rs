@@ -49,7 +49,7 @@ pub struct ServerConfig {
     /// SkipList provides O(log n) rank queries; BTreeMap provides lower memory usage.
     /// Requires server restart to change.
     #[serde(default = "default_sorted_set_index")]
-    #[param(skip)]
+    #[param]
     pub sorted_set_index: SortedSetIndexConfig,
 
     /// Maximum number of simultaneous client connections (0 = unlimited).
@@ -66,7 +66,7 @@ pub struct ServerConfig {
     /// defaults it to `true` so existing test-only DEBUG commands keep
     /// working.
     #[serde(default = "default_enable_debug_command")]
-    #[param(skip)]
+    #[param]
     pub enable_debug_command: bool,
 }
 

@@ -261,12 +261,17 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
     use std::sync::LazyLock;
 
     static REGISTRY: LazyLock<Vec<ConfigParamInfo>> = LazyLock::new(|| {
+        use crate::admin::AdminConfig;
+        use crate::cluster::ClusterConfigSection;
+        use crate::distributed_tracing::TracingConfig;
+        use crate::http::HttpConfig;
+        use crate::latency::LatencyBandsConfig;
         use crate::logging::LoggingConfig;
         use crate::memory::MemoryConfig;
         use crate::metrics::MetricsConfig;
-        use crate::persistence::PersistenceConfig;
+        use crate::persistence::{PersistenceConfig, SnapshotConfig};
         use crate::replication::ReplicationConfigSection;
-        use crate::security::SecurityConfig;
+        use crate::security::{AclFileConfig, SecurityConfig};
         use crate::server::ServerConfig;
         use crate::slowlog::SlowlogConfig;
         use crate::tls::TlsConfig;
@@ -321,6 +326,31 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
         rows.push(pick(TlsConfig::PARAMS, "tls-cluster"));
         rows.push(pick(TlsConfig::PARAMS, "tls-protocols"));
 
+        // --- 13-01 Pass 2a: 22 promote-immutable rows appended below. ---
+        // The 61 rows above keep their historical relative order untouched; the
+        // audit's newly-exposed immutable (CONFIG GET-only) params are grouped by
+        // section and appended here so the golden snapshot's first 61 rows are
+        // stable. (26 rows were classified promote-immutable in Pass 1; 4 metrics
+        // OTLP/bind rows were downgraded to justify as dead config — the OTLP
+        // recorder is never wired and the metrics listener is superseded by the
+        // `http` section — leaving 22 exposed here.)
+        rows.push(pick(ServerConfig::PARAMS, "sorted-set-index"));
+        rows.push(pick(ServerConfig::PARAMS, "enable-debug-command"));
+        rows.push(pick(PersistenceConfig::PARAMS, "write-buffer-size-mb"));
+        rows.push(pick(PersistenceConfig::PARAMS, "compression"));
+        rows.push(pick(PersistenceConfig::PARAMS, "block-cache-size-mb"));
+        rows.push(pick(PersistenceConfig::PARAMS, "bloom-filter-bits"));
+        rows.push(pick(PersistenceConfig::PARAMS, "max-write-buffer-number"));
+        rows.extend_from_slice(SnapshotConfig::PARAMS); // snapshot-dir
+        rows.extend_from_slice(HttpConfig::PARAMS); // http-enabled, http-bind, http-port
+        rows.extend_from_slice(AdminConfig::PARAMS); // admin-enabled, admin-port, admin-bind
+        rows.extend_from_slice(TracingConfig::PARAMS); // tracing-enabled, tracing-otlp-endpoint
+        rows.extend_from_slice(AclFileConfig::PARAMS); // aclfile
+        rows.extend_from_slice(ClusterConfigSection::PARAMS); // cluster-enabled, cluster-data-dir
+        rows.extend_from_slice(LatencyBandsConfig::PARAMS); // latency-bands
+        rows.push(pick(TlsConfig::PARAMS, "tls-enabled"));
+        rows.push(pick(LoggingConfig::PARAMS, "logfile"));
+
         rows
     });
 
@@ -331,10 +361,12 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
 mod tests {
     use super::*;
 
-    /// Independent snapshot of the original hand-written 61-row table, captured
-    /// verbatim before the derive-macro migration. The assembled
-    /// [`config_param_registry`] must equal this exactly — same rows, same order
-    /// — so no migration step can silently change the registry a client sees.
+    /// Independent snapshot of the registry, captured verbatim. The first 61 rows
+    /// are the original hand-written table captured before the derive-macro
+    /// migration; 13-01 Pass 2a appended 22 promote-immutable rows (see the
+    /// trailing block below). The assembled [`config_param_registry`] must equal
+    /// this exactly — same rows, same order — so no migration step can silently
+    /// change the registry a client sees.
     const GOLDEN_SNAPSHOT: &[ConfigParamInfo] = &[
         ConfigParamInfo {
             name: "maxmemory",
@@ -763,6 +795,163 @@ mod tests {
             mutable: false,
             noop: false,
         },
+        // --- 13-01 Pass 2a: 22 promote-immutable rows (all CONFIG GET-only,
+        // mutable: false), appended after the original 61 so their relative order
+        // is stable and the first 61 rows above are byte-for-byte unchanged. ---
+        ConfigParamInfo {
+            name: "sorted-set-index",
+            section: Some("server"),
+            field: Some("sorted-set-index"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "enable-debug-command",
+            section: Some("server"),
+            field: Some("enable-debug-command"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "write-buffer-size-mb",
+            section: Some("persistence"),
+            field: Some("write-buffer-size-mb"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "compression",
+            section: Some("persistence"),
+            field: Some("compression"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "block-cache-size-mb",
+            section: Some("persistence"),
+            field: Some("block-cache-size-mb"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "bloom-filter-bits",
+            section: Some("persistence"),
+            field: Some("bloom-filter-bits"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "max-write-buffer-number",
+            section: Some("persistence"),
+            field: Some("max-write-buffer-number"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "snapshot-dir",
+            section: Some("snapshot"),
+            field: Some("snapshot-dir"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "http-enabled",
+            section: Some("http"),
+            field: Some("enabled"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "http-bind",
+            section: Some("http"),
+            field: Some("bind"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "http-port",
+            section: Some("http"),
+            field: Some("port"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "admin-enabled",
+            section: Some("admin"),
+            field: Some("enabled"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "admin-port",
+            section: Some("admin"),
+            field: Some("port"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "admin-bind",
+            section: Some("admin"),
+            field: Some("bind"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "tracing-enabled",
+            section: Some("tracing"),
+            field: Some("enabled"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "tracing-otlp-endpoint",
+            section: Some("tracing"),
+            field: Some("otlp-endpoint"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "aclfile",
+            section: Some("acl"),
+            field: Some("aclfile"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "cluster-enabled",
+            section: Some("cluster"),
+            field: Some("enabled"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "cluster-data-dir",
+            section: Some("cluster"),
+            field: Some("data-dir"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "latency-bands",
+            section: Some("latency-bands"),
+            field: Some("bands"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "tls-enabled",
+            section: Some("tls"),
+            field: Some("enabled"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "logfile",
+            section: Some("logging"),
+            field: Some("file-path"),
+            mutable: false,
+            noop: false,
+        },
     ];
 
     #[test]
@@ -784,9 +973,12 @@ mod tests {
     }
 
     #[test]
-    fn test_golden_snapshot_is_61_rows() {
-        // Guards against accidental edits to the snapshot itself.
-        assert_eq!(GOLDEN_SNAPSHOT.len(), 61);
+    fn test_golden_snapshot_row_count() {
+        // Guards against accidental edits to the snapshot itself. The original
+        // migration captured 61 rows; 13-01 Pass 2a appended 22 promote-immutable
+        // rows (26 classified, minus 4 metrics OTLP/bind rows downgraded to justify
+        // as dead config), giving 83.
+        assert_eq!(GOLDEN_SNAPSHOT.len(), 83);
     }
 
     #[test]

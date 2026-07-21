@@ -15,17 +15,17 @@ use serde::{Deserialize, Serialize};
 pub struct HttpConfig {
     /// Whether the HTTP server is enabled.
     #[serde(default = "default_http_enabled")]
-    #[param(skip)]
+    #[param(name = "http-enabled")]
     pub enabled: bool,
 
     /// Bind address for the HTTP server.
     #[serde(default = "default_http_bind")]
-    #[param(skip)]
+    #[param(name = "http-bind")]
     pub bind: String,
 
     /// Port for the HTTP server.
     #[serde(default = "default_http_port")]
-    #[param(skip)]
+    #[param(name = "http-port")]
     pub port: u16,
 
     /// Optional bearer token for protected endpoints (/admin/*, /debug/*).

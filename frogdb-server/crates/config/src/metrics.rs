@@ -18,6 +18,8 @@ pub struct MetricsConfig {
     /// Bind address for the metrics HTTP server.
     #[serde(default = "default_metrics_bind")]
     #[param(skip)]
+    // skip: config not yet consumed by server (metrics HTTP listener superseded by the `http`
+    // section; only validated for bind-overlap, no listener binds here)
     pub bind: String,
 
     /// Port for the metrics HTTP server.
@@ -28,16 +30,20 @@ pub struct MetricsConfig {
     /// Whether OTLP export is enabled.
     #[serde(default)]
     #[param(skip)]
+    // skip: config not yet consumed by server (OtlpRecorder::new is never constructed from this
+    // section at startup; the OTLP metrics exporter is unwired)
     pub otlp_enabled: bool,
 
     /// OTLP endpoint URL.
     #[serde(default = "default_otlp_endpoint")]
     #[param(skip)]
+    // skip: config not yet consumed by server (OTLP metrics exporter unwired; see otlp_enabled)
     pub otlp_endpoint: String,
 
     /// OTLP push interval in seconds.
     #[serde(default = "default_otlp_interval_secs")]
     #[param(skip)]
+    // skip: config not yet consumed by server (OTLP metrics exporter unwired; see otlp_enabled)
     pub otlp_interval_secs: u64,
 }
 

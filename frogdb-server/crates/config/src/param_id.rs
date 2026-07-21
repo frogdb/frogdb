@@ -7,7 +7,7 @@
 //! - [`MutableParamId`] — the 45 runtime-mutable parameters (31 real
 //!   `ConfigParam` lifecycles + 14 Redis-compat no-ops). Served by the server's
 //!   `build_typed_params`.
-//! - [`ImmutableParamId`] — the 16 restart-required parameters. Served by the
+//! - [`ImmutableParamId`] — the 38 restart-required parameters. Served by the
 //!   server's `build_param_registry`.
 //!
 //! # Why these are hand-written, not derived
@@ -159,6 +159,30 @@ param_id_enum! {
         TlsReplication => "tls-replication",
         TlsCluster => "tls-cluster",
         TlsProtocols => "tls-protocols",
+        // === 13-01 Pass 2a: 22 promote-immutable params (CONFIG GET-only) ===
+        // Order mirrors the registry's appended block for review locality.
+        SortedSetIndex => "sorted-set-index",
+        EnableDebugCommand => "enable-debug-command",
+        WriteBufferSizeMb => "write-buffer-size-mb",
+        Compression => "compression",
+        BlockCacheSizeMb => "block-cache-size-mb",
+        BloomFilterBits => "bloom-filter-bits",
+        MaxWriteBufferNumber => "max-write-buffer-number",
+        SnapshotDir => "snapshot-dir",
+        HttpEnabled => "http-enabled",
+        HttpBind => "http-bind",
+        HttpPort => "http-port",
+        AdminEnabled => "admin-enabled",
+        AdminPort => "admin-port",
+        AdminBind => "admin-bind",
+        TracingEnabled => "tracing-enabled",
+        TracingOtlpEndpoint => "tracing-otlp-endpoint",
+        Aclfile => "aclfile",
+        ClusterEnabled => "cluster-enabled",
+        ClusterDataDir => "cluster-data-dir",
+        LatencyBands => "latency-bands",
+        TlsEnabled => "tls-enabled",
+        Logfile => "logfile",
     }
 }
 
@@ -230,6 +254,9 @@ mod tests {
     #[test]
     fn id_counts_are_stable() {
         assert_eq!(MutableParamId::ALL.len(), 45);
-        assert_eq!(ImmutableParamId::ALL.len(), 16);
+        // 16 original immutable ids + 22 promote-immutable params added by 13-01
+        // Pass 2a (26 classified, minus 4 metrics OTLP/bind rows downgraded to
+        // justify as dead config).
+        assert_eq!(ImmutableParamId::ALL.len(), 38);
     }
 }

@@ -2,6 +2,34 @@
 
 Status: in-progress
 
+> **Pass 2a complete (2026-07-21).** The 26 promote-immutable rows were implemented as
+> **22 `#[param]` promotions** (CONFIG GET-only) + **4 downgrades to justify**. The 4 downgrades
+> are the `metrics.*` OTLP/bind rows: liveness verification (per the Pass-2 caveat, extended from
+> `snapshot.*` on the "misleading observability data" principle) found the metrics section's
+> OTLP exporter is **never wired** — `frogdb_telemetry::OtlpRecorder::new` is not constructed
+> anywhere from `config.metrics`, and the metrics HTTP listener is superseded by the `http`
+> section (`StaticConfig` maps the existing `metrics-enabled`/`metrics-port` params to
+> `config.http.*`). Exposing `metrics-otlp-*`/`metrics-bind` via CONFIG GET would report values
+> the server ignores, so they carry `// skip: config not yet consumed by server` (see the metrics
+> rows below). `snapshot.snapshot-dir` was **verified live** (wired through
+> `SnapshotConfigExt::to_core_config` into `RocksSnapshotCoordinator`) and kept as promote-immutable.
+>
+> Registry grew **61 → 83** (22 immutable rows appended after the original 61; first 61 unchanged).
+> `ImmutableParamId` grew **16 → 38**; golden snapshot re-captured to 83 rows;
+> `id_counts_are_stable`/`test_golden_snapshot_row_count` updated deliberately. Gates green:
+> `cargo nextest -p frogdb-config` 106/106; server config tests 52/52 (incl. new
+> `test_config_get_promoted_immutable_params`); `cargo check --workspace`; clippy (config+server);
+> `cargo fmt --check`; `docs-gen --check` (config-reference.json regenerated — diff is exactly the
+> 22 new `config_param`/`mutable:false` entries). **Name choices** (section-prefixed per the
+> `persistence-enabled`/`metrics-enabled` convention, Redis-analogue where cited): `aclfile`,
+> `enable-debug-command`, `sorted-set-index`, `snapshot-dir`, RocksDB tuning names unprefixed
+> (`write-buffer-size-mb`, `compression`, `block-cache-size-mb`, `bloom-filter-bits`,
+> `max-write-buffer-number`) matching the existing unprefixed persistence rows; `tls-enabled`,
+> `cluster-enabled`, `cluster-data-dir`, `http-enabled/-bind/-port`, `admin-enabled/-port/-bind`,
+> `tracing-enabled`, `tracing-otlp-endpoint`; `logfile` (Redis analogue, diverges from field
+> `file-path`); `latency-bands` (diverges from field `bands` — `latency-bands-bands` would be
+> redundant). Promote-mutable rows (Pass 2b) and the 62 justify rows are untouched.
+>
 > **Pass 1 complete (2026-07-21).** All 123 `#[param(skip)]` fields classified below
 > (promote-mutable / promote-immutable / justify). The 62 **justify** fields have had a
 > durable, greppable `// skip: <reason>` comment applied in-tree (config crate compiles,
@@ -74,14 +102,14 @@ Redis/Valkey `standardConfig`; "—" = no directly analogous CONFIG parameter.
 | section.field | decision | Redis/Valkey analogue (mutability) | rationale |
 |---|---|---|---|
 | persistence.mode | justify | — (Redis: `appendonly`/`save`) | startup-only WAL backend selector; `fake` is a sim-test sink, no runtime meaning |
-| persistence.write-buffer-size-mb | promote-immutable | — (RocksDB SetOptions) | RocksDB tuning applied at DB open; issue names it expose-worthy; startup-fixed |
-| persistence.compression | promote-immutable | `rdbcompression` (MOD) loosely | RocksDB CF compression, applied at open; issue names it expose-worthy |
-| persistence.block-cache-size-mb | promote-immutable | — | RocksDB block-cache sizing, applied at open |
-| persistence.bloom-filter-bits | promote-immutable | — | RocksDB bloom tuning, applied at open |
-| persistence.max-write-buffer-number | promote-immutable | — | RocksDB memtable count, applied at open |
+| persistence.write-buffer-size-mb | promote-immutable ✓done(2a) | — (RocksDB SetOptions) | RocksDB tuning applied at DB open; issue names it expose-worthy; startup-fixed |
+| persistence.compression | promote-immutable ✓done(2a) | `rdbcompression` (MOD) loosely | RocksDB CF compression, applied at open; issue names it expose-worthy |
+| persistence.block-cache-size-mb | promote-immutable ✓done(2a) | — | RocksDB block-cache sizing, applied at open |
+| persistence.bloom-filter-bits | promote-immutable ✓done(2a) | — | RocksDB bloom tuning, applied at open |
+| persistence.max-write-buffer-number | promote-immutable ✓done(2a) | — | RocksDB memtable count, applied at open |
 | persistence.compaction-rate-limit-mb | promote-mutable | — (RocksDB rate limiter) | RocksDB rate limiter is the canonical live-tunable; throttle background I/O on a live node |
 | persistence.batch-size-threshold-kb | promote-mutable | — | sibling `batch-timeout-ms` is already `#[param(mutable)]`; write-path flush tuning |
-| snapshot.snapshot-dir | promote-immutable | `dir` (MOD) | snapshot output path; path exposure is normal (Redis `dir`); startup-fixed |
+| snapshot.snapshot-dir | promote-immutable ✓done(2a) | `dir` (MOD) | snapshot output path; path exposure is normal (Redis `dir`); startup-fixed |
 | snapshot.snapshot-interval-secs | promote-mutable | `save` (MOD) | classic snapshot-cadence knob; **Pass 2: verify snapshot subsystem is live before wiring** |
 | snapshot.max-snapshots | justify | — | borderline: retention count, no Redis analogue; snapshot subsystem liveness unverified |
 
@@ -114,12 +142,12 @@ Redis/Valkey `standardConfig`; "—" = no directly analogous CONFIG parameter.
 
 | section.field | decision | Redis/Valkey analogue (mutability) | rationale |
 |---|---|---|---|
-| cluster.enabled | promote-immutable | `cluster-enabled` (IMMUT) | direct analogue; visibility of cluster mode, startup-fixed |
+| cluster.enabled | promote-immutable ✓done(2a) | `cluster-enabled` (IMMUT) | direct analogue; visibility of cluster mode, startup-fixed |
 | cluster.node-id | justify | — (nodes.conf) | bootstrap identity; Redis keeps node id in nodes.conf, not CONFIG |
 | cluster.client-addr | justify | `cluster-announce-ip` (MOD) but derived | bootstrap topology, derived from server bind at startup |
 | cluster.cluster-bus-addr | justify | — | startup Raft bus bind; cannot rebind live |
 | cluster.initial-nodes | justify | — | bootstrap cluster seed list; join-time only |
-| cluster.data-dir | promote-immutable | `cluster-config-file` (IMMUT) | Raft state dir path; path exposure normal, startup-fixed |
+| cluster.data-dir | promote-immutable ✓done(2a) | `cluster-config-file` (IMMUT) | Raft state dir path; path exposure normal, startup-fixed |
 | cluster.election-timeout-ms | justify | `cluster-node-timeout` (MOD) but Raft | borderline: Raft election timing read at init; live change risks split votes |
 | cluster.heartbeat-interval-ms | justify | — | borderline: Raft heartbeat (coupled to election), init-time |
 | cluster.connect-timeout-ms | justify | — | borderline: Raft bus connect timing, init-time |
@@ -133,7 +161,7 @@ Redis/Valkey `standardConfig`; "—" = no directly analogous CONFIG parameter.
 
 | section.field | decision | Redis/Valkey analogue (mutability) | rationale |
 |---|---|---|---|
-| tls.enabled | promote-immutable | — (Redis enables via `tls-port`) | master TLS on/off visibility; startup lifecycle |
+| tls.enabled | promote-immutable ✓done(2a) | — (Redis enables via `tls-port`) | master TLS on/off visibility; startup lifecycle |
 | tls.ciphersuites | promote-mutable | `tls-ciphersuites` (MOD) | direct analogue (applyTlsCfg live-reloads) |
 | tls.tls-cluster-migration | promote-mutable | — | strong story: enable dual-accept during rolling TLS migration |
 | tls.no-tls-on-admin-port | justify | — | startup listener wiring; fixed at bind time |
@@ -148,7 +176,7 @@ Redis/Valkey `standardConfig`; "—" = no directly analogous CONFIG parameter.
 
 | section.field | decision | Redis/Valkey analogue (mutability) | rationale |
 |---|---|---|---|
-| acl.aclfile | promote-immutable | `aclfile` (IMMUT) | direct name analogue; path, immutable in Redis |
+| acl.aclfile | promote-immutable ✓done(2a) | `aclfile` (IMMUT) | direct name analogue; path, immutable in Redis |
 | acl.log-max-len | promote-mutable | `acllog-max-len` (MOD) | direct name analogue |
 
 ### server.rs — `ServerConfig`
@@ -156,41 +184,41 @@ Redis/Valkey `standardConfig`; "—" = no directly analogous CONFIG parameter.
 | section.field | decision | Redis/Valkey analogue (mutability) | rationale |
 |---|---|---|---|
 | server.allow-cross-slot-standalone | justify | — | borderline: changes multi-key command semantics; startup-fixed behavior flag |
-| server.sorted-set-index | promote-immutable | — | doc says restart-required; expose backend for visibility, startup-fixed |
-| server.enable-debug-command | promote-immutable | `enable-debug-command` (IMMUT) | direct name analogue; Redis exposes GET-only (SET can't enable live) — safe visibility, CONFIG GET is auth-gated. NB: issue's example called this "never expose", but Redis evidence + immutable-only exposure makes GET safe |
+| server.sorted-set-index | promote-immutable ✓done(2a) | — | doc says restart-required; expose backend for visibility, startup-fixed |
+| server.enable-debug-command | promote-immutable ✓done(2a) | `enable-debug-command` (IMMUT) | direct name analogue; Redis exposes GET-only (SET can't enable live) — safe visibility, CONFIG GET is auth-gated. NB: issue's example called this "never expose", but Redis evidence + immutable-only exposure makes GET safe |
 
 ### admin.rs — `AdminConfig` (issue names `admin.*` expose-worthy)
 
 | section.field | decision | Redis/Valkey analogue (mutability) | rationale |
 |---|---|---|---|
-| admin.enabled | promote-immutable | — | management-surface visibility; startup listener; CONFIG GET auth-gated |
-| admin.port | promote-immutable | `port`/`tls-port` (MOD) precedent | startup-only listener port; parity with exposed server.port |
-| admin.bind | promote-immutable | `bind` (MOD) precedent | startup-only listener bind; parity with exposed server.bind |
+| admin.enabled | promote-immutable ✓done(2a) | — | management-surface visibility; startup listener; CONFIG GET auth-gated |
+| admin.port | promote-immutable ✓done(2a) | `port`/`tls-port` (MOD) precedent | startup-only listener port; parity with exposed server.port |
+| admin.bind | promote-immutable ✓done(2a) | `bind` (MOD) precedent | startup-only listener bind; parity with exposed server.bind |
 
 ### http.rs — `HttpConfig` (issue names `http.*` expose-worthy)
 
 | section.field | decision | Redis/Valkey analogue (mutability) | rationale |
 |---|---|---|---|
-| http.enabled | promote-immutable | — | HTTP observability endpoint visibility; startup listener |
-| http.bind | promote-immutable | `bind` (MOD) precedent | startup-only listener bind |
-| http.port | promote-immutable | `port` (MOD) precedent | startup-only listener port |
+| http.enabled | promote-immutable ✓done(2a) | — | HTTP observability endpoint visibility; startup listener |
+| http.bind | promote-immutable ✓done(2a) | `bind` (MOD) precedent | startup-only listener bind |
+| http.port | promote-immutable ✓done(2a) | `port` (MOD) precedent | startup-only listener port |
 | http.token | justify | — (cf. `requirepass` exposed) | security: bearer credential; must not surface via CONFIG GET |
 
 ### metrics.rs — `MetricsConfig` (issue names `metrics.otlp-endpoint` expose-worthy)
 
 | section.field | decision | Redis/Valkey analogue (mutability) | rationale |
 |---|---|---|---|
-| metrics.bind | promote-immutable | `bind` (MOD) precedent | parity with already-exposed `metrics-port`; startup-fixed |
-| metrics.otlp-enabled | promote-immutable | — | OTLP exporter built at startup; expose state |
-| metrics.otlp-endpoint | promote-immutable | — | issue names it expose-worthy; exporter startup-wired |
-| metrics.otlp-interval-secs | promote-immutable | — | exporter push cadence; startup-wired |
+| metrics.bind | ~~promote-immutable~~ → **justify (Pass 2a: dead config)** | `bind` (MOD) precedent | DOWNGRADED: no listener binds here — metrics HTTP endpoint superseded by `http` section (`StaticConfig` maps `metrics-enabled`/`metrics-port` to `config.http.*`); only used for bind-overlap validation. `// skip: config not yet consumed by server` |
+| metrics.otlp-enabled | ~~promote-immutable~~ → **justify (Pass 2a: dead config)** | — | DOWNGRADED: `OtlpRecorder::new` is never constructed from `config.metrics`; OTLP metrics exporter is unwired. Pass-1 rationale ("built at startup") was incorrect. `// skip: config not yet consumed by server` |
+| metrics.otlp-endpoint | ~~promote-immutable~~ → **justify (Pass 2a: dead config)** | — | DOWNGRADED: OTLP metrics exporter unwired (see otlp-enabled). `// skip: config not yet consumed by server` |
+| metrics.otlp-interval-secs | ~~promote-immutable~~ → **justify (Pass 2a: dead config)** | — | DOWNGRADED: OTLP metrics exporter unwired (see otlp-enabled). `// skip: config not yet consumed by server` |
 
 ### distributed_tracing.rs — `TracingConfig` (section `tracing`)
 
 | section.field | decision | Redis/Valkey analogue (mutability) | rationale |
 |---|---|---|---|
-| tracing.enabled | promote-immutable | — | tracing pipeline built at startup; expose state |
-| tracing.otlp-endpoint | promote-immutable | — | trace export target; startup-wired |
+| tracing.enabled | promote-immutable ✓done(2a) | — | tracing pipeline built at startup; expose state |
+| tracing.otlp-endpoint | promote-immutable ✓done(2a) | — | trace export target; startup-wired |
 | tracing.sampling-rate | promote-mutable | — | THE universal tracing live-tunable (dial sampling up to debug / down for cost) |
 | tracing.service-name | justify | — | borderline: static trace-identity label, startup-fixed |
 | tracing.scatter-gather-spans | justify | — | borderline: fine-grained span category; pipeline startup-wired |
@@ -235,7 +263,7 @@ Redis/Valkey `standardConfig`; "—" = no directly analogous CONFIG parameter.
 | latency.startup-test-duration-secs | justify | — | startup-only self-test duration |
 | latency.warning-threshold-us | justify | — | startup-only self-test threshold |
 | latency-bands.enabled | promote-mutable | `latency-tracking` (MOD) | toggle SLO latency-band tracking live |
-| latency-bands.bands | promote-immutable | `latency-tracking-info-percentiles` (MOD) | bucket thresholds; Redis makes percentiles mutable but live-resize resets histograms → GET-only |
+| latency-bands.bands | promote-immutable ✓done(2a) | `latency-tracking-info-percentiles` (MOD) | bucket thresholds; Redis makes percentiles mutable but live-resize resets histograms → GET-only |
 
 ### memory.rs — `MemoryConfig` (doctor internals)
 
@@ -261,7 +289,7 @@ Redis/Valkey `standardConfig`; "—" = no directly analogous CONFIG parameter.
 | debug-bundle.max-trace-entries | justify | — | internal per-bundle trace content cap |
 | logging.format | justify | — | borderline: log formatter built at startup; Redis has no log-format CONFIG |
 | logging.output | justify | — | startup-fixed console sink; writer bound at startup |
-| logging.file-path | promote-immutable | `logfile` (IMMUT) | direct analogue; log file path, immutable in Redis |
+| logging.file-path | promote-immutable ✓done(2a) | `logfile` (IMMUT) | direct analogue; log file path, immutable in Redis |
 | logging.rotation | justify | — | nested struct; sub-fields intentionally not ConfigParams |
 
 ### chaos.rs — `ChaosConfig` (turmoil feature only — all justify)

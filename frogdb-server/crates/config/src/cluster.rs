@@ -17,7 +17,7 @@ use crate::server::ServerConfig;
 pub struct ClusterConfigSection {
     /// Whether cluster mode is enabled.
     #[serde(default)]
-    #[param(skip)]
+    #[param(name = "cluster-enabled")]
     pub enabled: bool,
 
     /// This node's unique ID (0 = auto-generate from timestamp).
@@ -47,7 +47,7 @@ pub struct ClusterConfigSection {
 
     /// Directory for storing cluster state (Raft logs, snapshots).
     #[serde(default = "default_cluster_data_dir")]
-    #[param(skip)]
+    #[param(name = "cluster-data-dir")]
     pub data_dir: std::path::PathBuf,
 
     /// Election timeout in milliseconds.

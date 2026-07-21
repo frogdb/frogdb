@@ -27,7 +27,7 @@ pub struct AclFileConfig {
     /// Path to the ACL file for SAVE/LOAD operations.
     /// If empty, ACL SAVE/LOAD will return an error.
     #[serde(default)]
-    #[param(skip)]
+    #[param]
     pub aclfile: String,
 
     /// Maximum number of entries in the ACL LOG.

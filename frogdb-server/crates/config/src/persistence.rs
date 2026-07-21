@@ -41,27 +41,27 @@ pub struct PersistenceConfig {
 
     /// RocksDB write buffer size in MB.
     #[serde(default = "default_write_buffer_size_mb")]
-    #[param(skip)]
+    #[param]
     pub write_buffer_size_mb: usize,
 
     /// Compression type: "none", "snappy", "lz4", "zstd".
     #[serde(default = "default_compression")]
-    #[param(skip)]
+    #[param]
     pub compression: String,
 
     /// RocksDB block cache size in MB.
     #[serde(default = "default_block_cache_size_mb")]
-    #[param(skip)]
+    #[param]
     pub block_cache_size_mb: usize,
 
     /// RocksDB bloom filter bits per key. Set to 0 to disable.
     #[serde(default = "default_bloom_filter_bits")]
-    #[param(skip)]
+    #[param]
     pub bloom_filter_bits: i32,
 
     /// Maximum number of RocksDB write buffers.
     #[serde(default = "default_max_write_buffer_number")]
-    #[param(skip)]
+    #[param]
     pub max_write_buffer_number: i32,
 
     /// RocksDB compaction rate limit in MB/s. 0 means unlimited.
@@ -269,7 +269,7 @@ impl PersistenceConfig {
 pub struct SnapshotConfig {
     /// Directory for storing snapshots.
     #[serde(default = "default_snapshot_dir")]
-    #[param(skip)]
+    #[param]
     pub snapshot_dir: PathBuf,
 
     /// Interval between automatic snapshots in seconds (0 = disabled).

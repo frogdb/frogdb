@@ -15,17 +15,17 @@ use serde::{Deserialize, Serialize};
 pub struct AdminConfig {
     /// Whether the admin API is enabled.
     #[serde(default)]
-    #[param(skip)]
+    #[param(name = "admin-enabled")]
     pub enabled: bool,
 
     /// Port for the admin RESP protocol listener.
     #[serde(default = "default_admin_port")]
-    #[param(skip)]
+    #[param(name = "admin-port")]
     pub port: u16,
 
     /// Bind address for the admin RESP protocol listener.
     #[serde(default = "default_admin_bind")]
-    #[param(skip)]
+    #[param(name = "admin-bind")]
     pub bind: String,
 }
 
