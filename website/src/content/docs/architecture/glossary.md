@@ -139,7 +139,9 @@ Wire error strings are quoted from source; the canonical registry is
 | `-BUSYGROUP` | `BUSYGROUP Consumer Group name already exists` | XGROUP CREATE on existing group |
 | `-NOGROUP` | `NOGROUP No such consumer group` | Stream group missing |
 | `-NOSCRIPT` | `NOSCRIPT No matching script. Please use EVAL.` | EVALSHA on unknown SHA |
-| `-BUSY` | `ERR BUSY Lua script running. Allow up to <ms>ms for it to finish.` | A script is still running |
+| `-BUSY` | `ERR BUSY Lua script running. Allow up to <ms>ms for it to finish.` | A Lua script is still running |
+| `-BUSY` | `BUSY timeout during FUNCTION LOAD (library loading took too long)` | FUNCTION LOAD exceeded its time budget |
+| `-BUSY` | `BUSY shard busy with continuation lock; retry` | A lock request hit a shard held by a Lua/MULTI continuation lock |
 | `-EXECABORT` | `EXECABORT Transaction discarded because of previous errors.` | EXEC after a queued error |
 | `-VERSIONMISMATCH` | `VERSIONMISMATCH expected <expected> actual <actual>` | Optimistic version check failed |
 
