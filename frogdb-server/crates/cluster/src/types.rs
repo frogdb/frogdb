@@ -367,6 +367,35 @@ pub enum ClusterResponse {
     Error(String),
 }
 
+/// A node-agnostic description of a side effect a successful cluster mutation
+/// produced. [`crate::state::ClusterState::apply_command`] returns these on its
+/// `Ok` path (so emit-on-failure is structurally impossible), and the state
+/// machine's `apply` translates them into the channel payload types after
+/// applying the node-local self-filter it owns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClusterEvent {
+    /// A node was demoted from primary to replica (via `SetRole { Replica }`
+    /// or a graceful `Failover`). Node-agnostic: the state machine decides
+    /// whether *this* node is the demoted one.
+    NodeDemoted {
+        /// The node that was demoted.
+        demoted_node_id: NodeId,
+        /// The node that is the new primary (if known).
+        new_primary_id: Option<NodeId>,
+        /// The configuration epoch at the time of demotion.
+        epoch: u64,
+    },
+    /// A slot migration completed (relevant on all nodes, no self-filter).
+    SlotMigrationCompleted {
+        /// The slot whose migration completed.
+        slot: u16,
+        /// The node that previously owned the slot.
+        source_node: NodeId,
+        /// The node that now owns the slot.
+        target_node: NodeId,
+    },
+}
+
 /// Cluster configuration options.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClusterConfig {
