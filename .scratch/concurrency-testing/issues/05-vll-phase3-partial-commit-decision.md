@@ -26,11 +26,29 @@ Rationale for the current design: post-lock-acquisition VLL determinism — part
 2. **Re-execution path** — persist the decided VLL batch (intent record before phase-3 dispatch) and replay the failed shard's portion on recovery. Restores durable atomicity, NOT live visibility (executed shards released locks; readers see partial state until recovery). Requires: coordinator commit-point persistence in the hot path, txn framing in per-shard WALs (pairs with the rollback-mode WAL partial-append deferral), recovery scanner + deterministic re-executor, idempotence for the phase-4 executed-but-unconfirmed window (response channel dropped/timeout after VllExecute delivered). Also forces an EXEC-ack semantics decision (block / error-but-applies-later / Calvin-style ack-on-log). Durability-phase scope.
    - **2b (cheaper variant): abort-on-recovery** — intent record + per-shard completion markers; recovery **discards** incomplete cross-shard txns instead of re-executing. Sound because the coordinator died before acking EXEC to the client. Skips the deterministic-replay machinery entirely; still needs txn framing + intent record. Only coherent combined with option 4 (node must not keep serving after a phase-3 failure, else discarding at recovery contradicts already-served reads).
 3. **Abort-all with executed-shard compensation** — conflicts with the VLL lock-release invariant (executed participants released their own locks); no prior art does write-undo. Dead end, listed for completeness.
-4. **Fail-stop (Dragonfly-equivalent)** — treat `send_execute` failure as node-fatal: a dead shard worker in a live node is an undefined-state node; escalate to shutdown instead of serving a partial commit. Clients never observe live partial state, matching Dragonfly's structural position. WAL recovery still resurrects the partial commit unless paired with 2b's txn framing — 4 + 2b together = full atomicity without live replay.
+4. **Fail-stop (Dragonfly-equivalent; expanded 2026-07-21)** — treat a dead shard worker as node-fatal. WAL recovery still resurrects the partial commit unless paired with 2b's txn framing — 4 + 2b together = full atomicity without live replay. See trigger analysis below for why this cannot fire intermittently, and the spectrum for graduated deployment:
+   - **4a. Supervise** (minimum; arguably a standalone bug-fix): shard workers are unsupervised tokio tasks — `spawn(monitor.instrument(worker.run()))` (`server/shards.rs:279`) where `monitor` is `tokio_metrics::TaskMonitor` (metrics only); `JoinHandle`s are only joined at shutdown (`subsystems.rs:550`). A panicked worker dies silently: 1/N of the keyspace gone, blocked waiters never wake, active expiry stops for those keys, no health signal — a **zombie node**, which in an HA deployment is worse than a crash (no failover trigger). Fix: watch handles live (JoinSet/select); on JoinError → CRITICAL log, flip node health (INFO/STATUS, liveness probe) so the orchestrator restarts.
+   - **4b-fence:** on detected worker death, mark the shard dead and reject cross-shard EXECs naming it **before phase 1**. Shrinks the partial-commit surface from "every transaction until someone notices" to "transactions already past lock-phase at the instant of death."
+   - **4c-abort:** `process::abort()` on unexpected worker death. Simplest; the only variant that composes cleanly with 2b (abort-on-recovery). Must be gated on "shutdown not in progress" (see below).
+
+## Trigger analysis: can this fire from normal transactional behavior? (verified 2026-07-21)
+
+**No.** `send_execute` Err strictly ⇒ worker task dead; it is unreachable from load, contention, or slowness:
+
+- Production sink (`server/src/vll_adapter.rs:118-127`) dispatches via `ShardSender::send().await` = tokio **bounded mpsc awaiting send** (`core/src/shard/message.rs:42-55`): a full channel *waits* (backpressure), never errors; `Err` exists only for `Closed` (receiver dropped = worker gone).
+- Normal transactional failures (lock conflict, lock timeout) land in phases 1-2, which `abort_shards(ALL)` before anything executes — all-or-nothing preserved (`vll/src/coordinator.rs:250-263`).
+- Slowness lands in **phase 4** (`ResultTimeout`, `coordinator.rs:299-302`) and deliberately aborts nothing: by then every participant has `VllExecute` queued and will apply. Outcome = transaction **fully commits**, client gets a timeout error — the standard ambiguous-outcome problem (same as any timed-out Redis command; a client retry re-applies on ALL shards), **not** a partial commit. Load-dependent but atomicity-preserving; document separately as EXEC-timeout ambiguity.
+- Chaos/error injection paths in the sink are `#[cfg(feature = "turmoil")]` — absent from production builds.
+
+Known causes of a closed shard channel, exhaustively:
+1. **Panic unwinding the worker task** (a bug, deterministic per triggering input; workspace has no `panic = "abort"`, tokio contains the panic). This is the "already zombified — crash" case; also note the client whose EXEC hit phase-3 failure got an error reply while some shards committed, so a retry **double-applies** the executed portion — retry amplification on top of partiality.
+2. **Graceful-shutdown race** (benign): subsystem teardown drops workers while a scatter is in flight. Any 4c implementation must check shutdown-in-progress before aborting, so clean shutdowns don't register as crashes.
 
 ## Acceptance criteria
 
 - [ ] Human decision recorded here (option + rationale)
 - [ ] If option 1: consistency caveat documented in the appropriate CONTEXT.md/spec
-- [ ] If option 2/2b/4: follow-up implementation issue(s) filed in the durability phase (txn framing, intent record, recovery policy; escalation path for option 4)
+- [ ] If option 2/2b/4: follow-up implementation issue(s) filed in the durability phase (txn framing, intent record, recovery policy; escalation path + shutdown-race guard for option 4)
+- [ ] 4a (worker supervision + health signal) considered as an immediate standalone fix regardless of option chosen — the zombie-node gap exists today independent of VLL
+- [ ] EXEC phase-4 timeout ambiguity (commits despite timeout error reply) documented wherever cross-shard EXEC semantics are specified
 - [ ] Phase-6 planning note: replica-side multi-shard atomicity (Dragonfly PR #598 precedent) regardless of option chosen
