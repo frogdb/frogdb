@@ -342,6 +342,21 @@ Ladder:
   (a `ConnectFactory` seam exists for the Raft client only). openraft is tokio-based
   and should tolerate turmoil's reactor.
 
+**Planning note — replica-side multi-shard transaction atomicity:** VLL's
+cross-shard atomicity is a standalone-node, primary-side property (see
+[VLL Atomicity Semantics](/architecture/vll/#atomicity-semantics)); nothing
+today establishes the equivalent property on a *replica*. Each internal
+shard replicates through its own async journal/replication flow, so a
+multi-shard transaction that commits atomically on the primary can in
+principle become visible to replica reads shard-by-shard rather than
+atomically — a distinct hazard from the primary-side partial-commit
+question in [issue 05](../../../.scratch/concurrency-testing/issues/05-vll-phase3-partial-commit-decision.md).
+Precedent: Dragonfly shipped this as a dedicated fix, v0.13.0
+["feat(replica): atomicity for multi shard commands"](https://github.com/dragonflydb/dragonfly/pull/598),
+specifically to keep per-shard async journal flows from exposing partial
+multi-shard transactions on replicas. Needs explicit design + testing once
+6a's multi-node harness exists; not yet scoped into 6a/6b/6c above.
+
 Complementary to Jepsen, not a replacement: turmoil adds deterministic seeds and
 shrinkable repros; real disk, real clocks, real kill -9 remain Jepsen's job.
 

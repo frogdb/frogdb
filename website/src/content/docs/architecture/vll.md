@@ -154,8 +154,9 @@ VLL provides **execution atomicity** (isolation) but **not failure atomicity**
 |----------|----------|------------|
 | Single-shard operation | Runs to completion without interleaving | Consistent |
 | Multi-shard success | All shards execute under held locks, globally ordered | Consistent |
-| Lock-acquisition timeout | Coordinator aborts every shard still holding locks; client receives an `ERR` | No changes |
-| Failure mid-execution | Shards that already received `VllExecute` complete; the rest are aborted | Partial writes persist (no rollback) |
+| Lock-acquisition timeout (phase 1-2) | Coordinator aborts every shard still holding locks; client receives an `ERR` | No changes |
+| Phase-3 dispatch failure mid-execution | Shards that already received `VllExecute` complete; the rest are aborted | Partial writes persist (no rollback); node fail-stops (see below) |
+| Phase-4 result timeout | Every participant already received `VllExecute` before the wait; none are aborted | Fully commits — ambiguous *outcome*, not a partial commit (see below) |
 | Coordinator abandons mid-op | Un-executed participants are aborted; executed ones release their own locks | Partial state possible |
 
 **Key point:** once a shard has received `VllExecute`, its write proceeds and
@@ -167,6 +168,36 @@ There is no dedicated VLL timeout error code. A lock-acquisition failure surface
 to the client with the generic prefix as `ERR VLL lock acquisition failed`; the
 internal `VllError::QueueFull` / `LockTimeout` values are logged, not sent as
 distinct wire codes.
+
+### Phase-4 result timeout vs phase-3 dispatch failure
+
+These two rows look similar ("a client-visible error after some shards have
+already run") but are different failure classes and must not be conflated:
+
+- **Phase-4 `ResultTimeout`** (`ScatterError::ResultTimeout`,
+  `frogdb-server/crates/vll/src/coordinator.rs:299-302`) fires while *waiting
+  for results* — by that point in `scatter_gather`, every participant has
+  already been dispatched a `VllExecute` (phase 3 succeeded for all shards)
+  and none are aborted. The transaction **fully commits**; the client
+  receives a timeout error anyway. This is the standard ambiguous-outcome
+  problem shared by any timed-out command in any system (a client retry
+  re-applies on *all* shards) — atomicity is preserved, and this is
+  explicitly **not** a partial commit.
+- **Phase-3 dispatch failure** (`ScatterError::ShardUnavailable`,
+  `coordinator.rs:266-288`) fires when `send_execute` itself errors, which
+  only happens if a shard worker's channel is closed — i.e. the worker is
+  already dead. Only shards dispatched *before* the failure keep their
+  writes; the rest are aborted, which is the genuine partial-commit case
+  this doc's atomicity table describes. As of `da1c0838`, the server layer
+  treats a dead shard worker as **node-fatal**: `shard_supervisor.rs`
+  supervises every worker and fail-stops (`process::abort()`, guarded
+  against in-progress shutdown) the instant one dies unexpectedly, so this
+  partial-commit window is not something a live node keeps serving reads
+  against. The design decision is recorded in the concurrency-testing issue
+  tracker (`.scratch/concurrency-testing/issues/05-vll-phase3-partial-commit-decision.md`);
+  the durability-phase follow-up that keeps WAL replay from resurrecting the
+  partial commit after restart (txn framing + abort-on-recovery) is filed as
+  issue 06 in the same directory.
 
 ---
 
