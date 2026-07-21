@@ -91,7 +91,7 @@ starlightSidebarTopics([
 						items: [
 							{ label: 'Commands', slug: 'reference/commands' },
 							{ label: 'Configuration', slug: 'reference/configuration' },
-							{ label: 'Reference Config', slug: 'reference/reference-config' },
+							{ label: 'Example Config', slug: 'reference/example-config' },
 							{ label: 'frogdb-server', slug: 'reference/frogdb-server' },
 							{ label: 'frogctl', slug: 'reference/frogctl' },
 							{ label: 'Metrics', slug: 'reference/metrics' },

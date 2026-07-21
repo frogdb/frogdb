@@ -1,0 +1,33 @@
+---
+title: Example Config File
+description: Complete FrogDB configuration file with all default values
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+import exampleConfig from '../../../data/example-config.toml?raw';
+
+This is a complete FrogDB configuration file with every setting at its default value. Generate an identical one yourself with `frogdb-server --generate-config`; the block below is that exact output, captured at docs-build time so it cannot drift from the flag.
+
+## Generate it yourself
+
+```bash
+frogdb-server --generate-config > frogdb.toml
+```
+
+<Aside type="note">
+`--generate-config` currently prints a hand-maintained TOML template rather than a full serialization of `Config::default()`. It is kept in sync with the config-struct field list by convention, not by the compiler, so a newly added field can land in [Configuration Reference](/reference/configuration/) before it lands here. If a field you need is missing below, check the Configuration Reference table — it is generated directly from `Config::default()` and is authoritative for the full field list.
+</Aside>
+
+## Full configuration
+
+```toml
+{exampleConfig}
+```
+
+## See also
+
+<CardGrid>
+  <LinkCard title="Configuration Reference" description="Every parameter, its type, default, and mutability" href="/reference/configuration/" />
+  <LinkCard title="Configuration surfaces" description="File, env vars, CLI flags, and CONFIG SET precedence" href="/operations/configuration/" />
+  <LinkCard title="Deployment" description="Production deployment guide" href="/operations/deployment/" />
+</CardGrid>
