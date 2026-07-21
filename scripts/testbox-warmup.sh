@@ -5,7 +5,7 @@
 set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
 
-workflow="${1:-blacksmith-testbox.yml}"
+workflow="${1:-test-unit-tests-testbox.yml}"
 shift || true
 idle="${TESTBOX_IDLE_TIMEOUT:-5}"
 idfile="$(git rev-parse --git-dir)/blacksmith-testboxes"
