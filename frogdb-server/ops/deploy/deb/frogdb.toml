@@ -13,6 +13,7 @@ allow-cross-slot-standalone = false
 scatter-gather-timeout-ms = 5000
 sorted-set-index = "skiplist"
 max-clients = 10000
+enable-debug-command = false
 
 [logging]
 level = "info"
@@ -28,6 +29,7 @@ max-files = 5
 
 [persistence]
 enabled = true
+mode = "rocksdb"
 data-dir = "/var/lib/frogdb/data"
 durability-mode = "periodic"
 sync-interval-ms = 1000
@@ -37,6 +39,7 @@ block-cache-size-mb = 256
 bloom-filter-bits = 10
 max-write-buffer-number = 4
 compaction-rate-limit-mb = 0
+flush-compact-range = true
 batch-size-threshold-kb = 4096
 batch-timeout-ms = 10
 wal-failure-policy = "continue"
@@ -83,6 +86,7 @@ lfu-decay-time = 1
 doctor-big-key-threshold = 1048576
 doctor-max-big-keys = 100
 doctor-imbalance-threshold = 25.0
+maxmemory-clients = "0"
 
 [security]
 requirepass = ""
