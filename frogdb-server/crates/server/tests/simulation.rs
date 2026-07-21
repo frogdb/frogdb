@@ -3478,3 +3478,274 @@ fn xreadgroup_ttl_no_nogroup_realpath() {
          waiter fell through to its BLOCK timeout.",
     );
 }
+
+/// S7 (phase-4b): `CLIENT PAUSE WRITE` vs an in-flight write-`EXEC` on the real
+/// connection path (turmoil-level).
+///
+/// S7 is **not expressible in the shard driver**: the pause gate is purely
+/// connection-side, pre-dispatch (dispatch.rs `DispatchStage::PauseGate` ->
+/// lifecycle.rs `wait_if_paused` / `wait_if_paused_for_transaction`). An EXEC
+/// sitting in a shard queue is by construction already past that gate, so the
+/// invariant can only be exercised over a real TCP connection. This drives three
+/// concurrent connections through the real server:
+///   - A (pauser): `CLIENT PAUSE <big> WRITE`, later `CLIENT UNPAUSE`.
+///   - B (writer): `MULTI; SET k v; EXEC` — the write-EXEC that must block.
+///   - C (reader): `GET k` — a read that must proceed under WRITE-mode pause.
+///
+/// Invariants asserted:
+///   1. While paused, the write-EXEC has **not** committed: C's `GET k` returns
+///      the RESP2 null bulk `$-1\r\n` (k not observable) — the write is gated.
+///   2. That `GET k` **returns** while paused (its reply is captured before any
+///      unpause): WRITE-mode pause does not block reads.
+///   3. After `CLIENT UNPAUSE`, B's blocked `EXEC` commits (`*1\r\n+OK\r\n`) and
+///      a subsequent `GET k` on B returns `v` — the effect becomes observable
+///      only once the pause is lifted.
+///
+/// ## Clock findings (dual-clock discipline; the trap that bit Tasks 8/9/12)
+/// - **Pause deadline** (`PauseState::unpause_at`): a real `std::time::Instant`
+///   (client_registry/mod.rs:186; armed at :733 as `Instant::now() + timeout`;
+///   compared at :786/:797 via `Instant::now()`). It elapses on the **real wall
+///   clock**, independent of turmoil's virtual clock.
+/// - **Pause wait loop**: `tokio::time::sleep(10ms)` (lifecycle.rs `wait_if_paused`
+///   :515 and `wait_if_paused_for_transaction` :543) — the poll *interval* is
+///   **virtual**; the release *condition* (`check_pause`) reads the real-clock
+///   deadline above. Because the deadline is real and the poll is virtual, we do
+///   NOT rely on the deadline auto-expiring (that would be a cross-clock race).
+///   Instead the pause uses a large 60_000ms deadline and is released
+///   **deterministically by an explicit `CLIENT UNPAUSE`**, sequenced by
+///   `tokio::sync::Notify` handshakes. The write invariant is therefore
+///   independent of both clocks: the SET simply cannot commit until unpause, and
+///   C's GET is captured (and signals the unpause) strictly before that.
+/// - **Key TTL expiry**: real `Instant` (`KeyMetadata::is_expired`); the
+///   **active-expiry sweep** runs on the shard's virtual-time interval.
+///
+/// ## Expiry sub-assertion: intentionally dropped (brief fallback)
+/// The brief permits observing `expiry_paused` suppression only if the harness
+/// exposes a *deterministic client-visible* way to see it; it does not.
+/// `HashMapStore::check_and_delete_expired` (store/hashmap.rs:421-435) returns
+/// `true` (logically expired) for an elapsed key even when `expiry_suppressed`
+/// is set — it merely skips the *physical* delete / counter / replication. So
+/// `get_with_expiry_check` (:1024) still returns `None` to a client `GET` on a
+/// suppressed-but-elapsed key: suppression is indistinguishable from real expiry
+/// over the wire. The suppression that matters (skipping the active sweep to
+/// avoid master/replica divergence) is internal and is covered by the
+/// `run_active_expiry` pause gate (shard/event_loop.rs:124-133, unit path). We
+/// therefore assert only the two write/read invariants here, per the brief.
+///
+/// ## Determinism
+/// Looped over a handful of turmoil seeds with `enable_random_order()`, so
+/// `rng_seed` drives per-tick host execution order and each seed samples a
+/// different A/B/C interleave. The `Notify` handshakes make all three invariants
+/// hold for every schedule.
+#[test]
+fn client_pause_write_vs_exec() {
+    // Connect with retry: under `enable_random_order()` a seeded schedule can run
+    // a client's connect before the server host binds its listener, yielding
+    // ConnectionRefused. Retry over sim-time until the server is up (mirrors
+    // workload_runner's `connect_with_retry`).
+    async fn connect_retry(addr: std::net::IpAddr) -> Result<TcpStream, BoxError> {
+        for _ in 0..50 {
+            match TcpStream::connect((addr, SERVER_PORT)).await {
+                Ok(s) => return Ok(s),
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Err("connect_retry: server never accepted".into())
+    }
+
+    for seed in [1u64, 7, 42, 100, 999] {
+        let mut sim = Builder::new()
+            .tick_duration(Duration::from_millis(1))
+            .simulation_duration(Duration::from_secs(60))
+            .rng_seed(seed)
+            .enable_random_order()
+            .build();
+
+        // Single shard: SET/GET k share a key (same shard); pause is server-wide
+        // (admin-shared client registry), so one shard fully exercises the gate.
+        sim.host(SERVER_HOST, || real_frogdb_server(1));
+
+        // Captured raw reply bytes.
+        let get_while_paused: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let exec_reply: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let get_after_unpause: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+
+        // Handshakes (each single-waiter -> `notify_one` stores a permit, so the
+        // wake is race-free regardless of task scheduling order):
+        //   release_writer/release_reader: A -> B / A -> C, fired only after the
+        //     pause is engaged (A has the `+OK` in hand), so B's EXEC reaches the
+        //     gate and C's GET runs strictly while paused.
+        //   ready_to_unpause: C -> A, fired only after C has captured its GET
+        //     reply, so the unpause (and thus B's commit) strictly follows it.
+        let release_writer = Arc::new(tokio::sync::Notify::new());
+        let release_reader = Arc::new(tokio::sync::Notify::new());
+        let ready_to_unpause = Arc::new(tokio::sync::Notify::new());
+
+        let release_writer_a = release_writer.clone();
+        let release_reader_a = release_reader.clone();
+        let ready_to_unpause_a = ready_to_unpause.clone();
+        let release_writer_b = release_writer.clone();
+        let release_reader_c = release_reader.clone();
+        let ready_to_unpause_c = ready_to_unpause.clone();
+
+        let exec_reply_b = exec_reply.clone();
+        let get_after_unpause_b = get_after_unpause.clone();
+        let get_while_paused_c = get_while_paused.clone();
+
+        // A (pauser): engage PAUSE WRITE, release B+C, wait for C's read, unpause.
+        sim.client("pauser", async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let addr = turmoil::lookup(SERVER_HOST);
+            let mut stream = connect_retry(addr).await?;
+            let mut buf = vec![0u8; 1024];
+
+            // 60_000ms real-clock deadline: far beyond the test's real runtime, so
+            // release is governed solely by the explicit UNPAUSE below (never by
+            // the real-vs-virtual deadline race).
+            stream
+                .write_all(&encode_command(&[b"CLIENT", b"PAUSE", b"60000", b"WRITE"]))
+                .await?;
+            let n = stream.read(&mut buf).await?;
+            assert!(
+                matches!(parse_simple_response(&buf[..n]), OperationResult::Ok),
+                "CLIENT PAUSE 60000 WRITE should reply +OK, got {:?}",
+                &buf[..n]
+            );
+
+            // Pause is engaged; release the writer and reader into it.
+            release_writer_a.notify_one();
+            release_reader_a.notify_one();
+
+            // Wait until the reader has captured its while-paused GET, then unpause.
+            ready_to_unpause_a.notified().await;
+            stream
+                .write_all(&encode_command(&[b"CLIENT", b"UNPAUSE"]))
+                .await?;
+            let n = stream.read(&mut buf).await?;
+            assert!(
+                matches!(parse_simple_response(&buf[..n]), OperationResult::Ok),
+                "CLIENT UNPAUSE should reply +OK, got {:?}",
+                &buf[..n]
+            );
+            Ok(())
+        });
+
+        // B (writer): the in-flight write-EXEC. Blocks at the connection-side
+        // transaction pause gate until A unpauses, then commits.
+        sim.client("writer", async move {
+            let addr = turmoil::lookup(SERVER_HOST);
+            let mut stream = connect_retry(addr).await?;
+            let mut buf = vec![0u8; 1024];
+
+            async fn round_trip(
+                stream: &mut TcpStream,
+                buf: &mut [u8],
+                cmd: &Bytes,
+            ) -> Result<Vec<u8>, BoxError> {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                stream.write_all(cmd).await?;
+                let n = stream.read(buf).await?;
+                Ok(buf[..n].to_vec())
+            }
+
+            // Only enter the transaction once the pause is engaged, so the EXEC
+            // gate observes PAUSE WRITE.
+            release_writer_b.notified().await;
+
+            let reply = round_trip(&mut stream, &mut buf, &encode_command(&[b"MULTI"])).await?;
+            assert!(
+                matches!(parse_simple_response(&reply), OperationResult::Ok),
+                "MULTI should reply +OK, got {reply:?}"
+            );
+            let reply = round_trip(
+                &mut stream,
+                &mut buf,
+                &encode_command(&[b"SET", b"k", b"v"]),
+            )
+            .await?;
+            assert_eq!(
+                reply.as_slice(),
+                b"+QUEUED\r\n",
+                "SET k v inside MULTI should reply +QUEUED, got {reply:?}"
+            );
+
+            // EXEC contains a write -> `transaction_has_writes` -> blocks in
+            // `wait_if_paused_for_transaction` until UNPAUSE. This read does not
+            // return until A unpauses.
+            let reply = round_trip(&mut stream, &mut buf, &encode_command(&[b"EXEC"])).await?;
+            *exec_reply_b.lock().unwrap() = reply;
+
+            // Now unpaused and committed: k must be observable as `v`.
+            let reply = round_trip(&mut stream, &mut buf, &encode_command(&[b"GET", b"k"])).await?;
+            *get_after_unpause_b.lock().unwrap() = reply;
+            Ok(())
+        });
+
+        // C (reader): a WRITE-mode-exempt read that must proceed while paused.
+        sim.client("reader", async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let addr = turmoil::lookup(SERVER_HOST);
+            let mut stream = connect_retry(addr).await?;
+            let mut buf = vec![0u8; 1024];
+
+            // Read strictly while paused.
+            release_reader_c.notified().await;
+
+            // GET is not a write -> `should_pause_command` == false -> not gated.
+            // It returns immediately, and (because the write-EXEC is still gated)
+            // k is not yet set: null bulk.
+            stream.write_all(&encode_command(&[b"GET", b"k"])).await?;
+            let n = stream.read(&mut buf).await?;
+            *get_while_paused_c.lock().unwrap() = buf[..n].to_vec();
+
+            // Only now allow the unpause: the while-paused GET is captured and
+            // strictly precedes any commit of B's SET.
+            ready_to_unpause_c.notify_one();
+            Ok(())
+        });
+
+        sim.run().unwrap();
+
+        // Null bulk string: FrogDB's reply for GET on an absent key (RESP2).
+        const NULL_BULK: &[u8] = b"$-1\r\n";
+
+        let paused_read = get_while_paused.lock().unwrap().clone();
+        assert!(
+            !paused_read.is_empty(),
+            "seed {seed}: reader never captured a while-paused GET reply"
+        );
+        // Invariants 1 + 2: the read returned *while paused* (captured before the
+        // unpause handshake) AND saw k absent -> the write-EXEC has not committed
+        // under the pause, and WRITE-mode pause did not block the read.
+        assert_eq!(
+            paused_read.as_slice(),
+            NULL_BULK,
+            "seed {seed}: S7 write/read invariant: while PAUSE WRITE is engaged, a \
+             concurrent write-EXEC must not have committed and a read must still \
+             proceed. Expected `GET k` -> null bulk `$-1\\r\\n`, got {paused_read:?}. \
+             A `$1\\r\\nv\\r\\n` here means the gated write-EXEC leaked its SET before \
+             unpause (pause gate bypassed); an empty/hung reply means WRITE-mode \
+             pause wrongly blocked the read."
+        );
+
+        // Invariant 3a: once unpaused, the previously blocked EXEC commits.
+        let exec = exec_reply.lock().unwrap().clone();
+        assert_eq!(
+            exec.as_slice(),
+            b"*1\r\n+OK\r\n",
+            "seed {seed}: after UNPAUSE the blocked write-EXEC must commit \
+             (`*1\\r\\n+OK\\r\\n`), got {exec:?}"
+        );
+
+        // Invariant 3b: the committed effect is now observable.
+        let after = get_after_unpause.lock().unwrap().clone();
+        assert_eq!(
+            after.as_slice(),
+            b"$1\r\nv\r\n",
+            "seed {seed}: after UNPAUSE + commit, `GET k` must return `v`, got {after:?}"
+        );
+    }
+}
