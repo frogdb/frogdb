@@ -1,0 +1,49 @@
+---
+title: Test suite results
+description: Redis regression test coverage and intentional exclusions, generated from the test source.
+---
+
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+import compat from '../../../data/compat-exclusions.json';
+import CompatSummary from '../../../components/CompatSummary.astro';
+import CompatCategories from '../../../components/CompatCategories.astro';
+import CompatCommands from '../../../components/CompatCommands.astro';
+import CompatSuiteDetail from '../../../components/CompatSuiteDetail.astro';
+
+FrogDB maintains a port of the {compat.summary.upstream_version} regression test suite. The target version is single-sourced from the generated summary below, not hardcoded on this page. Every ported test runs on every commit, and every intentional exclusion is documented in the test source and surfaced here — so this page cannot drift from the code.
+
+The ported tests are Rust `#[tokio::test]` functions that mirror the upstream Redis TCL tests one file at a time. They are Rust-native ports, not a live TCL runner: the upstream TCL harness was removed and no `.tcl` files execute against FrogDB. For the per-command support view these tests back up, see the [Command matrix](/compatibility/command-matrix/); for the full testing strategy, see [Testing methodology](/compatibility/testing-methodology/).
+
+## Summary
+
+<CompatSummary />
+
+**Ported tests** are the `#[tokio::test]` functions across the regression suites. **Intentional exclusions** are upstream tests deliberately not ported, each with a documented reason. **Broken tests** (`#[ignore]`) mark known regressions that still need fixing.
+
+## Exclusion Categories
+
+Each excluded test is tagged with a category explaining why it was not ported.
+
+<CompatCategories />
+
+## Command Impact
+
+Commands touched by at least one excluded test, with the suites that exercise them and the number of intentional exclusions in those suites.
+
+Exclusions are documented per suite in each port file's `## Intentional exclusions` doc-comment, not tagged to an individual command within a multi-command suite. This table therefore reports which suites exercise a command and how many exclusions those suites carry — it does not claim a per-command "N of M tests excluded" ratio, which the source metadata cannot support.
+
+<CompatCommands />
+
+## Suite Details
+
+Expand a suite to see the full list of excluded tests with reasons.
+
+<CompatSuiteDetail />
+
+## See Also
+
+<CardGrid>
+  <LinkCard title="Command matrix" href="/compatibility/command-matrix/" description="Per-command supported / partial / unsupported status" />
+  <LinkCard title="Overview & differences" href="/compatibility/overview/" description="FrogDB's compatibility target and behavioral differences" />
+  <LinkCard title="Testing methodology" href="/compatibility/testing-methodology/" description="The layered, automated testing behind the compatibility claims" />
+</CardGrid>

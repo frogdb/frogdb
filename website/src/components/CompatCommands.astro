@@ -1,7 +1,18 @@
 ---
 /**
- * Command impact table: shows commands with >0 exclusions.
+ * Command impact table: commands that have at least one excluded test,
+ * with the suites that touch them and the number of intentional exclusions
+ * in those suites.
+ *
  * Sorted alphabetically. Reads from auto-generated compat-exclusions.json.
+ *
+ * Note: exclusions in the source are documented per suite (file), not tagged
+ * to an individual command within a multi-command suite. We therefore show
+ * only the honest signal — which suites exercise the command and how many
+ * exclusions those suites carry — and deliberately do NOT show a per-command
+ * "N of M tests excluded" ratio, because `command_impact.total_tests` is the
+ * summed test count of every suite that touches the command (over-counting
+ * shared suites) and cannot support that claim. See compat-gen.py.
  */
 
 import data from '../data/compat-exclusions.json';
@@ -16,7 +27,6 @@ const commands = Object.entries((data as any).command_impact)
     <tr>
       <th>Command</th>
       <th>Test Suites</th>
-      <th style="text-align: right">Ported Tests</th>
       <th style="text-align: right">Excluded Tests</th>
     </tr>
   </thead>
@@ -25,7 +35,6 @@ const commands = Object.entries((data as any).command_impact)
       <tr>
         <td><code>{c.cmd}</code></td>
         <td>{c.suites.join(', ')}</td>
-        <td style="text-align: right">{c.total_tests}</td>
         <td style="text-align: right">{c.total_excluded}</td>
       </tr>
     ))}

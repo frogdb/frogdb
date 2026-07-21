@@ -1,0 +1,155 @@
+---
+/**
+ * Command support matrix: Family / Command / Status / Details.
+ * Reads from auto-generated command-matrix.json. Includes a client-side
+ * search box and status filter (progressive enhancement — the full table
+ * renders without JavaScript).
+ */
+
+import data from '../data/command-matrix.json';
+
+type Command = { name: string; status: string; note: string };
+type Family = { family: string; commands: Command[] };
+
+const families = ((data as any).families as Family[])
+  .slice()
+  .sort((a, b) => a.family.localeCompare(b.family));
+
+const rows = families.flatMap((f) =>
+  f.commands
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((c) => ({ family: f.family, ...c }))
+);
+
+const statusLabel: Record<string, string> = {
+  supported: 'Supported',
+  partial: 'Partial',
+  unsupported: 'Unsupported',
+};
+---
+
+<div class="matrix">
+  <div class="matrix-filters">
+    <input
+      type="search"
+      id="matrix-search"
+      class="matrix-search"
+      placeholder="Filter by command or family…"
+      aria-label="Filter commands"
+    />
+    <select id="matrix-status" class="matrix-status" aria-label="Filter by status">
+      <option value="all">All statuses</option>
+      <option value="supported">Supported</option>
+      <option value="partial">Partial</option>
+      <option value="unsupported">Unsupported</option>
+    </select>
+  </div>
+
+  <table class="matrix-table">
+    <thead>
+      <tr>
+        <th>Family</th>
+        <th>Command</th>
+        <th>Status</th>
+        <th>Details</th>
+      </tr>
+    </thead>
+    <tbody id="matrix-body">
+      {rows.map((r) => (
+        <tr data-family={r.family} data-name={r.name.toLowerCase()} data-status={r.status}>
+          <td class="matrix-family">{r.family}</td>
+          <td><code>{r.name}</code></td>
+          <td>
+            <span class={`status-badge status-${r.status}`}>{statusLabel[r.status] ?? r.status}</span>
+          </td>
+          <td>{r.note}</td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+  <p id="matrix-empty" class="matrix-empty" hidden>No commands match the current filter.</p>
+</div>
+
+<script>
+  const search = document.getElementById('matrix-search') as HTMLInputElement | null;
+  const status = document.getElementById('matrix-status') as HTMLSelectElement | null;
+  const body = document.getElementById('matrix-body');
+  const empty = document.getElementById('matrix-empty');
+
+  function apply() {
+    if (!body) return;
+    const q = (search?.value ?? '').trim().toLowerCase();
+    const s = status?.value ?? 'all';
+    let visible = 0;
+    for (const row of Array.from(body.children) as HTMLElement[]) {
+      const name = row.getAttribute('data-name') ?? '';
+      const family = row.getAttribute('data-family') ?? '';
+      const st = row.getAttribute('data-status') ?? '';
+      const matchesText = !q || name.includes(q) || family.includes(q);
+      const matchesStatus = s === 'all' || st === s;
+      const show = matchesText && matchesStatus;
+      row.hidden = !show;
+      if (show) visible++;
+    }
+    if (empty) empty.hidden = visible !== 0;
+  }
+
+  search?.addEventListener('input', apply);
+  status?.addEventListener('change', apply);
+</script>
+
+<style>
+  .matrix-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin: 1rem 0;
+  }
+  .matrix-search {
+    flex: 1 1 16rem;
+    min-width: 12rem;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    background: var(--sl-color-black);
+    color: var(--sl-color-white);
+    font-size: 0.95rem;
+  }
+  .matrix-status {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    background: var(--sl-color-black);
+    color: var(--sl-color-white);
+    font-size: 0.95rem;
+  }
+  .matrix-family {
+    color: var(--sl-color-gray-2);
+    white-space: nowrap;
+  }
+  .status-badge {
+    display: inline-block;
+    padding: 0.125rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .status-supported {
+    background: var(--sl-color-green-low);
+    color: var(--sl-color-green-high);
+  }
+  .status-partial {
+    background: var(--sl-color-orange-low);
+    color: var(--sl-color-orange-high);
+  }
+  .status-unsupported {
+    background: var(--sl-color-red-low);
+    color: var(--sl-color-red-high);
+  }
+  .matrix-empty {
+    color: var(--sl-color-gray-2);
+    font-style: italic;
+  }
+</style>

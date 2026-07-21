@@ -50,9 +50,12 @@ starlightSidebarTopics([
 						link: '/compatibility/redis-differences/',
 						icon: 'i-tabler:plug-connected',
 						items: [
+							{ label: 'Overview & differences', slug: 'compatibility/overview' },
 							{ label: 'Redis Differences', slug: 'compatibility/redis-differences' },
 							{ label: 'Migration Guide', slug: 'compatibility/migration-guide' },
-							{ label: 'Redis Test Suite', slug: 'compatibility/redis-test-suite' },
+							{ label: 'Command matrix', slug: 'compatibility/command-matrix' },
+							{ label: 'Test suite results', slug: 'compatibility/test-suite' },
+							{ label: 'Testing methodology', slug: 'compatibility/testing-methodology' },
 						],
 					},
 					{
