@@ -51,7 +51,8 @@ pub(super) struct ShardSpawnContext {
     pub shard_monitor: tokio_metrics::TaskMonitor,
 }
 
-/// Spawn all shard workers and return their join handles.
+/// Spawn all shard workers and return their join handles, each paired with its
+/// shard id so the supervisor can attribute a failure to the dead shard.
 ///
 /// Fails if the number of recovered per-shard stores does not match the
 /// configured shard count. Such a mismatch means the data directory was written
@@ -60,7 +61,7 @@ pub(super) struct ShardSpawnContext {
 /// loudly instead (see also the earlier guard in `RocksStore::open`).
 pub(super) fn spawn_shard_workers(
     ctx: ShardSpawnContext,
-) -> anyhow::Result<Vec<crate::net::JoinHandle<()>>> {
+) -> anyhow::Result<Vec<(usize, crate::net::JoinHandle<()>)>> {
     if ctx.recovered_stores.len() != ctx.num_shards {
         anyhow::bail!(
             "recovered {} shard store(s) but the server is configured for {} shard(s); data \
@@ -280,7 +281,7 @@ pub(super) fn spawn_shard_workers(
             worker.run().await;
         }));
 
-        shard_handles.push(handle);
+        shard_handles.push((shard_id, handle));
     }
 
     Ok(shard_handles)

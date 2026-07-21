@@ -6,6 +6,7 @@ mod listeners;
 mod register;
 mod replication_init;
 mod runtime;
+mod shard_supervisor;
 mod shards;
 mod startup;
 mod subsystems;
@@ -91,8 +92,14 @@ pub struct Server {
     /// New connection senders (one per shard).
     new_conn_senders: Vec<mpsc::Sender<frogdb_core::shard::NewConnection>>,
 
-    /// Shard worker handles.
-    shard_handles: Vec<crate::net::JoinHandle<()>>,
+    /// Handle to the shard-worker supervisor task.
+    ///
+    /// The supervisor owns the individual shard-worker handles and watches them
+    /// live (fail-stop on unexpected death — see [`shard_supervisor`]). It
+    /// completes once every worker has terminated, so shutdown awaits this in
+    /// place of the per-worker handles. `Option` so `start_subsystems` can
+    /// `.take()` it.
+    shard_supervisor_handle: Option<crate::net::JoinHandle<()>>,
 
     /// Optional RocksDB store for persistence.
     rocks_store: Option<Arc<RocksStore>>,
@@ -309,6 +316,18 @@ impl Server {
             shard_monitor: infra.shard_monitor,
         })?;
 
+        // Phase 4b: Supervise the shard workers. Unsupervised, a panicked or
+        // early-returning worker leaves the node a zombie (1/N of the keyspace
+        // unreachable, waiters never wake) with no failover trigger. The
+        // supervisor watches the handles live and fail-stops the process on
+        // unexpected death, guarded by the node's shutdown signal so clean
+        // teardown is not mistaken for a crash. Production default = abort.
+        let shard_supervisor_handle = Some(shard_supervisor::spawn_shard_supervisor(
+            shard_handles,
+            infra.health_checker.clone(),
+            Arc::new(shard_supervisor::AbortFailStop),
+        ));
+
         // ACL manager, latency histograms, shard notifier, and client-eviction
         // registry are now built in `init_infrastructure` and injected into the
         // ConfigManager at construction (see `ConfigCollaborators`), so there is
@@ -352,7 +371,7 @@ impl Server {
             config_manager: infra.config_manager,
             shard_senders: infra.shard_senders,
             new_conn_senders: infra.new_conn_senders,
-            shard_handles,
+            shard_supervisor_handle,
             rocks_store: infra.rocks_store,
             periodic_sync_handle: infra.periodic_sync_handle,
             periodic_snapshot_handle: infra.periodic_snapshot_handle,
