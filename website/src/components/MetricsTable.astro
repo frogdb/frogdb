@@ -15,6 +15,11 @@
  * metrics.json in either direction -- a new metric landing in an unmapped
  * group, or a mapped group disappearing from the source.
  *
+ * Labels with a fixed enum (e.g. `reason: maxclients | auth_required |
+ * shutdown` on `frogdb_connections_rejected_total`) carry a `values` array
+ * in metrics.json; those are rendered alongside the label name, mirroring
+ * how ConfigTable.astro renders `enum_values`.
+ *
  * Usage in MDX:
  *   import MetricsTable from '../../components/MetricsTable.astro';
  *   <MetricsTable category="Persistence" />
@@ -28,7 +33,7 @@ const { category } = Astro.props;
 
 import metricsData from '../data/metrics.json';
 
-type Label = { name: string; type: string };
+type Label = { name: string; type: string; values?: string[] };
 type Metric = { name: string; type: string; help: string; group: string; labels: Label[] };
 
 const allMetrics = (metricsData as any).metrics as Metric[];
@@ -78,7 +83,16 @@ const rows = allMetrics.filter((m) => groups.includes(m.group)).sort((a, b) => a
 
 function formatLabels(labels: Label[]): string {
   if (!labels || labels.length === 0) return '—';
-  return labels.map((l) => l.name).join(', ');
+  return labels
+    .map((l) => {
+      const name = `<code>${l.name}</code>`;
+      if (l.values && l.values.length > 0) {
+        const options = l.values.map((v) => `<code>${v}</code>`).join(', ');
+        return `${name}: ${options}`;
+      }
+      return name;
+    })
+    .join('<br />');
 }
 ---
 
@@ -96,7 +110,7 @@ function formatLabels(labels: Label[]): string {
       <tr>
         <td><code>{m.name}</code></td>
         <td>{m.type}</td>
-        <td>{formatLabels(m.labels)}</td>
+        <td set:html={formatLabels(m.labels)} />
         <td>{m.help}</td>
       </tr>
     ))}

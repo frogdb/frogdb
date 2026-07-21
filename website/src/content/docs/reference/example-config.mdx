@@ -15,7 +15,7 @@ frogdb-server --generate-config > frogdb.toml
 ```
 
 <Aside type="note">
-`--generate-config` currently prints a hand-maintained TOML template rather than a full serialization of `Config::default()`. It is kept in sync with the config-struct field list by convention, not by the compiler, so a newly added field can land in [Configuration Reference](/reference/configuration/) before it lands here. If a field you need is missing below, check the Configuration Reference table — it is generated directly from `Config::default()` and is authoritative for the full field list.
+`--generate-config` currently prints a hand-maintained TOML template rather than a full serialization of `Config::default()`. It is kept in sync with the config-struct field list by convention, not by the compiler, so a newly added field — or an entire new section — can land in [Configuration Reference](/reference/configuration/) before it lands here. As of this writing, the template below is missing the `[blocking]`, `[tiered-storage]`, `[compat]`, `[hotshards]`, `[debug-bundle]`, and `[monitor]` sections entirely. This is a known gap, tracked for a fix at the generator (`default_toml_impl()` should serialize `Config::default()` instead of a hand-maintained string) rather than in this doc. If a field or section you need is missing below, check the Configuration Reference table — it is generated directly from `Config::default()` and is authoritative for the full field list.
 </Aside>
 
 ## Full configuration
