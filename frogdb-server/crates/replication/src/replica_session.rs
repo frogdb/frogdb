@@ -31,6 +31,8 @@ use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::broadcast;
 
+use frogdb_types::ADVERTISED_REDIS_VERSION;
+
 use crate::BoxedStream;
 use crate::frame::ReplicationFrame;
 use crate::fullsync::{
@@ -879,16 +881,27 @@ struct LagBreach {
     time_exceeded: bool,
 }
 
+/// Append an RDB length-prefixed string using the 6-bit length encoding
+/// (valid for strings under 64 bytes, which covers every AUX field FrogDB emits).
+fn push_rdb_short_string(rdb: &mut Vec<u8>, s: &[u8]) {
+    debug_assert!(
+        s.len() < 64,
+        "string too long for 6-bit RDB length encoding"
+    );
+    rdb.push(s.len() as u8);
+    rdb.extend_from_slice(s);
+}
+
 /// Build a minimal valid RDB suitable for empty databases or fallbacks.
 pub(crate) fn create_minimal_rdb() -> Vec<u8> {
     let mut rdb = Vec::new();
     // Magic + version
     rdb.extend_from_slice(b"REDIS");
     rdb.extend_from_slice(b"0011");
-    // AUX redis-ver:7.2.0
+    // AUX redis-ver:<ADVERTISED_REDIS_VERSION>
     rdb.push(RDB_OPCODE_AUX);
-    rdb.extend_from_slice(b"\x09redis-ver");
-    rdb.extend_from_slice(b"\x057.2.0");
+    push_rdb_short_string(&mut rdb, b"redis-ver");
+    push_rdb_short_string(&mut rdb, ADVERTISED_REDIS_VERSION.as_bytes());
     // SELECTDB 0
     rdb.push(RDB_OPCODE_SELECTDB);
     rdb.push(0x00);

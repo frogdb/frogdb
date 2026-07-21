@@ -1,8 +1,9 @@
 //! Documentation data generator for FrogDB.
 //!
 //! Extracts configuration defaults and JSON Schema metadata from the
-//! `Config` struct to produce a `config-reference.json` file consumed
-//! by the Astro/Starlight documentation site.
+//! `Config` struct to produce a `config-reference.json` file, and version
+//! identifiers to produce a `versions.json` file, both consumed by the
+//! Astro/Starlight documentation site.
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -78,6 +79,32 @@ struct GeneratedNotice {
     regenerate: String,
 }
 
+/// Top-level output structure for `versions.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VersionsInfo {
+    /// Machine-readable notice that this file is generated.
+    #[serde(rename = "_generated")]
+    generated: GeneratedNotice,
+    /// The FrogDB workspace version.
+    workspace_version: String,
+    /// The pinned Rust toolchain channel.
+    rust_toolchain: String,
+    /// The Redis version FrogDB advertises to clients.
+    advertised_redis_version: String,
+    /// The upstream Redis version FrogDB's compatibility is measured against.
+    redis_compat_target: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RustToolchainFile {
+    toolchain: RustToolchainSection,
+}
+
+#[derive(Debug, Deserialize)]
+struct RustToolchainSection {
+    channel: String,
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -85,15 +112,29 @@ fn main() -> Result<()> {
     let output_dir = workspace_root.join(&args.output);
 
     let reference = generate_config_reference()?;
-    let json = serde_json::to_string_pretty(&reference)?;
+    let reference_json = serde_json::to_string_pretty(&reference)?;
+    write_or_check(
+        &output_dir,
+        "config-reference.json",
+        &reference_json,
+        args.check,
+    )?;
 
-    let output_path = output_dir.join("config-reference.json");
+    let versions = generate_versions(&workspace_root)?;
+    let versions_json = serde_json::to_string_pretty(&versions)?;
+    write_or_check(&output_dir, "versions.json", &versions_json, args.check)?;
 
-    if args.check {
-        check_file(&output_path, &json)?;
+    Ok(())
+}
+
+fn write_or_check(output_dir: &PathBuf, file_name: &str, json: &str, check: bool) -> Result<()> {
+    let output_path = output_dir.join(file_name);
+
+    if check {
+        check_file(&output_path, json)?;
     } else {
-        fs::create_dir_all(&output_dir)?;
-        fs::write(&output_path, &json)?;
+        fs::create_dir_all(output_dir)?;
+        fs::write(&output_path, json)?;
         println!("Generated: {}", output_path.display());
     }
 
@@ -116,7 +157,10 @@ fn check_file(path: &PathBuf, expected: &str) -> Result<()> {
         );
     }
 
-    println!("config-reference.json is up to date.");
+    println!(
+        "{} is up to date.",
+        path.file_name().unwrap_or_default().to_string_lossy()
+    );
     Ok(())
 }
 
@@ -192,6 +236,26 @@ fn generate_config_reference() -> Result<ConfigReference> {
             regenerate: "just docs-gen".into(),
         },
         sections,
+    })
+}
+
+fn generate_versions(workspace_root: &std::path::Path) -> Result<VersionsInfo> {
+    let toolchain_path = workspace_root.join("rust-toolchain.toml");
+    let toolchain_toml = fs::read_to_string(&toolchain_path)
+        .with_context(|| format!("Failed to read {}", toolchain_path.display()))?;
+    let toolchain: RustToolchainFile = toml::from_str(&toolchain_toml)
+        .with_context(|| format!("Failed to parse {}", toolchain_path.display()))?;
+
+    Ok(VersionsInfo {
+        generated: GeneratedNotice {
+            warning: "DO NOT EDIT — this file is auto-generated from Rust source code".into(),
+            source: "frogdb-server/crates/types/src/redis_version.rs, rust-toolchain.toml".into(),
+            regenerate: "just docs-gen".into(),
+        },
+        workspace_version: env!("CARGO_PKG_VERSION").to_string(),
+        rust_toolchain: toolchain.toolchain.channel,
+        advertised_redis_version: frogdb_types::ADVERTISED_REDIS_VERSION.to_string(),
+        redis_compat_target: frogdb_types::REDIS_COMPAT_TARGET.to_string(),
     })
 }
 

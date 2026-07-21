@@ -51,7 +51,7 @@ impl InfoSection for ServerSection {
 
         let mut w = SectionWriter::new("Server");
         w.field("frogdb_version", env!("CARGO_PKG_VERSION"))
-            .field("redis_version", "7.2.0")
+            .field("redis_version", frogdb_core::ADVERTISED_REDIS_VERSION)
             .field("redis_git_sha1", "00000000")
             .field("redis_git_dirty", 0)
             .field("redis_build_id", 0)

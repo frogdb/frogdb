@@ -31,6 +31,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 TESTS_DIR = REPO_ROOT / "frogdb-server" / "crates" / "redis-regression" / "tests"
 DEFAULT_OUTPUT = REPO_ROOT / "website" / "src" / "data" / "compat-exclusions.json"
+REDIS_VERSION_PATH = REPO_ROOT / "frogdb-server" / "crates" / "types" / "src" / "redis_version.rs"
 
 # ---------------------------------------------------------------------------
 # Regexes (from audit_tcl.py)
@@ -47,6 +48,8 @@ INTENTIONAL_BULLET_RE = re.compile(r"//!\s*-\s*`([^`]+)`\s*\u2014\s*(.*)$")
 INTENTIONAL_CONT_RE = re.compile(r"^//!\s{2,}(.+)$")
 # Count #[ignore = "..."] tests (broken tests)
 IGNORE_RE = re.compile(r'#\[ignore\s*=\s*"([^"]+)"\]')
+# Extract REDIS_COMPAT_TARGET from frogdb-types, the single source of truth
+REDIS_COMPAT_TARGET_RE = re.compile(r'pub const REDIS_COMPAT_TARGET:\s*&str\s*=\s*"([^"]+)"')
 # Extract test function names
 TEST_FN_RE = re.compile(
     r"#\[tokio::test\b[^\]]*\][^\n]*\n(?:\s*#\[[^\]]*\][^\n]*\n)*\s*async\s+fn\s+([a-z_][a-z0-9_]*)"
@@ -280,6 +283,15 @@ def count_broken_tests(rs_path: Path) -> int:
     return len(IGNORE_RE.findall(content))
 
 
+def get_redis_compat_target() -> str:
+    """Read REDIS_COMPAT_TARGET from frogdb-types, the single source of truth."""
+    content = REDIS_VERSION_PATH.read_text()
+    match = REDIS_COMPAT_TARGET_RE.search(content)
+    if not match:
+        raise SystemExit(f"Could not find REDIS_COMPAT_TARGET in {REDIS_VERSION_PATH}")
+    return match.group(1)
+
+
 # ---------------------------------------------------------------------------
 # Generation
 # ---------------------------------------------------------------------------
@@ -374,7 +386,7 @@ def generate(tests_dir: Path) -> dict:
             "total_tests": total_tests,
             "total_exclusions": total_exclusions,
             "broken_tests": total_broken,
-            "upstream_version": "Redis 8.6.0",
+            "upstream_version": f"Redis {get_redis_compat_target()}",
         },
         "categories": categories,
         "suites": suites,
