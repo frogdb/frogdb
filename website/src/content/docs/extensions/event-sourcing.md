@@ -76,9 +76,9 @@ Read events by version range.
 ES.READ key start_version [end_version] [COUNT n]
 ```
 
-- `start_version` — 1-based inclusive start. Version `1` is the first event ever
-  appended. A `start_version` of `0`, or one past the last version, returns an
-  empty array.
+- `start_version` — 1-based inclusive start. Version `1` is the first surviving
+  event (see [Version semantics](#version-semantics)). A `start_version` of `0`,
+  or one past the last version, returns an empty array.
 - `end_version` — inclusive end. Defaults to the latest version.
 - `COUNT n` — cap the number of events returned.
 
@@ -93,6 +93,8 @@ extra field/value pairs supplied at append time.
   an empty array.
 - `ERR value is not an integer or out of range` — `start_version`,
   `end_version`, or the `COUNT` argument is not a valid integer.
+- `ERR syntax error` — an unexpected extra positional argument after
+  `end_version`.
 
 ### ES.REPLAY
 
