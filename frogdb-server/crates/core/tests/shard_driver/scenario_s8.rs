@@ -76,9 +76,29 @@ proptest! {
     #![proptest_config(ProptestConfig { cases: 64, ..ProptestConfig::default() })]
 
     /// Permute [EXEC, Execute, ExpiryTick, WaiterTimeoutTick] via the shared
-    /// scheduler. Whatever the order, at quiesce: the EXEC's effects are atomic
-    /// (both a and b share the committed value, never one-updated), and the
-    /// memory/expiry-index probes are clean.
+    /// scheduler, with a genuinely-TTL'd key `w` in play so `Tick::Expiry`
+    /// does real sweep work in some interleavings (not the inert no-op it was
+    /// before this fix).
+    ///
+    /// `w` is deliberately a *third* key, distinct from the EXEC's
+    /// watched/written `a`/`b` — not "the same key both watched and TTL'd" as
+    /// originally sketched. WATCH here is the per-shard *coarse* version
+    /// (`worker.rs::check_watches`/`get_key_version` ignore the key argument
+    /// entirely — see `scenario_s2.rs`'s module doc and its
+    /// `ActiveExpiryUnrelated` case): any same-shard removal invalidates any
+    /// outstanding watch, watched key or not. And `execute_transaction`
+    /// (execution.rs:459-462) always calls `purge_expired_watches` on the
+    /// EXEC's own watch list *before* `check_watches`. So if the watched key
+    /// itself carried the TTL, that inline purge-and-bump would fire on
+    /// *every* schedule the instant the EXEC dispatches (whether an explicit
+    /// sweep beat it there or not) — the transaction would abort
+    /// unconditionally, with no schedule-dependent commit branch ever
+    /// reachable. Keeping `w` out of the watch list restores real
+    /// schedule-dependence: the EXEC commits if its dispatch beats every
+    /// version-bumping event (an explicit sweep of `w`, or sender 1's
+    /// unrelated write to `c`); otherwise it aborts. Whichever happens,
+    /// atomicity holds: `a`/`b` are either both the EXEC's committed values
+    /// or both untouched — never one-updated.
     #[test]
     fn prop_s8_exec_atomic_under_permutation(schedule in schedule_strategy(2, 1, 10)) {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -90,14 +110,26 @@ proptest! {
             d.execute(0, "SET", &["a", "0"]).await;
             d.execute(0, "SET", &["b", "0"]).await;
 
-            // Sender 0: a multi-write EXEC (a:=9, b:=9). Sender 1: an unrelated
-            // single write on c.
+            // A key that will genuinely have expired by replay time, so a
+            // live `Tick::Expiry` in the schedule does real sweep work
+            // (removal + version bump) rather than finding nothing to do.
+            d.execute(0, "SET", &["w", "w0"]).await;
+            d.execute(0, "PEXPIRE", &["w", "1"]).await;
+
+            // Watch snapshot happens before the sleep, mirroring a real
+            // client's WATCH a issued while everything is still live.
+            let watch_version = d.get_version(0).await;
+
+            tokio::time::sleep(Duration::from_millis(3)).await; // w now past TTL
+
+            // Sender 0: a multi-write EXEC (a:=9, b:=9), watching `a` at the
+            // pre-sleep version. Sender 1: an unrelated single write on c.
             let mut senders = vec![
                 Sender::new(vec![Step::ExecTransaction {
                     shard: 0,
                     conn_id: 1,
                     commands: vec![cmd("SET", &["a", "9"]), cmd("SET", &["b", "9"])],
-                    watches: vec![],
+                    watches: vec![(Bytes::from_static(b"a"), watch_version)],
                 }]),
                 Sender::new(vec![Step::Execute {
                     shard: 0,
@@ -113,10 +145,27 @@ proptest! {
 
             replay(&mut d, &mut senders, &sched, 1).await;
 
-            // Atomicity: a and b share the committed transaction value.
+            // Outcome-conditional atomicity: whichever way the WATCH raced
+            // (sweep of `w`, sender 1's write to `c`, or neither), a/b are
+            // never partially updated.
             let a = d.execute(0, "GET", &["a"]).await;
             let b = d.execute(0, "GET", &["b"]).await;
-            prop_assert_eq!(a, b, "EXEC not atomic: a and b diverged");
+            let committed = a == Response::Bulk(Some(Bytes::from_static(b"9")));
+            if committed {
+                prop_assert_eq!(
+                    b, Response::Bulk(Some(Bytes::from_static(b"9"))),
+                    "EXEC committed on a but not on b"
+                );
+            } else {
+                prop_assert_eq!(
+                    a, Response::Bulk(Some(Bytes::from_static(b"0"))),
+                    "EXEC aborted but a changed anyway"
+                );
+                prop_assert_eq!(
+                    b, Response::Bulk(Some(Bytes::from_static(b"0"))),
+                    "EXEC aborted but b changed anyway"
+                );
+            }
 
             let mem = d.memory_check(0).await;
             prop_assert_eq!(mem.tracked_bytes, mem.recomputed_bytes);
