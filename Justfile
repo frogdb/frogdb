@@ -945,7 +945,7 @@ lint-metrics-chokepoint:
 # =============================================================================
 
 # Warm up a testbox and record its ID for session-end cleanup
-tb-warmup workflow="blacksmith-testbox.yml" *args="":
+tb-warmup workflow="test-unit-tests-testbox.yml" *args="":
     ./scripts/testbox-warmup.sh {{workflow}} {{args}}
 
 # Run a command on the most recently warmed testbox: just tb-run "just test frogdb-server"
@@ -955,7 +955,9 @@ tb-run cmd:
     export PATH="$HOME/.local/bin:$PATH"
     id=$(tail -1 "$(git rev-parse --git-dir)/blacksmith-testboxes" 2>/dev/null || true)
     [ -n "$id" ] || { echo "no testbox recorded; run 'just tb-warmup' first" >&2; exit 1; }
-    blacksmith testbox run --id "$id" {{quote(cmd)}}
+    # The testbox SSH session does not inherit the workflow's PATH; mise-managed
+    # tools (just, cargo-nextest) live in the shims dir.
+    blacksmith testbox run --id "$id" 'export PATH="$HOME/.local/share/mise/shims:$PATH" && '{{quote(cmd)}}
 
 # Show status of the most recently warmed testbox
 tb-status *args="":
