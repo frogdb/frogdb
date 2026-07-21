@@ -123,9 +123,11 @@ way the release pipeline does.
      frogdb-server/ops/deploy/deb/
 
    cd frogdb-server/ops/deploy/deb
-   ARCH=$(dpkg --print-architecture) nfpm package \
+   ARCH=$(dpkg --print-architecture)
+   VERSION=$(awk -F'"' '/^version:/{print $2}' nfpm.yaml)
+   nfpm package \
      --config nfpm.yaml --packager deb \
-     --target frogdb-server_0.1.0_$ARCH.deb
+     --target frogdb-server_${VERSION}_${ARCH}.deb
    ```
 
 4. **Install and start**:
@@ -144,7 +146,7 @@ The package installs:
 | What | Path |
 |---|---|
 | Server binary | `/usr/bin/frogdb-server` |
-| `frogctl` (operational CLI) | `/usr/bin/frog` |
+| `frogctl` (operational CLI) | `/usr/bin/frogctl` |
 | `frogdb-admin` CLI | `/usr/bin/frogdb-admin` |
 | Config file | `/etc/frogdb/frogdb.toml` |
 | systemd unit | `/usr/lib/systemd/system/frogdb-server.service` |
@@ -159,33 +161,32 @@ The package installs:
    `cargo` command inside the repo with [rustup](https://rustup.rs/) installed
    fetches that exact version automatically.
 
-2. **Install system dependencies.** FrogDB builds RocksDB from source via
-   `librocksdb-sys`, which needs `libclang` for bindgen; TLS support needs
-   OpenSSL and `pkg-config`. These come from your OS package manager, not `cargo`
-   — see `Brewfile` / `shell.nix` at the repo root for the full, current list.
+2. **Install system dependencies.** FrogDB needs `libclang` for `bindgen`
+   (used by `librocksdb-sys`) and a C/C++ toolchain to compile RocksDB's C++
+   sources; TLS is handled by a pure-Rust `rustls` stack, so no system OpenSSL
+   is required. See `Brewfile` / `shell.nix` at the repo root for the full,
+   current list.
 
    **macOS:**
    ```bash
-   brew install llvm pkg-config openssl
+   brew install llvm rocksdb
    ```
-   `llvm` provides `libclang`. macOS builds also need `DYLD_LIBRARY_PATH` pointed
-   at it; the `just` recipes below set this for you automatically.
+   `llvm` provides `libclang`. The `Justfile` defaults `FROGDB_SYSTEM_ROCKSDB`
+   to `1`, so the `just` build recipes below link against this Homebrew
+   RocksDB by default — install it even though `Brewfile` labels it
+   "optional," or the default build will fail to find it. macOS builds also
+   need `DYLD_LIBRARY_PATH` pointed at `llvm`; the `just` recipes set this for
+   you automatically.
 
    **Debian/Ubuntu:**
    ```bash
-   sudo apt install build-essential pkg-config libclang-dev libssl-dev
+   sudo apt install build-essential libclang-dev
    ```
 
    **Arch Linux:**
    ```bash
-   sudo pacman -S base-devel clang openssl pkg-config
+   sudo pacman -S base-devel clang
    ```
-
-   <Aside type="tip">
-   Building RocksDB from source is slow. If you have a system RocksDB installed
-   (`brew install rocksdb` on macOS), set `FROGDB_SYSTEM_ROCKSDB=1` and the
-   `just` build recipes will link against it instead.
-   </Aside>
 
 3. **Clone and build:**
 
@@ -195,10 +196,22 @@ The package installs:
    just release
    ```
 
-   `just release` wraps `cargo build --release` with the environment variables
-   from step 2 already set. The binary lands at `target/release/frogdb-server`.
-   Prefer it over a bare `cargo build --release` so you don't have to set those
-   variables by hand.
+   `just release` wraps `cargo build --release` with the environment
+   variables from step 2 already set. The binary lands at
+   `target/release/frogdb-server`. Prefer it over a bare `cargo build
+   --release` so you don't have to set those variables by hand.
+
+   <Aside type="tip">
+   `just` build recipes default to linking against a Homebrew-installed
+   RocksDB (`FROGDB_SYSTEM_ROCKSDB` defaults to `1` in the `Justfile`, with
+   a Homebrew library path) — that's what step 2's `brew install rocksdb`
+   is for on macOS. On Linux, no system RocksDB path has been set up, so
+   build from source instead by setting `FROGDB_SYSTEM_ROCKSDB=0`:
+
+   ```bash
+   FROGDB_SYSTEM_ROCKSDB=0 just release
+   ```
+   </Aside>
 </Steps>
 
 ## Verify the install

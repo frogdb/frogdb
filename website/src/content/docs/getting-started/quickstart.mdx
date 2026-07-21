@@ -153,9 +153,10 @@ recovery, and choosing a durability mode.
 
 ## Configuration
 
-FrogDB reads configuration from a TOML file, CLI flags, and `FROGDB_<SECTION>__<FIELD>`
-environment variables, in increasing order of precedence; most settings can also
-be changed at runtime with `CONFIG SET`. See
+FrogDB reads configuration from a TOML file, `FROGDB_<SECTION>__<FIELD>`
+environment variables, and CLI flags, in increasing order of precedence
+(CLI flags win); most settings can also be changed at runtime with
+`CONFIG SET`. See
 [Operations → Configuration](/operations/configuration/) for how those surfaces
 combine.
 
