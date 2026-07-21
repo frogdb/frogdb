@@ -191,20 +191,18 @@ impl RoleManagerHandle {
         }
     }
 
+    fn with_lock<R>(&self, f: impl FnOnce(&mut RoleManager) -> R) -> R {
+        f(&mut self.inner.lock().expect("role manager poisoned"))
+    }
+
     /// The data-path role flag owned by the wrapped manager.
     pub fn role_flag(&self) -> Arc<AtomicBool> {
-        self.inner
-            .lock()
-            .expect("role manager poisoned")
-            .role_flag()
+        self.with_lock(|manager| manager.role_flag())
     }
 
     /// The primary this node is currently a replica of, if any.
     pub fn primary_target(&self) -> Option<SocketAddr> {
-        self.inner
-            .lock()
-            .expect("role manager poisoned")
-            .primary_target()
+        self.with_lock(|manager| manager.primary_target())
     }
 
     /// Adopt a boot-spawned replica handler so a later `promote()`/`demote()`
@@ -215,30 +213,21 @@ impl RoleManagerHandle {
         handler: Arc<ReplicaReplicationHandler>,
         primary: SocketAddr,
     ) {
-        self.inner
-            .lock()
-            .expect("role manager poisoned")
-            .register_boot_replica_handler(handler, primary);
+        self.with_lock(|manager| manager.register_boot_replica_handler(handler, primary));
     }
 }
 
 impl frogdb_core::RoleController for RoleManagerHandle {
     fn request_promote(&self) {
-        self.inner.lock().expect("role manager poisoned").promote();
+        self.with_lock(RoleManager::promote);
     }
 
     fn request_demote(&self, primary: SocketAddr) {
-        self.inner
-            .lock()
-            .expect("role manager poisoned")
-            .demote(primary);
+        self.with_lock(|manager| manager.demote(primary));
     }
 
     fn primary_target(&self) -> Option<SocketAddr> {
-        self.inner
-            .lock()
-            .expect("role manager poisoned")
-            .primary_target()
+        RoleManagerHandle::primary_target(self)
     }
 }
 
