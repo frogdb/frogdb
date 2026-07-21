@@ -254,17 +254,20 @@ impl PreDispatchView<'_> {
         // Redis `processCommand` runs the cluster redirection (`getNodeByQuery`,
         // which yields `-MOVED`/`-CROSSSLOT`/`-ASK`) *before* the read-only
         // replica check (`server.masterhost && server.repl_slave_ro`). So a
-        // keyed write sent to a cluster replica must be answered with `-MOVED`
-        // (the slot's primary), never `-READONLY`. A replica never owns the
-        // slot for its keys, so [`Self::validate_cluster_slots`] — at the
+        // keyed write targeting a slot committed to another node must be
+        // answered with `-MOVED` (the slot's primary), never `-READONLY` —
+        // [`Self::validate_cluster_slots`] issues that redirect at the
         // `ClusterSlotValidation` stage, and at queue time inside
-        // [`Self::try_queue_in_transaction`] — will always issue that redirect.
-        // Deferring here (rather than short-circuiting with `-READONLY`) makes
-        // the reply deterministic regardless of whether the async replica-role
-        // flag has been applied yet; without it, a keyed write races the flag
-        // and intermittently leaks `-READONLY` where `-MOVED` is required.
-        // Keyless writes (FLUSHALL, …) and standalone-replication writes are not
-        // slot-redirectable and still get `-READONLY` here.
+        // [`Self::try_queue_in_transaction`]. Deferring here (rather than
+        // short-circuiting with `-READONLY`) makes the reply deterministic
+        // regardless of whether the async replica-role flag has been applied
+        // yet; without it, a keyed write races the flag and intermittently
+        // leaks `-READONLY` where `-MOVED` is required. The deferral is
+        // ownership-aware — see [`Self::write_defers_to_cluster_redirect`] for
+        // why (a slot-owning replica is reachable in FrogDB and must keep the
+        // `-READONLY` rejection). Keyless writes (FLUSHALL, …) and
+        // standalone-replication writes are not slot-redirectable and still
+        // get `-READONLY` here.
         //
         // Flag checks read `get_entry` (all registered commands), not `get`
         // (shard commands only), so a connection-level command like CONFIG —
