@@ -79,7 +79,7 @@ impl DebugProvider for ConnectionHandler {
                 // unavailable shard yields an empty snapshot).
                 Some(id) => {
                     let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-                    let msg = frogdb_core::shard::ShardMessage::GetVllQueueInfo { response_tx };
+                    let msg = frogdb_core::shard::VllMsg::GetVllQueueInfo { response_tx };
                     match self.scatter_gather().query_one(id, msg, response_rx).await {
                         Ok(info) => vec![info],
                         Err(_) => Vec::new(),
@@ -88,7 +88,7 @@ impl DebugProvider for ConnectionHandler {
                 None => {
                     self.scatter_gather()
                         .gather_all(|_shard, response_tx| {
-                            frogdb_core::shard::ShardMessage::GetVllQueueInfo { response_tx }
+                            frogdb_core::shard::VllMsg::GetVllQueueInfo { response_tx }
                         })
                         .await
                 }
@@ -101,7 +101,7 @@ impl DebugProvider for ConnectionHandler {
         Box::pin(async move {
             self.scatter_gather()
                 .gather_all(|_shard, response_tx| {
-                    frogdb_core::shard::ShardMessage::GetLockTableInfo { response_tx }
+                    frogdb_core::shard::DebugIntrospectionMsg::GetLockTableInfo { response_tx }
                 })
                 .await
         })
@@ -112,7 +112,7 @@ impl DebugProvider for ConnectionHandler {
         Box::pin(async move {
             self.scatter_gather()
                 .gather_all(|_shard, response_tx| {
-                    frogdb_core::shard::ShardMessage::GetWaitQueueInfo { response_tx }
+                    frogdb_core::shard::DebugIntrospectionMsg::GetWaitQueueInfo { response_tx }
                 })
                 .await
         })
@@ -122,11 +122,9 @@ impl DebugProvider for ConnectionHandler {
     fn memory_check<'a>(&'a self) -> BoxFuture<'a, Vec<MemoryCheckInfo>> {
         Box::pin(async move {
             self.scatter_gather()
-                .gather_all(
-                    |_shard, response_tx| frogdb_core::shard::ShardMessage::MemoryCheck {
-                        response_tx,
-                    },
-                )
+                .gather_all(|_shard, response_tx| {
+                    frogdb_core::shard::DebugIntrospectionMsg::MemoryCheck { response_tx }
+                })
                 .await
         })
     }
@@ -136,7 +134,7 @@ impl DebugProvider for ConnectionHandler {
         Box::pin(async move {
             self.scatter_gather()
                 .gather_all(|_shard, response_tx| {
-                    frogdb_core::shard::ShardMessage::ExpiryIndexCheck { response_tx }
+                    frogdb_core::shard::DebugIntrospectionMsg::ExpiryIndexCheck { response_tx }
                 })
                 .await
         })
@@ -160,7 +158,7 @@ impl DebugProvider for ConnectionHandler {
             // Shard-level counts from shard 0 (broadcast pub/sub coordinator)
             let (response_tx, response_rx) = oneshot::channel();
             let send_result = self.core.shard_senders[0]
-                .send(frogdb_core::shard::ShardMessage::GetPubSubLimitsInfo { response_tx })
+                .send(frogdb_core::shard::SearchMsg::GetPubSubLimitsInfo { response_tx })
                 .await;
 
             let (shard_total, shard_channels, shard_patterns) = if send_result.is_ok() {
@@ -274,7 +272,7 @@ impl DebugProvider for ConnectionHandler {
             let _ = self
                 .scatter_gather()
                 .gather_all(
-                    |_shard, response_tx| frogdb_core::ShardMessage::SetActiveExpire {
+                    |_shard, response_tx| frogdb_core::ObservabilityMsg::SetActiveExpire {
                         enabled,
                         response_tx,
                     },
@@ -287,14 +285,12 @@ impl DebugProvider for ConnectionHandler {
     fn keysizes_snapshot<'a>(&'a self) -> BoxFuture<'a, KeysizeHistograms> {
         Box::pin(async move {
             let mut merged = KeysizeHistograms::new();
-            let snapshots = self
-                .scatter_gather()
-                .gather_all(
-                    |_shard, response_tx| frogdb_core::ShardMessage::KeysizesSnapshot {
-                        response_tx,
-                    },
-                )
-                .await;
+            let snapshots =
+                self.scatter_gather()
+                    .gather_all(|_shard, response_tx| {
+                        frogdb_core::ObservabilityMsg::KeysizesSnapshot { response_tx }
+                    })
+                    .await;
             for snap in snapshots.into_iter().flatten() {
                 merged.merge(&snap);
             }
@@ -307,7 +303,7 @@ impl DebugProvider for ConnectionHandler {
         Box::pin(async move {
             self.scatter_gather()
                 .gather_all(
-                    |_shard, response_tx| frogdb_core::ShardMessage::AllocsizeInSlot {
+                    |_shard, response_tx| frogdb_core::ObservabilityMsg::AllocsizeInSlot {
                         slot,
                         response_tx,
                     },

@@ -33,7 +33,8 @@ use frogdb_core::shard::types::{
     ExpiryIndexCheckInfo, LockTableInfo, MemoryCheckInfo, TransactionResult, WaitQueueInfo,
 };
 use frogdb_core::shard::{
-    Envelope, NewConnection, ShardMessage, ShardReceiver, ShardSender, ShardWorkerBuilder,
+    BlockingMsg, CoreMsg, DebugIntrospectionMsg, Envelope, NewConnection, ShardMessage,
+    ShardReceiver, ShardSender, ShardWorkerBuilder,
 };
 use frogdb_core::types::BlockingOp;
 use frogdb_core::{CommandRegistry, ShardWorker};
@@ -102,14 +103,14 @@ impl ShardDriver {
     // --- Direct dispatch (test is the sole sender) ----------------------
 
     /// Dispatch a raw message directly to a shard, bypassing its queue.
-    pub async fn dispatch(&mut self, shard: usize, msg: ShardMessage) -> bool {
+    pub async fn dispatch(&mut self, shard: usize, msg: impl Into<ShardMessage>) -> bool {
         self.workers[shard].drive(msg).await
     }
 
     /// Run one command and await its reply.
     pub async fn execute(&mut self, shard: usize, name: &str, args: &[&str]) -> Response {
         let (tx, rx) = oneshot::channel();
-        let msg = ShardMessage::Execute {
+        let msg = CoreMsg::Execute {
             command: Arc::new(cmd(name, args)),
             conn_id: 1,
             txid: None,
@@ -131,7 +132,7 @@ impl ShardDriver {
         args: &[&str],
     ) -> Response {
         let (tx, rx) = oneshot::channel();
-        let msg = ShardMessage::Execute {
+        let msg = CoreMsg::Execute {
             command: Arc::new(cmd(name, args)),
             conn_id,
             txid: None,
@@ -149,7 +150,7 @@ impl ShardDriver {
         let (tx, rx) = oneshot::channel();
         self.dispatch(
             shard,
-            ShardMessage::GetVersion {
+            CoreMsg::GetVersion {
                 keys: vec![],
                 response_tx: tx,
             },
@@ -167,7 +168,7 @@ impl ShardDriver {
         watches: Vec<(Bytes, u64)>,
     ) -> TransactionResult {
         let (tx, rx) = oneshot::channel();
-        let msg = ShardMessage::ExecTransaction {
+        let msg = CoreMsg::ExecTransaction {
             commands,
             watches,
             conn_id,
@@ -189,7 +190,7 @@ impl ShardDriver {
         deadline: Option<Instant>,
     ) -> oneshot::Receiver<Response> {
         let (tx, rx) = oneshot::channel();
-        let msg = ShardMessage::BlockWait {
+        let msg = BlockingMsg::BlockWait {
             conn_id,
             keys,
             op,
@@ -203,7 +204,7 @@ impl ShardDriver {
 
     /// Fire-and-forget waiter cleanup (connection gave up).
     pub async fn unregister_wait(&mut self, shard: usize, conn_id: u64) {
-        self.dispatch(shard, ShardMessage::UnregisterWait { conn_id })
+        self.dispatch(shard, BlockingMsg::UnregisterWait { conn_id })
             .await;
     }
 
@@ -244,29 +245,41 @@ impl ShardDriver {
 
     pub async fn wait_queue_info(&mut self, shard: usize) -> WaitQueueInfo {
         let (tx, rx) = oneshot::channel();
-        self.dispatch(shard, ShardMessage::GetWaitQueueInfo { response_tx: tx })
-            .await;
+        self.dispatch(
+            shard,
+            DebugIntrospectionMsg::GetWaitQueueInfo { response_tx: tx },
+        )
+        .await;
         rx.await.expect("wait queue info")
     }
 
     pub async fn lock_table_info(&mut self, shard: usize) -> LockTableInfo {
         let (tx, rx) = oneshot::channel();
-        self.dispatch(shard, ShardMessage::GetLockTableInfo { response_tx: tx })
-            .await;
+        self.dispatch(
+            shard,
+            DebugIntrospectionMsg::GetLockTableInfo { response_tx: tx },
+        )
+        .await;
         rx.await.expect("lock table info")
     }
 
     pub async fn memory_check(&mut self, shard: usize) -> MemoryCheckInfo {
         let (tx, rx) = oneshot::channel();
-        self.dispatch(shard, ShardMessage::MemoryCheck { response_tx: tx })
-            .await;
+        self.dispatch(
+            shard,
+            DebugIntrospectionMsg::MemoryCheck { response_tx: tx },
+        )
+        .await;
         rx.await.expect("memory check")
     }
 
     pub async fn expiry_index_check(&mut self, shard: usize) -> ExpiryIndexCheckInfo {
         let (tx, rx) = oneshot::channel();
-        self.dispatch(shard, ShardMessage::ExpiryIndexCheck { response_tx: tx })
-            .await;
+        self.dispatch(
+            shard,
+            DebugIntrospectionMsg::ExpiryIndexCheck { response_tx: tx },
+        )
+        .await;
         rx.await.expect("expiry index check")
     }
 }

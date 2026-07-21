@@ -1,15 +1,15 @@
-use super::message::ShardMessage;
+use super::message::ClusterMsg;
 use super::worker::ShardWorker;
 
 impl ShardWorker {
     /// Dispatch cluster/raft messages (SlotMigrated, RaftCommand).
-    pub(super) async fn dispatch_cluster(&mut self, msg: ShardMessage) -> bool {
+    pub(super) async fn dispatch_cluster(&mut self, msg: ClusterMsg) -> bool {
         match msg {
-            ShardMessage::SlotMigrated { slot, target_addr } => {
+            ClusterMsg::SlotMigrated { slot, target_addr } => {
                 self.handle_slot_migrated(slot, target_addr);
                 self.handle_slot_migrated_pubsub(slot);
             }
-            ShardMessage::RaftCommand { cmd, response_tx } => {
+            ClusterMsg::RaftCommand { cmd, response_tx } => {
                 let result = if let Some(raft) = self.cluster.raft() {
                     raft.client_write(cmd)
                         .await
@@ -20,7 +20,6 @@ impl ShardWorker {
                 };
                 let _ = response_tx.send(result);
             }
-            _ => unreachable!(),
         }
         false
     }

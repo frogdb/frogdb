@@ -40,12 +40,16 @@ impl ShardSender {
     }
 
     /// Send a message, automatically recording the enqueue timestamp.
-    pub async fn send(
+    ///
+    /// Generic over `Into<ShardMessage>` so a send site can pass a category
+    /// sub-enum value (`CoreMsg::Execute { .. }`) directly and have it wrapped,
+    /// instead of naming the outer `ShardMessage::Core(..)` wrapper explicitly.
+    pub async fn send<M: Into<ShardMessage>>(
         &self,
-        message: ShardMessage,
+        message: M,
     ) -> Result<(), mpsc::error::SendError<ShardMessage>> {
         let envelope = Envelope {
-            message,
+            message: message.into(),
             enqueued_at: Instant::now(),
         };
         self.inner
@@ -56,12 +60,12 @@ impl ShardSender {
 
     /// Non-blocking send for use in synchronous contexts (e.g. Lua callbacks).
     #[allow(clippy::result_large_err)]
-    pub fn try_send(
+    pub fn try_send<M: Into<ShardMessage>>(
         &self,
-        message: ShardMessage,
+        message: M,
     ) -> Result<(), mpsc::error::TrySendError<ShardMessage>> {
         let envelope = Envelope {
-            message,
+            message: message.into(),
             enqueued_at: Instant::now(),
         };
         self.inner.try_send(envelope).map_err(|e| match e {
@@ -113,8 +117,48 @@ impl ShardReceiver {
 }
 
 /// Messages sent to shard workers.
+///
+/// A thin two-level wrapper: every variant except [`ShardMessage::Shutdown`]
+/// carries a per-category sub-enum. The category partition the event loop
+/// dispatches on is therefore enforced by the type system — a `dispatch_*`
+/// method takes its category enum and matches it exhaustively (no wildcard), so
+/// an unhandled variant is a compile error and a misrouted variant cannot type
+/// check — rather than by hand-maintained agreement between `dispatch_message`
+/// and each `dispatch_*` sub-match closed by `_ => unreachable!()`.
 #[derive(Debug)]
 pub enum ShardMessage {
+    /// Core command execution — see [`CoreMsg`].
+    Core(CoreMsg),
+    /// Pub/Sub and connection lifecycle — see [`PubSubMsg`].
+    PubSub(PubSubMsg),
+    /// Client-side caching / tracking — see [`TrackingMsg`].
+    Tracking(TrackingMsg),
+    /// Scripting and functions — see [`ScriptingMsg`].
+    Scripting(ScriptingMsg),
+    /// Blocking command waiters — see [`BlockingMsg`].
+    Blocking(BlockingMsg),
+    /// Observability: slowlog, memory, latency, stats, config — see [`ObservabilityMsg`].
+    Observability(ObservabilityMsg),
+    /// VLL (Very Lightweight Locking) — see [`VllMsg`].
+    Vll(VllMsg),
+    /// Always-available DEBUG introspection probes — see [`DebugIntrospectionMsg`].
+    DebugIntrospection(DebugIntrospectionMsg),
+    /// Cluster / Raft — see [`ClusterMsg`].
+    Cluster(ClusterMsg),
+    /// Search index flush + pub/sub limits — see [`SearchMsg`].
+    Search(SearchMsg),
+
+    /// Shutdown signal.
+    ///
+    /// Handled directly in the event loop body (flushes WAL and breaks the
+    /// loop); it is the only message that returns `true` from dispatch, so it
+    /// stays a top-level variant rather than folding into a category.
+    Shutdown,
+}
+
+/// Core command-execution messages.
+#[derive(Debug)]
+pub enum CoreMsg {
     /// Execute a command on this shard.
     Execute {
         command: Arc<ParsedCommand>,
@@ -166,10 +210,11 @@ pub enum ShardMessage {
         protocol_version: ProtocolVersion,
         response_tx: oneshot::Sender<TransactionResult>,
     },
+}
 
-    // =========================================================================
-    // Pub/Sub messages
-    // =========================================================================
+/// Pub/Sub and connection-lifecycle messages.
+#[derive(Debug)]
+pub enum PubSubMsg {
     /// Subscribe to broadcast channels.
     Subscribe {
         channels: Vec<Bytes>,
@@ -244,10 +289,11 @@ pub enum ShardMessage {
 
     /// Connection closed - clean up subscriptions and tracking.
     ConnectionClosed { conn_id: ConnId },
+}
 
-    // =========================================================================
-    // Client tracking messages
-    // =========================================================================
+/// Client-side caching / tracking messages.
+#[derive(Debug)]
+pub enum TrackingMsg {
     /// Register a connection for client-side caching invalidation.
     TrackingRegister {
         conn_id: ConnId,
@@ -265,10 +311,11 @@ pub enum ShardMessage {
         noloop: bool,
         prefixes: Vec<Bytes>,
     },
+}
 
-    // =========================================================================
-    // Scripting messages
-    // =========================================================================
+/// Scripting and function messages.
+#[derive(Debug)]
+pub enum ScriptingMsg {
     /// Execute a Lua script (EVAL / EVAL_RO).
     EvalScript {
         /// Script source code.
@@ -348,9 +395,6 @@ pub enum ShardMessage {
         response_tx: std::sync::mpsc::SyncSender<Response>,
     },
 
-    // =========================================================================
-    // Function messages
-    // =========================================================================
     /// Execute a function (FCALL).
     FunctionCall {
         /// Function name.
@@ -368,10 +412,11 @@ pub enum ShardMessage {
         /// Response channel.
         response_tx: oneshot::Sender<Response>,
     },
+}
 
-    // =========================================================================
-    // Blocking commands messages
-    // =========================================================================
+/// Blocking-command waiter messages.
+#[derive(Debug)]
+pub enum BlockingMsg {
     /// Register a blocking wait for keys.
     BlockWait {
         /// Connection ID of the blocked client.
@@ -393,7 +438,11 @@ pub enum ShardMessage {
         /// Connection ID to unregister.
         conn_id: u64,
     },
+}
 
+/// Observability messages: slowlog, memory, latency, stats, and runtime config.
+#[derive(Debug)]
+pub enum ObservabilityMsg {
     // =========================================================================
     // Slowlog messages
     // =========================================================================
@@ -550,10 +599,11 @@ pub enum ShardMessage {
         /// Response channel returning the total memory.
         response_tx: oneshot::Sender<usize>,
     },
+}
 
-    // =========================================================================
-    // VLL (Very Lightweight Locking) messages
-    // =========================================================================
+/// VLL (Very Lightweight Locking) messages.
+#[derive(Debug)]
+pub enum VllMsg {
     /// VLL lock request - declare intents and acquire locks.
     VllLockRequest {
         /// Transaction ID for ordering.
@@ -594,9 +644,16 @@ pub enum ShardMessage {
         release_rx: oneshot::Receiver<()>,
     },
 
-    // =========================================================================
-    // Cluster / Raft messages
-    // =========================================================================
+    /// Get VLL queue information from this shard.
+    GetVllQueueInfo {
+        /// Channel to send the response.
+        response_tx: oneshot::Sender<VllQueueInfo>,
+    },
+}
+
+/// Cluster / Raft messages.
+#[derive(Debug)]
+pub enum ClusterMsg {
     /// Notify shard that a slot has migrated to a new node.
     /// All blocked clients waiting on keys in this slot receive `-MOVED`.
     SlotMigrated {
@@ -614,13 +671,12 @@ pub enum ShardMessage {
         /// Response channel for the result.
         response_tx: oneshot::Sender<Result<(), String>>,
     },
+}
 
-    /// Get VLL queue information from this shard.
-    GetVllQueueInfo {
-        /// Channel to send the response.
-        response_tx: oneshot::Sender<VllQueueInfo>,
-    },
-
+/// Always-available DEBUG introspection messages (LOCKTABLE / WAITQUEUE /
+/// MEMORY-CHECK / EXPIRY-INDEX-CHECK).
+#[derive(Debug)]
+pub enum DebugIntrospectionMsg {
     /// Get the VLL lock-table snapshot from this shard (DEBUG LOCKTABLE).
     GetLockTableInfo {
         /// Channel to send the response.
@@ -644,85 +700,231 @@ pub enum ShardMessage {
         /// Channel to send the response.
         response_tx: oneshot::Sender<super::types::ExpiryIndexCheckInfo>,
     },
+}
+
+/// Search index flush + pub/sub limits messages.
+#[derive(Debug)]
+pub enum SearchMsg {
+    /// Flush (commit) all dirty search indexes on this shard.
+    /// Used by the snapshot coordinator to ensure search index consistency.
+    FlushSearchIndexes { response_tx: oneshot::Sender<()> },
 
     /// Get pub/sub limits info from this shard.
     GetPubSubLimitsInfo {
         /// Channel to send the response.
         response_tx: oneshot::Sender<PubSubLimitsInfo>,
     },
+}
 
-    /// Flush (commit) all dirty search indexes on this shard.
-    /// Used by the snapshot coordinator to ensure search index consistency.
-    FlushSearchIndexes { response_tx: oneshot::Sender<()> },
-
-    /// Shutdown signal.
-    Shutdown,
+impl From<CoreMsg> for ShardMessage {
+    fn from(m: CoreMsg) -> Self {
+        ShardMessage::Core(m)
+    }
+}
+impl From<PubSubMsg> for ShardMessage {
+    fn from(m: PubSubMsg) -> Self {
+        ShardMessage::PubSub(m)
+    }
+}
+impl From<TrackingMsg> for ShardMessage {
+    fn from(m: TrackingMsg) -> Self {
+        ShardMessage::Tracking(m)
+    }
+}
+impl From<ScriptingMsg> for ShardMessage {
+    fn from(m: ScriptingMsg) -> Self {
+        ShardMessage::Scripting(m)
+    }
+}
+impl From<BlockingMsg> for ShardMessage {
+    fn from(m: BlockingMsg) -> Self {
+        ShardMessage::Blocking(m)
+    }
+}
+impl From<ObservabilityMsg> for ShardMessage {
+    fn from(m: ObservabilityMsg) -> Self {
+        ShardMessage::Observability(m)
+    }
+}
+impl From<VllMsg> for ShardMessage {
+    fn from(m: VllMsg) -> Self {
+        ShardMessage::Vll(m)
+    }
+}
+impl From<DebugIntrospectionMsg> for ShardMessage {
+    fn from(m: DebugIntrospectionMsg) -> Self {
+        ShardMessage::DebugIntrospection(m)
+    }
+}
+impl From<ClusterMsg> for ShardMessage {
+    fn from(m: ClusterMsg) -> Self {
+        ShardMessage::Cluster(m)
+    }
+}
+impl From<SearchMsg> for ShardMessage {
+    fn from(m: SearchMsg) -> Self {
+        ShardMessage::Search(m)
+    }
 }
 
 impl ShardMessage {
     /// Return a static string identifying the message variant, for USDT probes.
+    ///
+    /// Delegates to a per-category `probe_type_str`; the produced strings are
+    /// byte-for-byte identical to the pre-split flat variant names (e.g.
+    /// `"VllAbort"`), which downstream USDT probe consumers depend on.
     pub fn probe_type_str(&self) -> &'static str {
         match self {
-            ShardMessage::Execute { .. } => "Execute",
-            ShardMessage::ScatterRequest { .. } => "ScatterRequest",
-            ShardMessage::GetVersion { .. } => "GetVersion",
-            ShardMessage::ExecTransaction { .. } => "ExecTransaction",
-            ShardMessage::Subscribe { .. } => "Subscribe",
-            ShardMessage::Unsubscribe { .. } => "Unsubscribe",
-            ShardMessage::PSubscribe { .. } => "PSubscribe",
-            ShardMessage::PUnsubscribe { .. } => "PUnsubscribe",
-            ShardMessage::Publish { .. } => "Publish",
-            ShardMessage::PublishKeyspace { .. } => "PublishKeyspace",
-            ShardMessage::ShardedSubscribe { .. } => "ShardedSubscribe",
-            ShardMessage::ShardedUnsubscribe { .. } => "ShardedUnsubscribe",
-            ShardMessage::ShardedPublish { .. } => "ShardedPublish",
-            ShardMessage::PubSubIntrospection { .. } => "PubSubIntrospection",
-            ShardMessage::ConnectionClosed { .. } => "ConnectionClosed",
-            ShardMessage::TrackingRegister { .. } => "TrackingRegister",
-            ShardMessage::TrackingUnregister { .. } => "TrackingUnregister",
-            ShardMessage::TrackingBroadcastRegister { .. } => "TrackingBroadcastRegister",
-            ShardMessage::EvalScript { .. } => "EvalScript",
-            ShardMessage::EvalScriptSha { .. } => "EvalScriptSha",
-            ShardMessage::ScriptLoad { .. } => "ScriptLoad",
-            ShardMessage::ScriptExists { .. } => "ScriptExists",
-            ShardMessage::ScriptFlush { .. } => "ScriptFlush",
-            ShardMessage::ScriptKill { .. } => "ScriptKill",
-            ShardMessage::ScriptSubCommand { .. } => "ScriptSubCommand",
-            ShardMessage::FunctionCall { .. } => "FunctionCall",
-            ShardMessage::BlockWait { .. } => "BlockWait",
-            ShardMessage::UnregisterWait { .. } => "UnregisterWait",
-            ShardMessage::SlowlogGet { .. } => "SlowlogGet",
-            ShardMessage::SlowlogLen { .. } => "SlowlogLen",
-            ShardMessage::SlowlogReset { .. } => "SlowlogReset",
-            ShardMessage::SlowlogAdd { .. } => "SlowlogAdd",
-            ShardMessage::MemoryUsage { .. } => "MemoryUsage",
-            ShardMessage::MemoryStats { .. } => "MemoryStats",
-            ShardMessage::InfoSnapshot { .. } => "InfoSnapshot",
-            ShardMessage::ScanBigKeys { .. } => "ScanBigKeys",
-            ShardMessage::LatencyLatest { .. } => "LatencyLatest",
-            ShardMessage::LatencyHistory { .. } => "LatencyHistory",
-            ShardMessage::LatencyReset { .. } => "LatencyReset",
-            ShardMessage::HotShardStats { .. } => "HotShardStats",
-            ShardMessage::ResetStats { .. } => "ResetStats",
-            ShardMessage::UpdateConfig { .. } => "UpdateConfig",
-            ShardMessage::SetActiveExpire { .. } => "SetActiveExpire",
-            ShardMessage::SetKeyMemoryHistograms { .. } => "SetKeyMemoryHistograms",
-            ShardMessage::KeysizesSnapshot { .. } => "KeysizesSnapshot",
-            ShardMessage::AllocsizeInSlot { .. } => "AllocsizeInSlot",
-            ShardMessage::VllLockRequest { .. } => "VllLockRequest",
-            ShardMessage::VllExecute { .. } => "VllExecute",
-            ShardMessage::VllAbort { .. } => "VllAbort",
-            ShardMessage::VllContinuationLock { .. } => "VllContinuationLock",
-            ShardMessage::SlotMigrated { .. } => "SlotMigrated",
-            ShardMessage::RaftCommand { .. } => "RaftCommand",
-            ShardMessage::GetVllQueueInfo { .. } => "GetVllQueueInfo",
-            ShardMessage::GetLockTableInfo { .. } => "GetLockTableInfo",
-            ShardMessage::GetWaitQueueInfo { .. } => "GetWaitQueueInfo",
-            ShardMessage::MemoryCheck { .. } => "MemoryCheck",
-            ShardMessage::ExpiryIndexCheck { .. } => "ExpiryIndexCheck",
-            ShardMessage::GetPubSubLimitsInfo { .. } => "GetPubSubLimitsInfo",
-            ShardMessage::FlushSearchIndexes { .. } => "FlushSearchIndexes",
+            ShardMessage::Core(m) => m.probe_type_str(),
+            ShardMessage::PubSub(m) => m.probe_type_str(),
+            ShardMessage::Tracking(m) => m.probe_type_str(),
+            ShardMessage::Scripting(m) => m.probe_type_str(),
+            ShardMessage::Blocking(m) => m.probe_type_str(),
+            ShardMessage::Observability(m) => m.probe_type_str(),
+            ShardMessage::Vll(m) => m.probe_type_str(),
+            ShardMessage::DebugIntrospection(m) => m.probe_type_str(),
+            ShardMessage::Cluster(m) => m.probe_type_str(),
+            ShardMessage::Search(m) => m.probe_type_str(),
             ShardMessage::Shutdown => "Shutdown",
+        }
+    }
+}
+
+impl CoreMsg {
+    /// USDT probe name for this variant (byte-stable with the pre-split names).
+    pub fn probe_type_str(&self) -> &'static str {
+        match self {
+            CoreMsg::Execute { .. } => "Execute",
+            CoreMsg::ScatterRequest { .. } => "ScatterRequest",
+            CoreMsg::GetVersion { .. } => "GetVersion",
+            CoreMsg::ExecTransaction { .. } => "ExecTransaction",
+        }
+    }
+}
+
+impl PubSubMsg {
+    /// USDT probe name for this variant (byte-stable with the pre-split names).
+    pub fn probe_type_str(&self) -> &'static str {
+        match self {
+            PubSubMsg::Subscribe { .. } => "Subscribe",
+            PubSubMsg::Unsubscribe { .. } => "Unsubscribe",
+            PubSubMsg::PSubscribe { .. } => "PSubscribe",
+            PubSubMsg::PUnsubscribe { .. } => "PUnsubscribe",
+            PubSubMsg::Publish { .. } => "Publish",
+            PubSubMsg::PublishKeyspace { .. } => "PublishKeyspace",
+            PubSubMsg::ShardedSubscribe { .. } => "ShardedSubscribe",
+            PubSubMsg::ShardedUnsubscribe { .. } => "ShardedUnsubscribe",
+            PubSubMsg::ShardedPublish { .. } => "ShardedPublish",
+            PubSubMsg::PubSubIntrospection { .. } => "PubSubIntrospection",
+            PubSubMsg::ConnectionClosed { .. } => "ConnectionClosed",
+        }
+    }
+}
+
+impl TrackingMsg {
+    /// USDT probe name for this variant (byte-stable with the pre-split names).
+    pub fn probe_type_str(&self) -> &'static str {
+        match self {
+            TrackingMsg::TrackingRegister { .. } => "TrackingRegister",
+            TrackingMsg::TrackingUnregister { .. } => "TrackingUnregister",
+            TrackingMsg::TrackingBroadcastRegister { .. } => "TrackingBroadcastRegister",
+        }
+    }
+}
+
+impl ScriptingMsg {
+    /// USDT probe name for this variant (byte-stable with the pre-split names).
+    pub fn probe_type_str(&self) -> &'static str {
+        match self {
+            ScriptingMsg::EvalScript { .. } => "EvalScript",
+            ScriptingMsg::EvalScriptSha { .. } => "EvalScriptSha",
+            ScriptingMsg::ScriptLoad { .. } => "ScriptLoad",
+            ScriptingMsg::ScriptExists { .. } => "ScriptExists",
+            ScriptingMsg::ScriptFlush { .. } => "ScriptFlush",
+            ScriptingMsg::ScriptKill { .. } => "ScriptKill",
+            ScriptingMsg::ScriptSubCommand { .. } => "ScriptSubCommand",
+            ScriptingMsg::FunctionCall { .. } => "FunctionCall",
+        }
+    }
+}
+
+impl BlockingMsg {
+    /// USDT probe name for this variant (byte-stable with the pre-split names).
+    pub fn probe_type_str(&self) -> &'static str {
+        match self {
+            BlockingMsg::BlockWait { .. } => "BlockWait",
+            BlockingMsg::UnregisterWait { .. } => "UnregisterWait",
+        }
+    }
+}
+
+impl ObservabilityMsg {
+    /// USDT probe name for this variant (byte-stable with the pre-split names).
+    pub fn probe_type_str(&self) -> &'static str {
+        match self {
+            ObservabilityMsg::SlowlogGet { .. } => "SlowlogGet",
+            ObservabilityMsg::SlowlogLen { .. } => "SlowlogLen",
+            ObservabilityMsg::SlowlogReset { .. } => "SlowlogReset",
+            ObservabilityMsg::SlowlogAdd { .. } => "SlowlogAdd",
+            ObservabilityMsg::MemoryUsage { .. } => "MemoryUsage",
+            ObservabilityMsg::MemoryStats { .. } => "MemoryStats",
+            ObservabilityMsg::InfoSnapshot { .. } => "InfoSnapshot",
+            ObservabilityMsg::ScanBigKeys { .. } => "ScanBigKeys",
+            ObservabilityMsg::LatencyLatest { .. } => "LatencyLatest",
+            ObservabilityMsg::LatencyHistory { .. } => "LatencyHistory",
+            ObservabilityMsg::LatencyReset { .. } => "LatencyReset",
+            ObservabilityMsg::HotShardStats { .. } => "HotShardStats",
+            ObservabilityMsg::ResetStats { .. } => "ResetStats",
+            ObservabilityMsg::UpdateConfig { .. } => "UpdateConfig",
+            ObservabilityMsg::SetActiveExpire { .. } => "SetActiveExpire",
+            ObservabilityMsg::SetKeyMemoryHistograms { .. } => "SetKeyMemoryHistograms",
+            ObservabilityMsg::KeysizesSnapshot { .. } => "KeysizesSnapshot",
+            ObservabilityMsg::AllocsizeInSlot { .. } => "AllocsizeInSlot",
+        }
+    }
+}
+
+impl VllMsg {
+    /// USDT probe name for this variant (byte-stable with the pre-split names).
+    pub fn probe_type_str(&self) -> &'static str {
+        match self {
+            VllMsg::VllLockRequest { .. } => "VllLockRequest",
+            VllMsg::VllExecute { .. } => "VllExecute",
+            VllMsg::VllAbort { .. } => "VllAbort",
+            VllMsg::VllContinuationLock { .. } => "VllContinuationLock",
+            VllMsg::GetVllQueueInfo { .. } => "GetVllQueueInfo",
+        }
+    }
+}
+
+impl DebugIntrospectionMsg {
+    /// USDT probe name for this variant (byte-stable with the pre-split names).
+    pub fn probe_type_str(&self) -> &'static str {
+        match self {
+            DebugIntrospectionMsg::GetLockTableInfo { .. } => "GetLockTableInfo",
+            DebugIntrospectionMsg::GetWaitQueueInfo { .. } => "GetWaitQueueInfo",
+            DebugIntrospectionMsg::MemoryCheck { .. } => "MemoryCheck",
+            DebugIntrospectionMsg::ExpiryIndexCheck { .. } => "ExpiryIndexCheck",
+        }
+    }
+}
+
+impl ClusterMsg {
+    /// USDT probe name for this variant (byte-stable with the pre-split names).
+    pub fn probe_type_str(&self) -> &'static str {
+        match self {
+            ClusterMsg::SlotMigrated { .. } => "SlotMigrated",
+            ClusterMsg::RaftCommand { .. } => "RaftCommand",
+        }
+    }
+}
+
+impl SearchMsg {
+    /// USDT probe name for this variant (byte-stable with the pre-split names).
+    pub fn probe_type_str(&self) -> &'static str {
+        match self {
+            SearchMsg::FlushSearchIndexes { .. } => "FlushSearchIndexes",
+            SearchMsg::GetPubSubLimitsInfo { .. } => "GetPubSubLimitsInfo",
         }
     }
 }

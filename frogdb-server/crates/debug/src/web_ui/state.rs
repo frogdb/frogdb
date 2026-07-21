@@ -13,7 +13,7 @@
 //! `collect()` can populate.
 //!
 //! Per-shard statistics, latency histograms, and the slowlog are gathered on
-//! demand by scattering [`ShardMessage`] requests over the real shard senders —
+//! demand by scattering `ShardMessage` requests over the real shard senders —
 //! the same messages `INFO` and the `LATENCY`/`SLOWLOG` commands use — so no
 //! surface returns a stubbed empty panel.
 
@@ -25,7 +25,7 @@ use tokio::sync::oneshot;
 
 use crate::bundle::{BundleConfig, BundleGenerator, BundleInfo, BundleStore, DiagnosticCollector};
 use frogdb_core::{
-    ClientRegistry, LatencyEvent, LatencySample, ShardMessage, ShardSender, SlowLogEntry,
+    ClientRegistry, LatencyEvent, LatencySample, ObservabilityMsg, ShardSender, SlowLogEntry,
 };
 use frogdb_telemetry::{NodeStateSnapshot, ShardState, SharedTracer};
 
@@ -454,7 +454,7 @@ impl DebugState {
         for sender in senders.iter() {
             let (response_tx, response_rx) = oneshot::channel();
             if sender
-                .send(ShardMessage::LatencyLatest { response_tx })
+                .send(ObservabilityMsg::LatencyLatest { response_tx })
                 .await
                 .is_ok()
                 && let Ok(samples) = response_rx.await
@@ -481,7 +481,7 @@ impl DebugState {
             for sender in senders.iter() {
                 let (response_tx, response_rx) = oneshot::channel();
                 if sender
-                    .send(ShardMessage::LatencyHistory { event, response_tx })
+                    .send(ObservabilityMsg::LatencyHistory { event, response_tx })
                     .await
                     .is_ok()
                     && let Ok(history) = response_rx.await
@@ -524,7 +524,7 @@ impl DebugState {
         for sender in senders.iter() {
             let (response_tx, response_rx) = oneshot::channel();
             if sender
-                .send(ShardMessage::SlowlogGet { count, response_tx })
+                .send(ObservabilityMsg::SlowlogGet { count, response_tx })
                 .await
                 .is_ok()
                 && let Ok(shard_entries) = response_rx.await
@@ -678,7 +678,9 @@ fn slowlog_entry_from_core(entry: SlowLogEntry) -> SlowlogEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use frogdb_core::{Envelope, InfoShardSnapshot, LatencySample, ShardMemoryStats, TieredCounts};
+    use frogdb_core::{
+        Envelope, InfoShardSnapshot, LatencySample, ShardMemoryStats, ShardMessage, TieredCounts,
+    };
     use tokio::sync::mpsc;
 
     /// Spawn a mock shard worker over the real `ShardMessage` protocol.
@@ -692,7 +694,7 @@ mod tests {
         tokio::spawn(async move {
             while let Some(env) = rx.recv().await {
                 match env.message {
-                    ShardMessage::InfoSnapshot { response_tx } => {
+                    ShardMessage::Observability(ObservabilityMsg::InfoSnapshot { response_tx }) => {
                         let mut snap = InfoShardSnapshot {
                             shard_id,
                             ..Default::default()
@@ -711,18 +713,26 @@ mod tests {
                         };
                         let _ = response_tx.send(snap);
                     }
-                    ShardMessage::LatencyLatest { response_tx } => {
+                    ShardMessage::Observability(ObservabilityMsg::LatencyLatest {
+                        response_tx,
+                    }) => {
                         let sample = LatencySample::with_timestamp(1_000 + shard_id as i64, 5);
                         let _ = response_tx.send(vec![(LatencyEvent::Command, sample)]);
                     }
-                    ShardMessage::LatencyHistory { response_tx, .. } => {
+                    ShardMessage::Observability(ObservabilityMsg::LatencyHistory {
+                        response_tx,
+                        ..
+                    }) => {
                         let history = vec![
                             LatencySample::with_timestamp(1_000 + shard_id as i64, 5),
                             LatencySample::with_timestamp(999 + shard_id as i64, 3),
                         ];
                         let _ = response_tx.send(history);
                     }
-                    ShardMessage::SlowlogGet { response_tx, .. } => {
+                    ShardMessage::Observability(ObservabilityMsg::SlowlogGet {
+                        response_tx,
+                        ..
+                    }) => {
                         let _ = response_tx.send(vec![SlowLogEntry {
                             id: shard_id as u64,
                             timestamp: 1_700_000_000 + shard_id as i64,

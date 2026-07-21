@@ -1,7 +1,7 @@
 //! Timeseries scatter-gather command handlers (TS.QUERYINDEX, TS.MGET, TS.MRANGE/MREVRANGE).
 
 use bytes::Bytes;
-use frogdb_core::{ScatterOp, ShardMessage};
+use frogdb_core::{CoreMsg, ScatterOp};
 use frogdb_protocol::Response;
 
 use crate::connection::{ConnectionHandler, next_txid};
@@ -17,7 +17,7 @@ impl ConnectionHandler {
         let args = args.to_vec();
         self.scatter_gather()
             .run(Box::new(SortedUnion::default()), |_shard, response_tx| {
-                ShardMessage::ScatterRequest {
+                CoreMsg::ScatterRequest {
                     request_id: next_txid(),
                     keys: vec![],
                     operation: ScatterOp::TsQueryIndex { args: args.clone() },
@@ -37,7 +37,7 @@ impl ConnectionHandler {
         let args = args.to_vec();
         self.scatter_gather()
             .run(Box::new(SortedByKey::default()), |_shard, response_tx| {
-                ShardMessage::ScatterRequest {
+                CoreMsg::ScatterRequest {
                     request_id: next_txid(),
                     keys: vec![],
                     operation: ScatterOp::TsMget { args: args.clone() },
@@ -61,7 +61,7 @@ impl ConnectionHandler {
         let args = args.to_vec();
         self.scatter_gather()
             .run(Box::new(SortedByKey::default()), |_shard, response_tx| {
-                ShardMessage::ScatterRequest {
+                CoreMsg::ScatterRequest {
                     request_id: next_txid(),
                     keys: vec![],
                     operation: ScatterOp::TsMrange {

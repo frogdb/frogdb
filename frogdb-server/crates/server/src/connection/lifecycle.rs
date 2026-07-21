@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use frogdb_core::{
-    BoxFuture, ClientTrackingProvider, CommandFlags, FunctionFlags, InvalidationMessage,
-    InvalidationSender, PauseMode, ShardMessage, ShardSender,
+    BlockingMsg, BoxFuture, ClientTrackingProvider, CommandFlags, FunctionFlags,
+    InvalidationMessage, InvalidationSender, PauseMode, PubSubMsg, ShardSender, TrackingMsg,
 };
 use frogdb_protocol::Response;
 use tokio::sync::mpsc;
@@ -113,7 +113,7 @@ impl ClientTrackingProvider for TrackingIo {
                         };
                         let (resp_tx, _) = tokio::sync::oneshot::channel();
                         let _ = broadcast_shard
-                            .send(ShardMessage::Publish {
+                            .send(PubSubMsg::Publish {
                                 channel: Bytes::from_static(b"__redis__:invalidate"),
                                 message: payload,
                                 response_tx: resp_tx,
@@ -131,7 +131,7 @@ impl ClientTrackingProvider for TrackingIo {
             // shard-side, so each call sends only its own (new) prefix batch.
             if bcast {
                 ScatterGather::broadcast(shard_senders)
-                    .broadcast_all(|_shard| ShardMessage::TrackingBroadcastRegister {
+                    .broadcast_all(|_shard| TrackingMsg::TrackingBroadcastRegister {
                         conn_id,
                         sender: sender.clone(),
                         noloop,
@@ -140,7 +140,7 @@ impl ClientTrackingProvider for TrackingIo {
                     .await;
             } else {
                 ScatterGather::broadcast(shard_senders)
-                    .broadcast_all(|_shard| ShardMessage::TrackingRegister {
+                    .broadcast_all(|_shard| TrackingMsg::TrackingRegister {
                         conn_id,
                         sender: sender.clone(),
                         noloop,
@@ -160,7 +160,7 @@ impl ClientTrackingProvider for TrackingIo {
     ) -> BoxFuture<'a, ()> {
         Box::pin(async move {
             ScatterGather::broadcast(shard_senders)
-                .broadcast_all(|_shard| ShardMessage::TrackingUnregister { conn_id })
+                .broadcast_all(|_shard| TrackingMsg::TrackingUnregister { conn_id })
                 .await;
             self.teardown_local();
         })
@@ -191,7 +191,7 @@ impl ConnectionHandler {
         // Notify shards if we had subscriptions or tracking enabled
         if self.state.in_pubsub_mode() || self.state.tracking().enabled {
             ScatterGather::broadcast(self.core.shard_senders.as_slice())
-                .broadcast_all(|_shard| ShardMessage::ConnectionClosed {
+                .broadcast_all(|_shard| PubSubMsg::ConnectionClosed {
                     conn_id: self.state.id,
                 })
                 .await;
@@ -202,7 +202,7 @@ impl ConnectionHandler {
             && let Some(sender) = self.core.shard_senders.get(shard_id)
         {
             let _ = sender
-                .send(ShardMessage::UnregisterWait {
+                .send(BlockingMsg::UnregisterWait {
                     conn_id: self.state.id,
                 })
                 .await;

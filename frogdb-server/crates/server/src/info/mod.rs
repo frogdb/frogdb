@@ -588,8 +588,8 @@ mod tests {
     use super::test_support::sources;
     use super::*;
     use frogdb_core::{
-        InfoShardSnapshot, KeysizeHistograms, ShardMemoryStats, ShardMessage, ShardReceiver,
-        TieredCounts,
+        InfoShardSnapshot, KeysizeHistograms, ObservabilityMsg, ShardMemoryStats, ShardMessage,
+        ShardReceiver, TieredCounts,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::mpsc;
@@ -750,7 +750,10 @@ mod tests {
             tokio::spawn(async move {
                 while let Some(env) = receiver.recv().await {
                     messages.fetch_add(1, Ordering::SeqCst);
-                    if let ShardMessage::InfoSnapshot { response_tx } = env.message {
+                    if let ShardMessage::Observability(ObservabilityMsg::InfoSnapshot {
+                        response_tx,
+                    }) = env.message
+                    {
                         let _ = response_tx.send(shard_snap(shard_id));
                     }
                 }
@@ -782,7 +785,9 @@ mod tests {
         let mut r0 = ShardReceiver::new(rx0);
         tokio::spawn(async move {
             while let Some(env) = r0.recv().await {
-                if let ShardMessage::InfoSnapshot { response_tx } = env.message {
+                if let ShardMessage::Observability(ObservabilityMsg::InfoSnapshot { response_tx }) =
+                    env.message
+                {
                     let _ = response_tx.send(shard_snap(0));
                 }
             }

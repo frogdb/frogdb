@@ -24,7 +24,7 @@
 //!
 //! [`run_event_dispatcher`](Self::run_event_dispatcher) is a background task
 //! that consumes [`SlotMigrationCompleteEvent`]s emitted by the Raft state
-//! machine and fans them out to the per-shard `ShardMessage::SlotMigrated`
+//! machine and fans them out to the per-shard `ClusterMsg::SlotMigrated`
 //! channel used to wake blocked clients with the correct MOVED address.
 
 mod events;
@@ -73,7 +73,7 @@ impl SlotMigrationCoordinator {
     }
 
     /// Spawn the background task that fans slot-migration completion events
-    /// out to the appropriate per-shard `ShardMessage::SlotMigrated` channels.
+    /// out to the appropriate per-shard `ClusterMsg::SlotMigrated` channels.
     pub fn spawn_event_dispatcher(
         &self,
         migration_rx: UnboundedReceiver<SlotMigrationCompleteEvent>,

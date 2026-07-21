@@ -1,7 +1,7 @@
 //! ES.ALL handler.
 
 use bytes::Bytes;
-use frogdb_core::{ScatterOp, ShardMessage};
+use frogdb_core::{CoreMsg, ScatterOp};
 use frogdb_protocol::Response;
 
 use super::merge::EsAllMerge;
@@ -56,7 +56,7 @@ impl ConnectionHandler {
         // after the merge (see `EsAllMerge`).
         self.scatter_gather()
             .run(Box::new(EsAllMerge::new(count)), |_shard, response_tx| {
-                ShardMessage::ScatterRequest {
+                CoreMsg::ScatterRequest {
                     request_id: next_txid(),
                     keys: vec![],
                     operation: ScatterOp::EsAll { count, after_id },

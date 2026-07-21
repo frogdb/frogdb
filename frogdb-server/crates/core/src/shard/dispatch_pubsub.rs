@@ -1,13 +1,13 @@
 use frogdb_types::metrics::definitions::PubsubMessages;
 
-use super::message::ShardMessage;
+use super::message::PubSubMsg;
 use super::worker::ShardWorker;
 
 impl ShardWorker {
     /// Dispatch pub/sub and connection lifecycle messages.
-    pub(super) fn dispatch_pubsub(&mut self, msg: ShardMessage) {
+    pub(super) fn dispatch_pubsub(&mut self, msg: PubSubMsg) {
         match msg {
-            ShardMessage::Subscribe {
+            PubSubMsg::Subscribe {
                 channels,
                 conn_id,
                 sender,
@@ -16,7 +16,7 @@ impl ShardWorker {
                 let counts = self.handle_subscribe(channels, conn_id, sender);
                 let _ = response_tx.send(counts);
             }
-            ShardMessage::Unsubscribe {
+            PubSubMsg::Unsubscribe {
                 channels,
                 conn_id,
                 response_tx,
@@ -24,7 +24,7 @@ impl ShardWorker {
                 let counts = self.handle_unsubscribe(channels, conn_id);
                 let _ = response_tx.send(counts);
             }
-            ShardMessage::PSubscribe {
+            PubSubMsg::PSubscribe {
                 patterns,
                 conn_id,
                 sender,
@@ -33,7 +33,7 @@ impl ShardWorker {
                 let counts = self.handle_psubscribe(patterns, conn_id, sender);
                 let _ = response_tx.send(counts);
             }
-            ShardMessage::PUnsubscribe {
+            PubSubMsg::PUnsubscribe {
                 patterns,
                 conn_id,
                 response_tx,
@@ -41,7 +41,7 @@ impl ShardWorker {
                 let counts = self.handle_punsubscribe(patterns, conn_id);
                 let _ = response_tx.send(counts);
             }
-            ShardMessage::Publish {
+            PubSubMsg::Publish {
                 channel,
                 message,
                 response_tx,
@@ -55,7 +55,7 @@ impl ShardWorker {
                 PubsubMessages::inc(self.observability.metrics(), &shard_label);
                 let _ = response_tx.send(count);
             }
-            ShardMessage::PublishKeyspace { channel, payload } => {
+            PubSubMsg::PublishKeyspace { channel, payload } => {
                 // Forwarded from a non-coordinator shard's keyspace emit. This
                 // is the coordinator shard (shard 0), whose `subscriptions` table
                 // is where every broadcast subscriber — including keyspace and
@@ -66,7 +66,7 @@ impl ShardWorker {
                 // diverge from single-shard for the same event.
                 self.subscriptions.publish(&channel, &payload);
             }
-            ShardMessage::ShardedSubscribe {
+            PubSubMsg::ShardedSubscribe {
                 channels,
                 conn_id,
                 sender,
@@ -75,7 +75,7 @@ impl ShardWorker {
                 let counts = self.handle_ssubscribe(channels, conn_id, sender);
                 let _ = response_tx.send(counts);
             }
-            ShardMessage::ShardedUnsubscribe {
+            PubSubMsg::ShardedUnsubscribe {
                 channels,
                 conn_id,
                 response_tx,
@@ -83,7 +83,7 @@ impl ShardWorker {
                 let counts = self.handle_sunsubscribe(channels, conn_id);
                 let _ = response_tx.send(counts);
             }
-            ShardMessage::ShardedPublish {
+            PubSubMsg::ShardedPublish {
                 channel,
                 message,
                 response_tx,
@@ -93,19 +93,18 @@ impl ShardWorker {
                 PubsubMessages::inc(self.observability.metrics(), &shard_label);
                 let _ = response_tx.send(count);
             }
-            ShardMessage::PubSubIntrospection {
+            PubSubMsg::PubSubIntrospection {
                 request,
                 response_tx,
             } => {
                 let response = self.handle_introspection(request);
                 let _ = response_tx.send(response);
             }
-            ShardMessage::ConnectionClosed { conn_id } => {
+            PubSubMsg::ConnectionClosed { conn_id } => {
                 self.subscriptions.remove_connection(conn_id);
                 self.subscriptions.reset_thresholds_if_needed();
                 self.tracking.unregister(conn_id);
             }
-            _ => unreachable!(),
         }
     }
 }

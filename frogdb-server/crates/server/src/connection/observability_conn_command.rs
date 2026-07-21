@@ -21,7 +21,7 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, BoxFuture, CommandFlags, CommandSpec, ConnCtx, ConnectionCommand,
     ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, LatencyEvent, LatencySample,
-    LookupSpec, MemoryDiagProvider, ShardMemoryStats, ShardMessage, ShardSender, WaiterWake,
+    LookupSpec, MemoryDiagProvider, ObservabilityMsg, ShardMemoryStats, ShardSender, WaiterWake,
     WalStrategy, generate_latency_graph, shard_for_key,
 };
 use frogdb_protocol::Response;
@@ -56,7 +56,7 @@ impl MemoryDiagProvider for MemoryDiag {
 /// Gather memory stats from all shards. Used by MEMORY STATS.
 async fn gather_memory_stats(shard_senders: &[ShardSender]) -> Vec<ShardMemoryStats> {
     ScatterGather::new(shard_senders, DEFAULT_SCATTER_GATHER_TIMEOUT, 0)
-        .gather_all(|_shard, response_tx| ShardMessage::MemoryStats { response_tx })
+        .gather_all(|_shard, response_tx| ObservabilityMsg::MemoryStats { response_tx })
         .await
 }
 
@@ -67,7 +67,7 @@ async fn gather_latency_latest(
     let mut latest_by_event: HashMap<LatencyEvent, LatencySample> = HashMap::new();
 
     let per_shard = ScatterGather::new(shard_senders, DEFAULT_SCATTER_GATHER_TIMEOUT, 0)
-        .gather_all(|_shard, response_tx| ShardMessage::LatencyLatest { response_tx })
+        .gather_all(|_shard, response_tx| ObservabilityMsg::LatencyLatest { response_tx })
         .await;
     for samples in per_shard {
         for (event, sample) in samples {
@@ -93,7 +93,10 @@ async fn gather_latency_history(
 ) -> Vec<LatencySample> {
     let mut all_samples: Vec<LatencySample> =
         ScatterGather::new(shard_senders, DEFAULT_SCATTER_GATHER_TIMEOUT, 0)
-            .gather_all(|_shard, response_tx| ShardMessage::LatencyHistory { event, response_tx })
+            .gather_all(|_shard, response_tx| ObservabilityMsg::LatencyHistory {
+                event,
+                response_tx,
+            })
             .await
             .into_iter()
             .flatten()
@@ -191,7 +194,7 @@ async fn slowlog_get(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
     // Scatter-gather: collect from all shards
     let mut all_entries: Vec<_> =
         ScatterGather::new(ctx.shard_senders, DEFAULT_SCATTER_GATHER_TIMEOUT, 0)
-            .gather_all(|_shard, response_tx| ShardMessage::SlowlogGet { count, response_tx })
+            .gather_all(|_shard, response_tx| ObservabilityMsg::SlowlogGet { count, response_tx })
             .await
             .into_iter()
             .flatten()
@@ -224,7 +227,7 @@ async fn slowlog_get(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
 /// SLOWLOG LEN — get total number of entries across all shards.
 async fn slowlog_len(ctx: &ConnCtx<'_>) -> Response {
     let total_len: usize = ScatterGather::new(ctx.shard_senders, DEFAULT_SCATTER_GATHER_TIMEOUT, 0)
-        .gather_all(|_shard, response_tx| ShardMessage::SlowlogLen { response_tx })
+        .gather_all(|_shard, response_tx| ObservabilityMsg::SlowlogLen { response_tx })
         .await
         .into_iter()
         .sum();
@@ -237,7 +240,7 @@ async fn slowlog_reset(ctx: &ConnCtx<'_>) -> Response {
     // Await-and-discard: the replies are only a barrier confirming every shard
     // cleared its log. Bounded by the shared deadline (was unbounded).
     let _ = ScatterGather::new(ctx.shard_senders, DEFAULT_SCATTER_GATHER_TIMEOUT, 0)
-        .gather_all(|_shard, response_tx| ShardMessage::SlowlogReset { response_tx })
+        .gather_all(|_shard, response_tx| ObservabilityMsg::SlowlogReset { response_tx })
         .await;
 
     Response::ok()
@@ -480,7 +483,7 @@ async fn memory_usage(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
 
     let (response_tx, response_rx) = oneshot::channel();
     if sender
-        .send(ShardMessage::MemoryUsage {
+        .send(ObservabilityMsg::MemoryUsage {
             key: key.clone(),
             samples,
             response_tx,
@@ -775,7 +778,7 @@ async fn latency_reset(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
     // Broadcast reset to all shards. Await-and-discard: the replies are only a
     // barrier confirming every shard reset. Bounded by the shared deadline.
     let _ = ScatterGather::new(ctx.shard_senders, DEFAULT_SCATTER_GATHER_TIMEOUT, 0)
-        .gather_all(|_shard, response_tx| ShardMessage::LatencyReset {
+        .gather_all(|_shard, response_tx| ObservabilityMsg::LatencyReset {
             events: events.clone(),
             response_tx,
         })

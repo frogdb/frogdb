@@ -1,7 +1,7 @@
 //! FT.ALTER, FT.DROPINDEX, FT.INFO, FT.LIST handlers.
 
 use bytes::Bytes;
-use frogdb_core::{ScatterOp, ShardMessage};
+use frogdb_core::{CoreMsg, ScatterOp};
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
 
@@ -32,7 +32,7 @@ impl ConnectionHandler {
         self.scatter_gather()
             .run(
                 Box::new(OkOrFirstError::default()),
-                |_shard, response_tx| ShardMessage::ScatterRequest {
+                |_shard, response_tx| CoreMsg::ScatterRequest {
                     request_id: next_txid(),
                     keys: vec![],
                     operation: ScatterOp::FtAlter {
@@ -57,7 +57,7 @@ impl ConnectionHandler {
         self.scatter_gather()
             .run(
                 Box::new(OkOrFirstError::default()),
-                |_shard, response_tx| ShardMessage::ScatterRequest {
+                |_shard, response_tx| CoreMsg::ScatterRequest {
                     request_id: next_txid(),
                     keys: vec![],
                     operation: ScatterOp::FtDropIndex {
@@ -80,7 +80,7 @@ impl ConnectionHandler {
 
         // Only query shard 0 (all shards have identical schemas)
         let (response_tx, response_rx) = oneshot::channel();
-        let msg = ShardMessage::ScatterRequest {
+        let msg = CoreMsg::ScatterRequest {
             request_id: next_txid(),
             keys: vec![],
             operation: ScatterOp::FtInfo { index_name },
@@ -107,7 +107,7 @@ impl ConnectionHandler {
     /// Handle FT._LIST - query shard 0 only.
     pub(crate) async fn handle_ft_list(&self, _args: &[Bytes]) -> Response {
         let (response_tx, response_rx) = oneshot::channel();
-        let msg = ShardMessage::ScatterRequest {
+        let msg = CoreMsg::ScatterRequest {
             request_id: next_txid(),
             keys: vec![],
             operation: ScatterOp::FtList,

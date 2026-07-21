@@ -34,7 +34,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, BoxFuture, CommandFlags, CommandSpec, ConnCtx, ConnectionCommand,
-    ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, LookupSpec, ShardMessage, WaiterWake,
+    ConnectionLevelOp, CoreMsg, EventSpec, ExecutionStrategy, KeySpec, LookupSpec, WaiterWake,
     WalStrategy,
 };
 use frogdb_protocol::Response;
@@ -305,7 +305,7 @@ async fn handle_watch(ctx: &mut ConnCtx<'_>, args: &[Bytes]) -> Response {
     // still live here that expires during the window is caught at EXEC (F3).
     let (response_tx, response_rx) = oneshot::channel();
     if shard_senders[shard]
-        .send(ShardMessage::GetVersion {
+        .send(CoreMsg::GetVersion {
             keys: args.to_vec(),
             response_tx,
         })

@@ -14,7 +14,7 @@ use tokio::sync::oneshot;
 use frogdb_core::persistence::{FakeFailure, WalFailurePolicy};
 use frogdb_core::shard::types::TransactionResult;
 use frogdb_core::shard::{
-    Envelope, FakeWalRegistry, NewConnection, ShardMessage, ShardReceiver, ShardSender,
+    CoreMsg, Envelope, FakeWalRegistry, NewConnection, ShardReceiver, ShardSender,
     ShardWorkerBuilder, WalMode,
 };
 use frogdb_core::{CommandRegistry, ShardWorker};
@@ -60,7 +60,7 @@ fn build_rollback_worker(
 
 async fn exec_tx(worker: &mut ShardWorker, commands: Vec<ParsedCommand>) -> TransactionResult {
     let (tx, rx) = oneshot::channel();
-    let msg = ShardMessage::ExecTransaction {
+    let msg = CoreMsg::ExecTransaction {
         commands,
         watches: vec![],
         conn_id: 1,
@@ -73,7 +73,7 @@ async fn exec_tx(worker: &mut ShardWorker, commands: Vec<ParsedCommand>) -> Tran
 
 async fn get(worker: &mut ShardWorker, key: &str) -> Response {
     let (tx, rx) = oneshot::channel();
-    let msg = ShardMessage::Execute {
+    let msg = CoreMsg::Execute {
         command: Arc::new(cmd("GET", &[key])),
         conn_id: 1,
         txid: None,

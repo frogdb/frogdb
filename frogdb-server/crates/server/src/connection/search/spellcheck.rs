@@ -1,7 +1,7 @@
 //! FT.SPELLCHECK handler.
 
 use bytes::Bytes;
-use frogdb_core::{ScatterOp, ShardMessage};
+use frogdb_core::{CoreMsg, ScatterOp};
 use frogdb_protocol::Response;
 
 use super::merge::SpellcheckMerge;
@@ -19,7 +19,7 @@ impl ConnectionHandler {
         self.scatter_gather()
             .run(
                 Box::new(SpellcheckMerge::default()),
-                |_shard, response_tx| ShardMessage::ScatterRequest {
+                |_shard, response_tx| CoreMsg::ScatterRequest {
                     request_id: next_txid(),
                     keys: vec![],
                     operation: ScatterOp::FtSpellcheck {

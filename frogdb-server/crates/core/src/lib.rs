@@ -134,13 +134,14 @@ pub use scripting::{
     CachedScript, LuaVm, ScriptCache, ScriptError, ScriptExecutor, ScriptingConfig,
 };
 pub use shard::{
-    BigKeyInfo, BigKeysScanResponse, Envelope, HotShardStatsResponse, IndexLifecycleManager,
-    InfoShardSnapshot, LifecycleError, PartialResult, REDIS_CLUSTER_SLOTS,
-    REPLICA_INTERNAL_CONN_ID, RecoveryOutcome, RecoveryResult, ScatterOp, ShardBuilderError,
+    BigKeyInfo, BigKeysScanResponse, BlockingMsg, ClusterMsg, CoreMsg, DebugIntrospectionMsg,
+    Envelope, HotShardStatsResponse, IndexLifecycleManager, InfoShardSnapshot, LifecycleError,
+    ObservabilityMsg, PartialResult, PubSubMsg, REDIS_CLUSTER_SLOTS, REPLICA_INTERNAL_CONN_ID,
+    RecoveryOutcome, RecoveryResult, ScatterOp, ScriptingMsg, SearchMsg, ShardBuilderError,
     ShardClusterDeps, ShardConfig, ShardCoreDeps, ShardMemoryStats, ShardMessage,
     ShardPersistenceDeps, ShardReceiver, ShardSender, ShardWaitQueue, ShardWorker,
-    ShardWorkerBuilder, TieredCounts, TransactionResult, WaitEntry, WalLagStatsResponse,
-    extract_hash_tag, shard_for_key, slot_for_key,
+    ShardWorkerBuilder, TieredCounts, TrackingMsg, TransactionResult, VllMsg, WaitEntry,
+    WalLagStatsResponse, extract_hash_tag, shard_for_key, slot_for_key,
 };
 pub use slowlog::{
     DEFAULT_SLOWLOG_LOG_SLOWER_THAN, DEFAULT_SLOWLOG_MAX_ARG_LEN, DEFAULT_SLOWLOG_MAX_LEN, SlowLog,

@@ -1,7 +1,7 @@
 //! FCALL/FCALL_RO and FUNCTION LOAD/DELETE/LIST/STATS/DUMP/RESTORE/KILL/HELP handlers.
 
 use bytes::Bytes;
-use frogdb_core::{RwLockExt, ShardMessage};
+use frogdb_core::{RwLockExt, ScriptingMsg};
 use frogdb_protocol::Response;
 use std::path::PathBuf;
 use tokio::sync::oneshot;
@@ -49,7 +49,7 @@ impl ConnectionHandler {
 
         // Send to shard
         let (response_tx, response_rx) = oneshot::channel();
-        let msg = ShardMessage::FunctionCall {
+        let msg = ScriptingMsg::FunctionCall {
             function_name,
             keys,
             argv,
@@ -503,7 +503,7 @@ impl ConnectionHandler {
         match self
             .scatter_gather()
             .find_first(
-                |_shard, response_tx| ShardMessage::ScriptKill { response_tx },
+                |_shard, response_tx| ScriptingMsg::ScriptKill { response_tx },
                 |reply| !matches!(reply, Err(e) if e.contains("NOTBUSY")),
             )
             .await

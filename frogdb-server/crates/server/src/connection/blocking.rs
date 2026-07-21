@@ -7,7 +7,7 @@
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use frogdb_core::{BlockingOp, ShardMessage, UnblockMode, shard_for_key};
+use frogdb_core::{BlockingMsg, BlockingOp, UnblockMode, shard_for_key};
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
 
@@ -91,7 +91,7 @@ impl ConnectionHandler {
         };
 
         if sender
-            .send(ShardMessage::BlockWait {
+            .send(BlockingMsg::BlockWait {
                 conn_id: self.state.id,
                 keys: keys.to_vec(),
                 op,
@@ -132,7 +132,7 @@ impl ConnectionHandler {
             && let Some(sender) = self.core.shard_senders.get(target_shard)
         {
             let _ = sender
-                .send(ShardMessage::UnregisterWait {
+                .send(BlockingMsg::UnregisterWait {
                     conn_id: self.state.id,
                 })
                 .await;

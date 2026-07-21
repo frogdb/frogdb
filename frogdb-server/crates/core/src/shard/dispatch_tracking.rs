@@ -1,11 +1,11 @@
-use super::message::ShardMessage;
+use super::message::TrackingMsg;
 use super::worker::ShardWorker;
 
 impl ShardWorker {
     /// Dispatch client tracking messages.
-    pub(super) fn dispatch_tracking(&mut self, msg: ShardMessage) {
+    pub(super) fn dispatch_tracking(&mut self, msg: TrackingMsg) {
         match msg {
-            ShardMessage::TrackingRegister {
+            TrackingMsg::TrackingRegister {
                 conn_id,
                 sender,
                 noloop,
@@ -15,10 +15,10 @@ impl ShardWorker {
                     crate::tracking::TrackedConnection { sender, noloop },
                 );
             }
-            ShardMessage::TrackingUnregister { conn_id } => {
+            TrackingMsg::TrackingUnregister { conn_id } => {
                 self.tracking.unregister(conn_id);
             }
-            ShardMessage::TrackingBroadcastRegister {
+            TrackingMsg::TrackingBroadcastRegister {
                 conn_id,
                 sender,
                 noloop,
@@ -30,7 +30,6 @@ impl ShardWorker {
                     &prefixes,
                 );
             }
-            _ => unreachable!(),
         }
     }
 }

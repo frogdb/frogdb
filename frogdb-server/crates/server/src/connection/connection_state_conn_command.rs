@@ -36,7 +36,7 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
-use crate::connection::ShardMessage;
+use crate::connection::PubSubMsg;
 use crate::scatter::ScatterGather;
 
 /// Build a `CommandSpec` for a connection-state command. All four share the same
@@ -137,7 +137,7 @@ async fn handle_reset(ctx: &mut ConnCtx<'_>) -> Response {
     // handle_reset sent ConnectionClosed once if either was active.
     if outcome.was_in_pubsub || outcome.tracking_was_enabled {
         ScatterGather::broadcast(shard_senders)
-            .broadcast_all(|_shard| ShardMessage::ConnectionClosed { conn_id })
+            .broadcast_all(|_shard| PubSubMsg::ConnectionClosed { conn_id })
             .await;
     }
 

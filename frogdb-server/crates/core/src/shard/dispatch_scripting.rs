@@ -1,11 +1,11 @@
-use super::message::ShardMessage;
+use super::message::ScriptingMsg;
 use super::worker::ShardWorker;
 
 impl ShardWorker {
     /// Dispatch scripting messages (EvalScript, EvalScriptSha, ScriptLoad, etc.).
-    pub(super) async fn dispatch_scripting(&mut self, msg: ShardMessage) -> bool {
+    pub(super) async fn dispatch_scripting(&mut self, msg: ScriptingMsg) -> bool {
         match msg {
-            ShardMessage::EvalScript {
+            ScriptingMsg::EvalScript {
                 script_source,
                 keys,
                 argv,
@@ -30,7 +30,7 @@ impl ShardWorker {
                     .await;
                 let _ = response_tx.send(response);
             }
-            ShardMessage::EvalScriptSha {
+            ScriptingMsg::EvalScriptSha {
                 script_sha,
                 keys,
                 argv,
@@ -55,26 +55,26 @@ impl ShardWorker {
                     .await;
                 let _ = response_tx.send(response);
             }
-            ShardMessage::ScriptLoad {
+            ScriptingMsg::ScriptLoad {
                 script_source,
                 response_tx,
             } => {
                 let sha = self.handle_script_load(&script_source);
                 let _ = response_tx.send(sha);
             }
-            ShardMessage::ScriptExists { shas, response_tx } => {
+            ScriptingMsg::ScriptExists { shas, response_tx } => {
                 let results = self.handle_script_exists(&shas);
                 let _ = response_tx.send(results);
             }
-            ShardMessage::ScriptFlush { response_tx } => {
+            ScriptingMsg::ScriptFlush { response_tx } => {
                 self.handle_script_flush();
                 let _ = response_tx.send(());
             }
-            ShardMessage::ScriptKill { response_tx } => {
+            ScriptingMsg::ScriptKill { response_tx } => {
                 let result = self.handle_script_kill();
                 let _ = response_tx.send(result);
             }
-            ShardMessage::FunctionCall {
+            ScriptingMsg::FunctionCall {
                 function_name,
                 keys,
                 argv,
@@ -95,7 +95,7 @@ impl ShardWorker {
                     .await;
                 let _ = response_tx.send(response);
             }
-            ShardMessage::ScriptSubCommand {
+            ScriptingMsg::ScriptSubCommand {
                 command,
                 conn_id,
                 protocol_version,
@@ -110,7 +110,6 @@ impl ShardWorker {
                     .await;
                 let _ = response_tx.send(response);
             }
-            _ => unreachable!(),
         }
         false
     }

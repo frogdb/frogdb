@@ -125,10 +125,11 @@ impl<'a> ScatterGather<'a> {
     /// single shared deadline, fold them with `merge`, and map send-failure /
     /// drop / timeout to the canonical error replies — once, for every broadcast
     /// command.
-    pub async fn run<M, F>(&self, mut merge: Box<M>, make_msg: F) -> Response
+    pub async fn run<M, F, S>(&self, mut merge: Box<M>, make_msg: F) -> Response
     where
         M: MergeStrategy + ?Sized,
-        F: Fn(usize, oneshot::Sender<M::Reply>) -> ShardMessage,
+        F: Fn(usize, oneshot::Sender<M::Reply>) -> S,
+        S: Into<ShardMessage>,
     {
         let mut rxs = Vec::with_capacity(self.senders.len());
         for (shard_id, sender) in self.senders.iter().enumerate() {
@@ -193,7 +194,7 @@ impl<'a> ScatterGather<'a> {
     pub async fn query_one<R: Send + 'static>(
         &self,
         shard_id: usize,
-        message: ShardMessage,
+        message: impl Into<ShardMessage>,
         rx: oneshot::Receiver<R>,
     ) -> Result<R, Response> {
         if self.senders[shard_id].send(message).await.is_err() {
@@ -224,10 +225,11 @@ impl<'a> ScatterGather<'a> {
     /// produced. The whole gather is bounded by one deadline, replacing the
     /// per-shard 5s timeouts (worst case N×5s) and the unbounded awaits these
     /// callers used to hand-roll.
-    pub async fn gather_all<R, F>(&self, make_msg: F) -> Vec<R>
+    pub async fn gather_all<R, F, S>(&self, make_msg: F) -> Vec<R>
     where
         R: Send + 'static,
-        F: Fn(usize, oneshot::Sender<R>) -> ShardMessage,
+        F: Fn(usize, oneshot::Sender<R>) -> S,
+        S: Into<ShardMessage>,
     {
         let mut rxs = Vec::with_capacity(self.senders.len());
         for (shard_id, sender) in self.senders.iter().enumerate() {
@@ -275,10 +277,11 @@ impl<'a> ScatterGather<'a> {
     /// caller classifies the returned reply, so the exact NOTBUSY / UNKILLABLE /
     /// hard-error precedence stays at the call site. The per-shard await that
     /// FUNCTION KILL used to leave unbounded is now structurally bounded here.
-    pub async fn find_first<R, F, P>(&self, make_msg: F, predicate: P) -> Option<R>
+    pub async fn find_first<R, F, P, S>(&self, make_msg: F, predicate: P) -> Option<R>
     where
         R: Send + 'static,
-        F: Fn(usize, oneshot::Sender<R>) -> ShardMessage,
+        F: Fn(usize, oneshot::Sender<R>) -> S,
+        S: Into<ShardMessage>,
         P: Fn(&R) -> bool,
     {
         let mut rxs = Vec::with_capacity(self.senders.len());
@@ -314,9 +317,10 @@ impl<'a> ScatterGather<'a> {
     /// reply. Send failures are silently ignored (best-effort), matching the
     /// teardown/registration fan-outs this replaces: they must never surface an
     /// error to the caller. No reply is awaited, so there is no deadline.
-    pub async fn broadcast_all<F>(&self, make_msg: F)
+    pub async fn broadcast_all<F, S>(&self, make_msg: F)
     where
-        F: Fn(usize) -> ShardMessage,
+        F: Fn(usize) -> S,
+        S: Into<ShardMessage>,
     {
         for (shard_id, sender) in self.senders.iter().enumerate() {
             let _ = sender.send(make_msg(shard_id)).await;
@@ -682,7 +686,7 @@ impl MergeStrategy for BoolOr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use frogdb_core::ShardReceiver;
+    use frogdb_core::{CoreMsg, ShardReceiver};
     use tokio::sync::mpsc;
 
     // -------------------------------------------------------------------------
@@ -937,7 +941,9 @@ mod tests {
             tasks.push(tokio::spawn(async move {
                 let mut held = Vec::new();
                 while let Some(env) = receiver.recv().await {
-                    if let ShardMessage::ScatterRequest { response_tx, .. } = env.message {
+                    if let ShardMessage::Core(CoreMsg::ScatterRequest { response_tx, .. }) =
+                        env.message
+                    {
                         match &behavior {
                             Behavior::Reply(results) => {
                                 let _ = response_tx.send(partial(results.clone()));
@@ -954,8 +960,8 @@ mod tests {
         (senders, tasks)
     }
 
-    fn dbsize_msg(_shard: usize, response_tx: oneshot::Sender<PartialResult>) -> ShardMessage {
-        ShardMessage::ScatterRequest {
+    fn dbsize_msg(_shard: usize, response_tx: oneshot::Sender<PartialResult>) -> CoreMsg {
+        CoreMsg::ScatterRequest {
             request_id: 1,
             keys: vec![],
             operation: frogdb_core::ScatterOp::DbSize,
@@ -1077,9 +1083,9 @@ mod tests {
 
     /// A fire-and-forget message with a throwaway reply channel — `broadcast_all`
     /// discards replies, so the receiver is dropped immediately.
-    fn dbsize_broadcast_msg(_shard: usize) -> ShardMessage {
+    fn dbsize_broadcast_msg(_shard: usize) -> CoreMsg {
         let (response_tx, _rx) = oneshot::channel();
-        ShardMessage::ScatterRequest {
+        CoreMsg::ScatterRequest {
             request_id: 1,
             keys: vec![],
             operation: frogdb_core::ScatterOp::DbSize,

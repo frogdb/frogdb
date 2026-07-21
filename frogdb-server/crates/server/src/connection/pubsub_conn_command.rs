@@ -31,8 +31,8 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, BoxFuture, CommandFlags, CommandSpec, ConnCtx, ConnId, ConnectionCommand,
     ConnectionLevelOp, EventSpec, ExecutionStrategy, GlobPattern, IntrospectionRequest,
-    IntrospectionResponse, KeySpec, LookupSpec, PubSubConfirmation, PubSubMessage, PubSubProvider,
-    PubSubSender, ShardMessage, WaiterWake, WalStrategy, shard_for_key, slot_for_key,
+    IntrospectionResponse, KeySpec, LookupSpec, PubSubConfirmation, PubSubMessage, PubSubMsg,
+    PubSubProvider, PubSubSender, WaiterWake, WalStrategy, shard_for_key, slot_for_key,
 };
 use frogdb_protocol::Response;
 use tokio::sync::{mpsc, oneshot};
@@ -51,7 +51,7 @@ use crate::slot_migration::RouteOutcome;
 /// through this single shard so each subscriber is registered exactly once and
 /// each message is delivered exactly once, with a subscriber count that is not
 /// multiplied by the number of shards. Forwarded keyspace notifications
-/// (`ShardMessage::PublishKeyspace`) and the CLIENT TRACKING BCAST redirect
+/// (`PubSubMsg::PublishKeyspace`) and the CLIENT TRACKING BCAST redirect
 /// path rely on the same invariant. Also referenced by the cluster bus and the
 /// connection lifecycle.
 pub(crate) const BROADCAST_SHARD: usize = 0;
@@ -91,10 +91,9 @@ struct SubKindSpec {
     /// Error returned when the per-connection limit is hit.
     limit_error: &'static str,
     /// Build the batched shard registration message.
-    subscribe_msg:
-        fn(Vec<Bytes>, ConnId, PubSubSender, oneshot::Sender<Vec<usize>>) -> ShardMessage,
+    subscribe_msg: fn(Vec<Bytes>, ConnId, PubSubSender, oneshot::Sender<Vec<usize>>) -> PubSubMsg,
     /// Build the batched shard deregistration message.
-    unsubscribe_msg: fn(Vec<Bytes>, ConnId, oneshot::Sender<Vec<usize>>) -> ShardMessage,
+    unsubscribe_msg: fn(Vec<Bytes>, ConnId, oneshot::Sender<Vec<usize>>) -> PubSubMsg,
     /// Build the subscribe confirmation.
     subscribed: fn(Bytes, usize) -> PubSubConfirmation,
     /// Build the unsubscribe confirmation (`None` channel = "nothing to
@@ -109,13 +108,13 @@ static CHANNEL_SPEC: SubKindSpec = SubKindSpec {
     route_command: "SUBSCRIBE",
     arity_error: "ERR wrong number of arguments for 'subscribe' command",
     limit_error: "ERR max subscriptions reached",
-    subscribe_msg: |channels, conn_id, sender, response_tx| ShardMessage::Subscribe {
+    subscribe_msg: |channels, conn_id, sender, response_tx| PubSubMsg::Subscribe {
         channels,
         conn_id,
         sender,
         response_tx,
     },
-    unsubscribe_msg: |channels, conn_id, response_tx| ShardMessage::Unsubscribe {
+    unsubscribe_msg: |channels, conn_id, response_tx| PubSubMsg::Unsubscribe {
         channels,
         conn_id,
         response_tx,
@@ -131,13 +130,13 @@ static PATTERN_SPEC: SubKindSpec = SubKindSpec {
     route_command: "PSUBSCRIBE",
     arity_error: "ERR wrong number of arguments for 'psubscribe' command",
     limit_error: "ERR max pattern subscriptions reached",
-    subscribe_msg: |patterns, conn_id, sender, response_tx| ShardMessage::PSubscribe {
+    subscribe_msg: |patterns, conn_id, sender, response_tx| PubSubMsg::PSubscribe {
         patterns,
         conn_id,
         sender,
         response_tx,
     },
-    unsubscribe_msg: |patterns, conn_id, response_tx| ShardMessage::PUnsubscribe {
+    unsubscribe_msg: |patterns, conn_id, response_tx| PubSubMsg::PUnsubscribe {
         patterns,
         conn_id,
         response_tx,
@@ -153,13 +152,13 @@ static SHARDED_SPEC: SubKindSpec = SubKindSpec {
     route_command: "SSUBSCRIBE",
     arity_error: "ERR wrong number of arguments for 'ssubscribe' command",
     limit_error: "ERR max sharded subscriptions reached",
-    subscribe_msg: |channels, conn_id, sender, response_tx| ShardMessage::ShardedSubscribe {
+    subscribe_msg: |channels, conn_id, sender, response_tx| PubSubMsg::ShardedSubscribe {
         channels,
         conn_id,
         sender,
         response_tx,
     },
-    unsubscribe_msg: |channels, conn_id, response_tx| ShardMessage::ShardedUnsubscribe {
+    unsubscribe_msg: |channels, conn_id, response_tx| PubSubMsg::ShardedUnsubscribe {
         channels,
         conn_id,
         response_tx,
@@ -465,7 +464,7 @@ impl<'a> PubSubIo<'a> {
         // of shards.
         let (response_tx, response_rx) = oneshot::channel();
         let _ = self.core.shard_senders[BROADCAST_SHARD]
-            .send(ShardMessage::Publish {
+            .send(PubSubMsg::Publish {
                 channel: channel.clone(),
                 message: message.clone(),
                 response_tx,
@@ -506,7 +505,7 @@ impl<'a> PubSubIo<'a> {
         let shard_id = shard_for_key(channel, self.num_shards);
         let (response_tx, response_rx) = oneshot::channel();
         let _ = self.core.shard_senders[shard_id]
-            .send(ShardMessage::ShardedPublish {
+            .send(PubSubMsg::ShardedPublish {
                 channel: channel.clone(),
                 message: message.clone(),
                 response_tx,
@@ -556,7 +555,7 @@ impl<'a> PubSubIo<'a> {
 
         self.scatter_gather()
             .run(Box::new(DedupSorted::default()), |_shard, response_tx| {
-                ShardMessage::PubSubIntrospection {
+                PubSubMsg::PubSubIntrospection {
                     request: IntrospectionRequest::Channels {
                         pattern: pattern.clone(),
                     },
@@ -576,7 +575,7 @@ impl<'a> PubSubIo<'a> {
         self.scatter_gather()
             .run(
                 Box::new(CountByKey::new(channels.clone())),
-                |_shard, response_tx| ShardMessage::PubSubIntrospection {
+                |_shard, response_tx| PubSubMsg::PubSubIntrospection {
                     request: IntrospectionRequest::NumSub {
                         channels: channels.clone(),
                     },
@@ -591,7 +590,7 @@ impl<'a> PubSubIo<'a> {
         self.scatter_gather()
             .run(
                 Box::<SumIntegers<IntrospectionResponse>>::default(),
-                |_shard, response_tx| ShardMessage::PubSubIntrospection {
+                |_shard, response_tx| PubSubMsg::PubSubIntrospection {
                     request: IntrospectionRequest::NumPat,
                     response_tx,
                 },
@@ -609,7 +608,7 @@ impl<'a> PubSubIo<'a> {
 
         self.scatter_gather()
             .run(Box::new(DedupSorted::default()), |_shard, response_tx| {
-                ShardMessage::PubSubIntrospection {
+                PubSubMsg::PubSubIntrospection {
                     request: IntrospectionRequest::ShardChannels {
                         pattern: pattern.clone(),
                     },
@@ -629,7 +628,7 @@ impl<'a> PubSubIo<'a> {
         self.scatter_gather()
             .run(
                 Box::new(CountByKey::new(channels.clone())),
-                |_shard, response_tx| ShardMessage::PubSubIntrospection {
+                |_shard, response_tx| PubSubMsg::PubSubIntrospection {
                     request: IntrospectionRequest::ShardNumSub {
                         channels: channels.clone(),
                     },

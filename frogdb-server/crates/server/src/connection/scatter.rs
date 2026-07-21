@@ -9,7 +9,7 @@
 //! - FLUSHDB/FLUSHALL - Flush databases
 
 use bytes::Bytes;
-use frogdb_core::{KeyType, PartialResult, ScatterOp, ShardMessage};
+use frogdb_core::{CoreMsg, KeyType, PartialResult, ScatterOp};
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
 
@@ -135,7 +135,7 @@ impl ConnectionHandler {
             let (response_tx, response_rx) = oneshot::channel();
             let remaining = count - all_keys.len();
 
-            let msg = ShardMessage::ScatterRequest {
+            let msg = CoreMsg::ScatterRequest {
                 request_id: next_txid(),
                 keys: vec![],
                 operation: ScatterOp::Scan {
@@ -208,7 +208,7 @@ impl ConnectionHandler {
 
         self.scatter_gather()
             .run(Box::new(SortedUnion::default()), |_shard, response_tx| {
-                ShardMessage::ScatterRequest {
+                CoreMsg::ScatterRequest {
                     request_id: next_txid(),
                     keys: vec![],
                     operation: ScatterOp::Keys {
@@ -226,7 +226,7 @@ impl ConnectionHandler {
         self.scatter_gather()
             .run(
                 Box::<SumIntegers<PartialResult>>::default(),
-                |_shard, response_tx| ShardMessage::ScatterRequest {
+                |_shard, response_tx| CoreMsg::ScatterRequest {
                     request_id: next_txid(),
                     keys: vec![],
                     operation: ScatterOp::DbSize,
@@ -247,7 +247,7 @@ impl ConnectionHandler {
         let mut total_keys: i64 = 0;
         for shard_id in 0..self.num_shards {
             let (response_tx, response_rx) = oneshot::channel();
-            let msg = ShardMessage::ScatterRequest {
+            let msg = CoreMsg::ScatterRequest {
                 request_id: next_txid(),
                 keys: vec![],
                 operation: ScatterOp::DbSize,
@@ -294,7 +294,7 @@ impl ConnectionHandler {
 
         // Phase 3 (fetch): request a random key from the selected shard.
         let (response_tx, response_rx) = oneshot::channel();
-        let msg = ShardMessage::ScatterRequest {
+        let msg = CoreMsg::ScatterRequest {
             request_id: next_txid(),
             keys: vec![],
             operation: ScatterOp::RandomKey,
@@ -330,7 +330,7 @@ impl ConnectionHandler {
         self.scatter_gather()
             .run(
                 Box::<AllOk<PartialResult>>::default(),
-                |_shard, response_tx| ShardMessage::ScatterRequest {
+                |_shard, response_tx| CoreMsg::ScatterRequest {
                     request_id: next_txid(),
                     keys: vec![],
                     operation: ScatterOp::FlushDb,

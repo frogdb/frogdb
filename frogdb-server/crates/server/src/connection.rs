@@ -75,7 +75,7 @@ use std::time::Duration;
 use anyhow::Result;
 use bytes::BytesMut;
 use codec::FrogDbResp2;
-use frogdb_core::{ClientHandle, PubSubMessage, PubSubSender, ShardMessage};
+use frogdb_core::{ClientHandle, PubSubMessage, PubSubMsg, PubSubSender};
 use frogdb_protocol::{ParsedCommand, Response, WireResponse};
 use futures::StreamExt;
 use lifecycle::TrackingIo;

@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use tokio::sync::{mpsc, oneshot};
 
-use frogdb_core::{BigKeyInfo, BigKeysScanResponse, ShardMemoryStats, ShardMessage, ShardSender};
+use frogdb_core::{
+    BigKeyInfo, BigKeysScanResponse, ObservabilityMsg, ShardMemoryStats, ShardSender,
+};
 
 /// Configuration for memory diagnostics.
 #[derive(Debug, Clone)]
@@ -166,7 +168,7 @@ impl MemoryDiagCollector {
         for (shard_id, sender) in self.shard_senders.iter().enumerate() {
             let (response_tx, response_rx) = oneshot::channel();
             if sender
-                .send(ShardMessage::MemoryStats { response_tx })
+                .send(ObservabilityMsg::MemoryStats { response_tx })
                 .await
                 .is_ok()
             {
@@ -196,7 +198,7 @@ impl MemoryDiagCollector {
         for (shard_id, sender) in self.shard_senders.iter().enumerate() {
             let (response_tx, response_rx) = oneshot::channel();
             if sender
-                .send(ShardMessage::ScanBigKeys {
+                .send(ObservabilityMsg::ScanBigKeys {
                     threshold_bytes: self.config.big_key_threshold_bytes,
                     max_keys: self.config.max_big_keys_per_shard,
                     response_tx,

@@ -34,7 +34,7 @@ use super::bindings::{
 use super::lua_vm::ExecutionState;
 use crate::command::{CommandContext, ExecutionStrategy, ScriptWriteRecord};
 use crate::registry::CommandRegistry;
-use crate::shard::message::ShardMessage;
+use crate::shard::message::ScriptingMsg;
 use crate::shard::{ShardSender, shard_for_key, slot_for_key};
 use crate::store::Store;
 use crate::sync::MutexExt;
@@ -85,7 +85,7 @@ impl CrossSlotTracker {
 enum Plan {
     /// Keys (if any) belong to this shard; run against the local store.
     Local,
-    /// Keys belong to shard N; dispatch a [`ShardMessage::ScriptSubCommand`].
+    /// Keys belong to shard N; dispatch a [`ScriptingMsg::ScriptSubCommand`].
     Remote(usize),
 }
 
@@ -313,7 +313,7 @@ impl<'a> ScriptInvoker<'a> {
         }
     }
 
-    /// Dispatch a synchronous [`ShardMessage::ScriptSubCommand`] to the owning
+    /// Dispatch a synchronous [`ScriptingMsg::ScriptSubCommand`] to the owning
     /// shard and block on the reply.
     ///
     /// The wait uses `block_in_place`, which requires a multi-thread Tokio
@@ -327,7 +327,7 @@ impl<'a> ScriptInvoker<'a> {
     ) -> Result<Response, RemoteError> {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         self.shard_senders[target_shard]
-            .try_send(ShardMessage::ScriptSubCommand {
+            .try_send(ScriptingMsg::ScriptSubCommand {
                 command: parts.to_vec(),
                 conn_id: self.conn_id,
                 protocol_version: self.protocol_version,
@@ -454,7 +454,7 @@ impl CommandInvoker for ScriptInvoker<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shard::message::Envelope;
+    use crate::shard::message::{Envelope, ShardMessage};
     use crate::store::HashMapStore;
     use tokio::sync::mpsc;
 
@@ -920,7 +920,9 @@ mod tests {
         // Stand in for shard 1's worker: reply to the ScriptSubCommand.
         let responder = tokio::spawn(async move {
             if let Some(env) = rx1.recv().await
-                && let ShardMessage::ScriptSubCommand { response_tx, .. } = env.message
+                && let ShardMessage::Scripting(ScriptingMsg::ScriptSubCommand {
+                    response_tx, ..
+                }) = env.message
             {
                 let _ = response_tx.send(Response::Simple(Bytes::from_static(b"OK")));
             }

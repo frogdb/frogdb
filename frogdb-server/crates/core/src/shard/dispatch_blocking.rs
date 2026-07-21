@@ -1,11 +1,11 @@
-use super::message::ShardMessage;
+use super::message::BlockingMsg;
 use super::worker::ShardWorker;
 
 impl ShardWorker {
     /// Dispatch blocking command messages (BlockWait, UnregisterWait).
-    pub(super) fn dispatch_blocking(&mut self, msg: ShardMessage) {
+    pub(super) fn dispatch_blocking(&mut self, msg: BlockingMsg) {
         match msg {
-            ShardMessage::BlockWait {
+            BlockingMsg::BlockWait {
                 conn_id,
                 keys,
                 op,
@@ -15,10 +15,9 @@ impl ShardWorker {
             } => {
                 self.handle_block_wait(conn_id, keys, op, response_tx, deadline, protocol_version);
             }
-            ShardMessage::UnregisterWait { conn_id } => {
+            BlockingMsg::UnregisterWait { conn_id } => {
                 self.handle_unregister_wait(conn_id);
             }
-            _ => unreachable!(),
         }
     }
 }

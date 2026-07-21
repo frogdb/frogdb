@@ -1,11 +1,11 @@
-use super::message::ShardMessage;
+use super::message::SearchMsg;
 use super::worker::ShardWorker;
 
 impl ShardWorker {
     /// Dispatch search and pub/sub limits messages.
-    pub(super) fn dispatch_search(&mut self, msg: ShardMessage) {
+    pub(super) fn dispatch_search(&mut self, msg: SearchMsg) {
         match msg {
-            ShardMessage::FlushSearchIndexes { response_tx } => {
+            SearchMsg::FlushSearchIndexes { response_tx } => {
                 let sid = self.identity.shard_id();
                 for idx in self.search.indexes.values_mut() {
                     if idx.is_dirty()
@@ -16,7 +16,7 @@ impl ShardWorker {
                 }
                 let _ = response_tx.send(());
             }
-            ShardMessage::GetPubSubLimitsInfo { response_tx } => {
+            SearchMsg::GetPubSubLimitsInfo { response_tx } => {
                 let info = super::types::PubSubLimitsInfo {
                     total_subscriptions: self.subscriptions.total_subscription_count(),
                     unique_channels: self.subscriptions.unique_channel_count(),
@@ -24,7 +24,6 @@ impl ShardWorker {
                 };
                 let _ = response_tx.send(info);
             }
-            _ => unreachable!(),
         }
     }
 }

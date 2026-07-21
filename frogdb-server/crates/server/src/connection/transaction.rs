@@ -19,7 +19,7 @@
 //! and no longer lives here.)
 
 use bytes::Bytes;
-use frogdb_core::{RateLimitExceeded, ServerWideOp, ShardMessage, TransactionResult};
+use frogdb_core::{CoreMsg, RateLimitExceeded, ServerWideOp, TransactionResult};
 use frogdb_protocol::{ParsedCommand, Response};
 use tokio::sync::oneshot;
 use tracing::debug;
@@ -327,7 +327,7 @@ impl ConnectionHandler {
         watches: Vec<(Bytes, u64)>,
     ) -> Result<Vec<Response>, (TransactionOutcome, Response)> {
         let (response_tx, response_rx) = oneshot::channel();
-        let msg = ShardMessage::ExecTransaction {
+        let msg = CoreMsg::ExecTransaction {
             commands,
             watches,
             conn_id: self.state.id,

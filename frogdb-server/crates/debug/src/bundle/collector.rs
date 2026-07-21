@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use frogdb_core::{ShardMemoryStats, ShardMessage, ShardSender};
+use frogdb_core::{ObservabilityMsg, ShardMemoryStats, ShardSender};
 use frogdb_telemetry::SharedTracer;
 use serde::Serialize;
 use tokio::sync::oneshot;
@@ -160,7 +160,7 @@ impl DiagnosticCollector {
         for sender in self.shard_senders.iter() {
             let (response_tx, response_rx) = oneshot::channel();
             if sender
-                .send(ShardMessage::MemoryStats { response_tx })
+                .send(ObservabilityMsg::MemoryStats { response_tx })
                 .await
                 .is_ok()
                 && let Ok(shard_stats) = response_rx.await

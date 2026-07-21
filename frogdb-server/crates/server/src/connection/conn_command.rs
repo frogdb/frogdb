@@ -31,7 +31,7 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, BoxFuture, CommandFlags, CommandSpec, ConfigProvider, ConnMutation,
     ConnectionLevelOp, CursorReadBatch, CursorStoreProvider, EventSpec, ExecutionStrategy, KeySpec,
-    LookupSpec, ShardMessage, WaiterWake, WalStrategy,
+    LookupSpec, ObservabilityMsg, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -333,7 +333,7 @@ async fn config_resetstat(ctx: &ConnCtx<'_>) -> Response {
     // Await-and-discard: the replies are only a barrier confirming every shard
     // reset its stats. Bounded by the shared deadline (was unbounded).
     let _ = ScatterGather::new(ctx.shard_senders, DEFAULT_SCATTER_GATHER_TIMEOUT, 0)
-        .gather_all(|_shard, response_tx| ShardMessage::ResetStats { response_tx })
+        .gather_all(|_shard, response_tx| ObservabilityMsg::ResetStats { response_tx })
         .await;
     ctx.client_registry.reset_command_call_counts();
     ctx.client_registry.error_stats.reset();

@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use tokio::sync::{mpsc, oneshot};
 
-use frogdb_core::{HotShardStatsResponse, ShardMessage, ShardSender};
+use frogdb_core::{HotShardStatsResponse, ObservabilityMsg, ShardSender};
 
 /// Configuration for hot shard detection.
 #[derive(Debug, Clone)]
@@ -216,7 +216,7 @@ impl HotShardCollector {
         for (shard_id, sender) in self.shard_senders.iter().enumerate() {
             let (response_tx, response_rx) = oneshot::channel();
             if sender
-                .send(ShardMessage::HotShardStats {
+                .send(ObservabilityMsg::HotShardStats {
                     period_secs,
                     response_tx,
                 })

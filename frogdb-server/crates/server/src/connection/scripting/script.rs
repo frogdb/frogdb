@@ -1,7 +1,7 @@
 //! SCRIPT LOAD, EXISTS, FLUSH, KILL handlers.
 
 use bytes::Bytes;
-use frogdb_core::ShardMessage;
+use frogdb_core::ScriptingMsg;
 use frogdb_protocol::Response;
 
 use crate::connection::ConnectionHandler;
@@ -44,7 +44,7 @@ impl ConnectionHandler {
         self.scatter_gather()
             .run(
                 Box::new(ShardZeroReply::<String>::unchecked()),
-                |_shard, response_tx| ShardMessage::ScriptLoad {
+                |_shard, response_tx| ScriptingMsg::ScriptLoad {
                     script_source: script_source.clone(),
                     response_tx,
                 },
@@ -61,7 +61,7 @@ impl ConnectionHandler {
         let num_shas = shas.len();
         self.scatter_gather()
             .run(Box::new(BoolOr::new(num_shas)), |_shard, response_tx| {
-                ShardMessage::ScriptExists {
+                ScriptingMsg::ScriptExists {
                     shas: shas.clone(),
                     response_tx,
                 }
@@ -89,7 +89,7 @@ impl ConnectionHandler {
 
         self.scatter_gather()
             .run(Box::<AllOk<()>>::default(), |_shard, response_tx| {
-                ShardMessage::ScriptFlush { response_tx }
+                ScriptingMsg::ScriptFlush { response_tx }
             })
             .await
     }
@@ -107,7 +107,7 @@ impl ConnectionHandler {
         match self
             .scatter_gather()
             .find_first(
-                |_shard, response_tx| ShardMessage::ScriptKill { response_tx },
+                |_shard, response_tx| ScriptingMsg::ScriptKill { response_tx },
                 // Stop at the first shard whose reply is not a NOTBUSY skip.
                 |reply| !matches!(reply, Err(e) if e.contains("NOTBUSY")),
             )
@@ -162,7 +162,8 @@ mod broadcast_timeout_routing_tests {
 
     use bytes::Bytes;
     use frogdb_core::{
-        IntrospectionRequest, IntrospectionResponse, ShardMessage, ShardReceiver, ShardSender,
+        IntrospectionRequest, IntrospectionResponse, PubSubMsg, ScriptingMsg, ShardMessage,
+        ShardReceiver, ShardSender,
     };
     use frogdb_protocol::Response;
     use tokio::sync::mpsc;
@@ -203,18 +204,18 @@ mod broadcast_timeout_routing_tests {
         let responder = tokio::spawn(async move {
             while let Some(env) = rx0.recv().await {
                 match env.message {
-                    ShardMessage::ScriptLoad { response_tx, .. } => {
+                    ShardMessage::Scripting(ScriptingMsg::ScriptLoad { response_tx, .. }) => {
                         let _ = response_tx.send("deadbeef".to_string());
                     }
-                    ShardMessage::ScriptKill { response_tx } => {
+                    ShardMessage::Scripting(ScriptingMsg::ScriptKill { response_tx }) => {
                         // Healthy shard 0 has no running script.
                         let _ = response_tx
                             .send(Err("NOTBUSY No scripts in execution right now.".to_string()));
                     }
-                    ShardMessage::PubSubIntrospection {
+                    ShardMessage::PubSub(PubSubMsg::PubSubIntrospection {
                         request,
                         response_tx,
-                    } => {
+                    }) => {
                         let reply = match request {
                             IntrospectionRequest::NumPat => IntrospectionResponse::NumPat(0),
                             IntrospectionRequest::NumSub { channels }

@@ -1,6 +1,6 @@
 //! Common scatter-gather helper methods.
 
-use frogdb_core::{PartialResult, ScatterOp, ShardMessage};
+use frogdb_core::{CoreMsg, PartialResult, ScatterOp};
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
 
@@ -14,7 +14,7 @@ impl ConnectionHandler {
         self.scatter_gather()
             .run(
                 Box::new(ShardZeroReply::<PartialResult>::checked()),
-                |_shard, response_tx| ShardMessage::ScatterRequest {
+                |_shard, response_tx| CoreMsg::ScatterRequest {
                     request_id: next_txid(),
                     keys: vec![],
                     operation: operation.clone(),
@@ -33,7 +33,7 @@ impl ConnectionHandler {
         self.scatter_gather()
             .run(
                 Box::new(ShardZeroReply::<PartialResult>::unchecked()),
-                |_shard, response_tx| ShardMessage::ScatterRequest {
+                |_shard, response_tx| CoreMsg::ScatterRequest {
                     request_id: next_txid(),
                     keys: vec![],
                     operation: operation.clone(),
@@ -47,7 +47,7 @@ impl ConnectionHandler {
     /// Send an operation to shard 0 only and return its response.
     pub(crate) async fn query_shard0(&self, operation: ScatterOp) -> Response {
         let (response_tx, response_rx) = oneshot::channel();
-        let msg = ShardMessage::ScatterRequest {
+        let msg = CoreMsg::ScatterRequest {
             request_id: next_txid(),
             keys: vec![],
             operation,

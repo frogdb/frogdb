@@ -1,11 +1,11 @@
-use super::message::ShardMessage;
+use super::message::VllMsg;
 use super::worker::ShardWorker;
 
 impl ShardWorker {
     /// Dispatch VLL (Very Lightweight Locking) messages.
-    pub(super) async fn dispatch_vll(&mut self, msg: ShardMessage) -> bool {
+    pub(super) async fn dispatch_vll(&mut self, msg: VllMsg) -> bool {
         match msg {
-            ShardMessage::VllLockRequest {
+            VllMsg::VllLockRequest {
                 txid,
                 keys,
                 mode,
@@ -15,13 +15,13 @@ impl ShardWorker {
                 self.handle_vll_lock_request(txid, keys, mode, operation, ready_tx)
                     .await;
             }
-            ShardMessage::VllExecute { txid, response_tx } => {
+            VllMsg::VllExecute { txid, response_tx } => {
                 self.handle_vll_execute(txid, response_tx).await;
             }
-            ShardMessage::VllAbort { txid } => {
+            VllMsg::VllAbort { txid } => {
                 self.handle_vll_abort(txid);
             }
-            ShardMessage::VllContinuationLock {
+            VllMsg::VllContinuationLock {
                 txid,
                 conn_id,
                 ready_tx,
@@ -30,11 +30,10 @@ impl ShardWorker {
                 self.handle_vll_continuation_lock(txid, conn_id, ready_tx, release_rx)
                     .await;
             }
-            ShardMessage::GetVllQueueInfo { response_tx } => {
+            VllMsg::GetVllQueueInfo { response_tx } => {
                 let info = self.collect_vll_queue_info();
                 let _ = response_tx.send(info);
             }
-            _ => unreachable!(),
         }
         false
     }

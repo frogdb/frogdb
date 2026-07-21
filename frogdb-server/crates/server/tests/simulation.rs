@@ -3161,7 +3161,7 @@ fn test_role_command_standalone() {
 /// `k` in the window is the lazy check under test.
 ///
 /// Determinism: active expiry is disabled up front with
-/// `DEBUG SET-ACTIVE-EXPIRE 0` (debug.rs -> ShardMessage::SetActiveExpire), so
+/// `DEBUG SET-ACTIVE-EXPIRE 0` (debug.rs -> ObservabilityMsg::SetActiveExpire), so
 /// no sim sweep tick can race the TTL-elapse-to-EXEC window. Key expiry is
 /// evaluated against the real wall clock (`std::time::Instant`), not turmoil's
 /// virtual clock, so the window is advanced with a real 50ms `std::thread::sleep`

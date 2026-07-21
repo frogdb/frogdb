@@ -22,7 +22,7 @@ use frogdb_types::metrics::definitions::KeyspaceNotificationsDropped;
 use crate::noop::MetricsRecorder;
 use crate::pubsub::ShardSubscriptions;
 
-use super::message::{ShardMessage, ShardSender};
+use super::message::{PubSubMsg, ShardSender};
 
 /// Owns the one rule that would otherwise be split, unwritten, across
 /// `handle_subscribe` (subscribers register on the broadcast coordinator shard,
@@ -104,7 +104,7 @@ impl KeyspaceNotificationCoordinator {
                 shard_label,
             } => {
                 if coordinator_shard
-                    .try_send(ShardMessage::PublishKeyspace { channel, payload })
+                    .try_send(PubSubMsg::PublishKeyspace { channel, payload })
                     .is_err()
                 {
                     // Mailbox full or closed. Keyspace notifications are
@@ -128,7 +128,7 @@ mod tests {
 
     use super::*;
     use crate::pubsub::{PubSubMessage, PubSubSender};
-    use crate::shard::message::Envelope;
+    use crate::shard::message::{Envelope, ShardMessage};
 
     /// Records counter increments so tests can read cumulative totals back.
     #[derive(Default)]
@@ -248,7 +248,7 @@ mod tests {
         // expected channel + payload.
         let env = coord_rx.try_recv().expect("one message enqueued");
         match env.message {
-            ShardMessage::PublishKeyspace { channel, payload } => {
+            ShardMessage::PubSub(PubSubMsg::PublishKeyspace { channel, payload }) => {
                 assert_eq!(&channel[..], b"__keyevent@0__:set");
                 assert_eq!(&payload[..], b"mykey");
             }
@@ -262,7 +262,7 @@ mod tests {
         // Capacity-1 coordinator mailbox, pre-filled so the next try_send fails.
         let (senders, _coord_rx) = senders_with_coordinator(1);
         senders[0]
-            .try_send(ShardMessage::PublishKeyspace {
+            .try_send(PubSubMsg::PublishKeyspace {
                 channel: Bytes::from("__keyevent@0__:filler"),
                 payload: Bytes::from("x"),
             })

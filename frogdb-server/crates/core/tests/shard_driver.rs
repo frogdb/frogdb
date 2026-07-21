@@ -33,7 +33,8 @@ use frogdb_core::noop::NoopMetricsRecorder;
 use frogdb_core::persistence::FakeFailure;
 use frogdb_core::shard::{FakeWalRegistry, WalMode};
 use frogdb_core::{
-    CommandRegistry, ShardMessage, ShardReceiver, ShardSender, ShardWorker, ShardWorkerBuilder,
+    CommandRegistry, CoreMsg, ShardMessage, ShardReceiver, ShardSender, ShardWorker,
+    ShardWorkerBuilder,
 };
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 
@@ -58,7 +59,7 @@ fn real_worker() -> (ShardWorker, mpsc::Sender<frogdb_core::shard::NewConnection
 /// Construct a `SET k v` / `GET k` execute message with its own response channel.
 fn execute(name: &'static [u8], args: Vec<Bytes>) -> (ShardMessage, oneshot::Receiver<Response>) {
     let (tx, rx) = oneshot::channel();
-    let msg = ShardMessage::Execute {
+    let msg = CoreMsg::Execute {
         command: Arc::new(ParsedCommand::new(Bytes::from_static(name), args)),
         conn_id: 1,
         txid: None,
@@ -67,7 +68,7 @@ fn execute(name: &'static [u8], args: Vec<Bytes>) -> (ShardMessage, oneshot::Rec
         no_touch: false,
         response_tx: tx,
     };
-    (msg, rx)
+    (msg.into(), rx)
 }
 
 /// End-to-end smoke: drive a real `SET`+`GET` through the public seam and fire

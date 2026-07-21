@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use frogdb_core::persistence::WalFailurePolicy;
 use frogdb_core::{
-    EvictionConfig, EvictionPolicy, KeyspaceEventFlags, ShardMessage, ShardSender, glob_match,
+    EvictionConfig, EvictionPolicy, KeyspaceEventFlags, ObservabilityMsg, ShardSender, glob_match,
 };
 use tokio::sync::oneshot;
 use toml_edit::Value as TomlValue;
@@ -2460,7 +2460,7 @@ impl ShardConfigNotifier {
         for sender in self.shard_senders.iter() {
             let (tx, rx) = oneshot::channel();
             if let Err(e) = sender
-                .send(ShardMessage::UpdateConfig {
+                .send(ObservabilityMsg::UpdateConfig {
                     eviction_config: Some(eviction_config.clone()),
                     response_tx: tx,
                 })
@@ -2500,7 +2500,7 @@ impl ShardConfigNotifier {
         for sender in self.shard_senders.iter() {
             let (tx, rx) = oneshot::channel();
             if let Err(e) = sender
-                .send(ShardMessage::SetKeyMemoryHistograms {
+                .send(ObservabilityMsg::SetKeyMemoryHistograms {
                     enabled,
                     response_tx: tx,
                 })

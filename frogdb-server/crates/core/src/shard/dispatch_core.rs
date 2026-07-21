@@ -1,14 +1,14 @@
 use tracing::Instrument;
 
-use super::message::ShardMessage;
+use super::message::CoreMsg;
 use super::worker::ShardWorker;
 use crate::store::Store;
 
 impl ShardWorker {
     /// Dispatch core execution messages (Execute, ScatterRequest, GetVersion, ExecTransaction).
-    pub(super) async fn dispatch_core(&mut self, msg: ShardMessage) -> bool {
+    pub(super) async fn dispatch_core(&mut self, msg: CoreMsg) -> bool {
         match msg {
-            ShardMessage::Execute {
+            CoreMsg::Execute {
                 command,
                 conn_id,
                 txid: _,
@@ -39,7 +39,7 @@ impl ShardWorker {
                 self.store.set_suppress_touch(false);
                 let _ = response_tx.send(response);
             }
-            ShardMessage::ScatterRequest {
+            CoreMsg::ScatterRequest {
                 request_id: _,
                 keys,
                 operation,
@@ -56,7 +56,7 @@ impl ShardWorker {
                 let result = self.execute_scatter_part(&keys, &operation, conn_id).await;
                 let _ = response_tx.send(result);
             }
-            ShardMessage::GetVersion { keys, response_tx } => {
+            CoreMsg::GetVersion { keys, response_tx } => {
                 // Lazily purge any already-expired watched keys WITHOUT bumping
                 // the version: watching an already-stale key must record a
                 // "nonexistent" watch, so a later EXEC does not treat the key's
@@ -69,7 +69,7 @@ impl ShardWorker {
                 }
                 let _ = response_tx.send(self.shard_version);
             }
-            ShardMessage::ExecTransaction {
+            CoreMsg::ExecTransaction {
                 commands,
                 watches,
                 conn_id,
@@ -90,7 +90,6 @@ impl ShardWorker {
                 };
                 let _ = response_tx.send(result);
             }
-            _ => unreachable!(),
         }
         false
     }
