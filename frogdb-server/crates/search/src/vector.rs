@@ -408,7 +408,6 @@ impl VectorField {
 
     /// Whether the field's invariant holds: `reverse_map` and `key_map` are
     /// mutual inverses of equal size, and every live id is present in usearch.
-    #[cfg(any(test, debug_assertions))]
     fn invariant_holds(&self) -> bool {
         self.reverse_map.len() == self.key_map.len()
             && self.reverse_map.iter().all(|(k, id)| {
