@@ -130,6 +130,11 @@ pub struct HashMapStore {
     warm_tier: WarmTier,
     /// Total number of keys expired (lazy + active expiry).
     expired_keys: u64,
+    /// Keys physically removed by lazy expiry (`check_and_delete_expired`)
+    /// since the last `take_lazily_purged`. Reported to the worker so it can
+    /// apply the same version-bump + XREADGROUP-drain effects active expiry
+    /// applies; the store itself never reads or acts on it.
+    lazily_purged: Vec<Bytes>,
     /// Whether passive/lazy expiry is suppressed (set during CLIENT PAUSE).
     /// When true, expired keys are logically invisible (get returns None)
     /// but not physically deleted and the expired_keys counter is not
@@ -171,6 +176,7 @@ impl HashMapStore {
             dirty: 0,
             warm_tier: WarmTier::new(),
             expired_keys: 0,
+            lazily_purged: Vec::new(),
             expiry_suppressed: false,
             suppress_touch: false,
             keysizes: KeysizeHistograms::new(),
@@ -191,6 +197,7 @@ impl HashMapStore {
             dirty: 0,
             warm_tier: WarmTier::new(),
             expired_keys: 0,
+            lazily_purged: Vec::new(),
             expiry_suppressed: false,
             suppress_touch: false,
             keysizes: KeysizeHistograms::new(),
@@ -429,6 +436,10 @@ impl HashMapStore {
             debug!(key_len = key.len(), "Key expired via lazy deletion");
             self.uninstall(key);
             self.expired_keys += 1;
+            // Report the lazy removal so the worker can apply the parity
+            // effects (version bump + XREADGROUP drain). The store stays
+            // version- and wait-queue-ignorant.
+            self.lazily_purged.push(Bytes::copy_from_slice(key));
             return true;
         }
         false
@@ -1055,6 +1066,10 @@ impl Store for HashMapStore {
 
     fn purge_if_expired(&mut self, key: &[u8]) -> bool {
         self.check_and_delete_expired(key)
+    }
+
+    fn take_lazily_purged(&mut self) -> Vec<Bytes> {
+        std::mem::take(&mut self.lazily_purged)
     }
 
     fn set_with_options(&mut self, key: Bytes, value: Value, opts: SetOptions) -> SetResult {
@@ -2406,5 +2421,45 @@ mod tests {
         assert_eq!(store.warm_tier().expired_on_unspill(), 1);
         assert!(!store.contains(b"s"));
         assert_eq!(store.memory_used(), 0);
+    }
+
+    #[test]
+    fn lazy_value_read_reports_purge_but_nondestructive_probes_do_not() {
+        let mut s = HashMapStore::new();
+        // Seed an already-expired key.
+        s.set(Bytes::from_static(b"k"), Value::string("v"));
+        s.set_expiry(b"k", Instant::now() - Duration::from_secs(1));
+
+        // Non-destructive probes must NOT purge or report.
+        assert!(!s.exists_unexpired(b"k"));
+        let _ = s.key_type(b"k");
+        assert!(
+            s.take_lazily_purged().is_empty(),
+            "TYPE/EXISTS must not report a purge"
+        );
+
+        // A value read via the expiry-checking path purges and reports.
+        assert!(s.get_with_expiry_check(b"k").is_none());
+        assert_eq!(
+            s.take_lazily_purged(),
+            vec![Bytes::from_static(b"k")],
+            "get_with_expiry_check must report the physical lazy removal"
+        );
+        // Drained: a second take is empty.
+        assert!(s.take_lazily_purged().is_empty());
+    }
+
+    #[test]
+    fn suppressed_expiry_does_not_report() {
+        let mut s = HashMapStore::new();
+        s.set(Bytes::from_static(b"k"), Value::string("v"));
+        s.set_expiry(b"k", Instant::now() - Duration::from_secs(1));
+        s.set_expiry_suppressed(true);
+        // Suppressed: logically expired (read as absent) but NOT physically removed.
+        assert!(s.get_with_expiry_check(b"k").is_none());
+        assert!(
+            s.take_lazily_purged().is_empty(),
+            "CLIENT PAUSE suppression must not report a purge (key not removed)"
+        );
     }
 }

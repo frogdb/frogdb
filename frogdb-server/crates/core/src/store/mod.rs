@@ -508,6 +508,21 @@ pub trait Store: Send {
         false
     }
 
+    /// Drain the buffer of keys physically removed by **lazy** expiry
+    /// (`check_and_delete_expired` → `uninstall`) since the last drain.
+    ///
+    /// The store reports *which* keys it lazily removed; it does not act on the
+    /// report — it stays version- and wait-queue-ignorant. The worker drains
+    /// this after each command and applies the parity effects (shard-version
+    /// bump + XREADGROUP drain), exactly as active expiry applies them from
+    /// `ExpiryResult::deleted_keys`. Active expiry deletes via `delete`, not
+    /// `check_and_delete_expired`, so it never populates this buffer.
+    ///
+    /// Default: no lazy-purge reporting (stores that do not lazily purge).
+    fn take_lazily_purged(&mut self) -> Vec<Bytes> {
+        Vec::new()
+    }
+
     /// Set a value with options (NX/XX, EX/PX, GET, KEEPTTL).
     fn set_with_options(&mut self, key: Bytes, value: Value, _opts: SetOptions) -> SetResult {
         self.set(key, value);

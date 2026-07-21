@@ -485,9 +485,34 @@ impl ShardWorker {
                 purged = true;
             }
         }
+        // Task 1: discard the report (the explicit bump below preserves F3).
+        // Task 2 replaces both with apply_lazy_purge_effects().
+        self.discard_lazy_purges();
         if purged {
             self.increment_version();
         }
+    }
+
+    /// Drain and apply the effects of any lazy purges the store reported during
+    /// the current command: a shard-version bump + an XREADGROUP-waiter drain to
+    /// NOGROUP for each removed key — the same externally observable effects
+    /// active expiry applies (`apply_expiry_effects`, event_loop.rs), so a key
+    /// that died lazily is indistinguishable from one the sweep removed.
+    ///
+    /// Both effects are idempotent (a second bump only advances the counter; a
+    /// second drain finds no waiters), so calling this at more than one seam is
+    /// safe. Task 1 lands it as drain-and-discard; Task 2 fills in the effects.
+    pub(crate) fn apply_lazy_purge_effects(&mut self) {
+        let purged = self.store.take_lazily_purged();
+        let _ = purged; // Task 2: apply version bump + drain_stream_waiters_with_error.
+    }
+
+    /// Drain and DISCARD any lazy-purge report without applying effects — used
+    /// at the WATCH-time (`GetVersion`) seam, which must stay no-bump (F3): a
+    /// WATCH on an already-expired key records a "nonexistent" watch and must
+    /// not invalidate other watchers on the shard.
+    pub(crate) fn discard_lazy_purges(&mut self) {
+        let _ = self.store.take_lazily_purged();
     }
 
     /// Check if this connection can execute during a continuation lock.

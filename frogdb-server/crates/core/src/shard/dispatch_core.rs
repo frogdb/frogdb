@@ -67,6 +67,8 @@ impl ShardWorker {
                 for key in &keys {
                     self.store.purge_if_expired(key);
                 }
+                // WATCH stays no-bump (F3): drop the lazy-purge report unread.
+                self.discard_lazy_purges();
                 let _ = response_tx.send(self.shard_version);
             }
             ShardMessage::ExecTransaction {
