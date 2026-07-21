@@ -248,7 +248,26 @@ impl PreDispatchView<'_> {
             return Some(Response::error("NOAUTH Authentication required."));
         }
 
-        // Block write commands on replicas.
+        // Block write commands on replicas — but a cluster slot redirect takes
+        // precedence over the read-only-replica rejection.
+        //
+        // Redis `processCommand` runs the cluster redirection (`getNodeByQuery`,
+        // which yields `-MOVED`/`-CROSSSLOT`/`-ASK`) *before* the read-only
+        // replica check (`server.masterhost && server.repl_slave_ro`). So a
+        // keyed write targeting a slot committed to another node must be
+        // answered with `-MOVED` (the slot's primary), never `-READONLY` —
+        // [`Self::validate_cluster_slots`] issues that redirect at the
+        // `ClusterSlotValidation` stage, and at queue time inside
+        // [`Self::try_queue_in_transaction`]. Deferring here (rather than
+        // short-circuiting with `-READONLY`) makes the reply deterministic
+        // regardless of whether the async replica-role flag has been applied
+        // yet; without it, a keyed write races the flag and intermittently
+        // leaks `-READONLY` where `-MOVED` is required. The deferral is
+        // ownership-aware — see [`Self::write_defers_to_cluster_redirect`] for
+        // why (a slot-owning replica is reachable in FrogDB and must keep the
+        // `-READONLY` rejection). Keyless writes (FLUSHALL, …) and
+        // standalone-replication writes are not slot-redirectable and still
+        // get `-READONLY` here.
         //
         // Flag checks read `get_entry` (all registered commands), not `get`
         // (shard commands only), so a connection-level command like CONFIG —
@@ -257,6 +276,7 @@ impl PreDispatchView<'_> {
         if self.is_replica.load(Ordering::Relaxed)
             && let Some(cmd_impl) = self.registry.get_entry(cmd_name)
             && cmd_impl.flags().contains(CommandFlags::WRITE)
+            && !self.write_defers_to_cluster_redirect(cmd_name, args)
         {
             return Some(Response::error(
                 "READONLY You can't write against a read only replica.",
@@ -305,6 +325,69 @@ impl PreDispatchView<'_> {
         }
 
         None
+    }
+
+    /// Whether a keyed write on this (replica) connection targets a slot owned
+    /// by *another* node — i.e. it will be answered by a cluster slot redirect
+    /// (`-MOVED`), which must take precedence over the read-only-replica
+    /// rejection (`-READONLY`).
+    ///
+    /// Redis `processCommand` runs the cluster redirect (`getNodeByQuery`)
+    /// before the `repl_slave_ro` check, so a keyed write to a slot this node
+    /// does not serve must be `-MOVED`, never `-READONLY`. [`Self::run_pre_checks`]
+    /// consults this to defer the read-only rejection in exactly that case.
+    ///
+    /// SAFETY — this check is deliberately *ownership-aware* rather than assuming
+    /// the invariant "a replica never owns the slot for its keys". FrogDB
+    /// auto-assigns slots to bootstrapping nodes, so a node that later becomes a
+    /// replica (CLUSTER REPLICATE flips only role/primary_id, not slot ownership)
+    /// can still own slots — a slot-owning replica is reachable. If we deferred
+    /// purely on "is a keyed write", such a replica would route `LocalServe` and
+    /// *execute* the write locally (silent divergence). By deferring only when
+    /// the target slot is committed to a *different* node, the dangerous case
+    /// (this replica owns the slot, or the slot is unassigned) falls through to
+    /// the `-READONLY` rejection — the safe answer — with no dependency on any
+    /// topology-level invariant. The common case (replica does not own the
+    /// slot; its primary does) defers to `-MOVED` as required.
+    ///
+    /// Keyless writes (FLUSHALL, …), cluster-exempt commands, and
+    /// standalone-replication writes return `false` and stay `-READONLY`.
+    fn write_defers_to_cluster_redirect(&self, cmd_name: &str, args: &[Bytes]) -> bool {
+        // Cluster mode is gated by the same handles `validate_cluster_slots`
+        // requires; without them no redirect is produced and READONLY must win.
+        let (Some(node_id), Some(cluster_state)) =
+            (self.cluster.node_id, self.cluster.cluster_state.as_ref())
+        else {
+            return false;
+        };
+        if self.cluster.slot_migration.is_none() {
+            return false;
+        }
+        // Connection-level / scatter-gather / server-wide (and CLUSTER/PING/…)
+        // commands are not slot-routed, so they are never redirected.
+        if self.is_cluster_exempt(cmd_name) {
+            return false;
+        }
+        // Only keyed commands are slot-routed; a keyless write is not
+        // redirectable and stays under the READONLY rejection.
+        let Some(entry) = self.registry.get_entry(cmd_name) else {
+            return false;
+        };
+        let keys = entry.keys(args);
+        if keys.is_empty() {
+            return false;
+        }
+        // Defer to `-MOVED` only when the target slot is committed to a *different*
+        // node. If this replica owns the slot, or it is unassigned, keep
+        // `-READONLY` (never let a replica execute a keyed write locally).
+        // Cluster requires all keys in one slot, so the first key's slot is
+        // representative (a genuine cross-slot command is caught later as
+        // CROSSSLOT).
+        let slot = slot_for_key(keys[0]);
+        matches!(
+            cluster_state.snapshot().get_slot_owner(slot),
+            Some(owner) if owner != node_id
+        )
     }
 
     /// PING has bespoke framing while subscribed (`PubSubPing` stage), so it

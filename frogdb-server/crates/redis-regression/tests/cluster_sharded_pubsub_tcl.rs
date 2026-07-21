@@ -191,3 +191,88 @@ async fn tcl_sharded_pubsub_multi_exec_with_write_operation_on_replica() {
 
     harness.shutdown_all().await;
 }
+
+// ---------------------------------------------------------------------------
+// Test 7 (regression, issue 04): a write queued inside MULTI/EXEC on a cluster
+// replica returns -MOVED (slot redirect), never -READONLY, *even once the
+// replica's read-only role flag has been applied*.
+//
+// The upstream flake was a precedence race. FrogDB's replica read-only gate
+// lives in the `PreChecks` dispatch stage, which runs before the
+// `ClusterSlotValidation` / MULTI-queue slot check. The replica-role flag is
+// applied asynchronously (Raft SetRole → DemotionEvent → RoleManager::demote),
+// so a queued write could land either before the flag flipped (→ correct
+// -MOVED from slot validation) or after (→ the pre-check short-circuited with
+// -READONLY, the bug). Redis `processCommand` runs its cluster redirect
+// (`getNodeByQuery`) before the `repl_slave_ro` check, so a keyed write on a
+// cluster replica must always be -MOVED.
+//
+// Test 6 above leaves the timing to chance; this test forces the losing race
+// deterministically by waiting until `INFO replication` reports `role:slave`
+// (the read-only flag is set) *before* issuing the queued write — so it fails
+// deterministically (-READONLY) without the precedence fix and passes with it.
+// ---------------------------------------------------------------------------
+
+/// Poll `INFO replication` on `replica_id` until it reports `role:slave`,
+/// meaning the node's read-only replica flag has been applied (not merely that
+/// the cluster-state role propagated). Panics on timeout.
+async fn wait_for_replica_readonly_flag(
+    harness: &ClusterTestHarness,
+    replica_id: u64,
+    timeout: Duration,
+) {
+    let start = std::time::Instant::now();
+    loop {
+        let resp = harness
+            .node(replica_id)
+            .unwrap()
+            .send("INFO", &["replication"])
+            .await;
+        if let Response::Bulk(Some(bytes)) = &resp
+            && String::from_utf8_lossy(bytes).contains("role:slave")
+        {
+            return;
+        }
+        assert!(
+            start.elapsed() < timeout,
+            "timed out waiting for replica {replica_id} read-only flag (role:slave)",
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn tcl_sharded_pubsub_multi_exec_write_on_replica_moved_beats_readonly() {
+    let (mut harness, _primary_id, replica_id) = start_primary_replica_cluster().await;
+
+    // Force the previously-flaky race: ensure the replica's read-only role flag
+    // is applied *before* the write. Without the precedence fix the queued SET
+    // leaks -READONLY here instead of the required -MOVED.
+    wait_for_replica_readonly_flag(&harness, replica_id, Duration::from_secs(10)).await;
+
+    let replica = harness.node(replica_id).unwrap();
+    let mut client = replica.connect().await;
+
+    assert_ok(&client.command(&["MULTI"]).await);
+    client.command(&["SPUBLISH", "foo", "hello"]).await;
+    let set_resp = client.command(&["SET", "foo", "bar"]).await;
+    let err = match set_resp {
+        Response::Error(e) => String::from_utf8_lossy(&e).to_string(),
+        other => panic!("expected MOVED error, got {other:?}"),
+    };
+    assert!(
+        err.starts_with("MOVED"),
+        "a keyed write queued on a cluster replica must return MOVED, not READONLY; got {err}",
+    );
+    let exec_resp = client.command(&["EXEC"]).await;
+    let err = match exec_resp {
+        Response::Error(e) => String::from_utf8_lossy(&e).to_string(),
+        other => panic!("expected EXECABORT error, got {other:?}"),
+    };
+    assert!(
+        err.starts_with("EXECABORT"),
+        "expected EXECABORT error, got {err}",
+    );
+
+    harness.shutdown_all().await;
+}
