@@ -360,6 +360,7 @@ fn test_cf_enumeration_failure_propagates_and_preserves_data() {
         2,
         &RocksConfig::default(),
         false,
+        Arc::new(frogdb_types::traits::NoopMetricsRecorder),
         |_opts, _path| Err(RocksError::ColumnFamilyNotFound(sentinel.to_string())),
     );
     match result {
@@ -851,10 +852,17 @@ fn clear_reclamation_preserves_post_clear_writes() {
 #[test]
 fn warm_clear_tier_shard_reclaims_and_counts() {
     let t = TempDir::new().unwrap();
-    let s =
-        Arc::new(RocksStore::open_with_warm(t.path(), 1, &RocksConfig::default(), true).unwrap());
     let recorder = Arc::new(CountingRecorder::default());
-    s.set_metrics_recorder(recorder.clone());
+    let s = Arc::new(
+        RocksStore::open_with_warm_metrics(
+            t.path(),
+            1,
+            &RocksConfig::default(),
+            true,
+            recorder.clone(),
+        )
+        .unwrap(),
+    );
 
     for i in 0..100u32 {
         s.put_warm(0, format!("warm{i:03}").as_bytes(), b"cold-value")
@@ -884,9 +892,9 @@ fn reclamation_disabled_by_config_knob() {
         flush_compact_range: false,
         ..RocksConfig::default()
     };
-    let s = Arc::new(RocksStore::open(t.path(), 1, &config).unwrap());
     let recorder = Arc::new(CountingRecorder::default());
-    s.set_metrics_recorder(recorder.clone());
+    let s =
+        Arc::new(RocksStore::open_with_metrics(t.path(), 1, &config, recorder.clone()).unwrap());
 
     s.put(0, b"k", b"v").unwrap();
     let upper = commit_clear(&s, 0).expect("non-empty CF stages a tombstone");
@@ -905,6 +913,34 @@ fn reclamation_disabled_by_config_knob() {
         s.iter_cf(0).unwrap().count(),
         0,
         "tombstone still clears the data"
+    );
+}
+
+/// The `open`/`open_with_warm` shims default to an *explicit*
+/// `NoopMetricsRecorder` (no late install). Reclamation must still run through
+/// that recorder — reading it every pass — without panicking and without any
+/// observable count. This pins that the explicit-Noop default is intentional and
+/// safe: a Store opened via a shim is fully functional, and the deleted
+/// `set_metrics_recorder` install is not needed to make reclamation sound.
+#[test]
+fn noop_default_shim_reclaims_without_panicking() {
+    let t = TempDir::new().unwrap();
+    // Opened via the Noop-defaulting shim — no recorder is ever installed.
+    let s = Arc::new(RocksStore::open(t.path(), 1, &RocksConfig::default()).unwrap());
+
+    for i in 0..100u32 {
+        s.put(0, format!("k{i:04}").as_bytes(), b"v").unwrap();
+    }
+    s.flush().unwrap();
+    let upper = commit_clear(&s, 0).expect("non-empty CF stages a tombstone");
+    // Drives `run_reclamation`, which reads `metrics_recorder()` on every pass.
+    s.spawn_clear_reclamation(CfTier::Main, 0, upper);
+    wait_reclaim_idle(&s);
+
+    assert_eq!(
+        s.iter_cf(0).unwrap().count(),
+        0,
+        "Noop-default reclamation still clears the shard"
     );
 }
 

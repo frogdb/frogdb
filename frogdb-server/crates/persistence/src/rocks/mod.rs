@@ -37,29 +37,82 @@ pub struct RocksStore {
     /// and any other trigger site via the `Arc<RocksStore>`.
     pub(crate) reclaim_guard: reclaim::ReclaimGuard,
     /// Metrics recorder for store-initiated background work (post-clear
-    /// reclamation counters). Starts as a no-op recorder; server startup
-    /// installs the real one via [`RocksStore::set_metrics_recorder`] before
-    /// any client command can run.
-    metrics: std::sync::Mutex<Arc<dyn frogdb_types::traits::MetricsRecorder>>,
+    /// reclamation counters). Injected at construction and immutable: a Store
+    /// can never exist without a recorder, so the "no-metrics window" cannot
+    /// occur by construction. Callers that legitimately want no metrics (tests,
+    /// benches, tooling) pass an explicit
+    /// [`NoopMetricsRecorder`](frogdb_types::traits::NoopMetricsRecorder) via the
+    /// [`open`](RocksStore::open)/[`open_with_warm`](RocksStore::open_with_warm)
+    /// shims; production threads the real recorder through
+    /// [`open_with_warm_metrics`](RocksStore::open_with_warm_metrics).
+    metrics: Arc<dyn frogdb_types::traits::MetricsRecorder>,
 }
 
 impl RocksStore {
+    /// Noop-metrics shim over [`open_with_warm_metrics`](Self::open_with_warm_metrics)
+    /// (non-warm). The `NoopMetricsRecorder` is *explicit at the call site* — not a
+    /// hidden default a later install "should" overwrite — so tests, benches, and
+    /// tools opt into no metrics deliberately.
     pub fn open(path: &Path, num_shards: usize, config: &RocksConfig) -> Result<Self, RocksError> {
-        Self::open_with_warm(path, num_shards, config, false)
+        Self::open_with_warm_metrics(
+            path,
+            num_shards,
+            config,
+            false,
+            Arc::new(frogdb_types::traits::NoopMetricsRecorder),
+        )
     }
+    /// Non-warm open with an explicit metrics recorder. Symmetric to
+    /// [`open`](Self::open) for callers that want the real recorder without the
+    /// warm tier (e.g. the Main-tier reclamation counter test).
+    pub fn open_with_metrics(
+        path: &Path,
+        num_shards: usize,
+        config: &RocksConfig,
+        metrics: Arc<dyn frogdb_types::traits::MetricsRecorder>,
+    ) -> Result<Self, RocksError> {
+        Self::open_with_warm_metrics(path, num_shards, config, false, metrics)
+    }
+    /// Noop-metrics shim over [`open_with_warm_metrics`](Self::open_with_warm_metrics).
+    /// See [`open`](Self::open) on why the Noop is explicit rather than a default.
     pub fn open_with_warm(
         path: &Path,
         num_shards: usize,
         config: &RocksConfig,
         warm_enabled: bool,
     ) -> Result<Self, RocksError> {
+        Self::open_with_warm_metrics(
+            path,
+            num_shards,
+            config,
+            warm_enabled,
+            Arc::new(frogdb_types::traits::NoopMetricsRecorder),
+        )
+    }
+    /// Production entry point: the caller supplies the metrics recorder up front,
+    /// so store-initiated background work (post-clear reclamation counters) is
+    /// wired to the real recorder from the moment the Store exists. The recorder
+    /// is stored immutably — there is no separate late-install step and thus no
+    /// window in which reclamation counts into a no-op.
+    pub fn open_with_warm_metrics(
+        path: &Path,
+        num_shards: usize,
+        config: &RocksConfig,
+        warm_enabled: bool,
+        metrics: Arc<dyn frogdb_types::traits::MetricsRecorder>,
+    ) -> Result<Self, RocksError> {
         // Production path: enumerate the persisted column families with the real
         // `DB::list_cf`. The enumeration is threaded through an injectable seam
         // ([`open_with_cf_lister`]) so tests can force it to fail and assert the
         // error propagates rather than being coerced into an empty CF list.
-        Self::open_with_cf_lister(path, num_shards, config, warm_enabled, |opts, p| {
-            DB::list_cf(opts, p).map_err(RocksError::from)
-        })
+        Self::open_with_cf_lister(
+            path,
+            num_shards,
+            config,
+            warm_enabled,
+            metrics,
+            |opts, p| DB::list_cf(opts, p).map_err(RocksError::from),
+        )
     }
 
     /// Reopen seam parameterised over the column-family enumerator. The public
@@ -72,6 +125,7 @@ impl RocksStore {
         num_shards: usize,
         config: &RocksConfig,
         warm_enabled: bool,
+        metrics: Arc<dyn frogdb_types::traits::MetricsRecorder>,
         list_cf: impl FnOnce(&Options, &Path) -> Result<Vec<String>, RocksError>,
     ) -> Result<Self, RocksError> {
         let path_str = path.display().to_string();
@@ -186,7 +240,7 @@ impl RocksStore {
             search_meta_cf_names: manifest.search_meta_names().to_vec(),
             flush_compact_range: config.flush_compact_range,
             reclaim_guard: reclaim::ReclaimGuard::new(),
-            metrics: std::sync::Mutex::new(Arc::new(frogdb_types::traits::NoopMetricsRecorder)),
+            metrics,
         })
     }
     /// Main-tier resolver shim; see [`RocksStore::tier_cf_handle`] for the
@@ -413,16 +467,11 @@ impl RocksStore {
         reclaim::spawn_clear_reclamation(Arc::clone(self), tier, shard_id, upper_bound);
     }
 
-    /// Install the metrics recorder used by store-initiated background work
-    /// (post-clear reclamation counters). Called once during server startup.
-    pub fn set_metrics_recorder(&self, recorder: Arc<dyn frogdb_types::traits::MetricsRecorder>) {
-        *self.metrics.lock().unwrap() = recorder;
-    }
-
-    /// Current metrics recorder (no-op until
-    /// [`set_metrics_recorder`](Self::set_metrics_recorder) installs the real one).
+    /// The metrics recorder injected at construction, used by store-initiated
+    /// background work (post-clear reclamation counters). Immutable — cloned per
+    /// reclamation pass without any lock.
     pub(crate) fn metrics_recorder(&self) -> Arc<dyn frogdb_types::traits::MetricsRecorder> {
-        Arc::clone(&self.metrics.lock().unwrap())
+        Arc::clone(&self.metrics)
     }
     pub fn iter_cf(&self, shard_id: usize) -> Result<RocksIterator<'_>, RocksError> {
         self.iter_tier(CfTier::Main, shard_id)
