@@ -159,6 +159,13 @@ impl ConnectionHandler {
                 Err(resp) => return resp,
             };
 
+            // A shard whose keys are held by another connection's Continuation
+            // Lock rejects the scan part with a fatal `ShardError`; surface it
+            // rather than treating the shard as exhausted and dropping its keys.
+            if let Some(err) = partial.as_shard_error() {
+                return err.clone();
+            }
+
             // Append this shard's keys and read its typed next cursor — no
             // sentinel-key string match.
             let shard_next_cursor = absorb_scan_reply(&mut all_keys, partial);
@@ -250,6 +257,11 @@ impl ConnectionHandler {
                 Ok(partial) => partial,
                 Err(resp) => return resp,
             };
+            // A Continuation-Lock conflict rejects the count part; fail loudly
+            // rather than under-count (which would skew the weighted selection).
+            if let Some(err) = partial.as_shard_error() {
+                return err.clone();
+            }
             if let PartialResult::Count(count) = partial {
                 shard_counts.push((shard_id, count));
                 total_keys += count;
@@ -294,6 +306,8 @@ impl ConnectionHandler {
         {
             // Return the random key (or null if the shard is now empty).
             Ok(PartialResult::RandomKey(Some(key))) => Response::bulk(key),
+            // A Continuation-Lock conflict rejects the fetch; surface it.
+            Ok(PartialResult::ShardError(err)) => err,
             Ok(_) => Response::null(),
             Err(resp) => resp,
         }

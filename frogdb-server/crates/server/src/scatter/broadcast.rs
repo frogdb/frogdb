@@ -55,6 +55,37 @@ pub enum PartialPolicy {
     BestEffort,
 }
 
+/// A per-shard reply that may be *fatal*: a shard rejected the scatter part
+/// outright (Continuation-Lock conflict) and returned only the error, no data.
+///
+/// [`ScatterGather::run`] checks this **before** handing the reply to the
+/// [`MergeStrategy`], so a fatal reply aborts the whole gather with its error
+/// instead of being folded into a truncated success. Keying the check on the
+/// reply *type* (not each merge) means every broadcast merge — present and
+/// future — inherits conflict-abort for free; a new merge over
+/// [`PartialResult`] cannot silently reintroduce the swallow bug (issue #15
+/// item 4). Reply types that never carry a rejection use the `None` default.
+pub trait FatalReply {
+    /// The fatal error to abort the gather with, if this reply is a rejection.
+    fn fatal_error(&self) -> Option<Response> {
+        None
+    }
+}
+
+impl FatalReply for PartialResult {
+    fn fatal_error(&self) -> Option<Response> {
+        self.as_shard_error().cloned()
+    }
+}
+
+// Reply types that never carry a shard rejection (they ride non-`ScatterRequest`
+// messages that do not pass through the Continuation-Lock gate, or are simple
+// scalars): the `None` default is correct.
+impl FatalReply for IntrospectionResponse {}
+impl FatalReply for String {}
+impl FatalReply for () {}
+impl FatalReply for Vec<bool> {}
+
 /// How a broadcast command folds per-shard replies into one client `Response`.
 ///
 /// This is the entire interface a broadcast command must implement: the fan-out,
@@ -128,6 +159,7 @@ impl<'a> ScatterGather<'a> {
     pub async fn run<M, F, S>(&self, mut merge: Box<M>, make_msg: F) -> Response
     where
         M: MergeStrategy + ?Sized,
+        M::Reply: FatalReply,
         F: Fn(usize, oneshot::Sender<M::Reply>) -> S,
         S: Into<ShardMessage>,
     {
@@ -157,7 +189,21 @@ impl<'a> ScatterGather<'a> {
         for (shard_id, rx) in rxs {
             tokio::select! {
                 reply = rx => match reply {
-                    Ok(reply) => merge.absorb(shard_id, reply),
+                    Ok(reply) => {
+                        // A shard that rejected the part (Continuation-Lock
+                        // conflict) returns a fatal, data-free reply. Surface it
+                        // and abort — never fold it into a truncated success.
+                        if let Some(err) = reply.fatal_error() {
+                            warn!(
+                                conn_id = self.conn_id,
+                                shard_id,
+                                cmd = merge.name(),
+                                "shard rejected scatter part"
+                            );
+                            return err;
+                        }
+                        merge.absorb(shard_id, reply);
+                    }
                     Err(_) => match merge.on_missing() {
                         PartialPolicy::FailFast => {
                             warn!(
@@ -918,6 +964,8 @@ mod tests {
     enum Behavior {
         /// Reply with these `(key, response)` pairs.
         Reply(Vec<(Bytes, Response)>),
+        /// Reject the part with a fatal `ShardError` (Continuation-Lock conflict).
+        Reject(&'static str),
         /// Drop the oneshot sender without replying.
         Drop,
         /// Receive but never reply (hold the sender forever).
@@ -952,6 +1000,10 @@ mod tests {
                             Behavior::Reply(results) => {
                                 let _ = response_tx.send(partial(results.clone()));
                             }
+                            Behavior::Reject(msg) => {
+                                let _ = response_tx
+                                    .send(PartialResult::shard_error(Response::error(*msg)));
+                            }
                             Behavior::Drop => drop(response_tx),
                             Behavior::Hang => held.push(response_tx),
                             Behavior::Closed => unreachable!(),
@@ -972,6 +1024,30 @@ mod tests {
             conn_id: 0,
             response_tx,
         }
+    }
+
+    /// Issue #15 item 4 (keyless broadcast): a shard that rejects the part with
+    /// a fatal `ShardError` (Continuation-Lock conflict) must abort the whole
+    /// gather with that error — the surviving shards' partial fold must never be
+    /// returned as a (truncated) success. Keyed on the reply *type* in `run`, so
+    /// this holds for `SumIntegers` (DBSIZE) and every other broadcast merge.
+    #[tokio::test]
+    async fn run_aborts_on_shard_error_conflict() {
+        let (senders, _tasks) = mock_cluster(vec![
+            Behavior::Reply(vec![(Bytes::from("a"), Response::Integer(10))]),
+            Behavior::Reject("ERR shard busy with continuation lock"),
+        ]);
+        let sg = ScatterGather::new(&senders, Duration::from_secs(5), 0);
+        let resp = sg
+            .run(
+                Box::new(SumIntegers::<PartialResult>::default()),
+                dbsize_msg,
+            )
+            .await;
+        assert!(
+            matches!(resp, Response::Error(ref e) if e.as_ref() == b"ERR shard busy with continuation lock"),
+            "a fatal ShardError must abort the gather, got {resp:?}"
+        );
     }
 
     #[tokio::test]

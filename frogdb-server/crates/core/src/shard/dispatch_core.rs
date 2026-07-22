@@ -148,6 +148,15 @@ impl ShardWorker {
             ScatterOp::FtAggregate { .. } => {
                 super::types::PartialResult::ft(FtShardReply::Aggregate(Err(msg)))
             }
+            // Every remaining op. A **keyed** op (MGET/DEL/EXISTS/…) reconstructs
+            // the conflict from a per-key `Keyed` reply, so keep that shape. A
+            // **keyless** op (KEYS/DBSIZE/SCAN/FLUSHDB and the FT admin /
+            // single-shard ops) has no keys to hang the error on — the old
+            // `keys.map(...)` produced an *empty* `Keyed` reply that dropped the
+            // error silently, so the merge folded a truncated result as success.
+            // Emit the fatal, data-free `ShardError` those keyless merges (and
+            // the direct shard-0 reads) now surface instead.
+            _ if keys.is_empty() => super::types::PartialResult::shard_error(err),
             _ => super::types::PartialResult::keyed(
                 keys.iter().map(|k| (k.clone(), err.clone())).collect(),
             ),
@@ -272,6 +281,73 @@ mod tests {
             }
             other => panic!("expected Ft(Aggregate(Err)), got {other:?}"),
         }
+    }
+
+    /// Issue #15 item 4 (keyless fallout): a **keyless** scatter op (FT.DROPINDEX
+    /// here) colliding with another connection's Continuation Lock must come back
+    /// as a fatal [`PartialResult::ShardError`], not an *empty* `Keyed` reply.
+    /// FT.DROPINDEX routes no keys, so the old `keys.map(...)` per-key fallback
+    /// produced `Keyed(vec![])` — carrying no error at all — and the
+    /// `OkOrFirstError` merge returned `OK` while the locked shard never dropped
+    /// the index (silent cross-shard divergence reported as success).
+    #[tokio::test]
+    async fn keyless_dropindex_scatter_under_continuation_lock_returns_shard_error() {
+        let mut worker = test_worker();
+        let _release = hold_continuation_lock(&mut worker, 100).await;
+
+        let (tx, rx) = oneshot::channel();
+        worker
+            .dispatch_core(CoreMsg::ScatterRequest {
+                request_id: 1,
+                keys: vec![],
+                operation: ScatterOp::FtDropIndex {
+                    index_name: Bytes::from_static(b"idx"),
+                },
+                conn_id: 200,
+                response_tx: tx,
+            })
+            .await;
+
+        match rx.await.expect("scatter reply") {
+            PartialResult::ShardError(Response::Error(msg)) => {
+                assert!(
+                    String::from_utf8_lossy(&msg).contains("continuation lock"),
+                    "got {msg:?}"
+                );
+            }
+            other => panic!("expected ShardError, got {other:?}"),
+        }
+    }
+
+    /// FT.TAGVALS is likewise keyless: its rejection must be a fatal
+    /// `ShardError`, not an empty `Keyed` union the `TagValsUnion` merge folds
+    /// into a truncated (but "successful") tag set.
+    #[tokio::test]
+    async fn keyless_tagvals_scatter_under_continuation_lock_returns_shard_error() {
+        let mut worker = test_worker();
+        let _release = hold_continuation_lock(&mut worker, 100).await;
+
+        let (tx, rx) = oneshot::channel();
+        worker
+            .dispatch_core(CoreMsg::ScatterRequest {
+                request_id: 1,
+                keys: vec![],
+                operation: ScatterOp::FtTagvals {
+                    index_name: Bytes::from_static(b"idx"),
+                    field_name: Bytes::from_static(b"tag"),
+                },
+                conn_id: 200,
+                response_tx: tx,
+            })
+            .await;
+
+        assert!(
+            matches!(
+                rx.await.expect("scatter reply"),
+                PartialResult::ShardError(Response::Error(_))
+            ),
+            "keyless FT.TAGVALS conflict must surface as a fatal ShardError"
+        );
     }
 
     /// Non-FT keyed scatter ops keep their per-key `Keyed` conflict error — the
