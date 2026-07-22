@@ -354,6 +354,74 @@ async fn test_cross_shard_expired_keyevent_delivered() {
     server.shutdown().await;
 }
 
+/// Lazy-expiry effect parity (D8 real-path repro): a whole-key TTL that dies via
+/// the LAZY read path (`check_and_delete_expired` -> `uninstall`) must emit the
+/// same `expired` keyevent the active sweep emits for its `deleted_keys`. Active
+/// expiry is disabled (`DEBUG SET-ACTIVE-EXPIRE 0`) so the ONLY thing that can
+/// remove the key is the third-party `GET` — isolating the lazy seam. Redis/Valkey
+/// fire `expired` from `expireIfNeeded` (on-access) and `activeExpireCycle`
+/// (sweep) alike; before this fix the lazy seam silently dropped the event.
+#[tokio::test]
+#[ignore = "gap (D8 repro): lazy expiry does not emit the `expired` keyevent; un-ignored by the fix commit"]
+async fn regression_lazy_expiry_emits_expired_keyevent() {
+    // Single shard so the key and the shard-0 subscriber share a shard.
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut admin = server.connect().await;
+    let mut subscriber = server.connect().await;
+
+    // Disable active expiry: only a lazy read may now remove the key.
+    let resp = admin.command(&["DEBUG", "SET-ACTIVE-EXPIRE", "0"]).await;
+    assert_eq!(resp, Response::ok());
+
+    // Enable keyevent notifications.
+    let resp = admin
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // Seed a key with a TTL, then backdate its deadline into the past so it is
+    // logically expired but still physically present (backdate rewrites only the
+    // timestamp — no purge, no version bump).
+    admin.command(&["SET", "k", "v"]).await;
+    admin.command(&["PEXPIRE", "k", "100000"]).await;
+    let resp = admin
+        .command(&["DEBUG", "EXPIRE-BACKDATE", "k", "50"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    let resp = subscriber
+        .command(&["SUBSCRIBE", "__keyevent@0__:expired"])
+        .await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+
+    // Trigger the lazy purge: a value read of the already-expired key.
+    admin.command(&["GET", "k"]).await;
+
+    let msg = subscriber.read_message(Duration::from_secs(2)).await;
+    assert!(
+        msg.is_some(),
+        "lazy expiry (GET on a backdated key) must emit the `expired` keyevent, \
+         matching active expiry"
+    );
+    if let Some(Response::Array(arr)) = msg {
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("message"))));
+        assert_eq!(
+            arr[1],
+            Response::Bulk(Some(Bytes::from("__keyevent@0__:expired")))
+        );
+        assert_eq!(arr[2], Response::Bulk(Some(Bytes::from("k"))));
+    } else {
+        panic!("Expected array response for expired keyevent message");
+    }
+
+    server.shutdown().await;
+}
+
 /// The disabled fast path is unaffected: with notify-keyspace-events off
 /// (server default), a write on any shard emits nothing, so the coordinator is
 /// never consulted and the subscriber receives no message.

@@ -492,6 +492,79 @@ async fn test_ft_search_text() {
     server.shutdown().await;
 }
 
+/// Lazy-expiry effect parity (D8 real-path repro): a whole-key TTL that dies via
+/// the LAZY read path must remove the key from every search index it
+/// participated in, exactly as active expiry does
+/// (`apply_expiry_effects` -> `delete_from_search_indexes`). Active expiry is
+/// disabled so only the lazy `GET` can remove the key. Before this fix the store
+/// key was purged but its index entry lingered, so `FT.SEARCH` (which returns
+/// hits straight from the index, without store hydration) kept surfacing the
+/// dead key.
+#[tokio::test]
+#[ignore = "gap (D8 repro): lazy expiry does not remove keys from search indexes; un-ignored by the fix commit"]
+async fn regression_lazy_expiry_removes_key_from_search_index() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Disable active expiry: only a lazy read may now remove the key.
+    client.command(&["DEBUG", "SET-ACTIVE-EXPIRE", "0"]).await;
+
+    client
+        .command(&["HSET", "user:1", "name", "Alice Smith"])
+        .await;
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "user:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+        ])
+        .await;
+    assert_ok(&response);
+
+    // Wait for background indexing, then confirm the baseline hit.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let response = client.command(&["FT.SEARCH", "idx", "Alice"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        1,
+        "baseline: the live key must be indexed"
+    );
+
+    // Give the key a whole-key TTL and backdate it into the past.
+    client.command(&["PEXPIRE", "user:1", "100000"]).await;
+    let response = client
+        .command(&["DEBUG", "EXPIRE-BACKDATE", "user:1", "50"])
+        .await;
+    assert_ok(&response);
+
+    // Trigger the lazy purge with a value read. `delete_from_search_indexes`
+    // marks the index entry dirty; visibility to FT.SEARCH follows on the shard's
+    // periodic search-commit tick (1s cadence) — the same eventual-consistency
+    // active expiry has, since neither read-path lazy expiry nor the active sweep
+    // routes through the write-effect pipeline's synchronous commit.
+    client.command(&["GET", "user:1"]).await;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+
+    // The expired key must be gone from the index.
+    let response = client.command(&["FT.SEARCH", "idx", "Alice"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        0,
+        "lazy expiry must delete the key from the search index, matching active expiry"
+    );
+
+    server.shutdown().await;
+}
+
 #[tokio::test]
 async fn test_ft_search_field_specific() {
     let server = start_server_no_persist().await;
