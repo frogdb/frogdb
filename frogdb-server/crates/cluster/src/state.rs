@@ -305,7 +305,10 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
                     // right channel.
                     let (response, events) = self.state.apply_command(cmd).unwrap_or_else(|e| {
                         tracing::warn!(error = %e, "Failed to apply cluster command");
-                        (ClusterResponse::Error(e.to_string()), Vec::new())
+                        // Forward the typed error across the apply boundary
+                        // instead of flattening it to a display string
+                        // (proposal 32): the variant survives for consumers.
+                        (ClusterResponse::Error(e), Vec::new())
                     });
 
                     for event in events {
@@ -772,8 +775,13 @@ mod tests {
 
         let responses = sm.apply(vec![entry]).await.unwrap();
 
-        // Response is an error and no demotion event was emitted.
-        assert!(matches!(responses[0], ClusterResponse::Error(_)));
+        // Response is an error and no demotion event was emitted. The typed
+        // ClusterError survives the full Raft apply boundary (proposal 32) —
+        // the variant can be named, not just `Error(_)`.
+        assert!(matches!(
+            responses[0],
+            ClusterResponse::Error(ClusterError::NodeNotFound(2))
+        ));
         assert!(rx.try_recv().is_err());
     }
 
@@ -1517,7 +1525,7 @@ mod tests {
             new_primary_id: 2,
             force: true,
         });
-        assert!(matches!(result, Ok((ClusterResponse::Value(_), _))));
+        assert!(matches!(result, Ok((ClusterResponse::Epoch(_), _))));
 
         // Old primary removed
         assert!(state.get_node(1).is_none());
@@ -1627,7 +1635,7 @@ mod tests {
                 new_primary_id: 2,
                 force: true,
             });
-            assert!(matches!(result, Ok((ClusterResponse::Value(_), _))));
+            assert!(matches!(result, Ok((ClusterResponse::Epoch(_), _))));
         }
 
         assert!(state.get_node(1).is_none());
@@ -2012,7 +2020,7 @@ mod tests {
                 force: false,
             })
             .unwrap();
-        assert!(matches!(resp, ClusterResponse::Value(_)));
+        assert!(matches!(resp, ClusterResponse::Epoch(_)));
         assert_eq!(
             events,
             vec![ClusterEvent::NodeDemoted {
@@ -2021,6 +2029,18 @@ mod tests {
                 epoch: state.config_epoch(),
             }]
         );
+    }
+
+    #[test]
+    fn increment_epoch_returns_typed_epoch() {
+        // IncrementEpoch returns the post-increment config epoch as a typed
+        // ClusterResponse::Epoch, not a stringly-encoded Value (proposal 32).
+        let state = ClusterState::new();
+        assert_eq!(state.config_epoch(), 0);
+        let (resp, events) = state.apply_command(ClusterCommand::IncrementEpoch).unwrap();
+        assert!(matches!(resp, ClusterResponse::Epoch(1)));
+        assert!(events.is_empty());
+        assert_eq!(state.config_epoch(), 1);
     }
 
     #[test]
