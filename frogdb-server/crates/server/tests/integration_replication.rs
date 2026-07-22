@@ -656,6 +656,44 @@ async fn test_wait_inside_multi_returns_count_immediately() {
     primary.shutdown().await;
 }
 
+/// PSYNC queued inside MULTI/EXEC replies `+OK` and never triggers a socket
+/// takeover. This path bypasses `PsyncIntercept` entirely: `TransactionQueue`
+/// (earlier in `PRE_DISPATCH_ORDER`) queues the command, and at EXEC
+/// `execute_connection_level_in_transaction` short-circuits it to `+OK` without
+/// calling `PsyncCommand::execute`. Guards that the typed-handoff refactor left
+/// this behavior untouched (the connection stays a normal request/reply client).
+#[tokio::test]
+async fn test_psync_inside_multi_replies_ok() {
+    let config = TestServerConfig::default();
+    let primary = TestServer::start_primary_with_config(config).await;
+
+    let mut client = primary.connect().await;
+    assert_ok(&client.command(&["MULTI"]).await);
+    client.command(&["PSYNC", "?", "-1"]).await; // QUEUED
+
+    let response = client.command(&["EXEC"]).await;
+    match &response {
+        Response::Array(items) => {
+            assert_eq!(
+                items.len(),
+                1,
+                "EXEC returns one reply for the queued PSYNC"
+            );
+            assert_ok(&items[0]);
+        }
+        other => panic!("expected EXEC array, got {other:?}"),
+    }
+
+    // The connection is still a normal client: a follow-up PING must answer.
+    let pong = client.command(&["PING"]).await;
+    assert!(
+        !is_error(&pong),
+        "connection must remain a normal request/reply client after MULTI PSYNC EXEC, got {pong:?}"
+    );
+
+    primary.shutdown().await;
+}
+
 /// Test multiple writes replicate correctly.
 #[rstest]
 #[case::in_memory(false)]
