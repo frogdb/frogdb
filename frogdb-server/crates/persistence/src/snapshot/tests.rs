@@ -234,19 +234,53 @@ fn stager(
     }
 }
 
-/// Write a minimal `search/<index>/<shard>/<files>` sidecar under `data_dir`,
-/// matching the layout `copy_search_indexes` walks.
+/// Write a minimal `search/<index>/shard_<n>/<files>` sidecar under `data_dir`,
+/// matching the live layout `frogdb_core::IndexLifecycleManager::index_dir`
+/// produces. Used to prove the stager *excludes* this tree from a snapshot
+/// (proposal 23, DELETE branch): the checkpoint never copies the sidecar.
 fn write_search_sidecar(data_dir: &Path) {
-    let shard = data_dir.join("search").join("idx").join("0");
+    let shard = data_dir.join("search").join("idx").join("shard_0");
     std::fs::create_dir_all(&shard).unwrap();
     std::fs::write(shard.join("segment.dat"), b"index-bytes").unwrap();
     std::fs::write(shard.join("meta.json"), b"{}").unwrap();
 }
 
-/// Happy path: a complete `snapshot_NNNNN/{checkpoint,search,metadata.json}` is
+/// Happy path: a complete `snapshot_NNNNN/{checkpoint,metadata.json}` is
 /// promoted, the staging dir is gone, and `latest` points at the new snapshot.
 #[test]
 fn test_stager_happy_path() {
+    let db = TempDir::new().unwrap();
+    let store = make_store(db.path());
+    let snap = TempDir::new().unwrap();
+    let data = TempDir::new().unwrap();
+
+    let md = stager(snap.path(), data.path(), 1, 5).run(&store).unwrap();
+
+    assert!(md.is_complete());
+    let dir = snap.path().join("snapshot_00001");
+    assert!(dir.join("checkpoint").is_dir());
+    assert!(dir.join("metadata.json").exists());
+    assert!(
+        !snap.path().join(".snapshot_00001.tmp").exists(),
+        "staging dir must be gone after a successful promote"
+    );
+    assert!(md.size_bytes > 0, "size should reflect the checkpoint");
+    #[cfg(unix)]
+    assert_eq!(
+        std::fs::read_link(snap.path().join("latest")).unwrap(),
+        Path::new("snapshot_00001")
+    );
+}
+
+/// Decision guard (proposal 23, DELETE branch): a snapshot excludes the
+/// search-index sidecar. Even with a fully-populated `<data_dir>/search` tree
+/// present, the promoted `snapshot_NNNNN` contains the RocksDB checkpoint and
+/// `metadata.json` but **no** `search/` subtree. Pins the deletion so the copy
+/// cannot silently return; if a restore-from-sidecar consumer is ever added, this
+/// test is the deliberate red that says "re-add the copy" (see the note in
+/// `SnapshotStager::run`).
+#[test]
+fn test_stager_excludes_search_sidecar() {
     let db = TempDir::new().unwrap();
     let store = make_store(db.path());
     let snap = TempDir::new().unwrap();
@@ -258,23 +292,20 @@ fn test_stager_happy_path() {
     assert!(md.is_complete());
     let dir = snap.path().join("snapshot_00001");
     assert!(dir.join("checkpoint").is_dir());
-    assert!(
-        dir.join("search")
-            .join("idx")
-            .join("0")
-            .join("segment.dat")
-            .exists()
-    );
     assert!(dir.join("metadata.json").exists());
     assert!(
-        !snap.path().join(".snapshot_00001.tmp").exists(),
-        "staging dir must be gone after a successful promote"
+        !dir.join("search").exists(),
+        "the search sidecar must not be copied into a snapshot"
     );
-    assert!(md.size_bytes > 0, "size should reflect checkpoint + search");
-    #[cfg(unix)]
-    assert_eq!(
-        std::fs::read_link(snap.path().join("latest")).unwrap(),
-        Path::new("snapshot_00001")
+    // And the live sidecar under data_dir is left untouched (the writer owns it).
+    assert!(
+        data.path()
+            .join("search")
+            .join("idx")
+            .join("shard_0")
+            .join("segment.dat")
+            .exists(),
+        "the live sidecar must be untouched by snapshotting"
     );
 }
 
@@ -308,53 +339,12 @@ fn test_stager_checkpoint_failure_aborts_cleanly() {
     );
 }
 
-/// Search-copy failure aborts (flag 1 regression): a snapshot missing its search
-/// sidecar is never installed. The previous complete snapshot and its `latest`
-/// pointer are left untouched as the recovery source.
-#[test]
-fn test_stager_search_copy_failure_aborts_preserving_previous() {
-    let db = TempDir::new().unwrap();
-    let store = make_store(db.path());
-    let snap = TempDir::new().unwrap();
-    let data = TempDir::new().unwrap();
-
-    // First snapshot (no sidecar) succeeds and becomes the recovery source.
-    stager(snap.path(), data.path(), 1, 5).run(&store).unwrap();
-    assert!(
-        snap.path()
-            .join("snapshot_00001")
-            .join("metadata.json")
-            .exists()
-    );
-
-    // Make `data_dir/search` a *file* so `copy_search_indexes` fails.
-    std::fs::write(data.path().join("search"), b"not a dir").unwrap();
-
-    let res = stager(snap.path(), data.path(), 2, 5).run(&store);
-
-    assert!(res.is_err(), "search-copy failure must abort the snapshot");
-    assert!(
-        !snap.path().join("snapshot_00002").exists(),
-        "an incomplete snapshot must never be installed"
-    );
-    assert!(
-        !snap.path().join(".snapshot_00002.tmp").exists(),
-        "the staging dir must be reclaimed on abort"
-    );
-    assert!(
-        snap.path()
-            .join("snapshot_00001")
-            .join("metadata.json")
-            .exists(),
-        "the previous good snapshot must survive"
-    );
-    #[cfg(unix)]
-    assert_eq!(
-        std::fs::read_link(snap.path().join("latest")).unwrap(),
-        Path::new("snapshot_00001"),
-        "latest must still point at the previous good snapshot"
-    );
-}
+// (Removed `test_stager_search_copy_failure_aborts_preserving_previous`: the
+// search-copy stage it exercised was deleted in proposal 23's DELETE branch — a
+// snapshot no longer copies the sidecar, so a bad `<data_dir>/search` can no
+// longer abort a snapshot. The general abort-preserves-previous invariant is
+// still covered by `test_stager_checkpoint_failure_aborts_cleanly` and
+// `test_stager_promote_rename_failure_leaves_no_leak`.)
 
 /// Promote-rename failure leaves no leak (flag 2 regression): the final
 /// `tmp -> snapshot_NNNNN` rename fails onto a non-empty target, and the RAII

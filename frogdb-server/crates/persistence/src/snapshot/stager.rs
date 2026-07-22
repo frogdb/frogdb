@@ -1,10 +1,15 @@
 //! Staged creation of a single snapshot.
 //!
 //! [`SnapshotStager`] owns the durability-critical write half of the checkpoint
-//! machinery: cut a RocksDB checkpoint at a sequence number, copy the
-//! search-index sidecar, write `metadata.json`, and atomically promote a staged
-//! directory (`.snapshot_NNNNN.tmp` → `snapshot_NNNNN`) into the live snapshot
-//! set, then repoint the `latest` pointer.
+//! machinery: cut a RocksDB checkpoint at a sequence number, write
+//! `metadata.json`, and atomically promote a staged directory
+//! (`.snapshot_NNNNN.tmp` → `snapshot_NNNNN`) into the live snapshot set, then
+//! repoint the `latest` pointer.
+//!
+//! A snapshot deliberately does **not** include the search-index sidecar
+//! (`<data_dir>/search`). An earlier version copied it in; that copy was removed
+//! (proposal 23) because it had no restore-path reader — see the decision note on
+//! [`SnapshotStager::run`].
 //!
 //! The contract is *all-or-nothing*: every stage builds under `tmp`, and only a
 //! fully-formed snapshot is atomically promoted to `final_dir`. This mirrors the
@@ -60,7 +65,10 @@ pub(crate) struct SnapshotStager {
     pub(crate) final_dir: PathBuf,
     /// `snapshot_NNNNN` — the `latest` symlink target (relative).
     pub(crate) name: String,
-    /// Source of the `search/` sidecar (the live data dir).
+    /// The live data dir. Retained on the stager (the coordinator constructs it)
+    /// as the re-add anchor for a future search-sidecar copy; unread today since
+    /// the copy path was removed (proposal 23) — see [`SnapshotStager::run`].
+    #[allow(dead_code)]
     pub(crate) data_dir: PathBuf,
     pub(crate) epoch: u64,
     pub(crate) num_shards: usize,
@@ -79,7 +87,34 @@ impl SnapshotStager {
         let guard = TmpDirGuard::new(&self.tmp);
 
         let seq = self.stage_checkpoint(rocks)?;
-        self.copy_indexes()?;
+        // NOTE (proposal 23 — search-sidecar layout, DELETE branch): a snapshot no
+        // longer copies the search-index sidecar (`<data_dir>/search`) into the
+        // checkpoint. The former `copy_indexes` step produced an *unconsumed
+        // artifact*: nothing on the restore path ever reads a Checkpoint's
+        // `search/` subtree back. Startup reads only `metadata.json`
+        // (`RocksSnapshotCoordinator::load_latest_metadata`); the staged-checkpoint
+        // installer installs only the RocksDB dir; and search indexes are rebuilt
+        // from the `search_meta` column family by
+        // `frogdb_core::IndexLifecycleManager::recover`, which opens tantivy/usearch
+        // files from the *live* `<data_dir>/search` — never from a snapshot copy.
+        // Replication full sync ships its own flat RocksDB checkpoint and never
+        // touches `search/` either.
+        //
+        // Proposal 23's decision rule: extract a shared sidecar-layout type only if
+        // a restore-from-sidecar consumer exists or is on the roadmap; otherwise
+        // prefer deleting the reader-less copy over abstracting it. Verified against
+        // the current tree (2026-07): no such consumer and no roadmap promise
+        // (checked server recovery, the operator, website docs, and CHANGELOG), so
+        // the copy is deleted, removing one of the layout's two authors and closing
+        // the cross-crate silent-drift seam. `stager_excludes_search_sidecar` pins
+        // this exclusion so it is enforced, not accidental.
+        //
+        // Re-add path: if a warm-open / restore-from-sidecar consumer is added,
+        // reintroduce the copy as proposal 23's `SearchSidecar::copy_into` extraction
+        // (a `persistence`-owned layout type shared by this copier and core's
+        // `IndexLifecycleManager::index_dir` writer), not as the previous
+        // hand-rolled `copy_search_indexes` walk. `data_dir` is retained on the
+        // stager as that anchor.
         let md = self.finalize_metadata(seq)?;
         self.install()?;
         guard.commit();
@@ -112,28 +147,13 @@ impl SnapshotStager {
         Ok(seq)
     }
 
-    /// Copy the search-index sidecar into the snapshot. A copy failure aborts the
-    /// snapshot: shipping an index-less snapshot would mark it complete yet leave
-    /// a silent restore gap, and would replace the previous good snapshot. On
-    /// abort the guard removes the temp dir and the prior complete snapshot (and
-    /// its `latest` pointer) remain the recovery source.
-    fn copy_indexes(&self) -> Result<(), SnapshotError> {
-        let src = self.data_dir.join("search");
-        if src.exists() {
-            Self::copy_search_indexes(&src, &self.tmp.join("search"))?;
-        }
-        Ok(())
-    }
-
     /// Compute the size, then write `metadata.json` atomically (`.tmp` + rename).
     fn finalize_metadata(&self, seq: u64) -> Result<SnapshotMetadataFile, SnapshotError> {
         let cp = self.tmp.join("checkpoint");
         let mut md = SnapshotMetadataFile::new(self.epoch, seq, self.num_shards);
-        let mut size = Self::calculate_dir_size(&cp).unwrap_or(0);
-        let search = self.tmp.join("search");
-        if search.exists() {
-            size += Self::calculate_dir_size(&search).unwrap_or(0);
-        }
+        // The snapshot contains only the RocksDB checkpoint (no search sidecar —
+        // see the decision note in `run`), so its size is the checkpoint's alone.
+        let size = Self::calculate_dir_size(&cp).unwrap_or(0);
         md.mark_complete(size);
         let json = serde_json::to_string_pretty(&md)
             .map_err(|e| SnapshotError::Internal(format!("Failed to serialize metadata: {e}")))?;
@@ -163,41 +183,6 @@ impl SnapshotStager {
             }
         }
         Ok(s)
-    }
-
-    fn copy_search_indexes(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
-        for ie in std::fs::read_dir(src)? {
-            let ie = ie?;
-            if !ie.file_type()?.is_dir() {
-                continue;
-            }
-            let in_ = ie.file_name();
-            for se in std::fs::read_dir(ie.path())? {
-                let se = se?;
-                if !se.file_type()?.is_dir() {
-                    continue;
-                }
-                let sd = dst.join(&in_).join(se.file_name());
-                std::fs::create_dir_all(&sd)?;
-                for fe in std::fs::read_dir(se.path())? {
-                    let fe = fe?;
-                    if !fe.file_type()?.is_file() {
-                        continue;
-                    }
-                    let fn_ = fe.file_name();
-                    let sp = fe.path();
-                    let dp = sd.join(&fn_);
-                    let ns = fn_.to_string_lossy();
-                    if ns == "meta.json"
-                        || ns.starts_with('.')
-                        || std::fs::hard_link(&sp, &dp).is_err()
-                    {
-                        std::fs::copy(&sp, &dp)?;
-                    }
-                }
-            }
-        }
-        Ok(())
     }
 
     /// Keep the newest `ms` `snapshot_NNNNN` dirs, delete the rest.
