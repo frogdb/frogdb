@@ -120,6 +120,9 @@ impl Server {
                 self.replication_tracker.clone(),
                 mode.clone(),
                 self.role_manager_handle.clone(),
+                self.raft
+                    .clone()
+                    .map(|r| r as Arc<dyn crate::debug_providers::LeaderReader>),
             ));
 
             let debug_state = DebugState::new(
