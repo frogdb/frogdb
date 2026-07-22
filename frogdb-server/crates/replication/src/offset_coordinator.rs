@@ -33,11 +33,11 @@ use crate::tracker::ReplicationTrackerImpl;
 ///
 /// Invariant (the whole reason this type exists): the offset is measured in
 /// **RESP command-stream bytes** — the bytes a replica would have to replay to
-/// reach this position. Transport framing (the 18-byte [`ReplicationFrame`]
+/// reach this position. Transport framing (the 20-byte [`ReplicationFrame`]
 /// header) is NOT part of the offset. Primary and replica advance by the SAME
-/// unit ([`Self::advance_unit`], reached via [`Self::advance`] on the primary
-/// and [`Self::frame_advance`] on the replica), so an ACK is directly
-/// comparable to the live offset.
+/// unit ([`ReplicationFrame::stream_advance`], reached via [`Self::advance`] on
+/// the primary and [`Self::frame_advance`] on the replica), so an ACK is
+/// directly comparable to the live offset.
 ///
 /// The coordinator OWNS the live write position: the `live` atomic is its
 /// canonical home, and it is the single vendor of the shared handle the cluster
@@ -98,18 +98,17 @@ impl OffsetCoordinator {
     }
 
     /// Replica-side spelling of the advance *unit*. The replica advances its own
-    /// [`ReplicationState`] atomic (it has no [`OffsetCoordinator`] — that type
-    /// is primary-only), but must count by the SAME unit as [`Self::advance`].
-    /// A free function so the coordinator-less replica ingest path can call it;
-    /// defined in terms of [`Self::advance_unit`] so the two ends cannot use
-    /// different units.
+    /// live offset (it has no [`OffsetCoordinator`] — that type is
+    /// primary-only), but must count by the SAME unit as [`Self::advance`]. A
+    /// thin delegator to [`ReplicationFrame::stream_advance`], the neutral home
+    /// of the unit, so the two ends cannot use different counts.
     #[inline]
     pub fn frame_advance(frame: &ReplicationFrame) -> u64 {
-        Self::advance_unit(&frame.payload)
+        frame.stream_advance()
     }
 
     /// The one true live offset. Replaces every `tracker.current_offset()` AND
-    /// every `state.replication_offset` read for "where is the stream now".
+    /// every `state.offset_at_save` read for "where is the stream now".
     pub fn current(&self) -> u64 {
         self.live.load(Ordering::Acquire)
     }
@@ -164,8 +163,8 @@ impl OffsetCoordinator {
     pub async fn reconcile_for_persist(&self) -> ReplicationState {
         let offset = self.current();
         let mut state = self.state.write().await;
-        if offset > state.replication_offset {
-            state.replication_offset = offset;
+        if offset > state.offset_at_save {
+            state.offset_at_save = offset;
         }
         state.clone()
     }
@@ -341,9 +340,9 @@ mod tests {
 
         let old_id = {
             let mut s = state.write().await;
-            s.replication_offset = 1000;
             let old = s.replication_id.clone();
-            s.new_replication_id();
+            // Freeze the failover boundary from the live offset (1000).
+            s.new_replication_id(1000);
             old
         };
 
@@ -362,14 +361,14 @@ mod tests {
 
         coord.advance(&payload(750));
         let snapshot = coord.reconcile_for_persist().await;
-        assert_eq!(snapshot.replication_offset, 750);
+        assert_eq!(snapshot.offset_at_save, 750);
         // The persisted field was updated in place too.
-        assert_eq!(state.read().await.replication_offset, 750);
+        assert_eq!(state.read().await.offset_at_save, 750);
 
         // A reconcile never moves the offset backwards: if the persisted field
         // is already ahead (e.g. seeded from staged metadata), it is preserved.
-        state.write().await.replication_offset = 5000;
+        state.write().await.offset_at_save = 5000;
         let snapshot = coord.reconcile_for_persist().await;
-        assert_eq!(snapshot.replication_offset, 5000);
+        assert_eq!(snapshot.offset_at_save, 5000);
     }
 }

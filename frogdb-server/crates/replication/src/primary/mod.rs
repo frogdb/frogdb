@@ -75,7 +75,7 @@ pub struct PrimaryReplicationHandler {
     /// Single owner of the replication-offset contract (live write position,
     /// per-replica acked offsets, and the persisted offset). All offset reads
     /// and the broadcast advance route through this seam instead of reaching
-    /// into the tracker or `state.replication_offset` directly.
+    /// into the tracker or `state.offset_at_save` directly.
     pub(crate) offsets: Arc<OffsetCoordinator>,
     /// Single owner of the WAIT quorum decision (offset snapshot, immediate
     /// check, GETACK solicitation policy, quorum-or-deadline wait). The
@@ -135,7 +135,7 @@ impl PrimaryReplicationHandler {
     ///
     /// The durable offset is reconciled from the live write position by the
     /// [`OffsetCoordinator`] (the broadcast path advances only the live offset,
-    /// not `state.replication_offset`). This couples offset durability to
+    /// not `state.offset_at_save`). This couples offset durability to
     /// explicit save points (snapshot completion, graceful shutdown) rather than
     /// an fsync per write, mirroring Redis/Valkey, which persist repl-id +
     /// offset alongside the RDB instead of continuously.

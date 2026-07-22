@@ -64,12 +64,12 @@ pub(super) fn init_replication(
 
         info!(
             replication_id = %repl_state.replication_id,
-            offset = repl_state.replication_offset,
+            offset_at_save = repl_state.offset_at_save,
             "Initialized primary replication state"
         );
 
         let tracker = Arc::new(frogdb_core::ReplicationTrackerImpl::new());
-        tracker.set_offset(repl_state.replication_offset);
+        tracker.set_offset(repl_state.offset_at_save);
 
         let handler = Arc::new(PrimaryReplicationHandler::new(
             repl_state,
@@ -120,7 +120,7 @@ pub(super) fn init_replication(
         info!(
             primary = %resolved_primary_addr,
             replication_id = %repl_state.replication_id,
-            offset = repl_state.replication_offset,
+            offset_at_save = repl_state.offset_at_save,
             "Initialized replica replication state"
         );
 
