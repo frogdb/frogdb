@@ -48,6 +48,22 @@ async fn read_resp_line<R: AsyncReadExt + Unpin>(reader: &mut R) -> io::Result<S
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "RESP line is not valid UTF-8"))
 }
 
+/// Build the `(replication_id, offset)` pair for a reconnect `PSYNC` request
+/// from the replica's **live applied** offset. A live offset of 0 means the
+/// replica has never synced, so it asks for a full resync (`PSYNC ? -1`);
+/// otherwise it resumes from its live head under its current replication id.
+///
+/// Kept as a free function so the offset-source decision is unit-testable
+/// without a socket — the regression guard is that it is fed
+/// [`ReplicaOffset::current`], not the lagging persisted `offset_at_save`.
+fn psync_request_args(replication_id: &str, current_offset: u64) -> (String, i64) {
+    if current_offset == 0 {
+        ("?".to_string(), -1i64)
+    } else {
+        (replication_id.to_string(), current_offset as i64)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionState {
     Disconnected,
@@ -83,9 +99,9 @@ pub struct ReplicaConnection {
     pub(crate) state: Arc<RwLock<ReplicationState>>,
     pub(crate) connection_state: ConnectionState,
     pub(crate) data_dir: PathBuf,
-    /// Single owner of the replica-side offset lifecycle: the canonical
-    /// `state.replication_offset` field and its cluster-bus mirror move together
-    /// behind [`ReplicaOffset::advance`] / [`ReplicaOffset::reset_to`].
+    /// Single owner of the replica-side live offset: the applied-offset atomic
+    /// (also the cluster-bus HealthProbe handle) advanced behind
+    /// [`ReplicaOffset::frame_advance`] / [`ReplicaOffset::reset_to`].
     pub(crate) offsets: ReplicaOffset,
     /// Shared with the owning [`super::ReplicaReplicationHandler`]; kept in
     /// lockstep with `connection_state` via [`Self::set_state`] so INFO can
@@ -142,16 +158,13 @@ impl ReplicaConnection {
     }
 
     pub(crate) async fn psync(&mut self) -> io::Result<SyncType> {
-        let state = self.state.read().await;
-        let (repl_id, offset) = if state.replication_offset == 0 {
-            ("?".to_string(), -1i64)
-        } else {
-            (
-                state.replication_id.clone(),
-                state.replication_offset as i64,
-            )
-        };
-        drop(state);
+        // The reconnect offset MUST come from the live applied head
+        // (`ReplicaOffset::current`), never the persisted `offset_at_save` which
+        // lags between save points — a resume from behind the applied head would
+        // re-receive already-applied data or force a needless full resync.
+        let current = self.offsets.current();
+        let replication_id = self.state.read().await.replication_id.clone();
+        let (repl_id, offset) = psync_request_args(&replication_id, current);
         let cmd = serialize_command_to_resp(
             "PSYNC",
             &[Bytes::from(repl_id), Bytes::from(offset.to_string())],
@@ -166,7 +179,8 @@ impl ReplicaConnection {
                 let new_offset: u64 = parts[2].parse().map_err(|_| {
                     io::Error::new(io::ErrorKind::InvalidData, "invalid offset in FULLRESYNC")
                 })?;
-                self.offsets.reset_to(new_repl_id.clone(), new_offset).await;
+                self.state.write().await.replication_id = new_repl_id.clone();
+                self.offsets.reset_to(new_offset);
                 tracing::info!(replication_id = %new_repl_id, offset = new_offset, "FULLRESYNC initiated");
                 self.set_state(ConnectionState::Syncing);
                 let line_buf = read_resp_line(&mut self.stream).await?;
@@ -305,9 +319,8 @@ impl ReplicaConnection {
             }
         }
         tracing::info!(checkpoint_dir = %staged.dir().display(), replication_id = %metadata.replication_id, offset = metadata.replication_offset, "Checkpoint staged for loading - server restart required to apply");
-        self.offsets
-            .reset_to(metadata.replication_id.clone(), metadata.replication_offset)
-            .await;
+        self.state.write().await.replication_id = metadata.replication_id.clone();
+        self.offsets.reset_to(metadata.replication_offset);
         // The checkpoint itself needs a restart to load, but the connection
         // now moves straight into live WAL streaming (see `connect_and_sync`)
         // exactly like the RDB fullsync path below — so the link is up from
@@ -331,5 +344,75 @@ impl ReplicaConnection {
                 format!("unexpected response: {}", line),
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::replica::offset::ReplicaOffset;
+    use std::sync::atomic::AtomicU64;
+
+    #[test]
+    fn psync_request_args_asks_full_resync_when_never_synced() {
+        let (id, offset) = psync_request_args("abc", 0);
+        assert_eq!(id, "?");
+        assert_eq!(offset, -1);
+    }
+
+    #[test]
+    fn psync_request_args_resumes_from_the_live_offset() {
+        let (id, offset) = psync_request_args("myid", 500);
+        assert_eq!(id, "myid");
+        assert_eq!(offset, 500);
+    }
+
+    /// Regression guard for the reconnect-offset hazard: the offset a reconnect
+    /// `PSYNC` places in its request must equal the **live applied** head
+    /// (`ReplicaOffset::current`), not the lagging persisted `offset_at_save`.
+    /// Drives the real `psync()` over an in-memory duplex — no socket — and
+    /// inspects the bytes it wrote.
+    #[tokio::test]
+    async fn psync_places_live_offset_not_offset_at_save_in_the_request() {
+        let (client, server) = tokio::io::duplex(64 * 1024);
+
+        let mut st = ReplicationState::new();
+        let repl_id = st.replication_id.clone();
+        st.offset_at_save = 100; // persisted save-point M lags
+        let state = Arc::new(RwLock::new(st));
+        // Live applied head N = 500 (diverged from the persisted 100).
+        let offsets = ReplicaOffset::new(state.clone(), Arc::new(AtomicU64::new(500)));
+
+        let mut conn = ReplicaConnection {
+            stream: Box::new(server),
+            _primary_addr: "127.0.0.1:6379".parse().unwrap(),
+            state,
+            connection_state: ConnectionState::Connected,
+            data_dir: PathBuf::from("/tmp/frogdb-test"),
+            offsets,
+            link_up: Arc::new(AtomicBool::new(false)),
+        };
+
+        let mut client = client;
+        let task = tokio::spawn(async move { conn.psync().await });
+
+        // Read the PSYNC request the replica wrote.
+        let mut buf = vec![0u8; 512];
+        let n = client.read(&mut buf).await.unwrap();
+        let req = String::from_utf8_lossy(&buf[..n]).to_string();
+
+        // Let psync() complete with a partial-sync continue.
+        client
+            .write_all(format!("+CONTINUE {}\r\n", repl_id).as_bytes())
+            .await
+            .unwrap();
+        let sync = task.await.unwrap().unwrap();
+        assert!(matches!(sync, SyncType::PartialSync));
+
+        // The request resumes from the live head (500), never offset_at_save.
+        assert!(
+            req.contains("$3\r\n500\r\n"),
+            "reconnect PSYNC must carry the live offset 500, got: {req:?}"
+        );
     }
 }

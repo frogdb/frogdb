@@ -27,11 +27,11 @@ impl ReplicaConnection {
                         Ok(0) => { tracing::info!("Primary connection closed"); return Ok(()); }
                         Ok(_) => {
                             while let Some(frame) = codec.decode(&mut buf)? {
-                                // Advance the canonical offset and its cluster-bus mirror in
-                                // lockstep. The advance unit is the RESP payload only (see
+                                // Advance the live applied offset (also the cluster-bus handle).
+                                // The advance unit is the RESP payload only (see
                                 // `ReplicationFrame::stream_advance`), the same unit the primary
                                 // advances by, so the replica's ACK is directly comparable.
-                                let offset = self.offsets.advance(&frame).await;
+                                let offset = self.offsets.frame_advance(&frame);
                                 tracing::trace!(sequence = frame.sequence, offset = offset, "Received replication frame");
                                 // The primary's GETACK is an ack solicitation (sent by WAIT):
                                 // answer immediately instead of waiting for the next 1-second
@@ -46,7 +46,7 @@ impl ReplicaConnection {
                     }
                 }
                 _ = ack_interval.tick() => {
-                    let offset = self.offsets.current().await;
+                    let offset = self.offsets.current();
                     self.send_ack(offset).await?;
                 }
             }

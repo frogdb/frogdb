@@ -189,7 +189,7 @@ fn standalone_does_not_persist_replication_state() {
     let recovered = recover(&inputs).expect("standalone recovers");
 
     // A fresh in-memory state, offset 0, and no state file written to disk.
-    assert_eq!(recovered.replication.replication_offset, 0);
+    assert_eq!(recovered.replication.offset_at_save, 0);
     assert!(
         !db_dir.join(&repl_cfg.state_file).exists(),
         "standalone must not write a replication state file"
@@ -214,7 +214,7 @@ fn primary_loads_and_persists_replication_state() {
 
     let recovered = recover(&inputs).expect("primary recovers");
 
-    assert_eq!(recovered.replication.replication_offset, 0);
+    assert_eq!(recovered.replication.offset_at_save, 0);
     assert_eq!(recovered.replication.replication_id.len(), 40);
     assert!(
         db_dir.join(&repl_cfg.state_file).exists(),
@@ -253,7 +253,7 @@ fn staged_replication_metadata_is_adopted_and_consumed() {
 
     // Phase 5 returns the reconciled state: staged id + offset win.
     assert_eq!(recovered.replication.replication_id, staged_id);
-    assert_eq!(recovered.replication.replication_offset, 4242);
+    assert_eq!(recovered.replication.offset_at_save, 4242);
     // The staging file is consumed so later restarts use the state file.
     assert!(
         !db_dir.join("replication_metadata.json").exists(),
