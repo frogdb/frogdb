@@ -21,6 +21,31 @@ use frogdb_search::wire::{FtShardReply, ShardSearchHit};
 use crate::cursor_store::AggregateCursorStore;
 use crate::scatter::MergeStrategy;
 
+/// Turn a reply a search merge did not expect into an error to abort on, rather
+/// than silently dropping it (issue #15 item 4).
+///
+/// A search fan-out (FT.SEARCH / FT.HYBRID / FT.AGGREGATE) only ever expects a
+/// typed [`PartialResult::Ft`] reply. The one other shape it can legitimately
+/// receive is the Continuation-Lock conflict fallback: a shard whose keys are
+/// held by an in-flight MULTI/EXEC or Lua script rejects the scatter part with
+/// the conflict error carried inside a [`PartialResult::Keyed`] reply (see
+/// `dispatch_core::scatter_conflict_reply`). Surface that embedded error so the
+/// merge aborts and the client sees the failure — never a truncated result set
+/// returned as success. Any other shape is a dispatch bug and is surfaced
+/// loudly instead of swallowed.
+fn shard_conflict_or_bug(reply: PartialResult, cmd: &str) -> Response {
+    if let Some((_, resp)) = reply
+        .keyed_slice()
+        .iter()
+        .find(|(_, resp)| matches!(resp, Response::Error(_)))
+    {
+        return resp.clone();
+    }
+    Response::error(format!(
+        "ERR {cmd}: shard returned an unmergeable reply shape"
+    ))
+}
+
 /// Return the first embedded error from any shard, else `OK`.
 ///
 /// Shared by the FT admin broadcasts (FT.CREATE / FT.ALTER / FT.DROPINDEX /
@@ -361,7 +386,9 @@ impl MergeStrategy for FtSearchMerge {
             PartialResult::Ft(FtShardReply::Search(Err(msg))) => {
                 self.error = Some(Response::error(msg));
             }
-            _ => {}
+            other => {
+                self.error = Some(shard_conflict_or_bug(other, "FT.SEARCH"));
+            }
         }
     }
 
@@ -457,7 +484,9 @@ impl MergeStrategy for FtHybridMerge {
             PartialResult::Ft(FtShardReply::Search(Err(msg))) => {
                 self.error = Some(Response::error(msg));
             }
-            _ => {}
+            other => {
+                self.error = Some(shard_conflict_or_bug(other, "FT.HYBRID"));
+            }
         }
     }
 
@@ -532,7 +561,9 @@ impl MergeStrategy for FtAggregateMerge {
             PartialResult::Ft(FtShardReply::Aggregate(Err(msg))) => {
                 self.error = Some(Response::error(msg));
             }
-            _ => {}
+            other => {
+                self.error = Some(shard_conflict_or_bug(other, "FT.AGGREGATE"));
+            }
         }
     }
 
@@ -820,6 +851,119 @@ mod tests {
                 assert_eq!(&msg[..], b"idx: no such index");
             }
             other => panic!("expected error, got {other:?}"),
+        }
+    }
+
+    /// Regression for issue #15 item 4: a shard whose keys are held by a
+    /// Continuation Lock (MULTI/EXEC or Lua in flight) rejects the scatter part
+    /// with the conflict error carried inside a `Keyed` reply. The merge must
+    /// surface that error and abort — never silently drop it and return the
+    /// surviving shards' hits as a (truncated) success, which is silent data
+    /// loss to the client.
+    #[test]
+    fn test_search_merge_continuation_lock_error_not_swallowed() {
+        let mut merge = Box::new(FtSearchMerge::from_request(&parse_search(&["*"])));
+        merge.absorb(0, search_reply(1, vec![hit("a", 1.0, None, Some(vec![]))]));
+        merge.absorb(
+            1,
+            PartialResult::keyed(vec![(
+                Bytes::from_static(b"k"),
+                Response::error("ERR shard busy with continuation lock"),
+            )]),
+        );
+
+        match merge.finish() {
+            Response::Error(msg) => {
+                assert_eq!(&msg[..], b"ERR shard busy with continuation lock");
+            }
+            other => panic!("expected the conflict error to abort the merge, got {other:?}"),
+        }
+    }
+
+    /// A search merge must not silently swallow a wholly-unexpected reply shape
+    /// either: an empty/errorless non-`Ft` reply is a dispatch bug, and
+    /// returning a truncated result set as success would hide it. It must error
+    /// loudly instead.
+    #[test]
+    fn test_search_merge_unexpected_reply_shape_errors_loudly() {
+        let mut merge = Box::new(FtSearchMerge::from_request(&parse_search(&["*"])));
+        merge.absorb(0, search_reply(1, vec![hit("a", 1.0, None, Some(vec![]))]));
+        merge.absorb(1, PartialResult::Count(3));
+
+        assert!(
+            matches!(merge.finish(), Response::Error(_)),
+            "an unmergeable reply shape must surface as an error, not silent truncation"
+        );
+    }
+
+    /// A clean two-shard FT.SEARCH still merges to a success array (guards the
+    /// swallow fix from over-firing on the happy path).
+    #[test]
+    fn test_search_merge_clean_two_shards_regression() {
+        let mut merge = Box::new(FtSearchMerge::from_request(&parse_search(&[
+            "*",
+            "NOCONTENT",
+        ])));
+        merge.absorb(0, search_reply(1, vec![hit("a", 2.0, None, None)]));
+        merge.absorb(1, search_reply(1, vec![hit("b", 1.0, None, None)]));
+
+        let (total, items) = unwrap_reply(merge.finish());
+        assert_eq!(total, 2);
+        assert_eq!(key_at(&items, 0), "a");
+        assert_eq!(key_at(&items, 1), "b");
+    }
+
+    #[test]
+    fn test_hybrid_merge_continuation_lock_error_not_swallowed() {
+        let mut merge = Box::new(FtHybridMerge {
+            sortby_active: false,
+            sortby_desc: false,
+            sortby_numeric: false,
+            nosort: false,
+            global_offset: 0,
+            global_limit: 10,
+            error: None,
+            all_hits: Vec::new(),
+            total: 0,
+        });
+        merge.absorb(0, search_reply(1, vec![hit("low", 0.2, None, None)]));
+        merge.absorb(
+            1,
+            PartialResult::keyed(vec![(
+                Bytes::from_static(b"k"),
+                Response::error("ERR shard busy with continuation lock"),
+            )]),
+        );
+
+        match merge.finish() {
+            Response::Error(msg) => assert_eq!(&msg[..], b"ERR shard busy with continuation lock"),
+            other => panic!("expected the conflict error to abort the merge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_aggregate_merge_continuation_lock_error_not_swallowed() {
+        let mut merge = Box::new(FtAggregateMerge {
+            steps: Vec::new(),
+            withcursor: false,
+            cursor_count: 0,
+            cursor_maxidle_ms: 300_000,
+            index_name: Bytes::from_static(b"idx"),
+            cursor_store: Arc::new(AggregateCursorStore::new()),
+            error: None,
+            partials: Vec::new(),
+        });
+        merge.absorb(
+            0,
+            PartialResult::keyed(vec![(
+                Bytes::from_static(b"k"),
+                Response::error("ERR shard busy with continuation lock"),
+            )]),
+        );
+
+        match merge.finish() {
+            Response::Error(msg) => assert_eq!(&msg[..], b"ERR shard busy with continuation lock"),
+            other => panic!("expected the conflict error to abort the merge, got {other:?}"),
         }
     }
 

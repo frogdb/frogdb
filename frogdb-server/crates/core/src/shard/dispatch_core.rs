@@ -1,6 +1,6 @@
 use tracing::Instrument;
 
-use super::message::CoreMsg;
+use super::message::{CoreMsg, ScatterOp};
 use super::worker::ShardWorker;
 use crate::store::Store;
 
@@ -47,9 +47,7 @@ impl ShardWorker {
                 response_tx,
             } => {
                 if let Err(err) = self.can_execute_during_lock(conn_id) {
-                    let error_results: Vec<(bytes::Bytes, frogdb_protocol::Response)> =
-                        keys.iter().map(|k| (k.clone(), err.clone())).collect();
-                    let _ = response_tx.send(super::types::PartialResult::keyed(error_results));
+                    let _ = response_tx.send(Self::scatter_conflict_reply(&operation, &keys, err));
                     return false;
                 }
                 let result = self.execute_scatter_part(&keys, &operation, conn_id).await;
@@ -117,5 +115,192 @@ impl ShardWorker {
             }
         }
         false
+    }
+
+    /// Shape the Continuation-Lock conflict error for a rejected scatter part so
+    /// the coordinator's per-command merge actually *recognizes* it.
+    ///
+    /// The reply variant must match what that op's merge reads, or the error is
+    /// silently dropped. The FT.* query fan-outs (FT.SEARCH / FT.HYBRID /
+    /// FT.AGGREGATE) route **no keys** through the request and their merges only
+    /// inspect the typed [`FtShardReply`](frogdb_search::FtShardReply); a per-key
+    /// `Keyed` reply is therefore *empty* for them, carrying no error at all —
+    /// the shard would drop out of the merge and the client would receive an
+    /// incomplete result set as success (issue #15 item 4). Emit the typed FT
+    /// error variant those merges read instead. Every other scatter op keeps the
+    /// per-key `Keyed` error shape MGET/DEL/EXISTS/… reconstruct from.
+    fn scatter_conflict_reply(
+        operation: &ScatterOp,
+        keys: &[bytes::Bytes],
+        err: frogdb_protocol::Response,
+    ) -> super::types::PartialResult {
+        use frogdb_search::FtShardReply;
+
+        let msg = match &err {
+            frogdb_protocol::Response::Error(b) => String::from_utf8_lossy(b).into_owned(),
+            _ => "ERR shard busy with continuation lock".to_string(),
+        };
+        match operation {
+            // FT.SEARCH and FT.HYBRID both reply with `Search` hits.
+            ScatterOp::FtSearch { .. } | ScatterOp::FtHybrid { .. } => {
+                super::types::PartialResult::ft(FtShardReply::Search(Err(msg)))
+            }
+            ScatterOp::FtAggregate { .. } => {
+                super::types::PartialResult::ft(FtShardReply::Aggregate(Err(msg)))
+            }
+            _ => super::types::PartialResult::keyed(
+                keys.iter().map(|k| (k.clone(), err.clone())).collect(),
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
+
+    use bytes::Bytes;
+    use frogdb_protocol::Response;
+    use frogdb_search::wire::FtShardReply;
+    use frogdb_search::{FtAggregateRequest, FtSearchRequest};
+    use tokio::sync::{mpsc, oneshot};
+
+    use super::CoreMsg;
+    use crate::ShardReadyResult;
+    use crate::eviction::EvictionConfig;
+    use crate::noop::NoopMetricsRecorder;
+    use crate::registry::CommandRegistry;
+    use crate::replication::NoopBroadcaster;
+    use crate::shard::ShardWorker;
+    use crate::shard::message::{ScatterOp, ShardReceiver, ShardSender};
+    use crate::shard::types::PartialResult;
+
+    fn test_worker() -> ShardWorker {
+        let (msg_tx, msg_rx) = mpsc::channel(16);
+        let (_, conn_rx) = mpsc::channel(16);
+        let shard_senders = Arc::new(vec![ShardSender::new(msg_tx)]);
+        ShardWorker::with_eviction(
+            0,
+            1,
+            ShardReceiver::new(msg_rx),
+            conn_rx,
+            shard_senders,
+            Arc::new(CommandRegistry::new()),
+            EvictionConfig::default(),
+            Arc::new(NoopMetricsRecorder::new()),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(NoopBroadcaster),
+        )
+    }
+
+    /// Hold the continuation lock for `owner`. The returned release sender must
+    /// be kept alive for the lock to remain held.
+    async fn hold_continuation_lock(worker: &mut ShardWorker, owner: u64) -> oneshot::Sender<()> {
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        worker
+            .vll
+            .acquire_continuation_lock(1, owner, ready_tx, release_rx)
+            .await;
+        assert!(matches!(ready_rx.await, Ok(ShardReadyResult::Ready)));
+        assert_eq!(worker.vll.continuation_lock_owner(), Some(owner));
+        release_tx
+    }
+
+    /// Issue #15 item 4: an FT.SEARCH scatter part colliding with another
+    /// connection's Continuation Lock must come back as a *recognizable* typed
+    /// FT search error, not an empty `Keyed` reply the search merge silently
+    /// drops (FT.SEARCH routes no keys, so the old per-key `Keyed` reply carried
+    /// no error at all — an incomplete result set returned as success).
+    #[tokio::test]
+    async fn ft_search_scatter_under_continuation_lock_returns_ft_error() {
+        let mut worker = test_worker();
+        let _release = hold_continuation_lock(&mut worker, 100).await;
+
+        let (tx, rx) = oneshot::channel();
+        let request = Box::new(FtSearchRequest::parse(&[Bytes::from_static(b"*")]));
+        worker
+            .dispatch_core(CoreMsg::ScatterRequest {
+                request_id: 1,
+                keys: vec![],
+                operation: ScatterOp::FtSearch {
+                    index_name: Bytes::from_static(b"idx"),
+                    request,
+                },
+                conn_id: 200,
+                response_tx: tx,
+            })
+            .await;
+
+        match rx.await.expect("scatter reply") {
+            PartialResult::Ft(FtShardReply::Search(Err(msg))) => {
+                assert!(msg.contains("continuation lock"), "got {msg:?}");
+            }
+            other => panic!("expected Ft(Search(Err)), got {other:?}"),
+        }
+    }
+
+    /// FT.AGGREGATE rejects into the typed aggregate error variant its merge
+    /// reads (the aggregate merge only inspects `Ft(Aggregate(..))`).
+    #[tokio::test]
+    async fn ft_aggregate_scatter_under_continuation_lock_returns_ft_error() {
+        let mut worker = test_worker();
+        let _release = hold_continuation_lock(&mut worker, 100).await;
+
+        let (tx, rx) = oneshot::channel();
+        let request = Box::new(
+            FtAggregateRequest::parse(&[Bytes::from_static(b"*")])
+                .expect("aggregate request parses"),
+        );
+        worker
+            .dispatch_core(CoreMsg::ScatterRequest {
+                request_id: 1,
+                keys: vec![],
+                operation: ScatterOp::FtAggregate {
+                    index_name: Bytes::from_static(b"idx"),
+                    request,
+                },
+                conn_id: 200,
+                response_tx: tx,
+            })
+            .await;
+
+        match rx.await.expect("scatter reply") {
+            PartialResult::Ft(FtShardReply::Aggregate(Err(msg))) => {
+                assert!(msg.contains("continuation lock"), "got {msg:?}");
+            }
+            other => panic!("expected Ft(Aggregate(Err)), got {other:?}"),
+        }
+    }
+
+    /// Non-FT keyed scatter ops keep their per-key `Keyed` conflict error — the
+    /// fix must not disturb the shape MGET/DEL/EXISTS merges expect.
+    #[tokio::test]
+    async fn keyed_scatter_under_continuation_lock_still_returns_keyed_error() {
+        let mut worker = test_worker();
+        let _release = hold_continuation_lock(&mut worker, 100).await;
+
+        let (tx, rx) = oneshot::channel();
+        worker
+            .dispatch_core(CoreMsg::ScatterRequest {
+                request_id: 1,
+                keys: vec![Bytes::from_static(b"a"), Bytes::from_static(b"b")],
+                operation: ScatterOp::MGet,
+                conn_id: 200,
+                response_tx: tx,
+            })
+            .await;
+
+        match rx.await.expect("scatter reply") {
+            PartialResult::Keyed(results) => {
+                assert_eq!(results.len(), 2);
+                assert!(
+                    results.iter().all(|(_, r)| matches!(r, Response::Error(_))),
+                    "every requested key carries the conflict error"
+                );
+            }
+            other => panic!("expected Keyed error reply, got {other:?}"),
+        }
     }
 }
