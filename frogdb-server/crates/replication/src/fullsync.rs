@@ -17,6 +17,12 @@
 //! Per-replica progress and lifecycle live on `ReplicaSession`; this file
 //! has no per-session state of its own.
 
+pub mod receiver;
+pub mod stager;
+
+pub use receiver::receive_checkpoint_files;
+pub use stager::{CheckpointStager, StagedOutcome};
+
 use bytes::{Bytes, BytesMut};
 use sha2::{Digest, Sha256};
 use std::io;

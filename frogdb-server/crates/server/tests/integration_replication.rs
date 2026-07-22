@@ -4169,7 +4169,7 @@ async fn test_replica_recovers_offset_from_staged_metadata() {
     // 4. The reconciled state is persisted and the staging file is consumed.
     let persisted = read_json_file(&data_dir.join("replication_state.json")).await;
     assert_eq!(
-        persisted["replication_offset"].as_u64().unwrap(),
+        persisted["offset_at_save"].as_u64().unwrap(),
         staged_offset,
         "recovered offset must match the staged checkpoint, not reset to 0"
     );
@@ -4430,7 +4430,7 @@ async fn test_replica_ignores_corrupt_staged_metadata() {
     // Fresh state with offset 0 -> the replica will PSYNC "? -1" -> full resync.
     let persisted = read_json_file(&data_dir.join("replication_state.json")).await;
     assert_eq!(
-        persisted["replication_offset"].as_u64().unwrap(),
+        persisted["offset_at_save"].as_u64().unwrap(),
         0,
         "corrupt metadata must not be trusted; offset falls back to 0 (full resync)"
     );
