@@ -523,6 +523,39 @@ pub trait Store: Send {
         Vec::new()
     }
 
+    /// Drain the buffer of keys removed because their **last hash field**
+    /// expired on a lazy read (`purge_expired_hash_fields` -> `delete`) since
+    /// the last drain.
+    ///
+    /// A distinct seam from [`Store::take_lazily_purged`]: the whole key never
+    /// had its own TTL elapse — the hash simply emptied via field TTL — so Redis
+    /// emits a generic `del` (not `expired`) for it, matching active expiry's
+    /// `ExpiryResult::emptied_keys`. The worker drains this after each command
+    /// and fires the `del` notification + tracking/search invalidation. The
+    /// active sweep shares `purge_expired_hash_fields` and so populates this
+    /// buffer too, but owns its reporting via `ExpiryResult` and discards the
+    /// buffer at the sweep seam, so it only ever fires for genuinely lazy reads.
+    ///
+    /// Default: no lazy-emptied reporting (stores without hash-field TTL).
+    fn take_lazily_emptied(&mut self) -> Vec<Bytes> {
+        Vec::new()
+    }
+
+    /// Drain the count of hash fields reaped by **lazy** reads
+    /// (`purge_expired_hash_fields`) since the last drain, whether or not the
+    /// reap emptied the key.
+    ///
+    /// The worker bumps `frogdb_fields_expired_total` by this, mirroring the
+    /// per-field parity active expiry applies from `ExpiryResult::fields_expired`.
+    /// The active sweep populates it through the shared `purge_expired_hash_fields`
+    /// but owns its own field counting and discards this at the sweep seam, so it
+    /// only ever counts genuine lazy reaps.
+    ///
+    /// Default: no lazy field-reap reporting (stores without hash-field TTL).
+    fn take_lazily_expired_fields(&mut self) -> u64 {
+        0
+    }
+
     /// Set a value with options (NX/XX, EX/PX, GET, KEEPTTL).
     fn set_with_options(&mut self, key: Bytes, value: Value, _opts: SetOptions) -> SetResult {
         self.set(key, value);

@@ -4,6 +4,7 @@ use bytes::Bytes;
 use frogdb_types::metrics::definitions::{FieldsExpired, KeysExpired, ShardQueueLatency};
 
 use crate::keyspace_event::KeyspaceEventFlags;
+use crate::store::Store;
 
 use super::active_expiry::ExpiryResult;
 #[cfg(any(test, feature = "shard-driver"))]
@@ -140,8 +141,36 @@ impl ShardWorker {
             return;
         }
 
+        // Invariant the discard below relies on: the lazy-purge buffers are
+        // empty when a cycle starts. The shard event loop is a single
+        // `tokio::select!` with no `.await` between a command's drain
+        // (`apply_lazy_purge_effects`, run at every command seam) and this arm,
+        // so no lazily-purged/emptied report can be pending here. If a future
+        // refactor introduces a yield point that interleaves a partially-drained
+        // command with this sweep, this fails loud rather than letting the
+        // discard silently drop a genuine lazy report.
+        debug_assert!(
+            self.store.lazy_purge_buffers_empty(),
+            "lazy-purge buffers must be empty at active-expiry cycle start; \
+             a command's lazy drain was interleaved with the sweep"
+        );
+
         // Disjoint-field borrow: `self.expiry` and `self.store` are distinct fields.
         let result = self.expiry.run_cycle(&mut self.store, Instant::now());
+        // The sweep reaps last-hash-field deaths and hash-field reaps through the
+        // *same* `purge_expired_hash_fields` seam a lazy read uses, so it also
+        // fills the store's lazily-emptied buffer and lazily-expired-fields
+        // counter. But the sweep already owns reporting for these via
+        // `result.emptied_keys` / `result.fields_expired` —
+        // `apply_expiry_effects` fires their `del` events and metric bumps below.
+        // Discard both here so a later command's lazy drain
+        // (`drain_lazy_purge_effects`) does not re-fire `del` or re-count metrics
+        // for what the sweep already reported. Between event-loop iterations the
+        // buffers are empty (every command drains at its own seam; asserted
+        // above), so this discards only what this cycle just produced — never a
+        // pending lazy read.
+        self.store.take_lazily_emptied();
+        self.store.take_lazily_expired_fields();
         self.apply_expiry_effects(result);
     }
 
@@ -496,6 +525,209 @@ mod effect_tests {
         assert_eq!(recorder.counter_value("frogdb_keys_expired_total"), None);
         assert_eq!(recorder.counter_value("frogdb_fields_expired_total"), None);
         assert_eq!(worker.store.expired_keys(), 0);
+    }
+
+    /// Seed `store` with a single-field hash whose only field is already past
+    /// its field TTL (both on the value and in the field-expiry index) — a
+    /// last-field-death waiting to happen on the next read.
+    fn seed_expiring_single_field_hash(store: &mut crate::store::HashMapStore, key: &str) {
+        use crate::store::Store;
+        use crate::types::{HashValue, ListpackThresholds, Value};
+        let past = std::time::Instant::now() - std::time::Duration::from_secs(60);
+        let mut hash = HashValue::new();
+        hash.set(
+            Bytes::from_static(b"f"),
+            Bytes::from_static(b"v"),
+            ListpackThresholds::DEFAULT_HASH,
+        );
+        hash.set_field_expiry(b"f", past);
+        store.set(Bytes::from(key.to_string()), Value::Hash(hash));
+        store.set_field_expiry(key.as_bytes(), b"f", past);
+    }
+
+    /// Seed `store` with a hash carrying `expired` already-past-TTL fields and
+    /// `live` fields with no TTL — a lazy read reaps only the expired ones and
+    /// leaves the key non-empty.
+    fn seed_hash_with_mixed_fields(
+        store: &mut crate::store::HashMapStore,
+        key: &str,
+        expired: &[&str],
+        live: &[&str],
+    ) {
+        use crate::store::Store;
+        use crate::types::{HashValue, ListpackThresholds, Value};
+        let past = std::time::Instant::now() - std::time::Duration::from_secs(60);
+        let mut hash = HashValue::new();
+        for f in expired.iter().chain(live.iter()) {
+            hash.set(
+                Bytes::from((*f).to_string()),
+                Bytes::from_static(b"v"),
+                ListpackThresholds::DEFAULT_HASH,
+            );
+        }
+        for f in expired {
+            hash.set_field_expiry(f.as_bytes(), past);
+        }
+        store.set(Bytes::from(key.to_string()), Value::Hash(hash));
+        for f in expired {
+            store.set_field_expiry(key.as_bytes(), f.as_bytes(), past);
+        }
+    }
+
+    /// Lazy last-hash-field death routed through the lazy-purge drain must fire
+    /// a generic `del` keyevent (not `expired`), mirroring active expiry's
+    /// `emptied_keys` branch. Pins the worker seam in isolation: seed a hash
+    /// whose only field is expired, purge it (the lazy-read seam empties the key
+    /// and records it in the store's lazily-emptied buffer), then drain — the
+    /// `del` event fires and the buffer is emptied.
+    #[test]
+    fn lazy_emptied_hash_key_drains_del_event() {
+        use crate::store::Store;
+
+        let recorder = Arc::new(RecordingRecorder::default());
+        let (mut worker, _msg_tx, _conn_tx) = build_worker(recorder.clone());
+        let mut rx = enable_notifications_and_subscribe(
+            &mut worker,
+            &["__keyevent@0__:del", "__keyevent@0__:expired"],
+        );
+
+        seed_expiring_single_field_hash(&mut worker.store, "h");
+
+        // Lazy-read seam: purge the expired field, which empties and removes the
+        // key, recording it in the store's lazily-emptied buffer.
+        assert_eq!(worker.store.purge_expired_hash_fields(b"h"), 1);
+        assert!(!worker.store.contains(b"h"), "key must be physically gone");
+
+        // Drain the lazy-purge report at the command seam.
+        worker.apply_lazy_purge_effects();
+
+        let events = drain(&mut rx);
+        assert!(
+            events.contains(&("__keyevent@0__:del".into(), "h".into())),
+            "lazy last-field death must emit a `del` keyevent, got {events:?}"
+        );
+        assert!(
+            !events.iter().any(|(ch, _)| ch == "__keyevent@0__:expired"),
+            "lazy hash-empty must emit `del`, never `expired`, got {events:?}"
+        );
+
+        // Metric parity with the active sweep's `emptied_keys` branch: the
+        // emptied key counts as one key expiration on BOTH the INFO stat and the
+        // Prometheus counter, and its final field counts once toward the field
+        // counter.
+        assert_eq!(worker.store.expired_keys(), 1, "INFO expired_keys");
+        assert_eq!(
+            recorder.counter_value("frogdb_keys_expired_total"),
+            Some(1),
+            "KeysExpired metric"
+        );
+        assert_eq!(
+            recorder.counter_value("frogdb_fields_expired_total"),
+            Some(1),
+            "FieldsExpired metric (the emptying field)"
+        );
+
+        // Buffers drained — nothing leaks to the next command.
+        assert!(worker.store.take_lazily_emptied().is_empty());
+        assert_eq!(worker.store.take_lazily_expired_fields(), 0);
+    }
+
+    /// Lazy field reap that does NOT empty the key still bumps the FieldsExpired
+    /// metric with per-field parity to the active sweep — and removes no key, so
+    /// no `del`/`expired` event and no key-counter bump. This is the surface
+    /// (worker.rs:597-611 review finding 2) that would otherwise silently
+    /// under-count lazily-reaped fields.
+    #[test]
+    fn lazy_field_reap_without_emptying_counts_fields_only() {
+        use crate::store::Store;
+
+        let recorder = Arc::new(RecordingRecorder::default());
+        let (mut worker, _msg_tx, _conn_tx) = build_worker(recorder.clone());
+        let mut rx = enable_notifications_and_subscribe(
+            &mut worker,
+            &["__keyevent@0__:del", "__keyevent@0__:expired"],
+        );
+
+        // Two expired fields + one live field: the reap shrinks but does not
+        // empty the hash.
+        seed_hash_with_mixed_fields(&mut worker.store, "h", &["a", "b"], &["c"]);
+
+        assert_eq!(worker.store.purge_expired_hash_fields(b"h"), 2);
+        assert!(
+            worker.store.contains(b"h"),
+            "key must survive (still has `c`)"
+        );
+
+        worker.apply_lazy_purge_effects();
+
+        // No key removed → no keyspace event, no key-counter bump.
+        assert!(
+            drain(&mut rx).is_empty(),
+            "a field reap that does not empty the key emits no keyspace event"
+        );
+        assert_eq!(worker.store.expired_keys(), 0);
+        assert_eq!(recorder.counter_value("frogdb_keys_expired_total"), None);
+        // Two fields reaped → FieldsExpired == 2.
+        assert_eq!(
+            recorder.counter_value("frogdb_fields_expired_total"),
+            Some(2),
+            "both reaped fields counted"
+        );
+        assert_eq!(
+            worker.store.take_lazily_expired_fields(),
+            0,
+            "counter drained"
+        );
+    }
+
+    /// No double-fire: when the *active sweep* reaps a last-field-death it both
+    /// reports the key via `ExpiryResult::emptied_keys` (→ one `del` from
+    /// `apply_expiry_effects`) AND populates the store's lazily-emptied buffer
+    /// through the shared `purge_expired_hash_fields`. `run_active_expiry`
+    /// discards that buffer, so a subsequent command-seam drain fires nothing —
+    /// exactly one `del` total.
+    #[test]
+    fn active_sweep_emptied_key_does_not_double_fire_del() {
+        use crate::store::Store;
+
+        let recorder = Arc::new(RecordingRecorder::default());
+        let (mut worker, _msg_tx, _conn_tx) = build_worker(recorder.clone());
+        let mut rx = enable_notifications_and_subscribe(&mut worker, &["__keyevent@0__:del"]);
+
+        seed_expiring_single_field_hash(&mut worker.store, "h");
+
+        // Active sweep reaps the last field, empties the key, and reports it.
+        worker.run_active_expiry();
+
+        let after_sweep = drain(&mut rx);
+        assert_eq!(
+            after_sweep,
+            vec![("__keyevent@0__:del".to_string(), "h".to_string())],
+            "active sweep must emit exactly one `del`, got {after_sweep:?}"
+        );
+
+        // A later command-seam drain must find nothing — the sweep discarded the
+        // lazily-emptied buffer and field counter, so no second `del`.
+        worker.apply_lazy_purge_effects();
+        assert!(
+            drain(&mut rx).is_empty(),
+            "no second `del` may fire for a key the sweep already reported"
+        );
+        assert!(worker.store.take_lazily_emptied().is_empty());
+
+        // And no double-count: the sweep counted the key and its field exactly
+        // once (via apply_expiry_effects), the discarded buffers added nothing.
+        assert_eq!(worker.store.expired_keys(), 1, "key counted once");
+        assert_eq!(
+            recorder.counter_value("frogdb_keys_expired_total"),
+            Some(1),
+            "KeysExpired counted once"
+        );
+        assert_eq!(
+            recorder.counter_value("frogdb_fields_expired_total"),
+            Some(1),
+            "FieldsExpired counted once"
+        );
     }
 }
 
