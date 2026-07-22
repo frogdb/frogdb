@@ -5,7 +5,7 @@ use frogdb_core::cluster::{ClusterWriter, Proposed};
 use frogdb_core::sync::Arc;
 use frogdb_core::{
     ClusterNetworkFactory, ClusterRaft, ClusterState, ClusterStateMachine, ClusterStorage,
-    MetricsRecorder, ReplicationTrackerImpl, ShardSender, SharedBroadcaster,
+    MetricsRecorder, ShardSender,
 };
 use std::time::Duration;
 use tracing::{info, warn};
@@ -58,12 +58,9 @@ pub(super) async fn init_cluster(
     shard_senders: &Arc<Vec<ShardSender>>,
     num_shards: usize,
     // The primary handler now owns the whole split-brain divergence window
-    // (offsets + backlog), so the logger no longer needs the broadcaster or the
-    // tracker; these two remain in the signature only as inbound wiring the
-    // caller still threads.
-    _replication_broadcaster: &SharedBroadcaster,
+    // (offsets + backlog), so the logger no longer needs the broadcaster or
+    // the tracker.
     primary_replication_handler: Option<&Arc<crate::replication::PrimaryReplicationHandler>>,
-    _replication_tracker: &Option<Arc<ReplicationTrackerImpl>>,
     metrics_recorder: &Arc<dyn MetricsRecorder>,
     // The resolved `replicaof` primary address when this node boots as a
     // replica (`None` otherwise); resolved once by `init_replication` and
