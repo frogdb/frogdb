@@ -1111,6 +1111,159 @@ async fn test_ft_live_index_rename() {
     server.shutdown().await;
 }
 
+/// Regression: `HSETEX` writes hash field values but was absent from
+/// `update_search_indexes`'s command-name match, so on an `ON HASH` index the
+/// written document was never indexed (search returned nothing). It must
+/// reindex the key exactly as `HSET` does.
+#[tokio::test]
+async fn regression_hsetex_reindexes_search_index() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "user:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+        ])
+        .await;
+
+    // HSETEX after FT.CREATE — should be live-indexed like HSET. A far-future
+    // TTL keeps the field present; HSETEX's arity requires the expiry clause.
+    client
+        .command(&[
+            "HSETEX", "user:1", "EX", "10000", "FIELDS", "1", "name", "Alice",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let response = client.command(&["FT.SEARCH", "idx", "Alice"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        1,
+        "HSETEX-written field must be indexed and searchable"
+    );
+
+    server.shutdown().await;
+}
+
+/// Regression: `HGETDEL` deletes hash fields but was absent from
+/// `update_search_indexes`'s match, so deleting an indexed field left a stale
+/// index entry. It must reindex the surviving key (dropping the removed field).
+#[tokio::test]
+async fn regression_hgetdel_removes_field_from_search_index() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Two fields so the key survives the delete, exercising the reindex branch.
+    client
+        .command(&["HSET", "user:1", "name", "Alice", "bio", "Engineer"])
+        .await;
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "user:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let response = client.command(&["FT.SEARCH", "idx", "Alice"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        1,
+        "baseline: field must be indexed"
+    );
+
+    // Delete the indexed field; the key survives (bio remains).
+    client
+        .command(&["HGETDEL", "user:1", "FIELDS", "1", "name"])
+        .await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let response = client.command(&["FT.SEARCH", "idx", "Alice"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        0,
+        "HGETDEL-removed field must be dropped from the search index"
+    );
+
+    server.shutdown().await;
+}
+
+/// Regression: `HEXPIREAT` (and the `H(P)EXPIRE(AT)` family) synchronously
+/// deletes a hash field on a past/zero expiry time, but was absent from
+/// `update_search_indexes`'s match, so the deleted field lingered in the index.
+/// A past-time expiry that empties the key must drop it from the index.
+#[tokio::test]
+async fn regression_hexpireat_past_time_removes_field_from_search_index() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Disable active expiry so only the synchronous HEXPIREAT delete can act.
+    client.command(&["DEBUG", "SET-ACTIVE-EXPIRE", "0"]).await;
+
+    client.command(&["HSET", "user:1", "name", "Alice"]).await;
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "user:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let response = client.command(&["FT.SEARCH", "idx", "Alice"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        1,
+        "baseline: field must be indexed"
+    );
+
+    // Past-time HEXPIREAT synchronously deletes the field, emptying the key.
+    client
+        .command(&["HEXPIREAT", "user:1", "1", "FIELDS", "1", "name"])
+        .await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let response = client.command(&["FT.SEARCH", "idx", "Alice"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        0,
+        "HEXPIREAT past-time field delete must be dropped from the search index"
+    );
+
+    server.shutdown().await;
+}
+
 // ============================================================================
 // Background indexing (existing docs)
 // ============================================================================

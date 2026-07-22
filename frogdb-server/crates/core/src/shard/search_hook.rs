@@ -15,7 +15,7 @@ impl ShardWorker {
     /// Dispatches by command name to the appropriate index update logic.
     pub(crate) fn update_search_indexes(&mut self, cmd_name: &str, args: &[Bytes]) {
         match cmd_name {
-            "HSET" | "HSETNX" | "HMSET" | "HINCRBY" | "HINCRBYFLOAT" => {
+            "HSET" | "HSETNX" | "HMSET" | "HINCRBY" | "HINCRBYFLOAT" | "HSETEX" => {
                 if !args.is_empty() {
                     self.reindex_hash_key(&args[0]);
                 }
@@ -25,7 +25,11 @@ impl ShardWorker {
                     self.delete_from_search_indexes(key);
                 }
             }
-            "HDEL" => {
+            // Field-deleting hash writes: reindex the surviving key, else drop it.
+            // `HGETDEL` deletes named fields; the `H(P)EXPIRE(AT)` family
+            // synchronously deletes fields on a past/zero expiry time. Both can
+            // empty the key, so they mirror `HDEL`'s reindex-if-exists-else-delete.
+            "HDEL" | "HGETDEL" | "HEXPIRE" | "HPEXPIRE" | "HEXPIREAT" | "HPEXPIREAT" => {
                 if !args.is_empty() {
                     let key = &args[0];
                     if self.store.contains(key) {
