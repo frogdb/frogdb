@@ -11,7 +11,6 @@ use crate::error::CommandError;
 use crate::eviction::{
     EvictionCandidate, EvictionPolicy, EvictionRanker, LfuRanker, LruRanker, TtlRanker,
 };
-use crate::keyspace_event::KeyspaceEventFlags;
 use crate::store::Store;
 
 use super::post_execution::{ENGINE_INTERNAL_CONN_ID, RemovalPropagation, RemovalReason};
@@ -223,12 +222,18 @@ impl ShardWorker {
 
     /// Spill a key to warm tier for eviction (updates metrics and pool).
     ///
-    /// A spill is **not** a removal — the value moves hot→warm and stays
-    /// logically present (it unspills on next access) — so it deliberately does
-    /// **not** route through [`ShardWorker::run_internal_removal_effects`]; its
-    /// current per-key WATCH-version bump / `evicted` notification are tracked as
-    /// separate follow-ups. Only its fallback-to-delete path is a real removal,
-    /// and that awaits `delete_for_eviction`.
+    /// A spill is TIERING, **not** a removal — the value moves hot→warm and
+    /// stays logically present (it unspills on next access), so it must be
+    /// invisible to clients and replicas. It deliberately does **not** route
+    /// through [`ShardWorker::run_internal_removal_effects`], and — unlike a
+    /// real eviction — it must NOT bump the key's WATCH version (a WATCH on an
+    /// unchanged, still-readable value must survive EXEC) nor emit an `evicted`
+    /// keyspace notification (`evicted` means the key is gone; here it is not).
+    /// Observability comes from the `TieredSpills` / `TieredBytesSpilled`
+    /// metrics below, matching how Redis-on-flash and Dragonfly SSD tiering
+    /// surface spills — there is no standard spill keyspace event. Only its
+    /// fallback-to-delete path is a real removal, and that awaits
+    /// `delete_for_eviction`.
     async fn spill_for_eviction(&mut self, key: &[u8]) -> bool {
         // Remove from eviction pool
         self.eviction.forget_key(key);
@@ -236,11 +241,6 @@ impl ShardWorker {
         // Try to spill
         match self.store.spill_key(key) {
             Ok(bytes_freed) => {
-                self.bump_version_for_key(key);
-
-                // Emit evicted keyspace notification for spills too
-                self.emit_keyspace_notification(key, "evicted", KeyspaceEventFlags::EVICTED);
-
                 let shard_label = self.shard_id().to_string();
                 let policy_label = self.eviction.policy_label();
                 TieredSpills::inc(self.observability.metrics(), &shard_label, &policy_label);
@@ -250,12 +250,11 @@ impl ShardWorker {
                     &shard_label,
                 );
 
-                // Fire USDT probe: key-evicted
-                crate::probes::fire_key_evicted(
-                    std::str::from_utf8(key).unwrap_or("<binary>"),
-                    self.shard_id() as u64,
-                    &self.eviction.policy_label(),
-                );
+                // NB: no `key-evicted` USDT probe here — a spill is not an
+                // eviction (the value is still present), and firing it would show
+                // phantom evictions to anyone tracing `key-evicted`. Spills are
+                // observed via the `TieredSpills` / `TieredBytesSpilled` metrics
+                // above.
 
                 tracing::debug!(
                     shard_id = self.shard_id(),
@@ -364,6 +363,8 @@ mod eviction_effect_tests {
     use tempfile::TempDir;
     use tokio::sync::mpsc;
 
+    use crate::keyspace_event::KeyspaceEventFlags;
+
     use crate::command::{Arity, Command, CommandContext, CommandFlags, WaiterWake, WalStrategy};
     use crate::command_spec::{
         AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec, ReindexSpec,
@@ -373,7 +374,7 @@ mod eviction_effect_tests {
     use crate::registry::CommandRegistry;
     use crate::replication::{ReplicationBroadcaster, SharedBroadcaster};
     use crate::shard::builder::ShardWorkerBuilder;
-    use crate::shard::message::{ShardReceiver, ShardSender};
+    use crate::shard::message::{ShardReceiver, ShardSender, WatchEntry};
     use crate::store::HashMapStore;
     use crate::types::Value;
     use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
@@ -590,5 +591,108 @@ mod eviction_effect_tests {
             !store.contains(b"k"),
             "evicted non-TTL key resurrected on restart — WAL tombstone missing"
         );
+    }
+
+    /// A bare worker whose store has a warm tier configured, so `spill_key`
+    /// actually spills (hot→warm) instead of erroring and falling back to a
+    /// real delete. Returns the `TempDir` so the RocksDB warm CF outlives the
+    /// worker for the test's duration.
+    fn worker_with_warm(bc: SharedBroadcaster) -> (ShardWorker, TempDir) {
+        let mut w = worker(bc);
+        let tmp = TempDir::new().unwrap();
+        let rocks = Arc::new(
+            RocksStore::open_with_warm(tmp.path(), 1, &RocksConfig::default(), true).unwrap(),
+        );
+        w.store.set_warm_store(rocks, 0);
+        (w, tmp)
+    }
+
+    /// Spill is TIERING, not removal: the value moves hot→warm but stays
+    /// readable (unspills on access), so a client WATCHing the key must NOT get
+    /// a spurious EXEC abort. Red before the fix: `spill_for_eviction` bumped
+    /// the key's slot version, dirtying the watch even though nothing changed.
+    #[tokio::test]
+    async fn spill_preserves_watch_version() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let (mut w, _tmp) = worker_with_warm(bc as SharedBroadcaster);
+
+        w.store
+            .set(Bytes::from_static(b"k"), Value::string("a spillable value"));
+
+        // Snapshot the WATCH version at watch time.
+        let watched_ver = w.get_key_version(b"k");
+        let watch = [WatchEntry {
+            key: Bytes::from_static(b"k"),
+            version: watched_ver,
+            live_at_watch: true,
+        }];
+        assert!(
+            w.check_watches(&watch),
+            "sanity: a fresh watch is satisfied"
+        );
+
+        // Spill the key: value leaves RAM but remains logically present.
+        assert!(w.spill_for_eviction(b"k").await, "spill must succeed");
+        assert_eq!(
+            w.store.warm_tier().warm_keys(),
+            1,
+            "the key must actually have spilled (not fallen back to delete)"
+        );
+        assert!(
+            w.store.contains(b"k"),
+            "a spilled key is still logically present"
+        );
+
+        // The value is unchanged, so the WATCH version must be untouched and the
+        // watch must survive EXEC.
+        assert_eq!(
+            w.get_key_version(b"k"),
+            watched_ver,
+            "spill must NOT bump the WATCH version (unchanged value)"
+        );
+        assert!(
+            w.check_watches(&watch),
+            "WATCH on a merely-spilled key must survive EXEC"
+        );
+    }
+
+    /// A spill emits NO `evicted` keyspace notification (the value is still
+    /// readable — `evicted` means gone, misleading here), while a TRUE eviction
+    /// still does. Red before the fix: `spill_for_eviction` emitted `evicted`.
+    #[tokio::test]
+    async fn spill_emits_no_evicted_notification_but_true_eviction_does() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let (mut w, _tmp) = worker_with_warm(bc as SharedBroadcaster);
+
+        let (ntx, mut nrx) = mpsc::unbounded_channel();
+        w.subscriptions
+            .subscribe(Bytes::from_static(b"__keyevent@0__:evicted"), 1, ntx);
+
+        // Spill a key: still readable afterwards → NO `evicted` event.
+        w.store.set(
+            Bytes::from_static(b"spilled"),
+            Value::string("readable after spill"),
+        );
+        assert!(w.spill_for_eviction(b"spilled").await);
+        assert_eq!(
+            w.store.warm_tier().warm_keys(),
+            1,
+            "the key must actually have spilled (not fallen back to delete)"
+        );
+        assert!(
+            nrx.try_recv().is_err(),
+            "a spill must NOT emit an `evicted` keyspace notification"
+        );
+
+        // Regression guard: a TRUE eviction (delete) still emits `evicted`.
+        w.store.set(Bytes::from_static(b"gone"), Value::string("v"));
+        assert!(w.delete_for_eviction(b"gone").await);
+        match nrx.try_recv() {
+            Ok(crate::pubsub::PubSubMessage::Message { channel, payload }) => {
+                assert_eq!(&channel[..], b"__keyevent@0__:evicted");
+                assert_eq!(&payload[..], b"gone");
+            }
+            other => panic!("a true eviction must still emit `evicted`, got {other:?}"),
+        }
     }
 }
