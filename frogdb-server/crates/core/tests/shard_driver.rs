@@ -13,6 +13,7 @@
 
 mod generator;
 mod harness;
+mod notify_capture;
 mod sink;
 
 // Scenario submodules (one per targeted scenario; S7 is turmoil-level, server crate).
