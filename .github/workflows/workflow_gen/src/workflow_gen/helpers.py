@@ -237,12 +237,14 @@ def download_all_artifacts_step() -> Step:
     return Step(name="Download all artifacts", uses=DOWNLOAD_ARTIFACT, with_=omap(path="artifacts"))
 
 
-def upload_artifact_step(*, name: str, path: str, retention_days: int = 7) -> Step:
+def upload_artifact_step(
+    *, name: str, path: str, retention_days: int = 7, if_: str | None = None
+) -> Step:
     w = CommentedMap()
     w["name"] = name
     w["path"] = path
     w["retention-days"] = SQ(str(retention_days))
-    return Step(name=f"Upload {name}", uses=UPLOAD_ARTIFACT, with_=w)
+    return Step(name=f"Upload {name}", uses=UPLOAD_ARTIFACT, with_=w, if_=if_)
 
 
 def run_step(*, name: str, run: str) -> Step:

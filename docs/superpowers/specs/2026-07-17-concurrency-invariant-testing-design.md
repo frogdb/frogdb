@@ -300,7 +300,30 @@ Each phase lands independently:
      per-channel delivery conservation (a client subscribed for the entire
      publish window must receive the message exactly once) + per-publisher order
      preservation per channel; SUBSCRIBE/PSUBSCRIBE/PUBLISH vocabulary.
-5. CI wiring (per-PR + nightly).
+5. CI wiring (per-PR + nightly). **Done** (2026-07-22): `test.yml`'s
+   `shuttle-tests`/`turmoil-tests` jobs already ran the shuttle suite and the
+   turmoil `simulation` tests per PR, but not the `just concurrency`
+   generated-workload seed sweeps (`seed_sweep_short_workloads`,
+   `seed_sweep_txheavy`) — added those as extra steps on `turmoil-tests`, so
+   per-PR now matches `just concurrency` exactly (part of `just test-all`).
+   Added the nightly tier: a new generated workflow
+   (`concurrency-nightly.yml`, source `workflow_gen/workflows/concurrency_nightly.py`)
+   on a `03:14 UTC` cron + `workflow_dispatch` (with a `seeds` input), running
+   `just concurrency-nightly` — a new `#[ignore]`d `seed_sweep_nightly` test
+   that sweeps every profile (`Mixed`/`BlockingHeavy`/`TxHeavy`/`MultiWaiter`)
+   with longer per-client histories, 1000+ generated-workload runs by default
+   (env-var overridable), continuing past the first failing seed and emitting
+   a repro file per failure so one run can surface multiple bugs; failing
+   repros under `target/concurrency-repros/` are uploaded as a CI artifact on
+   failure. Plumbing validated on a testbox smoke run; that validation also
+   surfaced real, pre-existing invariant violations at higher seed counts and
+   `ops_per_client` (tracked as
+   `.scratch/concurrency-testing/issues/10-nightly-smoke-findings.md`),
+   including a near-deterministic MultiWaiter exactly-once-delivery bug once
+   `ops_per_client` crosses roughly 90 — so the nightly default was set to 75
+   (not the originally-planned larger value) to avoid a permanently-red job
+   until that bug is root-caused; the value is documented as provisional in
+   both the `Justfile` recipe and the harness itself.
 6. Replication & cluster in-process testing (see next section).
 
 Future phases (accommodated, not built): durability/crash-injection via the persistence

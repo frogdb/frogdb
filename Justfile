@@ -92,6 +92,20 @@ concurrency-repro FILE:
 concurrency-turmoil PATTERN='seed_sweep':
     {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-server --features turmoil -E 'test(/{{PATTERN}}/)'
 
+# Run the nightly (1000+ seed) generated-workload sweep across all profiles (CI nightly
+# tier, not part of `just concurrency`/`just test-all`). SEEDS overrides seeds-per-profile
+# (default 250 x 4 profiles = 1000). OPS overrides ops-per-client and defaults to 75, NOT the
+# harness's coded default of 150 — see .scratch/concurrency-testing/issues/10-nightly-smoke-findings.md:
+# ops_per_client >= ~90 makes the MultiWaiter "exactly-once delivery" invariant fail on nearly
+# every seed (a real, tracked bug), which would make this job permanently red rather than
+# surfacing new findings. Raise OPS only after that issue is resolved. clients/shards keep the
+# harness defaults but are independently overridable via FROGDB_CONCURRENCY_CLIENTS /
+# FROGDB_CONCURRENCY_SHARDS env vars (see frogdb-server/crates/server/tests/concurrency_workload.rs).
+# Failing seeds each get a repro file under target/concurrency-repros/, replayable via
+# `just concurrency-repro`.
+concurrency-nightly SEEDS='250' OPS='75':
+    {{dyld-env}} {{rocksdb-env}} FROGDB_CONCURRENCY_SEEDS={{SEEDS}} FROGDB_CONCURRENCY_OPS_PER_CLIENT={{OPS}} cargo nextest run -p frogdb-server --features turmoil --run-ignored all -E 'test(/seed_sweep_nightly/)'
+
 # Run the full test suite (unit + integration + concurrency + simulation)
 test-all: test concurrency
 

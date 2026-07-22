@@ -51,20 +51,40 @@ class WorkflowRunTrigger:
 
 
 @dataclass
+class ScheduleTrigger:
+    cron: list[str]
+
+    def to_yaml(self) -> CommentedSeq:
+        seq = CommentedSeq()
+        for expr in self.cron:
+            m = CommentedMap()
+            m["cron"] = SQ(expr)
+            seq.append(m)
+        return seq
+
+
+@dataclass
 class Trigger:
     workflow_dispatch: bool = True
+    workflow_dispatch_inputs: CommentedMap | None = None
     push: PushTrigger | None = None
     push_first: bool = False
     pull_request: PullRequestTrigger | None = None
     workflow_run: WorkflowRunTrigger | None = None
+    schedule: ScheduleTrigger | None = None
 
     def to_yaml(self) -> CommentedMap:
         on = CommentedMap()
+        if self.schedule is not None:
+            on["schedule"] = self.schedule.to_yaml()
         if self.push_first and self.push is not None:
             on["push"] = self.push.to_yaml()
         if self.workflow_dispatch:
             wd = CommentedMap()
-            wd.fa.set_flow_style()
+            if self.workflow_dispatch_inputs is not None:
+                wd["inputs"] = self.workflow_dispatch_inputs
+            else:
+                wd.fa.set_flow_style()
             on["workflow_dispatch"] = wd
         if not self.push_first and self.push is not None:
             on["push"] = self.push.to_yaml()
@@ -211,6 +231,7 @@ class Job:
     defaults: Defaults | None = None
     environment: str | Environment | None = None
     outputs: CommentedMap | None = None
+    timeout_minutes: int | None = None
 
     def to_yaml(self) -> CommentedMap:
         m = CommentedMap()
@@ -224,6 +245,8 @@ class Job:
         if self.name is not None:
             m["name"] = self.name
         m["runs-on"] = self.runs_on
+        if self.timeout_minutes is not None:
+            m["timeout-minutes"] = self.timeout_minutes
         if self.permissions is not None:
             m["permissions"] = self.permissions.to_yaml()
         if self.strategy is not None:
