@@ -12,7 +12,7 @@ use frogdb_core::cluster::{
 use frogdb_protocol::{RaftClusterOp, Response, SlotMigrationKind};
 
 use crate::connection::ConnectionHandler;
-use crate::connection::util::convert_raft_cluster_op;
+use crate::connection::util::raft_op_to_command;
 
 /// Render a typed [`LeaderRedirect`] into the RESP `REDIRECT`/`CLUSTERDOWN` wire
 /// string. This is the single home for the two byte-identical format strings the
@@ -64,27 +64,14 @@ impl ConnectionHandler {
                 _ => return Response::error("ERR Cluster mode not enabled"),
             };
 
-        // Convert protocol RaftClusterOp to core ClusterCommand.
-        //
-        // Failover maps to the atomic composite command: role change, slot
-        // transfer, and epoch bump are one replicated state-machine transition
-        // (previously a multi-entry saga that could leave slots ownerless if
-        // the leader crashed between entries).
-        let cmd = match &op {
-            RaftClusterOp::Failover {
-                replica_id,
-                primary_id,
-                force,
-            } => ClusterCommand::Failover {
-                old_primary_id: *primary_id,
-                new_primary_id: *replica_id,
-                force: *force,
-            },
-            _ => match convert_raft_cluster_op(&op) {
-                Some(cmd) => cmd,
-                None => return Response::error("ERR Unsupported cluster operation"),
-            },
-        };
+        // Convert protocol RaftClusterOp to core ClusterCommand. The adapter is
+        // total, so there is no "unsupported operation" fall-through: every
+        // non-`ResetCluster` op (which early-returned above) yields a command.
+        // Failover among them maps to the atomic composite command: role change,
+        // slot transfer, and epoch bump are one replicated state-machine
+        // transition (previously a multi-entry saga that could leave slots
+        // ownerless if the leader crashed between entries).
+        let cmd = raft_op_to_command(&op);
 
         // The writer owns the propose → (forward | redirect) saga and its
         // retained-for-forward command copy; the connection layer keeps only its

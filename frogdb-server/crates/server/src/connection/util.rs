@@ -162,33 +162,47 @@ pub(crate) fn estimate_command_size(cmd: &ParsedCommand) -> usize {
     header + name_size + args_size
 }
 
-/// Convert protocol RaftClusterOp to core ClusterCommand.
-/// Returns None for operations that require special handling (e.g., Failover).
-pub(crate) fn convert_raft_cluster_op(op: &RaftClusterOp) -> Option<ClusterCommand> {
+/// Convert a protocol [`RaftClusterOp`] into its core [`ClusterCommand`].
+///
+/// This adapter is **total**: every `RaftClusterOp` variant maps to a
+/// `ClusterCommand`. The `match` has no `_` arm, so adding a new
+/// `RaftClusterOp` variant is a compile error here until it is mapped — and
+/// because the return type is `ClusterCommand` (not `Option`), a new variant
+/// cannot be discharged with `=> None` and silently deferred to a runtime
+/// error; it must produce a real command.
+///
+/// `RaftClusterOp` lives in the `protocol` crate (which cannot depend on
+/// `cluster`) and `ClusterCommand` lives in `cluster`; both are foreign to the
+/// `server` crate, so the orphan rule rules out a `From` impl. `server` is the
+/// only crate that sees both types, hence a free function.
+///
+/// Note on `ResetCluster`: `handle_reset_command` builds its own
+/// `ClusterCommand::ResetCluster` from already-destructured fields and never
+/// routes through this adapter (it needs a post-commit `set_self_node_id` side
+/// effect). The arm here exists purely to keep the match total.
+pub(crate) fn raft_op_to_command(op: &RaftClusterOp) -> ClusterCommand {
     match op {
         RaftClusterOp::AddNode {
             node_id,
             addr,
             cluster_addr,
-        } => Some(ClusterCommand::AddNode {
+        } => ClusterCommand::AddNode {
             node: NodeInfo::new_primary(*node_id, *addr, *cluster_addr),
-        }),
-        RaftClusterOp::RemoveNode { node_id } => {
-            Some(ClusterCommand::RemoveNode { node_id: *node_id })
-        }
-        RaftClusterOp::AssignSlots { node_id, slots } => Some(ClusterCommand::AssignSlots {
+        },
+        RaftClusterOp::RemoveNode { node_id } => ClusterCommand::RemoveNode { node_id: *node_id },
+        RaftClusterOp::AssignSlots { node_id, slots } => ClusterCommand::AssignSlots {
             node_id: *node_id,
             slots: slots.iter().map(|&s| SlotRange::single(s)).collect(),
-        }),
-        RaftClusterOp::RemoveSlots { node_id, slots } => Some(ClusterCommand::RemoveSlots {
+        },
+        RaftClusterOp::RemoveSlots { node_id, slots } => ClusterCommand::RemoveSlots {
             node_id: *node_id,
             slots: slots.iter().map(|&s| SlotRange::single(s)).collect(),
-        }),
+        },
         RaftClusterOp::SetRole {
             node_id,
             is_replica,
             primary_id,
-        } => Some(ClusterCommand::SetRole {
+        } => ClusterCommand::SetRole {
             node_id: *node_id,
             role: if *is_replica {
                 NodeRole::Replica
@@ -196,21 +210,35 @@ pub(crate) fn convert_raft_cluster_op(op: &RaftClusterOp) -> Option<ClusterComma
                 NodeRole::Primary
             },
             primary_id: *primary_id,
-        }),
-        RaftClusterOp::IncrementEpoch => Some(ClusterCommand::IncrementEpoch),
+        },
+        RaftClusterOp::IncrementEpoch => ClusterCommand::IncrementEpoch,
         RaftClusterOp::MarkNodeFailed { node_id } => {
-            Some(ClusterCommand::MarkNodeFailed { node_id: *node_id })
+            ClusterCommand::MarkNodeFailed { node_id: *node_id }
         }
         RaftClusterOp::MarkNodeRecovered { node_id } => {
-            Some(ClusterCommand::MarkNodeRecovered { node_id: *node_id })
+            ClusterCommand::MarkNodeRecovered { node_id: *node_id }
         }
-        RaftClusterOp::FinalizeUpgrade { version } => Some(ClusterCommand::FinalizeUpgrade {
+        RaftClusterOp::FinalizeUpgrade { version } => ClusterCommand::FinalizeUpgrade {
             version: version.clone(),
-        }),
-        // Failover requires special handling - multiple Raft commands
-        RaftClusterOp::Failover { .. } => None,
-        // ResetCluster requires special handling (update self_node_id after commit)
-        RaftClusterOp::ResetCluster { .. } => None,
+        },
+        // Failover maps to the atomic composite command: role change, slot
+        // transfer, and epoch bump are one replicated state-machine transition.
+        RaftClusterOp::Failover {
+            replica_id,
+            primary_id,
+            force,
+        } => ClusterCommand::Failover {
+            old_primary_id: *primary_id,
+            new_primary_id: *replica_id,
+            force: *force,
+        },
+        RaftClusterOp::ResetCluster {
+            node_id,
+            new_node_id,
+        } => ClusterCommand::ResetCluster {
+            node_id: *node_id,
+            new_node_id: *new_node_id,
+        },
     }
 }
 
@@ -289,5 +317,144 @@ mod tests {
             required_access_for_key_flags(&[], KeyAccessType::Read),
             KeyAccessType::Read
         );
+    }
+
+    fn addr(port: u16) -> std::net::SocketAddr {
+        std::net::SocketAddr::from(([127, 0, 0, 1], port))
+    }
+
+    /// Every `RaftClusterOp` variant maps to its expected `ClusterCommand`
+    /// discriminant — including `Failover` and `ResetCluster`, which the old
+    /// `Option`-returning converter left as untested `None` cases. This is the
+    /// regression guard the previous design could not express.
+    #[test]
+    fn raft_op_to_command_maps_every_variant() {
+        assert!(matches!(
+            raft_op_to_command(&RaftClusterOp::AddNode {
+                node_id: 1,
+                addr: addr(6379),
+                cluster_addr: addr(16379),
+            }),
+            ClusterCommand::AddNode { .. }
+        ));
+        assert!(matches!(
+            raft_op_to_command(&RaftClusterOp::RemoveNode { node_id: 1 }),
+            ClusterCommand::RemoveNode { node_id: 1 }
+        ));
+        assert!(matches!(
+            raft_op_to_command(&RaftClusterOp::AssignSlots {
+                node_id: 1,
+                slots: vec![0, 1, 2],
+            }),
+            ClusterCommand::AssignSlots { node_id: 1, .. }
+        ));
+        assert!(matches!(
+            raft_op_to_command(&RaftClusterOp::RemoveSlots {
+                node_id: 1,
+                slots: vec![0, 1, 2],
+            }),
+            ClusterCommand::RemoveSlots { node_id: 1, .. }
+        ));
+        assert!(matches!(
+            raft_op_to_command(&RaftClusterOp::SetRole {
+                node_id: 1,
+                is_replica: true,
+                primary_id: Some(2),
+            }),
+            ClusterCommand::SetRole { node_id: 1, .. }
+        ));
+        assert!(matches!(
+            raft_op_to_command(&RaftClusterOp::IncrementEpoch),
+            ClusterCommand::IncrementEpoch
+        ));
+        assert!(matches!(
+            raft_op_to_command(&RaftClusterOp::MarkNodeFailed { node_id: 1 }),
+            ClusterCommand::MarkNodeFailed { node_id: 1 }
+        ));
+        assert!(matches!(
+            raft_op_to_command(&RaftClusterOp::MarkNodeRecovered { node_id: 1 }),
+            ClusterCommand::MarkNodeRecovered { node_id: 1 }
+        ));
+        assert!(matches!(
+            raft_op_to_command(&RaftClusterOp::FinalizeUpgrade {
+                version: "1.2.3".to_string(),
+            }),
+            ClusterCommand::FinalizeUpgrade { .. }
+        ));
+        assert!(matches!(
+            raft_op_to_command(&RaftClusterOp::Failover {
+                replica_id: 2,
+                primary_id: 1,
+                force: false,
+            }),
+            ClusterCommand::Failover { .. }
+        ));
+        assert!(matches!(
+            raft_op_to_command(&RaftClusterOp::ResetCluster {
+                node_id: 1,
+                new_node_id: Some(9),
+            }),
+            ClusterCommand::ResetCluster {
+                node_id: 1,
+                new_node_id: Some(9),
+            }
+        ));
+    }
+
+    /// Pin the `Failover` field cross-wiring that previously lived in a
+    /// hand-written dispatch arm in `cluster.rs`: the protocol's `primary_id`
+    /// becomes `old_primary_id` and `replica_id` becomes `new_primary_id`.
+    #[test]
+    fn failover_maps_old_and_new_primary() {
+        let cmd = raft_op_to_command(&RaftClusterOp::Failover {
+            replica_id: 2,
+            primary_id: 1,
+            force: true,
+        });
+        match cmd {
+            ClusterCommand::Failover {
+                old_primary_id,
+                new_primary_id,
+                force,
+            } => {
+                assert_eq!(old_primary_id, 1);
+                assert_eq!(new_primary_id, 2);
+                assert!(force);
+            }
+            other => panic!("expected Failover, got {other:?}"),
+        }
+    }
+
+    /// The `is_replica` bool selects between `NodeRole::Replica` and
+    /// `NodeRole::Primary`.
+    #[test]
+    fn set_role_replica_vs_primary() {
+        let replica = raft_op_to_command(&RaftClusterOp::SetRole {
+            node_id: 1,
+            is_replica: true,
+            primary_id: Some(2),
+        });
+        assert!(matches!(
+            replica,
+            ClusterCommand::SetRole {
+                role: NodeRole::Replica,
+                primary_id: Some(2),
+                ..
+            }
+        ));
+
+        let primary = raft_op_to_command(&RaftClusterOp::SetRole {
+            node_id: 1,
+            is_replica: false,
+            primary_id: None,
+        });
+        assert!(matches!(
+            primary,
+            ClusterCommand::SetRole {
+                role: NodeRole::Primary,
+                primary_id: None,
+                ..
+            }
+        ));
     }
 }
