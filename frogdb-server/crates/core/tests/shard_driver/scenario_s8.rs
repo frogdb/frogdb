@@ -38,7 +38,7 @@ async fn s8_exec_atomic_and_version_bumped_once() {
 
     // Permuted around the EXEC: an expiry tick (removes e) then EXEC (a,b).
     tokio::time::sleep(Duration::from_millis(3)).await;
-    d.tick_expiry(0); // one non-empty sweep → +1 ; emits `expired` for e
+    d.tick_expiry(0).await; // one non-empty sweep → +1 ; emits `expired` for e
 
     let result = d
         .exec_transaction(
@@ -106,7 +106,7 @@ async fn s8_notifications_consistent_with_serialization_order() {
         let mut capture = d.capture_keyspace(0, 9101, &["__keyevent@0__:*"], all_keyevents_mask());
         tokio::time::sleep(Duration::from_millis(3)).await;
 
-        d.tick_expiry(0); // sweep first
+        d.tick_expiry(0).await; // sweep first
         let _ = d
             .exec_transaction(
                 0,
@@ -141,7 +141,7 @@ async fn s8_notifications_consistent_with_serialization_order() {
             )
             .await;
         // ...then the explicit sweep removes the now-expired e.
-        d.tick_expiry(0);
+        d.tick_expiry(0).await;
 
         let events = capture.drain_keyevents();
         assert_keyevents_consistent(&events, &[("set", b"a"), ("set", b"b"), ("expired", b"e")])

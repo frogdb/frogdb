@@ -96,7 +96,7 @@ async fn smoke_real_registry_set_get_and_ticks() {
     );
 
     // The synchronous tick seams run without the event loop's timers.
-    worker.drive_expiry_tick();
+    worker.drive_expiry_tick().await;
     worker.drive_waiter_timeout_tick();
 }
 

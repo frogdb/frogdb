@@ -1,16 +1,17 @@
 use std::time::{Duration, Instant};
 
-use bytes::Bytes;
 use frogdb_types::metrics::definitions::{FieldsExpired, KeysExpired, ShardQueueLatency};
 
-use crate::keyspace_event::KeyspaceEventFlags;
 use crate::store::Store;
 
 use super::active_expiry::ExpiryResult;
 #[cfg(any(test, feature = "shard-driver"))]
 use super::message::Envelope;
 use super::message::ShardMessage;
+use super::post_execution::{ENGINE_INTERNAL_CONN_ID, RemovalPropagation, RemovalReason};
 use super::worker::ShardWorker;
+#[cfg(any(test, feature = "shard-driver"))]
+use bytes::Bytes;
 
 impl ShardWorker {
     /// Run the shard worker event loop.
@@ -61,10 +62,15 @@ impl ShardWorker {
                 // Active expiry task
                 _ = expiry_interval.tick() => {
                     if self.per_request_spans.load(std::sync::atomic::Ordering::Relaxed) {
-                        let _span = tracing::info_span!("active_expiry", shard_id = self.shard_id()).entered();
-                        self.run_active_expiry();
+                        // Build the span before creating the future so `shard_id()`'s
+                        // borrow ends before `run_active_expiry` takes `&mut self`;
+                        // `Instrument` carries the span across the await correctly
+                        // (never hold an entered guard across `.await`).
+                        use tracing::Instrument;
+                        let span = tracing::info_span!("active_expiry", shard_id = self.shard_id());
+                        self.run_active_expiry().instrument(span).await;
                     } else {
-                        self.run_active_expiry();
+                        self.run_active_expiry().await;
                     }
                 }
 
@@ -124,7 +130,7 @@ impl ShardWorker {
     /// and stay here; the decision + deletion half is delegated to
     /// [`ActiveExpiryCoordinator::run_cycle`], and the side effects are applied
     /// past the seam from the returned [`ExpiryResult`].
-    pub(crate) fn run_active_expiry(&mut self) {
+    pub(crate) async fn run_active_expiry(&mut self) {
         // Sync the expiry_paused flag to the store for passive expiry suppression.
         let paused = self
             .expiry_paused
@@ -171,78 +177,46 @@ impl ShardWorker {
         // pending lazy read.
         self.store.take_lazily_emptied();
         self.store.take_lazily_expired_fields();
-        self.apply_expiry_effects(result);
+        self.apply_expiry_effects(result).await;
     }
 
     /// Apply the side effects of an active-expiry cycle.
     ///
     /// This is the shard side of the seam: it owns the state the coordinator is
-    /// deliberately blind to — client tracking, search indexes, keyspace
-    /// notifications, USDT probes, metrics, and the version counter — and drives
-    /// them from the `ExpiryResult`.
-    pub(crate) fn apply_expiry_effects(&mut self, result: ExpiryResult) {
-        // Keys whose own TTL elapsed: full effect set.
-        for key in &result.deleted_keys {
-            // Invalidate tracked clients for expired key
-            if self.tracking.has_tracking_clients() {
-                self.tracking.invalidate_keys(&[key.as_ref()], 0);
-            }
-
-            // Remove from search indexes
-            self.delete_from_search_indexes(key);
-
-            // Emit expired keyspace notification
-            self.emit_keyspace_notification(key, "expired", KeyspaceEventFlags::EXPIRED);
-
-            // Fire USDT probe: key-expired
-            crate::probes::fire_key_expired(
-                std::str::from_utf8(key).unwrap_or("<binary>"),
-                self.shard_id() as u64,
-            );
-        }
-
-        // Keys removed because their last hash field expired. Redis emits a
-        // generic `del` for a key whose hash empties via field TTL (distinct
-        // from the whole-key `expired` event above). Match that, and fire the
-        // key-expired probe so the removal is not invisible to observers.
-        for key in &result.emptied_keys {
-            if self.tracking.has_tracking_clients() {
-                self.tracking.invalidate_keys(&[key.as_ref()], 0);
-            }
-
-            self.delete_from_search_indexes(key);
-
-            self.emit_keyspace_notification(key, "del", KeyspaceEventFlags::GENERIC);
-
-            crate::probes::fire_key_expired(
-                std::str::from_utf8(key).unwrap_or("<binary>"),
-                self.shard_id() as u64,
-            );
-        }
-
-        // F1: TTL/active-expiry must drain blocked XREADGROUP waiters for any
-        // removed stream key, mirroring the DEL write path
-        // (drain_stream_waiters_with_error → NOGROUP; XREAD waiters stay
-        // blocked). apply_expiry_effects previously never touched wait_queue.
-        let removed_keys: Vec<Bytes> = result
-            .deleted_keys
-            .iter()
-            .chain(result.emptied_keys.iter())
-            .cloned()
-            .collect();
-        for key in &removed_keys {
-            self.drain_stream_waiters_with_error(key);
-        }
-
-        // Record expired keys metric and increment version.
+    /// deliberately blind to. The **removals** (whole-key TTL deaths and
+    /// hash-emptied keys) are driven through the canonical write-effect pipeline
+    /// via [`ShardWorker::run_internal_removal_effects`] — reconstructed as
+    /// synthetic `DEL`s — so they inherit the *same* effect set + order as every
+    /// other write path (tracking invalidation, `expired`/`del` keyspace
+    /// notification, dirty counter, XREADGROUP NOGROUP drain, WAL delete,
+    /// search-index delete) instead of a hand-rolled partial subset. Only the
+    /// expiry-specific observability the pipeline does not own — the per-key USDT
+    /// probes and the aggregate expired-key/field metrics — stays here (mirroring
+    /// how eviction keeps its own metrics local).
+    ///
+    /// Propagation policy (explicit, not accidental): `wal = true` drops the
+    /// stale RocksDB entry at the source; `replicate = false` preserves FrogDB's
+    /// independent-expiry model (each node expires on its own clock — a
+    /// documented divergence from Redis's primary-drives-expiry; flipping it is a
+    /// deliberate ADR, out of scope here).
+    pub(crate) async fn apply_expiry_effects(&mut self, result: ExpiryResult) {
         if result.is_empty() {
             return;
         }
+
+        // Expiry-specific observability (not pipeline effects): fire the per-key
+        // USDT probe for every removed key, then bump the aggregate metrics.
+        // Count every removed key exactly once — key-level TTL AND field-emptied
+        // — so INFO `expired_keys` / `frogdb_keys_expired_total` do not
+        // under-count; the fields that triggered an emptied key are counted
+        // separately, so no double-count.
+        for key in result.deleted_keys.iter().chain(result.emptied_keys.iter()) {
+            crate::probes::fire_key_expired(
+                std::str::from_utf8(key).unwrap_or("<binary>"),
+                self.shard_id() as u64,
+            );
+        }
         let shard_label = self.shard_id().to_string();
-        // Count every key removed this cycle exactly once — key-level TTL AND
-        // field-emptied — so INFO `expired_keys` and `frogdb_keys_expired_total`
-        // do not under-count genuine expirations. The fields that triggered an
-        // emptied key are counted separately below, so no double-count.
         let keys_expired = result.keys_expired();
         if keys_expired > 0 {
             self.store.add_expired_keys(keys_expired);
@@ -255,7 +229,35 @@ impl ShardWorker {
                 &shard_label,
             );
         }
-        self.increment_version();
+
+        let removed_any = !result.deleted_keys.is_empty() || !result.emptied_keys.is_empty();
+
+        // Route both removal groups through the pipeline in a SINGLE call so the
+        // whole cycle coalesces to ONE version bump (not one per group), while
+        // still emitting `expired` for whole-key deaths and generic `del` for
+        // hash-emptied keys.
+        self.run_internal_removal_effects(
+            vec![
+                (RemovalReason::Expired, result.deleted_keys),
+                (RemovalReason::FieldEmptied, result.emptied_keys),
+            ],
+            RemovalPropagation {
+                wal: true,
+                replicate: false,
+            },
+            ENGINE_INTERNAL_CONN_ID,
+        )
+        .await;
+
+        // A cycle that reaped only hash *fields* (no key removed) is a mutation,
+        // not a removal, so it does not flow through the removal pipeline — but it
+        // still changed a watched hash. Preserve active expiry's historical
+        // one-bump-per-non-empty-cycle WATCH semantics with an explicit bump for
+        // exactly that case (when a key WAS removed, the pipeline already bumped
+        // once, so do not double-bump).
+        if !removed_any {
+            self.increment_version();
+        }
     }
 
     /// Dispatch a shard message to the appropriate handler.
@@ -317,8 +319,8 @@ impl ShardWorker {
     #[cfg(any(test, feature = "shard-driver"))]
     #[doc(hidden)]
     #[allow(dead_code)]
-    pub fn drive_expiry_tick(&mut self) {
-        self.run_active_expiry();
+    pub async fn drive_expiry_tick(&mut self) {
+        self.run_active_expiry().await;
     }
 
     /// Shard-driver harness seam: fire one blocking-waiter timeout sweep,
@@ -404,6 +406,10 @@ mod effect_tests {
     use tokio::sync::mpsc;
 
     use super::ExpiryResult;
+    use crate::command::{Arity, Command, CommandContext, CommandFlags, WaiterWake, WalStrategy};
+    use crate::command_spec::{
+        AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec, ReindexSpec,
+    };
     use crate::eviction::EvictionConfig;
     use crate::keyspace_event::KeyspaceEventFlags;
     use crate::noop::MetricsRecorder;
@@ -412,6 +418,53 @@ mod effect_tests {
     use crate::replication::NoopBroadcaster;
     use crate::shard::ShardWorker;
     use crate::shard::message::{Envelope, ShardReceiver};
+    use frogdb_protocol::Response;
+
+    /// Minimal `DEL` stand-in: active expiry reconstructs each removal as a
+    /// synthetic `DEL` through the write-effect pipeline, which resolves the
+    /// handler from the registry and reads its spec (`KeySpec::All`,
+    /// `WalStrategy::DeleteKeys`, `ReindexSpec::DeleteKeys`, `WaiterWake::All`).
+    /// Its `execute` is never called (the store removal already happened), so it
+    /// is a stub. The keyspace-event class is overridden per removal reason, so
+    /// `EventSpec` here is irrelevant.
+    struct MockDel;
+    impl Command for MockDel {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "DEL",
+                arity: Arity::AtLeast(1),
+                flags: CommandFlags::WRITE,
+                keys: KeySpec::All,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::DeleteKeys,
+                wakes: WaiterWake::All,
+                event: EventSpec::Emits {
+                    class: KeyspaceEventFlags::GENERIC,
+                    name: "del",
+                },
+                requires_same_slot: false,
+                reindex: ReindexSpec::DeleteKeys,
+                lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
+                strategy: crate::command::ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+        fn execute(
+            &self,
+            _ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            Ok(Response::ok())
+        }
+    }
+
+    /// A registry carrying the `DEL` handler the internal-removal pipeline needs.
+    fn registry_with_del() -> CommandRegistry {
+        let mut reg = CommandRegistry::new();
+        reg.register(MockDel);
+        reg
+    }
 
     /// Records counter increments so tests can read cumulative totals back.
     #[derive(Default)]
@@ -453,7 +506,7 @@ mod effect_tests {
             ShardReceiver::new(msg_rx),
             conn_rx,
             Arc::new(vec![]),
-            Arc::new(CommandRegistry::new()),
+            Arc::new(registry_with_del()),
             EvictionConfig::default(),
             recorder,
             Arc::new(AtomicU64::new(0)),
@@ -497,8 +550,8 @@ mod effect_tests {
         out
     }
 
-    #[test]
-    fn notifications_fired_for_both_deletion_paths() {
+    #[tokio::test]
+    async fn notifications_fired_for_both_deletion_paths() {
         let recorder = Arc::new(RecordingRecorder::default());
         let (mut worker, _msg_tx, _conn_tx) = build_worker(recorder);
         let mut rx = enable_notifications_and_subscribe(
@@ -512,7 +565,7 @@ mod effect_tests {
             fields_expired: 1,
             budget_exhausted: false,
         };
-        worker.apply_expiry_effects(result);
+        worker.apply_expiry_effects(result).await;
 
         let events = drain(&mut rx);
         // Key-level TTL key -> `expired`; field-emptied key -> `del`.
@@ -526,8 +579,8 @@ mod effect_tests {
         );
     }
 
-    #[test]
-    fn expired_keys_stat_counts_both_paths_without_double_count() {
+    #[tokio::test]
+    async fn expired_keys_stat_counts_both_paths_without_double_count() {
         let recorder = Arc::new(RecordingRecorder::default());
         let (mut worker, _msg_tx, _conn_tx) = build_worker(recorder.clone());
 
@@ -538,7 +591,7 @@ mod effect_tests {
             fields_expired: 4,
             budget_exhausted: false,
         };
-        worker.apply_expiry_effects(result);
+        worker.apply_expiry_effects(result).await;
 
         // Key counter: 3 keys (both paths), counted once each.
         assert_eq!(recorder.counter_value("frogdb_keys_expired_total"), Some(3));
@@ -550,12 +603,46 @@ mod effect_tests {
         );
     }
 
-    #[test]
-    fn empty_result_records_nothing() {
+    /// Version-bump coalescing (migration step 3): a single active-expiry cycle
+    /// that removes BOTH a whole-key-expired key (`Expired`) and a hash-emptied
+    /// key (`FieldEmptied`) advances the WATCH version exactly ONCE — the two
+    /// reason groups are driven through one `run_internal_removal_effects` call,
+    /// not one bump per group. Also pins the dirty counter (previously skipped by
+    /// the hand-rolled expiry path): it advances by the number of removed keys.
+    #[tokio::test]
+    async fn expiry_coalesces_version_bump_and_advances_dirty() {
+        use crate::store::Store;
+
+        let recorder = Arc::new(RecordingRecorder::default());
+        let (mut worker, _msg_tx, _conn_tx) = build_worker(recorder);
+        assert_eq!(worker.shard_version, 0);
+        assert_eq!(worker.store.dirty(), 0);
+
+        let result = ExpiryResult {
+            deleted_keys: vec![Bytes::from("plain")],
+            emptied_keys: vec![Bytes::from("h")],
+            fields_expired: 1,
+            budget_exhausted: false,
+        };
+        worker.apply_expiry_effects(result).await;
+
+        assert_eq!(
+            worker.shard_version, 1,
+            "removing both a whole-key-expired and a field-emptied key bumps WATCH once"
+        );
+        assert_eq!(
+            worker.store.dirty(),
+            2,
+            "dirty counter advances by the two removed keys (was skipped before)"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_result_records_nothing() {
         let recorder = Arc::new(RecordingRecorder::default());
         let (mut worker, _msg_tx, _conn_tx) = build_worker(recorder.clone());
 
-        worker.apply_expiry_effects(ExpiryResult::default());
+        worker.apply_expiry_effects(ExpiryResult::default()).await;
 
         assert_eq!(recorder.counter_value("frogdb_keys_expired_total"), None);
         assert_eq!(recorder.counter_value("frogdb_fields_expired_total"), None);
@@ -721,8 +808,8 @@ mod effect_tests {
     /// through the shared `purge_expired_hash_fields`. `run_active_expiry`
     /// discards that buffer, so a subsequent command-seam drain fires nothing —
     /// exactly one `del` total.
-    #[test]
-    fn active_sweep_emptied_key_does_not_double_fire_del() {
+    #[tokio::test]
+    async fn active_sweep_emptied_key_does_not_double_fire_del() {
         use crate::store::Store;
 
         let recorder = Arc::new(RecordingRecorder::default());
@@ -732,7 +819,7 @@ mod effect_tests {
         seed_expiring_single_field_hash(&mut worker.store, "h");
 
         // Active sweep reaps the last field, empties the key, and reports it.
-        worker.run_active_expiry();
+        worker.run_active_expiry().await;
 
         let after_sweep = drain(&mut rx);
         assert_eq!(
@@ -923,7 +1010,7 @@ mod seam_reachability_tests {
         );
 
         // Tick seams (now pub(crate)) run without a timer.
-        w.run_active_expiry();
+        w.run_active_expiry().await;
         w.check_waiter_timeouts();
     }
 }

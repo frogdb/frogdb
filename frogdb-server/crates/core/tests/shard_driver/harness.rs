@@ -235,8 +235,8 @@ impl ShardDriver {
 
     // --- Ticks (timer-only work; no ShardMessage exists) ----------------
 
-    pub fn tick_expiry(&mut self, shard: usize) {
-        self.workers[shard].drive_expiry_tick();
+    pub async fn tick_expiry(&mut self, shard: usize) {
+        self.workers[shard].drive_expiry_tick().await;
     }
 
     pub fn tick_waiter_timeout(&mut self, shard: usize) {

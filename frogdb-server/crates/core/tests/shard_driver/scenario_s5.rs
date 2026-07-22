@@ -97,7 +97,7 @@ async fn s5_ttl_arm_drains_xreadgroup_to_nogroup_after_f1_fix() {
     // TTL path: seed a short TTL, wait past it, then run the active-expiry tick.
     let _ = d.execute(0, "PEXPIRE", &["st", "1"]).await;
     tokio::time::sleep(Duration::from_millis(3)).await;
-    d.tick_expiry(0);
+    d.tick_expiry(0).await;
 
     // After F1: the group waiter receives the SAME NOGROUP the DEL arm produces.
     let group_resp = group_rx.await.expect("group waiter replied after expiry");
@@ -235,7 +235,7 @@ async fn regression_gap2_lazy_read_drains_before_sweep() {
     // The active-expiry sweep now runs — the key is already gone, so it is NOT
     // in `deleted_keys`; nothing depends on that anymore because the lazy read
     // already drained the waiter. This is a no-op here.
-    d.tick_expiry(0);
+    d.tick_expiry(0).await;
 
     let wq = d.wait_queue_info(0).await;
     assert_eq!(

@@ -94,12 +94,12 @@ async fn run_case(interleave: Interleave) -> CaseObservation {
             let _ = d.execute(0, "SET", &["e", "e0"]).await;
             let _ = d.execute(0, "PEXPIRE", &["e", "1"]).await;
             tokio::time::sleep(Duration::from_millis(3)).await;
-            d.tick_expiry(0);
+            d.tick_expiry(0).await;
         }
         Interleave::ActiveExpiryWatched => {
             let _ = d.execute(0, "PEXPIRE", &["k", "1"]).await;
             tokio::time::sleep(Duration::from_millis(3)).await;
-            d.tick_expiry(0);
+            d.tick_expiry(0).await;
             watched_changed = true;
         }
     }
