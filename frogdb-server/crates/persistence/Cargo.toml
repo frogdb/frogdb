@@ -7,11 +7,13 @@ publish = false
 description = "RocksDB persistence layer for FrogDB — storage, WAL, serialization, and snapshots"
 
 [features]
-# Exposes RocksStore's test-only single-key / WAL-sync accessors and the
-# `commit_raw_batch` seam to dependent crates' *test* builds (frogdb-core's
-# crash-recovery suite). Additive and never enabled in a production build —
-# only wired under `[dev-dependencies]` (see frogdb-core's manifest), and
-# resolver "2" keeps it out of the normal dependency build.
+# Exposes RocksStore's test-only single-key accessors (`put`/`get`/`put_opt`/
+# `delete`), the `sync_wal` helper, and the `commit_raw_batch` seam to dependent
+# crates' *test* builds — frogdb-core's crash-recovery suite, frogdb-server's
+# recovery-seam tests, frogdb-replication's full-sync tests, and the persistence
+# benchmark. Additive and never enabled in a production build — only wired under
+# each consumer's `[dev-dependencies]`, and resolver "2" keeps it out of the
+# normal dependency build.
 test-support = []
 
 [dependencies]
