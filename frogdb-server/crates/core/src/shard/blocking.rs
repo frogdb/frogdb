@@ -183,24 +183,52 @@ impl ShardWorker {
     ///
     /// Called after LPUSH, RPUSH, LPUSHX, RPUSHX, BLMOVE, BRPOPLPUSH operations.
     pub fn try_satisfy_list_waiters(&mut self, key: &Bytes) {
-        self.drive_satisfaction(&mut ListSatisfaction, key, 0);
+        self.drive_satisfaction(&mut ListSatisfaction, key);
     }
 
     /// Try to satisfy sorted set waiters after a sorted set write operation.
     ///
     /// Called after ZADD operations.
     pub fn try_satisfy_zset_waiters(&mut self, key: &Bytes) {
-        self.drive_satisfaction(&mut ZsetSatisfaction, key, 0);
+        self.drive_satisfaction(&mut ZsetSatisfaction, key);
     }
 
     /// Try to satisfy stream waiters after a stream write operation.
     ///
     /// Called after XADD, DEL, UNLINK, SET, XGROUP DESTROY, and RENAME operations.
     pub fn try_satisfy_stream_waiters(&mut self, key: &Bytes) {
-        self.drive_satisfaction(&mut StreamSatisfaction, key, 0);
+        self.drive_satisfaction(&mut StreamSatisfaction, key);
     }
 
-    /// Generic satisfaction driver shared by every waiter kind.
+    /// Drive waiter satisfaction for `key`, then apply the effects of any lazy
+    /// purge the strategies triggered.
+    ///
+    /// Each [`WaiterSatisfaction::check_key`] impl calls
+    /// [`crate::store::Store::purge_if_expired`] so a blocker woken by a write
+    /// never observes a stale just-expired value; that populates the store's
+    /// `lazily_purged` buffer. This wrapper drains it through
+    /// [`Self::apply_lazy_purge_effects`], so a key that dies on the blocking
+    /// wake path gets the same externally observable effects (a shard-version
+    /// bump + an XREADGROUP → NOGROUP drain) as any other lazy purge — the
+    /// blocking-path counterpart of the [`Self::execute_scatter_part`] and
+    /// `execute_command_inner` seams. Without it the report would survive into
+    /// the *next* message and be applied at the wrong seam (issue 08).
+    ///
+    /// The drain runs **after** [`Self::drive_satisfaction_body`] and its BLMove
+    /// wake-cascade have fully unwound — one drain point covering all three
+    /// `check_key` impls — so it never reenters the wait queue while the driver
+    /// is still iterating it (`apply_lazy_purge_effects` →
+    /// [`Self::drain_stream_waiters_with_error`] pops the same queue). This is
+    /// why the cascade recurses through the body, not this wrapper: effects
+    /// drain exactly once for the whole wake chain.
+    fn drive_satisfaction(&mut self, strat: &mut dyn WaiterSatisfaction, key: &Bytes) {
+        self.drive_satisfaction_body(strat, key, 0);
+        self.apply_lazy_purge_effects();
+    }
+
+    /// Generic satisfaction driver shared by every waiter kind (the body proper;
+    /// see [`Self::drive_satisfaction`], which wraps this to drain lazy-purge
+    /// effects afterward).
     ///
     /// Owns everything that is the *same* across the families — the FIFO loop,
     /// the BLMove wake-cascade recursion, the depth cap, the version bump, the
@@ -209,7 +237,7 @@ impl ShardWorker {
     /// wake cascade" logic lives behind the [`WaiterSatisfaction`] seam. The
     /// strategy sees only the store; this driver is the sole mutator of the wait
     /// queue.
-    fn drive_satisfaction(
+    fn drive_satisfaction_body(
         &mut self,
         strat: &mut dyn WaiterSatisfaction,
         key: &Bytes,
@@ -283,7 +311,7 @@ impl ShardWorker {
                     // A BLMove/BRPOPLPUSH pushes to its destination; wake any
                     // blockers on that key so wake chains propagate.
                     if let Some(dest) = cascade {
-                        self.drive_satisfaction(strat, &dest, depth + 1);
+                        self.drive_satisfaction_body(strat, &dest, depth + 1);
                     }
                 }
             }
@@ -1209,6 +1237,69 @@ mod tests {
                 .wait_queue
                 .has_waiters_for_kind(&key, WaiterKind::List),
             "the satisfied waiter is removed from the queue"
+        );
+    }
+
+    // ---- Lazy-purge drain at the satisfaction seam (issue 08) -------------
+
+    /// A blocking wake whose `check_key` lazily purges an expired key must drain
+    /// the store's `lazily_purged` report at the `drive_satisfaction` seam —
+    /// mirroring `scatter_mget_drains_lazy_purge_report`. `try_satisfy_*` never
+    /// routes through `execute_command_inner`, so without the wrapper drain the
+    /// report would leak into the NEXT, unrelated message and its effects (a
+    /// version bump + XREADGROUP drain) apply at the wrong seam. Pins all three:
+    /// the purge physically fired, the report was drained here, and the parity
+    /// version bump landed at this seam rather than being deferred.
+    #[test]
+    fn waiter_satisfaction_drains_lazy_purge_report() {
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        let key = Bytes::from_static(b"k");
+
+        // A live BLPOP waiter (future deadline, receiver kept open) is parked on
+        // the key so the driver enters its loop and calls `check_key`.
+        let (mut entry, _rx) = make_entry(BlockingOp::BLPop, vec![key.clone()]);
+        entry.deadline = Some(Instant::now() + std::time::Duration::from_secs(60));
+        worker.wait_queue.register(entry).unwrap();
+
+        // Seed the key as an already-expired list: a value is physically present
+        // but its TTL has elapsed, so `check_key`'s `purge_if_expired` removes it.
+        let mut v = Value::list();
+        v.as_list_mut().unwrap().push_back(Bytes::from_static(b"x"));
+        worker.store.set(key.clone(), v);
+        worker
+            .store
+            .set_expiry(b"k", Instant::now() - std::time::Duration::from_secs(60));
+        assert!(worker.store.contains(b"k"));
+
+        let version_before = worker.get_key_version(b"k");
+
+        worker.try_satisfy_list_waiters(&key);
+
+        // (a) The purge physically fired: the expired key is gone and the waiter
+        // stayed blocked (an expired key is never a satisfiable wake).
+        assert!(
+            !worker.store.contains(b"k"),
+            "the blocking-wake path must have lazily purged the expired key"
+        );
+        assert!(
+            worker
+                .wait_queue
+                .has_waiters_for_kind(&key, WaiterKind::List),
+            "the waiter stays blocked when its key expired instead of holding data"
+        );
+        // (b) The report was drained at the satisfaction seam — nothing leaks to
+        // the next message.
+        assert!(
+            worker.store.take_lazily_purged().is_empty(),
+            "drive_satisfaction must drain the lazy-purge report (no leak to the next message)"
+        );
+        // (c) The parity version bump landed *here*, not deferred: the only bump
+        // possible on this call is `apply_lazy_purge_effects` (the waiter never
+        // reached a `Done`, so `bumps_version` did not fire).
+        assert_eq!(
+            worker.get_key_version(b"k"),
+            version_before.wrapping_add(1),
+            "the lazy purge must bump the shard version at the satisfaction seam"
         );
     }
 
