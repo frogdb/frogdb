@@ -239,10 +239,18 @@ def test_workflow() -> Workflow:
         ),
     )
 
+    # Mirrors the turmoil-featured lines of `just concurrency` (the shuttle line
+    # is covered separately by `shuttle-tests` above): simulation tests plus the
+    # ~20-seed-per-profile generated-workload sweeps (short workloads +
+    # TxHeavy) that are the per-PR tier of the concurrency-invariant-testing
+    # design (see the "CI" section of
+    # docs/superpowers/specs/2026-07-17-concurrency-invariant-testing-design.md).
+    # The nightly tier (1000+ seeds, all profiles, longer histories) lives in
+    # concurrency-nightly.yml instead — too slow for a per-PR budget.
     turmoil_tests = w.job(
         "turmoil-tests",
         Job(
-            name="Turmoil Simulation Tests",
+            name="Turmoil Simulation + Generated-Workload Tests",
             runs_on=RUNS_ON,
             needs="changes",
             if_="needs.changes.outputs.rust == 'true'",
@@ -256,6 +264,16 @@ def test_workflow() -> Workflow:
                 run_step(
                     name="Run Turmoil simulation tests",
                     run="cargo nextest run -p frogdb-server --features turmoil -E 'test(/simulation/)'",
+                ),
+                run_step(
+                    name="Run generated-workload seed sweep (short workloads)",
+                    run="cargo nextest run -p frogdb-server --features turmoil"
+                    " -E 'test(/seed_sweep_short_workloads/)'",
+                ),
+                run_step(
+                    name="Run generated-workload seed sweep (TxHeavy)",
+                    run="cargo nextest run -p frogdb-server --features turmoil"
+                    " -E 'test(/seed_sweep_txheavy/)'",
                 ),
             ],
         ),
