@@ -24,11 +24,12 @@ pub(super) fn open_rocks(inputs: &RecoveryInputs<'_>) -> Result<Arc<RocksStore>>
     // `warm_enabled`.
     let rocks_config = RocksConfig::from_persistence(config);
 
-    let rocks = Arc::new(RocksStore::open_with_warm(
+    let rocks = Arc::new(RocksStore::open_with_warm_metrics(
         &config.data_dir,
         inputs.num_shards,
         &rocks_config,
         inputs.warm_enabled,
+        inputs.metrics_recorder.clone(),
     )?);
 
     Ok(rocks)

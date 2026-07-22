@@ -235,14 +235,11 @@ impl Server {
         log_reload_handle: Option<crate::runtime_config::LogReloadHandle>,
     ) -> Result<Self> {
         // Phase 1: Infrastructure init (metrics, listeners, registries, persistence, channels)
+        // The RocksDB store is opened during recovery with the metrics recorder
+        // injected at construction (`RocksStore::open_with_warm_metrics`), so
+        // store-initiated background work (post-clear space reclamation) is
+        // counted from the moment the store exists — no separate install step.
         let infra = init::init_infrastructure(&config, listeners, log_reload_handle).await?;
-
-        // Wire the metrics recorder into the RocksDB store so store-initiated
-        // background work (post-clear space reclamation) is counted. Installed
-        // before shard workers spawn, so no client command can race it.
-        if let Some(ref rocks) = infra.rocks_store {
-            rocks.set_metrics_recorder(infra.metrics_recorder.clone());
-        }
 
         // Phase 2: Replication handler setup
         let repl = replication_init::init_replication(
