@@ -13,30 +13,16 @@ use frogdb_core::{ExpiryIndex, HashMapStore};
 use tracing::info;
 
 use super::RecoveryInputs;
-use crate::server::util::{num_cpus, parse_compression};
 
 /// Phase 2: open RocksDB (with optional warm-tier column families).
 pub(super) fn open_rocks(inputs: &RecoveryInputs<'_>) -> Result<Arc<RocksStore>> {
     let config = inputs.persistence;
 
-    let rocks_config = RocksConfig {
-        write_buffer_size: config.write_buffer_size_mb * 1024 * 1024,
-        compression: parse_compression(&config.compression),
-        max_background_jobs: num_cpus::get() as i32,
-        create_if_missing: true,
-        block_cache_size: config.block_cache_size_mb * 1024 * 1024,
-        bloom_filter_bits: config.bloom_filter_bits,
-        max_write_buffer_number: config.max_write_buffer_number,
-        level0_file_num_compaction_trigger: 8,
-        target_file_size_base: 128 * 1024 * 1024,
-        max_bytes_for_level_base: 512 * 1024 * 1024,
-        compaction_rate_limit_mb: if config.compaction_rate_limit_mb > 0 {
-            Some(config.compaction_rate_limit_mb)
-        } else {
-            None
-        },
-        flush_compact_range: config.flush_compact_range,
-    };
+    // The operator-vs-invariant knob partition lives in `RocksConfig::from_persistence`
+    // (next to `RocksConfig::default()`); this site only supplies the two arguments
+    // that come from `RecoveryInputs`, not `PersistenceConfig`: `num_shards` and
+    // `warm_enabled`.
+    let rocks_config = RocksConfig::from_persistence(config);
 
     let rocks = Arc::new(RocksStore::open_with_warm(
         &config.data_dir,
