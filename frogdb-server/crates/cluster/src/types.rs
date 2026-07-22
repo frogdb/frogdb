@@ -516,8 +516,9 @@ pub struct ClusterSnapshot {
     pub config_epoch: ConfigEpoch,
     /// Active slot migrations.
     pub migrations: BTreeMap<u16, SlotMigration>,
-    /// The Raft leader node ID (if known).
-    pub leader_id: Option<NodeId>,
+    // `leader_id` removed (proposal 33): the leader is Raft runtime state, not
+    // replicated metadata, so this DTO's builder cannot supply it. The debug
+    // seam reads it live from `Raft::metrics().current_leader` instead.
     /// The finalized active version, if any.
     #[serde(default)]
     pub active_version: Option<String>,

@@ -83,8 +83,10 @@ use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
 use tracing::{Instrument, debug, info, trace, warn};
 
+use crate::commands::replication::PsyncHandoff;
 #[cfg(feature = "turmoil")]
 use crate::config::ChaosConfigExt;
+use crate::connection::dispatch::Dispatched;
 use crate::net::ConnectionStream;
 // Re-export next_txid for the command-execution submodules
 pub use crate::server::next_txid;
@@ -168,9 +170,11 @@ pub struct ConnectionHandler {
     /// seam so it can be exposed through [`ConnCtx::memory_diag`].
     memory_diag: crate::connection::observability_conn_command::MemoryDiag,
 
-    /// Pending PSYNC handoff parameters (replication_id, offset).
-    /// Set when PSYNC command returns PSYNC_HANDOFF, processed after the loop.
-    pending_psync_handoff: Option<(String, i64)>,
+    /// Pending PSYNC connection takeover. Set when `PsyncIntercept` yields a
+    /// typed [`Dispatched::Handoff`], carried out after the run loop (so any
+    /// buffered pipelined replies flush over the wire before the socket is
+    /// handed to the `PrimaryReplicationHandler`).
+    pending_psync_handoff: Option<PsyncHandoff>,
 
     /// Reusable buffer for RESP3 encoding to avoid per-response allocation.
     resp3_buf: BytesMut,
@@ -194,10 +198,14 @@ pub struct ConnectionHandler {
 enum FrameAction {
     /// Command processed normally, keep going.
     Continue,
-    /// Connection should close (QUIT, PSYNC handoff, disconnect).
+    /// Connection should close (QUIT, disconnect).
     Break,
     /// Response was skipped (ReplyMode::Off or skip_next_reply).
     SkipResponse,
+    /// PSYNC requested a raw-socket takeover. Carries the typed handoff out of
+    /// `process_one_command`; the run loop stashes it and breaks *after* the
+    /// shared flush so buffered pipelined replies still reach the wire.
+    Handoff(PsyncHandoff),
 }
 
 impl ConnectionHandler {
@@ -411,7 +419,7 @@ impl ConnectionHandler {
             .map(|t| t.start_request_span(&cmd_name, self.state.id));
 
         // Route and execute (with transaction and pub/sub handling)
-        let responses = if self
+        let dispatched = if self
             .per_request_spans
             .load(std::sync::atomic::Ordering::Relaxed)
         {
@@ -423,18 +431,22 @@ impl ConnectionHandler {
                 .await
         };
 
-        // Check for PSYNC_HANDOFF signal
-        if let Some(handoff_params) = Self::extract_psync_handoff(&responses) {
-            info!(
-                conn_id = self.state.id,
-                addr = %self.state.addr,
-                replication_id = %handoff_params.0,
-                offset = handoff_params.1,
-                "PSYNC handoff requested - will transfer connection to replication handler"
-            );
-            self.pending_psync_handoff = Some(handoff_params);
-            return FrameAction::Break;
-        }
+        // A PSYNC takeover is a typed control outcome, not a data reply: carry it
+        // out of this frame so the run loop can flush any buffered pipelined
+        // replies before handing the raw socket to the replication handler.
+        let responses = match dispatched {
+            Dispatched::Responses(responses) => responses,
+            Dispatched::Handoff(handoff) => {
+                info!(
+                    conn_id = self.state.id,
+                    addr = %self.state.addr,
+                    replication_id = %handoff.replication_id,
+                    offset = handoff.offset,
+                    "PSYNC handoff requested - will transfer connection to replication handler"
+                );
+                return FrameAction::Handoff(handoff);
+            }
+        };
 
         // Calculate elapsed time in microseconds for slowlog
         let elapsed_us = now.elapsed().as_micros() as u64;
@@ -670,6 +682,13 @@ impl ConnectionHandler {
                     let mut should_break = false;
                     match self.process_one_command(frame).await {
                         FrameAction::Break => should_break = true,
+                        // Stash the handoff and break *after* the shared flush
+                        // below, so buffered pipelined replies reach the wire
+                        // before the socket is taken over.
+                        FrameAction::Handoff(handoff) => {
+                            self.pending_psync_handoff = Some(handoff);
+                            should_break = true;
+                        }
                         FrameAction::Continue | FrameAction::SkipResponse => {}
                     }
 
@@ -688,6 +707,11 @@ impl ConnectionHandler {
                             };
                             match self.process_one_command(frame).await {
                                 FrameAction::Break => {
+                                    should_break = true;
+                                    break;
+                                }
+                                FrameAction::Handoff(handoff) => {
+                                    self.pending_psync_handoff = Some(handoff);
                                     should_break = true;
                                     break;
                                 }
@@ -710,7 +734,11 @@ impl ConnectionHandler {
         }
 
         // Check if we need to do PSYNC handoff
-        if let Some((replication_id, offset)) = self.pending_psync_handoff.take() {
+        if let Some(PsyncHandoff {
+            replication_id,
+            offset,
+        }) = self.pending_psync_handoff.take()
+        {
             info!(
                 conn_id = self.state.id,
                 addr = %self.state.addr,
@@ -719,42 +747,46 @@ impl ConnectionHandler {
                 "Performing PSYNC handoff"
             );
 
-            // Get the primary replication handler
-            if let Some(handler) = &self.cluster.primary_replication_handler {
-                // Extract the ConnectionStream from the Framed codec, then get the raw TcpStream.
-                let connection_stream = self.framed.into_inner();
+            // A handoff is only ever stashed after `PsyncIntercept` passed the
+            // `primary_replication_handler.is_none()` gate, so the handler is
+            // present here by construction. The former no-handler `else` (a
+            // silent warn) is thus dead; this `expect` documents the invariant
+            // and would surface a dispatch-order regression loudly rather than
+            // silently dropping the replica.
+            let handler = self
+                .cluster
+                .primary_replication_handler
+                .as_ref()
+                .expect("PsyncIntercept gates handler presence before yielding a handoff");
 
-                #[cfg(not(feature = "turmoil"))]
-                {
-                    // Pass the stream as a boxed trait object, preserving TLS if active.
-                    let boxed_stream = connection_stream.into_boxed();
-                    if let Err(e) = handler
-                        .handle_psync(boxed_stream, self.state.addr, &replication_id, offset)
-                        .await
-                    {
-                        warn!(
-                            conn_id = self.state.id,
-                            error = %e,
-                            "PSYNC handoff failed"
-                        );
-                    }
-                }
+            // Extract the ConnectionStream from the Framed codec, then get the raw TcpStream.
+            let connection_stream = self.framed.into_inner();
 
-                #[cfg(feature = "turmoil")]
+            #[cfg(not(feature = "turmoil"))]
+            {
+                // Pass the stream as a boxed trait object, preserving TLS if active.
+                let boxed_stream = connection_stream.into_boxed();
+                if let Err(e) = handler
+                    .handle_psync(boxed_stream, self.state.addr, &replication_id, offset)
+                    .await
                 {
-                    // In turmoil mode, we can't directly pass the turmoil TcpStream
-                    // to the handler which expects tokio TcpStream.
                     warn!(
                         conn_id = self.state.id,
-                        "PSYNC handoff not supported in turmoil simulation mode"
+                        error = %e,
+                        "PSYNC handoff failed"
                     );
-                    let _ = (handler, connection_stream);
                 }
-            } else {
+            }
+
+            #[cfg(feature = "turmoil")]
+            {
+                // In turmoil mode, we can't directly pass the turmoil TcpStream
+                // to the handler which expects tokio TcpStream.
                 warn!(
                     conn_id = self.state.id,
-                    "PSYNC handoff requested but no primary replication handler available"
+                    "PSYNC handoff not supported in turmoil simulation mode"
                 );
+                let _ = (handler, connection_stream);
             }
 
             // Don't run normal cleanup - replication handler has the connection
