@@ -377,15 +377,59 @@ impl Command for PsyncCommand {
         &SPEC
     }
 
-    fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        // PSYNC never reaches the shard executor: `DispatchStage::PsyncIntercept`
+        // (connection/dispatch.rs) owns the whole PSYNC decision — it presence-gates
+        // the primary replication handler, parses the args into a typed
+        // [`PsyncHandoff`], and yields `StageOutcome::Handoff`, which the connection
+        // task carries out as a raw-socket takeover. The queued-in-MULTI path is
+        // short-circuited to `+OK` at EXEC (transaction.rs) *without* calling this.
+        //
+        // This registered `Command` executor is retained only so the `CommandSpec`
+        // still carries arity/flags/`COMMAND DOCS`; it must never actually run.
+        // It returns an internal error (rather than `unreachable!()`) so a future
+        // dispatch-order regression that routed PSYNC here degrades gracefully with
+        // an error `Response` instead of panicking and taking down the shard worker.
+        Err(CommandError::Internal {
+            message: "PSYNC must be intercepted before shard execution".to_string(),
+        })
+    }
+}
+
+/// A validated request to hand a connection's raw socket to the
+/// `PrimaryReplicationHandler`. The sole product of PSYNC dispatch: it is parsed
+/// exactly once (here) and consumed directly by `handle_psync`, which already
+/// takes `&str` + `i64`, so there is no serialize/re-parse round-trip across the
+/// command→connection seam.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PsyncHandoff {
+    pub replication_id: String,
+    pub offset: i64,
+}
+
+impl PsyncHandoff {
+    /// The single PSYNC arg parse. Mirrors the branches the old
+    /// `PsyncCommand::execute` performed verbatim: two args, utf8 id, `i64`
+    /// offset. Arg errors surface as `CommandError` (returned to the client
+    /// exactly as before via the error `Response`).
+    ///
+    /// The `WrongArity` branch is dead in the live dispatch path — the `Arity`
+    /// stage validates PSYNC's `Fixed(2)` arity before `PsyncIntercept` is
+    /// reached — but is kept as defensive validation and unit-tested in isolation.
+    pub(crate) fn from_args(args: &[Bytes]) -> Result<Self, CommandError> {
         if args.len() != 2 {
             return Err(CommandError::WrongArity { command: "psync" });
         }
 
-        let replication_id =
-            std::str::from_utf8(&args[0]).map_err(|_| CommandError::InvalidArgument {
+        let replication_id = std::str::from_utf8(&args[0])
+            .map_err(|_| CommandError::InvalidArgument {
                 message: "invalid replication_id encoding".to_string(),
-            })?;
+            })?
+            .to_string();
 
         let offset_str =
             std::str::from_utf8(&args[1]).map_err(|_| CommandError::InvalidArgument {
@@ -401,18 +445,13 @@ impl Command for PsyncCommand {
         tracing::info!(
             replication_id = %replication_id,
             offset = offset,
-            "PSYNC request - returning handoff signal"
+            "PSYNC request parsed - connection takeover pending"
         );
 
-        // Return a special PSYNC_HANDOFF response that signals the connection handler
-        // to hand off this connection to the PrimaryReplicationHandler.
-        // The connection handler will detect this response, extract the raw TCP stream,
-        // and call PrimaryReplicationHandler::handle_psync() with the replication_id and offset.
-        Ok(Response::Array(vec![
-            Response::Simple(Bytes::from_static(b"PSYNC_HANDOFF")),
-            Response::Bulk(Some(args[0].clone())), // replication_id
-            Response::Bulk(Some(args[1].clone())), // offset
-        ]))
+        Ok(Self {
+            replication_id,
+            offset,
+        })
     }
 }
 
@@ -616,5 +655,72 @@ impl Command for RoleCommand {
                 Response::Array(replicas),
             ]))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PsyncHandoff;
+    use bytes::Bytes;
+    use frogdb_core::CommandError;
+
+    /// The happy path: a well-formed `PSYNC <replid> <offset>` parses into a
+    /// typed [`PsyncHandoff`] carrying exactly those values — asserted directly,
+    /// with no socket and no live primary handler. This is the seam the old
+    /// sentinel-array `Response` could not be unit-tested at.
+    #[test]
+    fn from_args_parses_id_and_offset() {
+        let handoff = PsyncHandoff::from_args(&[
+            Bytes::from_static(b"repl-abc"),
+            Bytes::from_static(b"12345"),
+        ])
+        .expect("valid PSYNC args parse");
+        assert_eq!(handoff.replication_id, "repl-abc");
+        assert_eq!(handoff.offset, 12345);
+    }
+
+    /// A negative offset (`?  -1`, the initial-sync sentinel) is a valid `i64`
+    /// and must parse — this is the most common real-world PSYNC.
+    #[test]
+    fn from_args_accepts_negative_offset() {
+        let handoff =
+            PsyncHandoff::from_args(&[Bytes::from_static(b"?"), Bytes::from_static(b"-1")])
+                .expect("`? -1` initial sync parses");
+        assert_eq!(handoff.replication_id, "?");
+        assert_eq!(handoff.offset, -1);
+    }
+
+    /// Wrong arg count → `WrongArity`. NOTE: this branch is *dead in the live
+    /// dispatch path* — the `Arity` stage validates PSYNC's `Fixed(2)` arity
+    /// before `PsyncIntercept` is reached, so `from_args` never sees a wrong arg
+    /// count in production. This asserts `from_args` as a standalone function
+    /// (defensive validation), not production wire behavior (already covered by
+    /// the `Arity` stage and `test_psync_invalid_args`).
+    #[test]
+    fn from_args_wrong_arity() {
+        let err = PsyncHandoff::from_args(&[Bytes::from_static(b"only-one")]).unwrap_err();
+        assert!(matches!(err, CommandError::WrongArity { command: "psync" }));
+    }
+
+    /// Non-utf8 replication id → `InvalidArgument`. This branch *is* on the live
+    /// path: the intercept reaches it after arity has passed.
+    #[test]
+    fn from_args_non_utf8_id() {
+        let err =
+            PsyncHandoff::from_args(&[Bytes::from_static(&[0xff, 0xfe]), Bytes::from_static(b"0")])
+                .unwrap_err();
+        assert!(matches!(err, CommandError::InvalidArgument { .. }));
+    }
+
+    /// Non-numeric offset → `InvalidArgument` — mirrors the wire assertion in
+    /// `test_psync_invalid_args` (`PSYNC ? not_a_number`). Live path.
+    #[test]
+    fn from_args_non_numeric_offset() {
+        let err = PsyncHandoff::from_args(&[
+            Bytes::from_static(b"?"),
+            Bytes::from_static(b"not_a_number"),
+        ])
+        .unwrap_err();
+        assert!(matches!(err, CommandError::InvalidArgument { .. }));
     }
 }
