@@ -71,6 +71,100 @@ pub fn serialize_command_to_resp(cmd_name: &str, args: &[Bytes]) -> Bytes {
     buf.freeze()
 }
 
+/// The REPLCONF ACK / GETACK control-message grammar, as one symmetric codec.
+///
+/// Single definition of the wire shapes previously scattered across
+/// `request_acks` (GETACK encode), `send_ack` (ACK encode), `parse_replconf_ack`
+/// (ACK decode) and `is_getack_frame` (GETACK decode). The encode side composes
+/// the crate's [`serialize_command_to_resp`]; the decode side owns the parsers.
+/// Framing only — offset stamping, frame headers, and backlog recording stay in
+/// the callers (`OffsetCoordinator` / [`ReplicationFrameCodec`] / `replay`).
+///
+/// This is the ACK/GETACK analogue of [`crate::fullsync::CheckpointStreamCodec`]:
+/// a wire grammar that was realized by hand across several call sites, collapsed
+/// to one owner with a golden round-trip test binding each encoder to its
+/// inverse.
+pub(crate) struct ReplconfCodec;
+
+impl ReplconfCodec {
+    // --- encode (delegates to serialize_command_to_resp) ---
+
+    /// `*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$<len>\r\n<offset>\r\n`
+    ///
+    /// The offset is emitted as decimal ASCII (`offset.to_string()`), so its
+    /// `$<len>` bulk-string prefix reflects the digit count (20 for `u64::MAX`).
+    pub(crate) fn encode_ack(offset: u64) -> Bytes {
+        serialize_command_to_resp(
+            "REPLCONF",
+            &[Bytes::from_static(b"ACK"), Bytes::from(offset.to_string())],
+        )
+    }
+
+    /// `*3\r\n$8\r\nREPLCONF\r\n$6\r\nGETACK\r\n$1\r\n*\r\n`
+    pub(crate) fn encode_getack() -> Bytes {
+        serialize_command_to_resp(
+            "REPLCONF",
+            &[Bytes::from_static(b"GETACK"), Bytes::from_static(b"*")],
+        )
+    }
+
+    // --- decode (inverses) ---
+
+    /// Parse a leading REPLCONF ACK frame from a (possibly streaming) buffer.
+    ///
+    /// Returns `Some((offset, consumed))` on a complete, valid frame; `None` if
+    /// the buffer is incomplete or does not hold a REPLCONF ACK. The `consumed`
+    /// return is load-bearing for the primary's streaming read loop
+    /// (`replica_session.rs`, `buf.advance(consumed)`).
+    ///
+    /// Expected wire format: `*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$<len>\r\n<offset>\r\n`
+    pub(crate) fn parse_ack(data: &[u8]) -> Option<(u64, usize)> {
+        use redis_protocol::resp2::decode::decode;
+        use redis_protocol::resp2::types::{OwnedFrame, Resp2Frame};
+
+        let (frame, consumed) = decode(data).ok()??;
+        if let OwnedFrame::Array(parts) = frame
+            && parts.len() >= 3
+        {
+            let is_replconf = parts[0]
+                .as_bytes()
+                .is_some_and(|b: &[u8]| b.eq_ignore_ascii_case(b"REPLCONF"));
+            let is_ack = parts[1]
+                .as_bytes()
+                .is_some_and(|b: &[u8]| b.eq_ignore_ascii_case(b"ACK"));
+            if is_replconf && is_ack {
+                let offset_str = std::str::from_utf8(parts[2].as_bytes()?).ok()?;
+                let offset = offset_str.parse::<u64>().ok()?;
+                return Some((offset, consumed));
+            }
+        }
+        None
+    }
+
+    /// Structural fast-path: true iff `payload` is a `REPLCONF GETACK *`
+    /// solicitation (`*3\r\n$8\r\nREPLCONF\r\n$6\r\nGETACK\r\n...`).
+    ///
+    /// Matched structurally (case-insensitive tokens) rather than by full RESP
+    /// decode: this runs once per ingested frame on the replica hot path, and
+    /// the solicitation is the only REPLCONF the primary puts on the stream.
+    pub(crate) fn is_getack(payload: &[u8]) -> bool {
+        let Some(rest) = payload.strip_prefix(b"*3\r\n$8\r\n") else {
+            return false;
+        };
+        if rest.len() < 8 + 6 + 6 {
+            return false;
+        }
+        let (name, rest) = rest.split_at(8);
+        if !name.eq_ignore_ascii_case(b"REPLCONF") {
+            return false;
+        }
+        let Some(rest) = rest.strip_prefix(b"\r\n$6\r\n") else {
+            return false;
+        };
+        rest.len() >= 6 && rest[..6].eq_ignore_ascii_case(b"GETACK")
+    }
+}
+
 /// Frame magic bytes: "FRPL"
 pub const FRAME_MAGIC: [u8; 4] = [0x46, 0x52, 0x50, 0x4C]; // "FRPL"
 
@@ -574,5 +668,114 @@ mod tests {
         // Binary data should be preserved correctly (20 bytes: value\r\nwith\x00newlines)
         assert!(resp.starts_with(b"*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$20\r\n"));
         assert!(resp.ends_with(b"\r\n"));
+    }
+
+    // --- ReplconfCodec: the golden-bytes round-trip suite for the ACK/GETACK
+    // control grammar. Each encoder is bound to its inverse in one place. ---
+
+    #[test]
+    fn replconf_ack_round_trips() {
+        // parse_ack(encode_ack(x)) == Some((x, encoded.len())) for the boundary
+        // offsets. u64::MAX pins that the offset is emitted as decimal ASCII so
+        // its 20-digit form round-trips through the `$<len>\r\n<offset>\r\n`
+        // bulk-string framing — the boundary a hand-rolled `format!` most
+        // easily gets wrong.
+        for offset in [0u64, 1, u64::MAX] {
+            let encoded = ReplconfCodec::encode_ack(offset);
+            assert_eq!(
+                ReplconfCodec::parse_ack(&encoded),
+                Some((offset, encoded.len())),
+                "ACK round-trip failed for offset {offset}"
+            );
+        }
+
+        // Explicit wire shape for a representative offset, decimal ASCII.
+        assert_eq!(
+            ReplconfCodec::encode_ack(12345).as_ref(),
+            b"*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$5\r\n12345\r\n"
+        );
+        // u64::MAX is 20 decimal digits — the `$20` length prefix must reflect it.
+        assert_eq!(
+            ReplconfCodec::encode_ack(u64::MAX).as_ref(),
+            b"*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$20\r\n18446744073709551615\r\n"
+        );
+    }
+
+    #[test]
+    fn replconf_getack_round_trips() {
+        // is_getack(encode_getack()) — GETACK producer/parser pin, anchored to
+        // the real encoder rather than a re-typed literal.
+        let encoded = ReplconfCodec::encode_getack();
+        assert!(ReplconfCodec::is_getack(&encoded));
+        // Explicit wire shape.
+        assert_eq!(
+            encoded.as_ref(),
+            b"*3\r\n$8\r\nREPLCONF\r\n$6\r\nGETACK\r\n$1\r\n*\r\n"
+        );
+    }
+
+    #[test]
+    fn replconf_cross_discriminator_rejection() {
+        // ACK and GETACK cannot be confused for one another.
+        assert!(!ReplconfCodec::is_getack(&ReplconfCodec::encode_ack(100)));
+        assert_eq!(
+            ReplconfCodec::parse_ack(&ReplconfCodec::encode_getack()),
+            None
+        );
+    }
+
+    #[test]
+    fn replconf_parse_ack_streaming_invariants() {
+        // Incomplete buffers → None, no panic (ported from
+        // test_parse_replconf_ack_incomplete).
+        assert_eq!(ReplconfCodec::parse_ack(b"*3\r\n$8\r\nREPLCONF\r\n"), None);
+        assert_eq!(
+            ReplconfCodec::parse_ack(b"*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$5\r\n123"),
+            None
+        );
+
+        // Two concatenated ACK frames: first parsed, consumed == frame1.len(),
+        // remainder re-parses (ported from test_parse_replconf_ack_with_trailing_data).
+        let frame1 = ReplconfCodec::encode_ack(100);
+        let frame2 = ReplconfCodec::encode_ack(200);
+        let mut combined = Vec::new();
+        combined.extend_from_slice(&frame1);
+        combined.extend_from_slice(&frame2);
+
+        let (offset, consumed) = ReplconfCodec::parse_ack(&combined).unwrap();
+        assert_eq!(offset, 100);
+        assert_eq!(consumed, frame1.len());
+        let (offset2, _) = ReplconfCodec::parse_ack(&combined[consumed..]).unwrap();
+        assert_eq!(offset2, 200);
+    }
+
+    #[test]
+    fn replconf_parse_ack_rejects_wrong_command() {
+        // Valid RESP array that is not a REPLCONF ACK (ported from
+        // test_parse_replconf_ack_wrong_command).
+        let set = serialize_command_to_resp(
+            "SET",
+            &[Bytes::from_static(b"foo"), Bytes::from_static(b"bar")],
+        );
+        assert_eq!(ReplconfCodec::parse_ack(&set), None);
+        // Non-RESP garbage.
+        assert_eq!(ReplconfCodec::parse_ack(b"INVALID"), None);
+    }
+
+    #[test]
+    fn replconf_is_getack_recognizes_variants_and_rejects_others() {
+        // Case-insensitivity (ported from matches_case_insensitively).
+        assert!(ReplconfCodec::is_getack(
+            b"*3\r\n$8\r\nreplconf\r\n$6\r\ngetack\r\n$1\r\n*\r\n"
+        ));
+
+        // Wrong command / wrong subcommand rejected (ported from
+        // rejects_other_commands_and_other_replconf_subcommands).
+        let set =
+            serialize_command_to_resp("SET", &[Bytes::from_static(b"k"), Bytes::from_static(b"v")]);
+        assert!(!ReplconfCodec::is_getack(&set));
+        assert!(!ReplconfCodec::is_getack(&ReplconfCodec::encode_ack(100)));
+        assert!(!ReplconfCodec::is_getack(b""));
+        assert!(!ReplconfCodec::is_getack(b"*3\r\n$8\r\nREPLCONF\r\n"));
     }
 }
