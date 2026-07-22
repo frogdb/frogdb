@@ -12,8 +12,8 @@ pub use columns::{CfTier, RocksIterator};
 pub use config::{CompressionType, RocksConfig, RocksError};
 use manifest::ColumnFamilyManifest;
 use rocksdb::{
-    BlockBasedOptions, BoundColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType,
-    DBWithThreadMode, MergeOperands, MultiThreaded, Options, WriteBatch, WriteOptions,
+    BlockBasedOptions, BoundColumnFamily, ColumnFamilyDescriptor, DB, DBWithThreadMode,
+    MergeOperands, MultiThreaded, Options, WriteBatch, WriteOptions,
 };
 pub use staged::StagedCheckpoint;
 use std::path::Path;
@@ -96,15 +96,11 @@ impl RocksStore {
         cf_opts.set_write_buffer_size(config.write_buffer_size);
         cf_opts.set_max_write_buffer_number(config.max_write_buffer_number);
         cf_opts.set_block_based_table_factory(&block_opts);
-        cf_opts.set_compression_per_level(&[
-            DBCompressionType::None,
-            DBCompressionType::None,
-            DBCompressionType::Lz4,
-            DBCompressionType::Lz4,
-            DBCompressionType::Zstd,
-            DBCompressionType::Zstd,
-            DBCompressionType::Zstd,
-        ]);
+        // Honor the configured compression preset (proposal 19). Each
+        // `CompressionType` maps to a curated 7-level schedule; the default
+        // `Lz4` preset reproduces the historical `[None,None,Lz4,Lz4,Zstd,Zstd,Zstd]`
+        // array exactly, so existing data directories keep their on-disk format.
+        cf_opts.set_compression_per_level(&config.compression.per_level_schedule());
         // Value-merge operator: folds type-tagged merge operands into the base
         // value. Registered on every data CF (the bare `default` CF holds no
         // values). Currently only HyperLogLog emits merges; the operator
