@@ -78,8 +78,15 @@ impl ShardWorker {
                 for key in &keys {
                     self.store.purge_if_expired(key);
                 }
-                // WATCH stays no-bump (F3): drop the lazy-purge report unread.
-                self.discard_lazy_purges();
+                // A WATCH-time purge still physically removed the key, so the
+                // removal's client-visible effects (tracking invalidation,
+                // search-index deletion, the `expired` keyspace notification,
+                // XREADGROUP drain) must fire — Redis emits `expired` on lazy
+                // expiry regardless of the triggering command. Only the
+                // shard-version bump is withheld: WATCH stays no-bump (F3) so an
+                // already-expired watched key records a "nonexistent" watch and
+                // does not over-abort unrelated watchers.
+                self.apply_lazy_purge_effects_no_version_bump();
                 let _ = response_tx.send((self.shard_version, live_at_watch));
             }
             CoreMsg::ExecTransaction {
