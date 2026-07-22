@@ -7,7 +7,7 @@
 //!
 //! This helper is implemented as an extension method on `ConnectionHandler`.
 
-use frogdb_core::{CommandFlags, ShardMessage, SlowLog};
+use frogdb_core::{CommandFlags, ObservabilityMsg, SlowLog};
 use frogdb_protocol::ParsedCommand;
 
 use crate::connection::ConnectionHandler;
@@ -64,7 +64,7 @@ impl ConnectionHandler {
         // Using shard 0 is simplest and matches Redis behavior
         if let Some(sender) = self.core.shard_senders.first() {
             let _ = sender
-                .send(ShardMessage::SlowlogAdd {
+                .send(ObservabilityMsg::SlowlogAdd {
                     duration_us: elapsed_us,
                     command: truncated_args,
                     client_addr,

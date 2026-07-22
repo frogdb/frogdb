@@ -34,7 +34,6 @@ impl ShardWorker {
                 return;
             }
             let def = idx.definition().clone();
-            let has_vectors = idx.has_vector_fields();
             let is_json = def.source == IndexSource::Json;
             for key in store.all_keys() {
                 if !super::key_matches_prefix(&def.prefix, &key) {
@@ -44,26 +43,10 @@ impl ShardWorker {
                 if let Some(value) = store.get(&key) {
                     if is_json {
                         if let Some(json_val) = value.as_json() {
-                            let fields = frogdb_search::extract_json_fields(&def, json_val.data());
-                            idx.index_document(key_str, &fields);
+                            idx.index_json(key_str, json_val.data());
                         }
                     } else if let Some(hash) = value.as_hash() {
-                        let fields: Vec<(String, String)> = hash
-                            .iter()
-                            .map(|(k, v)| {
-                                (
-                                    String::from_utf8_lossy(&k).to_string(),
-                                    String::from_utf8_lossy(&v).to_string(),
-                                )
-                            })
-                            .collect();
-                        idx.index_document(key_str, &fields);
-                        if has_vectors {
-                            for (k, v) in hash.iter() {
-                                let fname = String::from_utf8_lossy(&k);
-                                idx.index_vector(&fname, key_str, &v);
-                            }
-                        }
+                        idx.index_hash(key_str, &hash.to_vec());
                     }
                 }
             }

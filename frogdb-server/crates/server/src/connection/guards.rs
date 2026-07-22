@@ -24,8 +24,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    AclManager, CommandFlags, CommandRegistry, ConnectionLevelOp, ExecutionStrategy,
-    RateLimitExceeded, ScatterOp, ShardMessage, ShardSender, shard_for_key, slot_for_key,
+    AclManager, CommandFlags, CommandRegistry, ConnectionLevelOp, CoreMsg, ExecutionStrategy,
+    RateLimitExceeded, ScatterOp, ShardSender, shard_for_key, slot_for_key,
 };
 use frogdb_protocol::{ParsedCommand, Response};
 use std::net::SocketAddr;
@@ -666,7 +666,7 @@ impl PreDispatchView<'_> {
         let keys_bytes: Vec<Bytes> = keys.iter().map(|k| Bytes::copy_from_slice(k)).collect();
 
         let (response_tx, response_rx) = oneshot::channel();
-        let msg = ShardMessage::ScatterRequest {
+        let msg = CoreMsg::ScatterRequest {
             request_id: next_txid(),
             keys: keys_bytes,
             operation: ScatterOp::Exists,

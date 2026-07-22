@@ -1,7 +1,7 @@
 //! INFO command handler.
 //!
 //! Gathers every INFO source exactly once — a single combined
-//! [`frogdb_core::ShardMessage::InfoSnapshot`] fleet scatter plus
+//! [`frogdb_core::ObservabilityMsg::InfoSnapshot`] fleet scatter plus
 //! connection-level snapshots (client registry, metrics recorder, replication
 //! state, ACL rate limits, persistence coordinator) — and asks the
 //! [`crate::info::InfoBuilder`] to render the requested sections. Every

@@ -71,7 +71,11 @@ pub use counters::{HotShardStatsResponse, OperationBucket, OperationCounters};
 #[cfg(any(test, feature = "fake-wal"))]
 pub use fake_wal_registry::FakeWalRegistry;
 pub use helpers::REPLICA_INTERNAL_CONN_ID;
-pub use message::{Envelope, ScatterOp, ShardMessage, ShardReceiver, ShardSender, WatchEntry};
+pub use message::{
+    BlockingMsg, ClusterMsg, CoreMsg, DebugIntrospectionMsg, Envelope, ObservabilityMsg, PubSubMsg,
+    ScatterOp, ScriptingMsg, SearchMsg, ShardMessage, ShardReceiver, ShardSender, TrackingMsg,
+    VllMsg, WatchEntry,
+};
 pub use partition::{REDIS_CLUSTER_SLOTS, extract_hash_tag, shard_for_key, slot_for_key};
 pub use search::lifecycle::{
     IndexLifecycleManager, LifecycleError, RecoveryOutcome, RecoveryResult,

@@ -1,9 +1,9 @@
 //! RocksDB-backed snapshot coordinator using the Checkpoint API.
 use super::handle::SnapshotHandle;
-use super::metadata::{SnapshotConfig, SnapshotMetadata, SnapshotMetadataFile};
+use super::metadata::{SnapshotConfig, SnapshotMetadataFile};
 use super::scheduler::SnapshotScheduler;
 use super::stager::SnapshotStager;
-use super::{SnapshotCoordinator, SnapshotError, SnapshotRequest};
+use super::{SnapshotCoordinator, SnapshotError, SnapshotMode, SnapshotRequest};
 use crate::rocks::RocksStore;
 use frogdb_types::metrics::definitions::{
     PersistenceErrors, SnapshotDuration, SnapshotEpoch, SnapshotInProgress, SnapshotLastTimestamp,
@@ -125,26 +125,13 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
     fn in_progress(&self) -> bool {
         self.scheduler.in_progress()
     }
-    fn last_snapshot_metadata(&self) -> Option<SnapshotMetadata> {
-        self.last_metadata
-            .read()
-            .unwrap()
-            .as_ref()
-            .map(|m| m.to_metadata())
-    }
-    fn schedule_snapshot(&self) -> bool {
-        self.scheduler.schedule()
-    }
-    fn is_scheduled(&self) -> bool {
-        self.scheduler.is_scheduled()
-    }
-    fn request_snapshot(&self) -> SnapshotRequest {
-        match self.scheduler.request() {
+    fn request_snapshot(&self, mode: SnapshotMode) -> SnapshotRequest {
+        match self.scheduler.request_mode(mode) {
             SnapshotRequest::Started(epoch) => {
                 self.spawn_run(epoch);
                 SnapshotRequest::Started(epoch)
             }
-            SnapshotRequest::Coalesced => SnapshotRequest::Coalesced,
+            other => other,
         }
     }
 }

@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::types::{
-    CLUSTER_SLOTS, ClusterCommand, ClusterError, ClusterResponse, ClusterSnapshot, ConfigEpoch,
-    NodeId, NodeInfo, NodeRole, SlotMigration, SlotRange, TypeConfig,
+    CLUSTER_SLOTS, ClusterCommand, ClusterError, ClusterEvent, ClusterResponse, ClusterSnapshot,
+    ConfigEpoch, NodeId, NodeInfo, SlotMigration, SlotRange, TypeConfig,
 };
 
 /// The cluster state, protected by a read-write lock for concurrent access.
@@ -145,7 +145,9 @@ impl ClusterState {
     /// that Raft-applied commands do. Followers receive these mutations via Raft
     /// log replication; only the local bootstrap node uses this seam directly.
     pub fn apply_local(&self, cmd: ClusterCommand) -> Result<ClusterResponse, ClusterError> {
-        self.apply_command(cmd)
+        // Bootstrap runs before any event consumer is wired, so the derived
+        // events are dropped here (this is correct, not a lost event).
+        self.apply_command(cmd).map(|(response, _events)| response)
     }
 
     /// Check if all slots are assigned.
@@ -296,92 +298,53 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
                     results.push(ClusterResponse::Ok);
                 }
                 EntryPayload::Normal(cmd) => {
-                    // A SetRole self-demotion emits a DemotionEvent. Capture the
-                    // event data before apply consumes cmd; emit only if apply
-                    // succeeds (a rejected mutation must not fire a demotion).
-                    let set_role_demotion = if let Some(self_id) = self.self_node_id
-                        && let ClusterCommand::SetRole {
-                            node_id,
-                            role: NodeRole::Replica,
-                            primary_id,
-                        } = &cmd
-                        && *node_id == self_id
-                    {
-                        Some((self_id, *primary_id))
-                    } else {
-                        None
-                    };
-
-                    // A graceful Failover demotes the old primary as part of the
-                    // composite transition. Capture the event data before apply
-                    // consumes cmd; emit only if apply succeeds.
-                    let failover_demotion = if let Some(self_id) = self.self_node_id
-                        && let ClusterCommand::Failover {
-                            old_primary_id,
-                            new_primary_id,
-                            force: false,
-                        } = &cmd
-                        && *old_primary_id == self_id
-                    {
-                        Some((self_id, *new_primary_id))
-                    } else {
-                        None
-                    };
-
-                    // Extract migration event data before apply consumes cmd
-                    let migration_event = if let ClusterCommand::CompleteSlotMigration {
-                        slot,
-                        source_node,
-                        target_node,
-                    } = &cmd
-                    {
-                        Some(SlotMigrationCompleteEvent {
-                            slot: *slot,
-                            source_node: *source_node,
-                            target_node: *target_node,
-                        })
-                    } else {
-                        None
-                    };
-
-                    let result = self.state.apply_command(cmd).unwrap_or_else(|e| {
+                    // apply_command owns the variant→event mapping and returns
+                    // events only on its Ok path (emit-on-failure is impossible).
+                    // apply's job is to route those node-agnostic events: apply
+                    // the node-local self-filter it owns (self_node_id lives on
+                    // the state machine, not on ClusterState) and forward to the
+                    // right channel.
+                    let (response, events) = self.state.apply_command(cmd).unwrap_or_else(|e| {
                         tracing::warn!(error = %e, "Failed to apply cluster command");
-                        ClusterResponse::Error(e.to_string())
+                        (ClusterResponse::Error(e.to_string()), Vec::new())
                     });
 
-                    // Emit demotion event for a successful self-demotion via SetRole
-                    if let Some((demoted_id, new_primary_id)) = set_role_demotion
-                        && !matches!(result, ClusterResponse::Error(_))
-                        && let Some(ref tx) = self.demotion_tx
-                    {
-                        let _ = tx.send(DemotionEvent {
-                            demoted_node_id: demoted_id,
-                            new_primary_id,
-                            epoch: self.state.config_epoch(),
-                        });
+                    for event in events {
+                        match event {
+                            // Demotion is only relevant when *this* node is demoted.
+                            ClusterEvent::NodeDemoted {
+                                demoted_node_id,
+                                new_primary_id,
+                                epoch,
+                            } if Some(demoted_node_id) == self.self_node_id => {
+                                if let Some(ref tx) = self.demotion_tx {
+                                    let _ = tx.send(DemotionEvent {
+                                        demoted_node_id,
+                                        new_primary_id,
+                                        epoch,
+                                    });
+                                }
+                            }
+                            // Migration-complete fires on ALL nodes (no self-filter).
+                            ClusterEvent::SlotMigrationCompleted {
+                                slot,
+                                source_node,
+                                target_node,
+                            } => {
+                                if let Some(ref tx) = self.migration_complete_tx {
+                                    let _ = tx.send(SlotMigrationCompleteEvent {
+                                        slot,
+                                        source_node,
+                                        target_node,
+                                    });
+                                }
+                            }
+                            // A demotion of another node: nothing to route here.
+                            ClusterEvent::NodeDemoted { .. } => {}
+                        }
                     }
 
-                    // Emit demotion event for a successful graceful failover of self
-                    if let Some((demoted_id, new_primary_id)) = failover_demotion
-                        && !matches!(result, ClusterResponse::Error(_))
-                        && let Some(ref tx) = self.demotion_tx
-                    {
-                        let _ = tx.send(DemotionEvent {
-                            demoted_node_id: demoted_id,
-                            new_primary_id: Some(new_primary_id),
-                            epoch: self.state.config_epoch(),
-                        });
-                    }
-
-                    // Emit migration complete event on success
-                    if let Some(event) = migration_event
-                        && !matches!(result, ClusterResponse::Error(_))
-                        && let Some(ref tx) = self.migration_complete_tx
-                    {
-                        let _ = tx.send(event);
-                    }
-
-                    results.push(result);
+                    results.push(response);
                 }
                 EntryPayload::Membership(membership) => {
                     let mut inner = self.state.inner.write();
@@ -508,7 +471,7 @@ impl openraft::storage::RaftSnapshotBuilder<TypeConfig> for ClusterStateMachine 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ClusterError;
+    use crate::types::{ClusterError, NodeRole};
     use std::net::SocketAddr;
 
     fn test_addr(port: u16) -> SocketAddr {
@@ -521,7 +484,7 @@ mod tests {
         let node = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
 
         let result = state.apply_command(ClusterCommand::AddNode { node: node.clone() });
-        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+        assert!(matches!(result, Ok((ClusterResponse::Ok, _))));
 
         let retrieved = state.get_node(1).unwrap();
         assert_eq!(retrieved.addr, test_addr(6379));
@@ -581,7 +544,7 @@ mod tests {
         let result = state.apply_command(ClusterCommand::AddNode {
             node: NodeInfo::new_primary(1, test_addr(6380), test_addr(16380)),
         });
-        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+        assert!(matches!(result, Ok((ClusterResponse::Ok, _))));
 
         // Verify the node was updated with the new addresses
         let info = state.get_node(1).unwrap();
@@ -601,7 +564,7 @@ mod tests {
             node_id: 1,
             slots: vec![SlotRange::new(0, 100)],
         });
-        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+        assert!(matches!(result, Ok((ClusterResponse::Ok, _))));
 
         assert_eq!(state.get_slot_owner(50), Some(1));
         assert_eq!(state.get_slot_owner(101), None);
@@ -894,7 +857,7 @@ mod tests {
         let result = state.apply_command(ClusterCommand::FinalizeUpgrade {
             version: "0.2.0".to_string(),
         });
-        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+        assert!(matches!(result, Ok((ClusterResponse::Ok, _))));
         assert_eq!(state.active_version(), Some("0.2.0".to_string()));
     }
 
@@ -954,7 +917,7 @@ mod tests {
         let result = state.apply_command(ClusterCommand::FinalizeUpgrade {
             version: "0.2.0".to_string(),
         });
-        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+        assert!(matches!(result, Ok((ClusterResponse::Ok, _))));
         assert_eq!(state.active_version(), Some("0.2.0".to_string()));
     }
 
@@ -993,7 +956,7 @@ mod tests {
         let result = state.apply_command(ClusterCommand::FinalizeUpgrade {
             version: "0.2.0".to_string(),
         });
-        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+        assert!(matches!(result, Ok((ClusterResponse::Ok, _))));
     }
 
     #[test]
@@ -1009,7 +972,7 @@ mod tests {
         node2.version = "0.2.0".to_string();
         // Should succeed even with version mismatch (warning only)
         let result = state.apply_command(ClusterCommand::AddNode { node: node2 });
-        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+        assert!(matches!(result, Ok((ClusterResponse::Ok, _))));
     }
 
     // ========================================================================
@@ -1034,7 +997,7 @@ mod tests {
             node_id: 1,
             slots: vec![SlotRange::new(0, 100)],
         });
-        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+        assert!(matches!(result, Ok((ClusterResponse::Ok, _))));
         assert_eq!(state.get_slot_owner(50), None);
     }
 
@@ -1062,7 +1025,7 @@ mod tests {
             .unwrap();
 
         let result = state.apply_command(ClusterCommand::MarkNodeFailed { node_id: 1 });
-        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+        assert!(matches!(result, Ok((ClusterResponse::Ok, _))));
 
         let info = state.get_node(1).unwrap();
         assert!(info.flags.fail);
@@ -1088,7 +1051,7 @@ mod tests {
             .unwrap();
 
         let result = state.apply_command(ClusterCommand::MarkNodeRecovered { node_id: 1 });
-        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+        assert!(matches!(result, Ok((ClusterResponse::Ok, _))));
 
         let info = state.get_node(1).unwrap();
         assert!(!info.flags.fail);
@@ -1129,7 +1092,7 @@ mod tests {
             .unwrap();
 
         let result = state.apply_command(ClusterCommand::CancelSlotMigration { slot: 42 });
-        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+        assert!(matches!(result, Ok((ClusterResponse::Ok, _))));
         assert!(!state.is_slot_migrating(42));
     }
 
@@ -1139,7 +1102,7 @@ mod tests {
 
         // CancelSlotMigration is infallible — cancelling a non-migrating slot succeeds
         let result = state.apply_command(ClusterCommand::CancelSlotMigration { slot: 42 });
-        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+        assert!(matches!(result, Ok((ClusterResponse::Ok, _))));
     }
 
     #[test]
@@ -1171,7 +1134,7 @@ mod tests {
             node_id: 1,
             new_node_id: None,
         });
-        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+        assert!(matches!(result, Ok((ClusterResponse::Ok, _))));
 
         // Only node 1 remains
         assert!(state.get_node(1).is_some());
@@ -1215,7 +1178,7 @@ mod tests {
             node_id: 1,
             new_node_id: Some(99),
         });
-        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+        assert!(matches!(result, Ok((ClusterResponse::Ok, _))));
 
         // Old node 1 is gone, new node 99 exists with same address
         assert!(state.get_node(1).is_none());
@@ -1245,7 +1208,7 @@ mod tests {
             node_id: 999,
             new_node_id: None,
         });
-        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+        assert!(matches!(result, Ok((ClusterResponse::Ok, _))));
 
         // All nodes, slots, and migrations cleared
         assert!(state.get_node(1).is_none());
@@ -1323,7 +1286,7 @@ mod tests {
             node_id: 1,
             slots: vec![SlotRange::single(50)],
         });
-        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+        assert!(matches!(result, Ok((ClusterResponse::Ok, _))));
     }
 
     #[test]
@@ -1471,7 +1434,7 @@ mod tests {
             source_node: 1,
             target_node: 2,
         });
-        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+        assert!(matches!(result, Ok((ClusterResponse::Ok, _))));
     }
 
     #[test]
@@ -1555,7 +1518,7 @@ mod tests {
             new_primary_id: 2,
             force: true,
         });
-        assert!(matches!(result, Ok(ClusterResponse::Value(_))));
+        assert!(matches!(result, Ok((ClusterResponse::Value(_), _))));
 
         // Old primary removed
         assert!(state.get_node(1).is_none());
@@ -1665,7 +1628,7 @@ mod tests {
                 new_primary_id: 2,
                 force: true,
             });
-            assert!(matches!(result, Ok(ClusterResponse::Value(_))));
+            assert!(matches!(result, Ok((ClusterResponse::Value(_), _))));
         }
 
         assert!(state.get_node(1).is_none());
@@ -1958,5 +1921,189 @@ mod tests {
             target_node: 3,
         });
         assert!(matches!(result, Err(ClusterError::InvalidOperation(_))));
+    }
+
+    // ========================================================================
+    // apply_command event-derivation tests (synchronous, no Raft Entry types)
+    //
+    // These pin the variant→event mapping directly on apply_command — the
+    // module that owns it — without constructing openraft Entry/LogId or an
+    // async state machine. The node-agnostic self-filter is exercised by the
+    // Entry-based apply tests above.
+    // ========================================================================
+
+    /// Build two primaries (1, 2) so SetRole/Failover have valid topology.
+    fn two_primaries() -> ClusterState {
+        let state = ClusterState::new();
+        for id in [1u64, 2] {
+            let node = NodeInfo::new_primary(
+                id,
+                test_addr(6378 + id as u16),
+                test_addr(16378 + id as u16),
+            );
+            state
+                .apply_command(ClusterCommand::AddNode { node })
+                .unwrap();
+        }
+        state
+    }
+
+    #[test]
+    fn set_role_replica_emits_node_demoted() {
+        let state = two_primaries();
+        let (resp, events) = state
+            .apply_command(ClusterCommand::SetRole {
+                node_id: 2,
+                role: NodeRole::Replica,
+                primary_id: Some(1),
+            })
+            .unwrap();
+        assert!(matches!(resp, ClusterResponse::Ok));
+        assert_eq!(
+            events,
+            vec![ClusterEvent::NodeDemoted {
+                demoted_node_id: 2,
+                new_primary_id: Some(1),
+                epoch: state.config_epoch(),
+            }]
+        );
+    }
+
+    #[test]
+    fn set_role_primary_emits_no_event() {
+        // Promoting to (or reasserting) Primary is not a demotion.
+        let state = two_primaries();
+        let (_, events) = state
+            .apply_command(ClusterCommand::SetRole {
+                node_id: 2,
+                role: NodeRole::Primary,
+                primary_id: None,
+            })
+            .unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn set_role_self_demotion_emits_no_event_on_error() {
+        // The previously-missing coverage: a rejected SetRole self-demotion
+        // (target node absent) returns Err and therefore carries no events at
+        // all — emit-on-failure is structurally impossible.
+        let state = ClusterState::new();
+        let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        state
+            .apply_command(ClusterCommand::AddNode { node: node1 })
+            .unwrap();
+
+        // Node 2 was never added, so this is rejected with NodeNotFound.
+        let result = state.apply_command(ClusterCommand::SetRole {
+            node_id: 2,
+            role: NodeRole::Replica,
+            primary_id: Some(1),
+        });
+        assert!(matches!(result, Err(ClusterError::NodeNotFound(2))));
+    }
+
+    #[test]
+    fn graceful_failover_emits_node_demoted_for_old_primary() {
+        let state = failover_fixture();
+        let (resp, events) = state
+            .apply_command(ClusterCommand::Failover {
+                old_primary_id: 1,
+                new_primary_id: 2,
+                force: false,
+            })
+            .unwrap();
+        assert!(matches!(resp, ClusterResponse::Value(_)));
+        assert_eq!(
+            events,
+            vec![ClusterEvent::NodeDemoted {
+                demoted_node_id: 1,
+                new_primary_id: Some(2),
+                epoch: state.config_epoch(),
+            }]
+        );
+    }
+
+    #[test]
+    fn force_failover_emits_no_event() {
+        // Force failover removes the old primary; that is not a demotion.
+        let state = failover_fixture();
+        let (_, events) = state
+            .apply_command(ClusterCommand::Failover {
+                old_primary_id: 1,
+                new_primary_id: 2,
+                force: true,
+            })
+            .unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn complete_migration_emits_event_on_success() {
+        let state = ClusterState::new();
+        for id in [1u64, 2] {
+            let node = NodeInfo::new_primary(
+                id,
+                test_addr(6378 + id as u16),
+                test_addr(16378 + id as u16),
+            );
+            state
+                .apply_command(ClusterCommand::AddNode { node })
+                .unwrap();
+        }
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::single(42)],
+            })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::BeginSlotMigration {
+                slot: 42,
+                source_node: 1,
+                target_node: 2,
+            })
+            .unwrap();
+
+        let (resp, events) = state
+            .apply_command(ClusterCommand::CompleteSlotMigration {
+                slot: 42,
+                source_node: 1,
+                target_node: 2,
+            })
+            .unwrap();
+        assert!(matches!(resp, ClusterResponse::Ok));
+        assert_eq!(
+            events,
+            vec![ClusterEvent::SlotMigrationCompleted {
+                slot: 42,
+                source_node: 1,
+                target_node: 2,
+            }]
+        );
+    }
+
+    #[test]
+    fn complete_migration_emits_no_event_on_error() {
+        // No migration in progress -> Err -> no events.
+        let state = two_primaries();
+        let result = state.apply_command(ClusterCommand::CompleteSlotMigration {
+            slot: 42,
+            source_node: 1,
+            target_node: 2,
+        });
+        assert!(matches!(result, Err(ClusterError::InvalidOperation(_))));
+    }
+
+    #[test]
+    fn non_event_command_returns_no_events() {
+        // A plain successful mutation with no associated event.
+        let state = ClusterState::new();
+        let node = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        let (resp, events) = state
+            .apply_command(ClusterCommand::AddNode { node })
+            .unwrap();
+        assert!(matches!(resp, ClusterResponse::Ok));
+        assert!(events.is_empty());
     }
 }

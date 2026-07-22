@@ -5,7 +5,7 @@
 //! coordinator drives disk work and metrics *around* this type; the correctness-
 //! critical sequencing (the double-CAS reschedule handshake) lives here and is
 //! exhaustively unit-testable in isolation.
-use super::SnapshotRequest;
+use super::{SnapshotMode, SnapshotRequest};
 use std::sync::atomic::Ordering::SeqCst;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 
@@ -106,6 +106,24 @@ impl SnapshotScheduler {
         }
         // Observed a save running: arm a follow-up and close the wakeup window.
         self.arm_follow_up()
+    }
+
+    /// Mode-aware coalesce decision — the single seam behind both `BGSAVE` and
+    /// `BGSAVE SCHEDULE`. Claims the slot if idle (`Started`); otherwise the
+    /// behaviour splits on `mode`: `Schedule` arms a coalesced follow-up
+    /// (`Coalesced`, or `Started` on a finish race — see [`arm_follow_up`]), while
+    /// `Immediate` reports `AlreadyRunning` WITHOUT queuing, preserving plain
+    /// BGSAVE's no-queue semantics.
+    ///
+    /// [`arm_follow_up`]: SnapshotScheduler::arm_follow_up
+    pub fn request_mode(&self, mode: SnapshotMode) -> SnapshotRequest {
+        match self.try_begin() {
+            Some(epoch) => SnapshotRequest::Started(epoch),
+            None => match mode {
+                SnapshotMode::Schedule => self.arm_follow_up(),
+                SnapshotMode::Immediate => SnapshotRequest::AlreadyRunning,
+            },
+        }
     }
 
     /// Arm a coalesced follow-up after the caller observed `in_progress == true`,

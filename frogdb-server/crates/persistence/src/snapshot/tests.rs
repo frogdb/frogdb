@@ -27,18 +27,6 @@ fn test_noop_rejects_concurrent() {
     ));
 }
 #[test]
-fn test_handle_complete_releases_flag() {
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
-    // A `completing` handle clears its in-progress flag on explicit complete().
-    let in_progress = Arc::new(AtomicBool::new(true));
-    let h = SnapshotHandle::completing(1, in_progress.clone());
-    assert_eq!(h.epoch(), 1);
-    assert!(in_progress.load(Ordering::SeqCst));
-    h.complete();
-    assert!(!in_progress.load(Ordering::SeqCst));
-}
-#[test]
 fn test_handle_drop_releases_flag() {
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -57,37 +45,8 @@ fn test_handle_production_drop_is_noop() {
     // Production handles (`new`) carry no completion flag; Drop is a no-op and
     // costs a single `Option` check — no inert closure on the hot path.
     let h = SnapshotHandle::new(3);
-    assert!(!h.is_noop());
     assert_eq!(h.epoch(), 3);
     drop(h);
-}
-#[test]
-fn test_handle_noop() {
-    let h = SnapshotHandle::noop();
-    assert!(h.is_noop());
-    assert_eq!(h.epoch(), 0);
-    drop(h);
-}
-#[test]
-fn test_noop_metadata() {
-    let c = NoopSnapshotCoordinator::new();
-    assert!(c.last_snapshot_metadata().is_none());
-    drop(c.start_snapshot().unwrap());
-    let m = c.last_snapshot_metadata().unwrap();
-    assert_eq!(m.epoch, 1);
-    assert!(m.completed_at.is_some());
-}
-#[test]
-fn test_schedule_false() {
-    let c = NoopSnapshotCoordinator::new();
-    assert!(!c.schedule_snapshot());
-}
-#[test]
-fn test_schedule_true() {
-    let c = NoopSnapshotCoordinator::new();
-    let _h = c.start_snapshot().unwrap();
-    assert!(c.schedule_snapshot());
-    assert!(c.is_scheduled());
 }
 #[test]
 fn test_metadata_file_new() {
@@ -516,6 +475,42 @@ fn test_scheduler_request_while_running_coalesces() {
     assert_eq!(s.current_epoch(), 1);
 }
 
+/// Pin the deliberate plain-BGSAVE vs BGSAVE-SCHEDULE distinction through the one
+/// `request_mode` seam: `Immediate` while a save runs reports `AlreadyRunning`
+/// WITHOUT arming a follow-up (the no-queue regression guard), whereas `Schedule`
+/// reports `Coalesced` and DOES arm one. A naive unification that routed plain
+/// BGSAVE through the coalescing path would silently queue an extra snapshot —
+/// this test is the synchronous guard against exactly that.
+#[test]
+fn test_scheduler_request_mode_immediate_no_queue_vs_schedule_arms() {
+    let s = SnapshotScheduler::with_epoch(0);
+    // Idle: either mode starts a fresh save.
+    assert_eq!(
+        s.request_mode(SnapshotMode::Immediate),
+        SnapshotRequest::Started(1)
+    );
+
+    // Immediate while running: already-running, and NOTHING is queued.
+    assert_eq!(
+        s.request_mode(SnapshotMode::Immediate),
+        SnapshotRequest::AlreadyRunning
+    );
+    assert!(
+        !s.is_scheduled(),
+        "Immediate must not arm a follow-up — plain BGSAVE never queues"
+    );
+
+    // Schedule while running: coalesced, and a follow-up IS armed.
+    assert_eq!(
+        s.request_mode(SnapshotMode::Schedule),
+        SnapshotRequest::Coalesced
+    );
+    assert!(
+        s.is_scheduled(),
+        "Schedule must arm the coalesced follow-up"
+    );
+}
+
 /// Finish with a pending reschedule re-runs exactly once (the double-CAS loop).
 #[test]
 fn test_scheduler_finish_with_pending_reschedule_reruns_once() {
@@ -597,6 +592,23 @@ fn test_scheduler_schedule_only_while_running() {
     let s = SnapshotScheduler::with_epoch(0);
     assert!(!s.schedule(), "schedule while idle must be refused");
     assert!(!s.is_scheduled());
+    assert_eq!(s.try_begin(), Some(1));
+    assert!(s.schedule());
+    assert!(s.is_scheduled());
+}
+
+/// Relocated from the (deleted) `NoopSnapshotCoordinator::schedule_snapshot`
+/// trait-surface tests: `schedule()` on an idle scheduler is refused.
+#[test]
+fn test_schedule_false() {
+    let s = SnapshotScheduler::with_epoch(0);
+    assert!(!s.schedule());
+}
+
+/// Relocated: `schedule()` while a save runs arms the coalesced follow-up.
+#[test]
+fn test_schedule_true() {
+    let s = SnapshotScheduler::with_epoch(0);
     assert_eq!(s.try_begin(), Some(1));
     assert!(s.schedule());
     assert!(s.is_scheduled());

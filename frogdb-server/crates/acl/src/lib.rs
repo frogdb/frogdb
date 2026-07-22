@@ -15,7 +15,7 @@
 //! # Architecture
 //!
 //! - [`AclManager`] - Central user store and authentication service
-//! - [`AclChecker`] - Trait for permission checking (allows noop or full ACL)
+//! - [`FullAclChecker`] - Renders a permission decision into the NOPERM reply
 //! - [`User`] / [`AuthenticatedUser`] - User definitions and session state
 //! - [`AclLog`] - Security event logging
 //!
@@ -50,7 +50,7 @@ pub mod user;
 
 // Re-exports
 pub use categories::CommandCategory;
-pub use checker::{AclChecker, AllowAllChecker, FullAclChecker, PermissionResult};
+pub use checker::{FullAclChecker, PermissionResult};
 pub use error::AclError;
 pub use log::{AclLog, AclLogEntry, AclLogEntryType, AclLogValue, DEFAULT_ACL_LOG_MAX_LEN};
 pub use manager::{AclConfig, AclManager};
@@ -63,4 +63,4 @@ pub use permissions::{
 pub use ratelimit::{
     RateLimitConfig, RateLimitExceeded, RateLimitRegistry, RateLimitState, RateLimitStats,
 };
-pub use user::{AuthenticatedUser, User, UserInfoValue, UserPermissions};
+pub use user::{AuthenticatedUser, User, UserInfoValue};

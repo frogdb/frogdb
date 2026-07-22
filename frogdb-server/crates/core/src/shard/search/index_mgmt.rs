@@ -127,7 +127,6 @@ impl ShardWorker {
         // this closure re-indexes the matching hash keys against the new schema.
         let result = self.search.alter(name, new_fields, |idx| {
             let prefixes = idx.definition().prefix.clone();
-            let has_vectors = idx.has_vector_fields();
             for key in store.all_keys() {
                 if !super::key_matches_prefix(&prefixes, &key) {
                     continue;
@@ -136,22 +135,7 @@ impl ShardWorker {
                 if let Some(value) = store.get(&key)
                     && let Some(hash) = value.as_hash()
                 {
-                    let fields: Vec<(String, String)> = hash
-                        .iter()
-                        .map(|(k, v)| {
-                            (
-                                String::from_utf8_lossy(&k).to_string(),
-                                String::from_utf8_lossy(&v).to_string(),
-                            )
-                        })
-                        .collect();
-                    idx.index_document(key_str, &fields);
-                    if has_vectors {
-                        for (k, v) in hash.iter() {
-                            let fname = String::from_utf8_lossy(&k);
-                            idx.index_vector(&fname, key_str, &v);
-                        }
-                    }
+                    idx.index_hash(key_str, &hash.to_vec());
                 }
             }
         });

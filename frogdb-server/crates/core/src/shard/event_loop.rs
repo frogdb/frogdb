@@ -232,82 +232,36 @@ impl ShardWorker {
     /// Dispatch a shard message to the appropriate handler.
     /// Returns `true` if the event loop should break (shutdown).
     pub(crate) async fn dispatch_message(&mut self, msg: ShardMessage) -> bool {
-        use ShardMessage::*;
         match msg {
-            Execute { .. } | ScatterRequest { .. } | GetVersion { .. } | ExecTransaction { .. } => {
-                self.dispatch_core(msg).await
-            }
-            Subscribe { .. }
-            | Unsubscribe { .. }
-            | PSubscribe { .. }
-            | PUnsubscribe { .. }
-            | Publish { .. }
-            | PublishKeyspace { .. }
-            | ShardedSubscribe { .. }
-            | ShardedUnsubscribe { .. }
-            | ShardedPublish { .. }
-            | PubSubIntrospection { .. }
-            | ConnectionClosed { .. } => {
-                self.dispatch_pubsub(msg);
+            ShardMessage::Core(m) => self.dispatch_core(m).await,
+            ShardMessage::PubSub(m) => {
+                self.dispatch_pubsub(m);
                 false
             }
-            TrackingRegister { .. }
-            | TrackingUnregister { .. }
-            | TrackingBroadcastRegister { .. } => {
-                self.dispatch_tracking(msg);
+            ShardMessage::Tracking(m) => {
+                self.dispatch_tracking(m);
                 false
             }
-            EvalScript { .. }
-            | EvalScriptSha { .. }
-            | ScriptLoad { .. }
-            | ScriptExists { .. }
-            | ScriptFlush { .. }
-            | ScriptKill { .. }
-            | ScriptSubCommand { .. }
-            | FunctionCall { .. } => self.dispatch_scripting(msg).await,
-            BlockWait { .. } | UnregisterWait { .. } => {
-                self.dispatch_blocking(msg);
+            ShardMessage::Scripting(m) => self.dispatch_scripting(m).await,
+            ShardMessage::Blocking(m) => {
+                self.dispatch_blocking(m);
                 false
             }
-            SlowlogGet { .. }
-            | SlowlogLen { .. }
-            | SlowlogReset { .. }
-            | SlowlogAdd { .. }
-            | MemoryUsage { .. }
-            | MemoryStats { .. }
-            | InfoSnapshot { .. }
-            | ScanBigKeys { .. }
-            | LatencyLatest { .. }
-            | LatencyHistory { .. }
-            | LatencyReset { .. }
-            | ResetStats { .. }
-            | HotShardStats { .. }
-            | UpdateConfig { .. }
-            | SetActiveExpire { .. }
-            | SetKeyMemoryHistograms { .. }
-            | KeysizesSnapshot { .. }
-            | AllocsizeInSlot { .. } => {
-                self.dispatch_observability(msg);
+            ShardMessage::Observability(m) => {
+                self.dispatch_observability(m);
                 false
             }
-            VllLockRequest { .. }
-            | VllExecute { .. }
-            | VllAbort { .. }
-            | VllContinuationLock { .. }
-            | GetVllQueueInfo { .. } => self.dispatch_vll(msg).await,
-            GetLockTableInfo { .. }
-            | GetWaitQueueInfo { .. }
-            | MemoryCheck { .. }
-            | ExpiryIndexCheck { .. } => {
-                self.dispatch_debug_introspection(msg);
+            ShardMessage::Vll(m) => self.dispatch_vll(m).await,
+            ShardMessage::DebugIntrospection(m) => {
+                self.dispatch_debug_introspection(m);
                 false
             }
-            SlotMigrated { .. } | RaftCommand { .. } => self.dispatch_cluster(msg).await,
-            FlushSearchIndexes { .. } | GetPubSubLimitsInfo { .. } => {
-                self.dispatch_search(msg);
+            ShardMessage::Cluster(m) => self.dispatch_cluster(m).await,
+            ShardMessage::Search(m) => {
+                self.dispatch_search(m);
                 false
             }
-            Shutdown => {
+            ShardMessage::Shutdown => {
                 tracing::info!(shard_id = self.shard_id(), "Shard worker shutting down");
                 if let Some(wal) = self.persistence.wal_writer()
                     && let Err(e) = wal.flush_async().await
@@ -324,8 +278,8 @@ impl ShardWorker {
     #[cfg(any(test, feature = "shard-driver"))]
     #[doc(hidden)]
     #[allow(dead_code)]
-    pub async fn drive(&mut self, msg: ShardMessage) -> bool {
-        self.dispatch_message(msg).await
+    pub async fn drive<M: Into<ShardMessage>>(&mut self, msg: M) -> bool {
+        self.dispatch_message(msg.into()).await
     }
 
     /// Shard-driver harness seam: run one active-expiry cycle synchronously,
@@ -560,7 +514,7 @@ mod seam_reachability_tests {
     use crate::registry::CommandRegistry;
     use crate::shard::builder::ShardWorkerBuilder;
     use crate::shard::connection::NewConnection;
-    use crate::shard::message::{Envelope, ShardMessage, ShardReceiver, ShardSender};
+    use crate::shard::message::{CoreMsg, Envelope, ShardReceiver, ShardSender};
     use crate::shard::worker::ShardWorker;
     use crate::types::Value;
 
@@ -662,7 +616,7 @@ mod seam_reachability_tests {
 
         // `dispatch_message` (now pub(crate)) round-trips a SET then a GET.
         let (tx, rx) = oneshot::channel();
-        let set = ShardMessage::Execute {
+        let set = CoreMsg::Execute {
             command: Arc::new(ParsedCommand::new(
                 Bytes::from_static(b"SET"),
                 vec![Bytes::from_static(b"k"), Bytes::from_static(b"v")],
@@ -675,13 +629,13 @@ mod seam_reachability_tests {
             response_tx: tx,
         };
         assert!(
-            !w.dispatch_message(set).await,
+            !w.dispatch_message(set.into()).await,
             "SET must not signal shutdown"
         );
         assert!(matches!(rx.await.unwrap(), Response::Simple(_)));
 
         let (tx, rx) = oneshot::channel();
-        let get = ShardMessage::Execute {
+        let get = CoreMsg::Execute {
             command: Arc::new(ParsedCommand::new(
                 Bytes::from_static(b"GET"),
                 vec![Bytes::from_static(b"k")],
@@ -693,7 +647,7 @@ mod seam_reachability_tests {
             no_touch: false,
             response_tx: tx,
         };
-        w.dispatch_message(get).await;
+        w.dispatch_message(get.into()).await;
         assert_eq!(
             rx.await.unwrap(),
             Response::Bulk(Some(Bytes::from_static(b"v")))

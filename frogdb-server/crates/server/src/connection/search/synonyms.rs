@@ -1,7 +1,7 @@
 //! FT.SYNUPDATE, FT.SYNDUMP handlers.
 
 use bytes::Bytes;
-use frogdb_core::{ScatterOp, ShardMessage};
+use frogdb_core::{CoreMsg, ScatterOp};
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
 
@@ -36,7 +36,7 @@ impl ConnectionHandler {
         self.scatter_gather()
             .run(
                 Box::new(OkOrFirstError::default()),
-                |_shard, response_tx| ShardMessage::ScatterRequest {
+                |_shard, response_tx| CoreMsg::ScatterRequest {
                     request_id: next_txid(),
                     keys: vec![],
                     operation: ScatterOp::FtSynupdate {
@@ -59,7 +59,7 @@ impl ConnectionHandler {
 
         let index_name = args[0].clone();
         let (response_tx, response_rx) = oneshot::channel();
-        let msg = ShardMessage::ScatterRequest {
+        let msg = CoreMsg::ScatterRequest {
             request_id: next_txid(),
             keys: vec![],
             operation: ScatterOp::FtSyndump { index_name },

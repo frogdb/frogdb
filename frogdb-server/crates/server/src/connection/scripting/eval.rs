@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use frogdb_core::{ShardMessage, shard_for_key};
+use frogdb_core::{ScriptingMsg, shard_for_key};
 use frogdb_protocol::Response;
 use frogdb_vll::{
     ContinuationError, DEFAULT_LOCK_ACQUISITION_TIMEOUT, NoopMetricsSink, VllCoordinator,
@@ -241,9 +241,9 @@ impl EvalKind {
         protocol_version: frogdb_protocol::ProtocolVersion,
         read_only: bool,
         response_tx: oneshot::Sender<Response>,
-    ) -> ShardMessage {
+    ) -> ScriptingMsg {
         match self {
-            EvalKind::Source(script_source) => ShardMessage::EvalScript {
+            EvalKind::Source(script_source) => ScriptingMsg::EvalScript {
                 script_source,
                 keys,
                 argv,
@@ -252,7 +252,7 @@ impl EvalKind {
                 read_only,
                 response_tx,
             },
-            EvalKind::Sha(script_sha) => ShardMessage::EvalScriptSha {
+            EvalKind::Sha(script_sha) => ScriptingMsg::EvalScriptSha {
                 script_sha,
                 keys,
                 argv,

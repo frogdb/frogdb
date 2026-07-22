@@ -1,15 +1,24 @@
 //! Command handlers for cluster state mutations.
 
-use crate::types::{ClusterCommand, ClusterError, ClusterResponse, NodeRole, SlotMigration};
+use crate::types::{
+    ClusterCommand, ClusterError, ClusterEvent, ClusterResponse, NodeRole, SlotMigration,
+};
 
 use super::state::ClusterState;
 
 impl ClusterState {
-    /// Apply a command to the state.
+    /// Apply a command to the state, returning the response and any
+    /// [`ClusterEvent`]s the mutation produced.
+    ///
+    /// Events are pushed only on the `Ok` path of the arm that performs the
+    /// corresponding mutation, so a rejected command (an `Err` return) carries
+    /// no events at all — emit-on-failure is structurally impossible. The
+    /// events are node-agnostic; the node-local self-filter and channel routing
+    /// live in [`crate::state::ClusterStateMachine`]'s `apply`.
     pub(crate) fn apply_command(
         &self,
         cmd: ClusterCommand,
-    ) -> Result<ClusterResponse, ClusterError> {
+    ) -> Result<(ClusterResponse, Vec<ClusterEvent>), ClusterError> {
         let mut inner = self.inner.write();
 
         match cmd {
@@ -43,7 +52,7 @@ impl ClusterState {
                 }
 
                 inner.nodes.insert(node.id, node);
-                Ok(ClusterResponse::Ok)
+                Ok((ClusterResponse::Ok, Vec::new()))
             }
 
             ClusterCommand::RemoveNode { node_id } => {
@@ -56,7 +65,7 @@ impl ClusterState {
                     .retain(|_, &mut owner| owner != node_id);
                 inner.nodes.remove(&node_id);
                 tracing::info!(node_id, "Removed node from cluster");
-                Ok(ClusterResponse::Ok)
+                Ok((ClusterResponse::Ok, Vec::new()))
             }
 
             ClusterCommand::AssignSlots { node_id, slots } => {
@@ -80,7 +89,7 @@ impl ClusterState {
                     }
                 }
                 tracing::debug!(node_id, "Assigned slots to node");
-                Ok(ClusterResponse::Ok)
+                Ok((ClusterResponse::Ok, Vec::new()))
             }
 
             ClusterCommand::RemoveSlots { node_id, slots } => {
@@ -99,7 +108,7 @@ impl ClusterState {
                     }
                 }
                 tracing::debug!(node_id, "Removed slots from node");
-                Ok(ClusterResponse::Ok)
+                Ok((ClusterResponse::Ok, Vec::new()))
             }
 
             ClusterCommand::SetRole {
@@ -130,13 +139,27 @@ impl ClusterState {
                 node.role = role;
                 node.primary_id = primary_id;
                 tracing::info!(node_id, ?role, "Set node role");
-                Ok(ClusterResponse::Ok)
+
+                // Setting a node to Replica is a demotion. This is node-agnostic;
+                // the state machine decides whether it applies to *this* node.
+                let mut events = Vec::new();
+                if role == NodeRole::Replica {
+                    events.push(ClusterEvent::NodeDemoted {
+                        demoted_node_id: node_id,
+                        new_primary_id: primary_id,
+                        epoch: inner.config_epoch,
+                    });
+                }
+                Ok((ClusterResponse::Ok, events))
             }
 
             ClusterCommand::IncrementEpoch => {
                 inner.config_epoch += 1;
                 tracing::debug!(epoch = inner.config_epoch, "Incremented config epoch");
-                Ok(ClusterResponse::Value(inner.config_epoch.to_string()))
+                Ok((
+                    ClusterResponse::Value(inner.config_epoch.to_string()),
+                    Vec::new(),
+                ))
             }
 
             ClusterCommand::Failover {
@@ -179,7 +202,10 @@ impl ClusterState {
                     new_node.primary_id = None;
                 }
 
-                // 3. Apply the old primary's fate.
+                // 3. Apply the old primary's fate. A graceful failover demotes
+                //    the old primary (a NodeDemoted event); a force failover
+                //    *removes* it, which is not a demotion.
+                let graceful_demotion = !force;
                 if force {
                     if old_exists {
                         inner.nodes.remove(&old_primary_id);
@@ -222,7 +248,16 @@ impl ClusterState {
                     epoch,
                     "Applied atomic failover"
                 );
-                Ok(ClusterResponse::Value(epoch.to_string()))
+
+                let mut events = Vec::new();
+                if graceful_demotion {
+                    events.push(ClusterEvent::NodeDemoted {
+                        demoted_node_id: old_primary_id,
+                        new_primary_id: Some(new_primary_id),
+                        epoch,
+                    });
+                }
+                Ok((ClusterResponse::Value(epoch.to_string()), events))
             }
 
             ClusterCommand::MarkNodeFailed { node_id } => {
@@ -237,7 +272,7 @@ impl ClusterState {
                 // could be lost on leader crash).
                 inner.config_epoch += 1;
                 tracing::warn!(node_id, epoch = inner.config_epoch, "Marked node as failed");
-                Ok(ClusterResponse::Ok)
+                Ok((ClusterResponse::Ok, Vec::new()))
             }
 
             ClusterCommand::MarkNodeRecovered { node_id } => {
@@ -248,7 +283,7 @@ impl ClusterState {
                 node.flags.fail = false;
                 node.flags.pfail = false;
                 tracing::info!(node_id, "Marked node as recovered");
-                Ok(ClusterResponse::Ok)
+                Ok((ClusterResponse::Ok, Vec::new()))
             }
 
             ClusterCommand::BeginSlotMigration {
@@ -259,7 +294,7 @@ impl ClusterState {
                 // Idempotent: if the exact same migration is already in progress, succeed.
                 if let Some(existing) = inner.migrations.get(&slot) {
                     if existing.source_node == source_node && existing.target_node == target_node {
-                        return Ok(ClusterResponse::Ok);
+                        return Ok((ClusterResponse::Ok, Vec::new()));
                     }
                     return Err(ClusterError::MigrationInProgress(slot));
                 }
@@ -291,7 +326,7 @@ impl ClusterState {
                     },
                 );
                 tracing::info!(slot, source_node, target_node, "Started slot migration");
-                Ok(ClusterResponse::Ok)
+                Ok((ClusterResponse::Ok, Vec::new()))
             }
 
             ClusterCommand::CompleteSlotMigration {
@@ -318,13 +353,20 @@ impl ClusterState {
                 inner.slot_assignment.insert(slot, target_node);
                 inner.migrations.remove(&slot);
                 tracing::info!(slot, source_node, target_node, "Completed slot migration");
-                Ok(ClusterResponse::Ok)
+                Ok((
+                    ClusterResponse::Ok,
+                    vec![ClusterEvent::SlotMigrationCompleted {
+                        slot,
+                        source_node,
+                        target_node,
+                    }],
+                ))
             }
 
             ClusterCommand::CancelSlotMigration { slot } => {
                 inner.migrations.remove(&slot);
                 tracing::info!(slot, "Cancelled slot migration");
-                Ok(ClusterResponse::Ok)
+                Ok((ClusterResponse::Ok, Vec::new()))
             }
 
             ClusterCommand::FinalizeUpgrade { version } => {
@@ -358,7 +400,7 @@ impl ClusterState {
 
                 tracing::info!(version = %version, "Finalizing upgrade — active version advanced");
                 inner.active_version = Some(version);
-                Ok(ClusterResponse::Ok)
+                Ok((ClusterResponse::Ok, Vec::new()))
             }
 
             ClusterCommand::ResetCluster {
@@ -400,7 +442,7 @@ impl ClusterState {
                     tracing::warn!(node_id, "Cluster reset: node not found in state");
                 }
 
-                Ok(ClusterResponse::Ok)
+                Ok((ClusterResponse::Ok, Vec::new()))
             }
         }
     }

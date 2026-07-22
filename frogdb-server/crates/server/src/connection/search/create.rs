@@ -1,7 +1,7 @@
 //! FT.CREATE handler.
 
 use bytes::Bytes;
-use frogdb_core::{ScatterOp, ShardMessage};
+use frogdb_core::{CoreMsg, ScatterOp};
 use frogdb_protocol::Response;
 
 use super::merge::OkOrFirstError;
@@ -38,7 +38,7 @@ impl ConnectionHandler {
         self.scatter_gather()
             .run(
                 Box::new(OkOrFirstError::default()),
-                |_shard, response_tx| ShardMessage::ScatterRequest {
+                |_shard, response_tx| CoreMsg::ScatterRequest {
                     request_id: next_txid(),
                     keys: vec![],
                     operation: ScatterOp::FtCreate {

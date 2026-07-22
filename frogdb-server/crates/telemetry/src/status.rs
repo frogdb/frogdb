@@ -910,7 +910,8 @@ mod tests {
 
     use crate::prometheus_recorder::PrometheusRecorder;
     use frogdb_core::{
-        ClientRegistry, Envelope, InfoShardSnapshot, ShardMemoryStats, ShardMessage, ShardSender,
+        ClientRegistry, Envelope, InfoShardSnapshot, ObservabilityMsg, ShardMemoryStats,
+        ShardMessage, ShardSender,
     };
 
     /// Build a collector over the given shard senders and recorder.
@@ -941,7 +942,9 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Envelope>(8);
         tokio::spawn(async move {
             while let Some(env) = rx.recv().await {
-                if let ShardMessage::InfoSnapshot { response_tx } = env.message {
+                if let ShardMessage::Observability(ObservabilityMsg::InfoSnapshot { response_tx }) =
+                    env.message
+                {
                     let _ = response_tx.send(InfoShardSnapshot {
                         shard_id: stats.shard_id,
                         memory: stats.clone(),

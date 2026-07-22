@@ -2,18 +2,18 @@
 //!
 //! Consumes [`SlotMigrationCompleteEvent`]s emitted by the Raft state machine
 //! when a `CompleteSlotMigration` command is applied, and fans them out to the
-//! per-shard [`ShardMessage::SlotMigrated`] notification used to wake blocked
+//! per-shard [`ClusterMsg::SlotMigrated`] notification used to wake blocked
 //! clients with the correct MOVED redirect.
 
 use frogdb_core::sync::Arc;
-use frogdb_core::{ClusterState, ShardMessage, ShardSender, SlotMigrationCompleteEvent};
+use frogdb_core::{ClusterMsg, ClusterState, ShardSender, SlotMigrationCompleteEvent};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::SlotMigrationCoordinator;
 
 impl SlotMigrationCoordinator {
     /// Run the event dispatcher loop. Each completion event is translated into
-    /// a [`ShardMessage::SlotMigrated`] sent to the shard owning the slot, so
+    /// a [`ClusterMsg::SlotMigrated`] sent to the shard owning the slot, so
     /// blocked clients on that shard get the MOVED redirect for the new owner.
     pub(super) async fn run_event_dispatcher(
         cluster_state: Arc<ClusterState>,
@@ -37,7 +37,7 @@ impl SlotMigrationCoordinator {
             let target_shard = event.slot as usize % num_shards;
             if let Some(sender) = shard_senders.get(target_shard) {
                 let _ = sender
-                    .send(ShardMessage::SlotMigrated {
+                    .send(ClusterMsg::SlotMigrated {
                         slot: event.slot,
                         target_addr,
                     })

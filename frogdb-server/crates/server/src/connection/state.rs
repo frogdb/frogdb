@@ -1586,7 +1586,8 @@ mod tests {
 
     #[test]
     fn authenticate_transitions_from_unauthenticated() {
-        use frogdb_core::UserPermissions;
+        use frogdb_core::PermissionSet;
+        use std::sync::Arc;
 
         // A connection that requires auth starts unauthenticated.
         let mut s = ConnectionState::new(1, "127.0.0.1:0".parse().unwrap(), true);
@@ -1594,7 +1595,7 @@ mod tests {
         assert!(s.authenticated_user().is_none());
         assert_eq!(s.username(), "(not authenticated)");
 
-        let user = AuthenticatedUser::new("alice", UserPermissions::allow_all(), None);
+        let user = AuthenticatedUser::new("alice", Arc::new(PermissionSet::allow_all()), None);
         s.authenticate(user);
 
         assert!(s.is_authenticated());

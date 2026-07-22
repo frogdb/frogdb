@@ -18,8 +18,8 @@ mod executor;
 mod strategies;
 
 pub use broadcast::{
-    AllOk, BoolOr, CountByKey, DedupSorted, MergeStrategy, PartialPolicy, ScatterGather,
-    ShardZeroReply, SortedByKey, SortedUnion, SumIntegers,
+    AllOk, BoolOr, CountByKey, DEFAULT_SCATTER_GATHER_TIMEOUT, DedupSorted, MergeStrategy,
+    PartialPolicy, ScatterGather, ShardZeroReply, SortedByKey, SortedUnion, SumIntegers,
 };
 pub use executor::ScatterGatherExecutor;
 pub use strategies::{

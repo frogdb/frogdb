@@ -9,7 +9,7 @@ use frogdb_core::persistence::{
 };
 use frogdb_core::sync::{Arc, AtomicU64};
 use frogdb_core::{
-    CommandRegistry, ExpiryIndex, HashMapStore, MetricsRecorder, ShardMessage, ShardReceiver,
+    CommandRegistry, ExpiryIndex, HashMapStore, MetricsRecorder, SearchMsg, ShardReceiver,
     ShardSender,
 };
 use frogdb_telemetry::{HealthChecker, PrometheusRecorder, TaskMonitorRegistry};
@@ -312,7 +312,7 @@ pub(super) async fn init_infrastructure(
                 for sender in senders.iter() {
                     let (tx, rx) = tokio::sync::oneshot::channel();
                     let _ = sender
-                        .send(ShardMessage::FlushSearchIndexes { response_tx: tx })
+                        .send(SearchMsg::FlushSearchIndexes { response_tx: tx })
                         .await;
                     receivers.push(rx);
                 }

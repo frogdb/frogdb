@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use super::permissions::{PermissionSet, SubcommandRule};
+use super::permissions::PermissionSet;
 use super::ratelimit::{RateLimitConfig, RateLimitState};
 
 /// A user in the ACL system.
@@ -111,19 +111,6 @@ impl User {
     /// Check if key access is allowed (standalone key check).
     pub fn check_key_access(&self, key: &[u8], access: super::permissions::KeyAccessType) -> bool {
         self.root_permissions.check_key_access(key, access)
-    }
-
-    /// Check if a command with keys is allowed.
-    /// Both the command AND the key must be allowed.
-    pub fn check_command_with_key(
-        &self,
-        command: &str,
-        subcommand: Option<&str>,
-        key: &[u8],
-        access: super::permissions::KeyAccessType,
-    ) -> bool {
-        self.root_permissions.check_command(command, subcommand)
-            && self.root_permissions.check_key_access(key, access)
     }
 
     /// Check if channel access is allowed.
@@ -277,166 +264,13 @@ pub enum UserInfoValue {
     StringArray(Vec<String>),
 }
 
-/// Permissions snapshot for an authenticated user.
-/// This is an immutable snapshot taken at authentication time.
-#[derive(Debug, Clone)]
-pub struct UserPermissions {
-    /// Whether all commands are allowed.
-    pub allow_all_commands: bool,
-    /// Allowed commands (lowercase).
-    pub allowed_commands: HashSet<String>,
-    /// Denied commands (lowercase).
-    pub denied_commands: HashSet<String>,
-    /// Allowed categories.
-    pub allowed_categories: HashSet<super::categories::CommandCategory>,
-    /// Denied categories.
-    pub denied_categories: HashSet<super::categories::CommandCategory>,
-    /// Key patterns.
-    pub key_patterns: Vec<super::permissions::KeyPattern>,
-    /// Whether all keys are allowed.
-    pub all_keys: bool,
-    /// Channel patterns.
-    pub channel_patterns: Vec<super::permissions::ChannelPattern>,
-    /// Whether all channels are allowed.
-    pub all_channels: bool,
-    /// Subcommand-specific rules (Redis 7.0+).
-    pub subcommand_rules: Vec<SubcommandRule>,
-}
-
-impl UserPermissions {
-    /// Create from a User.
-    pub fn from_user(user: &User) -> Self {
-        Self {
-            allow_all_commands: user.root_permissions.commands.allow_all,
-            allowed_commands: user.root_permissions.commands.allowed_commands.clone(),
-            denied_commands: user.root_permissions.commands.denied_commands.clone(),
-            allowed_categories: user.root_permissions.commands.allowed_categories.clone(),
-            denied_categories: user.root_permissions.commands.denied_categories.clone(),
-            key_patterns: user.root_permissions.key_patterns.clone(),
-            all_keys: user.root_permissions.all_keys,
-            channel_patterns: user.root_permissions.channel_patterns.clone(),
-            all_channels: user.root_permissions.all_channels,
-            subcommand_rules: user.root_permissions.commands.subcommand_rules.clone(),
-        }
-    }
-
-    /// Create permissions that allow everything.
-    pub fn allow_all() -> Self {
-        Self {
-            allow_all_commands: true,
-            allowed_commands: HashSet::new(),
-            denied_commands: HashSet::new(),
-            allowed_categories: HashSet::new(),
-            denied_categories: HashSet::new(),
-            key_patterns: vec![],
-            all_keys: true,
-            channel_patterns: vec![],
-            all_channels: true,
-            subcommand_rules: vec![],
-        }
-    }
-
-    /// Check if a command is allowed.
-    pub fn check_command(&self, command: &str, subcommand: Option<&str>) -> bool {
-        let cmd_lower = command.to_lowercase();
-
-        // Check subcommand-specific rules FIRST (most specific wins)
-        if let Some(sub) = subcommand {
-            let sub_lower = sub.to_lowercase();
-            for rule in &self.subcommand_rules {
-                if rule.command.to_lowercase() == cmd_lower
-                    && rule.subcommand.to_lowercase() == sub_lower
-                {
-                    return rule.allowed;
-                }
-            }
-        }
-
-        // Explicit deny takes precedence
-        if self.denied_commands.contains(&cmd_lower) {
-            return false;
-        }
-
-        // Check denied categories (check ALL categories a command belongs to)
-        let categories = super::categories::CommandCategory::all_for_command(&cmd_lower);
-        for category in &categories {
-            if self.denied_categories.contains(category)
-                && !self.allowed_commands.contains(&cmd_lower)
-            {
-                return false;
-            }
-        }
-
-        // Allow all
-        if self.allow_all_commands {
-            return true;
-        }
-
-        // Explicit allow
-        if self.allowed_commands.contains(&cmd_lower) {
-            return true;
-        }
-
-        // Check allowed categories (check ALL categories a command belongs to)
-        for category in &categories {
-            if self.allowed_categories.contains(category) {
-                return true;
-            }
-        }
-
-        false
-    }
-
-    /// Check if key access is allowed.
-    pub fn check_key_access(&self, key: &[u8], access: super::permissions::KeyAccessType) -> bool {
-        if self.all_keys {
-            return true;
-        }
-
-        for pattern in &self.key_patterns {
-            if pattern.matches(key, access) {
-                return true;
-            }
-        }
-
-        false
-    }
-
-    /// Check if channel access is allowed.
-    pub fn check_channel_access(&self, channel: &[u8]) -> bool {
-        if self.all_channels {
-            return true;
-        }
-
-        for pattern in &self.channel_patterns {
-            if pattern.matches(channel) {
-                return true;
-            }
-        }
-
-        false
-    }
-
-    /// Check if a command with keys is allowed.
-    /// Both the command AND the key must be allowed.
-    pub fn check_command_with_key(
-        &self,
-        command: &str,
-        subcommand: Option<&str>,
-        key: &[u8],
-        access: super::permissions::KeyAccessType,
-    ) -> bool {
-        self.check_command(command, subcommand) && self.check_key_access(key, access)
-    }
-}
-
 /// An authenticated user with a snapshot of their permissions.
 #[derive(Debug, Clone)]
 pub struct AuthenticatedUser {
     /// Username.
     pub username: Arc<str>,
     /// Snapshot of permissions at authentication time.
-    pub permissions: Arc<UserPermissions>,
+    pub permissions: Arc<PermissionSet>,
     /// Per-user rate limit state (shared across all connections for this user).
     /// `None` when no rate limit is configured.
     pub rate_limit: Option<Arc<RateLimitState>>,
@@ -446,12 +280,12 @@ impl AuthenticatedUser {
     /// Create a new authenticated user.
     pub fn new(
         username: impl Into<Arc<str>>,
-        permissions: UserPermissions,
+        permissions: Arc<PermissionSet>,
         rate_limit: Option<Arc<RateLimitState>>,
     ) -> Self {
         Self {
             username: username.into(),
-            permissions: Arc::new(permissions),
+            permissions,
             rate_limit,
         }
     }
@@ -460,7 +294,7 @@ impl AuthenticatedUser {
     pub fn default_user() -> Self {
         Self {
             username: Arc::from("default"),
-            permissions: Arc::new(UserPermissions::allow_all()),
+            permissions: Arc::new(PermissionSet::allow_all()),
             rate_limit: None,
         }
     }
@@ -473,19 +307,6 @@ impl AuthenticatedUser {
     /// Check if key access is allowed.
     pub fn check_key_access(&self, key: &[u8], access: super::permissions::KeyAccessType) -> bool {
         self.permissions.check_key_access(key, access)
-    }
-
-    /// Check if a command with keys is allowed.
-    /// Both the command AND the key must be allowed.
-    pub fn check_command_with_key(
-        &self,
-        command: &str,
-        subcommand: Option<&str>,
-        key: &[u8],
-        access: super::permissions::KeyAccessType,
-    ) -> bool {
-        self.permissions
-            .check_command_with_key(command, subcommand, key, access)
     }
 
     /// Check if channel access is allowed.
@@ -589,49 +410,6 @@ mod tests {
         assert!(user.check_command("GET", None));
         assert!(user.check_key_access(b"any:key", super::super::permissions::KeyAccessType::Read));
         assert!(user.check_channel_access(b"any:channel"));
-    }
-
-    #[test]
-    fn test_user_permissions() {
-        let mut user = User::new("test");
-        user.root_permissions.commands.allow_command("get");
-        user.root_permissions
-            .add_key_pattern(super::super::permissions::KeyPattern::new(
-                "user:*".to_string(),
-            ));
-
-        let perms = UserPermissions::from_user(&user);
-        assert!(perms.check_command("GET", None));
-        assert!(!perms.check_command("SET", None));
-        assert!(
-            perms.check_key_access(b"user:123", super::super::permissions::KeyAccessType::Read)
-        );
-        assert!(
-            !perms.check_key_access(b"data:123", super::super::permissions::KeyAccessType::Read)
-        );
-    }
-
-    #[test]
-    fn test_user_permissions_with_subcommand_rules() {
-        use super::super::permissions::SubcommandRule;
-
-        let mut user = User::new("test");
-        user.root_permissions.commands.allow_all = true;
-
-        // Deny CONFIG|SET specifically
-        user.root_permissions
-            .commands
-            .add_subcommand_rule(SubcommandRule {
-                command: "config".to_string(),
-                subcommand: "set".to_string(),
-                allowed: false,
-            });
-
-        let perms = UserPermissions::from_user(&user);
-        // CONFIG GET should be allowed
-        assert!(perms.check_command("CONFIG", Some("GET")));
-        // CONFIG SET should be denied
-        assert!(!perms.check_command("CONFIG", Some("SET")));
     }
 
     #[test]

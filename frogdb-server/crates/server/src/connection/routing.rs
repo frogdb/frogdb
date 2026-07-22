@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::config::ChaosConfigExt;
 
 use bytes::Bytes;
-use frogdb_core::{ExecutionStrategy, ScatterGatherOp, ScatterOp, ShardMessage, shard_for_key};
+use frogdb_core::{CoreMsg, ExecutionStrategy, ScatterGatherOp, ScatterOp, shard_for_key};
 use frogdb_protocol::{ParsedCommand, Response};
 use tokio::sync::oneshot;
 use tracing::Instrument;
@@ -229,7 +229,7 @@ impl ConnectionHandler {
 
         // Phase 1: Read from source shard using ScatterOp::Copy
         let (tx1, rx1) = oneshot::channel();
-        let copy_request = ShardMessage::ScatterRequest {
+        let copy_request = CoreMsg::ScatterRequest {
             request_id: next_txid(),
             keys: vec![source.clone()],
             operation: ScatterOp::Copy {
@@ -281,7 +281,7 @@ impl ConnectionHandler {
 
         // Phase 2: Write to destination shard using ScatterOp::CopySet
         let (tx2, rx2) = oneshot::channel();
-        let copy_set_request = ShardMessage::ScatterRequest {
+        let copy_set_request = CoreMsg::ScatterRequest {
             request_id: next_txid(),
             keys: vec![dest.clone()],
             operation: ScatterOp::CopySet {
@@ -338,7 +338,7 @@ impl ConnectionHandler {
     async fn execute_on_shard_inner(&self, shard_id: usize, cmd: Arc<ParsedCommand>) -> Response {
         let (response_tx, response_rx) = oneshot::channel();
 
-        let msg = ShardMessage::Execute {
+        let msg = CoreMsg::Execute {
             command: cmd,
             conn_id: self.state.id,
             txid: None, // Single-shard operations don't need txid

@@ -1,6 +1,6 @@
 //! FT.SEARCH handler.
 
-use frogdb_core::{ScatterOp, ShardMessage};
+use frogdb_core::{CoreMsg, ScatterOp};
 use frogdb_protocol::Response;
 use frogdb_search::FtSearchRequest;
 
@@ -32,7 +32,7 @@ impl ConnectionHandler {
         let merge = Box::new(FtSearchMerge::from_request(&request));
         let request = Box::new(request);
         self.scatter_gather_with_timeout(effective_timeout)
-            .run(merge, |_shard, response_tx| ShardMessage::ScatterRequest {
+            .run(merge, |_shard, response_tx| CoreMsg::ScatterRequest {
                 request_id: next_txid(),
                 keys: vec![],
                 operation: ScatterOp::FtSearch {

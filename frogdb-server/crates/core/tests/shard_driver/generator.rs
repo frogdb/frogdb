@@ -114,7 +114,7 @@ pub async fn advance(driver: &mut ShardDriver, senders: &mut [Sender], idx: usiz
             command,
         } => {
             let (tx, rx) = tokio::sync::oneshot::channel();
-            let msg = frogdb_core::shard::ShardMessage::Execute {
+            let msg = frogdb_core::shard::CoreMsg::Execute {
                 command: std::sync::Arc::new(command),
                 conn_id,
                 txid: None,

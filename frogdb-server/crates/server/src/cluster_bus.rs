@@ -10,7 +10,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 #[cfg(not(feature = "turmoil"))]
-use frogdb_core::ShardMessage;
+use frogdb_core::PubSubMsg;
 use frogdb_core::ShardSender;
 use frogdb_core::cluster::{ClusterRaft, NodeId};
 #[cfg(not(feature = "turmoil"))]
@@ -189,7 +189,7 @@ async fn handle_pubsub_broadcast(
     use crate::connection::pubsub_conn_command::BROADCAST_SHARD;
     let (response_tx, response_rx) = oneshot::channel();
     let _ = shard_senders[BROADCAST_SHARD]
-        .send(ShardMessage::Publish {
+        .send(PubSubMsg::Publish {
             channel: bytes::Bytes::copy_from_slice(channel),
             message: bytes::Bytes::copy_from_slice(message),
             response_tx,
@@ -213,7 +213,7 @@ async fn handle_pubsub_forward(
     let shard_id = shard_for_key(channel, num_shards);
     let (response_tx, response_rx) = oneshot::channel();
     let _ = shard_senders[shard_id]
-        .send(ShardMessage::ShardedPublish {
+        .send(PubSubMsg::ShardedPublish {
             channel: bytes::Bytes::copy_from_slice(channel),
             message: bytes::Bytes::copy_from_slice(message),
             response_tx,

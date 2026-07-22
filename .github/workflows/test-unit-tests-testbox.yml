@@ -37,6 +37,9 @@ jobs:
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
         with:
           shared-key: testbox-arm
+          # Post-step save normally runs only on job success; testbox jobs end by
+          # cancellation (explicit stop) or idle-timeout, so save on those too.
+          cache-on-failure: 'true'
       - name: Prebuild workspace test binaries
         run: cargo nextest run --no-run --workspace
       - name: Run Testbox

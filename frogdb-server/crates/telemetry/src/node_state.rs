@@ -18,7 +18,8 @@
 use std::time::Duration;
 
 use frogdb_core::{
-    InfoShardSnapshot, KeysizeHistograms, ShardMessage, ShardSender, TieredCounts, WalLagAggregate,
+    InfoShardSnapshot, KeysizeHistograms, ObservabilityMsg, ShardSender, TieredCounts,
+    WalLagAggregate,
 };
 use tokio::sync::oneshot;
 
@@ -124,7 +125,7 @@ impl NodeStateSnapshot {
     }
 
     /// The one place a node-state snapshot is gathered: a single
-    /// [`ShardMessage::InfoSnapshot`] scatter to every shard, folded under a
+    /// [`ObservabilityMsg::InfoSnapshot`] scatter to every shard, folded under a
     /// shared deadline.
     ///
     /// Sends exactly one message per shard — the single-round-trip invariant the
@@ -140,7 +141,7 @@ impl NodeStateSnapshot {
         for (shard_id, sender) in senders.iter().enumerate() {
             let (response_tx, rx) = oneshot::channel();
             if sender
-                .send(ShardMessage::InfoSnapshot { response_tx })
+                .send(ObservabilityMsg::InfoSnapshot { response_tx })
                 .await
                 .is_err()
             {
@@ -202,7 +203,7 @@ impl ShardScatterError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use frogdb_core::{ShardMemoryStats, ShardReceiver, WalLagStats};
+    use frogdb_core::{ShardMemoryStats, ShardMessage, ShardReceiver, WalLagStats};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::mpsc;
@@ -315,7 +316,10 @@ mod tests {
             tokio::spawn(async move {
                 while let Some(env) = receiver.recv().await {
                     messages.fetch_add(1, Ordering::SeqCst);
-                    if let ShardMessage::InfoSnapshot { response_tx } = env.message {
+                    if let ShardMessage::Observability(ObservabilityMsg::InfoSnapshot {
+                        response_tx,
+                    }) = env.message
+                    {
                         let _ = response_tx.send(shard_snap(shard_id));
                     }
                 }
@@ -347,7 +351,9 @@ mod tests {
         let mut r0 = ShardReceiver::new(rx0);
         tokio::spawn(async move {
             while let Some(env) = r0.recv().await {
-                if let ShardMessage::InfoSnapshot { response_tx } = env.message {
+                if let ShardMessage::Observability(ObservabilityMsg::InfoSnapshot { response_tx }) =
+                    env.message
+                {
                     let _ = response_tx.send(shard_snap(0));
                 }
             }

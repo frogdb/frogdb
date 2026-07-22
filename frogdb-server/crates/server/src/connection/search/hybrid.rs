@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use frogdb_core::{ScatterOp, ShardMessage};
+use frogdb_core::{CoreMsg, ScatterOp};
 use frogdb_protocol::Response;
 
 use super::merge::FtHybridMerge;
@@ -110,7 +110,7 @@ impl ConnectionHandler {
             total: 0,
         });
         self.scatter_gather_with_timeout(effective_timeout)
-            .run(merge, |_shard, response_tx| ShardMessage::ScatterRequest {
+            .run(merge, |_shard, response_tx| CoreMsg::ScatterRequest {
                 request_id: next_txid(),
                 keys: vec![],
                 operation: ScatterOp::FtHybrid {

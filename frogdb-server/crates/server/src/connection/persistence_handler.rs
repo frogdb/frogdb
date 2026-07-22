@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use bytes::Bytes;
-use frogdb_core::{PartialResult, ScatterOp, ShardMessage, shard_for_key};
+use frogdb_core::{CoreMsg, PartialResult, ScatterOp, shard_for_key};
 use frogdb_protocol::{ParsedCommand, Response};
 
 use crate::connection::ConnectionHandler;
@@ -73,7 +73,7 @@ impl ConnectionHandler {
             if let Some(sender) = self.core.shard_senders.get(target_shard) {
                 let dump_cmd = ParsedCommand::new(Bytes::from("DUMP"), vec![key.clone()]);
                 if sender
-                    .send(ShardMessage::Execute {
+                    .send(CoreMsg::Execute {
                         command: std::sync::Arc::new(dump_cmd),
                         conn_id: self.state.id,
                         txid: None,
@@ -117,7 +117,7 @@ impl ConnectionHandler {
             if let Some(sender) = self.core.shard_senders.get(target_shard) {
                 let pttl_cmd = ParsedCommand::new(Bytes::from("PTTL"), vec![key.clone()]);
                 if sender
-                    .send(ShardMessage::Execute {
+                    .send(CoreMsg::Execute {
                         command: std::sync::Arc::new(pttl_cmd),
                         conn_id: self.state.id,
                         txid: None,
@@ -158,7 +158,7 @@ impl ConnectionHandler {
                 if let Some(sender) = self.core.shard_senders.get(target_shard) {
                     let del_cmd = ParsedCommand::new(Bytes::from("DEL"), vec![key.clone()]);
                     let _ = sender
-                        .send(ShardMessage::Execute {
+                        .send(CoreMsg::Execute {
                             command: std::sync::Arc::new(del_cmd),
                             conn_id: self.state.id,
                             txid: None,
@@ -209,7 +209,7 @@ impl ConnectionHandler {
 
         for (shard_id, keys) in &shard_keys {
             let (tx, rx) = tokio::sync::oneshot::channel();
-            let msg = ShardMessage::ScatterRequest {
+            let msg = CoreMsg::ScatterRequest {
                 request_id: txid,
                 keys: keys.clone(),
                 operation: ScatterOp::Dump,
@@ -312,7 +312,7 @@ impl ConnectionHandler {
 
             for (shard_id, keys) in delete_shard_keys {
                 let (tx, rx) = tokio::sync::oneshot::channel();
-                let msg = ShardMessage::ScatterRequest {
+                let msg = CoreMsg::ScatterRequest {
                     request_id: delete_txid,
                     keys,
                     operation: ScatterOp::Del,

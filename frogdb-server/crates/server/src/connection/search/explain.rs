@@ -1,7 +1,7 @@
 //! FT.EXPLAIN, FT.EXPLAINCLI handlers.
 
 use bytes::Bytes;
-use frogdb_core::{ScatterOp, ShardMessage};
+use frogdb_core::{CoreMsg, ScatterOp};
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
 
@@ -19,7 +19,7 @@ impl ConnectionHandler {
 
         // Only query shard 0 (schema is identical across shards)
         let (response_tx, response_rx) = oneshot::channel();
-        let msg = ShardMessage::ScatterRequest {
+        let msg = CoreMsg::ScatterRequest {
             request_id: next_txid(),
             keys: vec![],
             operation: ScatterOp::FtExplain {

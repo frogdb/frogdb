@@ -1,16 +1,14 @@
 //! No-op snapshot coordinator.
 use super::handle::SnapshotHandle;
-use super::metadata::SnapshotMetadata;
-use super::{SnapshotCoordinator, SnapshotError, SnapshotRequest};
+use super::{SnapshotCoordinator, SnapshotError, SnapshotMode, SnapshotRequest};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::{Instant, SystemTime};
+use std::time::Instant;
 
 pub struct NoopSnapshotCoordinator {
     last_save: RwLock<Option<Instant>>,
     in_progress: Arc<AtomicBool>,
     epoch: AtomicU64,
-    scheduled: AtomicBool,
 }
 impl Default for NoopSnapshotCoordinator {
     fn default() -> Self {
@@ -23,7 +21,6 @@ impl NoopSnapshotCoordinator {
             last_save: RwLock::new(None),
             in_progress: Arc::new(AtomicBool::new(false)),
             epoch: AtomicU64::new(0),
-            scheduled: AtomicBool::new(false),
         }
     }
 }
@@ -53,32 +50,15 @@ impl SnapshotCoordinator for NoopSnapshotCoordinator {
     fn in_progress(&self) -> bool {
         self.in_progress.load(Ordering::SeqCst)
     }
-    fn last_snapshot_metadata(&self) -> Option<SnapshotMetadata> {
-        let ls = self.last_save_time()?;
-        let now = Instant::now();
-        let sn = SystemTime::now();
-        let sa = if ls <= now { sn - (now - ls) } else { sn };
-        Some(SnapshotMetadata {
-            epoch: self.epoch.load(Ordering::SeqCst),
-            started_at: sa,
-            completed_at: Some(sa),
-            size_bytes: 0,
-        })
-    }
-    fn schedule_snapshot(&self) -> bool {
-        if !self.in_progress() {
-            return false;
-        }
-        self.scheduled.store(true, Ordering::SeqCst);
-        true
-    }
-    fn is_scheduled(&self) -> bool {
-        self.scheduled.load(Ordering::SeqCst)
-    }
-    fn request_snapshot(&self) -> SnapshotRequest {
+    fn request_snapshot(&self, mode: SnapshotMode) -> SnapshotRequest {
+        // A save already runs: `Schedule` coalesces, `Immediate` refuses without
+        // queuing. The no-op has no run loop to drain a follow-up, so `Coalesced`
+        // is purely the observable "scheduled" contract.
         if self.in_progress() {
-            self.scheduled.store(true, Ordering::SeqCst);
-            return SnapshotRequest::Coalesced;
+            return match mode {
+                SnapshotMode::Schedule => SnapshotRequest::Coalesced,
+                SnapshotMode::Immediate => SnapshotRequest::AlreadyRunning,
+            };
         }
         match self.start_snapshot() {
             // The no-op save completes instantly: drop the handle to release
@@ -88,7 +68,11 @@ impl SnapshotCoordinator for NoopSnapshotCoordinator {
                 drop(handle);
                 SnapshotRequest::Started(epoch)
             }
-            Err(_) => SnapshotRequest::Coalesced,
+            // Lost the start race — a save claimed the slot after our probe.
+            Err(_) => match mode {
+                SnapshotMode::Schedule => SnapshotRequest::Coalesced,
+                SnapshotMode::Immediate => SnapshotRequest::AlreadyRunning,
+            },
         }
     }
 }

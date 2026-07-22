@@ -13,9 +13,9 @@ use frogdb_vll::{LockMode, ShardReadyResult, ShardSink, ShardSinkError};
 use tokio::sync::oneshot;
 
 use frogdb_core::shard::types::PartialResult;
-use frogdb_core::shard::{ScatterOp, ShardMessage, ShardSender};
+use frogdb_core::shard::{ScatterOp, ShardSender, VllMsg};
 
-/// Plain sink: maps `ShardSink` calls onto `ShardMessage::Vll*` sends into the
+/// Plain sink: maps `ShardSink` calls onto `VllMsg::Vll*` sends into the
 /// per-shard queues. The driver services those queues via `pump_one`.
 pub struct ChannelSink {
     senders: Arc<Vec<ShardSender>>,
@@ -41,7 +41,7 @@ impl ShardSink for ChannelSink {
         ready_tx: oneshot::Sender<ShardReadyResult>,
     ) -> Result<(), ShardSinkError> {
         self.senders[shard_id]
-            .send(ShardMessage::VllLockRequest {
+            .send(VllMsg::VllLockRequest {
                 txid,
                 keys,
                 mode,
@@ -62,7 +62,7 @@ impl ShardSink for ChannelSink {
         response_tx: oneshot::Sender<Self::Response>,
     ) -> Result<(), ShardSinkError> {
         self.senders[shard_id]
-            .send(ShardMessage::VllExecute { txid, response_tx })
+            .send(VllMsg::VllExecute { txid, response_tx })
             .await
             .map_err(|_| ShardSinkError {
                 shard_id,
@@ -71,9 +71,7 @@ impl ShardSink for ChannelSink {
     }
 
     async fn send_abort(&self, shard_id: usize, txid: u64) {
-        let _ = self.senders[shard_id]
-            .send(ShardMessage::VllAbort { txid })
-            .await;
+        let _ = self.senders[shard_id].send(VllMsg::VllAbort { txid }).await;
     }
 
     async fn send_continuation_lock(
@@ -85,7 +83,7 @@ impl ShardSink for ChannelSink {
         release_rx: oneshot::Receiver<()>,
     ) -> Result<(), ShardSinkError> {
         self.senders[shard_id]
-            .send(ShardMessage::VllContinuationLock {
+            .send(VllMsg::VllContinuationLock {
                 txid,
                 conn_id,
                 ready_tx,

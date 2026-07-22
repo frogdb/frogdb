@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::Bytes;
 use frogdb_core::{
-    MetricsRecorder, PartialResult, ScatterOp, ShardMessage, ShardReadyResult, ShardSender,
+    MetricsRecorder, PartialResult, ScatterOp, ShardReadyResult, ShardSender, VllMsg,
 };
 use frogdb_vll::{LockMode, MetricsSink, ShardSink, ShardSinkError};
 use tokio::sync::oneshot;
@@ -94,7 +94,7 @@ impl ShardSink for ShardSenderSink {
             }
         }
 
-        let msg = ShardMessage::VllLockRequest {
+        let msg = VllMsg::VllLockRequest {
             txid,
             keys,
             mode,
@@ -120,7 +120,7 @@ impl ShardSink for ShardSenderSink {
         txid: u64,
         response_tx: oneshot::Sender<Self::Response>,
     ) -> Result<(), ShardSinkError> {
-        let msg = ShardMessage::VllExecute { txid, response_tx };
+        let msg = VllMsg::VllExecute { txid, response_tx };
         self.senders[shard_id]
             .send(msg)
             .await
@@ -131,9 +131,7 @@ impl ShardSink for ShardSenderSink {
     }
 
     async fn send_abort(&self, shard_id: usize, txid: u64) {
-        let _ = self.senders[shard_id]
-            .send(ShardMessage::VllAbort { txid })
-            .await;
+        let _ = self.senders[shard_id].send(VllMsg::VllAbort { txid }).await;
     }
 
     async fn send_continuation_lock(
@@ -144,7 +142,7 @@ impl ShardSink for ShardSenderSink {
         ready_tx: oneshot::Sender<ShardReadyResult>,
         release_rx: oneshot::Receiver<()>,
     ) -> Result<(), ShardSinkError> {
-        let msg = ShardMessage::VllContinuationLock {
+        let msg = VllMsg::VllContinuationLock {
             txid,
             conn_id,
             ready_tx,

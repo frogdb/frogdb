@@ -10,12 +10,12 @@
 //!
 //! Unlike the previous consumer, routing comes from the frame's origin-shard tag
 //! (not re-derived from `args[0]`), a `MULTI … EXEC` group is applied atomically
-//! via [`ShardMessage::ExecTransaction`], and the shard's response is checked so
+//! via [`CoreMsg::ExecTransaction`], and the shard's response is checked so
 //! a failed apply surfaces as a divergence instead of being silently dropped.
 
 use std::sync::Arc;
 
-use frogdb_core::{REPLICA_INTERNAL_CONN_ID, ShardMessage, ShardSender, TransactionResult};
+use frogdb_core::{CoreMsg, REPLICA_INTERNAL_CONN_ID, ShardSender, TransactionResult};
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 use frogdb_replication::{ApplyError, ReplicaApplier};
 use tokio::sync::oneshot;
@@ -55,7 +55,7 @@ impl ReplicaCommandExecutor {
     /// Apply a single replicated command on `shard_id`, checking the response.
     async fn apply_single(&self, shard_id: u16, command: ParsedCommand) -> Result<(), ApplyError> {
         let (response_tx, response_rx) = oneshot::channel();
-        let msg = ShardMessage::Execute {
+        let msg = CoreMsg::Execute {
             command: Arc::new(command),
             conn_id: REPLICA_INTERNAL_CONN_ID,
             txid: None,
@@ -89,7 +89,7 @@ impl ReplicaCommandExecutor {
         commands: Vec<ParsedCommand>,
     ) -> Result<(), ApplyError> {
         let (response_tx, response_rx) = oneshot::channel();
-        let msg = ShardMessage::ExecTransaction {
+        let msg = CoreMsg::ExecTransaction {
             commands,
             watches: Vec::new(),
             conn_id: REPLICA_INTERNAL_CONN_ID,

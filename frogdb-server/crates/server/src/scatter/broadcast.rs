@@ -2,20 +2,30 @@
 //!
 //! Where [`ScatterGatherExecutor`](super::ScatterGatherExecutor) drives the
 //! *keyed*, VLL-locked path (MGET/MSET/DEL/…), this module owns the *broadcast*
-//! path: fan a per-shard message out to every shard, await all replies under a
-//! single shared deadline, and fold them into one client [`Response`].
+//! path: fan a per-shard message out to every shard under a single shared
+//! deadline. [`ScatterGather`] exposes one method per fan-out shape, and each
+//! owns the same "enumerate shards, one `oneshot` per shard, send and handle
+//! send failure, collect under one deadline" choreography so no call site
+//! hand-rolls it:
 //!
-//! Every broadcast command differs in exactly two things:
+//! * [`run`](ScatterGather::run) — fold every shard's reply into one client
+//!   [`Response`] via a [`MergeStrategy`] (KEYS, DBSIZE, FLUSHDB, SCRIPT
+//!   LOAD/EXISTS/FLUSH, PUBSUB introspection, FT.*).
+//! * [`gather_all`](ScatterGather::gather_all) — best-effort typed `Vec<R>` for
+//!   callers that merge/sum/sort at the call site (DEBUG introspection, MEMORY
+//!   STATS, LATENCY/SLOWLOG aggregation, and the await-and-discard resets).
+//! * [`find_first`](ScatterGather::find_first) — short-circuit walk returning the
+//!   first reply a predicate accepts (SCRIPT KILL / FUNCTION KILL).
+//! * [`broadcast_all`](ScatterGather::broadcast_all) — fire-and-forget to every
+//!   shard, awaiting no reply (client-tracking register/unregister, the
+//!   `ConnectionClosed` teardown fan-outs).
 //!
-//! 1. **the message it builds per shard** (the `make_msg` closure) and its reply
-//!    type, and
-//! 2. **how replies fold** into a `Response` (the [`MergeStrategy`]).
-//!
-//! Everything else — enumerate shards, one `oneshot` per shard, send and handle
-//! send failure, collect, await all under one timeout, map drop/timeout to the
-//! canonical error replies — lives in [`ScatterGather::run`] and nowhere else.
-//! That is the seam the missing-timeout bugs in `pubsub.rs`/`script.rs` came
-//! from: there is no longer a place to forget the timeout.
+//! A broadcast command therefore states only its per-shard message (the
+//! `make_msg` closure) and, for [`run`](ScatterGather::run), how replies fold
+//! (the [`MergeStrategy`]). The single shared deadline and the send-failure /
+//! drop / timeout mapping live here and nowhere else — there is no longer a
+//! per-shard await to forget the timeout on, which is the bug class the
+//! `pubsub.rs` / `script.rs` / FUNCTION KILL missing timeouts all came from.
 
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
@@ -26,6 +36,14 @@ use frogdb_core::{IntrospectionResponse, PartialResult, ShardMessage, ShardSende
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
 use tracing::warn;
+
+/// Fallback fan-out deadline for broadcast helpers invoked from a
+/// [`ConnCtx`](frogdb_core::ConnCtx), which does not carry the connection's
+/// runtime `scatter_gather_timeout`. Matches the config default (5s). Handlers
+/// that hold a `ConnectionHandler` use the runtime value via
+/// [`scatter_gather`](crate::connection::ConnectionHandler::scatter_gather)
+/// instead.
+pub const DEFAULT_SCATTER_GATHER_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// What to do when a shard send fails, drops its sender, or times out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,14 +103,33 @@ impl<'a> ScatterGather<'a> {
         }
     }
 
+    /// Create a coordinator for a fire-and-forget [`broadcast_all`](Self::broadcast_all).
+    ///
+    /// That shape awaits no reply, so it needs neither a deadline nor a
+    /// connection id; this exists so call sites that only hold `&[ShardSender]`
+    /// (the client-tracking / teardown paths, which do not carry a
+    /// `scatter_gather_timeout`) can still route through the seam. The stored
+    /// timeout is never observed — only [`run`](Self::run), [`query_one`](Self::query_one),
+    /// [`gather_all`](Self::gather_all), and [`find_first`](Self::find_first)
+    /// await replies, and none of those are reachable through this constructor's
+    /// intended use.
+    pub fn broadcast(senders: &'a [ShardSender]) -> Self {
+        Self {
+            senders,
+            timeout: Duration::ZERO,
+            conn_id: 0,
+        }
+    }
+
     /// Fan `make_msg(shard_id, tx)` out to every shard, await all replies under a
     /// single shared deadline, fold them with `merge`, and map send-failure /
     /// drop / timeout to the canonical error replies — once, for every broadcast
     /// command.
-    pub async fn run<M, F>(&self, mut merge: Box<M>, make_msg: F) -> Response
+    pub async fn run<M, F, S>(&self, mut merge: Box<M>, make_msg: F) -> Response
     where
         M: MergeStrategy + ?Sized,
-        F: Fn(usize, oneshot::Sender<M::Reply>) -> ShardMessage,
+        F: Fn(usize, oneshot::Sender<M::Reply>) -> S,
+        S: Into<ShardMessage>,
     {
         let mut rxs = Vec::with_capacity(self.senders.len());
         for (shard_id, sender) in self.senders.iter().enumerate() {
@@ -157,7 +194,7 @@ impl<'a> ScatterGather<'a> {
     pub async fn query_one<R: Send + 'static>(
         &self,
         shard_id: usize,
-        message: ShardMessage,
+        message: impl Into<ShardMessage>,
         rx: oneshot::Receiver<R>,
     ) -> Result<R, Response> {
         if self.senders[shard_id].send(message).await.is_err() {
@@ -174,6 +211,119 @@ impl<'a> ScatterGather<'a> {
                 warn!(conn_id = self.conn_id, shard_id, "scatter timeout");
                 Err(Response::error("ERR timeout"))
             }
+        }
+    }
+
+    /// Fan `make_msg(shard_id, tx)` out to every shard concurrently, then collect
+    /// every reply that arrives before the one shared deadline into a `Vec<R>`.
+    ///
+    /// Best-effort: a shard whose send fails, whose sender drops, or that misses
+    /// the deadline is skipped rather than surfaced as an error — callers do
+    /// their own merge/sum/sort over the survivors at the call site. Replies are
+    /// collected in shard order (each receiver is awaited in ascending shard id),
+    /// so order-sensitive callers see the same layout the old sequential loops
+    /// produced. The whole gather is bounded by one deadline, replacing the
+    /// per-shard 5s timeouts (worst case N×5s) and the unbounded awaits these
+    /// callers used to hand-roll.
+    pub async fn gather_all<R, F, S>(&self, make_msg: F) -> Vec<R>
+    where
+        R: Send + 'static,
+        F: Fn(usize, oneshot::Sender<R>) -> S,
+        S: Into<ShardMessage>,
+    {
+        let mut rxs = Vec::with_capacity(self.senders.len());
+        for (shard_id, sender) in self.senders.iter().enumerate() {
+            let (tx, rx) = oneshot::channel();
+            if sender.send(make_msg(shard_id, tx)).await.is_err() {
+                warn!(
+                    conn_id = self.conn_id,
+                    shard_id, "shard unavailable (gather)"
+                );
+                continue;
+            }
+            rxs.push((shard_id, rx));
+        }
+
+        // One deadline for the whole gather, not one-per-receiver.
+        let mut results = Vec::with_capacity(rxs.len());
+        let deadline = tokio::time::sleep(self.timeout);
+        tokio::pin!(deadline);
+        for (shard_id, rx) in rxs {
+            tokio::select! {
+                reply = rx => match reply {
+                    Ok(reply) => results.push(reply),
+                    Err(_) => warn!(
+                        conn_id = self.conn_id,
+                        shard_id,
+                        "shard dropped request (gather)"
+                    ),
+                },
+                _ = &mut deadline => {
+                    warn!(conn_id = self.conn_id, shard_id, "gather timeout");
+                    break;
+                }
+            }
+        }
+        results
+    }
+
+    /// Fan `make_msg(shard_id, tx)` out to every shard concurrently, then walk the
+    /// replies in shard order and return the first one `predicate` accepts.
+    ///
+    /// Send-failure, dropped, and predicate-rejected shards are skipped; if the
+    /// shared deadline fires before any shard is accepted the walk stops and
+    /// returns `None`. Used by the KILL walks (SCRIPT KILL / FUNCTION KILL): the
+    /// predicate decides "did this shard produce a decisive reply?" and the
+    /// caller classifies the returned reply, so the exact NOTBUSY / UNKILLABLE /
+    /// hard-error precedence stays at the call site. The per-shard await that
+    /// FUNCTION KILL used to leave unbounded is now structurally bounded here.
+    pub async fn find_first<R, F, P, S>(&self, make_msg: F, predicate: P) -> Option<R>
+    where
+        R: Send + 'static,
+        F: Fn(usize, oneshot::Sender<R>) -> S,
+        S: Into<ShardMessage>,
+        P: Fn(&R) -> bool,
+    {
+        let mut rxs = Vec::with_capacity(self.senders.len());
+        for (shard_id, sender) in self.senders.iter().enumerate() {
+            let (tx, rx) = oneshot::channel();
+            if sender.send(make_msg(shard_id, tx)).await.is_err() {
+                // Best-effort: a shard we cannot even reach cannot be the answer.
+                continue;
+            }
+            rxs.push((shard_id, rx));
+        }
+
+        // One deadline for the whole walk, not one-per-receiver.
+        let deadline = tokio::time::sleep(self.timeout);
+        tokio::pin!(deadline);
+        for (_shard_id, rx) in rxs {
+            tokio::select! {
+                reply = rx => {
+                    if let Ok(reply) = reply
+                        && predicate(&reply)
+                    {
+                        return Some(reply);
+                    }
+                    // Dropped, or predicate rejected: try the next shard.
+                }
+                _ = &mut deadline => return None,
+            }
+        }
+        None
+    }
+
+    /// Fire `make_msg(shard_id)` at every shard and return without awaiting any
+    /// reply. Send failures are silently ignored (best-effort), matching the
+    /// teardown/registration fan-outs this replaces: they must never surface an
+    /// error to the caller. No reply is awaited, so there is no deadline.
+    pub async fn broadcast_all<F, S>(&self, make_msg: F)
+    where
+        F: Fn(usize) -> S,
+        S: Into<ShardMessage>,
+    {
+        for (shard_id, sender) in self.senders.iter().enumerate() {
+            let _ = sender.send(make_msg(shard_id)).await;
         }
     }
 }
@@ -536,7 +686,7 @@ impl MergeStrategy for BoolOr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use frogdb_core::ShardReceiver;
+    use frogdb_core::{CoreMsg, ShardReceiver};
     use tokio::sync::mpsc;
 
     // -------------------------------------------------------------------------
@@ -791,7 +941,9 @@ mod tests {
             tasks.push(tokio::spawn(async move {
                 let mut held = Vec::new();
                 while let Some(env) = receiver.recv().await {
-                    if let ShardMessage::ScatterRequest { response_tx, .. } = env.message {
+                    if let ShardMessage::Core(CoreMsg::ScatterRequest { response_tx, .. }) =
+                        env.message
+                    {
                         match &behavior {
                             Behavior::Reply(results) => {
                                 let _ = response_tx.send(partial(results.clone()));
@@ -808,8 +960,8 @@ mod tests {
         (senders, tasks)
     }
 
-    fn dbsize_msg(_shard: usize, response_tx: oneshot::Sender<PartialResult>) -> ShardMessage {
-        ShardMessage::ScatterRequest {
+    fn dbsize_msg(_shard: usize, response_tx: oneshot::Sender<PartialResult>) -> CoreMsg {
+        CoreMsg::ScatterRequest {
             request_id: 1,
             keys: vec![],
             operation: frogdb_core::ScatterOp::DbSize,
@@ -919,5 +1071,106 @@ mod tests {
         let elapsed = start.elapsed();
         assert!(matches!(resp, Response::Error(ref e) if e.as_ref() == b"ERR timeout"));
         assert_eq!(elapsed, timeout, "gather must use a single shared deadline");
+    }
+
+    // -------------------------------------------------------------------------
+    // gather_all / find_first / broadcast_all (mock shard senders)
+    //
+    // One stalled-shard test per fan-out shape: every command routing through a
+    // helper inherits the single-deadline guarantee, so a new gather/walk cannot
+    // reintroduce the unbounded-await bug — it has no await to leave unbounded.
+    // -------------------------------------------------------------------------
+
+    /// A fire-and-forget message with a throwaway reply channel — `broadcast_all`
+    /// discards replies, so the receiver is dropped immediately.
+    fn dbsize_broadcast_msg(_shard: usize) -> CoreMsg {
+        let (response_tx, _rx) = oneshot::channel();
+        CoreMsg::ScatterRequest {
+            request_id: 1,
+            keys: vec![],
+            operation: frogdb_core::ScatterOp::DbSize,
+            conn_id: 0,
+            response_tx,
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn gather_all_collects_survivors_under_one_deadline() {
+        // Shard 0 answers; shard 1 stalls forever. The gather must return the one
+        // survivor's reply bounded by a single shared deadline (not hang, and not
+        // num_shards × timeout).
+        let timeout = Duration::from_secs(2);
+        let (senders, _tasks) = mock_cluster(vec![
+            Behavior::Reply(vec![(Bytes::from("a"), Response::Integer(10))]),
+            Behavior::Hang,
+        ]);
+        let sg = ScatterGather::new(&senders, timeout, 0);
+        let start = tokio::time::Instant::now();
+        let results = sg.gather_all(dbsize_msg).await;
+        let elapsed = start.elapsed();
+        assert_eq!(
+            results.len(),
+            1,
+            "the responsive shard's reply is collected"
+        );
+        assert_eq!(
+            results[0].integer_total(),
+            10,
+            "the survivor's payload is intact"
+        );
+        assert_eq!(elapsed, timeout, "bounded by the single shared deadline");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn find_first_returns_none_when_the_match_stalls() {
+        // Shard 0 replies but is rejected by the predicate; shard 1 stalls. The
+        // walk must not hang: it returns None at the shared deadline.
+        let timeout = Duration::from_secs(2);
+        let (senders, _tasks) = mock_cluster(vec![
+            Behavior::Reply(vec![(Bytes::from("a"), Response::Integer(1))]),
+            Behavior::Hang,
+        ]);
+        let sg = ScatterGather::new(&senders, timeout, 0);
+        let start = tokio::time::Instant::now();
+        let found = sg.find_first(dbsize_msg, |_r: &PartialResult| false).await;
+        let elapsed = start.elapsed();
+        assert!(found.is_none(), "no shard satisfied the predicate");
+        assert_eq!(elapsed, timeout, "bounded by the single shared deadline");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn find_first_short_circuits_before_the_stalled_shard() {
+        // Shard 0 is accepted; shard 1 stalls. The walk returns on shard 0
+        // without ever awaiting the stalled shard.
+        let timeout = Duration::from_secs(2);
+        let (senders, _tasks) = mock_cluster(vec![
+            Behavior::Reply(vec![(Bytes::from("a"), Response::Integer(7))]),
+            Behavior::Hang,
+        ]);
+        let sg = ScatterGather::new(&senders, timeout, 0);
+        let start = tokio::time::Instant::now();
+        let found = sg.find_first(dbsize_msg, |_r: &PartialResult| true).await;
+        let elapsed = start.elapsed();
+        assert_eq!(
+            found.map(|r| r.integer_total()),
+            Some(7),
+            "shard 0's reply is returned"
+        );
+        assert!(
+            elapsed < timeout,
+            "short-circuits without awaiting the stalled shard"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn broadcast_all_returns_without_awaiting_replies() {
+        // Both shards stall. `broadcast_all` awaits no reply, so it returns
+        // immediately regardless — a stalled shard cannot block a teardown.
+        let (senders, _tasks) = mock_cluster(vec![Behavior::Hang, Behavior::Hang]);
+        let sg = ScatterGather::new(&senders, Duration::from_secs(2), 0);
+        let start = tokio::time::Instant::now();
+        sg.broadcast_all(dbsize_broadcast_msg).await;
+        let elapsed = start.elapsed();
+        assert_eq!(elapsed, Duration::ZERO, "fire-and-forget awaits no reply");
     }
 }
