@@ -685,7 +685,7 @@ impl PreDispatchView<'_> {
 
         let mut any_present = false;
         let mut any_absent = false;
-        for (_, response) in &partial.results {
+        for (_, response) in partial.keyed_slice() {
             match response {
                 Response::Integer(1) => any_present = true,
                 Response::Integer(0) => any_absent = true,

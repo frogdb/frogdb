@@ -11,7 +11,9 @@ use std::sync::Arc;
 use crate::config::ChaosConfigExt;
 
 use bytes::Bytes;
-use frogdb_core::{CoreMsg, ExecutionStrategy, ScatterGatherOp, ScatterOp, shard_for_key};
+use frogdb_core::{
+    CoreMsg, ExecutionStrategy, PartialResult, ScatterGatherOp, ScatterOp, shard_for_key,
+};
 use frogdb_protocol::{ParsedCommand, Response};
 use tokio::sync::oneshot;
 use tracing::Instrument;
@@ -254,25 +256,12 @@ impl ConnectionHandler {
             Err(_) => return Response::error("ERR scatter-gather timeout"),
         };
 
-        // Parse the source shard response
-        let source_data = source_result.results.into_iter().next();
-        let (value_data, expiry_ms) = match source_data {
-            Some((_, Response::Array(arr))) if arr.len() == 2 => {
-                // Extract the serialized value and expiry from the response. The
-                // value is a self-describing persistence frame, so no separate type
-                // tag is carried.
-                let data_bytes = match &arr[0] {
-                    Response::Bulk(Some(b)) => b.clone(),
-                    _ => return Response::error("ERR invalid response from source shard"),
-                };
-                let expiry = match &arr[1] {
-                    Response::Integer(ms) => Some(*ms),
-                    Response::Null | Response::Bulk(None) => None,
-                    _ => return Response::error("ERR invalid response from source shard"),
-                };
-                (data_bytes, expiry)
-            }
-            Some((_, Response::Null)) | Some((_, Response::Bulk(None))) => {
+        // Parse the source shard response. The read phase replies with a typed
+        // `Copy(Option<CopyPayload>)` — the value is a self-describing
+        // persistence frame and the expiry rides out-of-band, both named fields.
+        let (value_data, expiry_ms) = match source_result {
+            PartialResult::Copy(Some(payload)) => (payload.value, payload.expiry_ms),
+            PartialResult::Copy(None) => {
                 // Source key doesn't exist
                 return Response::Integer(0);
             }
@@ -309,8 +298,8 @@ impl ConnectionHandler {
             Err(_) => return Response::error("ERR scatter-gather timeout"),
         };
 
-        // Return the response from the destination shard
-        match dest_result.results.into_iter().next() {
+        // Return the response from the destination shard (keyed CopySet reply)
+        match dest_result.into_keyed_results().into_iter().next() {
             Some((_, response)) => response,
             None => Response::error("ERR no response from destination shard"),
         }

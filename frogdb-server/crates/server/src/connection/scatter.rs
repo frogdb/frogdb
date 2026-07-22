@@ -159,17 +159,9 @@ impl ConnectionHandler {
                 Err(resp) => return resp,
             };
 
-            // Extract cursor and keys from response
-            let mut shard_next_cursor = 0u64;
-            for (key, response) in partial.results {
-                if key.as_ref() == b"__cursor__" {
-                    if let Response::Integer(c) = response {
-                        shard_next_cursor = c as u64;
-                    }
-                } else {
-                    all_keys.push(key);
-                }
-            }
+            // Append this shard's keys and read its typed next cursor — no
+            // sentinel-key string match.
+            let shard_next_cursor = absorb_scan_reply(&mut all_keys, partial);
 
             if shard_next_cursor == 0 {
                 // Shard exhausted, move to next shard
@@ -183,11 +175,7 @@ impl ConnectionHandler {
         }
 
         // Encode next cursor
-        let final_cursor = if next_shard >= self.num_shards {
-            0 // Done
-        } else {
-            cursor::encode(next_shard as u16, next_position)
-        };
+        let final_cursor = encode_final_cursor(next_shard, next_position, self.num_shards);
 
         // Build response
         let key_responses: Vec<Response> = all_keys.into_iter().map(Response::bulk).collect();
@@ -262,11 +250,9 @@ impl ConnectionHandler {
                 Ok(partial) => partial,
                 Err(resp) => return resp,
             };
-            for (_, response) in partial.results {
-                if let Response::Integer(count) = response {
-                    shard_counts.push((shard_id, count));
-                    total_keys += count;
-                }
+            if let PartialResult::Count(count) = partial {
+                shard_counts.push((shard_id, count));
+                total_keys += count;
             }
         }
 
@@ -307,12 +293,8 @@ impl ConnectionHandler {
             .await
         {
             // Return the random key (or null if the shard is now empty).
-            Ok(partial) => partial
-                .results
-                .into_iter()
-                .next()
-                .map(|(_, response)| response)
-                .unwrap_or_else(Response::null),
+            Ok(PartialResult::RandomKey(Some(key))) => Response::bulk(key),
+            Ok(_) => Response::null(),
             Err(resp) => resp,
         }
     }
@@ -344,5 +326,95 @@ impl ConnectionHandler {
     /// Handle FLUSHALL command - same as FLUSHDB (single database).
     pub(crate) async fn handle_flushall(&self, args: &[Bytes]) -> Response {
         self.handle_flushdb(args).await
+    }
+}
+
+/// Fold one shard's typed SCAN reply into the cursor walk: append its keys to
+/// `all_keys` and return the shard's next cursor (`0` = exhausted). A non-`Scan`
+/// reply is treated as exhausted. This reads the typed `Scan { next_cursor,
+/// keys }` fields directly — no `__cursor__` sentinel string match — so a
+/// cursor mis-read (the bug that would drop every key on shards 1..N) cannot
+/// silently happen.
+fn absorb_scan_reply(all_keys: &mut Vec<Bytes>, reply: PartialResult) -> u64 {
+    match reply {
+        PartialResult::Scan { next_cursor, keys } => {
+            all_keys.extend(keys);
+            next_cursor
+        }
+        _ => 0,
+    }
+}
+
+/// Encode the client-facing SCAN cursor after the walk: `0` once every shard is
+/// exhausted, otherwise the `(shard, position)` resume cursor.
+fn encode_final_cursor(next_shard: usize, next_position: u64, num_shards: usize) -> u64 {
+    if next_shard >= num_shards {
+        0
+    } else {
+        frogdb_commands::scan::cursor::encode(next_shard as u16, next_position)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use frogdb_commands::scan::cursor;
+
+    /// The typed SCAN reply stitches keys across shards and reads the resume
+    /// cursor without any sentinel-key string comparison — socket-free, no live
+    /// shard. Pins the exact failure the `__cursor__` magic string could cause:
+    /// a mis-read cursor reporting "done" and dropping keys on later shards.
+    #[test]
+    fn scan_walk_stitches_cursors_and_drops_no_keys() {
+        let num_shards = 3;
+        let mut all_keys: Vec<Bytes> = Vec::new();
+
+        // Shard 0 replies exhausted (next_cursor 0) with two keys.
+        let c0 = absorb_scan_reply(
+            &mut all_keys,
+            PartialResult::Scan {
+                next_cursor: 0,
+                keys: vec![Bytes::from_static(b"a"), Bytes::from_static(b"b")],
+            },
+        );
+        assert_eq!(c0, 0, "shard 0 reports exhausted");
+
+        // Shard 1 replies with more to come (resume at cursor 42) and one key.
+        let c1 = absorb_scan_reply(
+            &mut all_keys,
+            PartialResult::Scan {
+                next_cursor: 42,
+                keys: vec![Bytes::from_static(b"c")],
+            },
+        );
+        assert_eq!(c1, 42, "shard 1 has a live resume cursor");
+
+        // Every key from every shard is retained, in walk order.
+        assert_eq!(
+            all_keys,
+            vec![
+                Bytes::from_static(b"a"),
+                Bytes::from_static(b"b"),
+                Bytes::from_static(b"c"),
+            ],
+        );
+
+        // Mid-walk on shard 1 → the client cursor encodes (shard 1, pos 42).
+        let mid = encode_final_cursor(1, 42, num_shards);
+        assert_eq!(mid, cursor::encode(1, 42));
+        assert_eq!(cursor::decode(mid), (1, 42));
+
+        // Past the last shard → the walk is complete (cursor 0).
+        assert_eq!(encode_final_cursor(num_shards, 0, num_shards), 0);
+    }
+
+    /// A non-`Scan` reply (shouldn't happen on the SCAN path) is treated as an
+    /// exhausted shard and contributes no keys — a safe default, not a panic.
+    #[test]
+    fn scan_walk_ignores_unexpected_reply_shape() {
+        let mut all_keys: Vec<Bytes> = Vec::new();
+        let cursor = absorb_scan_reply(&mut all_keys, PartialResult::Flushed);
+        assert_eq!(cursor, 0);
+        assert!(all_keys.is_empty());
     }
 }

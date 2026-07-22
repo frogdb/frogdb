@@ -721,27 +721,95 @@ pub struct ShardConfig {
 // Response / metadata types
 // ============================================================================
 
-/// Result from a shard for scatter-gather operations.
-#[derive(Debug, Default)]
-pub struct PartialResult {
-    /// Results keyed by original key position.
-    pub results: Vec<(Bytes, Response)>,
+/// Reply from a shard for a scatter-gather operation.
+///
+/// One variant per reply *shape*, mirroring the [`ScatterOp`] that produces it
+/// so request and reply are typed in lockstep. This replaces the former
+/// "`Vec<(Bytes, Response)>` + optional `ft`" struct, which forced the non-keyed
+/// broadcast ops (SCAN/DBSIZE/RANDOMKEY/FLUSHDB/COPY) to smuggle control data
+/// through fabricated sentinel keys and a positional array.
+#[derive(Debug)]
+pub enum PartialResult {
+    /// Keyed `(key, response)` pairs: MGET/MSET/DEL/EXISTS/TOUCH/UNLINK/KEYS/
+    /// DUMP/CopySet, the FT.* ops that reply per key, and the shard-error
+    /// fallback path (`dispatch_core.rs`).
+    Keyed(Vec<(Bytes, Response)>),
+
+    /// SCAN: this shard's next cursor (`0` = exhausted) and the keys found this
+    /// step.
+    Scan {
+        /// Resume cursor for the next SCAN step on this shard; `0` when done.
+        next_cursor: u64,
+        /// Keys found by this scan step.
+        keys: Vec<Bytes>,
+    },
+
+    /// DBSIZE: this shard's key count.
+    Count(i64),
+
+    /// RANDOMKEY: a random key from this shard, or `None` if it is empty.
+    RandomKey(Option<Bytes>),
+
+    /// FLUSHDB acknowledgement (no payload).
+    Flushed,
+
+    /// COPY read phase: the source value + out-of-band expiry, or `None` if the
+    /// source key is absent.
+    Copy(Option<CopyPayload>),
+
     /// Typed payload for the FT.* query fan-outs (search hits / partial
-    /// aggregates); `None` for every other scatter op.
-    pub ft: Option<frogdb_search::FtShardReply>,
+    /// aggregates).
+    Ft(frogdb_search::FtShardReply),
+}
+
+/// The source payload a cross-shard COPY read phase ships to the coordinator.
+#[derive(Debug)]
+pub struct CopyPayload {
+    /// Self-describing persistence frame (no separate type tag). The COPY frame
+    /// header is expiry-free; the TTL rides out-of-band in [`Self::expiry_ms`].
+    pub value: Bytes,
+    /// Expiry in ms since the epoch; `None` = no expiry.
+    pub expiry_ms: Option<i64>,
+}
+
+impl Default for PartialResult {
+    /// The empty keyed reply — matches the former `#[derive(Default)]` on the
+    /// struct (empty `results`). `#[default]` cannot attach to a data-carrying
+    /// variant, so this is hand-written; the live call site is the VLL
+    /// dequeue-miss empty reply (`vll.rs`).
+    fn default() -> Self {
+        PartialResult::Keyed(Vec::new())
+    }
 }
 
 impl PartialResult {
     /// A conventional keyed-response reply.
-    pub fn from_results(results: Vec<(Bytes, Response)>) -> Self {
-        Self { results, ft: None }
+    pub fn keyed(results: Vec<(Bytes, Response)>) -> Self {
+        PartialResult::Keyed(results)
     }
 
-    /// A typed FT.* reply (no keyed responses).
-    pub fn from_ft(reply: frogdb_search::FtShardReply) -> Self {
-        Self {
-            results: Vec::new(),
-            ft: Some(reply),
+    /// A typed FT.* reply.
+    pub fn ft(reply: frogdb_search::FtShardReply) -> Self {
+        PartialResult::Ft(reply)
+    }
+
+    /// The keyed `(key, response)` pairs, consuming the reply. Non-keyed
+    /// variants yield an empty vec — used by the genuinely-keyed consumers
+    /// (MGET/DEL/DUMP/CopySet fan-out merges and single-shard FT/persistence
+    /// replies).
+    pub fn into_keyed_results(self) -> Vec<(Bytes, Response)> {
+        match self {
+            PartialResult::Keyed(results) => results,
+            _ => Vec::new(),
+        }
+    }
+
+    /// Borrow the keyed `(key, response)` pairs; empty slice for non-keyed
+    /// variants.
+    pub fn keyed_slice(&self) -> &[(Bytes, Response)] {
+        match self {
+            PartialResult::Keyed(results) => results,
+            _ => &[],
         }
     }
 }

@@ -72,7 +72,7 @@ impl ConnectionHandler {
 
         match tokio::time::timeout(self.scatter_gather_timeout, response_rx).await {
             Ok(Ok(partial)) => {
-                if let Some((_, resp)) = partial.results.into_iter().next() {
+                if let Some((_, resp)) = partial.into_keyed_results().into_iter().next() {
                     resp
                 } else {
                     Response::Array(vec![])
