@@ -760,6 +760,17 @@ pub enum PartialResult {
     /// Typed payload for the FT.* query fan-outs (search hits / partial
     /// aggregates).
     Ft(frogdb_search::FtShardReply),
+
+    /// A shard rejected the scatter part outright — it never executed the
+    /// operation, so this reply carries *no* data, only the error. Emitted by
+    /// [`scatter_conflict_reply`](crate::shard::ShardWorker) for **keyless**
+    /// scatter ops (KEYS/DBSIZE/SCAN/FLUSHDB, and the FT admin/single-shard ops)
+    /// whose per-key `Keyed` fallback would otherwise be *empty* and drop the
+    /// error silently. A `ShardError` is fatal: the coordinator must surface it
+    /// (fail the whole command) rather than fold it into a truncated success.
+    /// [`ScatterGather::run`](../../../server) recognizes it centrally so every
+    /// broadcast merge — present and future — aborts on it uniformly.
+    ShardError(Response),
 }
 
 /// The source payload a cross-shard COPY read phase ships to the coordinator.
@@ -791,6 +802,23 @@ impl PartialResult {
     /// A typed FT.* reply.
     pub fn ft(reply: frogdb_search::FtShardReply) -> Self {
         PartialResult::Ft(reply)
+    }
+
+    /// A fatal shard-rejection reply carrying only the error (no data). Used by
+    /// the keyless-scatter conflict path so the error survives the merge.
+    pub fn shard_error(err: Response) -> Self {
+        PartialResult::ShardError(err)
+    }
+
+    /// Borrow the fatal shard error, if this is a [`PartialResult::ShardError`].
+    /// Non-`ShardError` variants yield `None`. Lets the non-`run` coordinator
+    /// seams (SCAN / RANDOMKEY / the shard-0-direct FT reads) surface a
+    /// conflict rejection instead of returning a truncated success.
+    pub fn as_shard_error(&self) -> Option<&Response> {
+        match self {
+            PartialResult::ShardError(err) => Some(err),
+            _ => None,
+        }
     }
 
     /// The keyed `(key, response)` pairs, consuming the reply. Non-keyed

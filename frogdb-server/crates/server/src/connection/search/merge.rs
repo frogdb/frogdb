@@ -137,6 +137,7 @@ impl MergeStrategy for TagValsUnion {
 /// Merge ES.ALL entries by `StreamId` ordering, applying COUNT after the merge.
 pub(crate) struct EsAllMerge {
     count: Option<usize>,
+    error: Option<Response>,
     entries: Vec<(StreamId, Response)>,
 }
 
@@ -144,6 +145,7 @@ impl EsAllMerge {
     pub(crate) fn new(count: Option<usize>) -> Self {
         Self {
             count,
+            error: None,
             entries: Vec::new(),
         }
     }
@@ -157,7 +159,18 @@ impl MergeStrategy for EsAllMerge {
     }
 
     fn absorb(&mut self, _shard_id: usize, reply: PartialResult) {
+        if self.error.is_some() {
+            return;
+        }
         for (_, resp) in reply.into_keyed_results() {
+            // An embedded error is a real shard failure — surface it and abort,
+            // like every other merge, rather than sorting it into the stream as
+            // an unparseable data row (`StreamId::max()`) and returning it as a
+            // spurious ES.ALL entry.
+            if let Response::Error(_) = &resp {
+                self.error = Some(resp);
+                return;
+            }
             // Each entry is [stream_id_string, [fields...]]; parse the id to sort.
             if let Response::Array(ref parts) = resp
                 && let Some(Response::Bulk(Some(id_bytes))) = parts.first()
@@ -172,6 +185,9 @@ impl MergeStrategy for EsAllMerge {
     }
 
     fn finish(mut self: Box<Self>) -> Response {
+        if let Some(err) = self.error {
+            return err;
+        }
         self.entries.sort_by(|a, b| a.0.cmp(&b.0));
         if let Some(limit) = self.count {
             self.entries.truncate(limit);
@@ -1134,6 +1150,38 @@ mod tests {
                 ("red".to_string(), "2".to_string()),
             ]
         );
+    }
+
+    /// Finding 2: `EsAllMerge` must surface an embedded `Response::Error` rather
+    /// than pushing it as an unparseable data row sorted via `StreamId::max()`
+    /// (which would return the error string as a spurious ES.ALL stream entry).
+    #[test]
+    fn test_es_all_merge_surfaces_embedded_error() {
+        let mut merge = Box::new(EsAllMerge::new(None));
+        // A healthy shard contributes a well-formed entry...
+        merge.absorb(
+            0,
+            PartialResult::keyed(vec![(
+                Bytes::from_static(b"k"),
+                Response::Array(vec![
+                    Response::bulk(Bytes::from_static(b"1-0")),
+                    Response::Array(vec![]),
+                ]),
+            )]),
+        );
+        // ...another shard reports an error.
+        merge.absorb(
+            1,
+            PartialResult::keyed(vec![(
+                Bytes::from_static(b"k"),
+                Response::error("ERR es.all failed on shard"),
+            )]),
+        );
+
+        match merge.finish() {
+            Response::Error(msg) => assert_eq!(&msg[..], b"ERR es.all failed on shard"),
+            other => panic!("expected the embedded error to surface, got {other:?}"),
+        }
     }
 
     #[test]
