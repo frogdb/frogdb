@@ -124,7 +124,7 @@ impl ScatterGatherExecutor {
         let mut shard_results: HashMap<usize, HashMap<Bytes, Response>> =
             HashMap::with_capacity(outcome.responses.len());
         for (shard_id, partial) in outcome.responses {
-            shard_results.insert(shard_id, partial.results.into_iter().collect());
+            shard_results.insert(shard_id, partial.into_keyed_results().into_iter().collect());
         }
 
         let num_shards = partition.shard_keys.len();

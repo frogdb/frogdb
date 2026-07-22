@@ -9,7 +9,7 @@ use frogdb_types::metrics::definitions::{KeyspaceHits, KeyspaceMisses, WalRollba
 use super::message::{ScatterOp, WatchEntry};
 use super::post_execution::{EffectScope, WalPhase, WriteSummary};
 use super::rollback::WriteSnapshot;
-use super::types::{PartialResult, TransactionResult};
+use super::types::{CopyPayload, PartialResult, TransactionResult};
 use super::worker::ShardWorker;
 use crate::command::{Command, CommandEffects, WriteRecord};
 use crate::store::Store;
@@ -685,14 +685,13 @@ impl ShardWorker {
                 matching_keys
             }
             ScatterOp::DbSize => {
-                // Return the key count for this shard
-                let count = self.store.len();
-                vec![(
-                    Bytes::from_static(b"__dbsize__"),
-                    Response::Integer(count as i64),
-                )]
+                // Return the key count for this shard as a typed scalar.
+                return PartialResult::Count(self.store.len() as i64);
             }
-            ScatterOp::FlushDb => self.scatter_flushdb(conn_id).await,
+            ScatterOp::FlushDb => {
+                self.scatter_flushdb(conn_id).await;
+                return PartialResult::Flushed;
+            }
             ScatterOp::Scan {
                 cursor,
                 count,
@@ -704,39 +703,23 @@ impl ShardWorker {
                 let (next_cursor, found_keys) =
                     self.store
                         .scan_filtered(*cursor, *count, pattern_ref, *key_type);
-                // Return cursor and keys as a special response
-                let mut results = Vec::with_capacity(found_keys.len() + 1);
-                results.push((
-                    Bytes::from_static(b"__cursor__"),
-                    Response::Integer(next_cursor as i64),
-                ));
-                for key in found_keys {
-                    results.push((key.clone(), Response::bulk(key)));
-                }
-                results
+                // Cursor and keys ride typed fields — no sentinel key.
+                return PartialResult::Scan {
+                    next_cursor,
+                    keys: found_keys,
+                };
             }
             ScatterOp::Copy { source_key } => {
                 // Get the value and expiry from source key for cross-shard copy.
-                // Returns an array with: [serialized_value, expiry_ms_or_nil].
-                // COPY ships the expiry out-of-band (the array's second element),
-                // so the transport frame is produced with an expiry-free header.
-                match self.serialize_key_for_transport(source_key, false) {
-                    Some((serialized, expiry_ms)) => {
-                        let expiry_resp = match expiry_ms {
-                            Some(ms) if ms > 0 => Response::Integer(ms),
-                            _ => Response::null(),
-                        };
-
-                        vec![(
-                            source_key.clone(),
-                            Response::Array(vec![Response::bulk(serialized), expiry_resp]),
-                        )]
-                    }
-                    None => {
-                        // Source key doesn't exist
-                        vec![(source_key.clone(), Response::null())]
-                    }
-                }
+                // COPY ships the expiry out-of-band (typed `CopyPayload`), so the
+                // transport frame is produced with an expiry-free header.
+                let payload = self.serialize_key_for_transport(source_key, false).map(
+                    |(serialized, expiry_ms)| CopyPayload {
+                        value: serialized,
+                        expiry_ms: expiry_ms.filter(|ms| *ms > 0),
+                    },
+                );
+                return PartialResult::Copy(payload);
             }
             ScatterOp::CopySet {
                 dest_key,
@@ -744,17 +727,14 @@ impl ShardWorker {
                 expiry_ms,
                 replace,
             } => {
-                return PartialResult::from_results(
+                return PartialResult::keyed(
                     self.scatter_copy_set(dest_key, value_data, expiry_ms, *replace, conn_id)
                         .await,
                 );
             }
             ScatterOp::RandomKey => {
-                // Return a random key from this shard
-                match self.store.random_key() {
-                    Some(key) => vec![(Bytes::from_static(b"__randomkey__"), Response::bulk(key))],
-                    None => vec![(Bytes::from_static(b"__randomkey__"), Response::null())],
-                }
+                // Return a random key from this shard (typed option, no filler key).
+                return PartialResult::RandomKey(self.store.random_key());
             }
             ScatterOp::Dump => {
                 // Serialize keys with full metadata for MIGRATE through the single
@@ -777,7 +757,7 @@ impl ShardWorker {
                 index_name,
                 request,
             } => {
-                return PartialResult::from_ft(frogdb_search::FtShardReply::Search(
+                return PartialResult::ft(frogdb_search::FtShardReply::Search(
                     self.execute_ft_search(index_name, request),
                 ));
             }
@@ -798,7 +778,7 @@ impl ShardWorker {
                 index_name,
                 request,
             } => {
-                return PartialResult::from_ft(frogdb_search::FtShardReply::Aggregate(
+                return PartialResult::ft(frogdb_search::FtShardReply::Aggregate(
                     self.execute_ft_aggregate(index_name, request),
                 ));
             }
@@ -806,7 +786,7 @@ impl ShardWorker {
                 index_name,
                 query_args,
             } => {
-                return PartialResult::from_ft(frogdb_search::FtShardReply::Search(
+                return PartialResult::ft(frogdb_search::FtShardReply::Search(
                     self.execute_ft_hybrid(index_name, query_args),
                 ));
             }
@@ -838,7 +818,7 @@ impl ShardWorker {
             ScatterOp::EsAll { count, after_id } => self.execute_es_all(count, after_id),
         };
 
-        PartialResult::from_results(results)
+        PartialResult::keyed(results)
     }
 
     fn scatter_mget(&mut self, keys: &[Bytes], conn_id: u64) -> Vec<(Bytes, Response)> {
@@ -962,7 +942,7 @@ impl ShardWorker {
         results
     }
 
-    async fn scatter_flushdb(&mut self, conn_id: u64) -> Vec<(Bytes, Response)> {
+    async fn scatter_flushdb(&mut self, conn_id: u64) {
         // Clear all keys in this shard.
         // Only increment version if there were live (non-expired) keys to clear,
         // so WATCH on non-existing keys or stale (expired) keys is not aborted.
@@ -992,7 +972,6 @@ impl ShardWorker {
         };
         self.run_scatter_effects(vec![(handler, Vec::new())], dirty_delta, conn_id)
             .await;
-        vec![(Bytes::from_static(b"__flushdb__"), Response::ok())]
     }
 
     async fn scatter_copy_set(
@@ -1230,6 +1209,37 @@ mod scatter_effect_tests {
         }
     }
 
+    /// Mock `FLUSHDB` (the always-registered write handler the FLUSHDB scatter
+    /// part routes its clear through): a keyless write with no keyspace event.
+    struct MockFlushDb;
+    impl Command for MockFlushDb {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "FLUSHDB",
+                arity: Arity::AtLeast(1),
+                flags: CommandFlags::WRITE,
+                keys: KeySpec::None,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::NoOp,
+                wakes: WaiterWake::All,
+                event: EventSpec::Suppressed,
+                requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
+                lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
+                strategy: crate::command::ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+        fn execute(
+            &self,
+            _ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            Ok(Response::ok())
+        }
+    }
+
     /// Build a single-shard worker (so keyspace notifications deliver into the
     /// local subscription table) with a recording broadcaster and all keyspace
     /// notification classes/channels enabled.
@@ -1240,6 +1250,7 @@ mod scatter_effect_tests {
         let mut registry = CommandRegistry::new();
         registry.register(MockSet);
         registry.register(MockDel);
+        registry.register(MockFlushDb);
         let mut worker = ShardWorker::with_eviction(
             0,
             1,
@@ -1480,16 +1491,11 @@ mod scatter_effect_tests {
                 1,
             )
             .await;
-        let arr = match &r.results[0].1 {
-            Response::Array(a) => a,
-            other => panic!("expected COPY array, got {other:?}"),
+        let payload = match r {
+            PartialResult::Copy(Some(payload)) => payload,
+            other => panic!("expected COPY payload, got {other:?}"),
         };
-        assert_eq!(arr.len(), 2);
-        let frame = match &arr[0] {
-            Response::Bulk(Some(b)) => b.clone(),
-            other => panic!("expected bulk frame, got {other:?}"),
-        };
-        let (val, meta) = ShardWorker::deserialize_transport_frame(&frame).unwrap();
+        let (val, meta) = ShardWorker::deserialize_transport_frame(&payload.value).unwrap();
         assert_eq!(
             val.as_string().map(|s| s.as_bytes()),
             Some(Bytes::from_static(b"hello"))
@@ -1498,12 +1504,83 @@ mod scatter_effect_tests {
             meta.expires_at.is_none(),
             "COPY frame header is expiry-free"
         );
-        match &arr[1] {
-            Response::Integer(ms) => {
-                assert!((49_000..=50_000).contains(ms), "unexpected ttl {ms}")
-            }
-            other => panic!("expected integer ttl, got {other:?}"),
+        match payload.expiry_ms {
+            Some(ms) => assert!((49_000..=50_000).contains(&ms), "unexpected ttl {ms}"),
+            None => panic!("expected out-of-band ttl, got none"),
         }
+    }
+
+    /// Proposal 16: the DBSIZE scatter arm replies with a typed `Count`, not a
+    /// fabricated `__dbsize__` key.
+    #[tokio::test]
+    async fn scatter_dbsize_arm_replies_typed_count() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = scatter_worker(bc as SharedBroadcaster);
+        worker.store.set(
+            Bytes::from_static(b"a"),
+            Value::string(Bytes::from_static(b"1")),
+        );
+        worker.store.set(
+            Bytes::from_static(b"b"),
+            Value::string(Bytes::from_static(b"2")),
+        );
+
+        let reply = worker
+            .execute_scatter_part(&[], &ScatterOp::DbSize, 1)
+            .await;
+        assert!(
+            matches!(reply, PartialResult::Count(2)),
+            "expected Count(2), got {reply:?}"
+        );
+    }
+
+    /// Proposal 16: RANDOMKEY on an empty shard replies with a typed
+    /// `RandomKey(None)`, not a `__randomkey__` filler key carrying nil.
+    #[tokio::test]
+    async fn scatter_randomkey_arm_replies_typed_option() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = scatter_worker(bc as SharedBroadcaster);
+
+        let empty = worker
+            .execute_scatter_part(&[], &ScatterOp::RandomKey, 1)
+            .await;
+        assert!(
+            matches!(empty, PartialResult::RandomKey(None)),
+            "expected RandomKey(None) on an empty shard, got {empty:?}"
+        );
+
+        worker.store.set(
+            Bytes::from_static(b"only"),
+            Value::string(Bytes::from_static(b"1")),
+        );
+        let present = worker
+            .execute_scatter_part(&[], &ScatterOp::RandomKey, 1)
+            .await;
+        match present {
+            PartialResult::RandomKey(Some(key)) => assert_eq!(key.as_ref(), b"only"),
+            other => panic!("expected RandomKey(Some(only)), got {other:?}"),
+        }
+    }
+
+    /// Proposal 16: the FLUSHDB scatter arm replies with a payload-free `Flushed`
+    /// ack, not a `__flushdb__` sentinel key, and still clears the shard.
+    #[tokio::test]
+    async fn scatter_flushdb_arm_replies_flushed_ack() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = scatter_worker(bc as SharedBroadcaster);
+        worker.store.set(
+            Bytes::from_static(b"a"),
+            Value::string(Bytes::from_static(b"1")),
+        );
+
+        let reply = worker
+            .execute_scatter_part(&[], &ScatterOp::FlushDb, 1)
+            .await;
+        assert!(
+            matches!(reply, PartialResult::Flushed),
+            "expected Flushed ack, got {reply:?}"
+        );
+        assert_eq!(worker.store.len(), 0, "FLUSHDB must clear the shard");
     }
 
     /// D2: EXISTS, TOUCH, and MGET all route hit/miss accounting through the one
@@ -1652,9 +1729,9 @@ mod scatter_effect_tests {
                 1,
             )
             .await;
-        match &copy.results[0].1 {
-            Response::Bulk(None) => {}
-            other => panic!("expected COPY of an expired source to be nil, got {other:?}"),
+        match copy {
+            PartialResult::Copy(None) => {}
+            other => panic!("expected COPY of an expired source to be absent, got {other:?}"),
         }
 
         // Re-arm the key for the DUMP half of the test (COPY's fetch already
@@ -1670,7 +1747,7 @@ mod scatter_effect_tests {
         let dump = worker
             .execute_scatter_part(&[Bytes::from_static(b"stale2")], &ScatterOp::Dump, 1)
             .await;
-        match &dump.results[0].1 {
+        match &dump.keyed_slice()[0].1 {
             Response::Bulk(None) => {}
             other => panic!("expected DUMP of an expired key to be nil, got {other:?}"),
         }

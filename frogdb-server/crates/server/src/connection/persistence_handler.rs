@@ -233,7 +233,7 @@ impl ConnectionHandler {
                 Err(_) => return Response::error("IOERR timeout reading local keys"),
             };
 
-            for (key, resp) in partial.results {
+            for (key, resp) in partial.into_keyed_results() {
                 if let Response::Bulk(Some(data)) = resp {
                     dumps.push((key, data.to_vec()));
                 }

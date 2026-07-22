@@ -42,7 +42,7 @@ impl MergeStrategy for OkOrFirstError {
         if self.error.is_some() {
             return;
         }
-        for (_, resp) in &reply.results {
+        for (_, resp) in reply.keyed_slice() {
             if let Response::Error(_) = resp {
                 self.error = Some(resp.clone());
                 break;
@@ -74,7 +74,7 @@ impl MergeStrategy for TagValsUnion {
         if self.error.is_some() {
             return;
         }
-        for (_, resp) in reply.results {
+        for (_, resp) in reply.into_keyed_results() {
             match resp {
                 Response::Error(_) => {
                     self.error = Some(resp);
@@ -132,7 +132,7 @@ impl MergeStrategy for EsAllMerge {
     }
 
     fn absorb(&mut self, _shard_id: usize, reply: PartialResult) {
-        for (_, resp) in reply.results {
+        for (_, resp) in reply.into_keyed_results() {
             // Each entry is [stream_id_string, [fields...]]; parse the id to sort.
             if let Response::Array(ref parts) = resp
                 && let Some(Response::Bulk(Some(id_bytes))) = parts.first()
@@ -175,7 +175,7 @@ impl MergeStrategy for SpellcheckMerge {
         if self.error.is_some() {
             return;
         }
-        for (_, resp) in reply.results {
+        for (_, resp) in reply.into_keyed_results() {
             if let Response::Error(_) = &resp {
                 self.error = Some(resp);
                 return;
@@ -342,8 +342,8 @@ impl MergeStrategy for FtSearchMerge {
         if self.error.is_some() {
             return;
         }
-        match reply.ft {
-            Some(FtShardReply::Search(Ok(shard_reply))) => {
+        match reply {
+            PartialResult::Ft(FtShardReply::Search(Ok(shard_reply))) => {
                 self.total += shard_reply.total;
                 for hit in shard_reply.hits {
                     let sort_key = if self.sortby_active {
@@ -358,7 +358,7 @@ impl MergeStrategy for FtSearchMerge {
                     self.all_hits.push((sort_key, hit));
                 }
             }
-            Some(FtShardReply::Search(Err(msg))) => {
+            PartialResult::Ft(FtShardReply::Search(Err(msg))) => {
                 self.error = Some(Response::error(msg));
             }
             _ => {}
@@ -442,8 +442,8 @@ impl MergeStrategy for FtHybridMerge {
         if self.error.is_some() {
             return;
         }
-        match reply.ft {
-            Some(FtShardReply::Search(Ok(shard_reply))) => {
+        match reply {
+            PartialResult::Ft(FtShardReply::Search(Ok(shard_reply))) => {
                 self.total += shard_reply.total;
                 for hit in shard_reply.hits {
                     let sort_key = if self.sortby_active {
@@ -454,7 +454,7 @@ impl MergeStrategy for FtHybridMerge {
                     self.all_hits.push((sort_key, hit));
                 }
             }
-            Some(FtShardReply::Search(Err(msg))) => {
+            PartialResult::Ft(FtShardReply::Search(Err(msg))) => {
                 self.error = Some(Response::error(msg));
             }
             _ => {}
@@ -525,11 +525,11 @@ impl MergeStrategy for FtAggregateMerge {
         if self.error.is_some() {
             return;
         }
-        match reply.ft {
+        match reply {
             // The typed partial aggregate crosses the shard boundary as-is —
             // no reducer-state decode.
-            Some(FtShardReply::Aggregate(Ok(partial))) => self.partials.push(partial),
-            Some(FtShardReply::Aggregate(Err(msg))) => {
+            PartialResult::Ft(FtShardReply::Aggregate(Ok(partial))) => self.partials.push(partial),
+            PartialResult::Ft(FtShardReply::Aggregate(Err(msg))) => {
                 self.error = Some(Response::error(msg));
             }
             _ => {}
@@ -634,7 +634,7 @@ mod tests {
     }
 
     fn search_reply(total: usize, hits: Vec<ShardSearchHit>) -> PartialResult {
-        PartialResult::from_ft(FtShardReply::Search(Ok(ShardSearchReply { total, hits })))
+        PartialResult::ft(FtShardReply::Search(Ok(ShardSearchReply { total, hits })))
     }
 
     fn parse_search(parts: &[&str]) -> FtSearchRequest {
@@ -812,7 +812,7 @@ mod tests {
         merge.absorb(0, search_reply(1, vec![hit("a", 1.0, None, Some(vec![]))]));
         merge.absorb(
             1,
-            PartialResult::from_ft(FtShardReply::Search(Err("idx: no such index".to_string()))),
+            PartialResult::ft(FtShardReply::Search(Err("idx: no such index".to_string()))),
         );
 
         match merge.finish() {
@@ -955,14 +955,8 @@ mod tests {
             error: None,
             partials: Vec::new(),
         });
-        merge.absorb(
-            0,
-            PartialResult::from_ft(FtShardReply::Aggregate(Ok(partial1))),
-        );
-        merge.absorb(
-            1,
-            PartialResult::from_ft(FtShardReply::Aggregate(Ok(partial2))),
-        );
+        merge.absorb(0, PartialResult::ft(FtShardReply::Aggregate(Ok(partial1))));
+        merge.absorb(1, PartialResult::ft(FtShardReply::Aggregate(Ok(partial2))));
 
         let (total, items) = unwrap_reply(merge.finish());
         assert_eq!(total, 2); // two groups
@@ -1012,7 +1006,7 @@ mod tests {
         });
         merge.absorb(
             0,
-            PartialResult::from_ft(FtShardReply::Aggregate(Err("ERR bad pipeline".to_string()))),
+            PartialResult::ft(FtShardReply::Aggregate(Err("ERR bad pipeline".to_string()))),
         );
         match merge.finish() {
             Response::Error(msg) => assert_eq!(&msg[..], b"ERR bad pipeline"),

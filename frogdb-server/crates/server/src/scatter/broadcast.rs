@@ -343,13 +343,19 @@ pub trait IntegerTotal: Send + 'static {
 
 impl IntegerTotal for PartialResult {
     fn integer_total(&self) -> i64 {
-        self.results
-            .iter()
-            .filter_map(|(_, r)| match r {
-                Response::Integer(n) => Some(*n),
-                _ => None,
-            })
-            .sum()
+        match self {
+            // DBSIZE replies with a typed count.
+            PartialResult::Count(n) => *n,
+            // A keyed reply of integers contributes their sum (generic fold).
+            PartialResult::Keyed(results) => results
+                .iter()
+                .filter_map(|(_, r)| match r {
+                    Response::Integer(n) => Some(*n),
+                    _ => None,
+                })
+                .sum(),
+            _ => 0,
+        }
     }
 }
 
@@ -412,7 +418,7 @@ impl MergeStrategy for SortedUnion {
     }
 
     fn absorb(&mut self, _shard_id: usize, reply: PartialResult) {
-        for (key, _) in reply.results {
+        for (key, _) in reply.into_keyed_results() {
             self.keys.push(key);
         }
     }
@@ -438,7 +444,7 @@ impl MergeStrategy for SortedByKey {
     }
 
     fn absorb(&mut self, _shard_id: usize, reply: PartialResult) {
-        self.results.extend(reply.results);
+        self.results.extend(reply.into_keyed_results());
     }
 
     fn finish(mut self: Box<Self>) -> Response {
@@ -535,7 +541,7 @@ pub trait ShardZeroProjection: Send + 'static {
 
 impl ShardZeroProjection for PartialResult {
     fn into_response(self) -> Response {
-        self.results
+        self.into_keyed_results()
             .into_iter()
             .next()
             .map(|(_, resp)| resp)
@@ -543,7 +549,7 @@ impl ShardZeroProjection for PartialResult {
     }
 
     fn embedded_error(&self) -> Option<Response> {
-        self.results.iter().find_map(|(_, resp)| match resp {
+        self.keyed_slice().iter().find_map(|(_, resp)| match resp {
             Response::Error(_) => Some(resp.clone()),
             _ => None,
         })
@@ -702,18 +708,16 @@ mod tests {
     }
 
     fn partial(results: Vec<(Bytes, Response)>) -> PartialResult {
-        PartialResult::from_results(results)
+        PartialResult::keyed(results)
     }
 
     #[test]
     fn sum_integers_partial_result() {
+        // DBSIZE replies as a typed `Count`; SumIntegers folds them.
         let merge: Box<SumIntegers<PartialResult>> = Box::default();
         let resp = fold(
             merge,
-            vec![
-                (0, partial(vec![(Bytes::from("a"), Response::Integer(2))])),
-                (1, partial(vec![(Bytes::from("b"), Response::Integer(3))])),
-            ],
+            vec![(0, PartialResult::Count(2)), (1, PartialResult::Count(3))],
         );
         assert!(matches!(resp, Response::Integer(5)));
     }
