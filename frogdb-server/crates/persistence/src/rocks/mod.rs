@@ -231,19 +231,6 @@ impl RocksStore {
     pub fn delete(&self, shard_id: usize, key: &[u8]) -> Result<(), RocksError> {
         self.delete_tier(CfTier::Main, shard_id, key)
     }
-    pub fn delete_opt(
-        &self,
-        shard_id: usize,
-        key: &[u8],
-        wo: &WriteOptions,
-    ) -> Result<(), RocksError> {
-        let cf = self.cf_handle(shard_id)?;
-        self.db.delete_cf_opt(&cf, key, wo).map_err(|e| {
-            error!(shard_id, error = %e, "RocksDB delete failed");
-            RocksError::from(e)
-        })?;
-        Ok(())
-    }
     pub fn write_batch(&self, batch: WriteBatch) -> Result<(), RocksError> {
         self.db.write(batch).map_err(|e| {
             error!(error = %e, "RocksDB batch write failed");
@@ -257,15 +244,6 @@ impl RocksStore {
             RocksError::from(e)
         })?;
         Ok(())
-    }
-    pub fn create_batch_for_shard(
-        &self,
-        shard_id: usize,
-    ) -> Result<(WriteBatch, String), RocksError> {
-        if shard_id >= self.num_shards {
-            return Err(RocksError::InvalidShardId(shard_id));
-        }
-        Ok((WriteBatch::default(), self.cf_names[shard_id].clone()))
     }
     pub fn batch_put(
         &self,
@@ -463,13 +441,4 @@ fn partial_value_merge(
 ) -> Option<Vec<u8>> {
     let ops: Vec<&[u8]> = operands.iter().collect();
     crate::partial_merge_hll_deltas(&ops)
-}
-
-#[allow(dead_code)]
-pub fn open_shared(
-    path: &Path,
-    num_shards: usize,
-    config: &RocksConfig,
-) -> Result<Arc<RocksStore>, RocksError> {
-    Ok(Arc::new(RocksStore::open(path, num_shards, config)?))
 }
