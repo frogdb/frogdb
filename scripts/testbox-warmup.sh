@@ -10,7 +10,10 @@ shift || true
 idle="${TESTBOX_IDLE_TIMEOUT:-5}"
 idfile="$(git rev-parse --git-dir)/blacksmith-testboxes"
 
-out=$(blacksmith testbox warmup "$workflow" --idle-timeout "$idle" "$@" | tee /dev/stderr)
+# No `tee /dev/stderr` here: the Claude sandbox denies writes to /dev/stderr
+# via tee; capture then echo instead (warmup output is short).
+out=$(blacksmith testbox warmup "$workflow" --idle-timeout "$idle" "$@")
+printf '%s\n' "$out"
 
 id=$(printf '%s\n' "$out" | grep -oE 'tbx_[A-Za-z0-9]+' | head -1 || true)
 if [ -z "$id" ]; then

@@ -957,7 +957,14 @@ tb-run cmd:
     [ -n "$id" ] || { echo "no testbox recorded; run 'just tb-warmup' first" >&2; exit 1; }
     # The testbox SSH session does not inherit the workflow's PATH; mise-managed
     # tools (just, cargo-nextest) live in the shims dir.
-    blacksmith testbox run --id "$id" 'export PATH="$HOME/.local/share/mise/shims:$PATH" && '{{quote(cmd)}}
+    #
+    # Keepalive: the run-testbox idle watchdog greps `ss` for the *external* SSH
+    # port (a gateway mapping; sshd actually listens on :22), so it never sees
+    # the live connection — the ~/.testbox-last-activity marker, touched only at
+    # command start/end, is the sole activity signal. Without a mid-run touch,
+    # any command longer than the idle timeout kills the box mid-run. The
+    # background loop self-terminates when the remote shell exits (kill -0 $$).
+    blacksmith testbox run --id "$id" '{ ( while kill -0 $$ 2>/dev/null; do touch ~/.testbox-last-activity; sleep 60; done ) </dev/null >/dev/null 2>&1 & export PATH="$HOME/.local/share/mise/shims:$PATH"; } && '{{quote(cmd)}}
 
 # Show status of the most recently warmed testbox
 tb-status *args="":

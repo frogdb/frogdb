@@ -25,6 +25,15 @@ This repo wraps the testbox lifecycle so boxes are always cleaned up:
   SessionEnd hook stops it automatically. Raw warmups bypass that safety net.
 - Idle timeout is 5 minutes (cost control; the user is price-sensitive). An expired box just
   needs another `just tb-warmup`; re-hydration is cheap thanks to the Rust build cache.
+- Long runs are safe: `tb-run` injects a background keepalive that touches
+  `~/.testbox-last-activity` every 60s while the command runs (the upstream idle watchdog
+  can't see the live SSH connection — it greps for the external gateway port while sshd
+  listens on :22 — so the marker file is the only activity signal). Commands longer than the
+  idle timeout no longer kill the box mid-run. Do NOT bypass `tb-run` with raw
+  `blacksmith testbox run` for long commands — the raw CLI touches the marker only at
+  command start/end.
+- `tb-run` also prepends `$HOME/.local/share/mise/shims` to the remote PATH; `just`,
+  `cargo-nextest`, etc. resolve fine. No need to export PATH in your command.
 - Runner is `blacksmith-8vcpu-ubuntu-2404-arm` (aarch64 Linux). RocksDB compiles from vendored
   source there (Linux system RocksDB is too old); the first-ever hydration is slow (~10-20 min)
   while later ones restore from cache.
