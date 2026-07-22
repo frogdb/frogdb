@@ -421,6 +421,139 @@ async fn regression_lazy_expiry_emits_expired_keyevent() {
     server.shutdown().await;
 }
 
+/// Lazy last-hash-field-death `del` parity (issue 09 real-path repro): a hash
+/// whose LAST field dies via field TTL empties the key, and Redis emits a
+/// generic `del` (not `expired`) for that removal. Active expiry emits it from
+/// its `emptied_keys` branch; before this fix the LAZY read seam
+/// (`purge_expired_hash_fields` -> `delete`) dropped it silently. Active expiry
+/// is disabled (`DEBUG SET-ACTIVE-EXPIRE 0`) so the ONLY thing that can reap the
+/// field is the third-party `HGET` — isolating the lazy seam. Hash-field TTL
+/// cannot be backdated (`DEBUG EXPIRE-BACKDATE` is whole-key only), so a short
+/// real TTL + a brief wait makes the field due before the triggering read.
+#[tokio::test]
+async fn regression_lazy_hash_field_death_emits_del_keyevent() {
+    // Single shard so the key and the shard-0 subscriber share a shard.
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut admin = server.connect().await;
+    let mut subscriber = server.connect().await;
+
+    // Disable active expiry: only a lazy read may now reap the field / empty
+    // the key.
+    let resp = admin.command(&["DEBUG", "SET-ACTIVE-EXPIRE", "0"]).await;
+    assert_eq!(resp, Response::ok());
+
+    // Enable keyevent notifications (KEA includes the generic `g` class `del`
+    // rides on).
+    let resp = admin
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // Seed a single-field hash and give that field a short TTL.
+    admin.command(&["HSET", "h", "f", "v"]).await;
+    let resp = admin
+        .command(&["HPEXPIRE", "h", "60", "FIELDS", "1", "f"])
+        .await;
+    assert!(matches!(resp, Response::Array(_)));
+
+    let resp = subscriber
+        .command(&["SUBSCRIBE", "__keyevent@0__:del"])
+        .await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+
+    // Let the field's TTL elapse (no active sweep will touch it).
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // Trigger the lazy purge: a read of the hash reaps the expired field, which
+    // empties and removes the key.
+    admin.command(&["HGET", "h", "f"]).await;
+
+    let msg = subscriber.read_message(Duration::from_secs(2)).await;
+    assert!(
+        msg.is_some(),
+        "lazy last-hash-field death (HGET reaping the final field) must emit the \
+         `del` keyevent, matching active expiry's emptied_keys branch"
+    );
+    if let Some(Response::Array(arr)) = msg {
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("message"))));
+        assert_eq!(
+            arr[1],
+            Response::Bulk(Some(Bytes::from("__keyevent@0__:del")))
+        );
+        assert_eq!(arr[2], Response::Bulk(Some(Bytes::from("h"))));
+    } else {
+        panic!("Expected array response for del keyevent message");
+    }
+
+    server.shutdown().await;
+}
+
+/// No double-fire under the active sweep (issue 09): the sweep reaps a
+/// last-hash-field death through the *same* `purge_expired_hash_fields` seam a
+/// lazy read uses, so it also fills the store's lazily-emptied buffer — but it
+/// already reports the key via `ExpiryResult::emptied_keys`. `run_active_expiry`
+/// discards the buffer, so a following command's lazy drain fires nothing:
+/// exactly one `del` total. Active expiry stays ENABLED (default) here.
+#[tokio::test]
+async fn lazy_hash_field_death_del_event_fires_once_under_active_sweep() {
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut admin = server.connect().await;
+    let mut subscriber = server.connect().await;
+
+    let resp = admin
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    admin.command(&["HSET", "h", "f", "v"]).await;
+    let resp = admin
+        .command(&["HPEXPIRE", "h", "80", "FIELDS", "1", "f"])
+        .await;
+    assert!(matches!(resp, Response::Array(_)));
+
+    let resp = subscriber
+        .command(&["SUBSCRIBE", "__keyevent@0__:del"])
+        .await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+
+    // The active sweep (100 ms cadence) reaps the field and emits exactly one
+    // `del`.
+    let msg = subscriber.read_message(Duration::from_secs(2)).await;
+    assert!(
+        msg.is_some(),
+        "active sweep must emit the `del` keyevent for the emptied hash key"
+    );
+    if let Some(Response::Array(arr)) = msg {
+        assert_eq!(arr[2], Response::Bulk(Some(Bytes::from("h"))));
+    } else {
+        panic!("Expected array response for del keyevent message");
+    }
+
+    // Drive several command seams that would drain a leaked lazily-emptied
+    // buffer. None may produce a second `del`.
+    for _ in 0..3 {
+        admin.command(&["HGET", "h", "f"]).await;
+        admin.command(&["GET", "nonexistent"]).await;
+    }
+    let extra = subscriber.read_message(Duration::from_millis(300)).await;
+    assert!(
+        extra.is_none(),
+        "the sweep already reported this key — no second `del` may fire on a \
+         later command's lazy drain, got {extra:?}"
+    );
+
+    server.shutdown().await;
+}
+
 /// The disabled fast path is unaffected: with notify-keyspace-events off
 /// (server default), a write on any shard emits nothing, so the coordinator is
 /// never consulted and the subscriber receives no message.

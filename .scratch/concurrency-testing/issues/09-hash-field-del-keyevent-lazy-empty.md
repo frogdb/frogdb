@@ -1,6 +1,6 @@
 # 09 — Lazy hash-field-death `"del"` keyspace event not emitted
 
-Status: needs-triage
+Status: done
 Type: AFK
 Origin: effect-scope parity review 2026-07-22 (proposal lazy-expiry-effect-scope.md Resolution section)
 
@@ -31,12 +31,34 @@ so the buffer only ever fires for genuinely lazy reads, plus its own D8 real-pat
 
 ## Acceptance criteria
 
-- [ ] Real-path repro of the missing lazy `"del"` keyspace event for last-hash-field-death (or a
+- [x] Real-path repro of the missing lazy `"del"` keyspace event for last-hash-field-death (or a
       reasoned-unreachable note if investigation shows the path cannot actually be hit).
-- [ ] Fix routes the lazy-emptied case through a single drain point without double-firing when the
+      Landed `regression_lazy_hash_field_death_emits_del_keyevent` in
+      `frogdb-server/crates/server/tests/integration_pubsub.rs`: `DEBUG SET-ACTIVE-EXPIRE 0`,
+      `HSET h f v`, `HPEXPIRE h 60 FIELDS 1 f`, brief sleep, then `HGET h f` reaps the last field
+      and must emit `del`. Field TTL cannot be backdated (`DEBUG EXPIRE-BACKDATE` is whole-key
+      only), so a short real TTL + sleep is used. Fail-before verified: the test failed on unfixed
+      code (repro commit, `#[ignore]`d with the gap reason); the fix un-ignores it.
+- [x] Fix routes the lazy-emptied case through a single drain point without double-firing when the
       same `purge_expired_hash_fields` call runs under the active sweep (i.e. the active-expiry
       call sites must not also report through the new lazy seam).
-- [ ] Existing hash-field-TTL and keyspace-notification tests stay green.
+      Design: added a sibling store buffer `lazily_emptied` (`store/hashmap.rs`, trait default in
+      `store/mod.rs`) that `purge_expired_hash_fields` pushes to when it empties a key.
+      `ShardWorker::drain_lazy_purge_effects` (`shard/worker.rs`) now drains it and fires the same
+      effect set as `apply_expiry_effects`' `emptied_keys` branch — `del` with `GENERIC` (never
+      `expired`), tracking + search invalidation, key-expired probe, stream-waiter drain — under
+      the one per-batch version bump. All five existing lazy drain seams inherit this for free.
+      Double-fire prevention: the active sweep shares `purge_expired_hash_fields` and so also fills
+      `lazily_emptied`, but it owns reporting via `ExpiryResult::emptied_keys`; `run_active_expiry`
+      (`shard/event_loop.rs`) take-and-discards the buffer after `run_cycle`, so a later command's
+      lazy drain never re-fires `del` for a swept key. Between event-loop iterations the buffer is
+      empty (every command drains at its own seam), so the discard only drops the current cycle's
+      own output. Pinned by `lazy_hash_field_death_del_event_fires_once_under_active_sweep`
+      (integration) and `active_sweep_emptied_key_does_not_double_fire_del` (worker unit).
+- [x] Existing hash-field-TTL and keyspace-notification tests stay green.
+      Verified: `frogdb-core` store/shard/active_expiry (68 + effect_tests), `frogdb-commands`
+      hash/hexpire (21), `frogdb-server` hash + keyspace/keyevent/notify (24) + `integration_hashes`
+      (10) all pass. Also added worker-unit `lazy_emptied_hash_key_drains_del_event`.
 
 ## Blocked by
 

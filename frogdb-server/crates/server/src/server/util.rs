@@ -1,4 +1,4 @@
-use frogdb_core::persistence::{CompressionType, DurabilityMode, WalConfig};
+use frogdb_core::persistence::{DurabilityMode, WalConfig};
 use frogdb_core::sync::{AtomicU64, Ordering};
 use frogdb_core::{EvictionConfig, EvictionPolicy};
 use std::collections::hash_map::DefaultHasher;
@@ -34,20 +34,6 @@ pub fn hash_addr_to_node_id(addr: &std::net::SocketAddr) -> u64 {
     let mut hasher = DefaultHasher::new();
     addr.hash(&mut hasher);
     hasher.finish()
-}
-
-/// Parse compression type from config string.
-pub fn parse_compression(s: &str) -> CompressionType {
-    match s.to_lowercase().as_str() {
-        "none" => CompressionType::None,
-        "snappy" => CompressionType::Snappy,
-        "lz4" => CompressionType::Lz4,
-        "zstd" => CompressionType::Zstd,
-        _ => unreachable!(
-            "Invalid compression '{}' should have been caught by validation",
-            s
-        ),
-    }
 }
 
 /// Build WAL config from persistence config.
@@ -121,15 +107,6 @@ pub fn build_eviction_config(config: &MemoryConfig) -> EvictionConfig {
         maxmemory_samples: config.maxmemory_samples,
         lfu_log_factor: config.lfu_log_factor,
         lfu_decay_time: config.lfu_decay_time,
-    }
-}
-
-/// Helper module for CPU count.
-pub mod num_cpus {
-    pub fn get() -> usize {
-        std::thread::available_parallelism()
-            .map(|p| p.get())
-            .unwrap_or(1)
     }
 }
 
