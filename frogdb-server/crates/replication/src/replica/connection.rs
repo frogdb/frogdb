@@ -2,9 +2,9 @@
 
 use crate::frame::serialize_command_to_resp;
 use crate::fullsync::{
-    CHECKPOINT_MARKER, CheckpointChecksum, CheckpointStreamCodec, receive_to_file,
+    CHECKPOINT_MARKER, CheckpointStager, CheckpointStreamCodec, receive_checkpoint_files,
 };
-use crate::state::{ReplicationState, StagedReplicationMetadata};
+use crate::state::ReplicationState;
 use bytes::Bytes;
 use std::io;
 use std::net::SocketAddr;
@@ -14,7 +14,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::offset::ReplicaOffset;
 use std::time::Duration;
-use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::RwLock;
 use tokio::time::timeout;
@@ -249,6 +248,22 @@ impl ReplicaConnection {
         Ok(())
     }
 
+    /// Receive a full-sync checkpoint and stage it for the next boot.
+    ///
+    /// This is a thin driver over two seams: [`receive_checkpoint_files`] owns
+    /// the transport loop (socket → scratch dir + combined checksum), and
+    /// [`CheckpointStager::commit`] owns verify → commit → metadata against the
+    /// staged-checkpoint contract. What stays here is the only step that belongs
+    /// to the connection — adopting the staged offset into live replication
+    /// state, then flipping to `Streaming`.
+    ///
+    /// Streaming-before-install: the returned [`StagedOutcome`] is the licence
+    /// to adopt the offset and proceed to live WAL streaming (see
+    /// `connect_and_sync`); the checkpoint itself is *staged*, not installed —
+    /// the on-disk DB is unchanged until the next boot loads it. That invariant
+    /// now rides in the `commit` return type instead of a prose comment.
+    ///
+    /// [`StagedOutcome`]: crate::fullsync::StagedOutcome
     pub(crate) async fn receive_checkpoint(&mut self, file_count: usize) -> io::Result<()> {
         tracing::info!(file_count = file_count, "Receiving FrogDB checkpoint");
         let parent_dir = self.data_dir.parent().ok_or_else(|| {
@@ -257,74 +272,23 @@ impl ReplicaConnection {
                 "data_dir has no parent directory",
             )
         })?;
-        let checkpoint_dir = parent_dir.join("checkpoint_incoming");
-        fs::create_dir_all(&checkpoint_dir).await?;
-        let mut total_bytes = 0u64;
+        let stager = CheckpointStager::new(parent_dir);
+        let incoming = stager.incoming_dir();
+
         let mut reader = BufReader::new(&mut self.stream);
-        // The combined checksum's coverage is owned by `CheckpointChecksum`: fold
-        // each file in as it lands, in the same order the codec framed it.
-        let mut combined = CheckpointChecksum::new();
-        for i in 0..file_count {
-            // Framing (per-file header) via the codec; the payload bytes still
-            // flow through `receive_to_file`, which computes the per-file hash.
-            let header = CheckpointStreamCodec::read_file_header(&mut reader).await?;
-            let file_path = checkpoint_dir.join(&header.name);
-            let checksum = receive_to_file(&mut reader, &file_path, header.size, None).await?;
-            total_bytes += header.size;
-            combined.update_file(&header.name, &checksum);
-            tracing::debug!(file = i + 1, filename = %header.name, size = header.size, checksum = %hex::encode(&checksum[..8]), "Received checkpoint file");
-        }
-        let metadata = CheckpointStreamCodec::read_metadata(&mut reader).await?;
-        tracing::info!(total_bytes = total_bytes, files = file_count, replication_id = %metadata.replication_id, offset = metadata.replication_offset, "Checkpoint received successfully");
-        let computed = combined.finalize();
-        if computed != metadata.checksum {
-            tracing::error!(expected = %hex::encode(metadata.checksum), actual = %hex::encode(computed), "Checkpoint checksum mismatch");
-            let _ = fs::remove_dir_all(&checkpoint_dir).await;
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "checkpoint checksum mismatch: received data does not match primary's checksum",
-            ));
-        }
-        tracing::info!(checksum = %hex::encode(computed), "Checkpoint checksum verified");
-        // Stage through the typed contract shared with the boot-time installer
-        // (`frogdb_persistence::rocks::staged`): the rename onto the staged dir
-        // is the writer's commit point.
-        let staged = frogdb_persistence::rocks::staged::StagedCheckpoint::in_parent(parent_dir);
-        if staged.exists()
-            && let Err(e) = fs::remove_dir_all(staged.dir()).await
-        {
-            tracing::warn!(error = %e, "Failed to remove old staged checkpoint");
-        }
-        if let Err(e) = fs::rename(&checkpoint_dir, staged.dir()).await {
-            tracing::error!(error = %e, "Failed to stage checkpoint for loading");
-            let _ = fs::remove_dir_all(&checkpoint_dir).await;
-            return Err(io::Error::other(format!(
-                "Failed to stage checkpoint: {}",
-                e
-            )));
-        }
-        let staged_meta = StagedReplicationMetadata {
-            replication_id: metadata.replication_id.clone(),
-            replication_offset: metadata.replication_offset,
-            checksum: Some(hex::encode(metadata.checksum)),
-        };
-        match serde_json::to_string(&staged_meta) {
-            Ok(json) => {
-                if let Err(e) = fs::write(staged.replication_metadata_path(), json).await {
-                    tracing::warn!(error = %e, "Failed to write replication metadata");
-                }
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to serialize replication metadata");
-            }
-        }
-        tracing::info!(checkpoint_dir = %staged.dir().display(), replication_id = %metadata.replication_id, offset = metadata.replication_offset, "Checkpoint staged for loading - server restart required to apply");
-        self.state.write().await.replication_id = metadata.replication_id.clone();
-        self.offsets.reset_to(metadata.replication_offset);
-        // The checkpoint itself needs a restart to load, but the connection
-        // now moves straight into live WAL streaming (see `connect_and_sync`)
-        // exactly like the RDB fullsync path below — so the link is up from
-        // here, matching `receive_rdb`'s transition.
+        let (metadata, computed) =
+            receive_checkpoint_files(&mut reader, &incoming, file_count).await?;
+
+        let outcome = stager.commit(incoming, computed, &metadata).await?;
+
+        // Adopt the staged offset into live state — the one step that must stay
+        // on the connection, because it mutates `ReplicationState` + the shared
+        // replica offset atomic (the cluster-bus / INFO handle).
+        self.state.write().await.replication_id = outcome.replication_id.clone();
+        self.offsets.reset_to(outcome.replication_offset);
+        // Staged, not installed: the connection now moves straight into live WAL
+        // streaming (see `connect_and_sync`) exactly like the RDB fullsync path —
+        // so the link is up from here, matching `receive_rdb`'s transition.
         self.set_state(ConnectionState::Streaming);
         Ok(())
     }
@@ -350,6 +314,9 @@ impl ReplicaConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fullsync::{
+        CheckpointChecksum, CheckpointFileHeader, FullSyncMetadata, calculate_bytes_checksum,
+    };
     use crate::replica::offset::ReplicaOffset;
     use std::sync::atomic::AtomicU64;
 
@@ -414,5 +381,93 @@ mod tests {
             req.contains("$3\r\n500\r\n"),
             "reconnect PSYNC must carry the live offset 500, got: {req:?}"
         );
+    }
+
+    /// Encode a checkpoint envelope body (per-file frames + trailing metadata,
+    /// *without* the marker/count prelude that `psync` already consumed) for a
+    /// given offset, folding the combined checksum the sender way.
+    async fn encode_checkpoint_body(
+        files: &[(String, Vec<u8>)],
+        replication_id: &str,
+        offset: u64,
+    ) -> Vec<u8> {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut combined = CheckpointChecksum::new();
+        for (name, payload) in files {
+            CheckpointStreamCodec::write_file_header(
+                &mut buf,
+                &CheckpointFileHeader {
+                    name: name.clone(),
+                    size: payload.len() as u64,
+                },
+            )
+            .await
+            .unwrap();
+            buf.write_all(payload).await.unwrap();
+            combined.update_file(name, &calculate_bytes_checksum(payload));
+        }
+        let metadata = FullSyncMetadata {
+            rdb_size: files.iter().map(|(_, p)| p.len() as u64).sum(),
+            checksum: combined.finalize(),
+            replication_id: replication_id.to_string(),
+            replication_offset: offset,
+        };
+        CheckpointStreamCodec::write_metadata(&mut buf, &metadata)
+            .await
+            .unwrap();
+        buf
+    }
+
+    /// The one behavior that must stay on the connection: after a good
+    /// checkpoint, the driver adopts the staged offset + replication id into
+    /// live state and raises `link_up` (Streaming). Drives the real
+    /// `receive_checkpoint` over an in-memory duplex — no socket, no RocksStore.
+    #[tokio::test]
+    async fn receive_checkpoint_adopts_offset_and_streams() {
+        let tmp = tempfile::tempdir().unwrap();
+        // data_dir is `<tmp>/db`; its parent `<tmp>` is where staging lands.
+        let data_dir = tmp.path().join("db");
+
+        let files = vec![
+            ("CURRENT".to_string(), b"MANIFEST-000005\n".to_vec()),
+            ("000042.sst".to_string(), (0u8..=200).collect()),
+        ];
+        let body = encode_checkpoint_body(&files, "primary-replid", 4242).await;
+
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+
+        let state = Arc::new(RwLock::new(ReplicationState::new()));
+        let offsets = ReplicaOffset::new(state.clone(), Arc::new(AtomicU64::new(0)));
+        let link_up = Arc::new(AtomicBool::new(false));
+
+        let mut conn = ReplicaConnection {
+            stream: Box::new(server),
+            _primary_addr: "127.0.0.1:6379".parse().unwrap(),
+            state: state.clone(),
+            connection_state: ConnectionState::Syncing,
+            data_dir,
+            offsets: offsets.clone(),
+            link_up: link_up.clone(),
+        };
+
+        // Feed the whole checkpoint body, then close so no read blocks.
+        client.write_all(&body).await.unwrap();
+        client.shutdown().await.unwrap();
+        drop(client);
+
+        conn.receive_checkpoint(files.len()).await.unwrap();
+
+        // Offset adopted into the live head + visible through the shared atomic.
+        assert_eq!(offsets.current(), 4242);
+        // Replication id adopted into live state.
+        assert_eq!(state.read().await.replication_id, "primary-replid");
+        // Link up: Streaming, with the derived atomic set in lockstep.
+        assert_eq!(conn.connection_state, ConnectionState::Streaming);
+        assert!(link_up.load(Ordering::Acquire));
+
+        // The checkpoint was staged (writer's commit point), not installed.
+        let staged = frogdb_persistence::rocks::staged::StagedCheckpoint::in_parent(tmp.path());
+        assert!(staged.exists());
+        assert!(staged.dir().join("CURRENT").exists());
     }
 }
