@@ -26,7 +26,7 @@ mod warm_tier;
 pub use typed::{StoreTypedExt, StoreTypedFamilyExt, TypedArc, WrongTypeError};
 
 // Re-export HashMapStore implementation
-pub use hashmap::{HashMapStore, SpillError};
+pub use hashmap::{BackdateExpiryResult, HashMapStore, SpillError};
 
 // Re-export the cohesive subsystems extracted out of HashMapStore so the
 // `Store` trait can expose them directly (`warm_tier()` / `ts_labels()`).

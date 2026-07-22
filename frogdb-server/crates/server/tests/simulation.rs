@@ -3164,9 +3164,11 @@ fn test_role_command_standalone() {
 /// `DEBUG SET-ACTIVE-EXPIRE 0` (debug.rs -> ObservabilityMsg::SetActiveExpire), so
 /// no sim sweep tick can race the TTL-elapse-to-EXEC window. Key expiry is
 /// evaluated against the real wall clock (`std::time::Instant`), not turmoil's
-/// virtual clock, so the window is advanced with a real 50ms `std::thread::sleep`
-/// (see the call site) — a `tokio::time::sleep` would advance only virtual time
-/// and leave k physically live. 50ms >> the 10ms TTL gives a wide, robust margin.
+/// virtual clock, so the TTL is elapsed with `DEBUG EXPIRE-BACKDATE k 50` (see the
+/// call site) — which rewrites k's deadline directly into the past — rather than a
+/// real `std::thread::sleep`: deterministic and instant, no wall-clock stall
+/// inside the sim. Backdate rewrites only the timestamp (no purge, no version
+/// bump), so k stays physically present for the lazy check under test.
 #[test]
 fn watch_lazy_expiry_false_negative_realpath() {
     // Verifies the FIXED behavior on the real connection path: an `EXEC` over a
@@ -3248,18 +3250,27 @@ fn watch_lazy_expiry_false_negative_realpath() {
             "WATCH k should reply +OK, got {reply:?}"
         );
 
-        // Advance WALL-CLOCK time well past the 10ms TTL WITHOUT touching k and
-        // (with active expiry off) without any sweep removing it. Key expiry is
-        // evaluated against `std::time::Instant::now()` (KeyMetadata::is_expired,
+        // Elapse the TTL WITHOUT touching k and (with active expiry off) without
+        // any sweep removing it. Key expiry is evaluated against
+        // `std::time::Instant::now()` (KeyMetadata::is_expired,
         // types/src/types/mod.rs), the real wall clock — NOT tokio's virtual
-        // clock. A `tokio::time::sleep` under turmoil advances only virtual time
-        // (~microseconds of real time), so it would leave k physically live and
-        // EXEC would commit over a *live* key — not the F3 scenario at all. We
-        // therefore block the sim thread for 50ms of REAL time (50ms >> 10ms TTL,
-        // a wide deterministic margin): k is now logically expired but still
-        // physically present, because active expiry is off and nothing has
+        // clock — so a `tokio::time::sleep` would advance only virtual time and
+        // leave k physically live. `DEBUG EXPIRE-BACKDATE` rewrites k's deadline
+        // 50ms into the past directly (deterministic and instant under turmoil,
+        // no real-clock stall): k is now logically expired but still physically
+        // present, because backdate rewrites only the timestamp — it never purges
+        // and never bumps the version — active expiry is off, and nothing has
         // accessed it. Only a lazy check will remove it.
-        std::thread::sleep(Duration::from_millis(50));
+        let reply = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"DEBUG", b"EXPIRE-BACKDATE", b"k", b"50"]),
+        )
+        .await?;
+        assert!(
+            matches!(parse_simple_response(&reply), OperationResult::Ok),
+            "DEBUG EXPIRE-BACKDATE k 50 should reply +OK, got {reply:?}"
+        );
 
         // MULTI ; SET k x ; EXEC — none of the queued commands touch k before
         // EXEC runs, and the correct outcome is an ABORT because k expired
@@ -3330,11 +3341,12 @@ fn watch_lazy_expiry_false_negative_realpath() {
 ///
 /// Real-path shape (Task-8 dual-clock conventions): key expiry is evaluated
 /// against the real wall clock (`std::time::Instant`), not turmoil's virtual
-/// clock, so the 10ms TTL is elapsed with a real 50ms `std::thread::sleep`
-/// (a `tokio::time::sleep` would advance only virtual time and leave `st`
-/// physically live). The active-expiry sweep itself runs on the shard's 100ms
-/// virtual-time interval, so a `tokio::time::sleep` window after the real elapse
-/// lets a sweep fire while `st` is genuinely past its TTL.
+/// clock, so the 10ms TTL is elapsed with `DEBUG EXPIRE-BACKDATE st 50` — which
+/// rewrites `st`'s deadline directly into the past (deterministic and instant, no
+/// real `std::thread::sleep`); a `tokio::time::sleep` would advance only virtual
+/// time and leave `st` physically live. The active-expiry sweep itself runs on the
+/// shard's 100ms virtual-time interval, so a `tokio::time::sleep` window after the
+/// backdate lets a sweep fire while `st` is genuinely past its TTL.
 #[test]
 fn xreadgroup_ttl_no_nogroup_realpath() {
     let mut sim = Builder::new()
@@ -3444,12 +3456,23 @@ fn xreadgroup_ttl_no_nogroup_realpath() {
             "PEXPIRE st 10 should reply :1, got {reply:?}"
         );
 
-        // Elapse the TTL in REAL wall-clock time. Key expiry checks
-        // `std::time::Instant::now()`, not turmoil's virtual clock, and
-        // `thread::sleep` advances no virtual time — so 50ms real (>> 10ms TTL)
-        // leaves the key logically expired but still physically present (nothing
-        // has accessed it and no sweep has run yet).
-        std::thread::sleep(Duration::from_millis(50));
+        // Elapse the TTL by rewriting `st`'s deadline 50ms into the past with
+        // `DEBUG EXPIRE-BACKDATE`. Key expiry checks `std::time::Instant::now()`,
+        // not turmoil's virtual clock, so a `tokio::time::sleep` would advance
+        // only virtual time and leave `st` live; backdate makes it deterministic
+        // and instant (no real-clock stall). Backdate rewrites only the timestamp
+        // — it never purges — so `st` is logically expired but still physically
+        // present until the sweep runs.
+        let reply = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"DEBUG", b"EXPIRE-BACKDATE", b"st", b"50"]),
+        )
+        .await?;
+        assert!(
+            matches!(parse_simple_response(&reply), OperationResult::Ok),
+            "DEBUG EXPIRE-BACKDATE st 50 should reply +OK, got {reply:?}"
+        );
 
         // Now advance virtual time so the shard's 100ms active-expiry interval
         // fires with `st` genuinely past its TTL: the sweep removes `st` and
@@ -3508,10 +3531,12 @@ fn xreadgroup_ttl_no_nogroup_realpath() {
 /// invalidate the watch in the window is the lazy purge under test.
 ///
 /// Clock: TTL expiry uses the real `std::time::Instant`; a `tokio::time::sleep`
-/// under turmoil advances only virtual time, so the 10ms TTL is elapsed with a
-/// real 50ms `std::thread::sleep` (F3 precedent). Ordering between the watcher
-/// (conn A) and the third-party reader (conn B) is made deterministic with
-/// `tokio::sync::Notify` handshakes (permit-storing `notify_one`, race-free).
+/// under turmoil advances only virtual time, so the 10ms TTL is elapsed with
+/// `DEBUG EXPIRE-BACKDATE k 50` — rewriting k's deadline directly into the past
+/// (F3 precedent), deterministic and instant with no real `std::thread::sleep`.
+/// Ordering between the watcher (conn A) and the third-party reader (conn B) is
+/// made deterministic with `tokio::sync::Notify` handshakes (permit-storing
+/// `notify_one`, race-free).
 #[test]
 fn regression_watch_read_lazy_purge_aborts_realpath() {
     let mut sim = Builder::new()
@@ -3572,9 +3597,21 @@ fn regression_watch_read_lazy_purge_aborts_realpath() {
         // WATCH the still-live key (snapshots the post-PEXPIRE version).
         round_trip(&mut stream, &mut buf, &encode_command(&[b"WATCH", b"k"])).await?;
 
-        // Elapse the real-clock TTL: k is now logically expired but still
-        // physically present (active expiry off, nothing has touched it).
-        std::thread::sleep(Duration::from_millis(50));
+        // Elapse the real-clock TTL by rewriting k's deadline 50ms into the past
+        // (deterministic and instant under turmoil, no `std::thread::sleep`).
+        // Backdate rewrites only the timestamp — no purge, no version bump — so k
+        // is now logically expired but still physically present (active expiry
+        // off, nothing has touched it).
+        let reply = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"DEBUG", b"EXPIRE-BACKDATE", b"k", b"50"]),
+        )
+        .await?;
+        assert!(
+            matches!(parse_simple_response(&reply), OperationResult::Ok),
+            "DEBUG EXPIRE-BACKDATE k 50 should reply +OK, got {reply:?}"
+        );
 
         // Release B to run the third-party lazy read, and wait for it to finish.
         go_read_a.notify_one();
@@ -3654,9 +3691,10 @@ fn regression_watch_read_lazy_purge_aborts_realpath() {
 ///
 /// Ordering: conn B sets the TTL BEFORE its own WATCH (PEXPIRE is a bump), so
 /// B's watch snapshots the post-PEXPIRE version — the only invalidation source
-/// in the window is A's WATCH-time purge under test. The 10ms TTL is elapsed
-/// with a real 50ms `std::thread::sleep` (real-clock `Instant`); the B->A->B
-/// sequence is pinned with `tokio::sync::Notify` handshakes.
+/// in the window is A's WATCH-time purge under test. The 10ms TTL is elapsed with
+/// `DEBUG EXPIRE-BACKDATE k 50` — rewriting k's deadline directly into the past
+/// (real-clock `Instant`), deterministic and instant with no `std::thread::sleep`;
+/// the B->A->B sequence is pinned with `tokio::sync::Notify` handshakes.
 ///
 /// Regression pin (gap 4): the case unfixable at the coarse per-shard version,
 /// now closed by per-key `live_at_watch`. B watched k while live and it is now
@@ -3722,9 +3760,20 @@ fn regression_watch_second_watcher_aborts_realpath() {
         // WATCH k while it is still LIVE (snapshots the post-PEXPIRE version).
         round_trip(&mut stream, &mut buf, &encode_command(&[b"WATCH", b"k"])).await?;
 
-        // Elapse the real-clock TTL — k is now logically expired, physically
-        // present.
-        std::thread::sleep(Duration::from_millis(50));
+        // Elapse the real-clock TTL by rewriting k's deadline 50ms into the past
+        // with `DEBUG EXPIRE-BACKDATE` (deterministic and instant under turmoil,
+        // no `std::thread::sleep`; rewrites only the timestamp — no purge, no
+        // version bump). k is now logically expired, physically present.
+        let reply = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"DEBUG", b"EXPIRE-BACKDATE", b"k", b"50"]),
+        )
+        .await?;
+        assert!(
+            matches!(parse_simple_response(&reply), OperationResult::Ok),
+            "DEBUG EXPIRE-BACKDATE k 50 should reply +OK, got {reply:?}"
+        );
 
         // Release A to run its stale WATCH (the no-bump WATCH-time purge), wait
         // for it to finish.
@@ -3826,34 +3875,28 @@ fn regression_watch_second_watcher_aborts_realpath() {
 /// - **Key TTL expiry**: real `Instant` (`KeyMetadata::is_expired`); the
 ///   **active-expiry sweep** runs on the shard's virtual-time interval.
 ///
-/// ## Expiry sub-assertion: intentionally dropped (brief fallback)
+/// ## Expiry sub-assertion: now pinned separately (issue 07)
 /// The brief permits observing `expiry_paused` suppression only if the harness
-/// exposes a *deterministic client-visible* way to see it; it does not, but not
-/// for the reason it might look like at first glance. `GET` alone would in fact
-/// be ambiguous: `HashMapStore::check_and_delete_expired` (store/hashmap.rs:
-/// 421-435) returns `true` (logically expired) for an elapsed key even when
-/// `expiry_suppressed` is set — it merely skips the *physical* delete / counter
-/// / replication — so `get_with_expiry_check` (:1024) still returns `None` to a
-/// client `GET` on a suppressed-but-elapsed key, same as real expiry over the
-/// wire. But `GET` is not the only client-visible probe: `OBJECT ENCODING`
-/// (commands/generic.rs:334-340, via raw `Store::get`, hashmap.rs:824-833) and
-/// `OBJECT REFCOUNT` (commands/generic.rs:438-448, via raw `Store::contains`,
-/// hashmap.rs:847-849) both skip the expiry-aware path entirely — neither calls
-/// `get_with_expiry_check` nor `check_and_delete_expired`, and REFCOUNT doesn't
-/// even use the expiry-aware `exists_unexpired` (:851-859) — so they *would*
-/// observe the physical presence of a suppressed-but-elapsed key and *would*
-/// distinguish suppression from real expiry. So the sub-assertion is not
-/// dropped because it is unobservable; it is dropped because constructing the
-/// scenario at all requires a real-clock TTL to actually elapse while the test
-/// runs under turmoil's virtual clock. Per the "Clock findings" above, `Instant`
-/// (real) and turmoil's sim clock (virtual) do not advance together, so driving
-/// a key past its real-clock TTL deadline deterministically from inside a
-/// turmoil sim is exactly the cross-clock race this test otherwise avoids by
-/// construction (explicit `CLIENT UNPAUSE` instead of deadline auto-expiry).
-/// The suppression that matters (skipping the active sweep to avoid
-/// master/replica divergence) is internal and is covered by the
-/// `run_active_expiry` pause gate (shard/event_loop.rs:124-133, unit path). We
-/// therefore assert only the two write/read invariants here, per the brief.
+/// exposes a *deterministic client-visible* way to see it. It does — `GET` alone
+/// would be ambiguous (`HashMapStore::check_and_delete_expired`, store/hashmap.rs,
+/// returns `true` for an elapsed key even when `expiry_suppressed` is set, merely
+/// skipping the *physical* delete, so `GET` returns `None` on a
+/// suppressed-but-elapsed key, same as real expiry over the wire), but the raw
+/// `OBJECT ENCODING` (via `Store::get`) and `OBJECT REFCOUNT` (via
+/// `Store::contains`) paths skip the expiry-aware check entirely and *would*
+/// observe the physical presence of a suppressed-but-elapsed key, distinguishing
+/// suppression from real expiry. The sub-assertion was originally dropped for one
+/// reason only: constructing the scenario required a real-clock TTL
+/// (`std::time::Instant`) to actually elapse while the test runs on turmoil's
+/// virtual clock — exactly the cross-clock race this test avoids by construction.
+/// `DEBUG EXPIRE-BACKDATE` (issue 07) removes that blocker by rewriting a key's
+/// deadline directly into the past, so the sub-assertion is now pinned in the
+/// dedicated `client_pause_write_expiry_suppression_realpath` test below — kept
+/// separate to avoid overloading this seed-looped, three-connection write-gate
+/// invariant. The internal suppression (skipping the active sweep to avoid
+/// master/replica divergence) remains covered by the `run_active_expiry` pause
+/// gate (shard/event_loop.rs, unit path). We therefore assert only the two
+/// write/read invariants here, per the brief.
 ///
 /// ## Determinism
 /// Looped over a handful of turmoil seeds with `enable_random_order()`, so
@@ -4071,4 +4114,196 @@ fn client_pause_write_vs_exec() {
             "seed {seed}: after UNPAUSE + commit, `GET k` must return `v`, got {after:?}"
         );
     }
+}
+
+/// S7 expiry sub-assertion (issue 07): `CLIENT PAUSE WRITE` suppresses passive
+/// expiry, and that suppression is *client-visible* — a lazily-elapsed key reads
+/// as gone to `GET` yet is still physically retained (observable via the raw,
+/// expiry-blind `OBJECT ENCODING`).
+///
+/// This is the sub-assertion `client_pause_write_vs_exec` deliberately dropped.
+/// Its doc comment cited a single blocker: constructing the scenario needs a
+/// key's real-clock TTL (`std::time::Instant`, `KeyMetadata::is_expired`) to
+/// actually elapse while the sim runs on turmoil's virtual clock — the exact
+/// cross-clock race that test otherwise avoids by construction. `DEBUG
+/// EXPIRE-BACKDATE` removes that blocker: it rewrites the key's deadline directly
+/// into the past, deterministically and instantly, with no real wall-clock wait.
+/// The sub-assertion is pinned here as its own focused, single-connection test
+/// rather than folded into S7's seed-looped, three-connection write-gate
+/// invariant, which would conflate two unrelated concerns.
+///
+/// Mechanism under test: while `expiry_paused` is set (client_registry
+/// `pause` -> the shard syncs it into `Store::expiry_suppressed` on its next
+/// active-expiry tick, event_loop.rs `run_active_expiry`),
+/// `check_and_delete_expired` (store/hashmap.rs) still reports an elapsed key as
+/// logically expired (so `GET` returns nil) but skips the *physical* delete. The
+/// raw `OBJECT ENCODING` path (`Store::get`, no expiry check) therefore still
+/// sees the key — the client-visible distinguisher between suppression and a real
+/// expiry. After `CLIENT UNPAUSE`, the next sweep clears suppression and actually
+/// reaps the backdated key, so `OBJECT ENCODING` then reports `no such key`,
+/// confirming the earlier retention was suppression, not a fluke.
+///
+/// Clock discipline: the only real-clock dependency (elapsing the TTL) is removed
+/// by backdate; the sweep-tick syncs of `expiry_suppressed` are driven by
+/// `tokio::time::sleep` advancing turmoil's virtual clock past the shard's 100ms
+/// active-expiry interval. No `std::thread::sleep`, no cross-clock race.
+#[test]
+fn client_pause_write_expiry_suppression_realpath() {
+    let mut sim = Builder::new()
+        .tick_duration(Duration::from_millis(1))
+        .build();
+
+    // Single shard: pause is server-wide and expiry is per-shard; one shard fully
+    // exercises the suppression seam.
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
+
+    // Captured raw reply bytes.
+    let get_while_paused: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let encoding_while_paused: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let encoding_after_reap: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let get_while_paused_c = get_while_paused.clone();
+    let encoding_while_paused_c = encoding_while_paused.clone();
+    let encoding_after_reap_c = encoding_after_reap.clone();
+
+    sim.client("prober", async move {
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        async fn round_trip(
+            stream: &mut TcpStream,
+            buf: &mut [u8],
+            cmd: &Bytes,
+        ) -> Result<Vec<u8>, BoxError> {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            stream.write_all(cmd).await?;
+            let n = stream.read(buf).await?;
+            Ok(buf[..n].to_vec())
+        }
+
+        // SET k v, then a long live TTL so no sweep reaps it before we backdate.
+        round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"SET", b"k", b"v"]),
+        )
+        .await?;
+        let reply = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"PEXPIRE", b"k", b"100000"]),
+        )
+        .await?;
+        assert!(
+            matches!(parse_simple_response(&reply), OperationResult::Integer(1)),
+            "PEXPIRE k 100000 should reply :1, got {reply:?}"
+        );
+
+        // Engage PAUSE WRITE (suppresses passive expiry). 60_000ms real-clock
+        // deadline: released only by the explicit UNPAUSE below, never by the
+        // real-vs-virtual deadline race.
+        let reply = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"CLIENT", b"PAUSE", b"60000", b"WRITE"]),
+        )
+        .await?;
+        assert!(
+            matches!(parse_simple_response(&reply), OperationResult::Ok),
+            "CLIENT PAUSE 60000 WRITE should reply +OK, got {reply:?}"
+        );
+
+        // Advance virtual time past the shard's 100ms active-expiry interval so a
+        // sweep tick fires under pause and syncs `expiry_suppressed = true` into
+        // the store (the sweep itself deletes nothing — k is still live here).
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // Backdate k's deadline 1s into the past: logically expired, instantly and
+        // deterministically, with no real-clock wait. Backdate rewrites only the
+        // timestamp — it does not purge and does not fire expiry effects.
+        let reply = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"DEBUG", b"EXPIRE-BACKDATE", b"k", b"1000"]),
+        )
+        .await?;
+        assert!(
+            matches!(parse_simple_response(&reply), OperationResult::Ok),
+            "DEBUG EXPIRE-BACKDATE k 1000 should reply +OK, got {reply:?}"
+        );
+
+        // GET k: the expiry-aware path reports the key logically gone (nil), even
+        // under suppression — and, being suppressed, does NOT physically delete it.
+        *get_while_paused_c.lock().unwrap() =
+            round_trip(&mut stream, &mut buf, &encode_command(&[b"GET", b"k"])).await?;
+
+        // OBJECT ENCODING k: the raw, expiry-blind path still sees k physically
+        // present — the client-visible proof of suppression (a real expiry would
+        // have removed it).
+        *encoding_while_paused_c.lock().unwrap() = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"OBJECT", b"ENCODING", b"k"]),
+        )
+        .await?;
+
+        // Lift the pause and advance virtual time so the next sweep clears
+        // suppression and actually reaps the long-backdated key.
+        let reply = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"CLIENT", b"UNPAUSE"]),
+        )
+        .await?;
+        assert!(
+            matches!(parse_simple_response(&reply), OperationResult::Ok),
+            "CLIENT UNPAUSE should reply +OK, got {reply:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // OBJECT ENCODING k now: k is really gone -> `no such key` error. Confirms
+        // the earlier physical presence was suppression, not a quirk.
+        *encoding_after_reap_c.lock().unwrap() = round_trip(
+            &mut stream,
+            &mut buf,
+            &encode_command(&[b"OBJECT", b"ENCODING", b"k"]),
+        )
+        .await?;
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+
+    // GET saw the key logically expired (nil), even under suppression.
+    let paused_get = get_while_paused.lock().unwrap().clone();
+    assert_eq!(
+        paused_get.as_slice(),
+        b"$-1\r\n",
+        "S7 expiry sub-assertion: under PAUSE WRITE, `GET` on a backdated (elapsed) \
+         key must report it logically gone (null bulk `$-1\\r\\n`), got {paused_get:?}"
+    );
+
+    // OBJECT ENCODING saw the key still physically present -> suppression is
+    // client-visible. A bulk string (`$...`) is the encoding; a `-ERR no such key`
+    // here would mean the key was physically reaped despite suppression.
+    let paused_encoding = encoding_while_paused.lock().unwrap().clone();
+    assert_eq!(
+        paused_encoding.first().copied(),
+        Some(b'$'),
+        "S7 expiry sub-assertion: under PAUSE WRITE, the expiry-blind `OBJECT \
+         ENCODING` must still see the suppressed-but-elapsed key physically present \
+         (a bulk-string encoding), got {paused_encoding:?}. An error reply here means \
+         passive-expiry suppression did not retain the key."
+    );
+
+    // After UNPAUSE + a sweep, the key is really reaped -> `no such key` error.
+    let reaped_encoding = encoding_after_reap.lock().unwrap().clone();
+    assert!(
+        reaped_encoding.starts_with(b"-"),
+        "S7 expiry sub-assertion: after UNPAUSE the next sweep must reap the \
+         backdated key, so `OBJECT ENCODING` reports `no such key` (an error), got \
+         {reaped_encoding:?}. Anything else means suppression did not lift or the \
+         key was never really expired."
+    );
 }

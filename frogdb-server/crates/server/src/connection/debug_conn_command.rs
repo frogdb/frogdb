@@ -76,12 +76,12 @@ impl ConnectionCommand for DebugConnCommand {
         &DEBUG_SPEC
     }
 
-    /// DEBUG OBJECT's key is its second argument; every other subcommand is
-    /// keyless.
+    /// DEBUG OBJECT's and DEBUG EXPIRE-BACKDATE's key is each subcommand's second
+    /// argument; every other subcommand is keyless.
     fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.len() >= 2 {
             let subcommand = args[0].to_ascii_uppercase();
-            if subcommand == b"OBJECT".as_slice() {
+            if subcommand == b"OBJECT".as_slice() || subcommand == b"EXPIRE-BACKDATE".as_slice() {
                 return vec![&args[1]];
             }
         }
@@ -193,6 +193,28 @@ impl ConnectionCommand for DebugConnCommand {
                     debug.set_active_expire(enabled).await;
                     Response::ok()
                 }
+                b"EXPIRE-BACKDATE" => {
+                    // args[0] = "EXPIRE-BACKDATE", args[1] = key, args[2] = ms
+                    if args.len() != 3 {
+                        return Response::error(
+                            "ERR wrong number of arguments for 'DEBUG EXPIRE-BACKDATE' command",
+                        );
+                    }
+                    let ms = match std::str::from_utf8(&args[2])
+                        .ok()
+                        .and_then(|s| s.parse::<u64>().ok())
+                    {
+                        Some(ms) => ms,
+                        None => {
+                            return Response::error(
+                                "ERR DEBUG EXPIRE-BACKDATE ms must be a non-negative integer",
+                            );
+                        }
+                    };
+                    let key = args[1].clone();
+                    let shard_id = shard_for_key(&key, num_shards);
+                    debug.expire_backdate(shard_id, key, ms).await
+                }
                 b"KEYSIZES-HIST-ASSERT" => keysizes_hist_assert(debug, args).await,
                 b"ALLOCSIZE-SLOTS-ASSERT" => allocsize_slots_assert(debug, args).await,
                 // Dangerous commands — intentionally not supported
@@ -259,6 +281,8 @@ fn debug_help() -> Response {
         "    Recompute live memory and report the diff vs the tracked counter.",
         "DEBUG EXPIRY-INDEX-CHECK",
         "    Cross-check the expiry index against entry deadlines.",
+        "DEBUG EXPIRE-BACKDATE <key> <ms>",
+        "    Backdate a key's TTL <ms> into the past so it is already expired (test support).",
         "DEBUG PUBSUB LIMITS",
         "    Show pub/sub subscription usage vs limits.",
         "DEBUG BUNDLE GENERATE [DURATION <seconds>]",
@@ -816,6 +840,17 @@ mod tests {
             vec![b"mykey".as_slice()]
         );
 
+        // EXPIRE-BACKDATE's key is also its second argument.
+        let backdate = [
+            Bytes::from_static(b"EXPIRE-BACKDATE"),
+            Bytes::from_static(b"mykey"),
+            Bytes::from_static(b"50"),
+        ];
+        assert_eq!(
+            DebugConnCommand.dynamic_keys(&backdate),
+            vec![b"mykey".as_slice()]
+        );
+
         // Other subcommands (and OBJECT without a key) are keyless.
         let hashing = [Bytes::from_static(b"HASHING"), Bytes::from_static(b"k")];
         assert!(DebugConnCommand.dynamic_keys(&hashing).is_empty());
@@ -997,6 +1032,14 @@ mod tests {
         fn set_active_expire<'a>(&'a self, _enabled: bool) -> BoxFuture<'a, ()> {
             Box::pin(async {})
         }
+        fn expire_backdate<'a>(
+            &'a self,
+            _shard_id: usize,
+            _key: Bytes,
+            _ms: u64,
+        ) -> BoxFuture<'a, Response> {
+            Box::pin(async { Response::ok() })
+        }
         fn keysizes_snapshot<'a>(&'a self) -> BoxFuture<'a, KeysizeHistograms> {
             Box::pin(async { KeysizeHistograms::new() })
         }
@@ -1023,6 +1066,53 @@ mod tests {
             .execute(&mut fx.ctx(Some(&stub)), &[arg("NOPE")])
             .await;
         assert!(matches!(resp, Response::Error(_)));
+    }
+
+    #[tokio::test]
+    async fn expire_backdate_dispatches_to_provider_on_valid_args() {
+        let stub = StubDebug { enabled: true };
+        let fx = super::tests_fixture::Deps::new();
+        let resp = DebugConnCommand
+            .execute(
+                &mut fx.ctx_with_num_shards(Some(&stub), 1),
+                &[arg("EXPIRE-BACKDATE"), arg("k"), arg("50")],
+            )
+            .await;
+        // The stub provider replies +OK for a well-formed request.
+        assert!(matches!(resp, Response::Simple(_)), "got {resp:?}");
+    }
+
+    #[tokio::test]
+    async fn expire_backdate_rejects_bad_arity_and_ms() {
+        let stub = StubDebug { enabled: true };
+        let fx = super::tests_fixture::Deps::new();
+
+        // Missing the ms argument.
+        let resp = DebugConnCommand
+            .execute(
+                &mut fx.ctx(Some(&stub)),
+                &[arg("EXPIRE-BACKDATE"), arg("k")],
+            )
+            .await;
+        assert!(matches!(resp, Response::Error(_)), "got {resp:?}");
+
+        // Non-integer ms.
+        let resp = DebugConnCommand
+            .execute(
+                &mut fx.ctx(Some(&stub)),
+                &[arg("EXPIRE-BACKDATE"), arg("k"), arg("soon")],
+            )
+            .await;
+        assert!(matches!(resp, Response::Error(_)), "got {resp:?}");
+
+        // Negative ms is not a u64.
+        let resp = DebugConnCommand
+            .execute(
+                &mut fx.ctx(Some(&stub)),
+                &[arg("EXPIRE-BACKDATE"), arg("k"), arg("-5")],
+            )
+            .await;
+        assert!(matches!(resp, Response::Error(_)), "got {resp:?}");
     }
 
     #[tokio::test]
@@ -1089,6 +1179,17 @@ mod tests_fixture {
         }
 
         pub(super) fn ctx<'a>(&'a self, debug: Option<&'a dyn DebugProvider>) -> ConnCtx<'a> {
+            self.ctx_with_num_shards(debug, 0)
+        }
+
+        /// Like [`Deps::ctx`] but with an explicit `num_shards`, for keyed
+        /// subcommands (e.g. EXPIRE-BACKDATE) whose executor maps the key to a
+        /// shard via `shard_for_key` and would divide by a zero shard count.
+        pub(super) fn ctx_with_num_shards<'a>(
+            &'a self,
+            debug: Option<&'a dyn DebugProvider>,
+            num_shards: usize,
+        ) -> ConnCtx<'a> {
             let mut ctx = ConnCtx::new(
                 &self.config_manager,
                 &self.client_registry,
@@ -1103,7 +1204,7 @@ mod tests_fixture {
                 &self.memory_diag,
                 self.acl_manager.as_ref(),
                 &self.command_registry,
-                0,
+                num_shards,
                 10000,
                 false,
             )

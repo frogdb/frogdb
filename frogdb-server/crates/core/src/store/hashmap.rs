@@ -114,6 +114,18 @@ pub enum SpillError {
     Rocks(#[from] frogdb_persistence::rocks::RocksError),
 }
 
+/// Outcome of [`HashMapStore::backdate_expiry`] (DEBUG EXPIRE-BACKDATE).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackdateExpiryResult {
+    /// The key's expiry deadline was rewritten into the past; it now reads as
+    /// expired on the next access (lazy purge) or active-expiry sweep.
+    Backdated,
+    /// No such key in the store.
+    NoSuchKey,
+    /// The key exists but carries no TTL, so there is nothing to backdate.
+    NoExpiry,
+}
+
 /// Default store implementation using griddle::HashMap.
 pub struct HashMapStore {
     data: HashMap<Bytes, Entry>,
@@ -463,6 +475,38 @@ impl HashMapStore {
     /// Set whether passive/lazy expiry is suppressed (during CLIENT PAUSE).
     pub fn set_expiry_suppressed(&mut self, suppressed: bool) {
         self.expiry_suppressed = suppressed;
+    }
+
+    /// Backdate an existing key's expiry deadline to lie `ms` milliseconds in
+    /// the past (DEBUG EXPIRE-BACKDATE), making it already-expired without any
+    /// wall-clock wait.
+    ///
+    /// This rewrites *only* the deadline (the entry's `expires_at` and its
+    /// expiry-index slot). It deliberately does **not** purge the key, does not
+    /// touch `lazily_purged`, and fires no expiry effects — the next read
+    /// (`check_and_delete_expired`) or active-expiry sweep performs the actual
+    /// expiry through the normal seams, exactly as a naturally-elapsed TTL would.
+    /// This keeps the command a pure timestamp rewrite so sim tests can drive
+    /// deterministic expiry under turmoil's virtual clock (real-clock TTLs would
+    /// otherwise require a `std::thread::sleep`).
+    ///
+    /// A key with no TTL is left untouched and reported via
+    /// [`BackdateExpiryResult::NoExpiry`]; a missing key via
+    /// [`BackdateExpiryResult::NoSuchKey`].
+    pub fn backdate_expiry(&mut self, key: &[u8], ms: u64) -> BackdateExpiryResult {
+        let Some(entry) = self.data.get_mut(key) else {
+            return BackdateExpiryResult::NoSuchKey;
+        };
+        if entry.metadata.expires_at.is_none() {
+            return BackdateExpiryResult::NoExpiry;
+        }
+        // `Instant - Duration` panics on monotonic-clock underflow; saturate to
+        // `now` for an absurdly large `ms` (still <= now, so still expired).
+        let now = Instant::now();
+        let deadline = now.checked_sub(Duration::from_millis(ms)).unwrap_or(now);
+        entry.metadata.expires_at = Some(deadline);
+        self.expiry_index.set(Bytes::copy_from_slice(key), deadline);
+        BackdateExpiryResult::Backdated
     }
 
     // ========================================================================
@@ -2461,5 +2505,75 @@ mod tests {
             s.take_lazily_purged().is_empty(),
             "CLIENT PAUSE suppression must not report a purge (key not removed)"
         );
+    }
+
+    #[test]
+    fn backdate_expiry_makes_key_expired_on_next_access() {
+        let mut s = HashMapStore::new();
+        s.set(Bytes::from_static(b"k"), Value::string("v"));
+        // Live TTL well into the future.
+        assert!(s.set_expiry(b"k", Instant::now() + Duration::from_secs(100)));
+
+        // Backdate rewrites only the deadline: it must NOT purge and must NOT
+        // report a lazy purge, and the key stays physically present.
+        assert_eq!(
+            s.backdate_expiry(b"k", 1000),
+            BackdateExpiryResult::Backdated
+        );
+        assert!(
+            s.contains(b"k"),
+            "backdate must not physically remove the key"
+        );
+        assert!(
+            s.take_lazily_purged().is_empty(),
+            "backdate must not fire any lazy-purge effect"
+        );
+
+        // The next expiry-aware read observes the key as gone (nil) and lazily
+        // purges it through the normal seam.
+        assert!(s.get_with_expiry_check(b"k").is_none());
+        assert_eq!(
+            s.take_lazily_purged(),
+            vec![Bytes::from_static(b"k")],
+            "the read-path lazy purge must fire normally after backdate"
+        );
+        assert!(!s.contains(b"k"), "the key must now be physically gone");
+    }
+
+    #[test]
+    fn backdate_expiry_missing_key_errors() {
+        let mut s = HashMapStore::new();
+        assert_eq!(
+            s.backdate_expiry(b"absent", 1000),
+            BackdateExpiryResult::NoSuchKey
+        );
+    }
+
+    #[test]
+    fn backdate_expiry_no_ttl_key_is_left_untouched() {
+        let mut s = HashMapStore::new();
+        s.set(Bytes::from_static(b"k"), Value::string("v"));
+        // No TTL installed: nothing to backdate.
+        assert_eq!(
+            s.backdate_expiry(b"k", 1000),
+            BackdateExpiryResult::NoExpiry
+        );
+        // The key remains live and readable — backdate did not affect it.
+        assert!(s.get_with_expiry_check(b"k").is_some());
+        assert_eq!(s.get_expiry(b"k"), None);
+    }
+
+    #[test]
+    fn backdate_expiry_saturates_on_absurd_ms() {
+        // A huge `ms` would underflow `Instant - Duration`; the method saturates
+        // to `now` rather than panicking, and the key still ends up expired.
+        let mut s = HashMapStore::new();
+        s.set(Bytes::from_static(b"k"), Value::string("v"));
+        assert!(s.set_expiry(b"k", Instant::now() + Duration::from_secs(100)));
+        assert_eq!(
+            s.backdate_expiry(b"k", u64::MAX),
+            BackdateExpiryResult::Backdated
+        );
+        assert!(s.get_with_expiry_check(b"k").is_none());
     }
 }
