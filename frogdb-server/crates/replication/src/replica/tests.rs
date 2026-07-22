@@ -1,11 +1,13 @@
 use crate::replica::connection::ConnectionState;
+use crate::replica::offset::ReplicaOffset;
 use crate::replica::{ConnectFactory, ReplicaReplicationHandler};
 use crate::state::ReplicationState;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
+use tokio::sync::RwLock;
 
 #[test]
 fn test_connection_state_display() {
@@ -97,6 +99,91 @@ async fn test_stop_terminates_reconnect_loop_without_abort() {
         attempts.load(Ordering::SeqCst),
         attempts_at_stop,
         "no further connection attempts after stop()"
+    );
+}
+
+/// Demotion path: pins the intended offset sequence a primary->replica
+/// transition publishes through the cluster-bus HealthProbe atomic.
+///
+/// When a node is demoted, a fresh `ReplicaReplicationHandler` is constructed
+/// (its `live` offset seeded from the persisted `offset_at_save`, which is 0 for
+/// a node that was never a replica) and then wired to the SAME HealthProbe
+/// atomic the old primary role advertised into — an atomic currently holding the
+/// old primary's high offset `N`.
+///
+/// `set_shared_offset` stamps the handler's own live offset (0 on a fresh
+/// demotion) into that atomic BEFORE adopting it, so the failure detector
+/// briefly reads 0 rather than the stale-high `N` the old primary left behind.
+/// Round-10 lane-B judged the transient 0 an improvement over advertising a
+/// stale-high value that no longer reflects this node's applied position; this
+/// test pins that sequence and guards it against regressing back to stamping the
+/// stale value.
+///
+/// Sequence asserted:
+///   1. HealthProbe atomic reads `N` (node still advertising its old primary
+///      offset).
+///   2. Demotion wiring (`set_shared_offset`) -> atomic reads 0 (transient, NOT
+///      the stale `N`).
+///   3. FULLRESYNC (`ReplicaOffset::reset_to`, the method the connection's
+///      `+FULLRESYNC` handler calls) -> atomic reflects the new stream offset.
+#[tokio::test]
+async fn test_demotion_stamps_zero_then_fullresync_offset_into_shared_probe() {
+    const OLD_PRIMARY_OFFSET: u64 = 987_654; // N: what the old primary advertised.
+    const FULLRESYNC_OFFSET: u64 = 42; // the fresh stream position from the new primary.
+
+    // Stage 1: the shared HealthProbe atomic as the node's old primary role left
+    // it — advertising the primary's high offset N.
+    let health_probe = Arc::new(AtomicU64::new(OLD_PRIMARY_OFFSET));
+    assert_eq!(
+        health_probe.load(Ordering::Acquire),
+        OLD_PRIMARY_OFFSET,
+        "precondition: probe advertises the old primary offset N before demotion"
+    );
+
+    // Demotion: construct a fresh replica handler. `ReplicationState::new()` has
+    // `offset_at_save == 0`, so the handler's live offset seeds to 0 — the node
+    // was never a replica, it has no persisted replica progress.
+    let addr: SocketAddr = "127.0.0.1:6379".parse().unwrap();
+    let state = ReplicationState::new();
+    let data_dir = std::env::temp_dir();
+    let state_path = data_dir.join(format!(
+        "frogdb-test-demotion-{}-{}.json",
+        std::process::id(),
+        line!()
+    ));
+    let (mut handler, _rx) =
+        ReplicaReplicationHandler::new(addr, 6380, state, state_path, data_dir);
+
+    // Stage 2: wire the fresh handler to the SAME probe atomic. It stamps its own
+    // live offset (0) in before adopting — so the detector sees the transient 0,
+    // never the stale-high N.
+    handler.set_shared_offset(health_probe.clone());
+    assert_eq!(
+        health_probe.load(Ordering::Acquire),
+        0,
+        "demotion must stamp the fresh replica's live offset (0), not the stale-high old-primary N"
+    );
+    // The handler adopts the exact atomic the caller passed (single shared home).
+    let adopted = handler
+        .shared_offset()
+        .expect("handler must vend the shared offset once wired");
+    assert!(
+        Arc::ptr_eq(&adopted, &health_probe),
+        "handler must adopt the caller's atomic, not mint a second one"
+    );
+
+    // Stage 3: the FULLRESYNC path. The connection's `+FULLRESYNC` handler builds
+    // a `ReplicaOffset` over the handler's (now shared) live atomic and calls
+    // `reset_to(new_offset)`. Model that exact call against the adopted atomic.
+    let offsets = ReplicaOffset::new(
+        Arc::new(RwLock::new(handler.state().await)),
+        adopted.clone(),
+    );
+    offsets.reset_to(FULLRESYNC_OFFSET);
+    assert_eq!(
+        health_probe.load(Ordering::Acquire),
+        FULLRESYNC_OFFSET,
+        "after FULLRESYNC the probe must reflect the new stream offset through the adopted atomic"
     );
 }
 
