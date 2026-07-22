@@ -84,14 +84,16 @@ impl ShardWorker {
     /// purged (`Store::check_and_delete_expired` → reported via
     /// `take_lazily_purged`) have their parity effects applied once, after the
     /// command, regardless of which of the body's many early returns fired.
-    fn execute_command_inner(
+    async fn execute_command_inner(
         &mut self,
         command: &ParsedCommand,
         conn_id: u64,
         protocol_version: ProtocolVersion,
         track_reads: bool,
     ) -> (Response, Option<WriteCommandMeta>) {
-        let out = self.execute_command_body(command, conn_id, protocol_version, track_reads);
+        let out = self
+            .execute_command_body(command, conn_id, protocol_version, track_reads)
+            .await;
         // Apply parity effects for any keys the command lazily purged (gaps 1-3).
         // Task 1: this is a no-op drain; Task 2 fills in the effects.
         self.apply_lazy_purge_effects();
@@ -100,7 +102,7 @@ impl ShardWorker {
 
     /// The command handler body proper (see [`Self::execute_command_inner`],
     /// which wraps this to drain lazy-purge effects afterward).
-    fn execute_command_body(
+    async fn execute_command_body(
         &mut self,
         command: &ParsedCommand,
         conn_id: u64,
@@ -138,7 +140,7 @@ impl ShardWorker {
         let is_write = handler
             .flags()
             .contains(crate::command::CommandFlags::WRITE);
-        if is_write && let Err(err) = self.check_memory_for_write() {
+        if is_write && let Err(err) = self.check_memory_for_write().await {
             return (err.to_response(), None);
         }
 
@@ -376,8 +378,9 @@ impl ShardWorker {
             None
         };
 
-        let (response, meta) =
-            self.execute_command_inner(command, conn_id, protocol_version, track_reads);
+        let (response, meta) = self
+            .execute_command_inner(command, conn_id, protocol_version, track_reads)
+            .await;
 
         // Post-execution: rollback mode vs default path. The WAL phase becomes a
         // value (Persist vs AlreadyPersisted) rather than a separate function.
@@ -402,6 +405,7 @@ impl ShardWorker {
                                 writes: std::slice::from_ref(&record),
                                 dirty_delta: write_meta.dirty_delta,
                                 conn_id,
+                                removal_reasons: &[],
                             },
                             WalPhase::AlreadyPersisted,
                             EffectScope::Command,
@@ -432,6 +436,7 @@ impl ShardWorker {
                         writes: std::slice::from_ref(&record),
                         dirty_delta: write_meta.dirty_delta,
                         conn_id,
+                        removal_reasons: &[],
                     },
                     WalPhase::Persist,
                     EffectScope::Command,
@@ -508,8 +513,9 @@ impl ShardWorker {
                 }
             }
 
-            let (response, meta) =
-                self.execute_command_inner(command, conn_id, protocol_version, false);
+            let (response, meta) = self
+                .execute_command_inner(command, conn_id, protocol_version, false)
+                .await;
 
             // Keyspace hit/miss metrics are recorded inside execute_command_inner
             // (lookup level), so MULTI/EXEC commands are counted the same way as
@@ -578,6 +584,7 @@ impl ShardWorker {
                         writes: &write_infos,
                         dirty_delta: total_dirty,
                         conn_id,
+                        removal_reasons: &[],
                     },
                     WalPhase::AlreadyPersisted,
                     EffectScope::Transaction,
@@ -589,6 +596,7 @@ impl ShardWorker {
                         writes: &write_infos,
                         dirty_delta: total_dirty,
                         conn_id,
+                        removal_reasons: &[],
                     },
                     WalPhase::Persist,
                     EffectScope::Transaction,
