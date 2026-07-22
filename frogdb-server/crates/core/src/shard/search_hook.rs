@@ -5,82 +5,48 @@
 
 use bytes::Bytes;
 
+use crate::command_spec::{IndexKind, ReindexAction, ReindexSpec};
 use crate::store::Store;
 
 use super::worker::ShardWorker;
 
 impl ShardWorker {
-    /// Update search indexes after a write command.
+    /// Apply a write command's declared reindex fact to the search indexes.
     ///
-    /// Dispatches by command name to the appropriate index update logic.
-    pub(crate) fn update_search_indexes(&mut self, cmd_name: &str, args: &[Bytes]) {
-        match cmd_name {
-            "HSET" | "HSETNX" | "HMSET" | "HINCRBY" | "HINCRBYFLOAT" | "HSETEX" => {
-                if !args.is_empty() {
-                    self.reindex_hash_key(&args[0]);
-                }
-            }
-            "DEL" | "UNLINK" => {
-                for key in args {
-                    self.delete_from_search_indexes(key);
-                }
-            }
-            // Field-deleting hash writes: reindex the surviving key, else drop it.
-            // `HGETDEL` deletes named fields; the `H(P)EXPIRE(AT)` family
-            // synchronously deletes fields on a past/zero expiry time. Both can
-            // empty the key, so they mirror `HDEL`'s reindex-if-exists-else-delete.
-            "HDEL" | "HGETDEL" | "HEXPIRE" | "HPEXPIRE" | "HEXPIREAT" | "HPEXPIREAT" => {
-                if !args.is_empty() {
-                    let key = &args[0];
+    /// Resolves the [`ReindexSpec`] to typed [`ReindexAction`]s and applies each,
+    /// replacing the former command-name `match`. The spec is a
+    /// [`CommandSpec`](crate::command_spec::CommandSpec) fact declared at the
+    /// command's own declaration site; the `ShardWorker` owns *how* each action
+    /// touches the index.
+    pub(crate) fn apply_reindex(&mut self, spec: ReindexSpec, args: &[Bytes]) {
+        for action in spec.actions(args) {
+            match action {
+                ReindexAction::Reindex { key, kind } => self.reindex(key, kind),
+                ReindexAction::ReindexOrDelete { key, kind } => {
                     if self.store.contains(key) {
-                        self.reindex_hash_key(key);
+                        self.reindex(key, kind);
                     } else {
-                        self.delete_from_search_indexes(key);
+                        self.delete_from_search_indexes(&Bytes::copy_from_slice(key));
                     }
                 }
-            }
-            "RENAME" => {
-                if args.len() >= 2 {
-                    self.delete_from_search_indexes(&args[0]);
-                    self.reindex_hash_key(&args[1]);
+                ReindexAction::Delete { key } => {
+                    self.delete_from_search_indexes(&Bytes::copy_from_slice(key));
                 }
             }
-            // JSON mutation commands — reindex for ON JSON indexes
-            "JSON.SET" | "JSON.MERGE" => {
-                if !args.is_empty() {
-                    self.reindex_json_key(&args[0]);
-                }
-            }
-            "JSON.MSET" => {
-                // args: key1 path1 val1 key2 path2 val2 ...
-                let mut j = 0;
-                while j + 2 < args.len() {
-                    self.reindex_json_key(&args[j]);
-                    j += 3;
-                }
-            }
-            "JSON.DEL" | "JSON.CLEAR" => {
-                if !args.is_empty() {
-                    let key = &args[0];
-                    if self.store.contains(key) {
-                        self.reindex_json_key(key);
-                    } else {
-                        self.delete_from_search_indexes(key);
-                    }
-                }
-            }
-            "JSON.NUMINCRBY" | "JSON.NUMMULTBY" | "JSON.STRAPPEND" | "JSON.ARRAPPEND"
-            | "JSON.ARRINSERT" | "JSON.ARRPOP" | "JSON.ARRTRIM" | "JSON.TOGGLE" => {
-                if !args.is_empty() {
-                    self.reindex_json_key(&args[0]);
-                }
-            }
-            _ => {}
+        }
+    }
+
+    /// Reindex `key` as the given [`IndexKind`], dispatching to the hash or JSON
+    /// projection body.
+    fn reindex(&mut self, key: &[u8], kind: IndexKind) {
+        match kind {
+            IndexKind::Hash => self.reindex_hash_key(key),
+            IndexKind::Json => self.reindex_json_key(key),
         }
     }
 
     /// Re-index a hash key in all matching search indexes.
-    fn reindex_hash_key(&mut self, key: &Bytes) {
+    fn reindex_hash_key(&mut self, key: &[u8]) {
         let key_str = match std::str::from_utf8(key) {
             Ok(s) => s,
             Err(_) => return,
@@ -107,7 +73,7 @@ impl ShardWorker {
     }
 
     /// Re-index a JSON key in all matching JSON-source search indexes.
-    fn reindex_json_key(&mut self, key: &Bytes) {
+    fn reindex_json_key(&mut self, key: &[u8]) {
         let key_str = match std::str::from_utf8(key) {
             Ok(s) => s,
             Err(_) => return,

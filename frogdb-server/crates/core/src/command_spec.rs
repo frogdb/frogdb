@@ -9,6 +9,7 @@
 //! See `todo/proposals/01-declarative-command-spec.md`.
 
 use bytes::Bytes;
+use smallvec::{SmallVec, smallvec};
 
 use crate::command::{
     Arity, CommandFlags, ConnMutation, ConnectionLevelOp, ExecutionStrategy, KeyAccessFlag,
@@ -323,6 +324,118 @@ pub enum LookupOutcome {
     Miss,
 }
 
+/// The index-source type a reindex action projects a key into.
+///
+/// A hash-source index reads the key as a hash; a JSON-source index reads it as
+/// a JSON document. The split is load-bearing: JSON-source indexes filter on
+/// [`frogdb_search::IndexSource::Json`], while the hash path matches by prefix
+/// alone (see `search_hook.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexKind {
+    /// Read the key as a hash and reindex into matching hash-source indexes.
+    Hash,
+    /// Read the key as a JSON document and reindex into matching JSON-source
+    /// indexes.
+    Json,
+}
+
+/// How a write command's effect on the search index is derived — the search
+/// analogue of [`WalStrategy`].
+///
+/// Declared once per command, next to `wal`/`event`/`wakes`; the `SearchIndex`
+/// write effect resolves it to [`ReindexAction`]s instead of matching the
+/// command's name string. The spec states *what* to reindex; the `ShardWorker`
+/// owns *how* (reading the stored value and updating the index bodies).
+///
+/// [`ReindexSpec::None`] is the correct default for reads and for the vast
+/// majority of writes (every string/list/set/zset/stream mutation, plus admin
+/// and per-field-TTL commands that change no indexable value such as
+/// `HPERSIST`), so — unlike `WalStrategy`/`EventSpec` — its default cannot serve
+/// as a completeness tripwire. See the registry conformance test in
+/// `server/src/server/register.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReindexSpec {
+    /// Read command, or a write that never changes indexable content
+    /// (string/list/set/zset/stream mutations, admin, `HPERSIST`). Default.
+    #[default]
+    None,
+    /// Reindex `args[0]` as `kind`; the key still exists after the write
+    /// (HSET/HMSET/HINCRBY/HSETEX…; JSON.SET/JSON.MERGE/JSON.NUMINCRBY…).
+    /// Mirrors [`WalStrategy::PersistFirstKey`].
+    FirstKey { kind: IndexKind },
+    /// Reindex `args[0]` as `kind` if it still exists, else drop it from the
+    /// indexes (HDEL/HGETDEL/H(P)EXPIRE(AT)/HGETEX; JSON.DEL/JSON.CLEAR) —
+    /// mirrors [`WalStrategy::PersistOrDeleteFirstKey`].
+    FirstKeyOrDelete { kind: IndexKind },
+    /// Drop every arg key from all matching indexes (DEL/UNLINK) — mirrors
+    /// [`WalStrategy::DeleteKeys`].
+    DeleteKeys,
+    /// Drop `args[0]`, reindex `args[1]` as a hash (RENAME/RENAMENX) — mirrors
+    /// [`WalStrategy::RenameKeys`]. Requires [`KeySpec::FirstTwo`].
+    Rename,
+}
+
+/// A typed reindex action against a single key.
+///
+/// [`ReindexSpec::actions`] resolves a spec + args to a sequence of these; the
+/// `ShardWorker` applies each. The search analogue of
+/// [`WalAction`](crate::command::WalAction).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReindexAction<'a> {
+    /// Reindex the key as `kind` (its value is read from the store).
+    Reindex { key: &'a [u8], kind: IndexKind },
+    /// Reindex the key as `kind` if present, else delete it from the indexes.
+    ReindexOrDelete { key: &'a [u8], kind: IndexKind },
+    /// Delete the key from all matching indexes.
+    Delete { key: &'a [u8] },
+}
+
+impl ReindexSpec {
+    /// Resolve this spec + args to the concrete sequence of per-key reindex
+    /// actions — the search analogue of [`WalStrategy::actions`].
+    ///
+    /// This is the single source of truth mapping a variant to actions. Adding a
+    /// variant extends only this match.
+    pub fn actions<'a>(&self, args: &'a [Bytes]) -> SmallVec<[ReindexAction<'a>; 2]> {
+        match self {
+            ReindexSpec::None => SmallVec::new(),
+            ReindexSpec::FirstKey { kind } => match args.first() {
+                Some(key) => smallvec![ReindexAction::Reindex {
+                    key: key.as_ref(),
+                    kind: *kind,
+                }],
+                None => SmallVec::new(),
+            },
+            ReindexSpec::FirstKeyOrDelete { kind } => match args.first() {
+                Some(key) => smallvec![ReindexAction::ReindexOrDelete {
+                    key: key.as_ref(),
+                    kind: *kind,
+                }],
+                None => SmallVec::new(),
+            },
+            ReindexSpec::DeleteKeys => args
+                .iter()
+                .map(|arg| ReindexAction::Delete { key: arg.as_ref() })
+                .collect(),
+            ReindexSpec::Rename => {
+                if args.len() >= 2 {
+                    smallvec![
+                        ReindexAction::Delete {
+                            key: args[0].as_ref(),
+                        },
+                        ReindexAction::Reindex {
+                            key: args[1].as_ref(),
+                            kind: IndexKind::Hash,
+                        },
+                    ]
+                } else {
+                    SmallVec::new()
+                }
+            }
+        }
+    }
+}
+
 /// Declarative description of a command's mechanics. One `static` per command.
 #[derive(Debug, Clone)]
 pub struct CommandSpec {
@@ -358,6 +471,11 @@ pub struct CommandSpec {
     /// pure-read connection command; [`validate`](Self::validate) cross-checks
     /// it against [`strategy`](Self::strategy). See [`ConnMutation`].
     pub mutation: ConnMutation,
+    /// How the command's writes are projected into search indexes. `None` for
+    /// reads and for writes that change no indexable hash/JSON content; declared
+    /// next to `wal`/`event` and validated against `flags`/`keys`. See
+    /// [`ReindexSpec`].
+    pub reindex: ReindexSpec,
 }
 
 /// A cross-field inconsistency detected by [`CommandSpec::validate`].
@@ -400,6 +518,12 @@ pub enum SpecError {
     /// write-access keys, so a positional access list with only read flags makes
     /// the strategy a silent no-op — nothing is ever persisted.
     WalDestinationWithoutWriteKey,
+    /// A non-`WRITE` command declared a non-[`ReindexSpec::None`] reindex fact.
+    /// Reindexing is a write side effect; a read cannot mutate an index.
+    ReindexOnReadCommand,
+    /// [`ReindexSpec::Rename`] reindexes `args[1]`, so it requires
+    /// [`KeySpec::FirstTwo`]; any other key shape cannot supply the second key.
+    RenameReindexRequiresFirstTwo,
 }
 
 impl std::fmt::Display for SpecError {
@@ -457,6 +581,18 @@ impl std::fmt::Display for SpecError {
                 write!(
                     f,
                     "flag-derived WAL strategy (Dynamic/PersistDestination) with a Positional access list declaring no write flag (W/OW/RW) persists nothing"
+                )
+            }
+            SpecError::ReindexOnReadCommand => {
+                write!(
+                    f,
+                    "a non-WRITE command must declare ReindexSpec::None (reindexing is a write side effect)"
+                )
+            }
+            SpecError::RenameReindexRequiresFirstTwo => {
+                write!(
+                    f,
+                    "ReindexSpec::Rename reindexes args[1] and requires KeySpec::FirstTwo"
                 )
             }
         }
@@ -586,6 +722,20 @@ impl CommandSpec {
             && !MULTI_KEY_EMITS_ALLOWLIST.contains(&self.name)
         {
             return Err(SpecError::MultiKeyBlanketEmits);
+        }
+
+        // Reindexing is a write side effect: a non-`None` reindex fact on a read
+        // command is meaningless (the effect pipeline never runs it). This is a
+        // structural guard — it trips for any command whose fields contradict,
+        // no allowlist involved.
+        if !write && !matches!(self.reindex, ReindexSpec::None) {
+            return Err(SpecError::ReindexOnReadCommand);
+        }
+
+        // `ReindexSpec::Rename` reindexes `args[1]`, so the command must extract
+        // a second key. Only `KeySpec::FirstTwo` guarantees it.
+        if matches!(self.reindex, ReindexSpec::Rename) && !matches!(self.keys, KeySpec::FirstTwo) {
+            return Err(SpecError::RenameReindexRequiresFirstTwo);
         }
 
         Ok(())
@@ -820,6 +970,7 @@ mod tests {
             lookup: LookupSpec::None,
             mutation: crate::command::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
+            reindex: ReindexSpec::None,
         }
     }
 
@@ -1087,5 +1238,140 @@ mod tests {
                 min_keys: 0
             })
         );
+    }
+
+    // --- ReindexSpec::actions resolver (mirrors WalStrategy::actions tests) ---
+
+    #[test]
+    fn reindex_none_yields_nothing() {
+        let a = args(&[b"k", b"v"]);
+        assert!(ReindexSpec::None.actions(&a).is_empty());
+        assert!(ReindexSpec::None.actions(&[]).is_empty());
+    }
+
+    #[test]
+    fn reindex_first_key() {
+        let a = args(&[b"user:1", b"name", b"Alice"]);
+        let actions = ReindexSpec::FirstKey {
+            kind: IndexKind::Hash,
+        }
+        .actions(&a);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(
+            actions[0],
+            ReindexAction::Reindex {
+                key,
+                kind: IndexKind::Hash
+            } if key == b"user:1"
+        ));
+
+        // JSON kind is carried through.
+        let a = args(&[b"doc:1", b"$", b"{}"]);
+        let actions = ReindexSpec::FirstKey {
+            kind: IndexKind::Json,
+        }
+        .actions(&a);
+        assert!(matches!(
+            actions[0],
+            ReindexAction::Reindex {
+                kind: IndexKind::Json,
+                ..
+            }
+        ));
+
+        // No args — defensive.
+        assert!(
+            ReindexSpec::FirstKey {
+                kind: IndexKind::Hash
+            }
+            .actions(&[])
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn reindex_first_key_or_delete() {
+        let a = args(&[b"user:1", b"FIELDS", b"1", b"name"]);
+        let actions = ReindexSpec::FirstKeyOrDelete {
+            kind: IndexKind::Hash,
+        }
+        .actions(&a);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(
+            actions[0],
+            ReindexAction::ReindexOrDelete {
+                key,
+                kind: IndexKind::Hash
+            } if key == b"user:1"
+        ));
+        assert!(
+            ReindexSpec::FirstKeyOrDelete {
+                kind: IndexKind::Json
+            }
+            .actions(&[])
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn reindex_delete_keys() {
+        let a = args(&[b"a", b"b", b"c"]);
+        let actions = ReindexSpec::DeleteKeys.actions(&a);
+        assert_eq!(actions.len(), 3);
+        assert!(matches!(actions[0], ReindexAction::Delete { key } if key == b"a"));
+        assert!(matches!(actions[1], ReindexAction::Delete { key } if key == b"b"));
+        assert!(matches!(actions[2], ReindexAction::Delete { key } if key == b"c"));
+        assert!(ReindexSpec::DeleteKeys.actions(&[]).is_empty());
+    }
+
+    #[test]
+    fn reindex_rename() {
+        let a = args(&[b"old", b"new"]);
+        let actions = ReindexSpec::Rename.actions(&a);
+        assert_eq!(actions.len(), 2);
+        assert!(matches!(actions[0], ReindexAction::Delete { key } if key == b"old"));
+        assert!(matches!(
+            actions[1],
+            ReindexAction::Reindex {
+                key,
+                kind: IndexKind::Hash
+            } if key == b"new"
+        ));
+        // Insufficient args yields nothing rather than panicking.
+        let one = args(&[b"old"]);
+        assert!(ReindexSpec::Rename.actions(&one).is_empty());
+    }
+
+    // --- ReindexSpec cross-field validation ---
+
+    #[test]
+    fn validate_reindex_on_read_command() {
+        let mut spec = base_write_spec();
+        spec.flags = CommandFlags::READONLY;
+        spec.event = EventSpec::NotApplicable;
+        spec.reindex = ReindexSpec::FirstKey {
+            kind: IndexKind::Hash,
+        };
+        assert_eq!(spec.validate(), Err(SpecError::ReindexOnReadCommand));
+        // `None` on a read is fine.
+        spec.reindex = ReindexSpec::None;
+        assert_eq!(spec.validate(), Ok(()));
+    }
+
+    #[test]
+    fn validate_rename_reindex_requires_first_two() {
+        let mut spec = base_write_spec();
+        spec.reindex = ReindexSpec::Rename;
+        // `KeySpec::First` cannot supply args[1].
+        assert_eq!(
+            spec.validate(),
+            Err(SpecError::RenameReindexRequiresFirstTwo)
+        );
+        // With FirstTwo it validates. Use a Dynamic event so the multi-key
+        // blanket-Emits guard does not fire first.
+        spec.keys = KeySpec::FirstTwo;
+        spec.arity = Arity::AtLeast(2);
+        spec.event = EventSpec::Dynamic;
+        assert_eq!(spec.validate(), Ok(()));
     }
 }

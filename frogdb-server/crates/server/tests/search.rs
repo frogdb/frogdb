@@ -1264,6 +1264,128 @@ async fn regression_hexpireat_past_time_removes_field_from_search_index() {
     server.shutdown().await;
 }
 
+/// Regression: `HGETEX` is a WRITE command that lazily purges already-expired
+/// fields (`purge_expired_hash_fields`) before reading. A purge that removes an
+/// indexed field must reindex the surviving key so the stale field leaves the
+/// index. `HGETEX` was absent from the old string match.
+#[tokio::test]
+async fn regression_hgetex_lazy_purge_removes_field_from_search_index() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Disable active expiry so only HGETEX's synchronous lazy purge can act.
+    client.command(&["DEBUG", "SET-ACTIVE-EXPIRE", "0"]).await;
+
+    // Two fields so the key survives the purge, exercising the reindex branch.
+    client
+        .command(&["HSET", "user:1", "name", "Alice", "bio", "Engineer"])
+        .await;
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "user:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let response = client.command(&["FT.SEARCH", "idx", "Alice"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        1,
+        "baseline: field must be indexed"
+    );
+
+    // Give the indexed `name` field a 1-second TTL and let it lapse.
+    client
+        .command(&["HGETEX", "user:1", "EX", "1", "FIELDS", "1", "name"])
+        .await;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+
+    // A subsequent HGETEX purges the now-expired `name` field and reindexes the
+    // surviving key (`bio` remains), dropping `name` from the index.
+    client
+        .command(&["HGETEX", "user:1", "FIELDS", "1", "bio"])
+        .await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let response = client.command(&["FT.SEARCH", "idx", "Alice"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        0,
+        "HGETEX lazy-purged field must be dropped from the search index"
+    );
+
+    server.shutdown().await;
+}
+
+/// Carve-out: `HPERSIST` is a WRITE hash command but changes no field value
+/// (it only removes a field's TTL), so it correctly declares
+/// `ReindexSpec::None`. It must NOT drop or alter the indexed document — a guard
+/// against the migration over-reacting and treating every hash WRITE as a
+/// reindex.
+#[tokio::test]
+async fn hpersist_carveout_leaves_document_searchable() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client.command(&["HSET", "user:1", "name", "Alice"]).await;
+    // Give the field a far-future TTL so HPERSIST has a TTL to remove.
+    client
+        .command(&["HEXPIRE", "user:1", "10000", "FIELDS", "1", "name"])
+        .await;
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "user:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let response = client.command(&["FT.SEARCH", "idx", "Alice"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        1,
+        "baseline: field must be indexed"
+    );
+
+    // HPERSIST removes the TTL but leaves the value unchanged: the doc stays.
+    client
+        .command(&["HPERSIST", "user:1", "FIELDS", "1", "name"])
+        .await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+    let response = client.command(&["FT.SEARCH", "idx", "Alice"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        1,
+        "HPERSIST (ReindexSpec::None carve-out) must leave the document searchable"
+    );
+
+    server.shutdown().await;
+}
+
 // ============================================================================
 // Background indexing (existing docs)
 // ============================================================================

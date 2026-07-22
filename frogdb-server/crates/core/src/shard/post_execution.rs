@@ -241,7 +241,7 @@ impl ShardWorker {
                 WriteEffectKind::SearchIndex => {
                     if !self.search.indexes.is_empty() {
                         for record in summary.writes {
-                            self.update_search_indexes(record.handler.name(), record.args);
+                            self.apply_reindex(record.handler.spec().reindex, record.args);
                         }
                     }
                 }
@@ -646,6 +646,7 @@ mod tests {
                 wakes: WaiterWake::None,
                 event: EventSpec::Suppressed,
                 requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
                 lookup: LookupSpec::None,
                 mutation: crate::command::ConnMutation::None,
                 strategy: crate::command::ExecutionStrategy::Standard,
@@ -674,6 +675,7 @@ mod tests {
                 wakes: WaiterWake::None,
                 event: EventSpec::Suppressed,
                 requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
                 lookup: LookupSpec::None,
                 mutation: crate::command::ConnMutation::None,
                 strategy: crate::command::ExecutionStrategy::Standard,

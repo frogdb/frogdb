@@ -23,6 +23,7 @@ impl Command for VrangeCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,

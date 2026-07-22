@@ -1594,6 +1594,7 @@ mod tests {
                         wakes: WaiterWake::None,
                         event: crate::command_spec::EventSpec::Suppressed,
                         requires_same_slot: false,
+                        reindex: crate::command_spec::ReindexSpec::None,
                         lookup: crate::command_spec::LookupSpec::None,
                         mutation: crate::command::ConnMutation::None,
                         strategy: ExecutionStrategy::Standard,
