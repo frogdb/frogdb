@@ -91,7 +91,9 @@ impl Command for SetexCommand {
                 name: "set",
             },
             requires_same_slot: false,
-            reindex: frogdb_core::ReindexSpec::None,
+            // Blind overwrite (any existing type → string): refresh the key so a
+            // clobbered indexed hash is de-indexed. See SET.
+            reindex: frogdb_core::ReindexSpec::RefreshFirstKey,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -137,7 +139,9 @@ impl Command for PsetexCommand {
                 name: "set",
             },
             requires_same_slot: false,
-            reindex: frogdb_core::ReindexSpec::None,
+            // Blind overwrite (any existing type → string): refresh the key so a
+            // clobbered indexed hash is de-indexed. See SET.
+            reindex: frogdb_core::ReindexSpec::RefreshFirstKey,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,

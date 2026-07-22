@@ -73,7 +73,12 @@ impl Command for RestoreCommand {
                 name: "restore",
             },
             requires_same_slot: false,
-            reindex: frogdb_core::ReindexSpec::None,
+            // RESTORE deserializes an arbitrary type into the key (with REPLACE it
+            // clobbers whatever was there). Refresh: index it when the restored
+            // value is a hash matching a prefix, else drop any stale doc. Also the
+            // reconstruction target of a cross-shard COPY (execution.rs), so this
+            // covers COPY's destination write too.
+            reindex: frogdb_core::ReindexSpec::RefreshFirstKey,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,

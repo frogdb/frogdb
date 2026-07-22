@@ -672,7 +672,23 @@ impl ShardWorker {
         // `expired`) for a hash that empties via field TTL, matching active
         // expiry's `ExpiryResult::emptied_keys` branch (event_loop.rs).
         let emptied = self.store.take_lazily_emptied();
+        // Hashes shrunk in place by this lazy read (≥1 field reaped, key still a
+        // hash). They are not removed, so they carry no `del`/`expired` event and
+        // do not flow through the removal branches below — but their search-index
+        // doc now holds a stale reaped-field value, so re-index each survivor.
+        // This is the READONLY-command analogue of a WRITE command's
+        // `ReindexSpec` (a lazy reap on HGET/HGETALL/… has no such spec), and it
+        // converges on the same `reindex_shrunk_hash_keys` owner the active sweep
+        // uses (event_loop.rs).
+        let shrunk = self.store.take_lazily_shrunk();
+        self.reindex_shrunk_hash_keys(&shrunk);
         if purged.is_empty() && emptied.is_empty() {
+            // A cycle that only shrank survivors still changed watched hashes:
+            // bump their per-slot versions so a WATCH observes the mutation,
+            // mirroring active expiry's field-expiry version bump.
+            if bump_version && !shrunk.is_empty() {
+                self.bump_versions_for(shrunk.iter().map(Bytes::as_ref));
+            }
             return;
         }
         for key in &purged {
@@ -734,12 +750,19 @@ impl ShardWorker {
             );
         }
         if bump_version {
-            // Per-slot bump for each lazily-removed key (both seams): a watched
-            // key that died lazily — whole-key TTL or last-hash-field death — is
-            // now observed changed by check_watches (gap 3). Only the removed
-            // keys' own slots are dirtied, so an unrelated watch on a different
-            // slot survives.
-            self.bump_versions_for(purged.iter().chain(emptied.iter()).map(Bytes::as_ref));
+            // Per-slot bump for each lazily-removed key (both seams) and each
+            // shrunk survivor: a watched key that died lazily — whole-key TTL or
+            // last-hash-field death — or whose hash shrank via field TTL is now
+            // observed changed by check_watches (gap 3). Only the affected keys'
+            // own slots are dirtied, so an unrelated watch on a different slot
+            // survives.
+            self.bump_versions_for(
+                purged
+                    .iter()
+                    .chain(emptied.iter())
+                    .chain(shrunk.iter())
+                    .map(Bytes::as_ref),
+            );
         }
     }
 

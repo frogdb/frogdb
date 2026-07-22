@@ -168,6 +168,19 @@ pub struct HashMapStore {
     /// `purge_expired_hash_fields` but owns its own field counting and discards
     /// this counter at the sweep seam, so it only ever counts genuine lazy reaps.
     lazily_expired_fields: u64,
+    /// Keys whose hash was **shrunk in place** by a lazy field-TTL reap
+    /// (`purge_expired_hash_fields` removed ≥1 field but the hash still exists)
+    /// since the last `take_lazily_shrunk`. Distinct from `lazily_emptied` (the
+    /// hash still holds surviving fields) and from `lazily_purged` (no whole-key
+    /// TTL elapsed): the key is a live, mutated hash whose search-index doc now
+    /// holds a stale (reaped) field value. Reported to the worker so it can
+    /// re-index the survivor, exactly as a WRITE command's `ReindexSpec` would —
+    /// READONLY commands that lazily reap fields (HGET/HMGET/HGETALL/…) carry no
+    /// such spec. The active sweep shares `purge_expired_hash_fields` and so
+    /// populates this too, but drains and re-indexes it at its own seam
+    /// (event_loop.rs) so it only ever fires for genuinely lazy reads. The store
+    /// never reads or acts on it.
+    lazily_shrunk: Vec<Bytes>,
     /// Whether passive/lazy expiry is suppressed (set during CLIENT PAUSE).
     /// When true, expired keys are logically invisible (get returns None)
     /// but not physically deleted and the expired_keys counter is not
@@ -212,6 +225,7 @@ impl HashMapStore {
             lazily_purged: Vec::new(),
             lazily_emptied: Vec::new(),
             lazily_expired_fields: 0,
+            lazily_shrunk: Vec::new(),
             expiry_suppressed: false,
             suppress_touch: false,
             keysizes: KeysizeHistograms::new(),
@@ -235,6 +249,7 @@ impl HashMapStore {
             lazily_purged: Vec::new(),
             lazily_emptied: Vec::new(),
             lazily_expired_fields: 0,
+            lazily_shrunk: Vec::new(),
             expiry_suppressed: false,
             suppress_touch: false,
             keysizes: KeysizeHistograms::new(),
@@ -496,6 +511,7 @@ impl HashMapStore {
     pub fn lazy_purge_buffers_empty(&self) -> bool {
         self.lazily_purged.is_empty()
             && self.lazily_emptied.is_empty()
+            && self.lazily_shrunk.is_empty()
             && self.lazily_expired_fields == 0
     }
 
@@ -1161,6 +1177,10 @@ impl Store for HashMapStore {
         std::mem::take(&mut self.lazily_expired_fields)
     }
 
+    fn take_lazily_shrunk(&mut self) -> Vec<Bytes> {
+        std::mem::take(&mut self.lazily_shrunk)
+    }
+
     fn set_with_options(&mut self, key: Bytes, value: Value, opts: SetOptions) -> SetResult {
         // Check condition (NX/XX)
         let key_exists = self.data.contains_key(&key) && !self.check_and_delete_expired(&key);
@@ -1426,14 +1446,32 @@ impl Store for HashMapStore {
         // `expired`. The active sweep also reaches here, but discards this
         // buffer at its seam (it owns reporting via `ExpiryResult`), so only a
         // genuinely lazy read ever drains it downstream.
-        if count > 0
-            && let Some(entry) = self.data.get(key)
-            && let Some(v) = entry.hot_value()
-            && let Some(hash) = v.as_hash()
-            && hash.is_empty()
-        {
-            self.delete(key);
-            self.lazily_emptied.push(Bytes::copy_from_slice(key));
+        //
+        // Otherwise the hash was shrunk in place but still exists: report it on
+        // `lazily_shrunk` so the worker re-indexes the survivor (its search-index
+        // doc still holds the reaped field's stale value). A READONLY command
+        // that triggered the reap carries no `ReindexSpec`, so this buffer is the
+        // only place the mutation is surfaced to the search index.
+        if count > 0 {
+            // Classify the post-reap state of the key: emptied (last field gone)
+            // vs shrunk-but-surviving. `None` (key somehow already absent) falls
+            // through to neither buffer.
+            let now_empty = self
+                .data
+                .get(key)
+                .and_then(|entry| entry.hot_value())
+                .and_then(|v| v.as_hash())
+                .map(|hash| hash.is_empty());
+            match now_empty {
+                Some(true) => {
+                    self.delete(key);
+                    self.lazily_emptied.push(Bytes::copy_from_slice(key));
+                }
+                Some(false) => {
+                    self.lazily_shrunk.push(Bytes::copy_from_slice(key));
+                }
+                None => {}
+            }
         }
 
         count

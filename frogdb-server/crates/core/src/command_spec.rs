@@ -370,9 +370,26 @@ pub enum ReindexSpec {
     /// Drop every arg key from all matching indexes (DEL/UNLINK) — mirrors
     /// [`WalStrategy::DeleteKeys`].
     DeleteKeys,
-    /// Drop `args[0]`, reindex `args[1]` as a hash (RENAME/RENAMENX) — mirrors
-    /// [`WalStrategy::RenameKeys`]. Requires [`KeySpec::FirstTwo`].
+    /// Drop `args[0]`, reconcile `args[1]` to its post-write type (RENAME/
+    /// RENAMENX) — mirrors [`WalStrategy::RenameKeys`]. Requires
+    /// [`KeySpec::FirstTwo`]. The destination is *refreshed* (not blindly
+    /// reindexed as a hash): a RENAME whose source was a non-hash overwrites an
+    /// indexed hash destination with a non-hash value, so the stale hash doc must
+    /// be dropped, not left dangling. See [`ReindexAction::Refresh`].
     Rename,
+    /// Reconcile `args[0]` to whatever type it now holds — index it if it is a
+    /// hash matching a prefix, else drop any stale doc (SET/SETEX/PSETEX, which
+    /// clobber an arbitrary existing key with a string; RESTORE, which writes an
+    /// arbitrary deserialized type). A type-clobbering write that leaves the key
+    /// present but no longer a hash must *de-index* it, which neither
+    /// [`FirstKey`](ReindexSpec::FirstKey) (never deletes) nor
+    /// [`FirstKeyOrDelete`](ReindexSpec::FirstKeyOrDelete) (deletes only when the
+    /// key is absent) expresses. See [`ReindexAction::Refresh`].
+    RefreshFirstKey,
+    /// Like [`RefreshFirstKey`](ReindexSpec::RefreshFirstKey) but reconciles
+    /// `args[1]` — the destination of COPY (same-shard). Requires
+    /// [`KeySpec::FirstTwo`].
+    RefreshSecondKey,
 }
 
 /// A typed reindex action against a single key.
@@ -388,6 +405,12 @@ pub enum ReindexAction<'a> {
     ReindexOrDelete { key: &'a [u8], kind: IndexKind },
     /// Delete the key from all matching indexes.
     Delete { key: &'a [u8] },
+    /// Reconcile the key to whatever type it now holds: index it as a hash if it
+    /// is one (matching prefix), otherwise remove any stale doc. Unlike
+    /// [`Reindex`](ReindexAction::Reindex) — which silently no-ops when the key
+    /// is no longer a hash — this drops a doc left stale by a cross-type
+    /// overwrite (SET/RESTORE/COPY/RENAME clobbering an indexed hash).
+    Refresh { key: &'a [u8] },
 }
 
 impl ReindexSpec {
@@ -423,15 +446,22 @@ impl ReindexSpec {
                         ReindexAction::Delete {
                             key: args[0].as_ref(),
                         },
-                        ReindexAction::Reindex {
+                        ReindexAction::Refresh {
                             key: args[1].as_ref(),
-                            kind: IndexKind::Hash,
                         },
                     ]
                 } else {
                     SmallVec::new()
                 }
             }
+            ReindexSpec::RefreshFirstKey => match args.first() {
+                Some(key) => smallvec![ReindexAction::Refresh { key: key.as_ref() }],
+                None => SmallVec::new(),
+            },
+            ReindexSpec::RefreshSecondKey => match args.get(1) {
+                Some(key) => smallvec![ReindexAction::Refresh { key: key.as_ref() }],
+                None => SmallVec::new(),
+            },
         }
     }
 }
@@ -524,6 +554,9 @@ pub enum SpecError {
     /// [`ReindexSpec::Rename`] reindexes `args[1]`, so it requires
     /// [`KeySpec::FirstTwo`]; any other key shape cannot supply the second key.
     RenameReindexRequiresFirstTwo,
+    /// [`ReindexSpec::RefreshSecondKey`] reconciles `args[1]`, so it requires
+    /// [`KeySpec::FirstTwo`]; any other key shape cannot supply the second key.
+    RefreshSecondKeyRequiresFirstTwo,
 }
 
 impl std::fmt::Display for SpecError {
@@ -593,6 +626,12 @@ impl std::fmt::Display for SpecError {
                 write!(
                     f,
                     "ReindexSpec::Rename reindexes args[1] and requires KeySpec::FirstTwo"
+                )
+            }
+            SpecError::RefreshSecondKeyRequiresFirstTwo => {
+                write!(
+                    f,
+                    "ReindexSpec::RefreshSecondKey reconciles args[1] and requires KeySpec::FirstTwo"
                 )
             }
         }
@@ -736,6 +775,14 @@ impl CommandSpec {
         // a second key. Only `KeySpec::FirstTwo` guarantees it.
         if matches!(self.reindex, ReindexSpec::Rename) && !matches!(self.keys, KeySpec::FirstTwo) {
             return Err(SpecError::RenameReindexRequiresFirstTwo);
+        }
+
+        // `ReindexSpec::RefreshSecondKey` reconciles `args[1]` (COPY's
+        // destination), so the command must extract a second key.
+        if matches!(self.reindex, ReindexSpec::RefreshSecondKey)
+            && !matches!(self.keys, KeySpec::FirstTwo)
+        {
+            return Err(SpecError::RefreshSecondKeyRequiresFirstTwo);
         }
 
         Ok(())
@@ -1330,16 +1377,50 @@ mod tests {
         let actions = ReindexSpec::Rename.actions(&a);
         assert_eq!(actions.len(), 2);
         assert!(matches!(actions[0], ReindexAction::Delete { key } if key == b"old"));
+        // The destination is refreshed (not blindly reindexed as a hash) so a
+        // non-hash source de-indexes a previously-indexed destination hash.
         assert!(matches!(
             actions[1],
-            ReindexAction::Reindex {
-                key,
-                kind: IndexKind::Hash
-            } if key == b"new"
+            ReindexAction::Refresh { key } if key == b"new"
         ));
         // Insufficient args yields nothing rather than panicking.
         let one = args(&[b"old"]);
         assert!(ReindexSpec::Rename.actions(&one).is_empty());
+    }
+
+    #[test]
+    fn reindex_refresh_first_key() {
+        let a = args(&[b"user:1", b"value"]);
+        let actions = ReindexSpec::RefreshFirstKey.actions(&a);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], ReindexAction::Refresh { key } if key == b"user:1"));
+        assert!(ReindexSpec::RefreshFirstKey.actions(&[]).is_empty());
+    }
+
+    #[test]
+    fn reindex_refresh_second_key() {
+        let a = args(&[b"src", b"dst"]);
+        let actions = ReindexSpec::RefreshSecondKey.actions(&a);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], ReindexAction::Refresh { key } if key == b"dst"));
+        // Only one key present yields nothing rather than panicking.
+        let one = args(&[b"src"]);
+        assert!(ReindexSpec::RefreshSecondKey.actions(&one).is_empty());
+    }
+
+    #[test]
+    fn validate_refresh_second_key_requires_first_two() {
+        let mut spec = base_write_spec();
+        spec.reindex = ReindexSpec::RefreshSecondKey;
+        // `KeySpec::First` cannot supply args[1].
+        assert_eq!(
+            spec.validate(),
+            Err(SpecError::RefreshSecondKeyRequiresFirstTwo)
+        );
+        spec.keys = KeySpec::FirstTwo;
+        spec.arity = Arity::AtLeast(2);
+        spec.event = EventSpec::Dynamic;
+        assert_eq!(spec.validate(), Ok(()));
     }
 
     // --- ReindexSpec cross-field validation ---

@@ -7197,3 +7197,337 @@ async fn test_ft_search_full_grammar_multi_shard() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// Reindex holes: cross-type overwrites + READONLY lazy field purge
+// (round-10 follow-up 5 + 3)
+// ============================================================================
+
+/// Round-10 follow-up 5: `SET` blindly overwrites an indexed HASH key with a
+/// string. The key still exists (so the old command-name / `FirstKeyOrDelete`
+/// paths never fired a delete), but it is no longer a hash, so its search doc
+/// must be dropped. `ReindexSpec::RefreshFirstKey` reconciles it.
+#[tokio::test]
+async fn regression_set_over_indexed_hash_removes_search_doc() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "user:1", "name", "Alice Smith"])
+        .await;
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "user:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+        ])
+        .await;
+    assert_ok(&response);
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "Alice"]).await);
+    assert_eq!(unwrap_integer(&arr[0]), 1, "baseline: hash is indexed");
+
+    // Clobber the indexed hash with a plain string.
+    assert_ok(&client.command(&["SET", "user:1", "just a string"]).await);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "Alice"]).await);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        0,
+        "SET over an indexed hash must drop the now-stale search doc"
+    );
+
+    server.shutdown().await;
+}
+
+/// Round-10 follow-up 5: same-shard `COPY` of a hash INTO an index-prefix key
+/// must index the destination. `ReindexSpec::RefreshSecondKey` reconciles
+/// `args[1]` (the destination).
+#[tokio::test]
+async fn regression_copy_hash_into_index_prefix_indexes_destination() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Source hash lives OUTSIDE the index prefix, so it is not itself indexed.
+    client
+        .command(&["HSET", "src:1", "name", "Bob Jones"])
+        .await;
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "user:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Nothing indexed yet.
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "Bob"]).await);
+    assert_eq!(unwrap_integer(&arr[0]), 0, "baseline: nothing under prefix");
+
+    // Copy the hash into a prefix-matching destination key.
+    assert_eq!(
+        unwrap_integer(&client.command(&["COPY", "src:1", "user:1"]).await),
+        1,
+        "COPY should succeed"
+    );
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "Bob"]).await);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        1,
+        "COPY of a hash into an index-prefix key must index the destination"
+    );
+
+    server.shutdown().await;
+}
+
+/// Round-10 follow-up 5: `RESTORE` of a hash payload INTO an index-prefix key
+/// must index the destination. RESTORE reconciles `args[0]` via
+/// `ReindexSpec::RefreshFirstKey` (this also covers cross-shard COPY, which
+/// reconstructs as RESTORE on the destination shard).
+#[tokio::test]
+async fn regression_restore_hash_into_index_prefix_indexes_destination() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Build a hash payload OUTSIDE the prefix and DUMP it.
+    client
+        .command(&["HSET", "tmp:1", "name", "Carol Danvers"])
+        .await;
+    let payload = match server.send("DUMP", &["tmp:1"]).await {
+        Response::Bulk(Some(data)) => data,
+        other => panic!("DUMP should return bulk data, got: {other:?}"),
+    };
+
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "user:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Restore the hash into a prefix-matching destination key.
+    let restore = Bytes::from_static(b"RESTORE");
+    let dest = Bytes::from_static(b"user:1");
+    let ttl = Bytes::from_static(b"0");
+    let resp = client.command_raw(&[&restore, &dest, &ttl, &payload]).await;
+    assert_ok(&resp);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "Carol"]).await);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        1,
+        "RESTORE of a hash into an index-prefix key must index the destination"
+    );
+
+    server.shutdown().await;
+}
+
+/// Round-10 follow-up 5: `RENAME` of a NON-hash source ONTO an indexed hash key
+/// clobbers it with a non-hash value; the destination's stale hash doc must be
+/// dropped. The old `ReindexSpec::Rename` reindexed the destination as a hash
+/// unconditionally (a silent no-op on a non-hash), leaving the doc dangling —
+/// now the destination is refreshed.
+#[tokio::test]
+async fn regression_rename_nonhash_over_indexed_hash_removes_doc() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "user:1", "name", "Diana Prince"])
+        .await;
+    // A plain string OUTSIDE the prefix, to be renamed onto the indexed key.
+    client.command(&["SET", "str:1", "not a hash"]).await;
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "user:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "Diana"]).await);
+    assert_eq!(unwrap_integer(&arr[0]), 1, "baseline: hash is indexed");
+
+    // Rename the string onto the indexed hash key (blind clobber).
+    assert_ok(&client.command(&["RENAME", "str:1", "user:1"]).await);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "Diana"]).await);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        0,
+        "RENAME of a non-hash onto an indexed hash must drop the stale doc"
+    );
+
+    server.shutdown().await;
+}
+
+/// Round-10 follow-up 3: a READONLY command (HGET) that lazily purges an
+/// expired hash field mutates the hash without a WRITE `ReindexSpec`, so the
+/// search index kept the reaped field's stale value. The purge-effect hook now
+/// re-indexes the survivor (`reindex_shrunk_hash_keys`).
+#[tokio::test]
+async fn regression_lazy_field_purge_reindexes_hash_survivor() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Disable active expiry: only a lazy read may reap the field.
+    client.command(&["DEBUG", "SET-ACTIVE-EXPIRE", "0"]).await;
+
+    client
+        .command(&["HSET", "user:1", "name", "Eve", "city", "paris"])
+        .await;
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "user:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+            "city",
+            "TAG",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Baseline: the tagged field is searchable.
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "@city:{paris}"]).await);
+    assert_eq!(unwrap_integer(&arr[0]), 1, "baseline: city field indexed");
+
+    // Give the `city` field a 1ms TTL and let it elapse.
+    client
+        .command(&["HPEXPIRE", "user:1", "1", "FIELDS", "1", "city"])
+        .await;
+    tokio::time::sleep(Duration::from_millis(60)).await;
+
+    // A READONLY read lazily purges the expired field; the hash survives with
+    // `name` only, and must be re-indexed without `city`.
+    client.command(&["HGET", "user:1", "name"]).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "@city:{paris}"]).await);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        0,
+        "lazy field purge must re-index the survivor without the purged field"
+    );
+    // The surviving field keeps the doc present (it was re-indexed, not deleted).
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "Eve"]).await);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        1,
+        "the survivor hash must remain indexed on its surviving field"
+    );
+
+    server.shutdown().await;
+}
+
+/// Round-10 follow-up 3: the ACTIVE-expiry sweep is the second owner that must
+/// re-index a field-shrunk survivor through the same `reindex_shrunk_hash_keys`
+/// path. Active expiry stays enabled and no lazy read is issued — the sweep
+/// alone reaps the field and refreshes the index.
+#[tokio::test]
+async fn regression_active_field_purge_reindexes_hash_survivor() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "user:1", "name", "Frank", "city", "berlin"])
+        .await;
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "user:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+            "city",
+            "TAG",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let arr = unwrap_array(
+        client
+            .command(&["FT.SEARCH", "idx", "@city:{berlin}"])
+            .await,
+    );
+    assert_eq!(unwrap_integer(&arr[0]), 1, "baseline: city field indexed");
+
+    // Expire the `city` field; the 100ms active sweep reaps it with no read.
+    client
+        .command(&["HPEXPIRE", "user:1", "1", "FIELDS", "1", "city"])
+        .await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let arr = unwrap_array(
+        client
+            .command(&["FT.SEARCH", "idx", "@city:{berlin}"])
+            .await,
+    );
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        0,
+        "active sweep must re-index the survivor without the purged field"
+    );
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "Frank"]).await);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        1,
+        "the survivor hash must remain indexed on its surviving field"
+    );
+
+    server.shutdown().await;
+}
