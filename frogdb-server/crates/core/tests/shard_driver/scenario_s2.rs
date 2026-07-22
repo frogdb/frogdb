@@ -26,16 +26,46 @@ use frogdb_core::store::Store;
 #[derive(Debug, Clone, Copy)]
 enum Interleave {
     None,
+    /// A third connection READS the watched key while it is live. A read must
+    /// not bump the version or purge, so EXEC must commit — the arm that pins
+    /// "a read never aborts a watch" (catches a bump-version-on-read regression).
+    ReadWatchedKey,
     UnrelatedWrite,
     WatchedWrite,
     ActiveExpiryUnrelated,
     ActiveExpiryWatched,
 }
 
-/// Returns (aborted, watched_key_changed). `watched_key_changed` is the model
-/// truth: did the watched key's value/existence change due to a write or
-/// active expiry during the gap?
-async fn run_case(interleave: Interleave) -> (bool, bool) {
+/// The pinned outcome for a fixed schedule, with the abort *attributed* to its
+/// cause. Pinning the cause (not just the abort bit) is what lets a spurious
+/// abort fail loudly instead of folding into a `>= 1` floor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Outcome {
+    /// EXEC commits: the watched key was untouched AND the shard version never
+    /// bumped, so there is nothing that could legitimately abort.
+    Commit,
+    /// EXEC aborts because the watched key itself genuinely changed (a write to
+    /// `k`, or `k`'s expiry). A required abort — the zero-false-negatives floor.
+    TrueAbort,
+    /// EXEC aborts *only* because the coarse per-shard version bumped from a
+    /// write/expiry of a DIFFERENT key on the same shard. Legal but
+    /// characterized: a per-key version scheme would let this arm commit, so a
+    /// partial coarseness regression flips it to `Commit` and fails the pin.
+    OverAbort,
+}
+
+/// Everything an arm's EXEC observed, enough to attribute the abort.
+struct CaseObservation {
+    aborted: bool,
+    /// Model truth: did the watched key's value/existence change during the gap?
+    watched_changed: bool,
+    /// Did the shard version the watch is validated against differ from the
+    /// snapshot `v0` (read non-destructively just before EXEC)? This is the
+    /// exact signal that drives a coarse over-abort.
+    version_bumped: bool,
+}
+
+async fn run_case(interleave: Interleave) -> CaseObservation {
     let mut d = ShardDriver::new(1);
 
     // Seed the watched key and an unrelated key.
@@ -48,6 +78,10 @@ async fn run_case(interleave: Interleave) -> (bool, bool) {
     let mut watched_changed = false;
     match interleave {
         Interleave::None => {}
+        Interleave::ReadWatchedKey => {
+            // A pure read of the still-live watched key: must not bump/purge.
+            let _ = d.execute_conn(0, 2, "GET", &["k"]).await;
+        }
         Interleave::UnrelatedWrite => {
             let _ = d.execute_conn(0, 2, "SET", &["u", "u1"]).await;
         }
@@ -70,6 +104,11 @@ async fn run_case(interleave: Interleave) -> (bool, bool) {
         }
     }
 
+    // The version EXEC will validate the watch against, read non-destructively
+    // (empty-key GetVersion => no lazy purge) just before EXEC. `!= v0` is
+    // exactly the coarse-bump signal `check_watches` compares on.
+    let version_bumped = d.get_version(0).await != v0;
+
     // Conn A runs EXEC watching k at v0.
     let result = d
         .exec_transaction(
@@ -84,40 +123,114 @@ async fn run_case(interleave: Interleave) -> (bool, bool) {
         )
         .await;
     let aborted = matches!(result, TransactionResult::WatchAborted);
-    (aborted, watched_changed)
+    CaseObservation {
+        aborted,
+        watched_changed,
+        version_bumped,
+    }
 }
 
+/// Characterize the S2 WATCH model with an *attributed* partition rather than a
+/// coarse `over_aborts >= 1` floor. For each fixed schedule we pin the exact
+/// outcome AND its cause, and assert the whole partition (N true + M over,
+/// exact). Two properties fall out that the floor could not catch:
+///   * a partial coarseness regression (an over-abort arm starts committing)
+///     shifts the exact `over_aborts` count and fails;
+///   * a spurious abort — one attributable to neither a real watched-key change
+///     nor a coarse version bump — fails loudly at its arm instead of silently
+///     inflating the count (the bug the floor masked).
 #[tokio::test]
 async fn s2_zero_false_negatives_and_over_abort_characterized() {
-    let cases = [
-        Interleave::None,
-        Interleave::UnrelatedWrite,
-        Interleave::WatchedWrite,
-        Interleave::ActiveExpiryUnrelated,
-        Interleave::ActiveExpiryWatched,
+    let schedule = [
+        (Interleave::None, Outcome::Commit),
+        (Interleave::ReadWatchedKey, Outcome::Commit),
+        (Interleave::UnrelatedWrite, Outcome::OverAbort),
+        (Interleave::WatchedWrite, Outcome::TrueAbort),
+        (Interleave::ActiveExpiryUnrelated, Outcome::OverAbort),
+        (Interleave::ActiveExpiryWatched, Outcome::TrueAbort),
     ];
+
+    let mut true_aborts = 0u32;
     let mut over_aborts = 0u32;
-    for c in cases {
-        let (aborted, changed) = run_case(c).await;
-        // Zero false negatives: a real change must abort.
-        if changed {
+
+    for (interleave, expected) in schedule {
+        let obs = run_case(interleave).await;
+
+        // (1) The abort decision matches the pinned expectation exactly. This is
+        // the zero-false-negatives floor AND its converse: a Commit arm that
+        // aborts (spurious) fails here too.
+        let should_abort = expected != Outcome::Commit;
+        assert_eq!(
+            obs.aborted, should_abort,
+            "{interleave:?}: pinned {expected:?} (abort={should_abort}), \
+             got aborted={} (changed={}, version_bumped={})",
+            obs.aborted, obs.watched_changed, obs.version_bumped
+        );
+
+        // (2) Attribute the outcome to its cause — the abort bit alone is not
+        // enough; the *reason* must match the pin.
+        match expected {
+            Outcome::Commit => {
+                assert!(
+                    !obs.watched_changed,
+                    "{interleave:?}: Commit arm must not change the watched key"
+                );
+                assert!(
+                    !obs.version_bumped,
+                    "{interleave:?}: Commit arm must not bump the shard version \
+                     (a read/no-op must be version-neutral)"
+                );
+            }
+            Outcome::TrueAbort => {
+                assert!(
+                    obs.watched_changed,
+                    "{interleave:?}: TrueAbort must be caused by a real change to \
+                     the watched key, not coarseness"
+                );
+                true_aborts += 1;
+            }
+            Outcome::OverAbort => {
+                // The precise coarseness signature: the watched key was NOT
+                // touched, yet an unrelated same-shard write/expiry bumped the
+                // per-shard version and forced the abort.
+                assert!(
+                    !obs.watched_changed,
+                    "{interleave:?}: OverAbort must not touch the watched key \
+                     (else it is a true abort, not coarseness)"
+                );
+                assert!(
+                    obs.version_bumped,
+                    "{interleave:?}: OverAbort must be attributable to a coarse \
+                     per-shard version bump from another key"
+                );
+                over_aborts += 1;
+            }
+        }
+
+        // (3) Attribution completeness: any abort must be explained by EITHER a
+        // real watched-key change OR a coarse version bump. An abort with
+        // neither is spurious and fails here — the case the old floor folded
+        // into its count.
+        if obs.aborted {
             assert!(
-                aborted,
-                "false negative: {c:?} changed the watched key but EXEC committed"
+                obs.watched_changed || obs.version_bumped,
+                "{interleave:?}: spurious abort — EXEC aborted with no watched-key \
+                 change and no shard-version bump"
             );
         }
-        // Characterize over-aborts (legal, per the pinned per-shard-version
-        // divergence) — count, do not assert.
-        if aborted && !changed {
-            over_aborts += 1;
-        }
     }
-    // Documented over-abort sources: unrelated same-shard write + unrelated
-    // active-expiry removal both bump shard_version.
-    eprintln!("S2 over-aborts (legal, characterized): {over_aborts}");
-    assert!(
-        over_aborts >= 1,
-        "expected the per-shard-version over-abort to be observable"
+
+    // (4) Pin the exact partition for this fixed schedule: exactly two required
+    // (true) aborts and exactly two coarse over-aborts. A partial coarseness
+    // regression (an over-abort arm that starts committing) or an extra spurious
+    // abort shifts one of these exact counts and fails.
+    assert_eq!(
+        true_aborts, 2,
+        "expected exactly two required (true) aborts: WatchedWrite + ActiveExpiryWatched"
+    );
+    assert_eq!(
+        over_aborts, 2,
+        "expected exactly two coarse over-aborts: UnrelatedWrite + ActiveExpiryUnrelated"
     );
 }
 
