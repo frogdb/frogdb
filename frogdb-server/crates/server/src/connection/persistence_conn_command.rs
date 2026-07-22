@@ -237,32 +237,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bgsave_reports_already_in_progress() {
+    async fn bgsave_starts_each_time_under_instant_completion() {
+        // The no-op coordinator now completes instantly (proposal 21): a save
+        // releases the slot synchronously, so there is never a genuinely in-flight
+        // save to observe. A leaked handle no longer pins `in_progress` — the
+        // deliberate semantic flip — so back-to-back BGSAVEs each `Started`.
         let fx = Fixture::new();
-        // Leak a handle so the snapshot stays in progress.
-        let handle = fx.snapshot_coordinator.start_snapshot().unwrap();
-        std::mem::forget(handle);
-        let resp = BgsaveConnCommand.execute(&mut fx.ctx(), &[]).await;
+        let first = BgsaveConnCommand.execute(&mut fx.ctx(), &[]).await;
         assert_eq!(
-            resp,
-            Response::Simple(Bytes::from_static(b"Background save already in progress"))
+            first,
+            Response::Simple(Bytes::from_static(b"Background saving started"))
+        );
+        let second = BgsaveConnCommand.execute(&mut fx.ctx(), &[]).await;
+        assert_eq!(
+            second,
+            Response::Simple(Bytes::from_static(b"Background saving started"))
         );
     }
 
     #[tokio::test]
-    async fn bgsave_schedule_while_in_progress_schedules() {
+    async fn bgsave_schedule_starts_when_idle() {
+        // With instant completion there is no save in flight to coalesce with, so
+        // BGSAVE SCHEDULE `Started`s a fresh save (proposal 21). The mode split
+        // (`Immediate` no-queue vs `Schedule` coalesce) is pinned at the scheduler
+        // (`test_scheduler_request_mode_immediate_no_queue_vs_schedule_arms`).
         let fx = Fixture::new();
-        let handle = fx.snapshot_coordinator.start_snapshot().unwrap();
-        std::mem::forget(handle);
         let resp = BgsaveConnCommand
             .execute(&mut fx.ctx(), &[arg("SCHEDULE")])
             .await;
-        // The observable contract is the RESP response; the coalesce-arming
-        // invariant is asserted at the scheduler
-        // (`test_scheduler_request_mode_immediate_no_queue_vs_schedule_arms`).
         assert_eq!(
             resp,
-            Response::Simple(Bytes::from_static(b"Background saving scheduled"))
+            Response::Simple(Bytes::from_static(b"Background saving started"))
         );
     }
 
@@ -276,8 +281,9 @@ mod tests {
     #[tokio::test]
     async fn lastsave_returns_timestamp_after_save() {
         let fx = Fixture::new();
-        let handle = fx.snapshot_coordinator.start_snapshot().unwrap();
-        drop(handle);
+        // Instant completion: the save runs and stamps `last_save` synchronously
+        // (the handle is a bare epoch carrier — nothing to drop/await).
+        let _ = fx.snapshot_coordinator.start_snapshot().unwrap();
         let resp = LastsaveConnCommand.execute(&mut fx.ctx(), &[]).await;
         match resp {
             Response::Integer(ts) => assert!(ts > 0, "expected a positive last-save timestamp"),
