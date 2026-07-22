@@ -6,6 +6,8 @@ pub mod chaos_configs;
 #[cfg(feature = "turmoil")]
 pub mod invariants;
 #[cfg(feature = "turmoil")]
+pub mod pubsub_runner;
+#[cfg(feature = "turmoil")]
 pub mod quiescence_probe;
 pub mod replication_helpers;
 #[cfg(feature = "turmoil")]

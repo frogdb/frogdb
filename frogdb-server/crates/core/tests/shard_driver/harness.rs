@@ -266,6 +266,31 @@ impl ShardDriver {
         while self.pump_one(shard).await {}
     }
 
+    // --- Keyspace-notification capture (S8 order consistency) ------------
+
+    /// Enable keyspace notifications (`flags`) on `shard` and register a capture
+    /// PSUBSCRIBE for each glob in `patterns`, returning the capture. The
+    /// single-shard driver runs the `Local` topology, so notifications emitted
+    /// by driven schedules (expiry sweeps, EXEC writes) land synchronously in
+    /// the returned receiver. See [`notify_capture`](super::notify_capture).
+    pub fn capture_keyspace(
+        &mut self,
+        shard: usize,
+        conn_id: u64,
+        patterns: &[&str],
+        flags: u32,
+    ) -> super::notify_capture::NotificationCapture {
+        let rx = self.workers[shard].drive_capture_keyspace(
+            patterns
+                .iter()
+                .map(|c| Bytes::from(c.to_string()))
+                .collect(),
+            conn_id,
+            flags,
+        );
+        super::notify_capture::NotificationCapture::new(rx)
+    }
+
     // --- Probes (production DEBUG seam) ----------------------------------
 
     pub async fn wait_queue_info(&mut self, shard: usize) -> WaitQueueInfo {

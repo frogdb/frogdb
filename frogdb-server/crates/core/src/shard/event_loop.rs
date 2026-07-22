@@ -357,6 +357,41 @@ impl ShardWorker {
     pub fn try_recv_queued(&mut self) -> Option<Envelope> {
         self.message_rx.try_recv()
     }
+
+    /// Shard-driver harness seam: enable the given keyspace-event mask and
+    /// register a capture PSUBSCRIBE for each glob in `patterns` on this
+    /// worker's own subscription table, returning the receiver every matching
+    /// emitted notification is delivered into.
+    ///
+    /// Single-shard drivers run the `Local` keyspace topology
+    /// ([`KeyspaceNotificationCoordinator::new`] with `num_shards == 1`), so
+    /// `emit_keyspace_notification` publishes straight into `self.subscriptions`
+    /// — the same table this seam subscribes into. That is exactly the
+    /// synchronous fast path a real single-shard server takes, so a driven
+    /// schedule's notifications land in the returned receiver in emission order.
+    /// A broad pattern (e.g. `__keyevent@0__:*`) captures every keyevent, so the
+    /// consistency checker can detect *extra* notifications, not only missing or
+    /// reordered ones. This makes the "keyspace notifications consistent with
+    /// the chosen serialization order" half of scenario S8 observable (design
+    /// doc S8 note).
+    #[cfg(any(test, feature = "shard-driver"))]
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn drive_capture_keyspace(
+        &mut self,
+        patterns: Vec<Bytes>,
+        conn_id: u64,
+        flags: u32,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<crate::pubsub::PubSubMessage> {
+        self.set_notify_keyspace_events(std::sync::Arc::new(std::sync::atomic::AtomicU32::new(
+            flags,
+        )));
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        for pat in patterns {
+            self.subscriptions.psubscribe(pat, conn_id, tx.clone());
+        }
+        rx
+    }
 }
 
 #[cfg(test)]
