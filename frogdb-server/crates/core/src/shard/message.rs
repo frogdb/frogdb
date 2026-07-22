@@ -244,33 +244,49 @@ pub enum CoreMsg {
 #[derive(Debug)]
 pub enum PubSubMsg {
     /// Subscribe to broadcast channels.
+    ///
+    /// `response_tx` is a bare registration ack: the round trip is a barrier, not
+    /// a count. Awaiting it guarantees the registration is visible in the shard's
+    /// subscription table before the client sees its confirmation, so a PUBLISH
+    /// processed after the confirmation sees this subscriber. The client-visible
+    /// subscription count is the per-connection one, computed server-side before
+    /// this message is sent (see `pubsub_conn_command`).
     Subscribe {
         channels: Vec<Bytes>,
         conn_id: ConnId,
         sender: PubSubSender,
-        response_tx: oneshot::Sender<Vec<usize>>,
+        response_tx: oneshot::Sender<()>,
     },
 
     /// Unsubscribe from broadcast channels.
+    ///
+    /// `response_tx` is a bare deregistration ack (barrier, not a count); see
+    /// [`PubSubMsg::Subscribe`].
     Unsubscribe {
         channels: Vec<Bytes>,
         conn_id: ConnId,
-        response_tx: oneshot::Sender<Vec<usize>>,
+        response_tx: oneshot::Sender<()>,
     },
 
     /// Subscribe to patterns.
+    ///
+    /// `response_tx` is a bare registration ack (barrier, not a count); see
+    /// [`PubSubMsg::Subscribe`].
     PSubscribe {
         patterns: Vec<Bytes>,
         conn_id: ConnId,
         sender: PubSubSender,
-        response_tx: oneshot::Sender<Vec<usize>>,
+        response_tx: oneshot::Sender<()>,
     },
 
     /// Unsubscribe from patterns.
+    ///
+    /// `response_tx` is a bare deregistration ack (barrier, not a count); see
+    /// [`PubSubMsg::Subscribe`].
     PUnsubscribe {
         patterns: Vec<Bytes>,
         conn_id: ConnId,
-        response_tx: oneshot::Sender<Vec<usize>>,
+        response_tx: oneshot::Sender<()>,
     },
 
     /// Publish to a broadcast channel.
@@ -288,18 +304,24 @@ pub enum PubSubMsg {
     PublishKeyspace { channel: Bytes, payload: Bytes },
 
     /// Subscribe to sharded channels.
+    ///
+    /// `response_tx` is a bare registration ack (barrier, not a count); see
+    /// [`PubSubMsg::Subscribe`].
     ShardedSubscribe {
         channels: Vec<Bytes>,
         conn_id: ConnId,
         sender: PubSubSender,
-        response_tx: oneshot::Sender<Vec<usize>>,
+        response_tx: oneshot::Sender<()>,
     },
 
     /// Unsubscribe from sharded channels.
+    ///
+    /// `response_tx` is a bare deregistration ack (barrier, not a count); see
+    /// [`PubSubMsg::Subscribe`].
     ShardedUnsubscribe {
         channels: Vec<Bytes>,
         conn_id: ConnId,
-        response_tx: oneshot::Sender<Vec<usize>>,
+        response_tx: oneshot::Sender<()>,
     },
 
     /// Publish to a sharded channel.
