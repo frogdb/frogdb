@@ -708,6 +708,12 @@ type RecvKey = (u64, Bytes, u64);
 /// Per-publisher order preservation per channel: for each
 /// (subscriber, channel, publisher), the subsequence of received messages must
 /// appear in the same order the publisher sent them.
+///
+/// Deliberately merges `message` and `pmessage` receives into one stream per
+/// (subscriber, channel, publisher) — both frame kinds funnel through the
+/// same subscriber connection in publish order (channel-subs delivered before
+/// pattern-subs for a given publish), so a single FIFO comparison here can
+/// neither false-positive nor mask a real reorder.
 pub fn check_pubsub_order(h: &PubSubHistory) -> Result<(), PubSubViolation> {
     let publishes = index_publishes(h);
 
