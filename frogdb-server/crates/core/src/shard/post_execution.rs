@@ -280,15 +280,28 @@ impl ShardWorker {
                     //   Command/ScatterPart: skip when dirty_delta < 0 (WATCH
                     //                        no-op rule)
                     //   Transaction:         unconditional, once per EXEC
-                    match scope {
+                    let warranted = match scope {
                         EffectScope::Command
                         | EffectScope::ScatterPart
-                        | EffectScope::InternalRemoval { .. } => {
-                            if summary.dirty_delta >= 0 {
-                                self.increment_version();
-                            }
-                        }
-                        EffectScope::Transaction => self.increment_version(),
+                        | EffectScope::InternalRemoval { .. } => summary.dirty_delta >= 0,
+                        EffectScope::Transaction => true,
+                    };
+                    if warranted {
+                        // Slot-granular (proposal 18): bump only the slots of the
+                        // written keys, so a watch on a different-slot key on this
+                        // shard survives. The keys come from the same
+                        // `record.handler.keys(args)` extraction client-tracking
+                        // uses one step later (`invalidate_written_keys`). A
+                        // warranted bump that names NO key (a whole-DB `FLUSHDB`
+                        // write record carries none) falls through to the
+                        // shard-wide epoch inside `bump_versions_for`, invalidating
+                        // every watch — matching Redis's flush-touches-all.
+                        self.bump_versions_for(
+                            summary
+                                .writes
+                                .iter()
+                                .flat_map(|record| record.handler.keys(record.args)),
+                        );
                     }
                 }
                 WriteEffectKind::TrackingInvalidation => {
@@ -940,7 +953,11 @@ mod tests {
         worker
             .execute_command(&noop, 1, ProtocolVersion::Resp2, false)
             .await;
-        assert_eq!(worker.shard_version, 0, "no-op write must not bump version");
+        assert_eq!(
+            worker.get_key_version(b"k"),
+            0,
+            "no-op write must not bump version"
+        );
         assert!(
             bc.commands.lock().unwrap().is_empty(),
             "no-op write must not replicate"
@@ -954,7 +971,7 @@ mod tests {
         worker
             .execute_command(&real, 1, ProtocolVersion::Resp2, false)
             .await;
-        assert_eq!(worker.shard_version, 1);
+        assert_eq!(worker.get_key_version(b"k"), 1);
         assert_eq!(bc.commands.lock().unwrap().len(), 1);
     }
 
@@ -979,8 +996,9 @@ mod tests {
         ];
         worker.run_scatter_effects(writes, 2, 42).await;
 
-        // Version bumped once for the whole part (not once per write).
-        assert_eq!(worker.shard_version, 1);
+        // Each written key's slot bumped once (a and b are different slots).
+        assert_eq!(worker.get_key_version(b"a"), 1);
+        assert_eq!(worker.get_key_version(b"b"), 1);
 
         // Two independent broadcasts, no MULTI/EXEC framing.
         let cmds = bc.commands.lock().unwrap();
@@ -1010,7 +1028,8 @@ mod tests {
         worker.run_scatter_effects(writes, -1, 42).await;
 
         assert_eq!(
-            worker.shard_version, 0,
+            worker.get_key_version(b"a"),
+            0,
             "negative dirty delta must not bump version"
         );
         // The write still replicates (the effect happened; only WATCH-dirtying
@@ -1128,7 +1147,11 @@ mod tests {
             )
             .await;
 
-        assert_eq!(worker.shard_version, 1, "one version bump for the removal");
+        assert_eq!(
+            worker.get_key_version(b"k"),
+            1,
+            "one version bump for the removed key's slot"
+        );
         assert_eq!(
             keyevents(&mut rx),
             vec![("__keyevent@0__:evicted".to_string(), "k".to_string())],
@@ -1195,7 +1218,11 @@ mod tests {
             )
             .await;
 
-        assert_eq!(worker.shard_version, 1, "local version bump still happens");
+        assert_eq!(
+            worker.get_key_version(b"k"),
+            1,
+            "local version bump still happens"
+        );
         assert_eq!(
             keyevents(&mut rx).len(),
             1,
@@ -1208,9 +1235,10 @@ mod tests {
     }
 
     /// A single cycle removing BOTH a whole-key-expired key (`Expired`) and a
-    /// hash-emptied key (`FieldEmptied`) coalesces to exactly ONE version bump —
-    /// not one per reason group — while still emitting the correct per-key event
-    /// class and replicating both synthetic `DEL`s.
+    /// hash-emptied key (`FieldEmptied`) bumps each removed key's slot exactly
+    /// once — not more, even though the two keys arrive in separate reason
+    /// groups — while still emitting the correct per-key event class and
+    /// replicating both synthetic `DEL`s.
     #[tokio::test]
     async fn internal_removal_coalesces_version_bump_across_reason_groups() {
         let bc = Arc::new(RecordingBroadcaster::default());
@@ -1234,10 +1262,10 @@ mod tests {
             )
             .await;
 
-        assert_eq!(
-            worker.shard_version, 1,
-            "two reason groups in one cycle bump the WATCH version exactly once"
-        );
+        // Each removed key's slot bumps exactly once (a and h are different
+        // slots); within one cycle a given slot is never double-bumped.
+        assert_eq!(worker.get_key_version(b"a"), 1);
+        assert_eq!(worker.get_key_version(b"h"), 1);
         let events = keyevents(&mut rx);
         assert!(events.contains(&("__keyevent@0__:expired".into(), "a".into())));
         assert!(events.contains(&("__keyevent@0__:del".into(), "h".into())));
@@ -1268,7 +1296,7 @@ mod tests {
             )
             .await;
 
-        assert_eq!(worker.shard_version, 0);
+        assert_eq!(worker.get_key_version(b"k"), 0);
         assert!(bc.commands.lock().unwrap().is_empty());
     }
 

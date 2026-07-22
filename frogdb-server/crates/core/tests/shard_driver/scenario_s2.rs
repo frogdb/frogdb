@@ -1,7 +1,10 @@
 //! S2 — WATCH vs expiry vs unrelated write (characterization). WATCH is a
-//! per-shard version (worker.rs:459-469): any same-shard write or active-expiry
-//! removal bumps the version and aborts EXEC. Invariant: zero false negatives
-//! (a genuine change to the watched key MUST abort). Over-aborts are legal and
+//! per-SLOT version (proposal 18, worker.rs `get_key_version`/`SlotVersions`): a
+//! write or active-expiry removal bumps only the affected key's Hash Slot
+//! version and aborts EXEC only for watches on THAT slot. Invariant: zero false
+//! negatives (a genuine change to the watched key MUST abort). A same-shard
+//! write to a DIFFERENT slot no longer aborts (the proposal-18 fix); a same-slot
+//! sibling (hash-tag colocated) still does — the residual coarseness, legal and
 //! characterized. F3 (lazy-expiry false negative on the watcher's own
 //! EXEC-time purge) is closed and pinned (`s2_f3_lazy_expiry_watched_key_aborts`).
 //! Lazy-expiry parity closes two further gaps at this seam: gap 3 — a THIRD
@@ -21,6 +24,7 @@ use super::harness::{ShardDriver, cmd};
 use frogdb_core::shard::WatchEntry;
 use frogdb_core::shard::types::TransactionResult;
 use frogdb_core::store::Store;
+use frogdb_core::types::BlockingOp;
 
 /// What happens in the WATCH→EXEC gap.
 #[derive(Debug, Clone, Copy)]
@@ -30,8 +34,18 @@ enum Interleave {
     /// not bump the version or purge, so EXEC must commit — the arm that pins
     /// "a read never aborts a watch" (catches a bump-version-on-read regression).
     ReadWatchedKey,
+    /// A write to an unrelated key in a DIFFERENT slot on the same shard. Under
+    /// slot-granular WATCH (proposal 18) this no longer bumps `k`'s slot, so
+    /// EXEC COMMITS (it over-aborted under the old coarse per-shard version).
     UnrelatedWrite,
+    /// A write to a sibling key colocated on `k`'s slot via a hash tag. Still
+    /// bumps `k`'s slot (slot granularity is coarser than Redis's per-key), so
+    /// EXEC over-aborts — the residual coarseness the design deliberately keeps.
+    SameSlotWrite,
     WatchedWrite,
+    /// Active expiry of an unrelated key in a DIFFERENT slot. Whole-key expiry
+    /// bumps only that key's slot via the removal pipeline, so `k`'s watch
+    /// survives and EXEC COMMITS (over-aborted under the old coarse version).
     ActiveExpiryUnrelated,
     ActiveExpiryWatched,
 }
@@ -41,16 +55,17 @@ enum Interleave {
 /// abort fail loudly instead of folding into a `>= 1` floor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Outcome {
-    /// EXEC commits: the watched key was untouched AND the shard version never
+    /// EXEC commits: the watched key was untouched AND its slot version never
     /// bumped, so there is nothing that could legitimately abort.
     Commit,
     /// EXEC aborts because the watched key itself genuinely changed (a write to
     /// `k`, or `k`'s expiry). A required abort — the zero-false-negatives floor.
     TrueAbort,
-    /// EXEC aborts *only* because the coarse per-shard version bumped from a
-    /// write/expiry of a DIFFERENT key on the same shard. Legal but
-    /// characterized: a per-key version scheme would let this arm commit, so a
-    /// partial coarseness regression flips it to `Commit` and fails the pin.
+    /// EXEC aborts *only* because `k`'s slot version bumped from a write/expiry
+    /// of a DIFFERENT key that shares `k`'s Hash Slot (a hash-tag sibling).
+    /// Legal but characterized: Redis's per-key WATCH would let this commit, so
+    /// this is the residual slot-granular coarseness. A regression that widened
+    /// the bump back to shard-scope would flip a Commit arm here and fail.
     OverAbort,
 }
 
@@ -59,9 +74,9 @@ struct CaseObservation {
     aborted: bool,
     /// Model truth: did the watched key's value/existence change during the gap?
     watched_changed: bool,
-    /// Did the shard version the watch is validated against differ from the
-    /// snapshot `v0` (read non-destructively just before EXEC)? This is the
-    /// exact signal that drives a coarse over-abort.
+    /// Did `k`'s OWN slot version (the value `check_watches` compares) differ
+    /// from the snapshot `v0`, read non-destructively just before EXEC? This is
+    /// the exact signal that drives an abort under slot-granular WATCH.
     version_bumped: bool,
 }
 
@@ -72,8 +87,8 @@ async fn run_case(interleave: Interleave) -> CaseObservation {
     let _ = d.execute(0, "SET", &["k", "v0"]).await;
     let _ = d.execute(0, "SET", &["u", "u0"]).await;
 
-    // Conn A reads the pre-gap version and watches k at it.
-    let v0 = d.get_version(0).await;
+    // Conn A reads the pre-gap version OF THE WATCHED KEY and watches k at it.
+    let v0 = d.key_version(0, "k").await;
 
     let mut watched_changed = false;
     match interleave {
@@ -83,14 +98,19 @@ async fn run_case(interleave: Interleave) -> CaseObservation {
             let _ = d.execute_conn(0, 2, "GET", &["k"]).await;
         }
         Interleave::UnrelatedWrite => {
+            // `u` is a different slot from `k` (same shard): no bump to k's slot.
             let _ = d.execute_conn(0, 2, "SET", &["u", "u1"]).await;
+        }
+        Interleave::SameSlotWrite => {
+            // `{k}sib` shares k's slot via the `{k}` hash tag → bumps k's slot.
+            let _ = d.execute_conn(0, 2, "SET", &["{k}sib", "s1"]).await;
         }
         Interleave::WatchedWrite => {
             let _ = d.execute_conn(0, 2, "SET", &["k", "v1"]).await;
             watched_changed = true;
         }
         Interleave::ActiveExpiryUnrelated => {
-            // Seed an unrelated key with an already-elapsed TTL, then sweep.
+            // Seed an unrelated key (different slot) with an elapsed TTL, sweep.
             let _ = d.execute(0, "SET", &["e", "e0"]).await;
             let _ = d.execute(0, "PEXPIRE", &["e", "1"]).await;
             tokio::time::sleep(Duration::from_millis(3)).await;
@@ -104,10 +124,10 @@ async fn run_case(interleave: Interleave) -> CaseObservation {
         }
     }
 
-    // The version EXEC will validate the watch against, read non-destructively
-    // (empty-key GetVersion => no lazy purge) just before EXEC. `!= v0` is
-    // exactly the coarse-bump signal `check_watches` compares on.
-    let version_bumped = d.get_version(0).await != v0;
+    // Whether k's OWN slot version moved since the snapshot — the exact signal
+    // `check_watches` compares on. Read non-destructively via `key_version`
+    // (direct `get_key_version`, no GetVersion round-trip, so no lazy purge).
+    let version_bumped = d.key_version(0, "k").await != v0;
 
     // Conn A runs EXEC watching k at v0.
     let result = d
@@ -144,9 +164,12 @@ async fn s2_zero_false_negatives_and_over_abort_characterized() {
     let schedule = [
         (Interleave::None, Outcome::Commit),
         (Interleave::ReadWatchedKey, Outcome::Commit),
-        (Interleave::UnrelatedWrite, Outcome::OverAbort),
+        // Proposal 18 flips: unrelated different-slot write/expiry now COMMIT.
+        (Interleave::UnrelatedWrite, Outcome::Commit),
+        (Interleave::ActiveExpiryUnrelated, Outcome::Commit),
+        // Residual slot-granular over-abort: same-slot sibling still aborts.
+        (Interleave::SameSlotWrite, Outcome::OverAbort),
         (Interleave::WatchedWrite, Outcome::TrueAbort),
-        (Interleave::ActiveExpiryUnrelated, Outcome::OverAbort),
         (Interleave::ActiveExpiryWatched, Outcome::TrueAbort),
     ];
 
@@ -177,8 +200,8 @@ async fn s2_zero_false_negatives_and_over_abort_characterized() {
                 );
                 assert!(
                     !obs.version_bumped,
-                    "{interleave:?}: Commit arm must not bump the shard version \
-                     (a read/no-op must be version-neutral)"
+                    "{interleave:?}: Commit arm must not bump k's slot version \
+                     (a read/no-op/different-slot write must be version-neutral for k)"
                 );
             }
             Outcome::TrueAbort => {
@@ -191,8 +214,8 @@ async fn s2_zero_false_negatives_and_over_abort_characterized() {
             }
             Outcome::OverAbort => {
                 // The precise coarseness signature: the watched key was NOT
-                // touched, yet an unrelated same-shard write/expiry bumped the
-                // per-shard version and forced the abort.
+                // touched, yet a same-SLOT sibling write bumped k's slot version
+                // and forced the abort.
                 assert!(
                     !obs.watched_changed,
                     "{interleave:?}: OverAbort must not touch the watched key \
@@ -200,8 +223,8 @@ async fn s2_zero_false_negatives_and_over_abort_characterized() {
                 );
                 assert!(
                     obs.version_bumped,
-                    "{interleave:?}: OverAbort must be attributable to a coarse \
-                     per-shard version bump from another key"
+                    "{interleave:?}: OverAbort must be attributable to a same-slot \
+                     sibling bumping k's slot version"
                 );
                 over_aborts += 1;
             }
@@ -215,22 +238,125 @@ async fn s2_zero_false_negatives_and_over_abort_characterized() {
             assert!(
                 obs.watched_changed || obs.version_bumped,
                 "{interleave:?}: spurious abort — EXEC aborted with no watched-key \
-                 change and no shard-version bump"
+                 change and no slot-version bump"
             );
         }
     }
 
     // (4) Pin the exact partition for this fixed schedule: exactly two required
-    // (true) aborts and exactly two coarse over-aborts. A partial coarseness
-    // regression (an over-abort arm that starts committing) or an extra spurious
-    // abort shifts one of these exact counts and fails.
+    // (true) aborts and exactly ONE residual slot-granular over-abort. If the
+    // bump regressed back to shard-scope, `UnrelatedWrite`/`ActiveExpiryUnrelated`
+    // would over-abort again and inflate this count; if the slot bump broke,
+    // `SameSlotWrite` would stop aborting and drop it.
     assert_eq!(
         true_aborts, 2,
         "expected exactly two required (true) aborts: WatchedWrite + ActiveExpiryWatched"
     );
     assert_eq!(
-        over_aborts, 2,
-        "expected exactly two coarse over-aborts: UnrelatedWrite + ActiveExpiryUnrelated"
+        over_aborts, 1,
+        "expected exactly one slot-granular over-abort: SameSlotWrite"
+    );
+}
+
+/// Headline (red-green pin for proposal 18): `WATCH a; SET b; EXEC` where `a`
+/// and `b` are on the same Internal Shard but DIFFERENT hash slots must COMMIT —
+/// the watched key `a` never changed, so a slot-granular WATCH does not abort.
+/// Under the pre-proposal coarse per-shard version this over-aborted.
+#[tokio::test]
+async fn watch_unrelated_slot_write_commits() {
+    let mut d = ShardDriver::new(1);
+    let _ = d.execute(0, "SET", &["a", "v0"]).await;
+    // a's watch-time version (per-key under Design A; shard-wide before it).
+    let v0 = d.key_version(0, "a").await;
+    // An unrelated write to a DIFFERENT slot on the same shard.
+    let _ = d.execute_conn(0, 2, "SET", &["b", "vb"]).await;
+    let result = d
+        .exec_transaction(
+            0,
+            1,
+            vec![cmd("SET", &["a", "x"])],
+            vec![WatchEntry {
+                key: Bytes::from_static(b"a"),
+                version: v0,
+                live_at_watch: true,
+            }],
+        )
+        .await;
+    assert!(
+        matches!(result, TransactionResult::Success(_)),
+        "WATCH a; SET b (different slot, same shard); EXEC must COMMIT, got {result:?}"
+    );
+}
+
+/// Slot-granularity control (proposal 18 caveat — coarser than Redis): two keys
+/// colocated on the SAME hash slot via a hash tag still cross-abort. `WATCH
+/// {t}a; SET {t}b; EXEC` aborts because both keys share slot `slot_for_key("t")`.
+#[tokio::test]
+async fn watch_same_slot_write_aborts() {
+    let mut d = ShardDriver::new(1);
+    let _ = d.execute(0, "SET", &["{t}a", "v0"]).await;
+    let v0 = d.key_version(0, "{t}a").await;
+    // Same-slot sibling (shared hash tag `{t}`).
+    let _ = d.execute_conn(0, 2, "SET", &["{t}b", "vb"]).await;
+    let result = d
+        .exec_transaction(
+            0,
+            1,
+            vec![cmd("SET", &["{t}a", "x"])],
+            vec![WatchEntry {
+                key: Bytes::from_static(b"{t}a"),
+                version: v0,
+                live_at_watch: true,
+            }],
+        )
+        .await;
+    assert!(
+        matches!(result, TransactionResult::WatchAborted),
+        "WATCH {{t}}a; SET {{t}}b (same slot); EXEC must abort (slot granularity), got {result:?}"
+    );
+}
+
+/// Over-abort regression (proposal 18): a blocking-waiter wake bumps only the
+/// woken key's slot. `WATCH a` must survive a BLPOP waiter on a DIFFERENT-slot
+/// key `b` being satisfied by an `LPUSH b` — the wake path (`blocking.rs`
+/// `bumps_version`) is slot-local, not shard-wide.
+#[tokio::test]
+async fn watch_survives_waiter_wake_on_different_slot() {
+    use bytes::Bytes;
+
+    let mut d = ShardDriver::new(1);
+    let _ = d.execute(0, "SET", &["a", "v0"]).await;
+    let v0 = d.key_version(0, "a").await;
+
+    // Block a BLPOP waiter on `b` (a different slot from `a`, same shard).
+    let _rx = d
+        .block_wait(
+            0,
+            2,
+            vec![Bytes::from_static(b"b")],
+            BlockingOp::BLPop,
+            None,
+        )
+        .await;
+    // LPUSH b wakes the waiter → pops the element → bumps b's slot (a wake that
+    // `bumps_version`), never a's slot.
+    let _ = d.execute_conn(0, 3, "LPUSH", &["b", "x"]).await;
+
+    let result = d
+        .exec_transaction(
+            0,
+            1,
+            vec![cmd("SET", &["a", "y"])],
+            vec![WatchEntry {
+                key: Bytes::from_static(b"a"),
+                version: v0,
+                live_at_watch: true,
+            }],
+        )
+        .await;
+    assert!(
+        matches!(result, TransactionResult::Success(_)),
+        "WATCH a must survive a BLPOP waiter-wake on a different-slot key b, got {result:?}"
     );
 }
 
@@ -257,7 +383,7 @@ async fn s2_f3_lazy_expiry_watched_key_aborts() {
     // tick active expiry and do NOT touch k — the key is only observed
     // lazily-expired at EXEC time.
     let _ = d.execute(0, "PEXPIRE", &["k", "1"]).await;
-    let v0 = d.get_version(0).await;
+    let v0 = d.key_version(0, "k").await;
     tokio::time::sleep(Duration::from_millis(3)).await;
 
     let result = d
@@ -299,7 +425,7 @@ async fn regression_gap3_third_party_lazy_read_aborts_watch() {
     // Set the TTL FIRST (this write bumps the version), then snapshot the
     // post-PEXPIRE version as the watch baseline (watching the still-live key).
     let _ = d.execute(0, "PEXPIRE", &["k", "1"]).await;
-    let v0 = d.get_version(0).await;
+    let v0 = d.key_version(0, "k").await;
     tokio::time::sleep(Duration::from_millis(3)).await;
 
     // Third conn's lazy read physically purges k. Version-ignorant before the
@@ -344,7 +470,8 @@ async fn regression_gap4_second_watcher_aborts() {
     let _ = d.execute(0, "PEXPIRE", &["k", "1"]).await;
     // B watches k LIVE: real version + liveness snapshot via watch_keys (not a
     // hardcoded `true` — watch_keys reports the actual computed live_at_watch).
-    let (vb, live) = d.watch_keys(0, &["k"]).await;
+    let (vb_versions, live) = d.watch_keys(0, &["k"]).await;
+    let vb = vb_versions[0];
     assert_eq!(
         live,
         vec![true],

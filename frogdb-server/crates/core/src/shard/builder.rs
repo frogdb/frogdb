@@ -432,7 +432,7 @@ impl ShardWorkerBuilder {
             new_conn_rx,
             shard_senders,
             registry,
-            shard_version: 0,
+            slot_versions: super::worker::SlotVersions::default(),
             persistence: ShardPersistence::new(wal_writer, snapshot_coordinator, failure_policy),
             observability: ShardObservability::new(
                 metrics_recorder,

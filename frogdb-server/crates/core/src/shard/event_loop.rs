@@ -251,12 +251,15 @@ impl ShardWorker {
 
         // A cycle that reaped only hash *fields* (no key removed) is a mutation,
         // not a removal, so it does not flow through the removal pipeline — but it
-        // still changed a watched hash. Preserve active expiry's historical
-        // one-bump-per-non-empty-cycle WATCH semantics with an explicit bump for
-        // exactly that case (when a key WAS removed, the pipeline already bumped
-        // once, so do not double-bump).
+        // still changed a watched hash. The swept field-keys are NOT carried by
+        // `ExpiryResult` (only a `fields_expired` count), so this is the one
+        // active-expiry event whose keys the shard cannot enumerate. Bump the
+        // shard-wide epoch: a safe over-abort that invalidates every watch and so
+        // never misses the watched hash whose field expired (zero false
+        // negatives). Whole-key removals already bumped their own slots via the
+        // pipeline above, so only the fields-only case reaches here.
         if !removed_any {
-            self.increment_version();
+            self.bump_version_global();
         }
     }
 
@@ -603,19 +606,20 @@ mod effect_tests {
         );
     }
 
-    /// Version-bump coalescing (migration step 3): a single active-expiry cycle
+    /// Slot-granular version bump (proposal 18): a single active-expiry cycle
     /// that removes BOTH a whole-key-expired key (`Expired`) and a hash-emptied
-    /// key (`FieldEmptied`) advances the WATCH version exactly ONCE — the two
+    /// key (`FieldEmptied`) bumps each removed key's slot exactly ONCE — the two
     /// reason groups are driven through one `run_internal_removal_effects` call,
-    /// not one bump per group. Also pins the dirty counter (previously skipped by
-    /// the hand-rolled expiry path): it advances by the number of removed keys.
+    /// so no slot is double-bumped. Also pins the dirty counter (previously
+    /// skipped by the hand-rolled expiry path): it advances by the removed keys.
     #[tokio::test]
     async fn expiry_coalesces_version_bump_and_advances_dirty() {
         use crate::store::Store;
 
         let recorder = Arc::new(RecordingRecorder::default());
         let (mut worker, _msg_tx, _conn_tx) = build_worker(recorder);
-        assert_eq!(worker.shard_version, 0);
+        assert_eq!(worker.get_key_version(b"plain"), 0);
+        assert_eq!(worker.get_key_version(b"h"), 0);
         assert_eq!(worker.store.dirty(), 0);
 
         let result = ExpiryResult {
@@ -627,8 +631,14 @@ mod effect_tests {
         worker.apply_expiry_effects(result).await;
 
         assert_eq!(
-            worker.shard_version, 1,
-            "removing both a whole-key-expired and a field-emptied key bumps WATCH once"
+            worker.get_key_version(b"plain"),
+            1,
+            "the whole-key-expired key's slot bumps once"
+        );
+        assert_eq!(
+            worker.get_key_version(b"h"),
+            1,
+            "the field-emptied key's slot bumps once"
         );
         assert_eq!(
             worker.store.dirty(),

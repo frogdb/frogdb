@@ -119,20 +119,20 @@ impl ShardReceiver {
 /// One watched key carried by [`ShardMessage::ExecTransaction`].
 ///
 /// Bundles the per-key state EXEC's watch validation needs: the key, the
-/// per-shard `version` snapshotted at WATCH time, and `live_at_watch` — whether
+/// per-slot `version` snapshotted at WATCH time, and `live_at_watch` — whether
 /// the key was present-and-unexpired when it was watched (the inverse of Redis
 /// `wk->expired`, PR #7920 / issue #7918).
 ///
 /// `live_at_watch` lets EXEC distinguish a key watched **live** that then
 /// expired during the window (must abort, even absent a version bump this
 /// watcher observed) from one already expired/absent when watched (a
-/// "nonexistent" watch that must NOT abort when it stays gone). The coarse
-/// per-shard version alone cannot express that per-key discriminator.
+/// "nonexistent" watch that must NOT abort when it stays gone). The version
+/// alone (even slot-granular) cannot express that per-key discriminator.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WatchEntry {
     /// The watched key.
     pub key: Bytes,
-    /// The per-shard version snapshotted at WATCH time.
+    /// The per-slot version snapshotted at WATCH time.
     pub version: u64,
     /// Whether the key was live (present and unexpired) at WATCH time.
     pub live_at_watch: bool,
@@ -218,14 +218,17 @@ pub enum CoreMsg {
     /// Redis's `wk->expired` flag (PR #7920). Pass an empty `keys` for a pure
     /// version probe (no purge).
     ///
-    /// The reply is `(shard_version, live_at_watch)`: the current shard version
-    /// plus, aligned with `keys`, one flag per key reporting whether it was live
+    /// The reply is `(versions, live_at_watch)`, both aligned with `keys`:
+    /// `versions[i]` is the **per-slot** WATCH version of `keys[i]` (proposal
+    /// 18 — the version is slot-granular, so distinct-slot keys carry distinct
+    /// versions), and `live_at_watch[i]` reports whether the key was live
     /// (present and unexpired) at watch time — the `wk->expired` discriminator
     /// (see [`WatchEntry::live_at_watch`]). The flags are computed via a
     /// non-destructive `exists_unexpired` probe before the no-bump lazy purge.
+    /// An empty `keys` yields two empty vectors (a pure no-op probe).
     GetVersion {
         keys: Vec<Bytes>,
-        response_tx: oneshot::Sender<(u64, Vec<bool>)>,
+        response_tx: oneshot::Sender<(Vec<u64>, Vec<bool>)>,
     },
 
     /// Execute a transaction atomically.

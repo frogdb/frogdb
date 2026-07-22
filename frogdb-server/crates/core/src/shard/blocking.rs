@@ -297,7 +297,10 @@ impl ShardWorker {
                     events,
                 } => {
                     if strat.bumps_version() {
-                        self.increment_version();
+                        // The wake mutated `key` (e.g. an element popped for a
+                        // BLPOP), so bump only its slot — a watch on a
+                        // different-slot key survives.
+                        self.bump_version_for_key(key);
                     }
                     // Publish the same keyspace events the immediate command path
                     // deposits. Routed through the coordinator seam
