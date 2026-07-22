@@ -13,16 +13,18 @@ impl ShardWorker {
                 sender,
                 response_tx,
             } => {
-                let counts = self.handle_subscribe(channels, conn_id, sender);
-                let _ = response_tx.send(counts);
+                self.handle_subscribe(channels, conn_id, sender);
+                // Barrier ack: registration is now visible in this shard.
+                let _ = response_tx.send(());
             }
             PubSubMsg::Unsubscribe {
                 channels,
                 conn_id,
                 response_tx,
             } => {
-                let counts = self.handle_unsubscribe(channels, conn_id);
-                let _ = response_tx.send(counts);
+                self.handle_unsubscribe(channels, conn_id);
+                // Barrier ack: deregistration is now visible in this shard.
+                let _ = response_tx.send(());
             }
             PubSubMsg::PSubscribe {
                 patterns,
@@ -30,16 +32,18 @@ impl ShardWorker {
                 sender,
                 response_tx,
             } => {
-                let counts = self.handle_psubscribe(patterns, conn_id, sender);
-                let _ = response_tx.send(counts);
+                self.handle_psubscribe(patterns, conn_id, sender);
+                // Barrier ack: registration is now visible in this shard.
+                let _ = response_tx.send(());
             }
             PubSubMsg::PUnsubscribe {
                 patterns,
                 conn_id,
                 response_tx,
             } => {
-                let counts = self.handle_punsubscribe(patterns, conn_id);
-                let _ = response_tx.send(counts);
+                self.handle_punsubscribe(patterns, conn_id);
+                // Barrier ack: deregistration is now visible in this shard.
+                let _ = response_tx.send(());
             }
             PubSubMsg::Publish {
                 channel,
@@ -72,16 +76,18 @@ impl ShardWorker {
                 sender,
                 response_tx,
             } => {
-                let counts = self.handle_ssubscribe(channels, conn_id, sender);
-                let _ = response_tx.send(counts);
+                self.handle_ssubscribe(channels, conn_id, sender);
+                // Barrier ack: registration is now visible in this shard.
+                let _ = response_tx.send(());
             }
             PubSubMsg::ShardedUnsubscribe {
                 channels,
                 conn_id,
                 response_tx,
             } => {
-                let counts = self.handle_sunsubscribe(channels, conn_id);
-                let _ = response_tx.send(counts);
+                self.handle_sunsubscribe(channels, conn_id);
+                // Barrier ack: deregistration is now visible in this shard.
+                let _ = response_tx.send(());
             }
             PubSubMsg::ShardedPublish {
                 channel,
@@ -106,5 +112,64 @@ impl ShardWorker {
                 self.tracking.unregister(conn_id);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use bytes::Bytes;
+    use tokio::sync::{mpsc, oneshot};
+
+    use super::PubSubMsg;
+    use crate::registry::CommandRegistry;
+    use crate::shard::builder::ShardWorkerBuilder;
+    use crate::shard::connection::NewConnection;
+    use crate::shard::message::{Envelope, ShardReceiver};
+    use crate::shard::worker::ShardWorker;
+
+    fn minimal_worker() -> ShardWorker {
+        let (_mtx, mrx) = mpsc::channel::<Envelope>(1);
+        let (_ntx, nrx) = mpsc::channel::<NewConnection>(1);
+        ShardWorkerBuilder::new(0, 1)
+            .with_message_rx(ShardReceiver::new(mrx))
+            .with_new_conn_rx(nrx)
+            .with_shard_senders(Arc::new(vec![]))
+            .with_registry(Arc::new(CommandRegistry::new()))
+            .build()
+    }
+
+    /// The registration round trip is a barrier: the bare ack fires only after
+    /// the subscription is durable in the shard's table. A `PUBLISH` that
+    /// observes the ack (or is processed after it) is therefore guaranteed to
+    /// see this subscriber. The `()` payload makes the barrier the contract —
+    /// the previous `Vec<usize>` invited callers to read a fabricated count.
+    #[test]
+    fn subscribe_ack_fires_after_registration_is_visible() {
+        let mut worker = minimal_worker();
+        let channel = Bytes::from_static(b"barrier-chan");
+        let (subscriber_tx, _subscriber_rx) = mpsc::unbounded_channel();
+        let (response_tx, mut response_rx) = oneshot::channel::<()>();
+
+        worker.dispatch_pubsub(PubSubMsg::Subscribe {
+            channels: vec![channel.clone()],
+            conn_id: 1,
+            sender: subscriber_tx,
+            response_tx,
+        });
+
+        // The ack resolved to the bare unit barrier...
+        assert_eq!(
+            response_rx.try_recv(),
+            Ok(()),
+            "registration ack must be a bare unit barrier"
+        );
+        // ...and by the time it fired, the registration was visible in the table.
+        assert_eq!(
+            worker.subscriptions.numsub(std::slice::from_ref(&channel)),
+            vec![(channel, 1)],
+            "the subscriber must be visible in the table before the ack fires"
+        );
     }
 }
