@@ -65,6 +65,10 @@ proptest.workspace = true
 tempfile.workspace = true
 serde_json.workspace = true
 frogdb-commands.workspace = true
+# Enable RocksStore's test-only seam (put_opt/delete/sync_wal + commit_raw_batch)
+# for the crash-recovery suite under src/persistence/. Dev-dep only so the
+# feature never reaches a production build (proposal 20).
+frogdb-persistence = { workspace = true, features = ["test-support"] }
 # Self-dev-dep enabling the test-only seam features for integration harnesses
 # (mirrors frogdb-telemetry's `features = ["testing"]` self-dev-dep precedent).
 frogdb-core = { path = ".", features = ["shard-driver", "fake-wal"] }
