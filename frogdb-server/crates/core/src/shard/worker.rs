@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64};
 
-use bytes::Bytes;
 use frogdb_protocol::Response;
 use tokio::sync::mpsc;
 
@@ -21,7 +20,7 @@ use super::active_expiry::ActiveExpiryCoordinator;
 use super::builder::ShardWorkerBuilder;
 use super::connection::NewConnection;
 use super::keyspace_coordinator::KeyspaceNotificationCoordinator;
-use super::message::{ShardReceiver, ShardSender};
+use super::message::{ShardReceiver, ShardSender, WatchEntry};
 use super::search::lifecycle::IndexLifecycleManager;
 use super::types::{
     ShardCluster, ShardEviction, ShardIdentity, ShardObservability, ShardPersistence,
@@ -459,10 +458,33 @@ impl ShardWorker {
     }
 
     /// Check if watched keys have changed since they were watched.
-    pub(crate) fn check_watches(&self, watches: &[(Bytes, u64)]) -> bool {
-        watches
-            .iter()
-            .all(|(key, watched_ver)| self.get_key_version(key) == *watched_ver)
+    ///
+    /// A watch is satisfied iff the key's version is unchanged AND it did not
+    /// transition live -> expired/gone. The version compare catches every write
+    /// and every expiry that bumped (active sweep, lazy read-path purge). The
+    /// second clause catches the one death that does NOT bump for this watcher:
+    /// a key watched while live that another watcher's no-bump WATCH-time purge
+    /// (or its own already-elapsed TTL) removed — the gap-4 second-watcher case.
+    /// `live_at_watch == false` means a stale/nonexistent watch (Redis
+    /// `wk->expired`), which must NOT abort when the key stays gone. Uses the
+    /// non-destructive `exists_unexpired` probe (constraint 1 — `check_watches`
+    /// must not physically purge).
+    pub(crate) fn check_watches(&self, watches: &[WatchEntry]) -> bool {
+        watches.iter().all(
+            |WatchEntry {
+                 key,
+                 version,
+                 live_at_watch,
+             }| {
+                if self.get_key_version(key) != *version {
+                    return false; // changed via a version-bumping path
+                }
+                if *live_at_watch && !self.store.exists_unexpired(key) {
+                    return false; // watched live, now expired/gone with no bump (gap 4)
+                }
+                true
+            },
+        )
     }
 
     /// Lazily purge any watched keys whose TTL has elapsed, bumping the shard
@@ -478,16 +500,49 @@ impl ShardWorker {
     /// [`crate::store::Store::purge_if_expired`], the version bump lives here.
     /// One bump per call regardless of how many keys purge, mirroring active
     /// expiry's one-bump-per-cycle.
-    pub(crate) fn purge_expired_watches(&mut self, watches: &[(Bytes, u64)]) {
-        let mut purged = false;
-        for (key, _watched_ver) in watches {
-            if self.store.purge_if_expired(key) {
-                purged = true;
-            }
+    pub(crate) fn purge_expired_watches(&mut self, watches: &[WatchEntry]) {
+        for WatchEntry { key, .. } in watches {
+            self.store.purge_if_expired(key);
         }
-        if purged {
-            self.increment_version();
+        // Apply the bump + drain for any watched key that expired during the
+        // WATCH window — this must run before check_watches so the version
+        // change is visible (F3). Subsumes the previous explicit increment.
+        self.apply_lazy_purge_effects();
+    }
+
+    /// Drain and apply the effects of any lazy purges the store reported during
+    /// the current command: a shard-version bump + an XREADGROUP-waiter drain to
+    /// NOGROUP for each removed key — the same externally observable effects
+    /// active expiry applies (`apply_expiry_effects`, event_loop.rs), so a key
+    /// that died lazily is indistinguishable from one the sweep removed.
+    ///
+    /// Both effects are idempotent (a second bump only advances the counter; a
+    /// second drain finds no waiters), so calling this at more than one seam is
+    /// safe.
+    pub(crate) fn apply_lazy_purge_effects(&mut self) {
+        let purged = self.store.take_lazily_purged();
+        if purged.is_empty() {
+            return;
         }
+        // Drain blocked XREADGROUP waiters for each lazily-removed stream key,
+        // mirroring the DEL write path and the F1 active-expiry drain
+        // (drain_stream_waiters_with_error → NOGROUP; plain XREAD waiters stay
+        // blocked). No-op for non-stream keys.
+        for key in &purged {
+            self.drain_stream_waiters_with_error(key);
+        }
+        // One version bump for the batch, mirroring active expiry's
+        // one-bump-per-cycle: a watched key that died lazily is now observed
+        // changed by check_watches (gap 3).
+        self.increment_version();
+    }
+
+    /// Drain and DISCARD any lazy-purge report without applying effects — used
+    /// at the WATCH-time (`GetVersion`) seam, which must stay no-bump (F3): a
+    /// WATCH on an already-expired key records a "nonexistent" watch and must
+    /// not invalidate other watchers on the shard.
+    pub(crate) fn discard_lazy_purges(&mut self) {
+        let _ = self.store.take_lazily_purged();
     }
 
     /// Check if this connection can execute during a continuation lock.

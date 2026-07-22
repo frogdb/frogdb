@@ -453,10 +453,12 @@ pub trait ConnStateMut: Send + Sync {
     /// EXEC/DISCARD). Read by WATCH to reject `WATCH inside MULTI`.
     fn is_in_multi(&self) -> bool;
 
-    /// Record a watched key with its watch-time version and owning shard (WATCH).
-    /// The watched shards are folded into the transaction target at EXEC time
-    /// (see `take_transaction`), from the live post-UNWATCH watch set.
-    fn watch_key(&mut self, key: Bytes, shard_id: usize, version: u64);
+    /// Record a watched key with its watch-time version, owning shard, and
+    /// liveness (WATCH). `live_at_watch` is the `wk->expired` inverse (present
+    /// and unexpired when watched), carried per key into EXEC. The watched
+    /// shards are folded into the transaction target at EXEC time (see
+    /// `take_transaction`), from the live post-UNWATCH watch set.
+    fn watch_key(&mut self, key: Bytes, shard_id: usize, version: u64, live_at_watch: bool);
 
     /// Forget all watched keys (UNWATCH).
     fn unwatch(&mut self);

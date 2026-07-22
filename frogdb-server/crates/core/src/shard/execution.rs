@@ -6,7 +6,7 @@ use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 
 use frogdb_types::metrics::definitions::{KeyspaceHits, KeyspaceMisses, WalRollbacks};
 
-use super::message::ScatterOp;
+use super::message::{ScatterOp, WatchEntry};
 use super::post_execution::{EffectScope, WalPhase, WriteSummary};
 use super::rollback::WriteSnapshot;
 use super::types::{PartialResult, TransactionResult};
@@ -79,7 +79,28 @@ impl ShardWorker {
     ///
     /// Returns the response and, for write commands, metadata needed by the
     /// post-execution pipeline. Read commands return `None` for the metadata.
+    ///
+    /// Wraps [`Self::execute_command_body`] so that any keys the command lazily
+    /// purged (`Store::check_and_delete_expired` → reported via
+    /// `take_lazily_purged`) have their parity effects applied once, after the
+    /// command, regardless of which of the body's many early returns fired.
     fn execute_command_inner(
+        &mut self,
+        command: &ParsedCommand,
+        conn_id: u64,
+        protocol_version: ProtocolVersion,
+        track_reads: bool,
+    ) -> (Response, Option<WriteCommandMeta>) {
+        let out = self.execute_command_body(command, conn_id, protocol_version, track_reads);
+        // Apply parity effects for any keys the command lazily purged (gaps 1-3).
+        // Task 1: this is a no-op drain; Task 2 fills in the effects.
+        self.apply_lazy_purge_effects();
+        out
+    }
+
+    /// The command handler body proper (see [`Self::execute_command_inner`],
+    /// which wraps this to drain lazy-purge effects afterward).
+    fn execute_command_body(
         &mut self,
         command: &ParsedCommand,
         conn_id: u64,
@@ -438,7 +459,7 @@ impl ShardWorker {
     pub(crate) async fn execute_transaction(
         &mut self,
         commands: Vec<ParsedCommand>,
-        watches: &[(Bytes, u64)],
+        watches: &[WatchEntry],
         conn_id: u64,
         protocol_version: ProtocolVersion,
     ) -> TransactionResult {
@@ -579,8 +600,33 @@ impl ShardWorker {
         TransactionResult::Success(results)
     }
 
-    /// Execute part of a scatter-gather operation.
+    /// Execute one shard's slice of a cross-shard scatter operation.
+    ///
+    /// Wraps [`Self::execute_scatter_part_body`] so that any keys a scatter part
+    /// lazily purged (MGET/DEL/TOUCH/COPY/DUMP funnel through
+    /// `check_and_delete_expired`) have their parity effects applied once, after
+    /// the part, regardless of which of the body's early returns fired. This is
+    /// the scatter-path counterpart of the [`Self::execute_command_inner`] seam —
+    /// scatter dispatch (`ScatterRequest`) never routes through
+    /// `execute_command_inner`, so the drain must be anchored here too.
     pub(crate) async fn execute_scatter_part(
+        &mut self,
+        keys: &[Bytes],
+        operation: &ScatterOp,
+        conn_id: u64,
+    ) -> PartialResult {
+        let out = self
+            .execute_scatter_part_body(keys, operation, conn_id)
+            .await;
+        // Apply parity effects for any keys the scatter part lazily purged
+        // (gaps 1-3). Task 1: this is a no-op drain; Task 2 fills in the effects.
+        self.apply_lazy_purge_effects();
+        out
+    }
+
+    /// The scatter-part body proper (see [`Self::execute_scatter_part`], which
+    /// wraps this to drain lazy-purge effects afterward).
+    async fn execute_scatter_part_body(
         &mut self,
         keys: &[Bytes],
         operation: &ScatterOp,
@@ -1618,6 +1664,115 @@ mod scatter_effect_tests {
             Response::Bulk(None) => {}
             other => panic!("expected DUMP of an expired key to be nil, got {other:?}"),
         }
+    }
+
+    /// A scatter part that lazily purges an expired key must drain the store's
+    /// `lazily_purged` report at the `execute_scatter_part` seam. Scatter
+    /// dispatch (`ScatterRequest`) never routes through `execute_command_inner`,
+    /// so without the wrapper drain the report would leak into the NEXT,
+    /// unrelated message and be applied at the wrong site (a spurious version
+    /// bump / waiter drain under Task 2). Pins both halves: the purge physically
+    /// fired AND its report was drained at the scatter seam.
+    #[tokio::test]
+    async fn scatter_mget_drains_lazy_purge_report() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = scatter_worker(bc as SharedBroadcaster);
+
+        // Seed an already-expired key.
+        worker.store.set(
+            Bytes::from_static(b"k"),
+            Value::string(Bytes::from_static(b"v")),
+        );
+        worker
+            .store
+            .set_expiry(b"k", Instant::now() - Duration::from_secs(60));
+        assert!(worker.store.contains(b"k"));
+
+        // A scatter MGET part reads the key via `get_with_expiry_check`, which
+        // physically purges it (`check_and_delete_expired` -> `uninstall`).
+        let _ = worker
+            .execute_scatter_part(&[Bytes::from_static(b"k")], &ScatterOp::MGet, 1)
+            .await;
+
+        // The purge physically fired ...
+        assert!(
+            !worker.store.contains(b"k"),
+            "scatter MGET must have physically purged the expired key"
+        );
+        // ... and the `execute_scatter_part` wrapper drained the report, so no
+        // stale entry leaks to the next message.
+        assert!(
+            worker.store.take_lazily_purged().is_empty(),
+            "execute_scatter_part must drain the lazy-purge report (no leak to the next message)"
+        );
+    }
+
+    /// Gap-4 clause coverage for the CLIENT-PAUSE-ALL under-abort window
+    /// (carried Task-2 observation): a logically-expired watched key whose
+    /// physical purge is *suppressed* (CLIENT PAUSE ALL → `expiry_suppressed`)
+    /// reports nothing at the EXEC-time seam, so `purge_expired_watches` does
+    /// NOT bump — the old version-compare `check_watches` would under-abort.
+    /// The new `live_at_watch && !exists_unexpired` clause closes it: the
+    /// non-destructive probe reads present-but-expired as not-live, so a watcher
+    /// that saw the key live still aborts. Pins both halves: no bump at the seam
+    /// AND the clause aborts. (CLIENT PAUSE is connection-side / pre-dispatch, so
+    /// this is only reachable as a store-level worker test, not a shard-driver
+    /// arm.)
+    #[tokio::test]
+    async fn suppressed_expired_watched_key_still_aborts_via_clause() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = scatter_worker(bc as SharedBroadcaster);
+
+        // Seed a live watched key and snapshot the watch baseline.
+        worker.store.set(
+            Bytes::from_static(b"k"),
+            Value::string(Bytes::from_static(b"v")),
+        );
+        let watched_ver = worker.get_key_version(b"k");
+
+        // The key's TTL elapses, but CLIENT PAUSE ALL suppresses physical purge:
+        // logically expired, still physically present.
+        worker
+            .store
+            .set_expiry(b"k", Instant::now() - Duration::from_secs(60));
+        worker.store.set_expiry_suppressed(true);
+
+        // EXEC-time watched-key purge seam: suppression means nothing is removed
+        // or reported, so no version bump — the under-abort window.
+        let watch = [WatchEntry {
+            key: Bytes::from_static(b"k"),
+            version: watched_ver,
+            live_at_watch: true,
+        }];
+        worker.purge_expired_watches(&watch);
+        assert!(
+            worker.store.contains(b"k"),
+            "suppression must keep the expired key physically present"
+        );
+        assert_eq!(
+            worker.get_key_version(b"k"),
+            watched_ver,
+            "suppressed purge must NOT bump the version (the under-abort window)"
+        );
+
+        // The new clause aborts anyway: exists_unexpired reads present-but-expired
+        // as not-live, so a live watcher's watch is dirty.
+        assert!(
+            !worker.check_watches(&watch),
+            "gap 4 clause: a live watcher of a suppressed-but-elapsed key must abort"
+        );
+
+        // Control: a stale watcher (live_at_watch == false) of the same key must
+        // NOT abort — Redis wk->expired semantics, no live->gone transition.
+        let stale = [WatchEntry {
+            key: Bytes::from_static(b"k"),
+            version: watched_ver,
+            live_at_watch: false,
+        }];
+        assert!(
+            worker.check_watches(&stale),
+            "gap 4 clause: a stale watcher (saw k already-dead) must NOT abort"
+        );
     }
 }
 

@@ -57,6 +57,17 @@ impl ShardWorker {
                 let _ = response_tx.send(result);
             }
             CoreMsg::GetVersion { keys, response_tx } => {
+                // Per-key liveness at watch time (the `wk->expired` inverse): a
+                // key present and unexpired is "live"; an absent or
+                // already-expired key records a nonexistent/stale watch. This is
+                // a non-destructive probe (`exists_unexpired`), computed BEFORE
+                // the no-bump purge below so the flag reflects the watch-time
+                // state (order is immaterial — an expired-but-present key reads
+                // `false` either way). Aligned with `keys`.
+                let live_at_watch: Vec<bool> = keys
+                    .iter()
+                    .map(|k| self.store.exists_unexpired(k))
+                    .collect();
                 // Lazily purge any already-expired watched keys WITHOUT bumping
                 // the version: watching an already-stale key must record a
                 // "nonexistent" watch, so a later EXEC does not treat the key's
@@ -67,7 +78,9 @@ impl ShardWorker {
                 for key in &keys {
                     self.store.purge_if_expired(key);
                 }
-                let _ = response_tx.send(self.shard_version);
+                // WATCH stays no-bump (F3): drop the lazy-purge report unread.
+                self.discard_lazy_purges();
+                let _ = response_tx.send((self.shard_version, live_at_watch));
             }
             CoreMsg::ExecTransaction {
                 commands,
