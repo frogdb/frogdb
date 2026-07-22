@@ -34,14 +34,12 @@ use tokio::sync::broadcast;
 use frogdb_types::ADVERTISED_REDIS_VERSION;
 
 use crate::BoxedStream;
-use crate::frame::ReplicationFrame;
+use crate::frame::{ReplconfCodec, ReplicationFrame};
 use crate::fullsync::{
     CheckpointChecksum, CheckpointFileHeader, CheckpointStreamCodec, FullSyncMetadata,
     calculate_file_checksum, stream_file_to_writer,
 };
-use crate::primary::{
-    LAG_CHECK_INTERVAL, LagThresholdConfig, PrimaryReplicationHandler, parse_replconf_ack,
-};
+use crate::primary::{LAG_CHECK_INTERVAL, LagThresholdConfig, PrimaryReplicationHandler};
 use crate::tracker::ReplicationTrackerImpl;
 
 // ============================================================================
@@ -678,7 +676,7 @@ impl ReplicaSession {
                 match read_half.read_buf(&mut buf).await {
                     Ok(0) => break,
                     Ok(_) => {
-                        while let Some((ack_offset, consumed)) = parse_replconf_ack(&buf) {
+                        while let Some((ack_offset, consumed)) = ReplconfCodec::parse_ack(&buf) {
                             read_offsets.ingest_replica_ack(read_replica_id, ack_offset);
                             buf.advance(consumed);
                         }

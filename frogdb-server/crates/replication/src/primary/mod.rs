@@ -24,7 +24,7 @@ use tokio::sync::{RwLock, broadcast};
 
 use crate::BoxedStream;
 use crate::ReplicationBroadcaster;
-use crate::frame::{CONTROL_SHARD, ReplicationFrame, serialize_command_to_resp};
+use crate::frame::{CONTROL_SHARD, ReplconfCodec, ReplicationFrame, serialize_command_to_resp};
 use crate::offset_coordinator::OffsetCoordinator;
 use crate::replica_session::SyncKind;
 use crate::state::ReplicationState;
@@ -257,10 +257,7 @@ impl PrimaryReplicationHandler {
     }
 
     pub async fn request_acks(&self) {
-        let resp_bytes = serialize_command_to_resp(
-            "REPLCONF",
-            &[Bytes::from_static(b"GETACK"), Bytes::from_static(b"*")],
-        );
+        let resp_bytes = ReplconfCodec::encode_getack();
         // GETACK is part of the command stream (Redis-compatible): it advances the
         // offset on both ends. The replica counts it via `frame_advance`, so the
         // primary must advance + stamp it too (and record it in the backlog like
@@ -317,33 +314,4 @@ impl ReplicationBroadcaster for PrimaryReplicationHandler {
     fn current_offset(&self) -> u64 {
         self.offsets.current()
     }
-}
-
-/// Parse a REPLCONF ACK response from a replica using proper RESP2 decoding.
-///
-/// Returns `Some((offset, consumed_bytes))` on success, or `None` if the buffer
-/// does not contain a complete, valid REPLCONF ACK frame.
-///
-/// Expected wire format: `*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$<len>\r\n<offset>\r\n`
-pub(crate) fn parse_replconf_ack(data: &[u8]) -> Option<(u64, usize)> {
-    use redis_protocol::resp2::decode::decode;
-    use redis_protocol::resp2::types::{OwnedFrame, Resp2Frame};
-
-    let (frame, consumed) = decode(data).ok()??;
-    if let OwnedFrame::Array(parts) = frame
-        && parts.len() >= 3
-    {
-        let is_replconf = parts[0]
-            .as_bytes()
-            .is_some_and(|b: &[u8]| b.eq_ignore_ascii_case(b"REPLCONF"));
-        let is_ack = parts[1]
-            .as_bytes()
-            .is_some_and(|b: &[u8]| b.eq_ignore_ascii_case(b"ACK"));
-        if is_replconf && is_ack {
-            let offset_str = std::str::from_utf8(parts[2].as_bytes()?).ok()?;
-            let offset = offset_str.parse::<u64>().ok()?;
-            return Some((offset, consumed));
-        }
-    }
-    None
 }
