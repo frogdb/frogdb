@@ -1,4 +1,4 @@
-use frogdb_core::persistence::{CompressionType, DurabilityMode, WalConfig, WalFailurePolicy};
+use frogdb_core::persistence::{CompressionType, DurabilityMode, WalConfig};
 use frogdb_core::sync::{AtomicU64, Ordering};
 use frogdb_core::{EvictionConfig, EvictionPolicy};
 use std::collections::hash_map::DefaultHasher;
@@ -64,32 +64,42 @@ pub fn build_wal_config(config: &PersistenceConfig) -> WalConfig {
         ),
     };
 
-    let failure_policy = match config.wal_failure_policy.to_lowercase().as_str() {
-        "rollback" => {
-            if !matches!(mode, DurabilityMode::Sync) {
-                let mode_str = match &mode {
-                    DurabilityMode::Async => "async",
-                    DurabilityMode::Periodic { .. } => "periodic",
-                    DurabilityMode::Sync => "sync",
-                };
-                tracing::warn!(
-                    "wal_failure_policy=rollback with durability_mode={}: \
-                     rollback only catches flush-thread crashes in non-sync modes; \
-                     for full durability guarantees, use durability_mode=sync",
-                    mode_str
-                );
-            }
-            WalFailurePolicy::Rollback
-        }
-        _ => WalFailurePolicy::Continue,
-    };
+    // Config-consistency diagnostic. The *effective* WAL failure policy is owned
+    // by the `ConfigManager` `Arc<AtomicU8>` (derived directly from
+    // `config.persistence.wal_failure_policy` and mutable via
+    // `CONFIG SET wal-failure-policy`); `WalConfig` no longer carries a duplicate
+    // copy. This warning is a pure startup consistency check between the
+    // configured failure policy and the durability mode — it does not compute or
+    // store the policy.
+    warn_if_rollback_without_sync(config, &mode);
 
     WalConfig {
         mode,
         batch_size_threshold: config.batch_size_threshold_kb * 1024,
         batch_timeout_ms: config.batch_timeout_ms,
-        failure_policy,
         ..Default::default()
+    }
+}
+
+/// Startup consistency check: `wal_failure_policy=rollback` only catches
+/// flush-thread crashes in non-`sync` durability modes, so a `rollback` policy
+/// paired with a non-`sync` mode is worth flagging. Reads the raw config string
+/// (`config.wal_failure_policy`) against the resolved [`DurabilityMode`]; emits a
+/// warning only, never affecting behavior.
+fn warn_if_rollback_without_sync(config: &PersistenceConfig, mode: &DurabilityMode) {
+    let is_rollback = config.wal_failure_policy.eq_ignore_ascii_case("rollback");
+    if is_rollback && !matches!(mode, DurabilityMode::Sync) {
+        let mode_str = match mode {
+            DurabilityMode::Async => "async",
+            DurabilityMode::Periodic { .. } => "periodic",
+            DurabilityMode::Sync => "sync",
+        };
+        tracing::warn!(
+            "wal_failure_policy=rollback with durability_mode={}: \
+             rollback only catches flush-thread crashes in non-sync modes; \
+             for full durability guarantees, use durability_mode=sync",
+            mode_str
+        );
     }
 }
 

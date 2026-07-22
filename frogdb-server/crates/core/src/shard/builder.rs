@@ -358,8 +358,11 @@ impl ShardWorkerBuilder {
             .unwrap_or_else(|| Arc::new(NoopSnapshotCoordinator::new()));
 
         // Persistence: a WAL writer exists only when both a RocksDB store and a
-        // WAL config were supplied. The failure policy is shared from
-        // ConfigManager when provided, else seeded from the WAL config.
+        // WAL config were supplied. The effective failure policy is owned by the
+        // `ConfigManager` `Arc<AtomicU8>`, shared in via `with_wal_failure_policy`
+        // in production; absent that (tests), it defaults to
+        // `WalFailurePolicy::default()`. `WalConfig` no longer carries a duplicate
+        // seed.
         let failure_policy = self
             .wal_failure_policy
             .clone()
@@ -367,20 +370,12 @@ impl ShardWorkerBuilder {
         let wal_writer: Option<Box<dyn WalSink>> = match self.wal_mode {
             // Production path — byte-identical to the pre-WalMode behavior.
             WalMode::Rocks => match (self.rocks_store.as_ref(), self.wal_config.as_ref()) {
-                (Some(rocks), Some(wal_config)) => {
-                    if self.wal_failure_policy.is_none() {
-                        failure_policy.store(
-                            wal_config.failure_policy.as_u8(),
-                            std::sync::atomic::Ordering::Relaxed,
-                        );
-                    }
-                    Some(Box::new(RocksWalWriter::new(
-                        rocks.clone(),
-                        shard_id,
-                        wal_config.clone(),
-                        metrics_recorder.clone(),
-                    )) as Box<dyn WalSink>)
-                }
+                (Some(rocks), Some(wal_config)) => Some(Box::new(RocksWalWriter::new(
+                    rocks.clone(),
+                    shard_id,
+                    wal_config.clone(),
+                    metrics_recorder.clone(),
+                )) as Box<dyn WalSink>),
                 _ => None,
             },
             // Deterministic fake WAL — only compiled under test / `fake-wal`.
