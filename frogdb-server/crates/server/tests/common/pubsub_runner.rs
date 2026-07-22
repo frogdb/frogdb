@@ -71,48 +71,34 @@ pub fn run_pubsub_workload(workload: &PubSubWorkload, num_shards: usize) -> PubS
                 tokio::time::sleep(Duration::from_millis(sub.subscribe_think_ms)).await;
             }
 
-            // SUBSCRIBE all channels in one command, then read exactly one
-            // confirmation frame per channel, recording each window-open.
-            if !sub.channels.is_empty() {
-                let mut parts: Vec<&[u8]> = vec![b"SUBSCRIBE"];
-                parts.extend(sub.channels.iter().map(|c| c.as_ref()));
+            // Send SUBSCRIBE (all channels in one command) and a PSUBSCRIBE per
+            // pattern up front. A single unified read loop below then classifies
+            // EVERY frame — confirmation vs delivered message — so a message
+            // that races in between the subscribe confirmations (which happens
+            // when a publish is already flowing) is captured, not dropped. (An
+            // earlier version read a fixed count of "confirmation" frames, which
+            // silently swallowed any interleaved message.)
+            {
                 use tokio::io::AsyncWriteExt;
-                stream.write_all(&encode_command(&parts)).await?;
-                for _ in 0..sub.channels.len() {
-                    if let Some(frame) =
-                        read_frame(&mut stream, &mut buf, &mut acc, READ_STEP_MS * 4).await
-                        && let Some((kind, _ch, _payload)) = classify_frame(&frame)
-                        && let FrameKind::SubscribeConfirm(channel) = kind
-                    {
-                        h.lock()
-                            .unwrap()
-                            .record_subscribe_ack(sub.client_id, SubKind::Channel(channel));
-                    }
+                if !sub.channels.is_empty() {
+                    let mut parts: Vec<&[u8]> = vec![b"SUBSCRIBE"];
+                    parts.extend(sub.channels.iter().map(|c| c.as_ref()));
+                    stream.write_all(&encode_command(&parts)).await?;
+                }
+                for pat in &sub.patterns {
+                    stream
+                        .write_all(&encode_command(&[b"PSUBSCRIBE", pat.as_ref()]))
+                        .await?;
                 }
             }
 
-            // PSUBSCRIBE each pattern, reading its confirmation.
-            for pat in &sub.patterns {
-                use tokio::io::AsyncWriteExt;
-                stream
-                    .write_all(&encode_command(&[b"PSUBSCRIBE", pat.as_ref()]))
-                    .await?;
-                if let Some(frame) =
-                    read_frame(&mut stream, &mut buf, &mut acc, READ_STEP_MS * 4).await
-                    && let Some((FrameKind::PSubscribeConfirm(pattern), _, _)) =
-                        classify_frame(&frame)
-                {
-                    h.lock()
-                        .unwrap()
-                        .record_subscribe_ack(sub.client_id, SubKind::Pattern(pattern));
-                }
-            }
-
-            // Read delivered frames until the deadline, recording each Receive.
+            // Unified read loop until the deadline: record subscribe/psubscribe
+            // confirmations as window-opens and message/pmessage frames as
+            // Receives, in the order they arrive.
             let start = tokio::time::Instant::now();
             while start.elapsed() < Duration::from_millis(READ_DEADLINE_MS) {
                 match read_frame(&mut stream, &mut buf, &mut acc, READ_STEP_MS).await {
-                    Some(frame) => record_message(&h, sub.client_id, &frame),
+                    Some(frame) => handle_frame(&h, sub.client_id, &frame),
                     None => continue, // timeout: re-check the deadline
                 }
             }
@@ -122,7 +108,7 @@ pub fn run_pubsub_workload(workload: &PubSubWorkload, num_shards: usize) -> PubS
             // BEFORE the window closes.
             while let Some(frame) = read_frame(&mut stream, &mut buf, &mut acc, DRAIN_IDLE_MS).await
             {
-                record_message(&h, sub.client_id, &frame);
+                handle_frame(&h, sub.client_id, &frame);
             }
 
             // Window close: record unsubscribe for every subscription, then
@@ -190,27 +176,39 @@ pub fn run_pubsub_workload(workload: &PubSubWorkload, num_shards: usize) -> PubS
     history.lock().unwrap().clone()
 }
 
-/// Record a delivered `message`/`pmessage` frame as a `Receive`.
-fn record_message(h: &Arc<Mutex<PubSubHistory>>, sub_client: u64, frame: &RespVal) {
-    if let Some((kind, channel, payload)) = classify_frame(frame) {
-        match kind {
-            FrameKind::Message => {
-                if let (Some(channel), Some(payload)) = (channel, payload) {
-                    h.lock()
-                        .unwrap()
-                        .record_receive(sub_client, channel, payload, None);
-                }
-            }
-            FrameKind::PMessage(pattern) => {
-                if let (Some(channel), Some(payload)) = (channel, payload) {
-                    h.lock()
-                        .unwrap()
-                        .record_receive(sub_client, channel, payload, Some(pattern));
-                }
-            }
-            // Confirmations / integers / other frames are not deliveries.
-            _ => {}
+/// Classify one subscriber frame and record it: a subscribe/psubscribe
+/// confirmation opens a window; a `message`/`pmessage` frame is a `Receive`.
+fn handle_frame(h: &Arc<Mutex<PubSubHistory>>, sub_client: u64, frame: &RespVal) {
+    let Some((kind, channel, payload)) = classify_frame(frame) else {
+        return;
+    };
+    match kind {
+        FrameKind::SubscribeConfirm(ch) => {
+            h.lock()
+                .unwrap()
+                .record_subscribe_ack(sub_client, SubKind::Channel(ch));
         }
+        FrameKind::PSubscribeConfirm(pat) => {
+            h.lock()
+                .unwrap()
+                .record_subscribe_ack(sub_client, SubKind::Pattern(pat));
+        }
+        FrameKind::Message => {
+            if let (Some(channel), Some(payload)) = (channel, payload) {
+                h.lock()
+                    .unwrap()
+                    .record_receive(sub_client, channel, payload, None);
+            }
+        }
+        FrameKind::PMessage(pattern) => {
+            if let (Some(channel), Some(payload)) = (channel, payload) {
+                h.lock()
+                    .unwrap()
+                    .record_receive(sub_client, channel, payload, Some(pattern));
+            }
+        }
+        // Integers / other frames are not deliveries.
+        FrameKind::Other => {}
     }
 }
 

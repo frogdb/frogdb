@@ -778,15 +778,52 @@ pub fn check_pubsub_order(h: &PubSubHistory) -> Result<(), PubSubViolation> {
 // corruption of an otherwise-valid history and accept the original.
 // ============================================================================
 
-/// Corruption: drop the first `Receive`. Trips [`check_pubsub_conservation`]
-/// (LostDelivery) when that receive was firmly in-window.
+/// Corruption: drop a `Receive` whose publish is firmly inside the confirmed
+/// window — guaranteed to trip [`check_pubsub_conservation`] (LostDelivery),
+/// unlike dropping an arbitrary receive (an edge-race delivery is at-most-once,
+/// so dropping it is legal and would not be caught). Falls back to the first
+/// receive if none is provably firm (e.g. a synthetic history with no windows).
 pub fn drop_delivery(h: &PubSubHistory) -> PubSubHistory {
+    let publishes = index_publishes(h);
+    let windows = build_windows(h);
+
+    // Find the first receive that is firmly in-window for its subscription.
+    let firm_pos = h.events().iter().position(|e| {
+        let PubSubEvent::Receive {
+            sub_client,
+            message,
+            pattern,
+            ..
+        } = e
+        else {
+            return false;
+        };
+        let kind = match pattern {
+            Some(p) => SubKind::Pattern(p.clone()),
+            None => {
+                // A channel-sub receive: the subscription kind is Channel(that
+                // receive's channel).
+                let PubSubEvent::Receive { channel, .. } = e else {
+                    return false;
+                };
+                SubKind::Channel(channel.clone())
+            }
+        };
+        let (Some(info), Some(win)) = (publishes.get(message), windows.get(&(*sub_client, kind)))
+        else {
+            return false;
+        };
+        win.open < info.send_seq && info.reply_seq < win.close
+    });
+
+    let pos = firm_pos.or_else(|| {
+        h.events()
+            .iter()
+            .position(|e| matches!(e, PubSubEvent::Receive { .. }))
+    });
+
     let mut out = h.clone();
-    if let Some(pos) = out
-        .events
-        .iter()
-        .position(|e| matches!(e, PubSubEvent::Receive { .. }))
-    {
+    if let Some(pos) = pos {
         out.events.remove(pos);
     }
     out
@@ -820,16 +857,20 @@ pub fn phantom_delivery(h: &PubSubHistory) -> PubSubHistory {
     out
 }
 
-/// Corruption: swap the receive-sequence of the first two `Receive`s that share
-/// a `(sub_client, channel, publisher)` stream, so a later-published message is
-/// received first. Trips [`check_pubsub_order`] (OrderViolation).
+/// Corruption: swap the receive-sequence of two `Receive`s that share a
+/// `(sub_client, channel, publisher)` stream but carry **different** messages
+/// (hence different publish ranks), so a later-published message is received
+/// first. Trips [`check_pubsub_order`] (OrderViolation). Requiring distinct
+/// messages matters: a dual channel+pattern subscriber receives the *same*
+/// message twice (message + pmessage) at the same rank, and swapping those
+/// would create no inversion.
 pub fn reorder_delivery(h: &PubSubHistory) -> PubSubHistory {
     let mut out = h.clone();
     let publishes = index_publishes(h);
-    // Find two receives in one publisher stream on one subscriber+channel whose
-    // publish send_seqs differ, then swap their recv seqs.
-    let mut idxs: Vec<usize> = Vec::new();
-    let mut stream_key: Option<(u64, Bytes, u64)> = None;
+    // stream key -> first (event index, message) seen; find a second entry in
+    // the same stream with a different message and swap the two recv seqs.
+    let mut first: HashMap<(u64, Bytes, u64), (usize, Bytes)> = HashMap::new();
+    let mut pair: Option<(usize, usize)> = None;
     for (i, e) in out.events.iter().enumerate() {
         if let PubSubEvent::Receive {
             sub_client,
@@ -841,28 +882,23 @@ pub fn reorder_delivery(h: &PubSubHistory) -> PubSubHistory {
             && info.channel == *channel
         {
             let key = (*sub_client, channel.clone(), info.pub_client);
-            match &stream_key {
+            match first.get(&key) {
+                Some((j, m0)) if m0 != message => {
+                    pair = Some((*j, i));
+                    break;
+                }
+                Some(_) => {} // same message (message+pmessage dup): keep looking
                 None => {
-                    stream_key = Some(key);
-                    idxs.push(i);
+                    first.insert(key, (i, message.clone()));
                 }
-                Some(k) if *k == key => {
-                    idxs.push(i);
-                    if idxs.len() == 2 {
-                        break;
-                    }
-                }
-                _ => {}
             }
         }
     }
-    if idxs.len() == 2 {
-        let (a, b) = (idxs[0], idxs[1]);
-        let (sa, sb) = (seq_of(&out.events[a]), seq_of(&out.events[b]));
-        if let (Some(sa), Some(sb)) = (sa, sb) {
-            set_seq(&mut out.events[a], sb);
-            set_seq(&mut out.events[b], sa);
-        }
+    if let Some((a, b)) = pair
+        && let (Some(sa), Some(sb)) = (seq_of(&out.events[a]), seq_of(&out.events[b]))
+    {
+        set_seq(&mut out.events[a], sb);
+        set_seq(&mut out.events[b], sa);
     }
     out
 }
