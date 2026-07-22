@@ -86,7 +86,13 @@ impl ShardWorker {
                 // already-expired watched key records a "nonexistent" watch and
                 // does not over-abort unrelated watchers.
                 self.apply_lazy_purge_effects_no_version_bump();
-                let _ = response_tx.send((self.shard_version, live_at_watch));
+                // Per-key WATCH versions (proposal 18): each key's slot stamp,
+                // aligned with `keys`. Read AFTER the no-bump purge so a key
+                // purged here reads its post-purge (unchanged, no-bump) version —
+                // preserving the "already-stale watch is a nonexistent watch"
+                // contract. Distinct-slot keys carry distinct versions.
+                let versions: Vec<u64> = keys.iter().map(|k| self.get_key_version(k)).collect();
+                let _ = response_tx.send((versions, live_at_watch));
             }
             CoreMsg::ExecTransaction {
                 commands,

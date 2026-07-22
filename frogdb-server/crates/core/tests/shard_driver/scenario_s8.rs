@@ -1,8 +1,9 @@
 //! S8 — expiry sweep interleaved with EXEC (pin). The shard event loop is a
 //! single task; message handling and expiry ticks are separate select arms,
 //! each awaited to completion (research scenario 8). Interleaving is
-//! message-granularity only: EXEC effects are always atomic and version bumps
-//! are exactly-once (per committed EXEC + per non-empty sweep).
+//! message-granularity only: EXEC effects are always atomic and WATCH version
+//! bumps are slot-granular and exactly-once (each written/expired key's slot
+//! bumps once — proposal 18).
 
 use std::time::Duration;
 
@@ -17,8 +18,10 @@ use frogdb_core::shard::WatchEntry;
 use frogdb_core::shard::types::TransactionResult;
 
 /// Deterministic pin: a multi-write EXEC is atomic even with an expiry tick and
-/// an unrelated write permuted around it; the version bumps exactly once for
-/// the committed EXEC.
+/// an unrelated write permuted around it. Under slot-granular WATCH (proposal
+/// 18) the committed EXEC bumps each written key's slot (`a`, `b`) exactly once,
+/// and the sweep bumps the expired key's slot (`e`) exactly once — a bump per
+/// affected slot, not one shared shard counter.
 #[tokio::test]
 async fn s8_exec_atomic_and_version_bumped_once() {
     let mut d = ShardDriver::new(1);
@@ -34,7 +37,10 @@ async fn s8_exec_atomic_and_version_bumped_once() {
     // are observed, in emission order.
     let mut capture = d.capture_keyspace(0, 9001, &["__keyevent@0__:*"], all_keyevents_mask());
 
-    let v_before = d.get_version(0).await;
+    // Per-key WATCH-version baselines (slot-granular): each key's own slot stamp.
+    let a_before = d.key_version(0, "a").await;
+    let b_before = d.key_version(0, "b").await;
+    let e_before = d.key_version(0, "e").await;
 
     // Permuted around the EXEC: an expiry tick (removes e) then EXEC (a,b).
     tokio::time::sleep(Duration::from_millis(3)).await;
@@ -59,15 +65,26 @@ async fn s8_exec_atomic_and_version_bumped_once() {
     assert_keyevents_consistent(&events, &[("expired", b"e"), ("set", b"a"), ("set", b"b")])
         .expect("sweep-before-EXEC keyevent order");
 
-    // Version read FIRST — before any GETs — so read-path effects (including
-    // the post-F3 lazy-purge bump, which Task 9 lands before this task) cannot
-    // contaminate the count. Bumped exactly twice: one non-empty sweep + one
-    // committed EXEC.
-    let v_after = d.get_version(0).await;
+    // Slot-granular version pins (read via `key_version`: a direct,
+    // non-destructive `get_key_version`, so no read-path effect can contaminate
+    // the counts). The committed EXEC bumped the `a` and `b` slots exactly once
+    // each (once per written key, not per command re-run), and the sweep bumped
+    // the `e` slot exactly once. `e`'s stamp survives its key's removal (slots
+    // are permanent).
     assert_eq!(
-        v_after,
-        v_before + 2,
-        "expected exactly one sweep bump + one EXEC bump"
+        d.key_version(0, "a").await,
+        a_before + 1,
+        "the committed EXEC bumps a's slot exactly once"
+    );
+    assert_eq!(
+        d.key_version(0, "b").await,
+        b_before + 1,
+        "the committed EXEC bumps b's slot exactly once"
+    );
+    assert_eq!(
+        d.key_version(0, "e").await,
+        e_before + 1,
+        "the non-empty sweep bumps e's slot exactly once"
     );
 
     // EXEC effects atomic: both keys reflect the committed values.
@@ -157,25 +174,18 @@ proptest! {
     /// does real sweep work in some interleavings (not the inert no-op it was
     /// before this fix).
     ///
-    /// `w` is deliberately a *third* key, distinct from the EXEC's
-    /// watched/written `a`/`b` — not "the same key both watched and TTL'd" as
-    /// originally sketched. WATCH here is the per-shard *coarse* version
-    /// (`worker.rs::check_watches`/`get_key_version` ignore the key argument
-    /// entirely — see `scenario_s2.rs`'s module doc and its
-    /// `ActiveExpiryUnrelated` case): any same-shard removal invalidates any
-    /// outstanding watch, watched key or not. And `execute_transaction`
-    /// (execution.rs:459-462) always calls `purge_expired_watches` on the
-    /// EXEC's own watch list *before* `check_watches`. So if the watched key
-    /// itself carried the TTL, that inline purge-and-bump would fire on
-    /// *every* schedule the instant the EXEC dispatches (whether an explicit
-    /// sweep beat it there or not) — the transaction would abort
-    /// unconditionally, with no schedule-dependent commit branch ever
-    /// reachable. Keeping `w` out of the watch list restores real
-    /// schedule-dependence: the EXEC commits if its dispatch beats every
-    /// version-bumping event (an explicit sweep of `w`, or sender 1's
-    /// unrelated write to `c`); otherwise it aborts. Whichever happens,
-    /// atomicity holds: `a`/`b` are either both the EXEC's committed values
-    /// or both untouched — never one-updated.
+    /// WATCH is now SLOT-granular (proposal 18): `check_watches`/`get_key_version`
+    /// compare the watched key `a`'s own Hash Slot version. `w` (a distinct,
+    /// different-slot key) does real sweep work, but its removal bumps only `w`'s
+    /// slot — so a `Tick::Expiry` of `w` NO LONGER aborts a watch on `a` (the
+    /// proposal-18 fix; contrast `scenario_s2.rs::ActiveExpiryUnrelated`). To keep
+    /// a genuine schedule-dependent abort branch reachable, sender 1's racing
+    /// write targets `{a}c` — a sibling colocated on `a`'s slot via the `{a}` hash
+    /// tag — so it bumps `a`'s slot. The EXEC (watching `a` at the pre-sleep
+    /// version) therefore commits iff its dispatch beats sender 1's write to
+    /// `{a}c`; a sweep of the different-slot `w` never tips it. Whichever happens,
+    /// atomicity holds: `a`/`b` are either both the EXEC's committed values or
+    /// both untouched — never one-updated.
     #[test]
     fn prop_s8_exec_atomic_under_permutation(schedule in schedule_strategy(2, 1, 10)) {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -194,8 +204,9 @@ proptest! {
             d.execute(0, "PEXPIRE", &["w", "1"]).await;
 
             // Watch snapshot happens before the sleep, mirroring a real
-            // client's WATCH a issued while everything is still live.
-            let watch_version = d.get_version(0).await;
+            // client's WATCH a issued while everything is still live. Snapshot
+            // `a`'s own slot version (slot-granular WATCH).
+            let watch_version = d.key_version(0, "a").await;
 
             tokio::time::sleep(Duration::from_millis(3)).await; // w now past TTL
 
@@ -215,7 +226,10 @@ proptest! {
                 Sender::new(vec![Step::Execute {
                     shard: 0,
                     conn_id: 2,
-                    command: cmd("SET", &["c", "5"]),
+                    // Same slot as `a` (hash tag `{a}`), so this racing write
+                    // bumps a's slot and can abort the watch — keeping both the
+                    // commit and abort branches reachable under slot-granular WATCH.
+                    command: cmd("SET", &["{a}c", "5"]),
                 }]),
             ];
             // Keep only expiry/waiter ticks (ContinuationRelease not applicable).
@@ -227,8 +241,8 @@ proptest! {
             replay(&mut d, &mut senders, &sched, 1).await;
 
             // Outcome-conditional atomicity: whichever way the WATCH raced
-            // (sweep of `w`, sender 1's write to `c`, or neither), a/b are
-            // never partially updated.
+            // (sender 1's same-slot write to `{a}c`, an inert different-slot
+            // sweep of `w`, or neither), a/b are never partially updated.
             let a = d.execute(0, "GET", &["a"]).await;
             let b = d.execute(0, "GET", &["b"]).await;
             let committed = a == Response::Bulk(Some(Bytes::from_static(b"9")));

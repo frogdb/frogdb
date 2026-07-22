@@ -1287,8 +1287,8 @@ mod scatter_effect_tests {
 
         // Value landed.
         assert!(worker.store.contains(b"mk"));
-        // Version bumped exactly once for the whole scatter part.
-        assert_eq!(worker.shard_version, 1);
+        // The written key's slot bumped exactly once for the scatter part.
+        assert_eq!(worker.get_key_version(b"mk"), 1);
 
         // Keyspace notification emitted (previously skipped).
         match nrx.try_recv() {
@@ -1352,7 +1352,7 @@ mod scatter_effect_tests {
             .scatter_del(&[Bytes::from_static(b"sk")], 42, false)
             .await;
         assert!(matches!(results[0].1, Response::Integer(1)));
-        assert_eq!(worker.shard_version, 1);
+        assert_eq!(worker.get_key_version(b"sk"), 1);
 
         // Waiter woken (previously skipped): drained with NOGROUP, queue empty.
         assert!(
@@ -1400,7 +1400,8 @@ mod scatter_effect_tests {
             .await;
         assert!(matches!(results[0].1, Response::Integer(0)));
         assert_eq!(
-            worker.shard_version, 0,
+            worker.get_key_version(b"absent"),
+            0,
             "no version bump when nothing deleted"
         );
         assert!(

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64};
 
+use bytes::Bytes;
 use frogdb_protocol::Response;
 use frogdb_types::metrics::definitions::{FieldsExpired, KeysExpired};
 use tokio::sync::mpsc;
@@ -23,12 +24,79 @@ use super::builder::ShardWorkerBuilder;
 use super::connection::NewConnection;
 use super::keyspace_coordinator::KeyspaceNotificationCoordinator;
 use super::message::{ShardReceiver, ShardSender, WatchEntry};
+use super::partition::slot_for_key;
 use super::search::lifecycle::IndexLifecycleManager;
 use super::types::{
     ShardCluster, ShardEviction, ShardIdentity, ShardObservability, ShardPersistence,
     ShardScripting, ShardTracking, ShardVll,
 };
 use super::wait_queue::ShardWaitQueue;
+
+/// Per-Internal-Shard WATCH version store, **slot-granular**.
+///
+/// Replaces the former single shard-wide `shard_version` counter. A watched key
+/// is validated against its Hash Slot's stamp, so a write to a key in a
+/// *different* slot on the same shard no longer over-aborts the watch (proposal
+/// 18). Bounded without GC: at most one `u64` per slot ever written on this
+/// shard (≤ 16384), and slots are permanent so entries never need reclaiming.
+///
+/// `global_epoch` is the honest coarse fallback for the one write source the
+/// `shard` module cannot localize to keys within its reach: a whole-DB flush
+/// (`FLUSHDB`/`FLUSHALL`, whose write record carries no keys) and a fields-only
+/// active-expiry cycle (a hash field TTL that shrinks but does not remove a key,
+/// whose keys `ExpiryResult` does not carry). Folding the epoch into every key's
+/// effective version makes those events invalidate *all* watches — a safe
+/// over-abort that preserves the zero-false-negative invariant, exactly matching
+/// Redis's `touchAllWatchedKeysOnFlush`.
+#[derive(Debug, Default)]
+pub struct SlotVersions {
+    /// slot -> version; a slot absent from the map reads as 0 (never bumped).
+    versions: std::collections::HashMap<u16, u64>,
+    /// Shard-wide epoch folded into every key's effective version (see above).
+    global_epoch: u64,
+}
+
+impl SlotVersions {
+    /// The effective WATCH version for `slot`: its per-slot stamp plus the
+    /// shard-wide epoch. Both components are monotonic, so the sum is monotonic
+    /// from any snapshot — it changes iff the slot was bumped OR the epoch was.
+    pub(crate) fn version_for(&self, slot: u16) -> u64 {
+        self.versions
+            .get(&slot)
+            .copied()
+            .unwrap_or(0)
+            .wrapping_add(self.global_epoch)
+    }
+
+    /// Advance a single slot's stamp by one.
+    fn bump_slot(&mut self, slot: u16) {
+        let v = self.versions.entry(slot).or_insert(0);
+        *v = v.wrapping_add(1);
+    }
+
+    /// Advance the shard-wide epoch (invalidates every outstanding watch).
+    fn bump_global(&mut self) {
+        self.global_epoch = self.global_epoch.wrapping_add(1);
+    }
+
+    /// Advance the slots of the given keys, each distinct slot at most once per
+    /// call (so a write touching two keys in one slot bumps it once — mirroring
+    /// the former one-bump-per-effect semantics). An empty key set advances the
+    /// shard-wide epoch instead: a warranted bump that names no key (a whole-DB
+    /// flush) must invalidate all watches, never nothing.
+    fn bump_keys<'a>(&mut self, keys: impl IntoIterator<Item = &'a [u8]>) {
+        let mut slots: Vec<u16> = keys.into_iter().map(slot_for_key).collect();
+        if slots.is_empty() {
+            self.bump_global();
+            return;
+        }
+        slots.sort_unstable();
+        slots.dedup();
+        for slot in slots {
+            self.bump_slot(slot);
+        }
+    }
+}
 
 /// A shard worker that owns a partition of the data.
 pub struct ShardWorker {
@@ -50,8 +118,8 @@ pub struct ShardWorker {
     /// Command registry.
     pub(crate) registry: Arc<CommandRegistry>,
 
-    /// Monotonically increasing version for WATCH detection.
-    pub(crate) shard_version: u64,
+    /// Per-slot WATCH version store (slot-granular WATCH detection).
+    pub(crate) slot_versions: SlotVersions,
 
     /// Persistence: RocksDB, WAL, snapshots.
     pub(crate) persistence: ShardPersistence,
@@ -449,14 +517,32 @@ impl ShardWorker {
         self.persistence.snapshot_coordinator()
     }
 
-    /// Increment shard version (call on any write operation).
-    pub(crate) fn increment_version(&mut self) {
-        self.shard_version = self.shard_version.wrapping_add(1);
+    /// Bump the WATCH version for the slots of the given keys (each distinct
+    /// slot once). The load-bearing per-key bump: a write to key `b` no longer
+    /// dirties a watch on key `a` unless they share a Hash Slot. An empty key
+    /// set (a keyless-but-dirtying write, e.g. `FLUSHDB`) bumps the shard-wide
+    /// epoch, invalidating every watch.
+    pub(crate) fn bump_versions_for<'a>(&mut self, keys: impl IntoIterator<Item = &'a [u8]>) {
+        self.slot_versions.bump_keys(keys);
     }
 
-    /// Get version for a key.
-    pub(crate) fn get_key_version(&self, _key: &[u8]) -> u64 {
-        self.shard_version
+    /// Bump the WATCH version for a single key's slot.
+    pub(crate) fn bump_version_for_key(&mut self, key: &[u8]) {
+        self.slot_versions.bump_slot(slot_for_key(key));
+    }
+
+    /// Bump the shard-wide WATCH epoch, invalidating every outstanding watch on
+    /// the shard. The safe over-abort fallback for a dirtying event whose keys
+    /// the `shard` module cannot enumerate (a fields-only active-expiry cycle).
+    pub(crate) fn bump_version_global(&mut self) {
+        self.slot_versions.bump_global();
+    }
+
+    /// Get the WATCH version for a key — its Hash Slot's stamp (plus the
+    /// shard-wide epoch). Now load-bearing: the key selects the slot, so
+    /// `check_watches` discriminates keys by slot.
+    pub fn get_key_version(&self, key: &[u8]) -> u64 {
+        self.slot_versions.version_for(slot_for_key(key))
     }
 
     /// Check if watched keys have changed since they were watched.
@@ -644,11 +730,12 @@ impl ShardWorker {
             );
         }
         if bump_version {
-            // One version bump for the batch (both seams), mirroring active
-            // expiry's one-bump-per-cycle: a watched key that died lazily —
-            // whole-key TTL or last-hash-field death — is now observed changed
-            // by check_watches (gap 3).
-            self.increment_version();
+            // Per-slot bump for each lazily-removed key (both seams): a watched
+            // key that died lazily — whole-key TTL or last-hash-field death — is
+            // now observed changed by check_watches (gap 3). Only the removed
+            // keys' own slots are dirtied, so an unrelated watch on a different
+            // slot survives.
+            self.bump_versions_for(purged.iter().chain(emptied.iter()).map(Bytes::as_ref));
         }
     }
 
@@ -661,6 +748,75 @@ impl ShardWorker {
             return Err(Response::error("ERR shard busy with continuation lock"));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod slot_versions_tests {
+    use super::SlotVersions;
+
+    #[test]
+    fn absent_slot_reads_zero() {
+        let sv = SlotVersions::default();
+        assert_eq!(sv.version_for(7), 0, "a never-bumped slot reads 0");
+        assert_eq!(sv.version_for(16383), 0);
+    }
+
+    #[test]
+    fn bump_is_slot_local_and_monotonic() {
+        let mut sv = SlotVersions::default();
+        sv.bump_slot(7);
+        assert_eq!(sv.version_for(7), 1, "bumped slot advances");
+        assert_eq!(sv.version_for(8), 0, "a different slot is untouched");
+        sv.bump_slot(7);
+        assert_eq!(sv.version_for(7), 2, "same-slot bump advances again");
+        assert_eq!(sv.version_for(8), 0);
+    }
+
+    #[test]
+    fn bump_keys_dedups_slots_per_call() {
+        let mut sv = SlotVersions::default();
+        // Two keys colocated on one slot via a hash tag advance it once.
+        sv.bump_keys([b"{t}a".as_slice(), b"{t}b".as_slice()]);
+        let slot = super::slot_for_key(b"{t}a");
+        assert_eq!(sv.version_for(slot), 1, "one bump for two same-slot keys");
+    }
+
+    #[test]
+    fn bump_keys_distinct_slots_are_independent() {
+        let mut sv = SlotVersions::default();
+        sv.bump_keys([b"a".as_slice(), b"b".as_slice()]);
+        assert_eq!(sv.version_for(super::slot_for_key(b"a")), 1);
+        assert_eq!(sv.version_for(super::slot_for_key(b"b")), 1);
+    }
+
+    #[test]
+    fn empty_key_set_bumps_global_epoch() {
+        let mut sv = SlotVersions::default();
+        let before_a = sv.version_for(super::slot_for_key(b"a"));
+        // A warranted bump that names no key (e.g. FLUSHDB) invalidates all.
+        sv.bump_keys(std::iter::empty::<&[u8]>());
+        assert_eq!(
+            sv.version_for(super::slot_for_key(b"a")),
+            before_a + 1,
+            "the global epoch folds into every slot's version"
+        );
+        assert_eq!(
+            sv.version_for(super::slot_for_key(b"zzz")),
+            1,
+            "even an absent slot reflects the epoch bump (0 + epoch)"
+        );
+    }
+
+    #[test]
+    fn global_epoch_and_slot_bumps_compose() {
+        let mut sv = SlotVersions::default();
+        let slot = super::slot_for_key(b"a");
+        sv.bump_slot(slot); // slot -> 1
+        sv.bump_global(); // epoch -> 1
+        assert_eq!(sv.version_for(slot), 2, "slot(1) + epoch(1)");
+        // A different slot only carries the epoch.
+        assert_eq!(sv.version_for(super::slot_for_key(b"b")), 1);
     }
 }
 

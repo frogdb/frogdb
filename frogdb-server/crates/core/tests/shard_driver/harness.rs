@@ -145,30 +145,15 @@ impl ShardDriver {
         rx.await.expect("execute response")
     }
 
-    /// Read a shard's WATCH version (pure probe: no keys, so no lazy purge).
+    /// Read a shard's per-key WATCH versions AND per-key liveness for the given
+    /// keys — the full `GetVersion` round-trip a real WATCH drives.
     ///
-    /// Discards the per-key liveness vector of the `GetVersion` reply — with no
-    /// keys it is always empty. Use [`Self::watch_keys`] to also read liveness.
-    pub async fn get_version(&mut self, shard: usize) -> u64 {
-        let (tx, rx) = oneshot::channel();
-        self.dispatch(
-            shard,
-            CoreMsg::GetVersion {
-                keys: vec![],
-                response_tx: tx,
-            },
-        )
-        .await;
-        rx.await.expect("version").0
-    }
-
-    /// Read a shard's WATCH version AND per-key liveness for the given keys.
-    ///
-    /// Mirrors [`Self::get_version`] but sends the watched keys, so the shard
-    /// (a) reports each key's `live_at_watch` flag (present and unexpired at
-    /// watch time, aligned with `keys`) and (b) runs the WATCH-time no-bump lazy
-    /// purge for any already-expired key — the same seam a real WATCH drives.
-    pub async fn watch_keys(&mut self, shard: usize, keys: &[&str]) -> (u64, Vec<bool>) {
+    /// The shard (a) returns each key's per-slot WATCH version and its
+    /// `live_at_watch` flag (present and unexpired at watch time, both aligned
+    /// with `keys`) and (b) runs the WATCH-time no-bump lazy purge for any
+    /// already-expired key. Use [`Self::key_version`] for a non-destructive
+    /// single-key version read (no purge).
+    pub async fn watch_keys(&mut self, shard: usize, keys: &[&str]) -> (Vec<u64>, Vec<bool>) {
         let (tx, rx) = oneshot::channel();
         self.dispatch(
             shard,
@@ -182,6 +167,14 @@ impl ShardDriver {
         )
         .await;
         rx.await.expect("version + liveness")
+    }
+
+    /// Non-destructively read the WATCH version the shard would compare a watch
+    /// on `key` against — reads `get_key_version` directly (no `GetVersion`
+    /// round-trip, so no lazy purge). This is exactly the value `check_watches`
+    /// uses, so it is the honest attribution signal for over-abort tests.
+    pub async fn key_version(&mut self, shard: usize, key: &str) -> u64 {
+        self.worker(shard).get_key_version(key.as_bytes())
     }
 
     /// Run a transaction with the given watches; returns the result.

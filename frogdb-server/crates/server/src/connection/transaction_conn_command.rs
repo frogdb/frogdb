@@ -315,21 +315,29 @@ async fn handle_watch(ctx: &mut ConnCtx<'_>, args: &[Bytes]) -> Response {
     {
         return Response::error("ERR shard unavailable");
     }
-    let (version, live_flags) = match response_rx.await {
+    let (versions, live_flags) = match response_rx.await {
         Ok(reply) => reply,
         Err(_) => return Response::error("ERR shard dropped request"),
     };
 
-    // Store watched keys with their version and per-key liveness. `live_flags`
-    // aligns with `args` (one flag per watched key, in order) — it reports
-    // whether the key was live (present and unexpired) at watch time, the
-    // `wk->expired` inverse EXEC needs to distinguish a live-then-expired watch
-    // (must abort) from an already-stale one (must not). The shard is *not*
-    // folded into the transaction target here: WATCH always precedes MULTI
-    // (WATCH inside MULTI errors), and MULTI resets the accumulator, so any fold
-    // recorded now would be discarded. The watch set's shards are folded at EXEC
-    // time in `take_transaction`, from the live (post-UNWATCH) watch set.
-    for (key, live_at_watch) in args.iter().zip(live_flags) {
+    // Both reply vectors align with `args` (one entry per watched key, in
+    // order). `versions[i]` is key `i`'s per-slot WATCH version (proposal 18 —
+    // slot-granular, so distinct-slot keys get distinct versions rather than one
+    // shared shard version); `live_flags[i]` reports whether the key was live
+    // (present and unexpired) at watch time — the `wk->expired` inverse EXEC
+    // needs to distinguish a live-then-expired watch (must abort) from an
+    // already-stale one (must not). Enforce the length invariant: a shard reply
+    // whose vectors do not match the watched-key count is a protocol bug, not a
+    // watch we can safely record.
+    if versions.len() != args.len() || live_flags.len() != args.len() {
+        return Response::error("ERR shard returned malformed WATCH version reply");
+    }
+    // The shard is *not* folded into the transaction target here: WATCH always
+    // precedes MULTI (WATCH inside MULTI errors), and MULTI resets the
+    // accumulator, so any fold recorded now would be discarded. The watch set's
+    // shards are folded at EXEC time in `take_transaction`, from the live
+    // (post-UNWATCH) watch set.
+    for ((key, version), live_at_watch) in args.iter().zip(versions).zip(live_flags) {
         state.watch_key(key.clone(), shard, version, live_at_watch);
     }
 

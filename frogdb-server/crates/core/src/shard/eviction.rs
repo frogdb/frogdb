@@ -226,7 +226,7 @@ impl ShardWorker {
     /// A spill is **not** a removal — the value moves hot→warm and stays
     /// logically present (it unspills on next access) — so it deliberately does
     /// **not** route through [`ShardWorker::run_internal_removal_effects`]; its
-    /// current `increment_version` / `evicted` notification are tracked as
+    /// current per-key WATCH-version bump / `evicted` notification are tracked as
     /// separate follow-ups. Only its fallback-to-delete path is a real removal,
     /// and that awaits `delete_for_eviction`.
     async fn spill_for_eviction(&mut self, key: &[u8]) -> bool {
@@ -236,7 +236,7 @@ impl ShardWorker {
         // Try to spill
         match self.store.spill_key(key) {
             Ok(bytes_freed) => {
-                self.increment_version();
+                self.bump_version_for_key(key);
 
                 // Emit evicted keyspace notification for spills too
                 self.emit_keyspace_notification(key, "evicted", KeyspaceEventFlags::EVICTED);
