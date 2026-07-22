@@ -156,10 +156,7 @@ impl ClusterState {
             ClusterCommand::IncrementEpoch => {
                 inner.config_epoch += 1;
                 tracing::debug!(epoch = inner.config_epoch, "Incremented config epoch");
-                Ok((
-                    ClusterResponse::Value(inner.config_epoch.to_string()),
-                    Vec::new(),
-                ))
+                Ok((ClusterResponse::Epoch(inner.config_epoch), Vec::new()))
             }
 
             ClusterCommand::Failover {
@@ -257,7 +254,7 @@ impl ClusterState {
                         epoch,
                     });
                 }
-                Ok((ClusterResponse::Value(epoch.to_string()), events))
+                Ok((ClusterResponse::Epoch(epoch), events))
             }
 
             ClusterCommand::MarkNodeFailed { node_id } => {

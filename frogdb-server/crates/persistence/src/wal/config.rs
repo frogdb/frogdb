@@ -75,7 +75,6 @@ pub struct WalConfig {
     pub batch_size_threshold: usize,
     pub batch_timeout_ms: u64,
     pub channel_capacity: usize,
-    pub failure_policy: WalFailurePolicy,
 }
 impl Default for WalConfig {
     fn default() -> Self {
@@ -84,7 +83,6 @@ impl Default for WalConfig {
             batch_size_threshold: 4 * 1024 * 1024,
             batch_timeout_ms: 10,
             channel_capacity: 8192,
-            failure_policy: WalFailurePolicy::Continue,
         }
     }
 }

@@ -107,9 +107,15 @@ pub struct ReplicationState {
     #[serde(default)]
     pub secondary_id: Option<String>,
 
-    /// Current replication offset.
-    /// This is the byte offset in the replication stream.
-    pub replication_offset: u64,
+    /// Replication offset reconciled AT THE LAST SAVE POINT — NOT a live stream
+    /// position on either role. On a Primary the live head lives in
+    /// [`crate::offset_coordinator::OffsetCoordinator`]; on a Replica it lives in
+    /// [`crate::replica::offset::ReplicaOffset`]. This field is reconciled up to
+    /// the live head only at save points, and it lags between them. Renamed from
+    /// `replication_offset` (kept as a serde alias for one release so existing
+    /// on-disk state still loads) so no reader mistakes it for the live head.
+    #[serde(alias = "replication_offset")]
+    pub offset_at_save: u64,
 
     /// The offset at which secondary_id is valid.
     /// Replicas can use secondary_id for PSYNC if their offset is <= this value.
@@ -142,7 +148,7 @@ impl ReplicationState {
         Self {
             replication_id: generate_replication_id(),
             secondary_id: None,
-            replication_offset: 0,
+            offset_at_save: 0,
             secondary_offset: -1,
             active_version: None,
             master_host: None,
@@ -160,7 +166,7 @@ impl ReplicationState {
                         if state.validate() {
                             tracing::info!(
                                 replication_id = %state.replication_id,
-                                offset = state.replication_offset,
+                                offset_at_save = state.offset_at_save,
                                 "Loaded replication state from disk"
                             );
                             Ok(state)
@@ -209,7 +215,7 @@ impl ReplicationState {
 
         tracing::debug!(
             replication_id = %self.replication_id,
-            offset = self.replication_offset,
+            offset_at_save = self.offset_at_save,
             "Saved replication state to disk"
         );
         Ok(())
@@ -233,10 +239,16 @@ impl ReplicationState {
     }
 
     /// Generate a new replication ID (for when becoming primary).
-    pub fn new_replication_id(&mut self) {
+    ///
+    /// `live_offset` is the current *live* replication offset — the failover
+    /// continuity boundary is frozen from it, not from [`Self::offset_at_save`].
+    /// Because the persisted field lags the live head between save points, taking
+    /// the live value as an argument keeps `secondary_offset` from ever being
+    /// frozen behind where the stream has actually reached.
+    pub fn new_replication_id(&mut self, live_offset: u64) {
         // Store current ID as secondary for failover continuity
         self.secondary_id = Some(self.replication_id.clone());
-        self.secondary_offset = self.replication_offset as i64;
+        self.secondary_offset = live_offset as i64;
 
         // Generate new primary ID
         self.replication_id = generate_replication_id();
@@ -254,7 +266,7 @@ impl ReplicationState {
     /// `current_offset` is the primary's **live** replication offset — the live
     /// write position advanced by `broadcast_command`. It is supplied by the
     /// [`crate::offset_coordinator::OffsetCoordinator`], the sole caller, which
-    /// owns the live offset; this method never reads `self.replication_offset`
+    /// owns the live offset; this method never reads `self.offset_at_save`
     /// (the persisted field lags the live stream head, so checking against it
     /// made every reconnect fall outside the window and forced a full resync).
     /// The secondary-ID branch keeps using `self.secondary_offset`, which is a
@@ -287,12 +299,6 @@ impl ReplicationState {
         false
     }
 
-    /// Increment the replication offset.
-    #[inline]
-    pub fn increment_offset(&mut self, bytes: u64) {
-        self.replication_offset = self.replication_offset.saturating_add(bytes);
-    }
-
     /// Get the default path for the replication state file.
     pub fn default_path(data_dir: &Path) -> PathBuf {
         data_dir.join("replication_state.json")
@@ -311,7 +317,8 @@ impl ReplicationState {
     /// (`master_host`/`master_port`) are preserved.
     pub fn apply_staged_metadata(&mut self, meta: &StagedReplicationMetadata) {
         self.replication_id = meta.replication_id.clone();
-        self.replication_offset = meta.replication_offset;
+        // A staged checkpoint offset *is* a save-point offset.
+        self.offset_at_save = meta.replication_offset;
     }
 }
 
@@ -377,7 +384,7 @@ mod tests {
         let state = ReplicationState::new();
         assert!(is_valid_replication_id(&state.replication_id));
         assert!(state.secondary_id.is_none());
-        assert_eq!(state.replication_offset, 0);
+        assert_eq!(state.offset_at_save, 0);
         assert!(state.validate());
     }
 
@@ -394,7 +401,7 @@ mod tests {
         // Load and verify
         let loaded = ReplicationState::load_or_create(&path).unwrap();
         assert_eq!(loaded.replication_id, original_id);
-        assert_eq!(loaded.replication_offset, 0);
+        assert_eq!(loaded.offset_at_save, 0);
     }
 
     #[test]
@@ -427,9 +434,10 @@ mod tests {
     fn test_replication_state_new_replication_id() {
         let mut state = ReplicationState::new();
         let original_id = state.replication_id.clone();
-        state.replication_offset = 1000;
 
-        state.new_replication_id();
+        // The failover boundary is frozen from the LIVE offset passed in, not
+        // from the persisted `offset_at_save`.
+        state.new_replication_id(1000);
 
         // New ID should be different
         assert_ne!(state.replication_id, original_id);
@@ -459,10 +467,9 @@ mod tests {
         assert!(!state.window_contains("unknown_id", 500, live_offset));
 
         // Test secondary ID after failover. `new_replication_id` freezes
-        // `secondary_offset` from the persisted offset, so set it explicitly.
-        state.replication_offset = 1000;
+        // `secondary_offset` from the live offset passed in.
         let old_id = state.replication_id.clone();
-        state.new_replication_id();
+        state.new_replication_id(1000);
 
         // Can still sync with old ID up to secondary_offset (the frozen failover
         // boundary), regardless of the current live offset.
@@ -505,7 +512,7 @@ mod tests {
         let mut state = ReplicationState::new();
         state.apply_staged_metadata(&meta);
         assert_eq!(state.replication_id, id);
-        assert_eq!(state.replication_offset, 4242);
+        assert_eq!(state.offset_at_save, 4242);
     }
 
     #[test]
@@ -556,19 +563,26 @@ mod tests {
     }
 
     #[test]
-    fn test_increment_offset() {
-        let mut state = ReplicationState::new();
-        assert_eq!(state.replication_offset, 0);
+    fn offset_at_save_loads_from_legacy_replication_offset_key() {
+        // Existing on-disk state files were written with the old
+        // `replication_offset` key; the serde alias keeps them loadable so a
+        // boot-time field rename never rewinds the persisted offset.
+        let id = generate_replication_id();
+        let json = serde_json::json!({
+            "replication_id": id,
+            "replication_offset": 9876u64,
+            "secondary_offset": -1,
+        });
+        let state: ReplicationState = serde_json::from_str(&json.to_string()).unwrap();
+        assert_eq!(state.offset_at_save, 9876);
 
-        state.increment_offset(100);
-        assert_eq!(state.replication_offset, 100);
-
-        state.increment_offset(50);
-        assert_eq!(state.replication_offset, 150);
-
-        // Test saturation (no overflow)
-        state.replication_offset = u64::MAX - 10;
-        state.increment_offset(100);
-        assert_eq!(state.replication_offset, u64::MAX);
+        // The new key also loads (round-trip through the current field name).
+        let json = serde_json::json!({
+            "replication_id": id,
+            "offset_at_save": 1234u64,
+            "secondary_offset": -1,
+        });
+        let state: ReplicationState = serde_json::from_str(&json.to_string()).unwrap();
+        assert_eq!(state.offset_at_save, 1234);
     }
 }

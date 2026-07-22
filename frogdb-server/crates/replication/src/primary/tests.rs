@@ -198,7 +198,7 @@ async fn save_state_persists_tracker_offset() {
     // A restart seeds the tracker from this file, so the offset must survive
     // and keep the same replication id.
     let reloaded = ReplicationState::load_or_create(&state_path).unwrap();
-    assert_eq!(reloaded.replication_offset, 987);
+    assert_eq!(reloaded.offset_at_save, 987);
     assert_eq!(reloaded.replication_id, replid);
 }
 

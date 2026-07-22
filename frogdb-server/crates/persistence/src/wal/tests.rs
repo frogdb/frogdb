@@ -134,7 +134,6 @@ async fn test_wal_backpressure_no_data_loss() {
             batch_size_threshold: 1024 * 1024,
             batch_timeout_ms: 60000,
             channel_capacity: 1,
-            ..Default::default()
         },
         m,
     );

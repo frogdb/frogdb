@@ -90,10 +90,12 @@ struct SubKindSpec {
     arity_error: &'static str,
     /// Error returned when the per-connection limit is hit.
     limit_error: &'static str,
-    /// Build the batched shard registration message.
-    subscribe_msg: fn(Vec<Bytes>, ConnId, PubSubSender, oneshot::Sender<Vec<usize>>) -> PubSubMsg,
-    /// Build the batched shard deregistration message.
-    unsubscribe_msg: fn(Vec<Bytes>, ConnId, oneshot::Sender<Vec<usize>>) -> PubSubMsg,
+    /// Build the batched shard registration message. The `oneshot` carries a
+    /// bare registration ack — a barrier, not a count (see [`PubSubMsg`]).
+    subscribe_msg: fn(Vec<Bytes>, ConnId, PubSubSender, oneshot::Sender<()>) -> PubSubMsg,
+    /// Build the batched shard deregistration message. The `oneshot` carries a
+    /// bare deregistration ack — a barrier, not a count.
+    unsubscribe_msg: fn(Vec<Bytes>, ConnId, oneshot::Sender<()>) -> PubSubMsg,
     /// Build the subscribe confirmation.
     subscribed: fn(Bytes, usize) -> PubSubConfirmation,
     /// Build the unsubscribe confirmation (`None` channel = "nothing to
@@ -372,10 +374,10 @@ impl<'a> PubSubIo<'a> {
         }
 
         // One batched registration message per destination shard. Await each
-        // shard's ack (the per-shard subscriber counts, unused here — the
-        // client-visible count is the per-connection one above) so that by the
-        // time the confirmation reaches the client, a PUBLISH processed after
-        // it is guaranteed to see the registration.
+        // shard's registration ack (the PUBLISH-visibility barrier) so that by
+        // the time the confirmation reaches the client, a PUBLISH processed
+        // after it is guaranteed to see the registration. The client-visible
+        // count is the per-connection one above; the ack carries no count.
         if !accepted.is_empty() {
             let pubsub_tx = self.ensure_pubsub_channel();
             for (shard, channels) in

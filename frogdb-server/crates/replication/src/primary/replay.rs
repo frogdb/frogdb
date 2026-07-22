@@ -309,11 +309,10 @@ mod tests {
     fn secondary_id_within_window_continues() {
         let replay = enabled_replay();
         let mut state = ReplicationState::new();
-        // Establish a failover boundary: rotate the id, freezing secondary at 0.
-        // Seed the backlog so the lower bound holds for offset 0.
-        state.replication_offset = 0;
+        // Establish a failover boundary: rotate the id, freezing secondary at 0
+        // (the live offset here). Seed the backlog so the lower bound holds.
         let old_id = state.replication_id.clone();
-        state.new_replication_id();
+        state.new_replication_id(0);
         // Backlog must cover the requested offset; an empty backlog with req==0
         // and current==0 still grants an empty tail.
         let grant = assert_continue(replay.handle_partial_sync_request(&state, &old_id, 0, 0));
