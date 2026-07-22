@@ -362,7 +362,6 @@ async fn test_cross_shard_expired_keyevent_delivered() {
 /// fire `expired` from `expireIfNeeded` (on-access) and `activeExpireCycle`
 /// (sweep) alike; before this fix the lazy seam silently dropped the event.
 #[tokio::test]
-#[ignore = "gap (D8 repro): lazy expiry does not emit the `expired` keyevent; un-ignored by the fix commit"]
 async fn regression_lazy_expiry_emits_expired_keyevent() {
     // Single shard so the key and the shard-0 subscriber share a shard.
     let server = TestServer::start_standalone_with_config(TestServerConfig {

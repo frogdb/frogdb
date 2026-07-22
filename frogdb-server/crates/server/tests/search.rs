@@ -501,7 +501,6 @@ async fn test_ft_search_text() {
 /// hits straight from the index, without store hydration) kept surfacing the
 /// dead key.
 #[tokio::test]
-#[ignore = "gap (D8 repro): lazy expiry does not remove keys from search indexes; un-ignored by the fix commit"]
 async fn regression_lazy_expiry_removes_key_from_search_index() {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;

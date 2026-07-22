@@ -1304,7 +1304,6 @@ async fn test_tracking_off_stops() {
 /// effect-ignorant, so the cached client silently missed the invalidation and
 /// served a stale value forever.
 #[tokio::test]
-#[ignore = "gap (D8 repro): lazy expiry does not invalidate tracked keys; un-ignored by the fix commit"]
 async fn regression_lazy_expiry_invalidates_tracked_key() {
     let server = TestServer::start_standalone_with_config(TestServerConfig {
         num_shards: Some(1),

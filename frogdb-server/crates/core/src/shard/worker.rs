@@ -8,6 +8,7 @@ use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::command::QuorumChecker;
 use crate::eviction::EvictionConfig;
 use crate::functions::SharedFunctionRegistry;
+use crate::keyspace_event::KeyspaceEventFlags;
 use crate::persistence::{RocksStore, SnapshotCoordinator, WalConfig};
 use crate::pubsub::ShardSubscriptions;
 use crate::registry::CommandRegistry;
@@ -510,39 +511,82 @@ impl ShardWorker {
         self.apply_lazy_purge_effects();
     }
 
-    /// Drain and apply the effects of any lazy purges the store reported during
-    /// the current command: a shard-version bump + an XREADGROUP-waiter drain to
-    /// NOGROUP for each removed key — the same externally observable effects
-    /// active expiry applies (`apply_expiry_effects`, event_loop.rs), so a key
-    /// that died lazily is indistinguishable from one the sweep removed.
+    /// Drain the store's lazy-purge report and apply, for each physically
+    /// removed key, the **same effect set active expiry applies for its own
+    /// `deleted_keys`** (`apply_expiry_effects`, event_loop.rs): client-tracking
+    /// invalidation, search-index deletion, the `expired` keyspace notification,
+    /// the USDT key-expired probe, and an XREADGROUP-waiter drain — then a single
+    /// shard-version bump for the batch. A key that died via a lazy read is thus
+    /// indistinguishable from one the active sweep removed, matching
+    /// Redis/Valkey, which fire the `expired` event from `expireIfNeeded`
+    /// (lazy/on-access) and `activeExpireCycle` (sweep) alike.
     ///
-    /// Both effects are idempotent (a second bump only advances the counter; a
-    /// second drain finds no waiters), so calling this at more than one seam is
-    /// safe.
+    /// Idempotency: every removal is pushed into the store's buffer exactly once
+    /// (only `check_and_delete_expired`'s actual-removal branch — a second purge
+    /// of the same key finds it already absent) and drained exactly once
+    /// (`std::mem::take`). No key can be reported through two seams, because the
+    /// first physical removal makes it absent for every later purge attempt. So
+    /// no effect double-fires; no guard is needed.
     pub(crate) fn apply_lazy_purge_effects(&mut self) {
+        self.drain_lazy_purge_effects(true);
+    }
+
+    /// WATCH-time (`GetVersion`) variant: apply every physical-removal effect
+    /// (tracking / search / `expired` notification / probe / XREADGROUP drain)
+    /// but WITHHOLD the shard-version bump.
+    ///
+    /// A key purged here is genuinely gone, so the removal must still be
+    /// externally visible — Redis fires the `expired` notification on lazy
+    /// expiry regardless of which command triggered it, and a search index or a
+    /// tracking consumer would otherwise silently miss the death. Only the
+    /// version bump is withheld: the WATCH-time purge must stay no-bump (F3) so a
+    /// WATCH on an already-expired key records a "nonexistent" watch and does not
+    /// over-abort unrelated watchers on the shard. Splitting the drain here — fire
+    /// the physical-removal effects, skip only the version bump — is what keeps
+    /// the effect gap from silently persisting on the WATCH seam.
+    pub(crate) fn apply_lazy_purge_effects_no_version_bump(&mut self) {
+        self.drain_lazy_purge_effects(false);
+    }
+
+    /// Shared drain point (single-drain-point discipline): fire the per-key
+    /// active-expiry effect set for each lazily-removed key, optionally bumping
+    /// the shard version. Ordering mirrors `apply_expiry_effects`' `deleted_keys`
+    /// branch (tracking → search → notify → probe, then the waiter drain), with
+    /// the version bump applied once at the end for the whole batch.
+    fn drain_lazy_purge_effects(&mut self, bump_version: bool) {
         let purged = self.store.take_lazily_purged();
         if purged.is_empty() {
             return;
         }
-        // Drain blocked XREADGROUP waiters for each lazily-removed stream key,
-        // mirroring the DEL write path and the F1 active-expiry drain
-        // (drain_stream_waiters_with_error → NOGROUP; plain XREAD waiters stay
-        // blocked). No-op for non-stream keys.
         for key in &purged {
+            // Invalidate tracked clients for the expired key (gated on there
+            // being any — same guard active expiry uses).
+            if self.tracking.has_tracking_clients() {
+                self.tracking.invalidate_keys(&[key.as_ref()], 0);
+            }
+            // Remove the expired key from any search index it participated in.
+            self.delete_from_search_indexes(key);
+            // Emit the `expired` keyspace notification for the whole-key TTL
+            // death — the exact event active expiry emits for `deleted_keys`.
+            self.emit_keyspace_notification(key, "expired", KeyspaceEventFlags::EXPIRED);
+            // Fire the USDT key-expired probe so the lazy removal is not
+            // invisible to observers.
+            crate::probes::fire_key_expired(
+                std::str::from_utf8(key).unwrap_or("<binary>"),
+                self.shard_id() as u64,
+            );
+            // Drain blocked XREADGROUP waiters for a removed stream key,
+            // mirroring the DEL write path and the F1 active-expiry drain
+            // (drain_stream_waiters_with_error → NOGROUP; plain XREAD waiters
+            // stay blocked). No-op for non-stream keys.
             self.drain_stream_waiters_with_error(key);
         }
-        // One version bump for the batch, mirroring active expiry's
-        // one-bump-per-cycle: a watched key that died lazily is now observed
-        // changed by check_watches (gap 3).
-        self.increment_version();
-    }
-
-    /// Drain and DISCARD any lazy-purge report without applying effects — used
-    /// at the WATCH-time (`GetVersion`) seam, which must stay no-bump (F3): a
-    /// WATCH on an already-expired key records a "nonexistent" watch and must
-    /// not invalidate other watchers on the shard.
-    pub(crate) fn discard_lazy_purges(&mut self) {
-        let _ = self.store.take_lazily_purged();
+        if bump_version {
+            // One version bump for the batch, mirroring active expiry's
+            // one-bump-per-cycle: a watched key that died lazily is now observed
+            // changed by check_watches (gap 3).
+            self.increment_version();
+        }
     }
 
     /// Check if this connection can execute during a continuation lock.
