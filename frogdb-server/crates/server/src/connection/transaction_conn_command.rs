@@ -62,6 +62,7 @@ const fn transaction_spec(
         wakes: WaiterWake::None,
         event: EventSpec::NotApplicable,
         requires_same_slot: false,
+        reindex: frogdb_core::ReindexSpec::None,
         lookup: LookupSpec::None,
         mutation: frogdb_core::ConnMutation::Auth,
         strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Transaction),

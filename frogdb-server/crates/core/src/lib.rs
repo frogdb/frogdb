@@ -72,7 +72,8 @@ pub use command::{
     WaiterKind, WaiterWake, WalAction, WalStrategy,
 };
 pub use command_spec::{
-    AccessSpec, CommandSpec, EventSpec, KeySpec, LookupOutcome, LookupSpec, SpecError,
+    AccessSpec, CommandSpec, EventSpec, IndexKind, KeySpec, LookupOutcome, LookupSpec,
+    ReindexAction, ReindexSpec, SpecError,
 };
 pub use conn_command::{
     BoxFuture, ClientTrackingProvider, ConfigProvider, ConnCtx, ConnStateMut, ConnectionCommand,

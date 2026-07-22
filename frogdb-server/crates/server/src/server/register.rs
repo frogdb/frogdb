@@ -252,7 +252,9 @@ mod spec_exhaustiveness {
     //! (missing keyspace event, missing waiter wake, missing WAL strategy)
     //! impossible to land without a failing test.
     use super::*;
-    use frogdb_core::{CommandFlags, EventSpec, WaiterKind, WaiterWake, WalStrategy};
+    use frogdb_core::{
+        CommandFlags, EventSpec, IndexKind, ReindexSpec, WaiterKind, WaiterWake, WalStrategy,
+    };
 
     /// WRITE commands that legitimately persist nothing through the key WAL:
     /// FLUSH* clear via RocksDB, FT.* persist through the search index, MIGRATE
@@ -433,6 +435,111 @@ mod spec_exhaustiveness {
                 EventSpec::Dynamic,
                 "{name}'s written keys are runtime-dependent and must deposit events (Dynamic)"
             );
+        }
+    }
+
+    /// Reindex conformance (proposal 15): the hash-family and JSON-family write
+    /// commands — the only writes that mutate indexable content — must declare
+    /// the `ReindexSpec` the `SearchIndex` write effect resolves, plus the
+    /// key-set writers (DEL/UNLINK/RENAME/RENAMENX).
+    ///
+    /// This is a **reviewer-maintained positive allowlist**, not an automatic
+    /// completeness proof. Unlike `every_write_command_declares_wal`, it cannot
+    /// iterate all writes and trip on the `None` default, because `None` is the
+    /// *correct* default for the vast majority of writes (every
+    /// string/list/set/zset/stream mutation, plus the `HPERSIST` carve-out).
+    /// It catches a *listed* command whose fact drifts; a newly-added hash write
+    /// the reviewer forgets to add here (and to the spec) still ships stale — the
+    /// same failure mode as the old string match, relocated to a
+    /// declaration-adjacent field with better locality. Adding a hash/JSON write
+    /// command means adding it here.
+    #[test]
+    fn reindex_facts_declared_for_hash_and_json_writes() {
+        let hash = IndexKind::Hash;
+        let json = IndexKind::Json;
+        // (command, expected ReindexSpec)
+        let expected: &[(&str, ReindexSpec)] = &[
+            // Hash writes whose key survives — reindex the first key.
+            ("HSET", ReindexSpec::FirstKey { kind: hash }),
+            ("HSETNX", ReindexSpec::FirstKey { kind: hash }),
+            ("HMSET", ReindexSpec::FirstKey { kind: hash }),
+            ("HINCRBY", ReindexSpec::FirstKey { kind: hash }),
+            ("HINCRBYFLOAT", ReindexSpec::FirstKey { kind: hash }),
+            ("HSETEX", ReindexSpec::FirstKey { kind: hash }),
+            // Hash writes that may empty the key (field delete / lazy purge) —
+            // reindex if it survives, else drop it.
+            ("HDEL", ReindexSpec::FirstKeyOrDelete { kind: hash }),
+            ("HGETDEL", ReindexSpec::FirstKeyOrDelete { kind: hash }),
+            ("HEXPIRE", ReindexSpec::FirstKeyOrDelete { kind: hash }),
+            ("HPEXPIRE", ReindexSpec::FirstKeyOrDelete { kind: hash }),
+            ("HEXPIREAT", ReindexSpec::FirstKeyOrDelete { kind: hash }),
+            ("HPEXPIREAT", ReindexSpec::FirstKeyOrDelete { kind: hash }),
+            ("HGETEX", ReindexSpec::FirstKeyOrDelete { kind: hash }),
+            // JSON writes whose key survives.
+            ("JSON.SET", ReindexSpec::FirstKey { kind: json }),
+            ("JSON.MERGE", ReindexSpec::FirstKey { kind: json }),
+            ("JSON.STRAPPEND", ReindexSpec::FirstKey { kind: json }),
+            ("JSON.TOGGLE", ReindexSpec::FirstKey { kind: json }),
+            ("JSON.ARRAPPEND", ReindexSpec::FirstKey { kind: json }),
+            ("JSON.ARRINSERT", ReindexSpec::FirstKey { kind: json }),
+            ("JSON.ARRPOP", ReindexSpec::FirstKey { kind: json }),
+            ("JSON.ARRTRIM", ReindexSpec::FirstKey { kind: json }),
+            ("JSON.NUMINCRBY", ReindexSpec::FirstKey { kind: json }),
+            ("JSON.NUMMULTBY", ReindexSpec::FirstKey { kind: json }),
+            // JSON writes that may drop the key.
+            ("JSON.DEL", ReindexSpec::FirstKeyOrDelete { kind: json }),
+            ("JSON.CLEAR", ReindexSpec::FirstKeyOrDelete { kind: json }),
+            // Key-set writers.
+            ("DEL", ReindexSpec::DeleteKeys),
+            ("UNLINK", ReindexSpec::DeleteKeys),
+            ("RENAME", ReindexSpec::Rename),
+            ("RENAMENX", ReindexSpec::Rename),
+        ];
+        // Explicit carve-outs: WRITE hash commands that change no indexable value
+        // and so legitimately declare `None` (they must NOT reindex).
+        let carve_outs: &[&str] = &["HPERSIST"];
+
+        let r = full_registry();
+        for (name, want) in expected {
+            let entry = r
+                .get_entry(name)
+                .unwrap_or_else(|| panic!("{name} not registered"));
+            let spec = entry.as_command().unwrap().spec();
+            assert_eq!(
+                spec.reindex, *want,
+                "{name} must declare ReindexSpec {want:?} so the search index stays live",
+            );
+        }
+        for name in carve_outs {
+            let entry = r
+                .get_entry(name)
+                .unwrap_or_else(|| panic!("{name} not registered"));
+            let spec = entry.as_command().unwrap().spec();
+            assert_eq!(
+                spec.reindex,
+                ReindexSpec::None,
+                "{name} changes no indexable value and must stay ReindexSpec::None",
+            );
+        }
+    }
+
+    /// Structural inverse (automatic, enforced by `CommandSpec::validate`): no
+    /// non-WRITE command may declare a non-`None` reindex fact — reindexing is a
+    /// write side effect. This iterates the whole registry and trips on any
+    /// violation, no allowlist involved.
+    #[test]
+    fn no_read_command_declares_reindex() {
+        for (name, entry) in full_registry().iter() {
+            if let Some(cmd) = entry.as_command() {
+                let spec = cmd.spec();
+                if !spec.flags.contains(CommandFlags::WRITE) {
+                    assert_eq!(
+                        spec.reindex,
+                        ReindexSpec::None,
+                        "{name}: a non-WRITE command must not declare a reindex fact",
+                    );
+                }
+            }
         }
     }
 }
