@@ -12,12 +12,12 @@ use std::sync::atomic::Ordering;
 #[cfg(not(feature = "turmoil"))]
 use frogdb_core::PubSubMsg;
 use frogdb_core::ShardSender;
-use frogdb_core::cluster::{ClusterRaft, NodeId};
 #[cfg(not(feature = "turmoil"))]
 use frogdb_core::cluster::{
-    ClusterRpcRequest, ClusterRpcResponse, handle_rpc_request, new_framed_tcp, parse_rpc_message,
-    send_rpc_response,
+    BusRpc, ClusterRpcRequest, ClusterRpcResponse, handle_rpc_request, new_framed_tcp,
+    parse_rpc_message, send_rpc_response,
 };
+use frogdb_core::cluster::{ClusterRaft, NodeId};
 #[cfg(not(feature = "turmoil"))]
 use frogdb_core::shard_for_key;
 #[cfg(not(feature = "turmoil"))]
@@ -151,20 +151,11 @@ async fn handle_connection(
             }
         };
 
-        // Dispatch based on request type
+        // Dispatch on the wire envelope: one typed seam. The bus owns its
+        // subset (`BusRpc`) locally; the Raft handler owns the rest (`RaftRpc`).
         let response = match request {
-            ClusterRpcRequest::PubSubBroadcast { channel, message } => {
-                handle_pubsub_broadcast(&ctx.shard_senders, &channel, &message).await
-            }
-            ClusterRpcRequest::PubSubForward { channel, message } => {
-                handle_pubsub_forward(&ctx.shard_senders, ctx.num_shards, &channel, &message).await
-            }
-            ClusterRpcRequest::HealthProbe => ClusterRpcResponse::HealthProbeResponse {
-                node_id: ctx.node_id,
-                replication_offset: ctx.replication_offset.load(Ordering::Acquire),
-            },
-            // All Raft RPCs (AppendEntries, Vote, InstallSnapshot, ForwardedWrite)
-            raft_request => handle_rpc_request(&ctx.raft, raft_request).await,
+            ClusterRpcRequest::Bus(bus_rpc) => handle_bus_rpc(ctx, bus_rpc).await,
+            ClusterRpcRequest::Raft(raft_rpc) => handle_rpc_request(&ctx.raft, raft_rpc).await,
         };
 
         // Send the response
@@ -175,6 +166,28 @@ async fn handle_connection(
                 e.to_string(),
             ));
         }
+    }
+}
+
+/// Handle a bus-local RPC: pub/sub fan-out and health probes, serviced from the
+/// cluster-bus context (shard senders, node id, replication offset) without ever
+/// touching Raft.
+///
+/// The match is exhaustive by construction — [`BusRpc`] names only the variants
+/// this function can service, so it cannot carry (nor mis-route) a Raft RPC.
+#[cfg(not(feature = "turmoil"))]
+async fn handle_bus_rpc(ctx: &ClusterBusContext, request: BusRpc) -> ClusterRpcResponse {
+    match request {
+        BusRpc::PubSubBroadcast { channel, message } => {
+            handle_pubsub_broadcast(&ctx.shard_senders, &channel, &message).await
+        }
+        BusRpc::PubSubForward { channel, message } => {
+            handle_pubsub_forward(&ctx.shard_senders, ctx.num_shards, &channel, &message).await
+        }
+        BusRpc::HealthProbe => ClusterRpcResponse::HealthProbeResponse {
+            node_id: ctx.node_id,
+            replication_offset: ctx.replication_offset.load(Ordering::Acquire),
+        },
     }
 }
 
