@@ -76,3 +76,5 @@ Closing it cleanly is **not** a mechanical copy: `purge_expired_hash_fields` is 
 ### Ordering
 
 `drain_lazy_purge_effects` matches `apply_expiry_effects`' order for expiry-driven removals (per-key effects, then the batch version bump at the end) — deliberately the active-expiry order, not the write-path `WRITE_EFFECT_ORDER` (which bumps first). For a pub/sub subscriber or tracking client the notification and the version bump are independent, so lazy and active removals are indistinguishable, which is the parity goal.
+
+Follow-up tracking the hash-field-death `"del"` gap above: [09-hash-field-del-keyevent-lazy-empty.md](../issues/09-hash-field-del-keyevent-lazy-empty.md).

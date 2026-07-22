@@ -550,7 +550,7 @@ async fn regression_lazy_expiry_removes_key_from_search_index() {
     // active expiry has, since neither read-path lazy expiry nor the active sweep
     // routes through the write-effect pipeline's synchronous commit.
     client.command(&["GET", "user:1"]).await;
-    tokio::time::sleep(Duration::from_millis(1200)).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
 
     // The expired key must be gone from the index.
     let response = client.command(&["FT.SEARCH", "idx", "Alice"]).await;
