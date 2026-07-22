@@ -53,12 +53,12 @@ pub use client_registry::{
     UnblockMode, extract_error_prefix,
 };
 pub use cluster::{
-    CLUSTER_SLOTS, ClusterCommand, ClusterConfig, ClusterError, ClusterNetwork,
+    BusRpc, CLUSTER_SLOTS, ClusterCommand, ClusterConfig, ClusterError, ClusterNetwork,
     ClusterNetworkFactory, ClusterRaft, ClusterResponse, ClusterRpcRequest, ClusterRpcResponse,
     ClusterSnapshot, ClusterState, ClusterStateMachine, ClusterStorage, ConfigEpoch, DemotionEvent,
-    FramedStream, NodeId, NodeInfo, NodeRole, SharedClusterRaft, SlotMigrationCompleteEvent,
-    SlotRange, TypeConfig, handle_rpc_request, new_framed, new_framed_tcp, parse_rpc_message,
-    send_rpc_response,
+    FramedStream, NodeId, NodeInfo, NodeRole, RaftRpc, SharedClusterRaft,
+    SlotMigrationCompleteEvent, SlotRange, TypeConfig, handle_rpc_request, new_framed,
+    new_framed_tcp, parse_rpc_message, send_rpc_response,
 };
 /// The shard-local executor trait. Alias of [`command::Command`], whose
 /// `execute(&mut CommandContext)` runs on the owning shard. Named `ShardCommand`

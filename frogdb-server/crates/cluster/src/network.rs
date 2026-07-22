@@ -88,9 +88,12 @@ impl std::fmt::Display for NetworkErrorWrapper {
 
 impl std::error::Error for NetworkErrorWrapper {}
 
-/// RPC request types for cluster communication.
+/// RPCs serviced through the [`ClusterRaft`](crate::ClusterRaft) handle: the
+/// openraft consensus trio plus the application write-forward (which reaches the
+/// leader via `client_write`). `ForwardedWrite` lives here — with the consensus
+/// RPCs — because it needs the Raft handle, not because it is consensus traffic.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ClusterRpcRequest {
+pub enum RaftRpc {
     /// AppendEntries RPC (leader to followers).
     AppendEntries(AppendEntriesRequest<TypeConfig>),
     /// Vote RPC (candidate to all nodes).
@@ -99,12 +102,44 @@ pub enum ClusterRpcRequest {
     InstallSnapshot(InstallSnapshotRequest<TypeConfig>),
     /// Forwarded client write (follower to leader).
     ForwardedWrite(ClusterCommand),
+}
+
+/// RPCs serviced locally from the cluster-bus context (shard senders, node id,
+/// replication offset) — these never touch Raft.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BusRpc {
     /// Broadcast pub/sub message to all nodes.
     PubSubBroadcast { channel: Vec<u8>, message: Vec<u8> },
     /// Forward sharded pub/sub message to the slot-owning node.
     PubSubForward { channel: Vec<u8>, message: Vec<u8> },
     /// Lightweight health probe for failover scoring.
     HealthProbe,
+}
+
+/// Wire envelope for cluster RPC requests.
+///
+/// One outer discriminant selects the owning handler; the payload is that
+/// handler's exhaustive subset. Serialized/parsed as a single type per frame,
+/// exactly as before — the nested design keeps the "one frame decodes to one
+/// type" wire constraint while making the Raft-vs-bus split compiler-enforced.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ClusterRpcRequest {
+    /// An RPC for the Raft handler (consensus + write-forward).
+    Raft(RaftRpc),
+    /// An RPC serviced locally by the cluster bus.
+    Bus(BusRpc),
+}
+
+impl From<RaftRpc> for ClusterRpcRequest {
+    fn from(rpc: RaftRpc) -> Self {
+        ClusterRpcRequest::Raft(rpc)
+    }
+}
+
+impl From<BusRpc> for ClusterRpcRequest {
+    fn from(rpc: BusRpc) -> Self {
+        ClusterRpcRequest::Bus(rpc)
+    }
 }
 
 /// RPC response types for cluster communication.
@@ -346,7 +381,7 @@ impl ClusterNetwork {
 
     /// Send a lightweight health probe to query a node's replication offset.
     pub async fn health_probe(&self) -> Result<(NodeId, u64), ClusterError> {
-        let request = ClusterRpcRequest::HealthProbe;
+        let request = BusRpc::HealthProbe.into();
         match self.send_rpc(request).await? {
             ClusterRpcResponse::HealthProbeResponse {
                 node_id,
@@ -360,7 +395,7 @@ impl ClusterNetwork {
 
     /// Forward a write command to a remote node (typically the Raft leader).
     pub async fn forward_write(&self, cmd: ClusterCommand) -> Result<(), ClusterError> {
-        let request = ClusterRpcRequest::ForwardedWrite(cmd);
+        let request = RaftRpc::ForwardedWrite(cmd).into();
         match self.send_rpc(request).await? {
             ClusterRpcResponse::ForwardedWrite(Ok(())) => Ok(()),
             ClusterRpcResponse::ForwardedWrite(Err(msg)) => Err(ClusterError::NetworkError(
@@ -503,7 +538,7 @@ impl RaftNetwork<TypeConfig> for ClusterNetwork {
             RPCError<NodeId, BasicNode, RaftError<NodeId>>,
         >,
     > + Send {
-        let request = ClusterRpcRequest::AppendEntries(req);
+        let request = RaftRpc::AppendEntries(req).into();
         let this = self.clone();
 
         async move {
@@ -529,7 +564,7 @@ impl RaftNetwork<TypeConfig> for ClusterNetwork {
     ) -> impl Future<
         Output = Result<VoteResponse<NodeId>, RPCError<NodeId, BasicNode, RaftError<NodeId>>>,
     > + Send {
-        let request = ClusterRpcRequest::Vote(req);
+        let request = RaftRpc::Vote(req).into();
         let this = self.clone();
 
         async move {
@@ -558,7 +593,7 @@ impl RaftNetwork<TypeConfig> for ClusterNetwork {
             RPCError<NodeId, BasicNode, RaftError<NodeId, InstallSnapshotError>>,
         >,
     > + Send {
-        let request = ClusterRpcRequest::InstallSnapshot(req);
+        let request = RaftRpc::InstallSnapshot(req).into();
         let this = self.clone();
 
         async move {
@@ -651,25 +686,26 @@ pub fn spawn_add_raft_voter(raft: crate::ClusterRaft, node_id: NodeId, addr: std
     });
 }
 
-/// Handle incoming RPC requests from other cluster nodes.
-pub async fn handle_rpc_request(
-    raft: &crate::ClusterRaft,
-    request: ClusterRpcRequest,
-) -> ClusterRpcResponse {
+/// Handle incoming Raft-handle RPC requests from other cluster nodes.
+///
+/// The parameter is [`RaftRpc`] — the subset serviced through the
+/// [`ClusterRaft`](crate::ClusterRaft) handle — so this match is exhaustive by
+/// construction: it cannot name (nor mis-route) a bus-local RPC.
+pub async fn handle_rpc_request(raft: &crate::ClusterRaft, request: RaftRpc) -> ClusterRpcResponse {
     match request {
-        ClusterRpcRequest::AppendEntries(req) => match raft.append_entries(req).await {
+        RaftRpc::AppendEntries(req) => match raft.append_entries(req).await {
             Ok(resp) => ClusterRpcResponse::AppendEntries(resp),
             Err(e) => ClusterRpcResponse::Error(e.to_string()),
         },
-        ClusterRpcRequest::Vote(req) => match raft.vote(req).await {
+        RaftRpc::Vote(req) => match raft.vote(req).await {
             Ok(resp) => ClusterRpcResponse::Vote(resp),
             Err(e) => ClusterRpcResponse::Error(e.to_string()),
         },
-        ClusterRpcRequest::InstallSnapshot(req) => match raft.install_snapshot(req).await {
+        RaftRpc::InstallSnapshot(req) => match raft.install_snapshot(req).await {
             Ok(resp) => ClusterRpcResponse::InstallSnapshot(resp),
             Err(e) => ClusterRpcResponse::Error(e.to_string()),
         },
-        ClusterRpcRequest::ForwardedWrite(cmd) => {
+        RaftRpc::ForwardedWrite(cmd) => {
             // Extract AddNode info before the command is consumed by client_write
             let add_node_info = if let ClusterCommand::AddNode { ref node } = cmd {
                 Some((node.id, node.cluster_addr))
@@ -695,14 +731,6 @@ pub async fn handle_rpc_request(
                 }
                 Err(e) => ClusterRpcResponse::ForwardedWrite(Err(e.to_string())),
             }
-        }
-        ClusterRpcRequest::PubSubBroadcast { .. } | ClusterRpcRequest::PubSubForward { .. } => {
-            ClusterRpcResponse::Error(
-                "PubSub RPCs must be handled by the cluster bus, not the Raft handler".to_string(),
-            )
-        }
-        ClusterRpcRequest::HealthProbe => {
-            ClusterRpcResponse::Error("HealthProbe must be handled by cluster bus".to_string())
         }
     }
 }
@@ -771,13 +799,28 @@ mod tests {
     #[test]
     fn test_rpc_request_serialization() {
         // Test that our RPC types can be serialized/deserialized with postcard
-        let request = ClusterRpcRequest::Vote(VoteRequest {
+        let request: ClusterRpcRequest = RaftRpc::Vote(VoteRequest {
             vote: openraft::Vote::new(1, 1),
             last_log_id: None,
-        });
+        })
+        .into();
 
         let bytes = postcard::to_allocvec(&request).unwrap();
         let _: ClusterRpcRequest = postcard::from_bytes(&bytes).unwrap();
+    }
+
+    #[test]
+    fn test_from_shims_wrap_correct_arm() {
+        // The `From` shims must place each subset on the matching envelope arm.
+        let raft: ClusterRpcRequest = RaftRpc::Vote(VoteRequest {
+            vote: openraft::Vote::new(1, 1),
+            last_log_id: None,
+        })
+        .into();
+        assert!(matches!(raft, ClusterRpcRequest::Raft(RaftRpc::Vote(_))));
+
+        let bus: ClusterRpcRequest = BusRpc::HealthProbe.into();
+        assert!(matches!(bus, ClusterRpcRequest::Bus(BusRpc::HealthProbe)));
     }
 
     #[test]
@@ -785,18 +828,22 @@ mod tests {
         use crate::types::NodeInfo;
 
         // AppendEntries (empty)
-        let req = ClusterRpcRequest::AppendEntries(AppendEntriesRequest {
+        let req: ClusterRpcRequest = RaftRpc::AppendEntries(AppendEntriesRequest {
             vote: openraft::Vote::new(1, 1),
             prev_log_id: None,
             entries: vec![],
             leader_commit: None,
-        });
+        })
+        .into();
         let bytes = postcard::to_allocvec(&req).unwrap();
         let decoded: ClusterRpcRequest = postcard::from_bytes(&bytes).unwrap();
-        assert!(matches!(decoded, ClusterRpcRequest::AppendEntries(_)));
+        assert!(matches!(
+            decoded,
+            ClusterRpcRequest::Raft(RaftRpc::AppendEntries(_))
+        ));
 
         // InstallSnapshot
-        let req = ClusterRpcRequest::InstallSnapshot(InstallSnapshotRequest {
+        let req: ClusterRpcRequest = RaftRpc::InstallSnapshot(InstallSnapshotRequest {
             vote: openraft::Vote::new(1, 1),
             meta: openraft::SnapshotMeta {
                 last_log_id: None,
@@ -809,10 +856,14 @@ mod tests {
             offset: 0,
             data: vec![1, 2, 3],
             done: true,
-        });
+        })
+        .into();
         let bytes = postcard::to_allocvec(&req).unwrap();
         let decoded: ClusterRpcRequest = postcard::from_bytes(&bytes).unwrap();
-        assert!(matches!(decoded, ClusterRpcRequest::InstallSnapshot(_)));
+        assert!(matches!(
+            decoded,
+            ClusterRpcRequest::Raft(RaftRpc::InstallSnapshot(_))
+        ));
 
         // ForwardedWrite
         let node = NodeInfo::new_primary(
@@ -820,25 +871,49 @@ mod tests {
             "127.0.0.1:6379".parse().unwrap(),
             "127.0.0.1:16379".parse().unwrap(),
         );
-        let req = ClusterRpcRequest::ForwardedWrite(ClusterCommand::AddNode { node });
+        let req: ClusterRpcRequest =
+            RaftRpc::ForwardedWrite(ClusterCommand::AddNode { node }).into();
         let bytes = postcard::to_allocvec(&req).unwrap();
         let decoded: ClusterRpcRequest = postcard::from_bytes(&bytes).unwrap();
-        assert!(matches!(decoded, ClusterRpcRequest::ForwardedWrite(_)));
+        assert!(matches!(
+            decoded,
+            ClusterRpcRequest::Raft(RaftRpc::ForwardedWrite(_))
+        ));
 
         // HealthProbe
-        let req = ClusterRpcRequest::HealthProbe;
+        let req: ClusterRpcRequest = BusRpc::HealthProbe.into();
         let bytes = postcard::to_allocvec(&req).unwrap();
         let decoded: ClusterRpcRequest = postcard::from_bytes(&bytes).unwrap();
-        assert!(matches!(decoded, ClusterRpcRequest::HealthProbe));
+        assert!(matches!(
+            decoded,
+            ClusterRpcRequest::Bus(BusRpc::HealthProbe)
+        ));
 
         // PubSubBroadcast
-        let req = ClusterRpcRequest::PubSubBroadcast {
+        let req: ClusterRpcRequest = BusRpc::PubSubBroadcast {
             channel: b"test".to_vec(),
             message: b"hello".to_vec(),
-        };
+        }
+        .into();
         let bytes = postcard::to_allocvec(&req).unwrap();
         let decoded: ClusterRpcRequest = postcard::from_bytes(&bytes).unwrap();
-        assert!(matches!(decoded, ClusterRpcRequest::PubSubBroadcast { .. }));
+        assert!(matches!(
+            decoded,
+            ClusterRpcRequest::Bus(BusRpc::PubSubBroadcast { .. })
+        ));
+
+        // PubSubForward
+        let req: ClusterRpcRequest = BusRpc::PubSubForward {
+            channel: b"test".to_vec(),
+            message: b"hello".to_vec(),
+        }
+        .into();
+        let bytes = postcard::to_allocvec(&req).unwrap();
+        let decoded: ClusterRpcRequest = postcard::from_bytes(&bytes).unwrap();
+        assert!(matches!(
+            decoded,
+            ClusterRpcRequest::Bus(BusRpc::PubSubForward { .. })
+        ));
 
         // Responses
         let resp = ClusterRpcResponse::HealthProbeResponse {
