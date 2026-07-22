@@ -522,7 +522,12 @@ impl Command for CopyCommand {
                 key_index: 1,
             },
             requires_same_slot: false,
-            reindex: frogdb_core::ReindexSpec::None,
+            // Same-shard COPY writes the source value into the destination
+            // (args[1], with REPLACE clobbering it). Refresh the destination:
+            // index it when the copied value is a hash matching a prefix, else
+            // drop any stale doc. Cross-shard COPY reconstructs as RESTORE on the
+            // destination shard (execution.rs), which carries its own refresh.
+            reindex: frogdb_core::ReindexSpec::RefreshSecondKey,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,

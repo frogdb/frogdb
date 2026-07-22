@@ -32,7 +32,51 @@ impl ShardWorker {
                 ReindexAction::Delete { key } => {
                     self.delete_from_search_indexes(&Bytes::copy_from_slice(key));
                 }
+                ReindexAction::Refresh { key } => self.refresh_hash_key(key),
             }
+        }
+    }
+
+    /// Reconcile a key's search-index presence to whatever type it now holds,
+    /// after a write that may have clobbered it across types.
+    ///
+    /// If the key is currently a hash it is (re)indexed into every matching
+    /// hash-source index — identical to [`Self::reindex_hash_key`]. Otherwise
+    /// (the key is now a string/list/…, or is absent) it is dropped from every
+    /// matching index. This is the search analogue of a "reconcile to current
+    /// state" write: [`ReindexAction::Reindex`] silently no-ops on a
+    /// non-hash value and so would leave a stale doc behind, which is exactly the
+    /// bug for `SET`/`RESTORE`/`COPY`/`RENAME` overwriting an indexed hash with a
+    /// non-hash value. `delete_from_search_indexes` is source-agnostic (it clears
+    /// the key from every prefix-matching index, hash- or JSON-source), so a
+    /// cross-type overwrite of a JSON-indexed key is de-indexed too.
+    fn refresh_hash_key(&mut self, key: &[u8]) {
+        let is_hash = self
+            .store
+            .get(key)
+            .is_some_and(|value| (&value as &crate::types::Value).as_hash().is_some());
+        if is_hash {
+            self.reindex_hash_key(key);
+        } else {
+            self.delete_from_search_indexes(&Bytes::copy_from_slice(key));
+        }
+    }
+
+    /// Re-index a batch of hash keys whose contents were shrunk in place by a
+    /// field-TTL purge (lazy read on a READONLY command, or the active-expiry
+    /// sweep) but which still exist as hashes.
+    ///
+    /// Such a purge mutates the hash without going through a WRITE command's
+    /// [`ReindexSpec`], so the search index would otherwise keep the reaped
+    /// field's stale value. Whole-key and last-field-emptied removals are handled
+    /// separately (they de-index via `Delete`); this covers only the survivors.
+    /// No-op when no search index exists.
+    pub(crate) fn reindex_shrunk_hash_keys(&mut self, keys: &[Bytes]) {
+        if self.search.indexes.is_empty() {
+            return;
+        }
+        for key in keys {
+            self.reindex_hash_key(key);
         }
     }
 

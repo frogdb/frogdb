@@ -165,18 +165,28 @@ impl ShardWorker {
         let result = self.expiry.run_cycle(&mut self.store, Instant::now());
         // The sweep reaps last-hash-field deaths and hash-field reaps through the
         // *same* `purge_expired_hash_fields` seam a lazy read uses, so it also
-        // fills the store's lazily-emptied buffer and lazily-expired-fields
-        // counter. But the sweep already owns reporting for these via
-        // `result.emptied_keys` / `result.fields_expired` —
-        // `apply_expiry_effects` fires their `del` events and metric bumps below.
-        // Discard both here so a later command's lazy drain
-        // (`drain_lazy_purge_effects`) does not re-fire `del` or re-count metrics
-        // for what the sweep already reported. Between event-loop iterations the
-        // buffers are empty (every command drains at its own seam; asserted
-        // above), so this discards only what this cycle just produced — never a
-        // pending lazy read.
+        // fills the store's lazily-emptied buffer, lazily-shrunk buffer, and
+        // lazily-expired-fields counter. But the sweep already owns reporting for
+        // the removals + field count via `result.emptied_keys` /
+        // `result.fields_expired` — `apply_expiry_effects` fires their `del`
+        // events and metric bumps below. Discard those here so a later command's
+        // lazy drain (`drain_lazy_purge_effects`) does not re-fire `del` or
+        // re-count metrics for what the sweep already reported. Between event-loop
+        // iterations the buffers are empty (every command drains at its own seam;
+        // asserted above), so this discards only what this cycle just produced —
+        // never a pending lazy read.
+        //
+        // The shrunk-survivor buffer, by contrast, is *not* owned by
+        // `ExpiryResult` (the sweep counts `fields_expired` but never enumerates
+        // the surviving keys), so drain it here and re-index each survivor through
+        // the *same* `reindex_shrunk_hash_keys` owner the lazy read path uses.
+        // This is what keeps a field-shrunk hash's search-index doc from holding
+        // the reaped field's stale value after an active sweep — the search
+        // analogue of the WATCH global bump below.
+        let shrunk = self.store.take_lazily_shrunk();
         self.store.take_lazily_emptied();
         self.store.take_lazily_expired_fields();
+        self.reindex_shrunk_hash_keys(&shrunk);
         self.apply_expiry_effects(result).await;
     }
 

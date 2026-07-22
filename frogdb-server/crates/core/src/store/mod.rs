@@ -556,6 +556,24 @@ pub trait Store: Send {
         0
     }
 
+    /// Drain the buffer of keys whose hash was **shrunk in place** by a lazy
+    /// field-TTL reap (`purge_expired_hash_fields` removed ≥1 field but the hash
+    /// still exists) since the last drain.
+    ///
+    /// The worker re-indexes each survivor so its search-index doc drops the
+    /// reaped field's stale value — the READONLY command that triggered the reap
+    /// carries no `ReindexSpec`, so this buffer is the only surface that reports
+    /// the in-place mutation to the search index. Distinct from
+    /// [`Store::take_lazily_emptied`] (the hash still holds surviving fields). The
+    /// active sweep shares `purge_expired_hash_fields` and populates this buffer
+    /// too, but drains and re-indexes it at its own seam, so it only ever fires
+    /// for genuinely lazy reads.
+    ///
+    /// Default: no lazy shrink reporting (stores without hash-field TTL).
+    fn take_lazily_shrunk(&mut self) -> Vec<Bytes> {
+        Vec::new()
+    }
+
     /// Set a value with options (NX/XX, EX/PX, GET, KEEPTTL).
     fn set_with_options(&mut self, key: Bytes, value: Value, _opts: SetOptions) -> SetResult {
         self.set(key, value);

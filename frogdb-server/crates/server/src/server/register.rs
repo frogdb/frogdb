@@ -494,6 +494,15 @@ mod spec_exhaustiveness {
             ("UNLINK", ReindexSpec::DeleteKeys),
             ("RENAME", ReindexSpec::Rename),
             ("RENAMENX", ReindexSpec::Rename),
+            // Cross-type clobbers (round-10 follow-up 5): a write that can replace
+            // an indexed hash with a non-hash value, or write a hash into an
+            // index-prefix key, must reconcile the destination via Refresh so the
+            // search doc is dropped (stale) or added (new hash) as appropriate.
+            ("SET", ReindexSpec::RefreshFirstKey),
+            ("SETEX", ReindexSpec::RefreshFirstKey),
+            ("PSETEX", ReindexSpec::RefreshFirstKey),
+            ("RESTORE", ReindexSpec::RefreshFirstKey),
+            ("COPY", ReindexSpec::RefreshSecondKey),
         ];
         // Explicit carve-outs: WRITE hash commands that change no indexable value
         // and so legitimately declare `None` (they must NOT reindex).

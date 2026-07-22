@@ -501,7 +501,11 @@ impl Command for SetCommand {
         WaiterWake::All,
             event: EventSpec::Emits { class: KeyspaceEventFlags::STRING, name: "set" },
             requires_same_slot: false,
-            reindex: frogdb_core::ReindexSpec::None,
+            // A blind `SET` overwrites any existing key with a string, so it can
+            // clobber an indexed hash. Refresh the key: index it if it is still a
+            // hash (a failed NX/XX leaves it unchanged), else drop the now-stale
+            // hash doc.
+            reindex: frogdb_core::ReindexSpec::RefreshFirstKey,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
