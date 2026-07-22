@@ -56,9 +56,13 @@ pub(super) async fn init_cluster(
     cluster_bus_listener: &Option<TcpListener>,
     shard_senders: &Arc<Vec<ShardSender>>,
     num_shards: usize,
-    replication_broadcaster: &SharedBroadcaster,
+    // The primary handler now owns the whole split-brain divergence window
+    // (offsets + backlog), so the logger no longer needs the broadcaster or the
+    // tracker; these two remain in the signature only as inbound wiring the
+    // caller still threads.
+    _replication_broadcaster: &SharedBroadcaster,
     primary_replication_handler: Option<&Arc<crate::replication::PrimaryReplicationHandler>>,
-    replication_tracker: &Option<Arc<ReplicationTrackerImpl>>,
+    _replication_tracker: &Option<Arc<ReplicationTrackerImpl>>,
     metrics_recorder: &Arc<dyn MetricsRecorder>,
     // The resolved `replicaof` primary address when this node boots as a
     // replica (`None` otherwise); resolved once by `init_replication` and
@@ -484,13 +488,12 @@ pub(super) async fn init_cluster(
             let split_brain_logger = if config.replication.split_brain_log_enabled {
                 Some(SplitBrainLogger {
                     data_dir: config.persistence.data_dir.clone(),
-                    broadcaster: replication_broadcaster.clone(),
-                    // Backlog introspection lives on the concrete primary handler,
-                    // not the frame-emit broadcaster trait. Only a primary reaches
-                    // the demotion path with divergent writes to extract; a
-                    // replica's handler is `None` and yields nothing.
+                    // The primary handler owns the whole divergence window (offset
+                    // coordinator + Replication Backlog); the logger only formats
+                    // and writes the record it returns. Only a primary reaches the
+                    // demotion path with divergent writes; a replica's handler is
+                    // `None` and never diverges.
                     primary_handler: primary_replication_handler.cloned(),
-                    tracker: replication_tracker.clone(),
                     metrics: metrics_recorder.clone(),
                 })
             } else {
@@ -587,9 +590,7 @@ pub(super) async fn init_cluster(
 /// [`DemotionConsumer`] holds `None` here and the demotion still runs.
 struct SplitBrainLogger {
     data_dir: std::path::PathBuf,
-    broadcaster: SharedBroadcaster,
     primary_handler: Option<Arc<crate::replication::PrimaryReplicationHandler>>,
-    tracker: Option<Arc<ReplicationTrackerImpl>>,
     metrics: Arc<dyn MetricsRecorder>,
 }
 
@@ -604,62 +605,73 @@ impl SplitBrainLogger {
             "Split-brain demotion detected"
         );
 
-        // Determine divergence boundary.
-        let min_acked = self
-            .tracker
+        // The primary handler owns the divergence window: it computes
+        // `(start, end]` and the divergent writes from its own offset coordinator
+        // and Replication Backlog. `None` means this node did not diverge (caught
+        // up, or nothing in the backlog past the acked point) — the logger's only
+        // job is to format the record's header and write it. A replica's handler
+        // is `None` and never diverges.
+        let Some(record) = self
+            .primary_handler
             .as_ref()
-            .and_then(|t| t.min_acked_offset())
-            .unwrap_or(0);
-        let current = self.broadcaster.current_offset();
+            .and_then(|h| h.divergence_record())
+        else {
+            return;
+        };
 
-        if current > min_acked {
-            let divergent = self
-                .primary_handler
-                .as_ref()
-                .map(|h| h.extract_divergent_writes(min_acked))
-                .unwrap_or_default();
-            if !divergent.is_empty() {
-                let header = frogdb_replication::split_brain_log::SplitBrainLogHeader {
-                    timestamp: String::new(),
-                    old_primary: format!("{:x}", event.demoted_node_id),
-                    new_primary: event
-                        .new_primary_id
-                        .map(|id| format!("{:x}", id))
-                        .unwrap_or_else(|| "unknown".to_string()),
-                    epoch_old: event.epoch,
-                    epoch_new: event.epoch.saturating_add(1),
-                    seq_diverge_start: min_acked,
-                    seq_diverge_end: current,
-                    ops_discarded: divergent.len(),
-                };
+        let header = split_brain_header(event, &record);
 
-                match frogdb_replication::split_brain_log::write_log(
-                    &self.data_dir,
-                    header,
-                    &divergent,
-                ) {
-                    Ok(path) => {
-                        tracing::warn!(
-                            ops = divergent.len(),
-                            path = %path.display(),
-                            "Split-brain: {} divergent writes logged to {}",
-                            divergent.len(),
-                            path.display()
-                        );
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "Failed to write split-brain log");
-                    }
-                }
-
-                frogdb_telemetry::definitions::SplitBrainEventsTotal::inc(&*self.metrics);
-                frogdb_telemetry::definitions::SplitBrainOpsDiscardedTotal::inc_by(
-                    &*self.metrics,
-                    divergent.len() as u64,
+        match frogdb_replication::split_brain_log::write_log(&self.data_dir, header, &record.writes)
+        {
+            Ok(path) => {
+                tracing::warn!(
+                    ops = record.writes.len(),
+                    path = %path.display(),
+                    "Split-brain: {} divergent writes logged to {}",
+                    record.writes.len(),
+                    path.display()
                 );
-                frogdb_telemetry::definitions::SplitBrainRecoveryPending::set(&*self.metrics, 1.0);
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to write split-brain log");
             }
         }
+
+        frogdb_telemetry::definitions::SplitBrainEventsTotal::inc(&*self.metrics);
+        frogdb_telemetry::definitions::SplitBrainOpsDiscardedTotal::inc_by(
+            &*self.metrics,
+            record.writes.len() as u64,
+        );
+        frogdb_telemetry::definitions::SplitBrainRecoveryPending::set(&*self.metrics, 1.0);
+    }
+}
+
+/// Format the split-brain log header from the demotion event and the divergence
+/// record the primary handler computed.
+///
+/// The metadata-plane fields (`old_primary`/`new_primary`/`epoch_*`) come from
+/// the [`frogdb_core::DemotionEvent`]; the divergence-window fields are a direct
+/// mapping from the [`frogdb_replication::DivergenceRecord`]
+/// (`start → seq_diverge_start`, `end → seq_diverge_end`,
+/// `writes.len() → ops_discarded`). Extracted so this format contract is pinned
+/// by a unit test and cannot silently drift now that the window computation lives
+/// in the handler.
+fn split_brain_header(
+    event: &frogdb_core::DemotionEvent,
+    record: &frogdb_replication::DivergenceRecord,
+) -> frogdb_replication::split_brain_log::SplitBrainLogHeader {
+    frogdb_replication::split_brain_log::SplitBrainLogHeader {
+        timestamp: String::new(),
+        old_primary: format!("{:x}", event.demoted_node_id),
+        new_primary: event
+            .new_primary_id
+            .map(|id| format!("{:x}", id))
+            .unwrap_or_else(|| "unknown".to_string()),
+        epoch_old: event.epoch,
+        epoch_new: event.epoch.saturating_add(1),
+        seq_diverge_start: record.start,
+        seq_diverge_end: record.end,
+        ops_discarded: record.writes.len(),
     }
 }
 
@@ -790,16 +802,15 @@ mod tests {
         );
     }
 
-    /// A real `SplitBrainLogger` wired with no-op collaborators. Its `log()`
-    /// runs (emitting the split-brain log line) but, with a zero broadcaster
-    /// offset and no primary handler, takes the no-divergence fast path — so the
-    /// test exercises the logger-present arm without staging divergent writes.
+    /// A real `SplitBrainLogger` with no primary handler. Its `log()` runs
+    /// (emitting the split-brain log line) but, with `primary_handler: None`,
+    /// `divergence_record()` is never reached and it takes the no-divergence
+    /// fast path — so the test exercises the logger-present arm without staging
+    /// divergent writes.
     fn noop_logger() -> SplitBrainLogger {
         SplitBrainLogger {
             data_dir: std::env::temp_dir(),
-            broadcaster: Arc::new(frogdb_core::NoopBroadcaster),
             primary_handler: None,
-            tracker: None,
             metrics: Arc::new(frogdb_core::NoopMetricsRecorder),
         }
     }
@@ -834,6 +845,57 @@ mod tests {
             *controller_on.demotes.lock().unwrap(),
             "demotion behavior must be identical regardless of the log gate"
         );
+    }
+
+    /// Regression guard for the split-brain log format contract: the header must
+    /// map the divergence record's fields exactly (`start → seq_diverge_start`,
+    /// `end → seq_diverge_end`, `writes.len() → ops_discarded`) and derive the
+    /// metadata fields from the `DemotionEvent`. Pinned here so the mapping cannot
+    /// silently drift now that the window computation moved into the handler.
+    #[test]
+    fn split_brain_header_maps_record_and_event_fields() {
+        let event = DemotionEvent {
+            demoted_node_id: 0xabc,
+            new_primary_id: Some(0xdef),
+            epoch: 7,
+        };
+        let record = frogdb_replication::DivergenceRecord {
+            start: 100,
+            end: 250,
+            writes: vec![
+                (150, bytes::Bytes::from_static(b"a")),
+                (250, bytes::Bytes::from_static(b"b")),
+            ],
+        };
+
+        let header = split_brain_header(&event, &record);
+
+        // Divergence-window fields map straight from the record.
+        assert_eq!(header.seq_diverge_start, record.start);
+        assert_eq!(header.seq_diverge_end, record.end);
+        assert_eq!(header.ops_discarded, record.writes.len());
+        // Metadata-plane fields come from the event (hex-formatted).
+        assert_eq!(header.old_primary, "abc");
+        assert_eq!(header.new_primary, "def");
+        assert_eq!(header.epoch_old, 7);
+        assert_eq!(header.epoch_new, 8);
+    }
+
+    /// An unknown new primary formats as "unknown".
+    #[test]
+    fn split_brain_header_unknown_new_primary() {
+        let event = DemotionEvent {
+            demoted_node_id: 1,
+            new_primary_id: None,
+            epoch: 3,
+        };
+        let record = frogdb_replication::DivergenceRecord {
+            start: 0,
+            end: 10,
+            writes: vec![(10, bytes::Bytes::from_static(b"x"))],
+        };
+        let header = split_brain_header(&event, &record);
+        assert_eq!(header.new_primary, "unknown");
     }
 
     /// A demotion event whose new primary is not yet in the committed topology
