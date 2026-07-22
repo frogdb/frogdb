@@ -127,33 +127,6 @@ impl NodeInfo {
     pub fn is_replica(&self) -> bool {
         self.role == NodeRole::Replica
     }
-
-    /// Format node info in Redis CLUSTER NODES format.
-    pub fn to_cluster_nodes_line(&self, myself: bool, slots: &[SlotRange]) -> String {
-        let flags = if myself {
-            format!("myself,{}", self.role)
-        } else {
-            self.role.to_string()
-        };
-
-        let primary_id = self
-            .primary_id
-            .map(|id| format!("{:016x}", id))
-            .unwrap_or_else(|| "-".to_string());
-
-        let slots_str: Vec<String> = slots.iter().map(|r| r.to_string()).collect();
-
-        format!(
-            "{:016x} {}@{} {} {} 0 {} connected {}",
-            self.id,
-            self.addr,
-            self.cluster_addr.port(),
-            flags,
-            primary_id,
-            self.config_epoch,
-            slots_str.join(" ")
-        )
-    }
 }
 
 /// Flags describing node state.
@@ -876,18 +849,5 @@ mod tests {
         let local_path = to_commands(&node_ids);
         let raft_path = to_commands(&node_ids);
         assert_eq!(local_path, raft_path);
-    }
-
-    #[test]
-    fn test_node_info_to_cluster_nodes_line() {
-        let node = NodeInfo::new_primary(
-            1,
-            "127.0.0.1:6379".parse().unwrap(),
-            "127.0.0.1:16379".parse().unwrap(),
-        );
-        let slots = vec![SlotRange::new(0, 5460)];
-        let line = node.to_cluster_nodes_line(true, &slots);
-        assert!(line.contains("myself,master"));
-        assert!(line.contains("0-5460"));
     }
 }
