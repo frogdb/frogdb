@@ -147,6 +147,18 @@ pub struct HashMapStore {
     /// apply the same version-bump + XREADGROUP-drain effects active expiry
     /// applies; the store itself never reads or acts on it.
     lazily_purged: Vec<Bytes>,
+    /// Keys removed because their **last hash field** expired on a lazy read
+    /// (`purge_expired_hash_fields` -> `delete`) since the last
+    /// `take_lazily_emptied`. A distinct seam from `lazily_purged`: the whole
+    /// key never had its own TTL elapse — the hash simply emptied — so Redis
+    /// emits a generic `del` (not `expired`) for it. Reported to the worker so
+    /// it can fire the matching `del` notification + tracking/search
+    /// invalidation, exactly as active expiry does for
+    /// `ExpiryResult::emptied_keys`. The store never reads or acts on it. The
+    /// active sweep shares `purge_expired_hash_fields` and so populates this too,
+    /// but owns its own reporting (`ExpiryResult::emptied_keys`) and discards the
+    /// buffer at the sweep seam, so the buffer only ever fires for lazy reads.
+    lazily_emptied: Vec<Bytes>,
     /// Whether passive/lazy expiry is suppressed (set during CLIENT PAUSE).
     /// When true, expired keys are logically invisible (get returns None)
     /// but not physically deleted and the expired_keys counter is not
@@ -189,6 +201,7 @@ impl HashMapStore {
             warm_tier: WarmTier::new(),
             expired_keys: 0,
             lazily_purged: Vec::new(),
+            lazily_emptied: Vec::new(),
             expiry_suppressed: false,
             suppress_touch: false,
             keysizes: KeysizeHistograms::new(),
@@ -210,6 +223,7 @@ impl HashMapStore {
             warm_tier: WarmTier::new(),
             expired_keys: 0,
             lazily_purged: Vec::new(),
+            lazily_emptied: Vec::new(),
             expiry_suppressed: false,
             suppress_touch: false,
             keysizes: KeysizeHistograms::new(),
@@ -1116,6 +1130,10 @@ impl Store for HashMapStore {
         std::mem::take(&mut self.lazily_purged)
     }
 
+    fn take_lazily_emptied(&mut self) -> Vec<Bytes> {
+        std::mem::take(&mut self.lazily_emptied)
+    }
+
     fn set_with_options(&mut self, key: Bytes, value: Value, opts: SetOptions) -> SetResult {
         // Check condition (NX/XX)
         let key_exists = self.data.contains_key(&key) && !self.check_and_delete_expired(&key);
@@ -1365,7 +1383,14 @@ impl Store for HashMapStore {
             self.resize(key, Some(snap), snap.key_mem);
         }
 
-        // If hash is now empty, delete the key
+        // If hash is now empty, delete the key and report the removal so the
+        // worker can fire the `del` keyspace notification + tracking/search
+        // invalidation active expiry fires for `ExpiryResult::emptied_keys`.
+        // This is the last-hash-field-death seam — distinct from the whole-key
+        // TTL seam that feeds `lazily_purged` — so Redis emits `del`, not
+        // `expired`. The active sweep also reaches here, but discards this
+        // buffer at its seam (it owns reporting via `ExpiryResult`), so only a
+        // genuinely lazy read ever drains it downstream.
         if count > 0
             && let Some(entry) = self.data.get(key)
             && let Some(v) = entry.hot_value()
@@ -1373,6 +1398,7 @@ impl Store for HashMapStore {
             && hash.is_empty()
         {
             self.delete(key);
+            self.lazily_emptied.push(Bytes::copy_from_slice(key));
         }
 
         count

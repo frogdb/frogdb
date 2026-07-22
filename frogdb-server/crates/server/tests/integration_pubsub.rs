@@ -431,9 +431,6 @@ async fn regression_lazy_expiry_emits_expired_keyevent() {
 /// cannot be backdated (`DEBUG EXPIRE-BACKDATE` is whole-key only), so a short
 /// real TTL + a brief wait makes the field due before the triggering read.
 #[tokio::test]
-#[ignore = "issue 09 gap: lazy last-hash-field death drops the `del` keyevent \
-            (the lazy-read purge seam never reports the emptied key); the fix \
-            commit routes it through the lazy-purge drain and un-ignores this"]
 async fn regression_lazy_hash_field_death_emits_del_keyevent() {
     // Single shard so the key and the shard-0 subscriber share a shard.
     let server = TestServer::start_standalone_with_config(TestServerConfig {

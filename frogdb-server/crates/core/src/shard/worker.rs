@@ -521,12 +521,19 @@ impl ShardWorker {
     /// Redis/Valkey, which fire the `expired` event from `expireIfNeeded`
     /// (lazy/on-access) and `activeExpireCycle` (sweep) alike.
     ///
+    /// Also drains the sibling last-hash-field-death buffer (`take_lazily_emptied`)
+    /// and fires the generic `del` effect set for those keys — see
+    /// [`Self::drain_lazy_purge_effects`].
+    ///
     /// Idempotency: every removal is pushed into the store's buffer exactly once
-    /// (only `check_and_delete_expired`'s actual-removal branch — a second purge
-    /// of the same key finds it already absent) and drained exactly once
-    /// (`std::mem::take`). No key can be reported through two seams, because the
-    /// first physical removal makes it absent for every later purge attempt. So
-    /// no effect double-fires; no guard is needed.
+    /// (whole-key TTL via `check_and_delete_expired`'s actual-removal branch;
+    /// last-hash-field death via `purge_expired_hash_fields`'s empty-and-delete
+    /// branch — a second purge of the same key finds it already absent) and
+    /// drained exactly once (`std::mem::take`). No key can be reported through two
+    /// seams, because the first physical removal makes it absent for every later
+    /// purge attempt. The active sweep shares `purge_expired_hash_fields` but
+    /// discards the lazily-emptied buffer at its own seam (event_loop.rs), so a
+    /// swept key never double-fires here. No guard is needed.
     pub(crate) fn apply_lazy_purge_effects(&mut self) {
         self.drain_lazy_purge_effects(true);
     }
@@ -555,7 +562,12 @@ impl ShardWorker {
     /// the version bump applied once at the end for the whole batch.
     fn drain_lazy_purge_effects(&mut self, bump_version: bool) {
         let purged = self.store.take_lazily_purged();
-        if purged.is_empty() {
+        // Keys removed because their last hash field expired on this lazy read.
+        // Distinct seam, distinct event: Redis emits a generic `del` (not
+        // `expired`) for a hash that empties via field TTL, matching active
+        // expiry's `ExpiryResult::emptied_keys` branch (event_loop.rs).
+        let emptied = self.store.take_lazily_emptied();
+        if purged.is_empty() && emptied.is_empty() {
             return;
         }
         for key in &purged {
@@ -581,10 +593,28 @@ impl ShardWorker {
             // stay blocked). No-op for non-stream keys.
             self.drain_stream_waiters_with_error(key);
         }
+        // Last-hash-field-death keys: same effect set as active expiry's
+        // `emptied_keys` branch — tracking + search invalidation, then a
+        // generic `del` notification and the key-expired probe. A hash key is
+        // never a stream, so the stream-waiter drain is a no-op, but keep it for
+        // structural parity with the whole-key branch above.
+        for key in &emptied {
+            if self.tracking.has_tracking_clients() {
+                self.tracking.invalidate_keys(&[key.as_ref()], 0);
+            }
+            self.delete_from_search_indexes(key);
+            self.emit_keyspace_notification(key, "del", KeyspaceEventFlags::GENERIC);
+            crate::probes::fire_key_expired(
+                std::str::from_utf8(key).unwrap_or("<binary>"),
+                self.shard_id() as u64,
+            );
+            self.drain_stream_waiters_with_error(key);
+        }
         if bump_version {
-            // One version bump for the batch, mirroring active expiry's
-            // one-bump-per-cycle: a watched key that died lazily is now observed
-            // changed by check_watches (gap 3).
+            // One version bump for the batch (both seams), mirroring active
+            // expiry's one-bump-per-cycle: a watched key that died lazily —
+            // whole-key TTL or last-hash-field death — is now observed changed
+            // by check_watches (gap 3).
             self.increment_version();
         }
     }
