@@ -86,6 +86,10 @@ hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
+# test-support exposes RocksStore's single-key put/get accessors to the recovery
+# seam tests (crates/server/src/recovery/tests.rs); dev-only, kept out of the
+# production build by resolver "2".
+frogdb-persistence = { workspace = true, features = ["test-support"] }
 futures.workspace = true
 shuttle.workspace = true
 turmoil.workspace = true

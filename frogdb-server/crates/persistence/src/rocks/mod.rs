@@ -256,11 +256,10 @@ impl RocksStore {
     /// Test-only convenience with **zero production callers**: production writes
     /// flow through the FrogDB WAL batch path (`RocksSink` →
     /// [`batch_put`](Self::batch_put) → [`write_batch_opt`](Self::write_batch_opt)).
-    /// Retained as plain `pub` — rather than gated behind `test-support` like its
-    /// sibling [`put_opt`](Self::put_opt) — only because its remaining callers
-    /// span crates outside proposal 20's file scope (`frogdb-replication` and the
-    /// `benchmarks` crate, whose `Cargo.toml`s this change may not touch). Gating
-    /// it is a follow-up once those manifests can enable `test-support`.
+    /// Exposed to dependent crates' test builds via the `test-support` feature
+    /// (mirroring its sibling [`put_opt`](Self::put_opt)), absent from production
+    /// builds.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn put(&self, shard_id: usize, key: &[u8], value: &[u8]) -> Result<(), RocksError> {
         self.put_tier(CfTier::Main, shard_id, key, value)
     }
@@ -306,10 +305,10 @@ impl RocksStore {
     /// Single-key read from a shard's main-tier column family.
     ///
     /// Test-only convenience with **zero production callers**: production reads
-    /// stream every key via [`iter_cf`](Self::iter_cf) during recovery. Kept
-    /// plain `pub` for the same cross-crate-scope reason as [`put`](Self::put)
-    /// (callers in `frogdb-replication` / `benchmarks`); gating behind
-    /// `test-support` is a follow-up.
+    /// stream every key via [`iter_cf`](Self::iter_cf) during recovery. Exposed
+    /// to dependent crates' test builds via the `test-support` feature, absent
+    /// from production builds.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn get(&self, shard_id: usize, key: &[u8]) -> Result<Option<Vec<u8>>, RocksError> {
         self.get_tier(CfTier::Main, shard_id, key)
     }
