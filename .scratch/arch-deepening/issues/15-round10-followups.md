@@ -1,6 +1,31 @@
 # Round-10 follow-ups (batch)
 
-Status: ready-for-agent
+Status: done (landed 2026-07-22, branch arch-deepening/impl)
+
+Resolution summary — all 7 items implemented and merged:
+1. Spill: no version bump / no `evicted` notification / no USDT probe (fc121930); observability
+   stays on TieredSpills metrics. Red-green tests pin both behaviors.
+2. `init_cluster` dead params dropped (1b30991d).
+3. Lazy-purge hook BUILT (no ADR): `lazily_shrunk` store buffer drained by both the lazy-read
+   seam and the active-expiry sweep via shared `reindex_shrunk_hash_keys` (fac157f3). Note:
+   FrogDB's HGETEX is a WRITE — the real gap was the pure-READONLY hash readers. Bonus: fixed
+   the same latent hole in the active-expiry sweep.
+4. FT.SEARCH conflict swallow fixed (4601be5f) + whole-branch review found the fix incomplete
+   for keyless scatter ops (FT.DROPINDEX returned OK while a locked shard skipped the drop) —
+   closed with `PartialResult::ShardError` + central `FatalReply` abort in `ScatterGather::run`
+   (0d322ee1); silent truncation now impossible by construction for all broadcast merges.
+5. Cross-type overwrite holes fixed via `ReindexAction::Refresh` +
+   `RefreshFirstKey`/`RefreshSecondKey` on SET/SETEX/PSETEX/RESTORE/COPY/RENAME/RENAMENX
+   (fac157f3). Full clobber audit in the proposal-15 conformance test. Remaining narrow gap
+   (pre-existing, out of scope): COPY/RESTORE of a *JSON* doc into a JSON-index prefix is not
+   indexed — see issue 16.
+6. `put`/`get` gated `#[cfg(any(test, feature = "test-support"))]` (20dc6c6d); no production
+   feature leak (verified `cargo tree -e features,no-dev`).
+7. Demotion-path test added (e65255d0); code behaves exactly as described.
+
+Review-fix extras (0d322ee1): EsAllMerge surfaces embedded errors; no-op SET NX/XX miss and
+no-op COPY now set `write_was_noop` (stops phantom replication/reindex/notifications —
+matches Redis, follows the RENAMENX precedent).
 
 Deferred items surfaced during round-10 implementation (proposals 14–37) and its whole-branch
 adversarial review. Each is independently actionable; split into separate issues if picked up.
