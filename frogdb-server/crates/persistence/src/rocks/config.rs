@@ -219,7 +219,7 @@ mod tests {
             rocks.level0_file_num_compaction_trigger,
             RocksConfig::default().level0_file_num_compaction_trigger
         );
-        assert_eq!(rocks.create_if_missing, true);
+        assert!(rocks.create_if_missing);
     }
 
     /// `compaction_rate_limit_mb == 0` encodes to `None` (unlimited).
