@@ -74,7 +74,7 @@ pub use helpers::REPLICA_INTERNAL_CONN_ID;
 pub use message::{
     BlockingMsg, ClusterMsg, CoreMsg, DebugIntrospectionMsg, Envelope, ObservabilityMsg, PubSubMsg,
     ScatterOp, ScriptingMsg, SearchMsg, ShardMessage, ShardReceiver, ShardSender, TrackingMsg,
-    VllMsg,
+    VllMsg, WatchEntry,
 };
 pub use partition::{REDIS_CLUSTER_SLOTS, extract_hash_tag, shard_for_key, slot_for_key};
 pub use search::lifecycle::{

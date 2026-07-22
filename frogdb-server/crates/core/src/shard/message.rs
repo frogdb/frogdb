@@ -116,6 +116,28 @@ impl ShardReceiver {
     }
 }
 
+/// One watched key carried by [`ShardMessage::ExecTransaction`].
+///
+/// Bundles the per-key state EXEC's watch validation needs: the key, the
+/// per-shard `version` snapshotted at WATCH time, and `live_at_watch` — whether
+/// the key was present-and-unexpired when it was watched (the inverse of Redis
+/// `wk->expired`, PR #7920 / issue #7918).
+///
+/// `live_at_watch` lets EXEC distinguish a key watched **live** that then
+/// expired during the window (must abort, even absent a version bump this
+/// watcher observed) from one already expired/absent when watched (a
+/// "nonexistent" watch that must NOT abort when it stays gone). The coarse
+/// per-shard version alone cannot express that per-key discriminator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchEntry {
+    /// The watched key.
+    pub key: Bytes,
+    /// The per-shard version snapshotted at WATCH time.
+    pub version: u64,
+    /// Whether the key was live (present and unexpired) at WATCH time.
+    pub live_at_watch: bool,
+}
+
 /// Messages sent to shard workers.
 ///
 /// A thin two-level wrapper: every variant except [`ShardMessage::Shutdown`]
@@ -195,16 +217,22 @@ pub enum CoreMsg {
     /// from one that was already gone when watched (must NOT abort), matching
     /// Redis's `wk->expired` flag (PR #7920). Pass an empty `keys` for a pure
     /// version probe (no purge).
+    ///
+    /// The reply is `(shard_version, live_at_watch)`: the current shard version
+    /// plus, aligned with `keys`, one flag per key reporting whether it was live
+    /// (present and unexpired) at watch time — the `wk->expired` discriminator
+    /// (see [`WatchEntry::live_at_watch`]). The flags are computed via a
+    /// non-destructive `exists_unexpired` probe before the no-bump lazy purge.
     GetVersion {
         keys: Vec<Bytes>,
-        response_tx: oneshot::Sender<u64>,
+        response_tx: oneshot::Sender<(u64, Vec<bool>)>,
     },
 
     /// Execute a transaction atomically.
     ExecTransaction {
         commands: Vec<ParsedCommand>,
-        /// Watched keys: (key, version_at_watch_time).
-        watches: Vec<(Bytes, u64)>,
+        /// Watched keys with their watch-time version and liveness.
+        watches: Vec<WatchEntry>,
         conn_id: u64,
         /// Protocol version for response encoding.
         protocol_version: ProtocolVersion,

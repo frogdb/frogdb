@@ -163,8 +163,8 @@ impl ConnStateMut for ConnectionState {
         ConnectionState::in_transaction(self)
     }
 
-    fn watch_key(&mut self, key: Bytes, shard_id: usize, version: u64) {
-        ConnectionState::watch_key(self, key, shard_id, version);
+    fn watch_key(&mut self, key: Bytes, shard_id: usize, version: u64, live_at_watch: bool) {
+        ConnectionState::watch_key(self, key, shard_id, version, live_at_watch);
     }
 
     fn unwatch(&mut self) {

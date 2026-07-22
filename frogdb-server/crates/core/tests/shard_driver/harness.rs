@@ -34,7 +34,7 @@ use frogdb_core::shard::types::{
 };
 use frogdb_core::shard::{
     BlockingMsg, CoreMsg, DebugIntrospectionMsg, Envelope, NewConnection, ShardMessage,
-    ShardReceiver, ShardSender, ShardWorkerBuilder,
+    ShardReceiver, ShardSender, ShardWorkerBuilder, WatchEntry,
 };
 use frogdb_core::types::BlockingOp;
 use frogdb_core::{CommandRegistry, ShardWorker};
@@ -146,6 +146,9 @@ impl ShardDriver {
     }
 
     /// Read a shard's WATCH version (pure probe: no keys, so no lazy purge).
+    ///
+    /// Discards the per-key liveness vector of the `GetVersion` reply — with no
+    /// keys it is always empty. Use [`Self::watch_keys`] to also read liveness.
     pub async fn get_version(&mut self, shard: usize) -> u64 {
         let (tx, rx) = oneshot::channel();
         self.dispatch(
@@ -156,7 +159,29 @@ impl ShardDriver {
             },
         )
         .await;
-        rx.await.expect("version")
+        rx.await.expect("version").0
+    }
+
+    /// Read a shard's WATCH version AND per-key liveness for the given keys.
+    ///
+    /// Mirrors [`Self::get_version`] but sends the watched keys, so the shard
+    /// (a) reports each key's `live_at_watch` flag (present and unexpired at
+    /// watch time, aligned with `keys`) and (b) runs the WATCH-time no-bump lazy
+    /// purge for any already-expired key — the same seam a real WATCH drives.
+    pub async fn watch_keys(&mut self, shard: usize, keys: &[&str]) -> (u64, Vec<bool>) {
+        let (tx, rx) = oneshot::channel();
+        self.dispatch(
+            shard,
+            CoreMsg::GetVersion {
+                keys: keys
+                    .iter()
+                    .map(|k| Bytes::copy_from_slice(k.as_bytes()))
+                    .collect(),
+                response_tx: tx,
+            },
+        )
+        .await;
+        rx.await.expect("version + liveness")
     }
 
     /// Run a transaction with the given watches; returns the result.
@@ -165,7 +190,7 @@ impl ShardDriver {
         shard: usize,
         conn_id: u64,
         commands: Vec<ParsedCommand>,
-        watches: Vec<(Bytes, u64)>,
+        watches: Vec<WatchEntry>,
     ) -> TransactionResult {
         let (tx, rx) = oneshot::channel();
         let msg = CoreMsg::ExecTransaction {

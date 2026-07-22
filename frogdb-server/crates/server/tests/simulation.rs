@@ -3479,9 +3479,9 @@ fn xreadgroup_ttl_no_nogroup_realpath() {
     );
 }
 
-/// GAP 3 real-path (D8): a watched key lazily purged by a THIRD party's read
-/// leaves the per-shard WATCH version untouched, so a later EXEC does NOT abort
-/// — a WATCH false negative (under-abort) on the READ path. This is the
+/// Regression pin (gap 3, real-path/D8): a watched key lazily purged by a THIRD
+/// party's read now bumps the per-shard WATCH version, so a later EXEC ABORTS —
+/// closing a WATCH false negative (under-abort) on the READ path. This is the
 /// read-path sibling of F3 (`watch_lazy_expiry_false_negative_realpath`).
 ///
 /// F3 fixed the case where EXEC's OWN watch validation lazily purges the expired
@@ -3489,18 +3489,18 @@ fn xreadgroup_ttl_no_nogroup_realpath() {
 /// But that bump only fires if the key is still physically present at EXEC. Here
 /// a THIRD connection's `GET k` runs `Store::get_with_expiry_check`
 /// (store/hashmap.rs `check_and_delete_expired`) first and physically removes
-/// `k` WITHOUT bumping the version (the read path is version-ignorant). At EXEC,
-/// `purge_if_expired(k)` finds nothing to purge, so no bump happens, the watch
-/// still matches its snapshot, and the transaction COMMITS over a live->gone
-/// transition.
+/// `k`. That removal is now reported to the worker, which applies the parity
+/// effects (`apply_lazy_purge_effects`: bump + XREADGROUP drain), so the shard
+/// version advances at the point of the lazy removal. At EXEC,
+/// `purge_if_expired(k)` finds nothing to purge, but the watch no longer matches
+/// its snapshot (the third-party read already bumped), so the transaction ABORTS.
 ///
 /// Reference behavior (Redis 7/8, Valkey, Dragonfly all ABORT): the read's own
 /// `expireIfNeeded` -> `deleteExpiredKeyAndPropagate` -> `keyModified` ->
 /// `touchWatchedKey` (db.c) marks the watch dirty at the moment of the lazy
 /// removal, regardless of which client triggered it (redis PR #7920 / issue
-/// #7918). FrogDB's coarse per-shard version cannot express "this key was
-/// modified" from a version-ignorant read, so the third-party lazy purge is
-/// invisible to the watcher.
+/// #7918). FrogDB's coarse per-shard version now expresses this via the
+/// version-bump-on-lazy-removal seam.
 ///
 /// CRITICAL ORDERING (why PEXPIRE precedes WATCH): identical to F3 — PEXPIRE on
 /// a live key is itself a version-bumping write, so setting the TTL BEFORE WATCH
@@ -3512,14 +3512,8 @@ fn xreadgroup_ttl_no_nogroup_realpath() {
 /// real 50ms `std::thread::sleep` (F3 precedent). Ordering between the watcher
 /// (conn A) and the third-party reader (conn B) is made deterministic with
 /// `tokio::sync::Notify` handshakes (permit-storing `notify_one`, race-free).
-///
-/// Documents the CURRENT (buggy) behavior: EXEC COMMITS (`*1\r\n+OK\r\n`).
-/// Remove `#[ignore]` and flip the assertion to the aborted null bulk
-/// (`$-1\r\n`) when the read-path lazy-purge effects seam (per-key expired-watch
-/// tracking) lands.
 #[test]
-#[ignore = "GAP 3 repro: third-party read-path lazy purge does not bump WATCH version (documents current under-abort; unfixed)"]
-fn watch_read_lazy_purge_no_bump_realpath() {
+fn regression_watch_read_lazy_purge_aborts_realpath() {
     let mut sim = Builder::new()
         .tick_duration(Duration::from_millis(1))
         .build();
@@ -3625,16 +3619,15 @@ fn watch_read_lazy_purge_no_bump_realpath() {
     let reply = exec_reply.lock().unwrap().clone();
     assert!(!reply.is_empty(), "watcher never captured an EXEC reply");
 
-    // Current (buggy) behavior: the queued `SET k x` commits.
-    const COMMITTED: &[u8] = b"*1\r\n+OK\r\n";
+    // Fixed behavior: a third-party GET lazily purged the watched key and bumped
+    // the shard version, so EXEC ABORTS ($-1).
+    const ABORTED: &[u8] = b"$-1\r\n";
     assert_eq!(
         reply.as_slice(),
-        COMMITTED,
-        "GAP 3: current behavior — a third-party GET lazily purged the watched \
-         key WITHOUT bumping the shard version, so EXEC COMMITTED \
-         (`*1\\r\\n+OK\\r\\n`) over a live->gone key. Redis/Valkey/Dragonfly ABORT \
-         here (`$-1\\r\\n`). Flip this assertion and drop #[ignore] when the \
-         read-path lazy-purge effects seam lands. Got {reply:?}.",
+        ABORTED,
+        "gap 3: a third-party GET lazily purged the watched key and bumped the \
+         shard version, so EXEC ABORTS ($-1). Redis/Valkey/Dragonfly abort here \
+         (expireIfNeeded -> keyModified -> touchWatchedKey). Got {reply:?}.",
     );
 }
 
@@ -3665,12 +3658,14 @@ fn watch_read_lazy_purge_no_bump_realpath() {
 /// with a real 50ms `std::thread::sleep` (real-clock `Instant`); the B->A->B
 /// sequence is pinned with `tokio::sync::Notify` handshakes.
 ///
-/// Documents the CURRENT (buggy) behavior: B's EXEC COMMITS (`*1\r\n+OK\r\n`).
-/// Remove `#[ignore]` and flip to the aborted null bulk (`$-1\r\n`) when the
-/// per-key expired-watch fix lands.
+/// Regression pin (gap 4): the case unfixable at the coarse per-shard version,
+/// now closed by per-key `live_at_watch`. B watched k while live and it is now
+/// gone with no bump reaching B, so B's EXEC ABORTS (`$-1\r\n`) — matching
+/// Redis/Valkey/Dragonfly (`wk->expired` + `touchWatchedKey`). A's stale watch
+/// (k already expired) still records `live_at_watch == false` and still does not
+/// abort. Per-key state tells B (must abort) from A (must not) apart.
 #[test]
-#[ignore = "GAP 4 repro: second watcher under-aborts via first watcher's no-bump WATCH-time purge (documents current under-abort; unfixed)"]
-fn watch_second_watcher_under_abort_realpath() {
+fn regression_watch_second_watcher_aborts_realpath() {
     let mut sim = Builder::new()
         .tick_duration(Duration::from_millis(1))
         .build();
@@ -3779,16 +3774,15 @@ fn watch_second_watcher_under_abort_realpath() {
         "live watcher never captured an EXEC reply"
     );
 
-    const COMMITTED: &[u8] = b"*1\r\n+OK\r\n";
+    const ABORTED: &[u8] = b"$-1\r\n";
     assert_eq!(
         reply.as_slice(),
-        COMMITTED,
-        "GAP 4: current behavior — the first (stale) watcher's WATCH-time purge \
-         removed the key WITHOUT bumping the version, so the second (live) \
-         watcher's EXEC COMMITTED (`*1\\r\\n+OK\\r\\n`) over a live->gone key. \
-         Redis/Valkey/Dragonfly ABORT here (`$-1\\r\\n`). This is unfixable at the \
-         coarse per-shard version — flip the assertion and drop #[ignore] when \
-         per-key expired-watch tracking lands. Got {reply:?}.",
+        ABORTED,
+        "GAP 4: the first (stale) watcher's WATCH-time purge removed the key \
+         WITHOUT bumping the version, but B watched k while LIVE, so B's EXEC \
+         ABORTS (`$-1\\r\\n`) via per-key `live_at_watch` — the case unfixable at \
+         the coarse per-shard version. Redis/Valkey/Dragonfly ABORT here \
+         (`wk->expired` + `touchWatchedKey`). Got {reply:?}.",
     );
 }
 
