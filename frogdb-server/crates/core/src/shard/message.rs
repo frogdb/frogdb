@@ -728,6 +728,18 @@ pub enum DebugIntrospectionMsg {
         /// Channel to send the response.
         response_tx: oneshot::Sender<super::types::ExpiryIndexCheckInfo>,
     },
+
+    /// Backdate a key's expiry deadline into the past (DEBUG EXPIRE-BACKDATE),
+    /// making it already-expired without a wall-clock wait. Rewrites only the
+    /// deadline; the next read/sweep performs the actual expiry.
+    ExpireBackdate {
+        /// The key whose deadline is rewritten.
+        key: Bytes,
+        /// How many milliseconds into the past to move the deadline.
+        ms: u64,
+        /// Channel to report whether the key existed / had a TTL.
+        response_tx: oneshot::Sender<crate::store::BackdateExpiryResult>,
+    },
 }
 
 /// Search index flush + pub/sub limits messages.
@@ -933,6 +945,7 @@ impl DebugIntrospectionMsg {
             DebugIntrospectionMsg::GetWaitQueueInfo { .. } => "GetWaitQueueInfo",
             DebugIntrospectionMsg::MemoryCheck { .. } => "MemoryCheck",
             DebugIntrospectionMsg::ExpiryIndexCheck { .. } => "ExpiryIndexCheck",
+            DebugIntrospectionMsg::ExpireBackdate { .. } => "ExpireBackdate",
         }
     }
 }

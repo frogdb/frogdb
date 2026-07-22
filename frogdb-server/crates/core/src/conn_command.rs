@@ -576,6 +576,18 @@ pub trait DebugProvider: Send + Sync {
     /// waiting for each shard's acknowledgment.
     fn set_active_expire<'a>(&'a self, enabled: bool) -> BoxFuture<'a, ()>;
 
+    /// DEBUG EXPIRE-BACKDATE <key> <ms> — rewrite `key`'s expiry deadline to lie
+    /// `ms` milliseconds in the past on the shard that owns it, making it
+    /// already-expired without a wall-clock wait. The executor resolved
+    /// `shard_id` from the key. Returns the fully-formed wire reply (`+OK`, or an
+    /// error for a missing key / a key with no TTL).
+    fn expire_backdate<'a>(
+        &'a self,
+        shard_id: usize,
+        key: Bytes,
+        ms: u64,
+    ) -> BoxFuture<'a, Response>;
+
     /// DEBUG KEYSIZES-HIST-ASSERT — the keysize histograms merged across every
     /// shard. The executor resolves the requested type/bin and compares.
     fn keysizes_snapshot<'a>(&'a self) -> BoxFuture<'a, crate::KeysizeHistograms>;
@@ -1004,6 +1016,14 @@ mod tests {
             unimplemented!()
         }
         fn set_active_expire<'a>(&'a self, _enabled: bool) -> BoxFuture<'a, ()> {
+            unimplemented!()
+        }
+        fn expire_backdate<'a>(
+            &'a self,
+            _shard_id: usize,
+            _key: Bytes,
+            _ms: u64,
+        ) -> BoxFuture<'a, Response> {
             unimplemented!()
         }
         fn keysizes_snapshot<'a>(&'a self) -> BoxFuture<'a, crate::KeysizeHistograms> {

@@ -42,6 +42,7 @@ FrogDB-specific subcommands, useful for diagnosing the shard/VLL machinery:
 | `BUNDLE GENERATE [DURATION <s>] \| LIST` | Generate or list diagnostic bundles |
 | `RESP3 BIGNUMBER \| BOOLEAN \| VERBATIM` | Emit a RESP3 type, for client testing |
 | `MEMORY-CHECK`, `EXPIRY-INDEX-CHECK` | Internal consistency checks |
+| `EXPIRE-BACKDATE <key> <ms>` | Rewrite a key's TTL to `<ms>` in the past so it is already expired, with no wall-clock wait — deterministic, instant TTL elapse for tests (notably turmoil sims on a virtual clock). Rewrites only the deadline; the next read/sweep performs the actual expiry. Errors on a missing key or a key with no TTL |
 | `KEYSIZES-HIST-ASSERT`, `ALLOCSIZE-SLOTS-ASSERT` | Contributor/test assertion helpers |
 
 `DEBUG SLEEP` is gated behind the `server.enable-debug-command` config; when
