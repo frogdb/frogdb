@@ -110,17 +110,22 @@ be triaged as real product bugs.
       (see "Resolution" below) can be safely raised back toward the harness's original coded
       default, to get longer per-history coverage in the nightly tier.
 
-## Resolution applied in phase 5 (CI wiring), pending the above
+## Resolution shipped in phase 5 (CI wiring)
 
 To avoid shipping a nightly job that is *guaranteed* red every run (which trains reviewers to
-ignore it, defeating the point), the nightly harness does not use the pre-existing hardcoded
-`ops_per_client = 150` default. It is overridable via `FROGDB_CONCURRENCY_OPS_PER_CLIENT`
-(see `frogdb-server/crates/server/tests/concurrency_workload.rs`, `seed_sweep_nightly`), and the
-`just concurrency-nightly` recipe / `concurrency-nightly.yml` workflow accept it as a pass-through
-env var. The workflow's own launch does not currently pin a lower default than the harness's coded
-150 — **this needs to be revisited before the nightly job is allowed to run un-triaged**, since 150
-guarantees Finding A on nearly every run. Recommended interim value: `ops_per_client = 75` (highest
-value empirically clean across the bisection above) until Finding A is fixed.
+ignore it, defeating the point), `ops_per_client = 75` — not 150 — is baked in as the default in
+both places that matter: the `env_override("FROGDB_CONCURRENCY_OPS_PER_CLIENT", 75usize)` call in
+`seed_sweep_nightly` (`frogdb-server/crates/server/tests/concurrency_workload.rs`), and the `OPS`
+parameter default on the `just concurrency-nightly` recipe (`Justfile`). 75 is the highest value
+that was empirically clean across the bisection above (the ~90 threshold above which Finding A
+reproduces on nearly every seed is documented in both places). `concurrency-nightly.yml` doesn't
+override `OPS`, so it inherits 75 from the Justfile recipe.
+
+The nightly job is safe to run as shipped: it will not go permanently red on Finding A. It may
+still occasionally surface Findings B/C (rare, real bugs — that's the tier's purpose), which is
+expected and should be triaged against this issue rather than treated as a workflow defect.
+Raising `ops_per_client` past 75, or raising `seeds` enough to meaningfully change the sampling
+rate of Findings B/C, is gated on root-causing the relevant finding below first.
 
 ## Blocked by
 

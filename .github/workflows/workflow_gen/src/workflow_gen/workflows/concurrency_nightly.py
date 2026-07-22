@@ -43,9 +43,12 @@ RUNS_ON = "blacksmith-4vcpu-ubuntu-2404"
 # zones, where this repo's activity concentrates.
 NIGHTLY_CRON = "14 3 * * *"
 
-# Seeds swept per profile; overridable per-dispatch. Default x 4 profiles
-# (Mixed, BlockingHeavy, TxHeavy, MultiWaiter) = 1000+ generated-workload runs,
-# matching the spec's "1000+ seeds" nightly bar.
+# Unique seeds swept, each replayed once per profile (overridable per-dispatch); NOT the total
+# run count. Default 250 unique seeds x 4 profiles (Mixed, BlockingHeavy, TxHeavy, MultiWaiter)
+# = 1000 (seed, profile) generated-workload runs. This is our chosen reading of the spec's
+# "1000+ seeds" nightly bar as "1000+ generated-workload runs," since a literal 1000 *unique*
+# seeds x 4 profiles would be 4000 runs — see the phase-5 entry in
+# docs/superpowers/specs/2026-07-17-concurrency-invariant-testing-design.md for the same call-out.
 DEFAULT_SEEDS_PER_PROFILE = "250"
 
 REPRO_DIR = "target/concurrency-repros"
@@ -53,7 +56,10 @@ REPRO_DIR = "target/concurrency-repros"
 
 def _seeds_input() -> CommentedMap:
     inp = CommentedMap()
-    inp["description"] = "Seeds per profile (4 profiles swept; default gives 1000+ total runs)"
+    inp["description"] = (
+        "Unique seeds to sweep, each run under all 4 profiles (default 250 seeds x 4 profiles "
+        "= 1000 total runs)"
+    )
     inp["required"] = False
     inp["default"] = SQ(DEFAULT_SEEDS_PER_PROFILE)
     inp["type"] = "string"
@@ -101,6 +107,10 @@ def concurrency_nightly_workflow() -> Workflow:
                     name="concurrency-nightly-repros",
                     path=REPRO_DIR,
                     if_="failure()",
+                    # This step only runs when the sweep already failed, so an empty upload
+                    # means the repro path is wrong (e.g. a CWD/workspace-root mismatch) — fail
+                    # loudly instead of the default "warn" (green, empty artifact).
+                    if_no_files_found="error",
                 ),
             ],
         ),

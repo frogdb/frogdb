@@ -255,12 +255,21 @@ fn seed_sweep_nightly() {
     );
 }
 
-/// Read an env var override, falling back to `default` when unset or unparseable.
-fn env_override<T: std::str::FromStr>(key: &str, default: T) -> T {
-    std::env::var(key)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
+/// Read an env var override, falling back to `default` when unset. Panics naming the env var
+/// and offending value if it's set but fails to parse — a malformed override (e.g. a typo'd
+/// `workflow_dispatch` `seeds` input) must fail loudly, not silently fall back to a default and
+/// run a different sweep than what was asked for.
+fn env_override<T>(key: &str, default: T) -> T
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    match std::env::var(key) {
+        Ok(v) => v
+            .parse()
+            .unwrap_or_else(|e| panic!("env var {key}={v:?} is not a valid override: {e}")),
+        Err(_) => default,
+    }
 }
 
 #[test]

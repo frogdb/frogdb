@@ -238,12 +238,23 @@ def download_all_artifacts_step() -> Step:
 
 
 def upload_artifact_step(
-    *, name: str, path: str, retention_days: int = 7, if_: str | None = None
+    *,
+    name: str,
+    path: str,
+    retention_days: int = 7,
+    if_: str | None = None,
+    if_no_files_found: str | None = None,
 ) -> Step:
     w = CommentedMap()
     w["name"] = name
     w["path"] = path
     w["retention-days"] = SQ(str(retention_days))
+    if if_no_files_found is not None:
+        # actions/upload-artifact defaults to "warn" (stays green with an empty upload) — pass
+        # "error" for steps where a missing artifact indicates a real regression (e.g. an
+        # `if: failure()` step whose whole point is to upload evidence of the failure) rather
+        # than an expected "nothing to upload" case.
+        w["if-no-files-found"] = if_no_files_found
     return Step(name=f"Upload {name}", uses=UPLOAD_ARTIFACT, with_=w, if_=if_)
 
 

@@ -311,19 +311,26 @@ Each phase lands independently:
    on a `03:14 UTC` cron + `workflow_dispatch` (with a `seeds` input), running
    `just concurrency-nightly` — a new `#[ignore]`d `seed_sweep_nightly` test
    that sweeps every profile (`Mixed`/`BlockingHeavy`/`TxHeavy`/`MultiWaiter`)
-   with longer per-client histories, 1000+ generated-workload runs by default
-   (env-var overridable), continuing past the first failing seed and emitting
-   a repro file per failure so one run can surface multiple bugs; failing
-   repros under `target/concurrency-repros/` are uploaded as a CI artifact on
-   failure. Plumbing validated on a testbox smoke run; that validation also
-   surfaced real, pre-existing invariant violations at higher seed counts and
-   `ops_per_client` (tracked as
+   with longer per-client histories, continuing past the first failing seed
+   and emitting a repro file per failure so one run can surface multiple bugs;
+   failing repros under `target/concurrency-repros/` (anchored off the
+   workspace root, not the test process's CWD, so it agrees with where
+   `just concurrency-repro` and the CI upload step look) are uploaded as a CI
+   artifact on failure (`if-no-files-found: error`, so a path regression fails
+   loudly instead of silently uploading nothing). Default 250 unique seeds x 4
+   profiles = 1000 (seed, profile) generated-workload runs — our reading of
+   this section's "1000+ seeds" bar as "1000+ runs," since a literal 1000
+   *unique* seeds x 4 profiles would be 4000 runs; both the seed count and
+   `ops_per_client` are env-var overridable. Plumbing validated on a testbox
+   smoke run; that validation also surfaced real, pre-existing invariant
+   violations at higher seed counts and `ops_per_client` (tracked as
    `.scratch/concurrency-testing/issues/10-nightly-smoke-findings.md`),
    including a near-deterministic MultiWaiter exactly-once-delivery bug once
-   `ops_per_client` crosses roughly 90 — so the nightly default was set to 75
-   (not the originally-planned larger value) to avoid a permanently-red job
-   until that bug is root-caused; the value is documented as provisional in
-   both the `Justfile` recipe and the harness itself.
+   `ops_per_client` crosses roughly 90 — so the nightly default (both the
+   harness's `env_override` fallback and the `Justfile` recipe's `OPS`
+   parameter) is set to 75, not the originally-planned larger value, so the
+   job doesn't go permanently red on that known, tracked bug. It may still
+   occasionally surface the tier's rarer findings, which is expected.
 6. Replication & cluster in-process testing (see next section).
 
 Future phases (accommodated, not built): durability/crash-injection via the persistence

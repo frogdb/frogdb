@@ -12,7 +12,7 @@ name: Concurrency Nightly
   workflow_dispatch:
     inputs:
       seeds:
-        description: Seeds per profile (4 profiles swept; default gives 1000+ total runs)
+        description: Unique seeds to sweep, each run under all 4 profiles (default 250 seeds x 4 profiles = 1000 total runs)
         required: false
         default: '250'
         type: string
@@ -59,3 +59,4 @@ jobs:
         name: concurrency-nightly-repros
         path: target/concurrency-repros
         retention-days: '7'
+        if-no-files-found: error
