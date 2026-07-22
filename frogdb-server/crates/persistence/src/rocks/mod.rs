@@ -217,7 +217,17 @@ impl RocksStore {
     /// Apply a single merge operand to `key` via the registered value-merge
     /// operator (mirrors [`RocksStore::put`]). RocksDB folds the operand into
     /// the base value at read/compaction time.
-    pub fn merge(&self, shard_id: usize, key: &[u8], operand: &[u8]) -> Result<(), RocksError> {
+    ///
+    /// Same-crate test-only: production merges flow through the WAL batch path
+    /// ([`RocksStore::batch_merge`]), never this single-key shim. Compiled only
+    /// under `cfg(test)`.
+    #[cfg(test)]
+    pub(crate) fn merge(
+        &self,
+        shard_id: usize,
+        key: &[u8],
+        operand: &[u8],
+    ) -> Result<(), RocksError> {
         let cf = self.cf_handle(shard_id)?;
         self.db.merge_cf(&cf, key, operand).map_err(|e| {
             error!(shard_id, error = %e, "RocksDB merge failed");
@@ -231,7 +241,11 @@ impl RocksStore {
     pub fn delete(&self, shard_id: usize, key: &[u8]) -> Result<(), RocksError> {
         self.delete_tier(CfTier::Main, shard_id, key)
     }
-    pub fn write_batch(&self, batch: WriteBatch) -> Result<(), RocksError> {
+    /// Commit a batch with default write options. Same-crate test-only: the
+    /// production commit path uses [`RocksStore::write_batch_opt`]. Compiled
+    /// only under `cfg(test)`.
+    #[cfg(test)]
+    pub(crate) fn write_batch(&self, batch: WriteBatch) -> Result<(), RocksError> {
         self.db.write(batch).map_err(|e| {
             error!(error = %e, "RocksDB batch write failed");
             RocksError::from(e)
@@ -256,7 +270,7 @@ impl RocksStore {
         batch.put_cf(&cf, key, value);
         Ok(())
     }
-    pub fn batch_merge(
+    pub(crate) fn batch_merge(
         &self,
         batch: &mut WriteBatch,
         shard_id: usize,
@@ -296,7 +310,7 @@ impl RocksStore {
     /// CF was empty (nothing staged). The caller uses the bound to trigger
     /// post-commit space reclamation ([`RocksStore::spawn_clear_reclamation`])
     /// once — and only if — the batch containing the tombstone commits.
-    pub fn batch_clear_shard(
+    pub(crate) fn batch_clear_shard(
         &self,
         batch: &mut WriteBatch,
         shard_id: usize,
@@ -356,7 +370,7 @@ impl RocksStore {
     /// tombstone's exclusive upper bound as returned by
     /// [`RocksStore::batch_clear_shard`]. Coalesced: a second call for the same
     /// `(tier, shard)` while a pass is in flight is dropped, not queued.
-    pub fn spawn_clear_reclamation(
+    pub(crate) fn spawn_clear_reclamation(
         self: &Arc<Self>,
         tier: CfTier,
         shard_id: usize,
