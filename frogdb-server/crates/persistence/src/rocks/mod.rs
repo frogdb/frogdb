@@ -197,9 +197,23 @@ impl RocksStore {
     ) -> Result<StdArc<BoundColumnFamily<'_>>, RocksError> {
         self.tier_cf_handle(CfTier::Main, shard_id)
     }
+    /// Single-key write into a shard's main-tier column family.
+    ///
+    /// Test-only convenience with **zero production callers**: production writes
+    /// flow through the FrogDB WAL batch path (`RocksSink` →
+    /// [`batch_put`](Self::batch_put) → [`write_batch_opt`](Self::write_batch_opt)).
+    /// Retained as plain `pub` — rather than gated behind `test-support` like its
+    /// sibling [`put_opt`](Self::put_opt) — only because its remaining callers
+    /// span crates outside proposal 20's file scope (`frogdb-replication` and the
+    /// `benchmarks` crate, whose `Cargo.toml`s this change may not touch). Gating
+    /// it is a follow-up once those manifests can enable `test-support`.
     pub fn put(&self, shard_id: usize, key: &[u8], value: &[u8]) -> Result<(), RocksError> {
         self.put_tier(CfTier::Main, shard_id, key, value)
     }
+    /// Single-key write with explicit [`WriteOptions`]. Test-only (no production
+    /// caller); exposed to dependent crates' test builds via the `test-support`
+    /// feature, absent from production builds.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn put_opt(
         &self,
         shard_id: usize,
@@ -217,7 +231,17 @@ impl RocksStore {
     /// Apply a single merge operand to `key` via the registered value-merge
     /// operator (mirrors [`RocksStore::put`]). RocksDB folds the operand into
     /// the base value at read/compaction time.
-    pub fn merge(&self, shard_id: usize, key: &[u8], operand: &[u8]) -> Result<(), RocksError> {
+    ///
+    /// Same-crate test-only: production merges flow through the WAL batch path
+    /// ([`RocksStore::batch_merge`]), never this single-key shim. Compiled only
+    /// under `cfg(test)`.
+    #[cfg(test)]
+    pub(crate) fn merge(
+        &self,
+        shard_id: usize,
+        key: &[u8],
+        operand: &[u8],
+    ) -> Result<(), RocksError> {
         let cf = self.cf_handle(shard_id)?;
         self.db.merge_cf(&cf, key, operand).map_err(|e| {
             error!(shard_id, error = %e, "RocksDB merge failed");
@@ -225,49 +249,51 @@ impl RocksStore {
         })?;
         Ok(())
     }
+    /// Single-key read from a shard's main-tier column family.
+    ///
+    /// Test-only convenience with **zero production callers**: production reads
+    /// stream every key via [`iter_cf`](Self::iter_cf) during recovery. Kept
+    /// plain `pub` for the same cross-crate-scope reason as [`put`](Self::put)
+    /// (callers in `frogdb-replication` / `benchmarks`); gating behind
+    /// `test-support` is a follow-up.
     pub fn get(&self, shard_id: usize, key: &[u8]) -> Result<Option<Vec<u8>>, RocksError> {
         self.get_tier(CfTier::Main, shard_id, key)
     }
+    /// Single-key delete from a shard's main-tier column family. Test-only (no
+    /// production caller; production deletes flow through the WAL batch path).
+    /// Exposed to dependent crates' test builds via the `test-support` feature,
+    /// absent from production builds.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn delete(&self, shard_id: usize, key: &[u8]) -> Result<(), RocksError> {
         self.delete_tier(CfTier::Main, shard_id, key)
     }
-    pub fn delete_opt(
-        &self,
-        shard_id: usize,
-        key: &[u8],
-        wo: &WriteOptions,
-    ) -> Result<(), RocksError> {
-        let cf = self.cf_handle(shard_id)?;
-        self.db.delete_cf_opt(&cf, key, wo).map_err(|e| {
-            error!(shard_id, error = %e, "RocksDB delete failed");
-            RocksError::from(e)
-        })?;
-        Ok(())
-    }
-    pub fn write_batch(&self, batch: WriteBatch) -> Result<(), RocksError> {
+    /// Commit a batch with default write options. Same-crate test-only: the
+    /// production commit path uses [`RocksStore::write_batch_opt`]. Compiled
+    /// only under `cfg(test)`.
+    #[cfg(test)]
+    pub(crate) fn write_batch(&self, batch: WriteBatch) -> Result<(), RocksError> {
         self.db.write(batch).map_err(|e| {
             error!(error = %e, "RocksDB batch write failed");
             RocksError::from(e)
         })?;
         Ok(())
     }
-    pub fn write_batch_opt(&self, batch: WriteBatch, wo: &WriteOptions) -> Result<(), RocksError> {
+    /// Commit a staged batch with explicit [`WriteOptions`] — the production
+    /// commit primitive driven by `RocksSink`. Crate-internal; the cross-crate
+    /// crash tests reach the same durability path through the feature-gated
+    /// [`commit_raw_batch`](Self::commit_raw_batch) seam.
+    pub(crate) fn write_batch_opt(
+        &self,
+        batch: WriteBatch,
+        wo: &WriteOptions,
+    ) -> Result<(), RocksError> {
         self.db.write_opt(batch, wo).map_err(|e| {
             error!(error = %e, "RocksDB batch write failed");
             RocksError::from(e)
         })?;
         Ok(())
     }
-    pub fn create_batch_for_shard(
-        &self,
-        shard_id: usize,
-    ) -> Result<(WriteBatch, String), RocksError> {
-        if shard_id >= self.num_shards {
-            return Err(RocksError::InvalidShardId(shard_id));
-        }
-        Ok((WriteBatch::default(), self.cf_names[shard_id].clone()))
-    }
-    pub fn batch_put(
+    pub(crate) fn batch_put(
         &self,
         batch: &mut WriteBatch,
         shard_id: usize,
@@ -278,7 +304,7 @@ impl RocksStore {
         batch.put_cf(&cf, key, value);
         Ok(())
     }
-    pub fn batch_merge(
+    pub(crate) fn batch_merge(
         &self,
         batch: &mut WriteBatch,
         shard_id: usize,
@@ -289,7 +315,7 @@ impl RocksStore {
         batch.merge_cf(&cf, key, operand);
         Ok(())
     }
-    pub fn batch_delete(
+    pub(crate) fn batch_delete(
         &self,
         batch: &mut WriteBatch,
         shard_id: usize,
@@ -318,7 +344,7 @@ impl RocksStore {
     /// CF was empty (nothing staged). The caller uses the bound to trigger
     /// post-commit space reclamation ([`RocksStore::spawn_clear_reclamation`])
     /// once — and only if — the batch containing the tombstone commits.
-    pub fn batch_clear_shard(
+    pub(crate) fn batch_clear_shard(
         &self,
         batch: &mut WriteBatch,
         shard_id: usize,
@@ -378,7 +404,7 @@ impl RocksStore {
     /// tombstone's exclusive upper bound as returned by
     /// [`RocksStore::batch_clear_shard`]. Coalesced: a second call for the same
     /// `(tier, shard)` while a pass is in flight is dropped, not queued.
-    pub fn spawn_clear_reclamation(
+    pub(crate) fn spawn_clear_reclamation(
         self: &Arc<Self>,
         tier: CfTier,
         shard_id: usize,
@@ -426,6 +452,10 @@ impl RocksStore {
     pub fn num_shards(&self) -> usize {
         self.num_shards
     }
+    /// Flush every shard's memtable with `wait = true`. Test-only (the
+    /// crash-recovery harness forces a durable point); exposed to dependent
+    /// crates' test builds via the `test-support` feature.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn sync_wal(&self) -> Result<(), RocksError> {
         let mut fo = rocksdb::FlushOptions::default();
         fo.set_wait(true);
@@ -437,6 +467,51 @@ impl RocksStore {
             })?;
         }
         Ok(())
+    }
+}
+
+/// A single put/delete operation for [`RocksStore::commit_raw_batch`], each
+/// carrying its own target shard so one atomic batch can span multiple shards.
+///
+/// The per-op `shard` (rather than a batch-level parameter) is load-bearing:
+/// the crash-recovery `test_cross_shard_batch` stages writes to several shards
+/// into one `WriteBatch` to verify cross-shard all-or-nothing atomicity, which
+/// a single batch-level shard could not express.
+#[cfg(any(test, feature = "test-support"))]
+pub enum RawBatchOp<'a> {
+    Put {
+        shard: usize,
+        key: &'a [u8],
+        value: &'a [u8],
+    },
+    Delete {
+        shard: usize,
+        key: &'a [u8],
+    },
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl RocksStore {
+    /// Stage a batch of raw put/delete ops — each carrying its own shard — and
+    /// commit them atomically with the given [`WriteOptions`], bypassing the
+    /// FrogDB WAL. The one named cross-crate seam the crash-atomicity tests
+    /// drive, replacing open-coded `WriteBatch`/`batch_put`/`write_batch_opt`
+    /// so no `rocksdb::WriteBatch` type crosses the `mod.rs` interface.
+    pub fn commit_raw_batch(
+        &self,
+        ops: &[RawBatchOp<'_>],
+        wo: &WriteOptions,
+    ) -> Result<(), RocksError> {
+        let mut batch = WriteBatch::default();
+        for op in ops {
+            match op {
+                RawBatchOp::Put { shard, key, value } => {
+                    self.batch_put(&mut batch, *shard, key, value)?
+                }
+                RawBatchOp::Delete { shard, key } => self.batch_delete(&mut batch, *shard, key)?,
+            }
+        }
+        self.write_batch_opt(batch, wo)
     }
 }
 /// Full RocksDB merge callback: fold every operand onto `existing` in order.
@@ -463,13 +538,4 @@ fn partial_value_merge(
 ) -> Option<Vec<u8>> {
     let ops: Vec<&[u8]> = operands.iter().collect();
     crate::partial_merge_hll_deltas(&ops)
-}
-
-#[allow(dead_code)]
-pub fn open_shared(
-    path: &Path,
-    num_shards: usize,
-    config: &RocksConfig,
-) -> Result<Arc<RocksStore>, RocksError> {
-    Ok(Arc::new(RocksStore::open(path, num_shards, config)?))
 }
