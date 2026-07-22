@@ -6,6 +6,7 @@ from ruamel.yaml import YAML
 
 from workflow_gen.schema import Workflow
 from workflow_gen.workflows.build import build_workflow
+from workflow_gen.workflows.concurrency_nightly import concurrency_nightly_workflow
 from workflow_gen.workflows.deploy_docs import deploy_docs_workflow
 from workflow_gen.workflows.fuzz import fuzz_workflow
 from workflow_gen.workflows.link_check import link_check_workflow
@@ -35,6 +36,7 @@ MANUAL_WORKFLOWS: set[str] = {
 WORKFLOWS = {
     "test.yml": test_workflow,
     "fuzz.yml": fuzz_workflow,
+    "concurrency-nightly.yml": concurrency_nightly_workflow,
     "build.yml": build_workflow,
     "release.yml": release_workflow,
     "release-please.yml": release_please_workflow,

@@ -57,6 +57,7 @@ pub mod fault_injection;
 pub mod history;
 pub mod models;
 pub mod partition;
+pub mod pubsub_oracle;
 pub mod quiescence;
 pub mod workload;
 
@@ -73,6 +74,10 @@ pub use models::{
     StreamId, StreamModel, StreamState, ZSetModel, ZSetState,
 };
 pub use partition::{default_keys_of, is_errored_exec_result, partition_by_key};
+pub use pubsub_oracle::{
+    PubMsg, PubSubEvent, PubSubHistory, PubSubViolation, PubSubWorkload, PublisherScript, SubKind,
+    SubscriberScript, check_pubsub_conservation, check_pubsub_order,
+};
 pub use quiescence::{
     ExpiryIndexSnapshot, LockTableSnapshot, MemoryCheckSnapshot, QuiescenceViolation,
     WaitQueueSnapshot, WaiterOrdinal, check_expiry_index_consistent, check_locktable_empty,

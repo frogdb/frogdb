@@ -42,14 +42,24 @@ slow-timeout = { period = "15s", terminate-after = 4 }
 filter = "test(property_tests::)"
 slow-timeout = { period = "15s", terminate-after = 4 }
 
-# The generated-workload seed sweep drives ~20 seeded turmoil sims back-to-back,
-# each spinning a multi-shard server, running the full invariant pipeline, and
-# probing the four DEBUG quiescence commands. That is legitimately >15s in debug,
-# so give it generous headroom (the individual sub-runs are fast; it is the
-# 20× repetition that accumulates).
+# The per-PR generated-workload seed sweeps drive ~20 seeded turmoil sims
+# back-to-back each, spinning a multi-shard server, running the full invariant
+# pipeline, and probing the four DEBUG quiescence commands. That is legitimately
+# >15s in debug, so give it generous headroom (the individual sub-runs are fast;
+# it is the 20x repetition that accumulates). Excludes `seed_sweep_nightly`
+# (below), whose seed count is unbounded and needs its own budget.
 [[profile.default.overrides]]
-filter = "test(concurrency_workload::seed_sweep)"
+filter = "test(concurrency_workload::seed_sweep) & !test(concurrency_workload::seed_sweep_nightly)"
 slow-timeout = { period = "30s", terminate-after = 4 }
+
+# The nightly generated-workload seed sweep (opt-in via `just concurrency-nightly`;
+# see concurrency_workload.rs) runs however many seeds x profiles the caller asks
+# for via FROGDB_CONCURRENCY_SEEDS, so its runtime is not bounded the way the
+# per-PR tier's is. Mark it slow after 60s but never force-terminate it from
+# nextest's side — the real time budget is the CI job's `timeout-minutes`.
+[[profile.default.overrides]]
+filter = "test(concurrency_workload::seed_sweep_nightly)"
+slow-timeout = { period = "60s" }
 
 # HyperLogLog cardinality tests add tens of thousands of elements over the
 # socket (sparse→dense promotion + repeated PFCOUNT) and run ~14s in debug —

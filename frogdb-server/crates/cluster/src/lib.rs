@@ -58,7 +58,7 @@ pub use state::{ClusterState, ClusterStateMachine, DemotionEvent, SlotMigrationC
 pub use storage::ClusterStorage;
 pub use types::{
     CLUSTER_SLOTS, ClusterCommand, ClusterConfig, ClusterError, ClusterResponse, ClusterSnapshot,
-    ConfigEpoch, NodeId, NodeInfo, NodeRole, SlotRange, TypeConfig,
+    ConfigEpoch, NodeId, NodeInfo, NodeRole, SlotRange, TypeConfig, even_slot_ranges,
 };
 
 use openraft::Raft;

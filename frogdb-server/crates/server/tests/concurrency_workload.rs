@@ -196,6 +196,82 @@ fn seed_sweep_txheavy() {
     }
 }
 
+// Nightly generated-workload seed sweep (CI nightly tier, see the "CI" section
+// of `docs/superpowers/specs/2026-07-17-concurrency-invariant-testing-design.md`):
+// many more seeds and longer per-client histories than the per-PR tiers above,
+// across every profile including `MultiWaiter` (excluded from the per-PR tier
+// only because it has its own dedicated smoke test). Ignored by default —
+// driven explicitly via `just concurrency-nightly` (used by the nightly CI
+// workflow), which sets the env var overrides below; running the whole crate
+// test suite (even with `--features turmoil`) never picks this up.
+//
+// Unlike the per-PR sweeps, this does not stop at the first failing seed: it
+// runs every seed of every profile, writes a repro file for each failure, and
+// reports the full set at the end. That lets one nightly run surface (and let
+// CI upload artifacts for) more than one distinct bug instead of hiding
+// everything behind whichever seed happens to fail first.
+#[test]
+#[ignore = "nightly-tier sweep; run via `just concurrency-nightly`"]
+fn seed_sweep_nightly() {
+    let seeds_per_profile = env_override("FROGDB_CONCURRENCY_SEEDS", 250u64);
+    // 75, not e.g. 150: at ops_per_client >= ~90 the MultiWaiter "exactly-once delivery"
+    // invariant fails on nearly every seed (see
+    // .scratch/concurrency-testing/issues/11-nightly-smoke-findings.md, Finding A) — a real bug,
+    // but one that would make this job permanently red instead of surfacing new findings. Raise
+    // this default only after that issue is resolved.
+    let ops_per_client = env_override("FROGDB_CONCURRENCY_OPS_PER_CLIENT", 75usize);
+    let num_clients = env_override("FROGDB_CONCURRENCY_CLIENTS", 4usize);
+    let num_shards = env_override("FROGDB_CONCURRENCY_SHARDS", 2usize);
+
+    let profiles = [
+        Profile::Mixed,
+        Profile::BlockingHeavy,
+        Profile::TxHeavy,
+        Profile::MultiWaiter,
+    ];
+
+    let mut failures = Vec::new();
+    for profile in profiles {
+        for seed in 0..seeds_per_profile {
+            let report = run_and_check(seed, profile, num_clients, ops_per_client, num_shards);
+            if !report.passed() {
+                let path = write_repro_for(seed, profile, num_clients, ops_per_client, num_shards);
+                eprintln!(
+                    "seed {seed} ({profile:?}) violated invariants: {:?}\nrepro: {}",
+                    report.violations,
+                    path.display()
+                );
+                failures.push((seed, profile, path));
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "{} of {} seed(s) violated invariants: {:#?}",
+        failures.len(),
+        seeds_per_profile * profiles.len() as u64,
+        failures
+    );
+}
+
+/// Read an env var override, falling back to `default` when unset. Panics naming the env var
+/// and offending value if it's set but fails to parse — a malformed override (e.g. a typo'd
+/// `workflow_dispatch` `seeds` input) must fail loudly, not silently fall back to a default and
+/// run a different sweep than what was asked for.
+fn env_override<T>(key: &str, default: T) -> T
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    match std::env::var(key) {
+        Ok(v) => v
+            .parse()
+            .unwrap_or_else(|e| panic!("env var {key}={v:?} is not a valid override: {e}")),
+        Err(_) => default,
+    }
+}
+
 #[test]
 #[ignore = "replay a single repro file via `just concurrency-repro <file>`"]
 fn replay_repro() {

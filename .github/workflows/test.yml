@@ -194,7 +194,7 @@ jobs:
   turmoil-tests:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    name: Turmoil Simulation Tests
+    name: Turmoil Simulation + Generated-Workload Tests
     runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
     steps:
     - name: Checkout
@@ -226,6 +226,10 @@ jobs:
         shared-key: turmoil
     - name: Run Turmoil simulation tests
       run: cargo nextest run -p frogdb-server --features turmoil -E 'test(/simulation/)'
+    - name: Run generated-workload seed sweep (short workloads)
+      run: cargo nextest run -p frogdb-server --features turmoil -E 'test(/seed_sweep_short_workloads/)'
+    - name: Run generated-workload seed sweep (TxHeavy)
+      run: cargo nextest run -p frogdb-server --features turmoil -E 'test(/seed_sweep_txheavy/)'
   operator-tests:
     needs: changes
     if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.operator == 'true'

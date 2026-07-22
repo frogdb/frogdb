@@ -12,6 +12,7 @@ use proptest::prelude::*;
 
 use super::generator::{Choice, Sender, Step, Tick, replay, schedule_strategy};
 use super::harness::{ShardDriver, cmd};
+use super::notify_capture::{all_keyevents_mask, assert_keyevents_consistent};
 use frogdb_core::shard::WatchEntry;
 use frogdb_core::shard::types::TransactionResult;
 
@@ -27,11 +28,17 @@ async fn s8_exec_atomic_and_version_bumped_once() {
     let _ = d.execute(0, "SET", &["e", "x"]).await;
     let _ = d.execute(0, "PEXPIRE", &["e", "1"]).await;
 
+    // Capture keyspace notifications AFTER seeding (so the seeding SETs, emitted
+    // while notifications were still disabled, do not pollute the capture) and
+    // BEFORE the schedule — so exactly the schedule's `expired`/`set` keyevents
+    // are observed, in emission order.
+    let mut capture = d.capture_keyspace(0, 9001, &["__keyevent@0__:*"], all_keyevents_mask());
+
     let v_before = d.get_version(0).await;
 
     // Permuted around the EXEC: an expiry tick (removes e) then EXEC (a,b).
     tokio::time::sleep(Duration::from_millis(3)).await;
-    d.tick_expiry(0); // one non-empty sweep → +1
+    d.tick_expiry(0); // one non-empty sweep → +1 ; emits `expired` for e
 
     let result = d
         .exec_transaction(
@@ -40,9 +47,17 @@ async fn s8_exec_atomic_and_version_bumped_once() {
             vec![cmd("SET", &["a", "1"]), cmd("SET", &["b", "1"])],
             vec![],
         )
-        .await; // committed EXEC → +1
+        .await; // committed EXEC → +1 ; emits `set` for a then b
 
     assert!(matches!(result, TransactionResult::Success(_)));
+
+    // Notification order consistent with the chosen serialization order
+    // (sweep BEFORE EXEC): `expired e` precedes `set a`, `set b`. This is the
+    // "keyspace notifications consistent with the chosen order" half of S8,
+    // previously unpinned for lack of a capture seam (design doc S8 note).
+    let events = capture.drain_keyevents();
+    assert_keyevents_consistent(&events, &[("expired", b"e"), ("set", b"a"), ("set", b"b")])
+        .expect("sweep-before-EXEC keyevent order");
 
     // Version read FIRST — before any GETs — so read-path effects (including
     // the post-F3 lazy-purge bump, which Task 9 lands before this task) cannot
@@ -71,6 +86,67 @@ async fn s8_exec_atomic_and_version_bumped_once() {
     let mem = d.memory_check(0).await;
     assert_eq!(mem.tracked_bytes, mem.recomputed_bytes);
     assert!(d.expiry_index_check(0).await.anomalies.is_empty());
+}
+
+/// S8 notification-order consistency: the *same* sweep-vs-EXEC events, run in
+/// two different serialization orders, must produce keyevent streams that each
+/// match their order — the capture seam makes the ordering observable, and the
+/// checker asserts "notifications consistent with the chosen order" (the half
+/// of S8 the design doc left unpinned for want of a capture seam). Two
+/// independent drivers, one per order.
+#[tokio::test]
+async fn s8_notifications_consistent_with_serialization_order() {
+    // --- Order A: sweep BEFORE EXEC → expired e, then set a, set b. ---
+    {
+        let mut d = ShardDriver::new(1);
+        let _ = d.execute(0, "SET", &["a", "0"]).await;
+        let _ = d.execute(0, "SET", &["b", "0"]).await;
+        let _ = d.execute(0, "SET", &["e", "x"]).await;
+        let _ = d.execute(0, "PEXPIRE", &["e", "1"]).await;
+        let mut capture = d.capture_keyspace(0, 9101, &["__keyevent@0__:*"], all_keyevents_mask());
+        tokio::time::sleep(Duration::from_millis(3)).await;
+
+        d.tick_expiry(0); // sweep first
+        let _ = d
+            .exec_transaction(
+                0,
+                1,
+                vec![cmd("SET", &["a", "1"]), cmd("SET", &["b", "1"])],
+                vec![],
+            )
+            .await;
+
+        let events = capture.drain_keyevents();
+        assert_keyevents_consistent(&events, &[("expired", b"e"), ("set", b"a"), ("set", b"b")])
+            .expect("order A (sweep→EXEC)");
+    }
+
+    // --- Order B: EXEC BEFORE sweep → set a, set b, then expired e. ---
+    {
+        let mut d = ShardDriver::new(1);
+        let _ = d.execute(0, "SET", &["a", "0"]).await;
+        let _ = d.execute(0, "SET", &["b", "0"]).await;
+        let _ = d.execute(0, "SET", &["e", "x"]).await;
+        let _ = d.execute(0, "PEXPIRE", &["e", "1"]).await;
+        let mut capture = d.capture_keyspace(0, 9102, &["__keyevent@0__:*"], all_keyevents_mask());
+        tokio::time::sleep(Duration::from_millis(3)).await;
+
+        // EXEC first (it touches a/b only, so e is not lazily purged here)...
+        let _ = d
+            .exec_transaction(
+                0,
+                1,
+                vec![cmd("SET", &["a", "1"]), cmd("SET", &["b", "1"])],
+                vec![],
+            )
+            .await;
+        // ...then the explicit sweep removes the now-expired e.
+        d.tick_expiry(0);
+
+        let events = capture.drain_keyevents();
+        assert_keyevents_consistent(&events, &[("set", b"a"), ("set", b"b"), ("expired", b"e")])
+            .expect("order B (EXEC→sweep)");
+    }
 }
 
 proptest! {

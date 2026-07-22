@@ -335,30 +335,18 @@ pub(super) async fn init_cluster(
         // Only the bootstrap node assigns slots to avoid conflicts
         if should_bootstrap && !initial_members.is_empty() && !cluster.all_slots_assigned() {
             let node_ids: Vec<u64> = initial_members.keys().copied().collect();
-            let num_nodes = node_ids.len();
-            let slots_per_node = 16384 / num_nodes;
-
-            for (i, &nid) in node_ids.iter().enumerate() {
-                // Match the inclusive ranges used by the Raft replication path
-                // below so the bootstrap node and followers converge on the same
-                // slot ownership.
-                let start = (i * slots_per_node) as u16;
-                let end = if i == num_nodes - 1 {
-                    16383u16 // Last node gets remainder
-                } else {
-                    ((i + 1) * slots_per_node - 1) as u16
-                };
+            let assignments = frogdb_core::cluster::even_slot_ranges(&node_ids);
+            for (nid, range) in &assignments {
                 let cmd = frogdb_core::cluster::ClusterCommand::AssignSlots {
-                    node_id: nid,
-                    slots: vec![frogdb_core::cluster::SlotRange::new(start, end)],
+                    node_id: *nid,
+                    slots: vec![*range],
                 };
                 if let Err(e) = cluster.apply_local(cmd) {
-                    warn!(node_id = nid, error = %e, "Failed to seed slot assignment into cluster state");
+                    warn!(node_id = *nid, error = %e, "Failed to seed slot assignment into cluster state");
                 }
             }
             info!(
-                node_count = num_nodes,
-                slots_per_node = slots_per_node,
+                node_count = assignments.len(),
                 "Auto-assigned slots to cluster nodes"
             );
         }
@@ -433,19 +421,11 @@ pub(super) async fn init_cluster(
             let network_factory = network_factory_clone.clone();
             let node_ids: Vec<u64> = initial_members.keys().copied().collect();
             tokio::spawn(async move {
-                let num_nodes = node_ids.len();
-                let slots_per_node = 16384 / num_nodes;
-
-                for (i, &nid) in node_ids.iter().enumerate() {
-                    let start = (i * slots_per_node) as u16;
-                    let end = if i == num_nodes - 1 {
-                        16383u16
-                    } else {
-                        ((i + 1) * slots_per_node - 1) as u16
-                    };
+                for (nid, range) in frogdb_core::cluster::even_slot_ranges(&node_ids) {
+                    let (start, end) = (range.start, range.end);
                     let cmd = frogdb_core::cluster::ClusterCommand::AssignSlots {
                         node_id: nid,
-                        slots: vec![frogdb_core::cluster::SlotRange::new(start, end)],
+                        slots: vec![range],
                     };
 
                     for attempt in 0..30 {
