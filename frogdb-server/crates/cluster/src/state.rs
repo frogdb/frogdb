@@ -95,7 +95,6 @@ impl ClusterState {
             slot_assignment: inner.slot_assignment.clone(),
             config_epoch: inner.config_epoch,
             migrations: inner.migrations.clone(),
-            leader_id: None, // Will be set by caller
             active_version: inner.active_version.clone(),
         }
     }
