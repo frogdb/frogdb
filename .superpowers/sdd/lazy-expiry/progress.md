@@ -19,7 +19,10 @@ testbox (`just tb-warmup` / `just tb-run`); `just concurrency` + `just lint` run
 - [x] Task 2 — Apply lazy-purge effects (gaps 1-3) + flip repros + S2 lazy arm — `8ffc47d7` APPROVED
 - [x] Task 3 — Per-key `live_at_watch` plumbing via `WatchEntry` (behavior-neutral) + `watch_keys` helper — `0609aa85` APPROVED
 - [x] Task 4 — `check_watches` honors `live_at_watch` (gap 4) + flip repro + two-watcher arm — `0eeea7ef` APPROVED
-- [ ] Task 5 — Proposal acceptance update + full verification (testbox + local concurrency/lint)
+- [x] Task 5 — Proposal acceptance update + full verification — docs `824fec24`; verification completed locally post-merge (see below)
+
+### Task 5 + upstream merge
+Docs closeout `824fec24` (proposal Status: done, module docs refreshed). Testbox verification ABANDONED per user: two infra bugs found — (1) `tb-run` recipe lacks mise-shims PATH on box (`just: command not found`); (2) 5-min idle timeout kills mid-suite runs (activity marker only touched at command start/end; box died at 5113/6644, zero test failures). User handles testbox in another session. Local full suite then failed 1/6644: `tcl_srandmember_count_overflow` SIGABRT — NOT branch-related; upstream fix `1dd8377f` landed on main after branch cut (fail-stop supervision converts the panic to SIGABRT). Main had moved: ShardMessage sub-enum partition `85c97a6a`, scatter fan-out `e1ee7cea`. Merge-first: `7e66d354` (Opus agent) — 5 conflict files resolved (WatchEntry/GetVersion into `CoreMsg` sub-enum; `watch_keys` rebuilt on `CoreMsg`; drain wrapper survived; semantic audit confirmed no un-drained scatter path; bare `purge_if_expired` in blocking.rs pre-existing/out of scope). Post-merge matrix ALL GREEN: full 6651/6651 (1 skip), core pins 11/11, turmoil 3/3, transaction 43/43, srandmember 1/1, concurrency 86/86 + sweeps, lint clean.
 
 ## Per-task record
 
