@@ -49,6 +49,7 @@ pub mod storage;
 pub mod types;
 pub mod version_gate;
 pub mod wire;
+pub mod writer;
 
 pub use network::{
     BusRpc, ClusterNetwork, ClusterNetworkFactory, ClusterRpcRequest, ClusterRpcResponse,
@@ -60,6 +61,10 @@ pub use storage::ClusterStorage;
 pub use types::{
     CLUSTER_SLOTS, ClusterCommand, ClusterConfig, ClusterError, ClusterResponse, ClusterSnapshot,
     ConfigEpoch, NodeId, NodeInfo, NodeRole, SlotRange, TypeConfig, even_slot_ranges,
+};
+pub use writer::{
+    ClusterWriter, LeaderForwarder, LeaderRedirect, ProposeError, Proposed, RaftClientWriteError,
+    RaftProposer, resolve_redirect,
 };
 
 use openraft::Raft;
