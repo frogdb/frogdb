@@ -230,8 +230,6 @@ impl ShardWorker {
             );
         }
 
-        let removed_any = !result.deleted_keys.is_empty() || !result.emptied_keys.is_empty();
-
         // Route both removal groups through the pipeline in a SINGLE call so the
         // whole cycle coalesces to ONE version bump (not one per group), while
         // still emitting `expired` for whole-key deaths and generic `del` for
@@ -249,16 +247,19 @@ impl ShardWorker {
         )
         .await;
 
-        // A cycle that reaped only hash *fields* (no key removed) is a mutation,
+        // A cycle that reaped hash *fields* from a surviving hash is a mutation,
         // not a removal, so it does not flow through the removal pipeline — but it
         // still changed a watched hash. The swept field-keys are NOT carried by
         // `ExpiryResult` (only a `fields_expired` count), so this is the one
         // active-expiry event whose keys the shard cannot enumerate. Bump the
-        // shard-wide epoch: a safe over-abort that invalidates every watch and so
-        // never misses the watched hash whose field expired (zero false
-        // negatives). Whole-key removals already bumped their own slots via the
-        // pipeline above, so only the fields-only case reaches here.
-        if !removed_any {
+        // shard-wide epoch whenever ANY field expired: a safe over-abort that
+        // invalidates every watch and so never misses the watched hash whose
+        // field expired (zero false negatives). This is INDEPENDENT of whether
+        // the same cycle also removed whole keys — those removals bump their own
+        // slots via the pipeline above, but a field-shrunk *survivor* hash is not
+        // among them, so its watch would slip through if the global bump were
+        // gated on `!removed_any`. `removed_any` therefore does not appear here.
+        if result.fields_expired > 0 {
             self.bump_version_global();
         }
     }
@@ -610,8 +611,15 @@ mod effect_tests {
     /// that removes BOTH a whole-key-expired key (`Expired`) and a hash-emptied
     /// key (`FieldEmptied`) bumps each removed key's slot exactly ONCE — the two
     /// reason groups are driven through one `run_internal_removal_effects` call,
-    /// so no slot is double-bumped. Also pins the dirty counter (previously
-    /// skipped by the hand-rolled expiry path): it advances by the removed keys.
+    /// so no slot is double-bumped. Because the cycle also carries
+    /// `fields_expired > 0` (the field that emptied `h`), it additionally bumps
+    /// the shard-wide global epoch (a safe over-abort — the field information is
+    /// not key-attributed, so any `fields_expired > 0` cycle bumps the epoch).
+    /// Each removed key's effective version is therefore its once-bumped slot
+    /// PLUS the once-bumped epoch = 2 (a double slot-bump would read 3, catching
+    /// the regression the "exactly once" invariant guards). Also pins the dirty
+    /// counter (previously skipped by the hand-rolled expiry path): it advances
+    /// by the removed keys.
     #[tokio::test]
     async fn expiry_coalesces_version_bump_and_advances_dirty() {
         use crate::store::Store;
@@ -632,18 +640,87 @@ mod effect_tests {
 
         assert_eq!(
             worker.get_key_version(b"plain"),
-            1,
-            "the whole-key-expired key's slot bumps once"
+            2,
+            "the whole-key-expired key's slot bumps once (1) + global epoch bump \
+             for the field expiry (1)"
         );
         assert_eq!(
             worker.get_key_version(b"h"),
-            1,
-            "the field-emptied key's slot bumps once"
+            2,
+            "the field-emptied key's slot bumps once (1) + global epoch bump (1)"
         );
         assert_eq!(
             worker.store.dirty(),
             2,
             "dirty counter advances by the two removed keys (was skipped before)"
+        );
+    }
+
+    /// Regression (whole-branch review): a single active-expiry cycle that BOTH
+    /// removes a whole key AND field-shrinks a *surviving* watched hash must
+    /// still invalidate a watch on that hash. The field-only expiry carries no
+    /// key (only `fields_expired`), so the shard cannot slot-attribute it and
+    /// compensates with a global-epoch bump. That bump must NOT be gated on
+    /// "no key was removed": when the same cycle also removes a key, the field
+    /// information still went unattributed and the watched survivor hash would
+    /// otherwise commit against a concurrently-mutated value (an optimistic-lock
+    /// false negative). Pins the exact scenario: `deleted_keys=[del]` +
+    /// `fields_expired=1` with a surviving hash `surv` on a DIFFERENT slot ⇒ a
+    /// WATCH on `surv` (live, version-snapshotted pre-cycle) must ABORT.
+    #[tokio::test]
+    async fn field_expiry_bumps_global_epoch_even_when_a_key_is_also_removed() {
+        use crate::shard::message::WatchEntry;
+        use crate::shard::partition::slot_for_key;
+
+        let recorder = Arc::new(RecordingRecorder::default());
+        let (mut worker, _msg_tx, _conn_tx) = build_worker(recorder);
+
+        // The survivor hash and the removed key must live on DIFFERENT slots, so
+        // the removed key's per-slot bump cannot coincidentally touch the
+        // survivor — the ONLY thing that can invalidate `surv`'s watch is the
+        // global-epoch bump owed to the unattributed field expiry.
+        let del = "del";
+        let surv = "surv";
+        assert_ne!(
+            slot_for_key(del.as_bytes()),
+            slot_for_key(surv.as_bytes()),
+            "test precondition: removed key and survivor hash must be on distinct slots"
+        );
+
+        // Seed the survivor as a live, non-empty hash so `exists_unexpired` holds
+        // — the watch can then only abort via the version compare, isolating the
+        // global-epoch path (not the `live_at_watch` liveness clause).
+        seed_hash_with_mixed_fields(&mut worker.store, surv, &[], &["f1"]);
+        let v0 = worker.get_key_version(surv.as_bytes());
+
+        // One cycle: reaps whole key `del` AND field-purges a field of `surv`
+        // (surv survives — absent from deleted_keys/emptied_keys, present only as
+        // the `fields_expired` count).
+        let result = ExpiryResult {
+            deleted_keys: vec![Bytes::from(del)],
+            emptied_keys: vec![],
+            fields_expired: 1,
+            budget_exhausted: false,
+        };
+        worker.apply_expiry_effects(result).await;
+
+        // The survivor's effective version must have moved (global epoch), so a
+        // live watch on it aborts.
+        assert_ne!(
+            worker.get_key_version(surv.as_bytes()),
+            v0,
+            "field-only expiry in a cycle that also removed a key must still bump \
+             the global epoch so the surviving hash's watch version moves"
+        );
+        let watches = [WatchEntry {
+            key: Bytes::from(surv),
+            version: v0,
+            live_at_watch: true,
+        }];
+        assert!(
+            !worker.check_watches(&watches),
+            "WATCH on a field-shrunk surviving hash must ABORT EXEC even when the \
+             same expiry cycle also removed a whole key (optimistic-lock invariant)"
         );
     }
 

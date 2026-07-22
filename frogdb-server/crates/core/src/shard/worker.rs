@@ -40,14 +40,18 @@ use super::wait_queue::ShardWaitQueue;
 /// 18). Bounded without GC: at most one `u64` per slot ever written on this
 /// shard (≤ 16384), and slots are permanent so entries never need reclaiming.
 ///
-/// `global_epoch` is the honest coarse fallback for the one write source the
+/// `global_epoch` is the honest coarse fallback for the write sources the
 /// `shard` module cannot localize to keys within its reach: a whole-DB flush
-/// (`FLUSHDB`/`FLUSHALL`, whose write record carries no keys) and a fields-only
-/// active-expiry cycle (a hash field TTL that shrinks but does not remove a key,
-/// whose keys `ExpiryResult` does not carry). Folding the epoch into every key's
-/// effective version makes those events invalidate *all* watches — a safe
-/// over-abort that preserves the zero-false-negative invariant, exactly matching
-/// Redis's `touchAllWatchedKeysOnFlush`.
+/// (`FLUSHDB`/`FLUSHALL`, whose write record carries no keys) and any
+/// active-expiry cycle that reaped hash *fields* from a surviving hash (a field
+/// TTL that shrinks but does not remove the key, whose keys `ExpiryResult` does
+/// not carry — only a `fields_expired` count). Because that field information is
+/// not key-attributed, ANY cycle with `fields_expired > 0` bumps the epoch,
+/// independently of whether the same cycle also removed whole keys (those are
+/// slot-attributed separately). Folding the epoch into every key's effective
+/// version makes those events invalidate *all* watches — a safe over-abort that
+/// preserves the zero-false-negative invariant, exactly matching Redis's
+/// `touchAllWatchedKeysOnFlush`.
 #[derive(Debug, Default)]
 pub struct SlotVersions {
     /// slot -> version; a slot absent from the map reads as 0 (never bumped).
