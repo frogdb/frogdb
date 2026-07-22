@@ -1,6 +1,8 @@
 mod common;
 
 #[cfg(feature = "turmoil")]
+mod concurrency_pubsub;
+#[cfg(feature = "turmoil")]
 mod concurrency_workload;
 #[cfg(not(feature = "turmoil"))]
 mod functions;
