@@ -8,6 +8,7 @@ description = "RocksDB persistence layer for FrogDB — storage, WAL, serializat
 
 [dependencies]
 frogdb-types.workspace = true
+frogdb-config.workspace = true
 async-trait.workspace = true
 rocksdb.workspace = true
 flume.workspace = true

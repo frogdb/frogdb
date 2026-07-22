@@ -681,8 +681,12 @@ pub async fn handle_rpc_request(
                 // The Raft write can commit while the state machine rejects the
                 // command; surface that as an error instead of a silent OK.
                 Ok(resp) => {
-                    if let ClusterResponse::Error(msg) = resp.data {
-                        return ClusterRpcResponse::ForwardedWrite(Err(msg));
+                    if let ClusterResponse::Error(e) = resp.data {
+                        // ForwardedWrite is a cross-node RPC contract that stays
+                        // Result<(), String> (out of scope for proposal 32), so
+                        // the typed error is re-flattened to its display string
+                        // here — the only site that intentionally does so.
+                        return ClusterRpcResponse::ForwardedWrite(Err(e.to_string()));
                     }
                     if let Some((node_id, cluster_addr)) = add_node_info {
                         spawn_add_raft_voter(raft.clone(), node_id, cluster_addr);

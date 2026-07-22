@@ -357,14 +357,34 @@ pub enum ClusterCommand {
 }
 
 /// Response from applying a cluster command.
+///
+/// This is the openraft `R` value — the only value that crosses back from a
+/// Raft apply. It carries structure end-to-end: the typed [`ClusterError`]
+/// survives the apply boundary instead of being flattened to a display string,
+/// and successful epoch-bumping commands return a typed [`ConfigEpoch`] rather
+/// than a stringly-encoded number (proposal 32).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClusterResponse {
     /// Command succeeded.
     Ok,
-    /// Command returned a value.
-    Value(String),
-    /// Command failed.
-    Error(String),
+    /// Command succeeded and produced a configuration epoch (e.g.
+    /// `IncrementEpoch`, `Failover`).
+    Epoch(ConfigEpoch),
+    /// Command failed, carrying the typed error the state machine produced.
+    Error(ClusterError),
+}
+
+impl ClusterResponse {
+    /// Return the typed error iff this response is an [`ClusterResponse::Error`].
+    ///
+    /// Lets callers that only want the `Display` string stay terse while a
+    /// caller that wants to branch on the variant can match it directly.
+    pub fn as_error(&self) -> Option<&ClusterError> {
+        match self {
+            ClusterResponse::Error(e) => Some(e),
+            _ => None,
+        }
+    }
 }
 
 /// A node-agnostic description of a side effect a successful cluster mutation
@@ -430,7 +450,13 @@ impl Default for ClusterConfig {
 }
 
 /// Errors that can occur in cluster operations.
-#[derive(Debug, Error, Clone)]
+///
+/// `Serialize`/`Deserialize` are required because this type is now carried in
+/// [`ClusterResponse`], the openraft `R` value, which must be `serde` under the
+/// enabled feature. Every variant holds only plain data (`NodeId`/`u16`/`String`),
+/// so the enum stays serde-clean — keep it that way (a `#[from] io::Error`-style
+/// variant would break the derive).
+#[derive(Debug, Error, Clone, Serialize, Deserialize)]
 pub enum ClusterError {
     /// Node not found.
     #[error("node {0} not found")]
@@ -516,8 +542,9 @@ pub struct ClusterSnapshot {
     pub config_epoch: ConfigEpoch,
     /// Active slot migrations.
     pub migrations: BTreeMap<u16, SlotMigration>,
-    /// The Raft leader node ID (if known).
-    pub leader_id: Option<NodeId>,
+    // `leader_id` removed (proposal 33): the leader is Raft runtime state, not
+    // replicated metadata, so this DTO's builder cannot supply it. The debug
+    // seam reads it live from `Raft::metrics().current_leader` instead.
     /// The finalized active version, if any.
     #[serde(default)]
     pub active_version: Option<String>,
@@ -648,6 +675,38 @@ mod tests {
         assert_eq!(ranges.len(), 2);
         assert_eq!(ranges[0], SlotRange::new(0, 9));
         assert_eq!(ranges[1], SlotRange::new(20, 24));
+    }
+
+    #[test]
+    fn test_cluster_response_as_error() {
+        // Error carries the typed variant, retrievable via as_error().
+        let err = ClusterResponse::Error(ClusterError::NodeNotFound(7));
+        assert!(matches!(
+            err.as_error(),
+            Some(ClusterError::NodeNotFound(7))
+        ));
+
+        // Non-error variants yield None.
+        assert!(ClusterResponse::Ok.as_error().is_none());
+        assert!(ClusterResponse::Epoch(3).as_error().is_none());
+    }
+
+    #[test]
+    fn test_cluster_response_serde_round_trip() {
+        // The new derives + the openraft `R: Serialize + Deserialize` bound:
+        // a typed error and the typed epoch both survive a serde round-trip.
+        let err = ClusterResponse::Error(ClusterError::SlotAlreadyAssigned(1, 2));
+        let json = serde_json::to_string(&err).unwrap();
+        let back: ClusterResponse = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            back.as_error(),
+            Some(ClusterError::SlotAlreadyAssigned(1, 2))
+        ));
+
+        let epoch = ClusterResponse::Epoch(7);
+        let json = serde_json::to_string(&epoch).unwrap();
+        let back: ClusterResponse = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, ClusterResponse::Epoch(7)));
     }
 
     #[test]

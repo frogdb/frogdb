@@ -1765,6 +1765,7 @@ dependencies = [
  "bitvec",
  "bytes",
  "flume",
+ "frogdb-config",
  "frogdb-types",
  "parking_lot",
  "rocksdb",
