@@ -1,6 +1,7 @@
 //! Replica node replication handling.
 
 pub(crate) mod connection;
+pub(crate) mod offset;
 mod streaming;
 #[cfg(test)]
 mod tests;
@@ -23,6 +24,7 @@ use crate::state::ReplicationState;
 
 use connection::SyncType;
 pub use connection::{ConnectionState, ReplicaConnection};
+use offset::ReplicaOffset;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -186,13 +188,14 @@ impl ReplicaReplicationHandler {
     async fn connect_and_sync(&self) -> io::Result<()> {
         let stream = (self.connect_factory)(self.primary_addr).await?;
         tracing::info!(primary = %self.primary_addr, "Connected to primary");
+        let offsets = ReplicaOffset::new(self.state.clone(), self.shared_offset.clone());
         let mut conn = ReplicaConnection {
             stream,
             _primary_addr: self.primary_addr,
             state: self.state.clone(),
             connection_state: ConnectionState::Connected,
             data_dir: self.data_dir.clone(),
-            shared_offset: self.shared_offset.clone(),
+            offsets,
             link_up: self.link_up.clone(),
         };
         // Whatever ends this attempt — clean close, a handshake/sync error, or

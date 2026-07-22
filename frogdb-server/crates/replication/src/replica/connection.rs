@@ -10,7 +10,9 @@ use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use super::offset::ReplicaOffset;
 use std::time::Duration;
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
@@ -81,7 +83,10 @@ pub struct ReplicaConnection {
     pub(crate) state: Arc<RwLock<ReplicationState>>,
     pub(crate) connection_state: ConnectionState,
     pub(crate) data_dir: PathBuf,
-    pub(crate) shared_offset: Option<Arc<AtomicU64>>,
+    /// Single owner of the replica-side offset lifecycle: the canonical
+    /// `state.replication_offset` field and its cluster-bus mirror move together
+    /// behind [`ReplicaOffset::advance`] / [`ReplicaOffset::reset_to`].
+    pub(crate) offsets: ReplicaOffset,
     /// Shared with the owning [`super::ReplicaReplicationHandler`]; kept in
     /// lockstep with `connection_state` via [`Self::set_state`] so INFO can
     /// read the link status without a lock on this connection.
@@ -161,13 +166,7 @@ impl ReplicaConnection {
                 let new_offset: u64 = parts[2].parse().map_err(|_| {
                     io::Error::new(io::ErrorKind::InvalidData, "invalid offset in FULLRESYNC")
                 })?;
-                let mut state = self.state.write().await;
-                state.replication_id = new_repl_id.clone();
-                state.replication_offset = new_offset;
-                drop(state);
-                if let Some(ref shared) = self.shared_offset {
-                    shared.store(new_offset, Ordering::Release);
-                }
+                self.offsets.reset_to(new_repl_id.clone(), new_offset).await;
                 tracing::info!(replication_id = %new_repl_id, offset = new_offset, "FULLRESYNC initiated");
                 self.set_state(ConnectionState::Syncing);
                 let line_buf = read_resp_line(&mut self.stream).await?;
@@ -306,14 +305,9 @@ impl ReplicaConnection {
             }
         }
         tracing::info!(checkpoint_dir = %staged.dir().display(), replication_id = %metadata.replication_id, offset = metadata.replication_offset, "Checkpoint staged for loading - server restart required to apply");
-        {
-            let mut state = self.state.write().await;
-            state.replication_id = metadata.replication_id.clone();
-            state.replication_offset = metadata.replication_offset;
-        }
-        if let Some(ref shared) = self.shared_offset {
-            shared.store(metadata.replication_offset, Ordering::Release);
-        }
+        self.offsets
+            .reset_to(metadata.replication_id.clone(), metadata.replication_offset)
+            .await;
         // The checkpoint itself needs a restart to load, but the connection
         // now moves straight into live WAL streaming (see `connect_and_sync`)
         // exactly like the RDB fullsync path below — so the link is up from

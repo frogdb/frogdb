@@ -241,6 +241,16 @@ impl ReplicationFrame {
     pub fn encoded_size(&self) -> usize {
         FRAME_HEADER_SIZE + self.payload.len()
     }
+
+    /// The replication-offset advance unit: RESP payload bytes only, never the
+    /// 20-byte transport header ([`FRAME_HEADER_SIZE`]: magic 4 + version 1 +
+    /// flags 1 + shard 2 + sequence 8 + length 4). This is the one definition
+    /// both ends count by — the primary's advance gate and the replica's ingest
+    /// path — so an ACK stays directly comparable to the live offset.
+    #[inline]
+    pub fn stream_advance(&self) -> u64 {
+        self.payload.len() as u64
+    }
 }
 
 /// Errors that can occur during frame decoding.

@@ -2,10 +2,8 @@
 
 use super::connection::ReplicaConnection;
 use crate::frame::{ReplicationFrame, ReplicationFrameCodec};
-use crate::offset_coordinator::OffsetCoordinator;
 use bytes::BytesMut;
 use std::io;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
@@ -29,15 +27,11 @@ impl ReplicaConnection {
                         Ok(0) => { tracing::info!("Primary connection closed"); return Ok(()); }
                         Ok(_) => {
                             while let Some(frame) = codec.decode(&mut buf)? {
-                                let mut state = self.state.write().await;
-                                // Advance by the RESP payload only — the 18-byte frame header is
-                                // transport, not part of the replication offset. This is the same
-                                // unit the primary advances by, so the replica's ACK is directly
-                                // comparable to the primary's live offset (see OffsetCoordinator).
-                                state.increment_offset(OffsetCoordinator::frame_advance(&frame));
-                                let offset = state.replication_offset;
-                                drop(state);
-                                if let Some(ref shared) = self.shared_offset { shared.store(offset, Ordering::Release); }
+                                // Advance the canonical offset and its cluster-bus mirror in
+                                // lockstep. The advance unit is the RESP payload only (see
+                                // `ReplicationFrame::stream_advance`), the same unit the primary
+                                // advances by, so the replica's ACK is directly comparable.
+                                let offset = self.offsets.advance(&frame).await;
                                 tracing::trace!(sequence = frame.sequence, offset = offset, "Received replication frame");
                                 // The primary's GETACK is an ack solicitation (sent by WAIT):
                                 // answer immediately instead of waiting for the next 1-second
@@ -52,9 +46,7 @@ impl ReplicaConnection {
                     }
                 }
                 _ = ack_interval.tick() => {
-                    let state = self.state.read().await;
-                    let offset = state.replication_offset;
-                    drop(state);
+                    let offset = self.offsets.current().await;
                     self.send_ack(offset).await?;
                 }
             }
