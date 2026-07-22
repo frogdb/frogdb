@@ -1,6 +1,7 @@
 //! Cluster/Raft initialization and background tasks.
 
 use anyhow::Result;
+use frogdb_core::cluster::{ClusterWriter, Proposed};
 use frogdb_core::sync::Arc;
 use frogdb_core::{
     ClusterNetworkFactory, ClusterRaft, ClusterState, ClusterStateMachine, ClusterStorage,
@@ -364,8 +365,16 @@ pub(super) async fn init_cluster(
         // via Raft consensus to correct the cluster state.
         // Leaders propose directly; followers forward through the cluster bus.
         {
-            let raft_clone = raft.clone();
-            let network_factory = network_factory_clone.clone();
+            // The bootstrap spawns deliberately *drop* the redirect: on a
+            // non-leader they retry until a leader accepts the write (directly or
+            // via forward), so a `ProposeError` simply means "retry". The writer
+            // owns the propose → forward decision; this loop keeps only the
+            // retry-and-ignore policy.
+            let writer = ClusterWriter::new(
+                raft.clone(),
+                Arc::new(network_factory_clone.clone()),
+                Arc::new(cluster.clone()),
+            );
             let mut self_node =
                 frogdb_core::cluster::NodeInfo::new_primary(node_id, client_addr, cluster_bus_addr);
             self_node.replica_priority = config.cluster.replica_priority;
@@ -374,40 +383,25 @@ pub(super) async fn init_cluster(
                     let cmd = frogdb_core::cluster::ClusterCommand::AddNode {
                         node: self_node.clone(),
                     };
-                    match raft_clone.client_write(cmd).await {
-                        Ok(_) => {
+                    match writer.propose(cmd).await {
+                        Ok(Proposed::Committed(_)) => {
                             info!(
                                 node_id = node_id,
                                 "Registered self in cluster state via Raft"
                             );
                             return;
                         }
+                        Ok(Proposed::Forwarded) => {
+                            info!(node_id = node_id, "Registered self via leader forward");
+                            return;
+                        }
                         Err(e) => {
-                            // Check if this is a ForwardToLeader error
-                            use openraft::error::{ClientWriteError, RaftError};
-                            if let RaftError::APIError(ClientWriteError::ForwardToLeader(fwd)) = &e
-                                && let Some(leader_id) = fwd.leader_id
-                                && let Some(leader_addr) = network_factory.get_node_addr(leader_id)
-                            {
-                                let net = network_factory.connect(leader_id, leader_addr);
-                                let fwd_cmd = frogdb_core::cluster::ClusterCommand::AddNode {
-                                    node: self_node.clone(),
-                                };
-                                if net.forward_write(fwd_cmd).await.is_ok() {
-                                    info!(
-                                        node_id = node_id,
-                                        leader_id = leader_id,
-                                        "Registered self via leader forward"
-                                    );
-                                    return;
-                                }
-                            }
                             if attempt < 29 {
                                 tokio::time::sleep(Duration::from_millis(500)).await;
                             } else {
                                 warn!(
                                     node_id = node_id,
-                                    error = %e,
+                                    error = ?e,
                                     "Failed to self-register after 30 attempts"
                                 );
                             }
@@ -421,8 +415,13 @@ pub(super) async fn init_cluster(
         // The local assign_slots() above only updates the bootstrap node's ClusterState;
         // followers have separate ClusterState instances and need Raft log replication.
         if should_bootstrap && !initial_members.is_empty() {
-            let raft_clone = raft.clone();
-            let network_factory = network_factory_clone.clone();
+            // Same drop-the-redirect retry policy as the self-registration spawn;
+            // the writer owns the propose → forward decision.
+            let writer = ClusterWriter::new(
+                raft.clone(),
+                Arc::new(network_factory_clone.clone()),
+                Arc::new(cluster.clone()),
+            );
             let node_ids: Vec<u64> = initial_members.keys().copied().collect();
             tokio::spawn(async move {
                 for (nid, range) in frogdb_core::cluster::even_slot_ranges(&node_ids) {
@@ -433,8 +432,8 @@ pub(super) async fn init_cluster(
                     };
 
                     for attempt in 0..30 {
-                        match raft_clone.client_write(cmd.clone()).await {
-                            Ok(_) => {
+                        match writer.propose(cmd.clone()).await {
+                            Ok(Proposed::Committed(_)) => {
                                 info!(
                                     node_id = nid,
                                     start = start,
@@ -443,31 +442,22 @@ pub(super) async fn init_cluster(
                                 );
                                 break;
                             }
+                            Ok(Proposed::Forwarded) => {
+                                info!(
+                                    node_id = nid,
+                                    start = start,
+                                    end = end,
+                                    "Replicated slot assignment via leader forward"
+                                );
+                                break;
+                            }
                             Err(e) => {
-                                use openraft::error::{ClientWriteError, RaftError};
-                                if let RaftError::APIError(ClientWriteError::ForwardToLeader(fwd)) =
-                                    &e
-                                    && let Some(leader_id) = fwd.leader_id
-                                    && let Some(leader_addr) =
-                                        network_factory.get_node_addr(leader_id)
-                                {
-                                    let net = network_factory.connect(leader_id, leader_addr);
-                                    if net.forward_write(cmd.clone()).await.is_ok() {
-                                        info!(
-                                            node_id = nid,
-                                            start = start,
-                                            end = end,
-                                            "Replicated slot assignment via leader forward"
-                                        );
-                                        break;
-                                    }
-                                }
                                 if attempt < 29 {
                                     tokio::time::sleep(Duration::from_millis(500)).await;
                                 } else {
                                     warn!(
                                         node_id = nid,
-                                        error = %e,
+                                        error = ?e,
                                         "Failed to replicate slot assignment after 30 attempts"
                                     );
                                 }

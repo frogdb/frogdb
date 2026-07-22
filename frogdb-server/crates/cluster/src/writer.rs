@@ -51,6 +51,7 @@ pub struct LeaderRedirect {
 /// caller of a *local* commit runs the leader-only side effects (e.g.
 /// `spawn_add_raft_voter`); on the forward path the leader-side `ForwardedWrite`
 /// receiver already performed them, so the caller must **not** repeat them.
+#[derive(Debug)]
 pub enum Proposed {
     /// This node was the leader and committed locally. Carries the state
     /// machine's [`ClusterResponse`]; the caller still inspects `Error(_)` and,
@@ -63,6 +64,7 @@ pub enum Proposed {
 }
 
 /// Failure outcome of a [`propose`](ClusterWriter::propose).
+#[derive(Debug)]
 pub enum ProposeError {
     /// Not the leader and the forward did not land — the forward failed for any
     /// reason (network failure, a state-machine rejection on the leader, or the
@@ -268,11 +270,7 @@ mod tests {
     }
 
     impl LeaderForwarder for FakeForwarder {
-        async fn forward_write(
-            &self,
-            _leader_id: NodeId,
-            _cmd: ClusterCommand,
-        ) -> Result<(), ()> {
+        async fn forward_write(&self, _leader_id: NodeId, _cmd: ClusterCommand) -> Result<(), ()> {
             self.outcome
         }
     }

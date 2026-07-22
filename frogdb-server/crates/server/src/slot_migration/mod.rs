@@ -10,9 +10,11 @@
 //!
 //! [`begin`](Self::begin), [`complete`](Self::complete), and
 //! [`cancel`](Self::cancel) commit `ClusterCommand::*SlotMigration` entries
-//! through Raft. They handle `ForwardToLeader` errors by forwarding the write
-//! through the cluster bus or returning a `REDIRECT` to the caller, mirroring
-//! the existing pattern used by [`crate::connection::cluster::handle_raft_command`].
+//! through Raft via the shared [`ClusterWriter`] propose seam, which owns the
+//! propose → forward → redirect saga. `commit` keeps only its own policy:
+//! render a `ProposeError::Redirect` into the wire `REDIRECT`/`CLUSTERDOWN`
+//! string (shared with [`crate::connection::cluster::handle_raft_command`] via
+//! [`crate::connection::cluster::redirect_to_response`]).
 //!
 //! ## Routing
 //!
@@ -37,16 +39,16 @@ mod validator;
 pub use routing::{RouteDecision, RouteOutcome};
 pub(crate) use validator::SlotValidator;
 
-use frogdb_core::cluster::ClusterCommand;
+use frogdb_core::cluster::{ClusterCommand, ClusterWriter, ProposeError, Proposed};
 use frogdb_core::sync::Arc;
 use frogdb_core::{
     ClusterNetworkFactory, ClusterRaft, ClusterResponse, ClusterState, NodeId, ShardSender,
     SlotMigrationCompleteEvent,
 };
 use frogdb_protocol::Response;
-use openraft::error::{ClientWriteError, RaftError};
 use tokio::sync::mpsc::UnboundedReceiver;
 
+use crate::connection::cluster::redirect_to_response;
 use crate::net::spawn;
 
 /// Coordinator for slot migration lifecycle, routing, and post-completion events.
@@ -127,41 +129,24 @@ impl SlotMigrationCoordinator {
     /// [`crate::connection::cluster::handle_raft_command`]. Returns
     /// `Response::ok()` on success, or a properly formatted error response.
     async fn commit(&self, cmd: ClusterCommand) -> Response {
-        let cmd_clone = cmd.clone();
-        match self.raft.client_write(cmd).await {
-            Ok(resp) => {
-                if let ClusterResponse::Error(msg) = &resp.data {
+        // Slot-migration commits carry no register/voter side effects, so
+        // leader-commit and forward-success collapse to the same success shape;
+        // only a leader commit can surface a state-machine error.
+        let writer = ClusterWriter::new(
+            self.raft.clone(),
+            self.network_factory.clone(),
+            self.cluster_state.clone(),
+        );
+        match writer.propose(cmd).await {
+            Ok(Proposed::Committed(resp)) => {
+                if let ClusterResponse::Error(msg) = &resp {
                     return Response::error(format!("ERR {}", msg));
                 }
                 Response::ok()
             }
-            Err(e) => {
-                if let RaftError::APIError(ClientWriteError::ForwardToLeader(forward)) = &e {
-                    if let Some(leader_id) = forward.leader_id
-                        && let Some(leader_addr) = self.network_factory.get_node_addr(leader_id)
-                    {
-                        let net = self.network_factory.connect(leader_id, leader_addr);
-                        if net.forward_write(cmd_clone).await.is_ok() {
-                            return Response::ok();
-                        }
-                    }
-
-                    if let Some(leader_id) = forward.leader_id
-                        && let Some(leader_info) = self.cluster_state.get_node(leader_id)
-                    {
-                        return Response::error(format!(
-                            "REDIRECT {} {}",
-                            leader_id, leader_info.addr
-                        ));
-                    }
-
-                    return Response::error(format!(
-                        "CLUSTERDOWN No leader available: {:?}",
-                        forward.leader_id
-                    ));
-                }
-                Response::error(format!("ERR Raft error: {}", e))
-            }
+            Ok(Proposed::Forwarded) => Response::ok(),
+            Err(ProposeError::Redirect(r)) => redirect_to_response(r),
+            Err(ProposeError::Raft(e)) => Response::error(format!("ERR Raft error: {}", e)),
         }
     }
 }

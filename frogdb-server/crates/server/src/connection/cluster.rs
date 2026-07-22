@@ -5,12 +5,25 @@
 //! - CLUSTER FAILOVER
 
 use frogdb_core::ClusterRaft;
-use frogdb_core::cluster::{ClusterCommand, ClusterResponse, spawn_add_raft_voter};
+use frogdb_core::cluster::{
+    ClusterCommand, ClusterResponse, ClusterWriter, LeaderRedirect, ProposeError, Proposed,
+    spawn_add_raft_voter,
+};
 use frogdb_protocol::{RaftClusterOp, Response, SlotMigrationKind};
-use openraft::error::{ClientWriteError, RaftError};
 
 use crate::connection::ConnectionHandler;
 use crate::connection::util::convert_raft_cluster_op;
+
+/// Render a typed [`LeaderRedirect`] into the RESP `REDIRECT`/`CLUSTERDOWN` wire
+/// string. This is the single home for the two byte-identical format strings the
+/// forwarding metadata-write sites (`handle_raft_command` and
+/// `SlotMigrationCoordinator::commit`) previously maintained by hand.
+pub(crate) fn redirect_to_response(r: LeaderRedirect) -> Response {
+    match (r.leader_id, r.leader_client_addr) {
+        (Some(id), Some(addr)) => Response::error(format!("REDIRECT {} {}", id, addr)),
+        (id, _) => Response::error(format!("CLUSTERDOWN No leader available: {:?}", id)),
+    }
+}
 
 impl ConnectionHandler {
     /// Handle a Raft cluster command asynchronously.
@@ -41,6 +54,16 @@ impl ConnectionHandler {
                 .await;
         }
 
+        // The forward/redirect saga needs the network factory (bus forward
+        // target) and cluster state (client redirect address) in addition to the
+        // Raft instance. In cluster mode all three are populated together (see
+        // `cluster_init`), so their absence is standalone mode.
+        let (network_factory, cluster_state) =
+            match (&self.cluster.network_factory, &self.cluster.cluster_state) {
+                (Some(nf), Some(cs)) => (nf, cs),
+                _ => return Response::error("ERR Cluster mode not enabled"),
+            };
+
         // Convert protocol RaftClusterOp to core ClusterCommand.
         //
         // Failover maps to the atomic composite command: role change, slot
@@ -63,83 +86,44 @@ impl ConnectionHandler {
             },
         };
 
-        // Clone cmd before consuming it in client_write — needed for cluster bus
-        // forwarding if this node isn't the Raft leader.
-        let cmd_clone = cmd.clone();
-
-        // Execute the Raft command
-        match raft.client_write(cmd).await {
-            Ok(resp) => {
+        // The writer owns the propose → (forward | redirect) saga and its
+        // retained-for-forward command copy; the connection layer keeps only its
+        // register/unregister side effects, which diverge by outcome.
+        let writer =
+            ClusterWriter::new(raft.clone(), network_factory.clone(), cluster_state.clone());
+        match writer.propose(cmd).await {
+            Ok(Proposed::Committed(resp)) => {
                 // Check if the state machine returned an error
-                if let ClusterResponse::Error(msg) = &resp.data {
+                if let ClusterResponse::Error(msg) = &resp {
                     return Response::error(format!("ERR {}", msg));
                 }
 
-                // Update NetworkFactory after successful Raft commit
-                if let Some((node_id, addr)) = register_node
-                    && let Some(ref factory) = self.cluster.network_factory
-                {
-                    factory.register_node(node_id, addr);
-
-                    // Also add to Raft voter set so the new node can participate in consensus
-                    if let Some(ref raft) = self.cluster.raft {
-                        spawn_add_raft_voter((**raft).clone(), node_id, addr);
-                    }
+                // Leader-local commit: register the node AND add it to the Raft
+                // voter set. This is the only voter-add on the pure-leader path
+                // (there is no remote receiver to do it).
+                if let Some((node_id, addr)) = register_node {
+                    network_factory.register_node(node_id, addr);
+                    spawn_add_raft_voter((**raft).clone(), node_id, addr);
                 }
-                if let Some(node_id) = unregister_node
-                    && let Some(ref factory) = self.cluster.network_factory
-                {
-                    factory.remove_node(node_id);
+                if let Some(node_id) = unregister_node {
+                    network_factory.remove_node(node_id);
                 }
                 Response::ok()
             }
-            Err(e) => {
-                // Check if this is a ForwardToLeader error
-                if let RaftError::APIError(ClientWriteError::ForwardToLeader(forward)) = &e {
-                    // Try forwarding via cluster bus first (needed for CLUSTER REPLICATE
-                    // and other commands where the receiving node's identity matters)
-                    if let Some(leader_id) = forward.leader_id
-                        && let Some(ref factory) = self.cluster.network_factory
-                        && let Some(leader_addr) = factory.get_node_addr(leader_id)
-                    {
-                        let net = factory.connect(leader_id, leader_addr);
-                        if net.forward_write(cmd_clone).await.is_ok() {
-                            // Update NetworkFactory after successful commit
-                            if let Some((node_id, addr)) = register_node
-                                && let Some(ref f) = self.cluster.network_factory
-                            {
-                                f.register_node(node_id, addr);
-                            }
-                            if let Some(node_id) = unregister_node
-                                && let Some(ref f) = self.cluster.network_factory
-                            {
-                                f.remove_node(node_id);
-                            }
-                            return Response::ok();
-                        }
-                        // Fall through to REDIRECT below
-                    }
-
-                    // Try to get the leader's client address from ClusterState
-                    if let Some(leader_id) = forward.leader_id
-                        && let Some(ref cluster_state) = self.cluster.cluster_state
-                        && let Some(leader_info) = cluster_state.get_node(leader_id)
-                    {
-                        // Return redirect error with leader's client address
-                        return Response::error(format!(
-                            "REDIRECT {} {}",
-                            leader_id, leader_info.addr
-                        ));
-                    }
-                    // Leader unknown - return error with whatever info we have
-                    return Response::error(format!(
-                        "CLUSTERDOWN No leader available: {:?}",
-                        forward.leader_id
-                    ));
+            Ok(Proposed::Forwarded) => {
+                // Forwarded to the leader: register only. The voter-add was
+                // performed by the leader-side `ForwardedWrite` receiver, so
+                // repeating it here would spawn a doomed follower `add_learner`.
+                if let Some((node_id, addr)) = register_node {
+                    network_factory.register_node(node_id, addr);
                 }
-                // Other errors
-                Response::error(format!("ERR Raft error: {}", e))
+                if let Some(node_id) = unregister_node {
+                    network_factory.remove_node(node_id);
+                }
+                Response::ok()
             }
+            Err(ProposeError::Redirect(r)) => redirect_to_response(r),
+            Err(ProposeError::Raft(e)) => Response::error(format!("ERR Raft error: {}", e)),
         }
     }
 
@@ -222,5 +206,46 @@ impl ConnectionHandler {
         }
 
         Response::ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pin the exact `REDIRECT`/`CLUSTERDOWN` wire bytes so the collapse of the
+    /// two former byte-identical copies into `redirect_to_response` is provably
+    /// lossless.
+    #[test]
+    fn redirect_to_response_renders_wire_strings() {
+        let redirect = redirect_to_response(LeaderRedirect {
+            leader_id: Some(7),
+            leader_client_addr: Some("127.0.0.1:6379".parse().unwrap()),
+        });
+        assert_eq!(
+            redirect,
+            Response::error("REDIRECT 7 127.0.0.1:6379".to_string())
+        );
+
+        // Leader known but its client address is not resolvable → CLUSTERDOWN
+        // carrying `Some(id)`, matching the historic `{:?}` rendering.
+        let clusterdown_known = redirect_to_response(LeaderRedirect {
+            leader_id: Some(7),
+            leader_client_addr: None,
+        });
+        assert_eq!(
+            clusterdown_known,
+            Response::error("CLUSTERDOWN No leader available: Some(7)".to_string())
+        );
+
+        // No leader at all → CLUSTERDOWN carrying `None`.
+        let clusterdown_none = redirect_to_response(LeaderRedirect {
+            leader_id: None,
+            leader_client_addr: None,
+        });
+        assert_eq!(
+            clusterdown_none,
+            Response::error("CLUSTERDOWN No leader available: None".to_string())
+        );
     }
 }
