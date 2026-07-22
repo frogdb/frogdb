@@ -6,46 +6,33 @@ use super::worker::ShardWorker;
 
 impl ShardWorker {
     /// Handle SUBSCRIBE - subscribe to broadcast channels.
+    ///
+    /// Registration only: the caller awaits a bare ack (a barrier ensuring the
+    /// registration is visible before the client's confirmation). The
+    /// client-visible subscription count is the per-connection one, computed
+    /// server-side before this handler runs.
     pub(crate) fn handle_subscribe(
         &mut self,
         channels: Vec<Bytes>,
         conn_id: ConnId,
         sender: PubSubSender,
-    ) -> Vec<usize> {
-        // This returns the total subscription count after each subscription
-        // The count is just a placeholder here since we don't track across shards
-        let counts: Vec<usize> = channels
-            .into_iter()
-            .enumerate()
-            .map(|(i, channel)| {
-                self.subscriptions
-                    .subscribe(channel, conn_id, sender.clone());
-                i + 1 // Placeholder count
-            })
-            .collect();
+    ) {
+        for channel in channels {
+            self.subscriptions
+                .subscribe(channel, conn_id, sender.clone());
+        }
         self.subscriptions.check_thresholds_after_subscribe(
             self.identity.shard_id(),
             self.observability.metrics_arc(),
         );
-        counts
     }
 
     /// Handle UNSUBSCRIBE - unsubscribe from broadcast channels.
-    pub(crate) fn handle_unsubscribe(
-        &mut self,
-        channels: Vec<Bytes>,
-        conn_id: ConnId,
-    ) -> Vec<usize> {
-        let counts: Vec<usize> = channels
-            .into_iter()
-            .enumerate()
-            .map(|(i, channel)| {
-                self.subscriptions.unsubscribe(&channel, conn_id);
-                i // Placeholder remaining count
-            })
-            .collect();
+    pub(crate) fn handle_unsubscribe(&mut self, channels: Vec<Bytes>, conn_id: ConnId) {
+        for channel in channels {
+            self.subscriptions.unsubscribe(&channel, conn_id);
+        }
         self.subscriptions.reset_thresholds_if_needed();
-        counts
     }
 
     /// Handle PSUBSCRIBE - subscribe to patterns.
@@ -54,39 +41,23 @@ impl ShardWorker {
         patterns: Vec<Bytes>,
         conn_id: ConnId,
         sender: PubSubSender,
-    ) -> Vec<usize> {
-        let counts: Vec<usize> = patterns
-            .into_iter()
-            .enumerate()
-            .map(|(i, pattern)| {
-                self.subscriptions
-                    .psubscribe(pattern, conn_id, sender.clone());
-                i + 1 // Placeholder count
-            })
-            .collect();
+    ) {
+        for pattern in patterns {
+            self.subscriptions
+                .psubscribe(pattern, conn_id, sender.clone());
+        }
         self.subscriptions.check_thresholds_after_subscribe(
             self.identity.shard_id(),
             self.observability.metrics_arc(),
         );
-        counts
     }
 
     /// Handle PUNSUBSCRIBE - unsubscribe from patterns.
-    pub(crate) fn handle_punsubscribe(
-        &mut self,
-        patterns: Vec<Bytes>,
-        conn_id: ConnId,
-    ) -> Vec<usize> {
-        let counts: Vec<usize> = patterns
-            .into_iter()
-            .enumerate()
-            .map(|(i, pattern)| {
-                self.subscriptions.punsubscribe(&pattern, conn_id);
-                i // Placeholder remaining count
-            })
-            .collect();
+    pub(crate) fn handle_punsubscribe(&mut self, patterns: Vec<Bytes>, conn_id: ConnId) {
+        for pattern in patterns {
+            self.subscriptions.punsubscribe(&pattern, conn_id);
+        }
         self.subscriptions.reset_thresholds_if_needed();
-        counts
     }
 
     /// Handle SSUBSCRIBE - subscribe to sharded channels.
@@ -95,39 +66,23 @@ impl ShardWorker {
         channels: Vec<Bytes>,
         conn_id: ConnId,
         sender: PubSubSender,
-    ) -> Vec<usize> {
-        let counts: Vec<usize> = channels
-            .into_iter()
-            .enumerate()
-            .map(|(i, channel)| {
-                self.subscriptions
-                    .ssubscribe(channel, conn_id, sender.clone());
-                i + 1 // Placeholder count
-            })
-            .collect();
+    ) {
+        for channel in channels {
+            self.subscriptions
+                .ssubscribe(channel, conn_id, sender.clone());
+        }
         self.subscriptions.check_thresholds_after_subscribe(
             self.identity.shard_id(),
             self.observability.metrics_arc(),
         );
-        counts
     }
 
     /// Handle SUNSUBSCRIBE - unsubscribe from sharded channels.
-    pub(crate) fn handle_sunsubscribe(
-        &mut self,
-        channels: Vec<Bytes>,
-        conn_id: ConnId,
-    ) -> Vec<usize> {
-        let counts: Vec<usize> = channels
-            .into_iter()
-            .enumerate()
-            .map(|(i, channel)| {
-                self.subscriptions.sunsubscribe(&channel, conn_id);
-                i // Placeholder remaining count
-            })
-            .collect();
+    pub(crate) fn handle_sunsubscribe(&mut self, channels: Vec<Bytes>, conn_id: ConnId) {
+        for channel in channels {
+            self.subscriptions.sunsubscribe(&channel, conn_id);
+        }
         self.subscriptions.reset_thresholds_if_needed();
-        counts
     }
 
     /// Handle slot migration for sharded pubsub subscribers.
