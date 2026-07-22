@@ -159,6 +159,15 @@ pub struct HashMapStore {
     /// but owns its own reporting (`ExpiryResult::emptied_keys`) and discards the
     /// buffer at the sweep seam, so the buffer only ever fires for lazy reads.
     lazily_emptied: Vec<Bytes>,
+    /// Count of hash fields reaped by a **lazy** read
+    /// (`purge_expired_hash_fields`) since the last `take_lazily_expired_fields`,
+    /// whether or not the reap emptied the key. Reported to the worker so it can
+    /// bump `frogdb_fields_expired_total` with the same per-field parity the
+    /// active sweep applies from `ExpiryResult::fields_expired`. Like
+    /// `lazily_emptied`, the active sweep populates this through the shared
+    /// `purge_expired_hash_fields` but owns its own field counting and discards
+    /// this counter at the sweep seam, so it only ever counts genuine lazy reaps.
+    lazily_expired_fields: u64,
     /// Whether passive/lazy expiry is suppressed (set during CLIENT PAUSE).
     /// When true, expired keys are logically invisible (get returns None)
     /// but not physically deleted and the expired_keys counter is not
@@ -202,6 +211,7 @@ impl HashMapStore {
             expired_keys: 0,
             lazily_purged: Vec::new(),
             lazily_emptied: Vec::new(),
+            lazily_expired_fields: 0,
             expiry_suppressed: false,
             suppress_touch: false,
             keysizes: KeysizeHistograms::new(),
@@ -224,6 +234,7 @@ impl HashMapStore {
             expired_keys: 0,
             lazily_purged: Vec::new(),
             lazily_emptied: Vec::new(),
+            lazily_expired_fields: 0,
             expiry_suppressed: false,
             suppress_touch: false,
             keysizes: KeysizeHistograms::new(),
@@ -474,6 +485,18 @@ impl HashMapStore {
     /// Total number of expired keys (lazy + active).
     pub fn expired_keys(&self) -> u64 {
         self.expired_keys
+    }
+
+    /// Whether every lazy-purge report buffer is currently empty — the
+    /// whole-key removal buffer, the last-hash-field-death buffer, and the
+    /// lazy field-reap counter. Used by the active-expiry cycle's
+    /// `debug_assert!` to catch any future interleaving that would leave a
+    /// partially-drained command's report pending across the sweep's
+    /// discard-and-own-reporting seam.
+    pub fn lazy_purge_buffers_empty(&self) -> bool {
+        self.lazily_purged.is_empty()
+            && self.lazily_emptied.is_empty()
+            && self.lazily_expired_fields == 0
     }
 
     /// Add to the expired keys counter (for active expiry which bypasses `check_and_delete_expired`).
@@ -1134,6 +1157,10 @@ impl Store for HashMapStore {
         std::mem::take(&mut self.lazily_emptied)
     }
 
+    fn take_lazily_expired_fields(&mut self) -> u64 {
+        std::mem::take(&mut self.lazily_expired_fields)
+    }
+
     fn set_with_options(&mut self, key: Bytes, value: Value, opts: SetOptions) -> SetResult {
         // Check condition (NX/XX)
         let key_exists = self.data.contains_key(&key) && !self.check_and_delete_expired(&key);
@@ -1369,6 +1396,14 @@ impl Store for HashMapStore {
         };
 
         let count = removed_fields.len();
+
+        // Report the reaped fields so the worker can bump
+        // `frogdb_fields_expired_total` with per-field parity to the active
+        // sweep (which counts `ExpiryResult::fields_expired`). Counts every lazy
+        // reap, whether or not it empties the key below. The active sweep also
+        // lands here but discards this counter at its seam, so it only ever
+        // counts genuine lazy reaps.
+        self.lazily_expired_fields += count as u64;
 
         // Update field expiry index
         for field in &removed_fields {

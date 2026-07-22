@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64};
 
 use frogdb_protocol::Response;
+use frogdb_types::metrics::definitions::{FieldsExpired, KeysExpired};
 use tokio::sync::mpsc;
 
 use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
@@ -561,6 +562,20 @@ impl ShardWorker {
     /// branch (tracking → search → notify → probe, then the waiter drain), with
     /// the version bump applied once at the end for the whole batch.
     fn drain_lazy_purge_effects(&mut self, bump_version: bool) {
+        // Fields reaped by this lazy read (whether or not they emptied a key).
+        // Counted first and unconditionally — a lazy reap that shrinks but does
+        // not empty a hash removes no key, so this is the only surface that sees
+        // it. Mirrors the active sweep's per-field `frogdb_fields_expired_total`
+        // increment (`ExpiryResult::fields_expired`, event_loop.rs).
+        let expired_fields = self.store.take_lazily_expired_fields();
+        if expired_fields > 0 {
+            FieldsExpired::inc_by(
+                self.observability.metrics(),
+                expired_fields,
+                &self.shard_id().to_string(),
+            );
+        }
+
         let purged = self.store.take_lazily_purged();
         // Keys removed because their last hash field expired on this lazy read.
         // Distinct seam, distinct event: Redis emits a generic `del` (not
@@ -609,6 +624,24 @@ impl ShardWorker {
                 self.shard_id() as u64,
             );
             self.drain_stream_waiters_with_error(key);
+        }
+        // Count each emptied key as one key expiration, on the same INFO stat
+        // (`expired_keys`) AND Prometheus (`frogdb_keys_expired_total`) surfaces
+        // the active sweep uses for its `emptied_keys` (event_loop.rs:
+        // add_expired_keys + KeysExpired::inc_by via keys_expired()). The
+        // whole-key `purged` keys already had the INFO stat bumped inside the
+        // store (`check_and_delete_expired`), so only the emptied batch is
+        // counted here. No double-count with the sweep: it discards the
+        // lazily-emptied buffer before its own counting path, so a swept key
+        // never reaches this drain.
+        if !emptied.is_empty() {
+            let n = emptied.len() as u64;
+            self.store.add_expired_keys(n);
+            KeysExpired::inc_by(
+                self.observability.metrics(),
+                n,
+                &self.shard_id().to_string(),
+            );
         }
         if bump_version {
             // One version bump for the batch (both seams), mirroring active
