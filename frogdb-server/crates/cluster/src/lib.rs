@@ -48,6 +48,7 @@ pub mod state;
 pub mod storage;
 pub mod types;
 pub mod version_gate;
+pub mod wire;
 
 pub use network::{
     BusRpc, ClusterNetwork, ClusterNetworkFactory, ClusterRpcRequest, ClusterRpcResponse,

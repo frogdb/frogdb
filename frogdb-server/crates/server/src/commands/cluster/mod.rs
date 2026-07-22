@@ -14,6 +14,7 @@
 mod admin;
 
 use bytes::Bytes;
+use frogdb_cluster::wire;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
     ExecutionStrategy, KeySpec, LookupSpec, WaiterWake, WalStrategy, slot_for_key,
@@ -298,107 +299,22 @@ total_cluster_links_buffer_limit_exceeded:0\r\n";
 }
 
 /// CLUSTER NODES - Returns the cluster nodes configuration.
+///
+/// Rendering is owned by `frogdb_cluster::wire::render_cluster_nodes`; this
+/// adapter just picks the snapshot (live cluster state, or a synthetic
+/// single-primary standalone snapshot) and the local node id.
 fn cluster_nodes(ctx: &mut CommandContext) -> Result<Response, CommandError> {
-    // Format: <id> <ip:port@cport> <flags> <master> <ping-sent> <pong-recv> <config-epoch> <link-state> <slot> <slot> ... <slot>
-    if let Some(cluster_state) = ctx.cluster_state {
+    let text = if let Some(cluster_state) = ctx.cluster_state {
         let snapshot = cluster_state.snapshot();
         let my_id = ctx.node_id.unwrap_or(0);
-
-        let mut lines = Vec::new();
-        for node in snapshot.nodes.values() {
-            // Build flags string
-            let mut flags = Vec::new();
-            if node.id == my_id {
-                flags.push("myself");
-            }
-            if node.is_primary() {
-                flags.push("master");
-            }
-            if node.is_replica() {
-                flags.push("slave");
-            }
-            if node.flags.fail {
-                flags.push("fail");
-            }
-            if node.flags.pfail {
-                flags.push("fail?");
-            }
-            if node.flags.handshake {
-                flags.push("handshake");
-            }
-            if node.flags.noaddr {
-                flags.push("noaddr");
-            }
-            let flags_str = if flags.is_empty() {
-                "noflags".to_string()
-            } else {
-                flags.join(",")
-            };
-
-            // Get master id (- for primary)
-            let master_id = node
-                .primary_id
-                .map(|id| format!("{:040x}", id))
-                .unwrap_or_else(|| "-".to_string());
-
-            // Get slot ranges for this node
-            let slot_ranges = snapshot.get_node_slots(node.id);
-            let slots_str: String = slot_ranges
-                .iter()
-                .map(|r| {
-                    if r.start == r.end {
-                        format!("{}", r.start)
-                    } else {
-                        format!("{}-{}", r.start, r.end)
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
-
-            // Append migration markers for this node
-            let mut migration_str = String::new();
-            for migration in snapshot.migrations.values() {
-                if migration.source_node == node.id {
-                    migration_str.push_str(&format!(
-                        " [{}->-{:040x}]",
-                        migration.slot, migration.target_node
-                    ));
-                } else if migration.target_node == node.id {
-                    migration_str.push_str(&format!(
-                        " [{}-<-{:040x}]",
-                        migration.slot, migration.source_node
-                    ));
-                }
-            }
-
-            // Build line
-            let line = format!(
-                "{:040x} {}:{}@{} {} {} 0 0 {} connected {}{}",
-                node.id,
-                node.addr.ip(),
-                node.addr.port(),
-                node.cluster_addr.port(),
-                flags_str,
-                master_id,
-                node.config_epoch,
-                slots_str,
-                migration_str
-            );
-
-            lines.push(line);
-        }
-
-        Ok(Response::bulk(Bytes::from(lines.join("\n") + "\n")))
+        wire::render_cluster_nodes(&snapshot, my_id)
     } else {
-        // Standalone mode - return self as a single primary with all slots
+        // Standalone mode - single primary owning all slots.
         let node_id = ctx.node_id.unwrap_or(1);
-        let info = format!(
-            "{:040x} 127.0.0.1:6379@16379 myself,master - 0 0 0 connected 0-16383\n",
-            node_id
-        );
+        wire::render_cluster_nodes(&wire::standalone_snapshot(node_id), node_id)
+    };
 
-        Ok(Response::bulk(Bytes::from(info)))
-    }
+    Ok(Response::bulk(Bytes::from(text)))
 }
 
 /// CLUSTER MYID - Returns this node's unique ID.
@@ -409,206 +325,126 @@ fn cluster_myid(ctx: &mut CommandContext) -> Result<Response, CommandError> {
 }
 
 /// CLUSTER SLOTS - Returns slot to node mappings (deprecated, use CLUSTER SHARDS).
+///
+/// Format: `[[start, end, [ip, port, id], [replica_ip, replica_port, replica_id], ...], ...]`.
+/// Grouping/sorting is owned by `frogdb_cluster::wire::shard_views`; this adapter
+/// maps each shard's slot ranges to RESP. Shards whose primary owns zero slots are
+/// skipped (matching the historical SLOTS behavior; SHARDS keeps them).
 fn cluster_slots(ctx: &mut CommandContext) -> Result<Response, CommandError> {
-    // Format: [[start, end, [ip, port, id], [replica_ip, replica_port, replica_id], ...], ...]
-    if let Some(cluster_state) = ctx.cluster_state {
-        let snapshot = cluster_state.snapshot();
-        let mut slot_info = Vec::new();
+    let snapshot = match ctx.cluster_state {
+        Some(cluster_state) => cluster_state.snapshot(),
+        // Standalone mode - single primary owning all slots.
+        None => wire::standalone_snapshot(ctx.node_id.unwrap_or(1)),
+    };
 
-        // Group slots by primary node
-        let mut node_slots: std::collections::HashMap<u64, Vec<(u16, u16)>> =
-            std::collections::HashMap::new();
+    Ok(map_slots_response(&wire::shard_views(&snapshot)))
+}
 
-        for (slot, node_id) in &snapshot.slot_assignment {
-            // Find the primary for this slot
-            let primary_id = if let Some(node) = snapshot.nodes.get(node_id) {
-                node.primary_id.unwrap_or(*node_id)
-            } else {
-                *node_id
-            };
-            node_slots
-                .entry(primary_id)
-                .or_default()
-                .push((*slot, *slot));
+/// Map grouped [`wire::ShardView`]s to the `CLUSTER SLOTS` RESP array. Skips
+/// shards whose primary owns no slots (their `slots` vec is empty).
+fn map_slots_response(views: &[wire::ShardView<'_>]) -> Response {
+    let mut slot_info = Vec::new();
+    for view in views {
+        if view.slots.is_empty() {
+            continue;
         }
-
-        // Convert to slot ranges and build response
-        for (node_id, _slots) in node_slots {
-            if let Some(node) = snapshot.nodes.get(&node_id) {
-                // Merge consecutive slots into ranges
-                let ranges = snapshot.get_node_slots(node_id);
-
-                for range in ranges {
-                    let mut entry = vec![
-                        Response::Integer(range.start as i64),
-                        Response::Integer(range.end as i64),
-                        Response::Array(vec![
-                            Response::bulk(Bytes::from(node.addr.ip().to_string())),
-                            Response::Integer(node.addr.port() as i64),
-                            Response::bulk(Bytes::from(format!("{:040x}", node.id))),
-                        ]),
-                    ];
-
-                    // Add replicas
-                    for replica in snapshot.nodes.values() {
-                        if replica.primary_id == Some(node_id) {
-                            entry.push(Response::Array(vec![
-                                Response::bulk(Bytes::from(replica.addr.ip().to_string())),
-                                Response::Integer(replica.addr.port() as i64),
-                                Response::bulk(Bytes::from(format!("{:040x}", replica.id))),
-                            ]));
-                        }
-                    }
-
-                    slot_info.push(Response::Array(entry));
-                }
+        for range in &view.slots {
+            let mut entry = vec![
+                Response::Integer(range.start as i64),
+                Response::Integer(range.end as i64),
+                Response::Array(vec![
+                    Response::bulk(Bytes::from(view.primary.node.addr.ip().to_string())),
+                    Response::Integer(view.primary.node.addr.port() as i64),
+                    Response::bulk(Bytes::from(wire::format_node_id(view.primary.id))),
+                ]),
+            ];
+            for replica in &view.replicas {
+                entry.push(Response::Array(vec![
+                    Response::bulk(Bytes::from(replica.node.addr.ip().to_string())),
+                    Response::Integer(replica.node.addr.port() as i64),
+                    Response::bulk(Bytes::from(wire::format_node_id(replica.id))),
+                ]));
             }
+            slot_info.push(Response::Array(entry));
         }
-
-        Ok(Response::Array(slot_info))
-    } else {
-        // Standalone mode - return all slots assigned to self
-        let node_id = ctx.node_id.unwrap_or(1);
-        let slot_info = vec![Response::Array(vec![
-            Response::Integer(0),
-            Response::Integer(16383),
-            Response::Array(vec![
-                Response::bulk(Bytes::from("127.0.0.1")),
-                Response::Integer(6379),
-                Response::bulk(Bytes::from(format!("{:040x}", node_id))),
-            ]),
-        ])];
-
-        Ok(Response::Array(slot_info))
     }
+    Response::Array(slot_info)
 }
 
 /// CLUSTER SHARDS - Returns information about cluster shards (Redis 7.0+).
+///
+/// Grouping/sorting is owned by `frogdb_cluster::wire::shard_views`; this adapter
+/// maps each shard to RESP, overlaying the server-only replication offset for the
+/// local node (which the `cluster` crate does not and must not see).
 fn cluster_shards(ctx: &mut CommandContext) -> Result<Response, CommandError> {
-    if let Some(cluster_state) = ctx.cluster_state {
-        let snapshot = cluster_state.snapshot();
-        let mut shards = Vec::new();
+    let my_offset = local_replication_offset(ctx);
+    let (snapshot, my_id) = match ctx.cluster_state {
+        Some(cluster_state) => (cluster_state.snapshot(), ctx.node_id),
+        // Standalone mode - single primary owning all slots. Attribute the local
+        // offset to that node regardless of whether `ctx.node_id` is set.
+        None => {
+            let node_id = ctx.node_id.unwrap_or(1);
+            (wire::standalone_snapshot(node_id), Some(node_id))
+        }
+    };
 
-        // Group nodes by primary (each primary + its replicas = one shard)
-        let mut primary_nodes: Vec<_> =
-            snapshot.nodes.values().filter(|n| n.is_primary()).collect();
-        primary_nodes.sort_by_key(|n| n.id);
+    Ok(map_shards_response(
+        &wire::shard_views(&snapshot),
+        my_id,
+        my_offset,
+    ))
+}
 
-        let my_offset = local_replication_offset(ctx);
+/// Map grouped [`wire::ShardView`]s to the `CLUSTER SHARDS` RESP array,
+/// overlaying `my_offset` as the `replication-offset` of the node whose id equals
+/// `my_id` (every other node reports 0).
+fn map_shards_response(
+    views: &[wire::ShardView<'_>],
+    my_id: Option<frogdb_cluster::NodeId>,
+    my_offset: i64,
+) -> Response {
+    let node_entry = |view: &wire::NodeView<'_>, role: &'static str| -> Response {
+        let offset = if Some(view.id) == my_id { my_offset } else { 0 };
+        Response::Array(vec![
+            Response::bulk(Bytes::from("id")),
+            Response::bulk(Bytes::from(wire::format_node_id(view.id))),
+            Response::bulk(Bytes::from("port")),
+            Response::Integer(view.node.addr.port() as i64),
+            Response::bulk(Bytes::from("ip")),
+            Response::bulk(Bytes::from(view.node.addr.ip().to_string())),
+            Response::bulk(Bytes::from("endpoint")),
+            Response::bulk(Bytes::from(view.node.addr.ip().to_string())),
+            Response::bulk(Bytes::from("role")),
+            Response::bulk(Bytes::from(role)),
+            Response::bulk(Bytes::from("replication-offset")),
+            Response::Integer(offset),
+            Response::bulk(Bytes::from("health")),
+            Response::bulk(Bytes::from(view.health)),
+        ])
+    };
 
-        for primary in primary_nodes {
-            let slot_ranges = snapshot.get_node_slots(primary.id);
-
-            // Build slots array [start1, end1, start2, end2, ...]
-            let mut slots = Vec::new();
-            for range in &slot_ranges {
-                slots.push(Response::Integer(range.start as i64));
-                slots.push(Response::Integer(range.end as i64));
-            }
-
-            // Build nodes array
-            let mut nodes = Vec::new();
-
-            // Add primary node
-            let primary_offset = if Some(primary.id) == ctx.node_id {
-                my_offset
-            } else {
-                0
-            };
-            nodes.push(Response::Array(vec![
-                Response::bulk(Bytes::from("id")),
-                Response::bulk(Bytes::from(format!("{:040x}", primary.id))),
-                Response::bulk(Bytes::from("port")),
-                Response::Integer(primary.addr.port() as i64),
-                Response::bulk(Bytes::from("ip")),
-                Response::bulk(Bytes::from(primary.addr.ip().to_string())),
-                Response::bulk(Bytes::from("endpoint")),
-                Response::bulk(Bytes::from(primary.addr.ip().to_string())),
-                Response::bulk(Bytes::from("role")),
-                Response::bulk(Bytes::from("master")),
-                Response::bulk(Bytes::from("replication-offset")),
-                Response::Integer(primary_offset),
-                Response::bulk(Bytes::from("health")),
-                Response::bulk(Bytes::from(if primary.flags.fail {
-                    "fail"
-                } else if primary.flags.pfail {
-                    "loading"
-                } else {
-                    "online"
-                })),
-            ]));
-
-            // Add replicas
-            for replica in snapshot.nodes.values() {
-                if replica.primary_id == Some(primary.id) {
-                    let replica_offset = if Some(replica.id) == ctx.node_id {
-                        my_offset
-                    } else {
-                        0
-                    };
-                    nodes.push(Response::Array(vec![
-                        Response::bulk(Bytes::from("id")),
-                        Response::bulk(Bytes::from(format!("{:040x}", replica.id))),
-                        Response::bulk(Bytes::from("port")),
-                        Response::Integer(replica.addr.port() as i64),
-                        Response::bulk(Bytes::from("ip")),
-                        Response::bulk(Bytes::from(replica.addr.ip().to_string())),
-                        Response::bulk(Bytes::from("endpoint")),
-                        Response::bulk(Bytes::from(replica.addr.ip().to_string())),
-                        Response::bulk(Bytes::from("role")),
-                        Response::bulk(Bytes::from("slave")),
-                        Response::bulk(Bytes::from("replication-offset")),
-                        Response::Integer(replica_offset),
-                        Response::bulk(Bytes::from("health")),
-                        Response::bulk(Bytes::from(if replica.flags.fail {
-                            "fail"
-                        } else if replica.flags.pfail {
-                            "loading"
-                        } else {
-                            "online"
-                        })),
-                    ]));
-                }
-            }
-
-            let shard = Response::Array(vec![
-                Response::bulk(Bytes::from("slots")),
-                Response::Array(slots),
-                Response::bulk(Bytes::from("nodes")),
-                Response::Array(nodes),
-            ]);
-
-            shards.push(shard);
+    let mut shards = Vec::new();
+    for view in views {
+        let mut slots = Vec::new();
+        for range in &view.slots {
+            slots.push(Response::Integer(range.start as i64));
+            slots.push(Response::Integer(range.end as i64));
         }
 
-        Ok(Response::Array(shards))
-    } else {
-        // Standalone mode - return single shard
-        let node_id = ctx.node_id.unwrap_or(1);
-        let shard = Response::Array(vec![
-            Response::bulk(Bytes::from("slots")),
-            Response::Array(vec![Response::Integer(0), Response::Integer(16383)]),
-            Response::bulk(Bytes::from("nodes")),
-            Response::Array(vec![Response::Array(vec![
-                Response::bulk(Bytes::from("id")),
-                Response::bulk(Bytes::from(format!("{:040x}", node_id))),
-                Response::bulk(Bytes::from("port")),
-                Response::Integer(6379),
-                Response::bulk(Bytes::from("ip")),
-                Response::bulk(Bytes::from("127.0.0.1")),
-                Response::bulk(Bytes::from("endpoint")),
-                Response::bulk(Bytes::from("127.0.0.1")),
-                Response::bulk(Bytes::from("role")),
-                Response::bulk(Bytes::from("master")),
-                Response::bulk(Bytes::from("replication-offset")),
-                Response::Integer(local_replication_offset(ctx)),
-                Response::bulk(Bytes::from("health")),
-                Response::bulk(Bytes::from("online")),
-            ])]),
-        ]);
+        let mut nodes = Vec::with_capacity(1 + view.replicas.len());
+        nodes.push(node_entry(&view.primary, "master"));
+        for replica in &view.replicas {
+            nodes.push(node_entry(replica, "slave"));
+        }
 
-        Ok(Response::Array(vec![shard]))
+        shards.push(Response::Array(vec![
+            Response::bulk(Bytes::from("slots")),
+            Response::Array(slots),
+            Response::bulk(Bytes::from("nodes")),
+            Response::Array(nodes),
+        ]));
     }
+    Response::Array(shards)
 }
 
 /// CLUSTER KEYSLOT - Returns the hash slot for a key.
@@ -738,3 +574,122 @@ fn cluster_help() -> Result<Response, CommandError> {
 // ASKING / READONLY / READWRITE were migrated behind the ConnCtx seam as
 // mutating connection commands (they set per-connection cluster-redirect flags).
 // See `crate::connection::connection_state_conn_command`.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use frogdb_cluster::{ClusterSnapshot, NodeInfo};
+
+    fn addr(s: &str) -> std::net::SocketAddr {
+        s.parse().unwrap()
+    }
+
+    fn as_arr(r: &Response) -> &[Response] {
+        match r {
+            Response::Array(v) => v,
+            _ => panic!("expected array"),
+        }
+    }
+
+    fn as_int(r: &Response) -> i64 {
+        match r {
+            Response::Integer(i) => *i,
+            _ => panic!("expected integer"),
+        }
+    }
+
+    fn as_bulk(r: &Response) -> String {
+        match r {
+            Response::Bulk(Some(b)) => String::from_utf8(b.to_vec()).unwrap(),
+            _ => panic!("expected bulk"),
+        }
+    }
+
+    /// Look up a value in a flat `[k1, v1, k2, v2, ...]` bulk-keyed node entry.
+    fn field<'a>(entry: &'a [Response], key: &str) -> &'a Response {
+        entry
+            .chunks_exact(2)
+            .find(|pair| as_bulk(&pair[0]) == key)
+            .map(|pair| &pair[1])
+            .unwrap_or_else(|| panic!("field {key} not found"))
+    }
+
+    /// Primary 1 owns slots 0-9 with replica 3; primary 2 owns zero slots.
+    fn fixture() -> ClusterSnapshot {
+        let mut snap = ClusterSnapshot::new();
+        snap.nodes.insert(
+            1,
+            NodeInfo::new_primary(1, addr("127.0.0.1:7001"), addr("127.0.0.1:17001")),
+        );
+        snap.nodes.insert(
+            2,
+            NodeInfo::new_primary(2, addr("127.0.0.1:7002"), addr("127.0.0.1:17002")),
+        );
+        snap.nodes.insert(
+            3,
+            NodeInfo::new_replica(3, addr("127.0.0.1:7003"), addr("127.0.0.1:17003"), 1),
+        );
+        for slot in 0..10 {
+            snap.slot_assignment.insert(slot, 1);
+        }
+        snap
+    }
+
+    #[test]
+    fn test_map_slots_response_skips_zero_slot_primary() {
+        let snap = fixture();
+        let resp = map_slots_response(&wire::shard_views(&snap));
+        let entries = as_arr(&resp);
+
+        // Only primary 1 (owns slots) is emitted; primary 2 (zero slots) skipped.
+        assert_eq!(entries.len(), 1);
+        let entry = as_arr(&entries[0]);
+        assert_eq!(as_int(&entry[0]), 0);
+        assert_eq!(as_int(&entry[1]), 9);
+
+        // [ip, port, id] for the primary, then the replica.
+        let primary = as_arr(&entry[2]);
+        assert_eq!(as_bulk(&primary[0]), "127.0.0.1");
+        assert_eq!(as_int(&primary[1]), 7001);
+        assert_eq!(
+            as_bulk(&primary[2]),
+            "0000000000000000000000000000000000000001"
+        );
+        let replica = as_arr(&entry[3]);
+        assert_eq!(
+            as_bulk(&replica[2]),
+            "0000000000000000000000000000000000000003"
+        );
+    }
+
+    #[test]
+    fn test_map_shards_response_overlays_offset_for_local_node_only() {
+        let snap = fixture();
+        // Local node is the primary (id 1); its offset must be overlaid, every
+        // other node reports 0. Zero-slot primary 2 is still present (SHARDS keeps
+        // it, unlike SLOTS).
+        let resp = map_shards_response(&wire::shard_views(&snap), Some(1), 42);
+        let shards = as_arr(&resp);
+        assert_eq!(shards.len(), 2);
+
+        // Shard 0 = primary 1 + replica 3.
+        let shard0 = as_arr(&shards[0]);
+        let nodes0 = as_arr(field(shard0, "nodes"));
+        assert_eq!(nodes0.len(), 2);
+
+        let primary = as_arr(&nodes0[0]);
+        assert_eq!(as_bulk(field(primary, "role")), "master");
+        assert_eq!(as_int(field(primary, "replication-offset")), 42);
+        assert_eq!(as_bulk(field(primary, "health")), "online");
+
+        let replica = as_arr(&nodes0[1]);
+        assert_eq!(as_bulk(field(replica, "role")), "slave");
+        assert_eq!(as_int(field(replica, "replication-offset")), 0);
+
+        // Shard 1 = zero-slot primary 2: present, empty slots, offset 0.
+        let shard1 = as_arr(&shards[1]);
+        assert!(as_arr(field(shard1, "slots")).is_empty());
+        let p2 = as_arr(&as_arr(field(shard1, "nodes"))[0]);
+        assert_eq!(as_int(field(p2, "replication-offset")), 0);
+    }
+}
