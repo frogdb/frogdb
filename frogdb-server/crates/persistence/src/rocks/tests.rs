@@ -1,5 +1,5 @@
 use super::*;
-use rocksdb::WriteBatch;
+use rocksdb::{DBCompressionType, WriteBatch};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -906,4 +906,118 @@ fn reclamation_disabled_by_config_knob() {
         0,
         "tombstone still clears the data"
     );
+}
+
+// --- Knob A: honor `compression` (proposal 19) ---
+
+/// The curated per-level preset table is pinned cell-by-cell so the presets
+/// cannot drift silently. Each `CompressionType` maps to a deliberate 7-level
+/// schedule (not a mechanical single-codec fill).
+#[test]
+fn per_level_schedule_curated_table() {
+    use DBCompressionType as D;
+    assert_eq!(
+        CompressionType::None.per_level_schedule(),
+        [
+            D::None,
+            D::None,
+            D::None,
+            D::None,
+            D::None,
+            D::None,
+            D::None
+        ],
+        "None preset compresses nothing"
+    );
+    assert_eq!(
+        CompressionType::Lz4.per_level_schedule(),
+        [D::None, D::None, D::Lz4, D::Lz4, D::Zstd, D::Zstd, D::Zstd],
+        "Lz4 preset is the balanced historical mixed Lz4/Zstd schedule"
+    );
+    assert_eq!(
+        CompressionType::Zstd.per_level_schedule(),
+        [
+            D::None,
+            D::None,
+            D::Zstd,
+            D::Zstd,
+            D::Zstd,
+            D::Zstd,
+            D::Zstd
+        ],
+        "Zstd preset is a uniform Zstd tail"
+    );
+    assert_eq!(
+        CompressionType::Snappy.per_level_schedule(),
+        [
+            D::None,
+            D::None,
+            D::Snappy,
+            D::Snappy,
+            D::Snappy,
+            D::Snappy,
+            D::Snappy
+        ],
+        "Snappy preset is a uniform Snappy tail"
+    );
+}
+
+/// Regression guard: the default compression (`Lz4`) must reproduce the exact
+/// historical hard-coded per-level array so honoring the knob does not silently
+/// change the default on-disk compression profile of existing data directories.
+#[test]
+fn default_compression_reproduces_historical_schedule() {
+    let historical = [
+        DBCompressionType::None,
+        DBCompressionType::None,
+        DBCompressionType::Lz4,
+        DBCompressionType::Lz4,
+        DBCompressionType::Zstd,
+        DBCompressionType::Zstd,
+        DBCompressionType::Zstd,
+    ];
+    assert_eq!(
+        RocksConfig::default().compression.per_level_schedule(),
+        historical,
+        "default RocksConfig must keep the historical compression schedule"
+    );
+}
+
+/// Open-time test: a store opened with a non-default `compression` opens, writes,
+/// and round-trips across a reopen. This exercises the config→CF-open wiring for
+/// `Zstd` (which now differs from `None`'s all-uncompressed schedule at the
+/// schedule level, pinned by `per_level_schedule_curated_table`).
+#[test]
+fn open_with_zstd_compression_roundtrips() {
+    let t = TempDir::new().unwrap();
+    let config = RocksConfig {
+        compression: CompressionType::Zstd,
+        ..RocksConfig::default()
+    };
+    {
+        let s = RocksStore::open(t.path(), 2, &config).unwrap();
+        s.put(0, b"k1", b"v1").unwrap();
+        s.put(1, b"k2", b"v2").unwrap();
+    }
+    // Reopen with the same compression and confirm data survives.
+    let s = RocksStore::open(t.path(), 2, &config).unwrap();
+    assert_eq!(s.get(0, b"k1").unwrap(), Some(b"v1".to_vec()));
+    assert_eq!(s.get(1, b"k2").unwrap(), Some(b"v2".to_vec()));
+}
+
+/// Snappy build-support probe (proposal 19 Risks): `compression = "snappy"` was
+/// validated-but-ignored before honoring, so this is the first value that routes
+/// to `DBCompressionType::Snappy`. If the linked RocksDB build lacked Snappy this
+/// would fail at CF open. Confirms the target build supports Snappy end-to-end.
+#[test]
+fn open_with_snappy_compression_succeeds() {
+    let t = TempDir::new().unwrap();
+    let config = RocksConfig {
+        compression: CompressionType::Snappy,
+        ..RocksConfig::default()
+    };
+    let s = RocksStore::open(t.path(), 1, &config)
+        .expect("Snappy compression must be supported by the linked RocksDB build");
+    s.put(0, b"k", b"v").unwrap();
+    assert_eq!(s.get(0, b"k").unwrap(), Some(b"v".to_vec()));
 }

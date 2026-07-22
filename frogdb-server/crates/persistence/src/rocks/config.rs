@@ -75,13 +75,49 @@ pub enum CompressionType {
     Zstd,
 }
 impl CompressionType {
-    #[allow(dead_code)]
+    /// Translate a single codec variant to its RocksDB type. This is the
+    /// per-cell helper the curated [`per_level_schedule`](Self::per_level_schedule)
+    /// table is built from; it is not a standalone knob-honoring path on its own.
     pub(crate) fn to_rocksdb(self) -> DBCompressionType {
         match self {
             Self::None => DBCompressionType::None,
             Self::Snappy => DBCompressionType::Snappy,
             Self::Lz4 => DBCompressionType::Lz4,
             Self::Zstd => DBCompressionType::Zstd,
+        }
+    }
+
+    /// Curated per-level schedule for a 7-level column family. Each variant is an
+    /// explicit operator-facing *preset*, not a uniform single-codec fill:
+    ///
+    /// ```text
+    ///   None   => [None,  None,  None,  None,  None,  None,  None ]  // compression off
+    ///   Lz4    => [None,  None,  Lz4,   Lz4,   Zstd,  Zstd,  Zstd ]  // balanced default (historical)
+    ///   Zstd   => [None,  None,  Zstd,  Zstd,  Zstd,  Zstd,  Zstd ]  // max ratio
+    ///   Snappy => [None,  None,  Snappy,Snappy,Snappy,Snappy,Snappy] // Snappy tail
+    /// ```
+    ///
+    /// Shallow L0/L1 stay uncompressed in every non-`None` preset to protect
+    /// write/read latency; only `None` compresses nothing.
+    ///
+    /// Note the deliberate asymmetry: because the default `Lz4` preset must
+    /// reproduce the historical two-codec array exactly (no on-disk format
+    /// drift), it is a *balanced* mixed Lz4/Zstd schedule — not pure Lz4 — while
+    /// `Zstd`/`Snappy` are uniform tails. This is documented as the curated-preset
+    /// model's cost in the config reference.
+    pub(crate) fn per_level_schedule(self) -> [DBCompressionType; 7] {
+        use DBCompressionType as D;
+        let tail = self.to_rocksdb();
+        match self {
+            // Balanced default: warm levels Lz4, deep levels Zstd. This row *is*
+            // the historical hard-coded schedule; keeping it here means the
+            // default on-disk format is pinned by the preset table itself.
+            Self::Lz4 => [D::None, D::None, D::Lz4, D::Lz4, D::Zstd, D::Zstd, D::Zstd],
+            // Uniform-tail presets: shallow L0/L1 uncompressed, everything below
+            // the configured codec (or nothing for `None`).
+            Self::None | Self::Snappy | Self::Zstd => {
+                [D::None, D::None, tail, tail, tail, tail, tail]
+            }
         }
     }
 }
