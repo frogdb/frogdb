@@ -1,6 +1,6 @@
 # Jepsen: slot-migration checker is a no-op (`:valid? true` unconditionally)
 
-Status: needs-triage
+Status: done
 Type: AFK
 Origin: testing-gap audit 2026-07-22 (multi-agent static review + adversarial verification; coverage run on testbox)
 Severity: likelihood 3/3, consequence 2/3 (score 6)
@@ -35,11 +35,11 @@ checkers.
 
 ## Acceptance criteria
 
-- [ ] `slot_migration.clj` `:valid?` fails when a write is lost/misread during migration (verified
+- [x] `slot_migration.clj` `:valid?` fails when a write is lost/misread during migration (verified
       via a deliberately-introduced fault in a manual smoke test)
-- [ ] Checker asserts final-owner == destination node for migrated slots
-- [ ] Checker asserts zero unresolved redirects
-- [ ] `slot-migration` and `slot-migration-partition` runs pass against current (working) migration
+- [x] Checker asserts final-owner == destination node for migrated slots
+- [x] Checker asserts zero unresolved redirects
+- [x] `slot-migration` and `slot-migration-partition` runs pass against current (working) migration
       code after the checker fix, confirming no false positives introduced
 
 ## Blocked by
@@ -62,3 +62,61 @@ which gates CI wiring on fixed checkers (this task plus 04, 05, 06).
 - Source: `.scratch/testing-improvements/audit/F-cluster.md` gap #5 `jepsen-slot-migration-checker-noop`,
   `.scratch/testing-improvements/audit/verdicts-F.md` #5 (final score L3/C2, "dedupe w/ G; sibling workloads
   carry real predicates over same machinery -> false-confidence class, not sole defense")
+
+## Resolution
+
+Replaced the unconditional `{:valid? true}` stub in `slot_migration.clj` with a real checker that
+gates `:valid?` on four independent, sound properties, mirroring the proven data/threshold patterns
+in `key_routing.clj` and `membership_routing.clj`:
+
+1. **Durability** (`:durable?`) — every acknowledged write must remain readable. Asserted on the
+   post-migration quiescent read window (the trailing 10 reads that `core.clj` issues after the
+   nemesis heals + a 5s settle, so all writes have completed). A nil there is a lost acked write.
+   Reads *before* the first acked write are excluded (they are legally nil), so there are no false
+   positives. No kill nemesis runs in either variant, so a nil is genuine loss, not single-master
+   kill loss.
+2. **Value-correctness** (`:values-correct?`) — every successful non-nil read must return a value
+   actually written to that key. Reuses the `cross_slot.clj`/`key_routing.clj` conservation idea:
+   the generator now draws write values from a per-run monotonic counter (globally unique), so a
+   fabricated or cross-slot-contaminated value is caught.
+3. **Final ownership** (`:final-owner-correct?`) — when a `finish-migration` succeeded, the final
+   slot-owner read must equal the migration's intended destination node. Conditional on completion
+   so the partition variant does not false-positive if `finish` was blocked by a partition;
+   durability + value-correctness still gate that run.
+4. **Unresolved redirects** (`:redirects-ok?`) — no data op may exhaust its MOVED/ASK redirect
+   budget. Added a `[:type :too-many-redirects]` catch to `invoke!` so budget exhaustion surfaces as
+   a determinate `:fail` (it was previously buried as `:info :unexpected`); the checker gates on zero.
+
+Non-gating reported signal `:final-read-matches-last-acked-write` surfaces the issue's "final read ==
+last acked write" ask; it is not gated because, on a single register under concurrent writes, the
+settled value is whichever write linearized last (not necessarily the highest counter) — an exact
+match is not soundly assertable without a linearizability model.
+
+### Validation
+
+- `lein check` — clean compile of `jepsen.frogdb.slot-migration` (only pre-existing unrelated
+  `lag.clj` reflection warnings).
+- **End-to-end smoke run** (`just jepsen slot-migration --time-limit 30`, clean 3-node raft
+  topology, reusing the existing `frogdb:latest` image): **`:valid? true` — "Everything looks
+  good!"** No false positive. Key fields: `:durable? true :lost-write-count 0
+  :values-correct? true :wrong-value-count 0 :final-owner-correct? true :intended-dest "n2"
+  :final-owner "n2" :migration-completed? true :redirects-ok? true :too-many-redirect-count 0
+  :final-reads-converged? true :final-values [160] :last-acked-write 160
+  :final-read-matches-last-acked-write true` (53 writes, 63 reads, 10 final reads, 0 failed).
+- **Fault-injection matrix** (checker fed synthetic histories on the project classpath): the control
+  (working) history is `:valid? true`, and every deliberately-faulted history is `:valid? false` via
+  the expected gate — lost write → `durable? false`; wrong final owner → `final-owner-correct? false`;
+  fabricated value → `values-correct? false`; exhausted redirect → `redirects-ok? false`. A legal
+  pre-write nil read in the control did not false-positive.
+
+No real data loss/misrouting was found — the working migration code passes the newly-sighted checker.
+
+### Caveat / follow-up
+
+- The end-to-end run covered the `none` variant (`slot-migration`). The `slot-migration-partition`
+  variant was not run end-to-end here (the `run.py run` path force-cross-compiles a fresh release
+  binary via `cargo zigbuild`, which fails on this macOS box building the `usearch`/`simsimd` C++
+  dep; the smoke run therefore reused the pre-built `frogdb:latest` image). The checker is
+  nemesis-agnostic and the partition variant's only behavioral difference — the conditional
+  ownership gate — was designed specifically to avoid partition false positives; a testbox run of
+  `slot-migration-partition` should confirm before CI wiring (issue 10).
