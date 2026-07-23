@@ -3591,10 +3591,158 @@ async fn test_migration_cancelled_midway() {
     harness.shutdown_all().await;
 }
 
-/// Test 19: Source dies during migration.
+/// Wait until every surviving node's replicated cluster state agrees on a single
+/// owner for `slot` and holds no lingering migration record for it, then return
+/// the converged owner. Panics if convergence is not reached within `timeout`.
 ///
-/// Scenario: Source node crashes mid-migration
-/// (Note: test_failover_during_migration_preserves_data already exists, this is an alternative)
+/// This is the core post-crash invariant for slot migration: after a crash the
+/// slot must never be left orphaned (assigned to nobody on some node), dual-owned
+/// (two nodes claim it), or stuck with a dangling migration record. The owner is
+/// read from each node's Raft-replicated [`ClusterState`], so this checks that the
+/// whole surviving cluster has converged on one consistent slot map, not just that
+/// a single node looks healthy.
+async fn assert_slot_converges_to_single_owner(
+    harness: &ClusterTestHarness,
+    surviving_ids: &[u64],
+    slot: u16,
+    timeout: Duration,
+) -> u64 {
+    let start = std::time::Instant::now();
+    loop {
+        let mut owners = std::collections::BTreeSet::new();
+        let mut lingering_migration = false;
+        let mut unassigned_on_some_node = false;
+        let mut observed = 0usize;
+
+        for &nid in surviving_ids {
+            let Some(node) = harness.node(nid) else {
+                continue;
+            };
+            if !node.is_running() {
+                continue;
+            }
+            let Some(cs) = node.cluster_state() else {
+                continue;
+            };
+            observed += 1;
+            if cs.is_slot_migrating(slot) {
+                lingering_migration = true;
+            }
+            match cs.get_slot_owner(slot) {
+                Some(owner) => {
+                    owners.insert(owner);
+                }
+                None => unassigned_on_some_node = true,
+            }
+        }
+
+        let converged =
+            observed > 0 && !lingering_migration && !unassigned_on_some_node && owners.len() == 1;
+        if converged {
+            return *owners.iter().next().unwrap();
+        }
+        if start.elapsed() >= timeout {
+            panic!(
+                "slot {slot} did not converge to a single owner within {timeout:?}: \
+                 distinct owners across {observed} surviving node(s) = {owners:?}, \
+                 lingering migration record = {lingering_migration}, \
+                 unassigned on some node = {unassigned_on_some_node}"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Assert `key` is served by exactly one running node among `running_ids`: that
+/// node answers the GET directly (no MOVED, no error) and every other running
+/// node redirects (MOVED) to that same node's address. Returns the serving node's
+/// harness id. Guards against both zero-owner (data loss — no node serves) and
+/// dual-owner (two nodes accept the same key) outcomes.
+async fn assert_key_served_by_exactly_one(
+    harness: &ClusterTestHarness,
+    running_ids: &[u64],
+    key: &str,
+) -> u64 {
+    let mut servers = Vec::new();
+    let mut moved_targets = std::collections::BTreeSet::new();
+
+    for &nid in running_ids {
+        let Some(node) = harness.node(nid) else {
+            continue;
+        };
+        if !node.is_running() {
+            continue;
+        }
+        let resp = node.send("GET", &[key]).await;
+        if let Some((_slot, addr)) = is_moved_redirect(&resp) {
+            moved_targets.insert(addr);
+        } else if !is_error(&resp) {
+            servers.push(nid);
+        } else {
+            panic!(
+                "GET {key} on node {nid} returned an unexpected error \
+                 (neither a value nor a MOVED redirect): {resp:?}"
+            );
+        }
+    }
+
+    assert_eq!(
+        servers.len(),
+        1,
+        "key {key} must be served by exactly one node (no data loss, no dual ownership): \
+         serving nodes = {servers:?}, MOVED targets = {moved_targets:?}"
+    );
+
+    let server = servers[0];
+    let server_addr = harness.node(server).unwrap().client_addr();
+    for addr in &moved_targets {
+        assert_eq!(
+            *addr, server_addr,
+            "MOVED redirect points at {addr}, but the sole serving node is at {server_addr}"
+        );
+    }
+    server
+}
+
+/// Assert that no running node among `running_ids` serves `key` directly — every
+/// node either redirects (MOVED) or reports an error. Used when the slot's sole
+/// owner has crashed with no replica: the data is genuinely unrecoverable, but the
+/// surviving nodes must not silently take ownership of the orphaned slot
+/// (dual-ownership / split-brain guard).
+async fn assert_key_served_by_no_running_node(
+    harness: &ClusterTestHarness,
+    running_ids: &[u64],
+    key: &str,
+) {
+    for &nid in running_ids {
+        let Some(node) = harness.node(nid) else {
+            continue;
+        };
+        if !node.is_running() {
+            continue;
+        }
+        let resp = node.send("GET", &[key]).await;
+        assert!(
+            is_error(&resp),
+            "node {nid} served key {key} directly after its owner crashed — \
+             a surviving node silently claimed the orphaned slot: {resp:?}"
+        );
+    }
+}
+
+/// Test 19: Source dies mid-migration and STAYS DEAD (no replica).
+///
+/// Crash phase: after `BeginSlotMigration` (SETSLOT MIGRATING/IMPORTING) but
+/// before any keys are handed off. An operator then cancels the migration on a
+/// surviving node. Because the crashed source owned the slot and had no replica,
+/// its data is unrecoverable — but the cluster *metadata* must still converge
+/// cleanly:
+///   (a) the slot resolves to exactly one owner (rolled back to the source),
+///   (b) no surviving node retains a lingering migration record, and
+///   (c) no surviving node silently takes ownership of the orphaned slot.
+///
+/// (Note: test_failover_during_migration_preserves_data already exists; this is an
+/// alternative that asserts convergence rather than only logging cluster info.)
 #[tokio::test]
 async fn test_source_dies_during_migration() {
     let mut harness = ClusterTestHarness::new();
@@ -3609,23 +3757,34 @@ async fn test_source_dies_during_migration() {
         .await
         .unwrap();
 
-    let node_ids = harness.node_ids();
-    let source_id = node_ids[0];
-    let target_id = node_ids[1];
-
-    // Get cluster node IDs via direct state access
+    // Use slot 950; source = whichever node actually owns it, target = another.
+    let test_slot = 950u16;
+    let test_key = key_for_slot(test_slot);
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
     let cluster_source_id = harness.get_node_id_str(source_id).unwrap();
     let cluster_target_id = harness.get_node_id_str(target_id).unwrap();
 
-    // Use slot 950
-    let test_slot = 950u16;
+    // Write a key into the slot before migration begins.
+    {
+        let source = harness.node(source_id).unwrap();
+        let set_resp = source
+            .send("SET", &[&test_key, "pre_migration_value"])
+            .await;
+        assert!(
+            !is_error(&set_resp),
+            "pre-migration SET failed: {set_resp:?}"
+        );
+    }
 
-    // Start migration
+    // Begin the migration (BeginSlotMigration via Raft), then crash the source
+    // before any keys are transferred.
     {
         let source = harness.node(source_id).unwrap();
         let target = harness.node(target_id).unwrap();
 
-        let _ = source
+        let mig = source
             .send(
                 "CLUSTER",
                 &[
@@ -3636,7 +3795,8 @@ async fn test_source_dies_during_migration() {
                 ],
             )
             .await;
-        let _ = target
+        assert!(!is_error(&mig), "SETSLOT MIGRATING failed: {mig:?}");
+        let imp = target
             .send(
                 "CLUSTER",
                 &[
@@ -3647,35 +3807,285 @@ async fn test_source_dies_during_migration() {
                 ],
             )
             .await;
+        assert!(!is_error(&imp), "SETSLOT IMPORTING failed: {imp:?}");
     }
 
-    eprintln!("Migration started, killing source node {}", source_id);
-
-    // Kill source mid-migration
+    eprintln!("Migration started, killing source node {source_id}");
     harness.kill_node(source_id).await;
 
-    // Wait for failure detection
+    // Let failure detection settle and a leader be (re-)elected.
     tokio::time::sleep(Duration::from_secs(2)).await;
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
 
-    // Verify cluster can handle the failure
-    let surviving_nodes: Vec<u64> = node_ids
-        .iter()
-        .filter(|&&id| id != source_id)
-        .copied()
+    let surviving_ids: Vec<u64> = harness
+        .node_ids()
+        .into_iter()
+        .filter(|&id| id != source_id)
         .collect();
 
-    for &node_id in &surviving_nodes {
-        if let Some(node) = harness.node(node_id)
+    // Operator cancels the migration on a surviving node.
+    for &nid in &surviving_ids {
+        if let Some(node) = harness.node(nid)
             && node.is_running()
         {
-            // Clean up migration state
             let _ = node
                 .send("CLUSTER", &["SETSLOT", &test_slot.to_string(), "STABLE"])
                 .await;
-
-            let info = harness.get_cluster_info(node_id);
-            eprintln!("Node {} after source death: {:?}", node_id, info);
         }
+    }
+
+    // (a) + (b): the surviving cluster converges to a single owner with no
+    // lingering migration record. The slot must roll back to the (now-dead)
+    // source, never silently reassign to the import target.
+    let owner = assert_slot_converges_to_single_owner(
+        &harness,
+        &surviving_ids,
+        test_slot,
+        Duration::from_secs(10),
+    )
+    .await;
+    assert_eq!(
+        owner, source_id,
+        "slot should roll back to the (now-dead) source, not silently reassign to the target"
+    );
+
+    // (c): with the sole owner dead and no replica, the key is unrecoverable —
+    // but no surviving node may silently start serving it.
+    assert_key_served_by_no_running_node(&harness, &surviving_ids, &test_key).await;
+
+    harness.shutdown_all().await;
+}
+
+/// Test 19b: Source dies mid-migration then RECOVERS (restarts and rejoins).
+///
+/// Crash phase: after `BeginSlotMigration`, before any key handoff. The source is
+/// restarted (persistence enabled) and the migration is cancelled. The cluster
+/// must converge with:
+///   (a) the slot rolled back to the recovered source (exactly one owner),
+///   (b) no lingering migration record on any node, and
+///   (c) the slot's key readable from exactly one node (the source).
+///
+/// Note: a hard crash may drop writes that were not yet fsynced, so the key's
+/// *value* survival is checked best-effort (logged); the routing invariant — that
+/// exactly one node serves the key — is asserted strictly.
+#[tokio::test]
+async fn test_source_dies_during_migration_source_recovers() {
+    let config = ClusterNodeConfig {
+        persistence: true,
+        ..Default::default()
+    };
+    let mut harness = ClusterTestHarness::with_config(config);
+    harness.start_cluster(3).await.unwrap();
+
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 950u16;
+    let test_key = key_for_slot(test_slot);
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+    let cluster_source_id = harness.get_node_id_str(source_id).unwrap();
+    let cluster_target_id = harness.get_node_id_str(target_id).unwrap();
+
+    // Write a key into the slot, then begin migration.
+    {
+        let source = harness.node(source_id).unwrap();
+        let set_resp = source
+            .send("SET", &[&test_key, "pre_migration_value"])
+            .await;
+        assert!(
+            !is_error(&set_resp),
+            "pre-migration SET failed: {set_resp:?}"
+        );
+
+        let mig = source
+            .send(
+                "CLUSTER",
+                &[
+                    "SETSLOT",
+                    &test_slot.to_string(),
+                    "MIGRATING",
+                    &cluster_target_id,
+                ],
+            )
+            .await;
+        assert!(!is_error(&mig), "SETSLOT MIGRATING failed: {mig:?}");
+        let target = harness.node(target_id).unwrap();
+        let imp = target
+            .send(
+                "CLUSTER",
+                &[
+                    "SETSLOT",
+                    &test_slot.to_string(),
+                    "IMPORTING",
+                    &cluster_source_id,
+                ],
+            )
+            .await;
+        assert!(!is_error(&imp), "SETSLOT IMPORTING failed: {imp:?}");
+    }
+
+    eprintln!("Migration started, killing source node {source_id}");
+    harness.kill_node(source_id).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // Bring the source back and let it rejoin the cluster.
+    eprintln!("Restarting source node {source_id}");
+    harness.restart_node(source_id).await.unwrap();
+    harness
+        .wait_for_node_recognized(source_id, Duration::from_secs(20))
+        .await
+        .unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // Operator cancels the migration (now that the source is back).
+    let cancel = harness
+        .node(source_id)
+        .unwrap()
+        .send("CLUSTER", &["SETSLOT", &test_slot.to_string(), "STABLE"])
+        .await;
+    eprintln!("SETSLOT STABLE on recovered source: {cancel:?}");
+
+    let all_ids = harness.node_ids();
+
+    // (a) + (b): converges across all three nodes, rolled back to the source.
+    let owner = assert_slot_converges_to_single_owner(
+        &harness,
+        &all_ids,
+        test_slot,
+        Duration::from_secs(15),
+    )
+    .await;
+    assert_eq!(
+        owner, source_id,
+        "slot should roll back to the recovered source after a cancelled migration"
+    );
+
+    // (c): the key is served by exactly one node — the source.
+    let server = assert_key_served_by_exactly_one(&harness, &all_ids, &test_key).await;
+    assert_eq!(
+        server, source_id,
+        "the migrating slot's key must be served by exactly one node (the recovered source)"
+    );
+
+    // Best-effort durability check — a hard crash may have dropped the write.
+    let val = harness
+        .node(source_id)
+        .unwrap()
+        .send("GET", &[&test_key])
+        .await;
+    eprintln!("recovered source GET {test_key} => {val:?}");
+
+    harness.shutdown_all().await;
+}
+
+/// Test 19c: Source dies AFTER the slot has been fully migrated to the target.
+///
+/// Crash phase: post-finalization (SETSLOT NODE committed, keys already on the
+/// target). Killing the old source must not disturb the converged topology:
+///   (a) the slot stays owned solely by the target,
+///   (b) no lingering migration record remains, and
+///   (c) the migrated keys remain readable from exactly one node (the target) —
+///       no data loss, no dual ownership.
+#[tokio::test]
+async fn test_source_dies_after_migration_complete() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 950u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+
+    // Write hash-tagged keys that all hash to the slot.
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let probe_key = format!("{tag}_k0");
+    {
+        let source = harness.node(source_id).unwrap();
+        for i in 0..5 {
+            let key = format!("{tag}_k{i}");
+            let value = format!("v{i}");
+            let resp = source.send("SET", &[&key, &value]).await;
+            assert!(!is_error(&resp), "SET failed: {resp:?}");
+        }
+    }
+
+    // Fully migrate the slot to the target (data + ownership handoff).
+    run_full_slot_migration(&harness, source_id, target_id, test_slot, 100)
+        .await
+        .expect("migration failed");
+
+    // Now crash the old source, which no longer owns the slot.
+    eprintln!("Migration complete, killing old source node {source_id}");
+    harness.kill_node(source_id).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    let surviving_ids: Vec<u64> = harness
+        .node_ids()
+        .into_iter()
+        .filter(|&id| id != source_id)
+        .collect();
+
+    // (a) + (b): slot owned solely by the target, no lingering migration record.
+    let owner = assert_slot_converges_to_single_owner(
+        &harness,
+        &surviving_ids,
+        test_slot,
+        Duration::from_secs(10),
+    )
+    .await;
+    assert_eq!(
+        owner, target_id,
+        "a completed migration should leave the slot owned by the target"
+    );
+
+    // (c): the migrated key is readable from exactly one node — the target — and
+    // its value survived the source crash.
+    let server = assert_key_served_by_exactly_one(&harness, &surviving_ids, &probe_key).await;
+    assert_eq!(
+        server, target_id,
+        "the migrated key must be served by exactly one node (the target)"
+    );
+    let val = harness
+        .node(target_id)
+        .unwrap()
+        .send("GET", &[&probe_key])
+        .await;
+    match val {
+        frogdb_protocol::Response::Bulk(Some(v)) => {
+            assert_eq!(&v[..], b"v0", "migrated value wrong on target");
+        }
+        other => panic!("expected migrated value on target, got: {other:?}"),
     }
 
     harness.shutdown_all().await;
