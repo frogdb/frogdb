@@ -1169,6 +1169,7 @@ mod tests {
             args,
             hll_wal_delta: None,
             keyspace_events: &[],
+            newly_created_keys: &[],
             repl_override,
         }
     }
