@@ -269,14 +269,16 @@ In `core.clj`, add a require and a dispatch entry:
 
 ```python
 # In the TESTS tuple:
-TestDefinition(
-    "my-workload", "my-workload", "none", 30,
-    Topology.SINGLE, suites=("single", "all")
-),
-TestDefinition(
-    "my-workload-crash", "my-workload", "kill", 60,
-    Topology.SINGLE, suites=("crash", "all")
-),
+(
+    TestDefinition(
+        "my-workload", "my-workload", "none", 30, Topology.SINGLE, suites=("single", "all")
+    ),
+)
+(
+    TestDefinition(
+        "my-workload-crash", "my-workload", "kill", 60, Topology.SINGLE, suites=("crash", "all")
+    ),
+)
 ```
 
 ### 4. Update CLI validation in core.clj

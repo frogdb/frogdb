@@ -28,7 +28,11 @@ This repo wraps the testbox lifecycle so boxes are always cleaned up:
 - Runner is `blacksmith-8vcpu-ubuntu-2404-arm` (aarch64 Linux). RocksDB compiles from vendored
   source there (Linux system RocksDB is too old); the first-ever hydration is slow (~10-20 min)
   while later ones restore from cache.
-- Do NOT attach sticky disks or change caching to sccache — deliberate cost/compat decisions.
+- Build caching uses Blacksmith sticky disks (`target/` + cargo registry, ~$0.50/GB/mo): the
+  last committed snapshot mounts in seconds and commits at VM teardown, including on
+  cancellation. Caveat: a fresh commit takes ~10-15 min to become the clone base, so a re-warm
+  shortly after a stop mounts the previous snapshot — mild staleness the hydration prebuild
+  recompiles. Do NOT change caching to sccache — deliberate cost/compat decision.
 - The box is Linux: build/runtime behavior can differ from local macOS (good — it matches
   production). `just` recipes work unchanged on the box.
 
