@@ -94,6 +94,17 @@ pub struct TestServerConfig {
     /// Override `replication.repl-ack-interval-ms` (how often a replica ACKs).
     /// Lowering this makes fence engage/recover tests converge faster.
     pub replication_ack_interval_ms: Option<u64>,
+    /// Override `replication.replica-write-timeout-ms` (how long the primary
+    /// waits on a blocked write to a replica before disconnecting it for a
+    /// resync). `None` keeps the server default (5000ms). Lowering it makes a
+    /// stalled-replica lag-disconnect fire quickly and deterministically.
+    pub replication_replica_write_timeout_ms: Option<u64>,
+    /// Override `replication.split-brain-buffer-size` (the replication backlog's
+    /// max entry count — Redis `repl-backlog-size` analogue). `None` keeps the
+    /// server default (10_000). Raising it lets a reconnecting replica whose gap
+    /// exceeds 10k commands still qualify for a partial resync (`+CONTINUE`)
+    /// instead of falling back to a full resync.
+    pub replication_split_brain_buffer_size: Option<usize>,
     /// Override `replication.min-replicas-to-write` (Redis `NOREPLICAS` gate:
     /// refuse writes with fewer than N good replicas). `None` keeps the default 0.
     pub replication_min_replicas_to_write: Option<u32>,
@@ -211,6 +222,8 @@ impl Clone for TestServerConfig {
             replication_self_fence_on_replica_loss: self.replication_self_fence_on_replica_loss,
             replication_replica_freshness_timeout_ms: self.replication_replica_freshness_timeout_ms,
             replication_ack_interval_ms: self.replication_ack_interval_ms,
+            replication_replica_write_timeout_ms: self.replication_replica_write_timeout_ms,
+            replication_split_brain_buffer_size: self.replication_split_brain_buffer_size,
             replication_min_replicas_to_write: self.replication_min_replicas_to_write,
             replication_min_replicas_timeout_ms: self.replication_min_replicas_timeout_ms,
             cluster_enabled: self.cluster_enabled,
@@ -480,6 +493,12 @@ impl TestServer {
         }
         if let Some(v) = test_config.replication_ack_interval_ms {
             config.replication.ack_interval_ms = v;
+        }
+        if let Some(v) = test_config.replication_replica_write_timeout_ms {
+            config.replication.replica_write_timeout_ms = v;
+        }
+        if let Some(v) = test_config.replication_split_brain_buffer_size {
+            config.replication.split_brain_buffer_size = v;
         }
         if let Some(v) = test_config.replication_min_replicas_to_write {
             config.replication.min_replicas_to_write = v;

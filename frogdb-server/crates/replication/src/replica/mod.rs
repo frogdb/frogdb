@@ -185,15 +185,18 @@ impl ReplicaReplicationHandler {
         self.shared_offset.clone()
     }
 
-    /// Run the connect/sync/reconnect loop until the primary connection
-    /// closes normally or [`Self::stop`] is called.
+    /// Run the connect/sync/reconnect loop until [`Self::stop`] is called.
     ///
-    /// Selects on the `shutdown` watch at every point the loop could block
-    /// (an in-flight connect/handshake/stream, and the backoff sleep between
-    /// attempts) so `stop()` breaks the loop directly — no `task.abort()`
-    /// required, which matters for a boot-spawned handler whose reconnect
-    /// loop otherwise keeps dialing a primary this node has since been
-    /// promoted away from.
+    /// The loop reconnects after *any* link loss — a transport error or a
+    /// clean close the primary initiated to force a resync (broadcast-lag /
+    /// write-timeout disconnect) — because a configured replica must keep
+    /// re-establishing its link, like a Redis replica. Termination is driven
+    /// solely by the `shutdown` watch: the loop selects on it at every point
+    /// it could block (an in-flight connect/handshake/stream, and the backoff
+    /// sleep between attempts) so `stop()` breaks the loop directly — no
+    /// `task.abort()` required, which matters for a boot-spawned handler whose
+    /// reconnect loop would otherwise keep dialing a primary this node has
+    /// since been promoted away from.
     pub async fn start(&self) -> io::Result<()> {
         let mut backoff = Duration::from_millis(100);
         let max_backoff = Duration::from_secs(30);
@@ -214,8 +217,30 @@ impl ReplicaReplicationHandler {
                 result = self.connect_and_sync() => {
                     match result {
                         Ok(()) => {
-                            tracing::info!("Replication connection closed normally");
-                            return Ok(());
+                            // The link closed without a transport error: almost
+                            // always the primary dropped us on purpose to force a
+                            // resync (a broadcast-lag / write-timeout disconnect,
+                            // see `replica_session`'s write task) or the primary
+                            // restarted. A configured replica must keep
+                            // re-establishing the link — Redis replicas reconnect
+                            // after *any* link loss until told otherwise. Every
+                            // intentional teardown (promotion, re-demotion, server
+                            // shutdown) fires the shutdown watch above, whose biased
+                            // branch returns before we would reconnect, so treating a
+                            // clean close as terminal here only stranded replicas
+                            // that a primary had disconnected for lag. Reset the
+                            // backoff since the connection had been healthy, then
+                            // pause briefly to avoid a hot reconnect spin.
+                            tracing::info!("Replication link closed by primary; reconnecting");
+                            backoff = Duration::from_millis(100);
+                            tokio::select! {
+                                biased;
+                                _ = shutdown_rx.changed() => {
+                                    tracing::info!("Replica replication stopped via shutdown watch after link close");
+                                    return Ok(());
+                                }
+                                _ = tokio::time::sleep(backoff) => {}
+                            }
                         }
                         Err(e) => {
                             tracing::warn!(error = %e, backoff_ms = backoff.as_millis(), "Replication connection failed, retrying");

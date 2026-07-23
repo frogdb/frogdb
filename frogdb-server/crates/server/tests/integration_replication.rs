@@ -2048,11 +2048,14 @@ async fn test_wait_with_disconnected_replica(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
-/// Test replica behavior under high write load.
-/// Documents broadcast channel behavior when replica lags.
+/// Test replica behavior under high write load: a burst of writes must still
+/// converge on the replica once it catches up (a smoke test that a moderate
+/// backlog does not wedge the stream).
 ///
-/// NOTE: Currently ignored because replica becomes unresponsive under high load.
-/// This documents Issue #2 from the test plan: "Broadcast overflow only warns - No resync triggered"
+/// For the full lag-disconnect → reconnect → resync cycle that a *stalled*
+/// replica triggers (broadcast overflow / write-timeout on the primary side),
+/// see [`test_broadcast_lag_disconnect_and_resync`], which drives the stall
+/// deterministically through an interposed throttling proxy.
 #[rstest]
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
@@ -5839,4 +5842,359 @@ async fn test_min_replicas_to_write_config_set_live() {
     );
     assert_ok(&primary.send("SET", &["k", "v3"]).await);
     primary.shutdown().await;
+}
+
+// ============================================================================
+// Tier 8: Broadcast-lag disconnect → reconnect → resync (E2E)
+// ============================================================================
+
+/// A throttling TCP proxy interposed between a replica and its primary.
+///
+/// It forwards both directions verbatim, except the primary→replica direction
+/// can be *stalled* on demand: while stalled the proxy stops draining bytes
+/// from the primary, so the primary's kernel send buffer to the proxy fills,
+/// the primary's per-replica write task blocks in `write_all`, and the primary
+/// disconnects the replica for lag (write-timeout / broadcast overflow — both
+/// close the link the same way). The replica→primary direction (the PSYNC
+/// handshake and ACKs) always flows, so a reconnecting replica can complete a
+/// fresh handshake through the proxy.
+struct LagProxy {
+    port: u16,
+    stalled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    accept_task: tokio::task::JoinHandle<()>,
+}
+
+impl LagProxy {
+    /// Bind an ephemeral port and start accepting replica connections, each
+    /// dialed through to `primary_port`.
+    async fn spawn(primary_port: u16) -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind lag-proxy listener");
+        let port = listener.local_addr().expect("proxy local_addr").port();
+        let stalled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stalled_accept = stalled.clone();
+
+        let accept_task = tokio::spawn(async move {
+            loop {
+                let (inbound, _) = match listener.accept().await {
+                    Ok(pair) => pair,
+                    Err(_) => break,
+                };
+                let outbound =
+                    match tokio::net::TcpStream::connect(("127.0.0.1", primary_port)).await {
+                        Ok(stream) => stream,
+                        Err(_) => continue,
+                    };
+                let stalled_conn = stalled_accept.clone();
+                tokio::spawn(proxy_connection(inbound, outbound, stalled_conn));
+            }
+        });
+
+        Self {
+            port,
+            stalled,
+            accept_task,
+        }
+    }
+
+    fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// Freeze the primary→replica direction: the replica stops receiving the
+    /// WAL stream and falls behind until the primary disconnects it.
+    fn stall(&self) {
+        self.stalled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Resume forwarding so a reconnecting replica can resync.
+    fn resume(&self) {
+        self.stalled
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl Drop for LagProxy {
+    fn drop(&mut self) {
+        self.accept_task.abort();
+    }
+}
+
+/// Pump one accepted replica↔primary connection through the proxy, honoring
+/// the shared stall flag on the primary→replica leg.
+async fn proxy_connection(
+    inbound: tokio::net::TcpStream,
+    outbound: tokio::net::TcpStream,
+    stalled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    use std::sync::atomic::Ordering;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (mut replica_rx, mut replica_tx) = inbound.into_split();
+    let (mut primary_rx, mut primary_tx) = outbound.into_split();
+
+    // replica → primary: always flowing (handshake commands + ACKs).
+    let mut up = tokio::spawn(async move {
+        let mut buf = [0u8; 16 * 1024];
+        loop {
+            match replica_rx.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if primary_tx.write_all(&buf[..n]).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    // primary → replica: stalled on demand. While stalled we stop reading from
+    // the primary, so its send buffer fills and its write task blocks. (At most
+    // one 16 KiB chunk already in-flight leaks through before we park — far
+    // below the buffering needed to keep a replica in sync under a write flood.)
+    let mut down = tokio::spawn(async move {
+        let mut buf = [0u8; 16 * 1024];
+        loop {
+            while stalled.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            match primary_rx.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if replica_tx.write_all(&buf[..n]).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    // Tear both legs down together the moment either peer closes its side, so
+    // the replica observes a *full* connection close exactly as it would on a
+    // direct link. Managing the halves independently would leave the socket
+    // half-open: when the primary drops the replica for lag, `up` would die but
+    // `down` would keep the replica's write side open, wedging the replica in
+    // its next ACK write (the proxy buffer fills instead of erroring) so it
+    // never reads the FIN — a proxy artifact that never happens on a real link.
+    tokio::select! {
+        _ = &mut up => { down.abort(); }
+        _ = &mut down => { up.abort(); }
+    }
+}
+
+/// Read `connected_slaves` (streaming replicas) from a server's
+/// `INFO replication`. Returns `None` if the field is missing/unparseable.
+async fn connected_slaves(server: &TestServer) -> Option<i64> {
+    let response = server.send("INFO", &["replication"]).await;
+    let info = parse_info_replication(&response)?;
+    info.get("connected_slaves")?.trim().parse().ok()
+}
+
+/// Poll `connected_slaves` until it equals `want` or the deadline elapses.
+/// Returns the last observed value (for assertion messages).
+async fn wait_connected_slaves(server: &TestServer, want: i64, within: Duration) -> Option<i64> {
+    let deadline = std::time::Instant::now() + within;
+    let mut last = connected_slaves(server).await;
+    while std::time::Instant::now() < deadline {
+        if last == Some(want) {
+            return last;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        last = connected_slaves(server).await;
+    }
+    last
+}
+
+/// End-to-end coverage of the broadcast-lag disconnect path (audit gap E#8):
+/// a streaming replica is stalled at the network layer until it exceeds the
+/// primary's lag tolerance; the primary disconnects it; the replica then
+/// reconnects, resyncs, and converges to the primary's full keyspace —
+/// including the writes it missed while stalled — plus the WAIT ack-count
+/// behaviour across the disconnect (0 while dropped) and recovery (1 once
+/// caught up).
+///
+/// The stall is driven deterministically through [`LagProxy`] (no timing luck)
+/// and every wait polls a condition with a deadline (no fixed sleeps for
+/// correctness). `replica_write_timeout_ms` is lowered so the primary's
+/// blocked-write lag-disconnect fires promptly (the deterministic trigger here;
+/// the flood also drives the per-replica broadcast receiver past its 10k slots,
+/// the secondary `Lagged` trigger — either way the primary drops the replica).
+/// Self-fence is disabled so the primary keeps accepting the write flood.
+///
+/// The backlog is sized above the flood so the reconnecting replica qualifies
+/// for a *partial* resync (`+CONTINUE`): the missed writes replay as live
+/// commands and the running keyspace converges without a restart. This is the
+/// only resync path that converges the live store in place — a full resync
+/// stages a checkpoint that installs on the next boot (persistence) or ships an
+/// empty RDB (in-memory), neither of which updates the running keyspace.
+///
+/// Regression guard for two replication bugs found writing this test:
+///   1. the replica did not reconnect after a primary-initiated clean close
+///      (`replica/mod.rs`: a clean `Ok(())` from the sync loop was terminal); and
+///   2. the primary's lag-disconnect never closed the socket, because the
+///      streaming `select!` dropped the sibling task's `JoinHandle` instead of
+///      aborting it, leaving a zombie half-open link the replica never saw close
+///      (`replica_session.rs`).
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_broadcast_lag_disconnect_and_resync(#[case] persistence: bool) {
+    let primary = TestServer::start_primary_with_config(TestServerConfig {
+        persistence,
+        // Keep accepting writes while the replica is stale — the flood is the
+        // whole point.
+        replication_self_fence_on_replica_loss: Some(false),
+        // Disconnect a blocked (stalled) replica quickly for a fast, robust test.
+        replication_replica_write_timeout_ms: Some(1000),
+        // Size the backlog above the flood so the reconnecting replica's gap is
+        // still covered — the primary grants a partial resync (+CONTINUE) and
+        // replays the missed writes as live commands, converging the running
+        // keyspace without a restart (a full resync would only stage a
+        // checkpoint / send an empty in-memory RDB).
+        replication_split_brain_buffer_size: Some(100_000),
+        ..Default::default()
+    })
+    .await;
+
+    // Interpose the throttling proxy and point the replica at it (not directly
+    // at the primary), so we control the primary→replica byte stream.
+    let proxy = LagProxy::spawn(primary.port()).await;
+    let mut replica_config = TestServerConfig {
+        persistence,
+        replication_self_fence_on_replica_loss: Some(false),
+        replication_replica_write_timeout_ms: Some(1000),
+        // ACK often so recovery (and WAIT) converge quickly.
+        replication_ack_interval_ms: Some(200),
+        ..Default::default()
+    };
+    replica_config.replication_primary_host = Some("127.0.0.1".to_string());
+    replica_config.replication_primary_port = Some(proxy.port());
+    let replica = TestServer::start_with_config(replica_config, ServerRole::Replica).await;
+
+    // Baseline: the replica reaches the Streaming phase through the proxy.
+    assert_eq!(
+        wait_connected_slaves(&primary, 1, Duration::from_secs(10)).await,
+        Some(1),
+        "replica should reach the streaming phase (connected_slaves:1) via the proxy"
+    );
+
+    // Seed a key and confirm it replicates end-to-end before we stall.
+    assert_ok(&primary.send("SET", &["seed_key", "seed_value"]).await);
+    let acked = parse_integer(&primary.send("WAIT", &["1", "3000"]).await).unwrap_or(0);
+    assert_eq!(
+        acked, 1,
+        "seed write should be acked by the healthy replica"
+    );
+    assert_eq!(
+        primary.send("DBSIZE", &[]).await,
+        replica.send("DBSIZE", &[]).await,
+        "keyspace sizes should match before the stall"
+    );
+
+    // ---- Stall the replica and flood the primary past the 10k broadcast cap.
+    proxy.stall();
+
+    // 20k frames: the stalled socket blocks the primary's per-replica write
+    // task, tripping the 1s write-timeout (the deterministic disconnect here),
+    // and the volume also overruns the 10_000-slot broadcast channel — either
+    // way the primary drops the replica for resync. The flood stays within the
+    // 100k-entry backlog, so the reconnect earns a partial resync.
+    const FLOOD: usize = 20_000;
+    let mut writer = primary.connect().await;
+    let mut i = 0usize;
+    while i < FLOOD {
+        let end = (i + 200).min(FLOOD);
+        for j in i..end {
+            let key = format!("flood_key_{j}");
+            let val = format!("flood_val_{j}");
+            writer.send_only(&["SET", &key, &val]).await;
+        }
+        for _ in i..end {
+            writer
+                .read_response(Duration::from_secs(10))
+                .await
+                .expect("primary should keep accepting writes while replica is stale");
+        }
+        i = end;
+    }
+    drop(writer);
+
+    // ---- Assert the primary disconnected the laggy replica.
+    assert_eq!(
+        wait_connected_slaves(&primary, 0, Duration::from_secs(10)).await,
+        Some(0),
+        "primary must disconnect the stalled replica (connected_slaves→0) once it exceeds \
+         the lag threshold"
+    );
+
+    // WAIT can find no streaming replica to ack while the replica is dropped.
+    let acked_stalled = parse_integer(&primary.send("WAIT", &["1", "500"]).await).unwrap_or(-1);
+    assert_eq!(
+        acked_stalled, 0,
+        "WAIT must return 0 while the replica is disconnected, got {acked_stalled}"
+    );
+
+    // ---- Recovery: unblock the link; the replica must reconnect on its own.
+    proxy.resume();
+
+    assert_eq!(
+        wait_connected_slaves(&primary, 1, Duration::from_secs(20)).await,
+        Some(1),
+        "replica must reconnect and return to the streaming phase after the link recovers \
+         (regression guard: a primary-initiated clean close must not strand the replica)"
+    );
+
+    // ---- Convergence: the resync must deliver the full keyspace, including
+    // every write the replica missed while stalled.
+    let acked_recovered = parse_integer(&primary.send("WAIT", &["1", "10000"]).await).unwrap_or(0);
+    assert_eq!(
+        acked_recovered, 1,
+        "WAIT must report the reconnected replica acking after recovery"
+    );
+
+    // Poll to full keyspace equality (WAIT acks the stream offset; the applier
+    // may trail it by a beat).
+    let primary_dbsize = parse_integer(&primary.send("DBSIZE", &[]).await).unwrap_or(-1);
+    let converged = {
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            let replica_dbsize = parse_integer(&replica.send("DBSIZE", &[]).await).unwrap_or(-2);
+            if replica_dbsize == primary_dbsize {
+                break true;
+            }
+            if std::time::Instant::now() >= deadline {
+                break false;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    };
+    assert!(
+        converged,
+        "replica keyspace must converge to the primary's {primary_dbsize} keys after resync"
+    );
+
+    // Spot-check a spread of the flood keys the replica missed during the stall
+    // plus the pre-stall seed — the resync must have delivered them.
+    for idx in [0usize, 1, FLOOD / 2, FLOOD - 2, FLOOD - 1] {
+        let key = format!("flood_key_{idx}");
+        let expected = format!("flood_val_{idx}");
+        let got = replica.send("GET", &[&key]).await;
+        assert_eq!(
+            got,
+            Response::Bulk(Some(Bytes::from(expected.clone()))),
+            "replica missing flood key {key} after resync (expected {expected})"
+        );
+    }
+    assert_eq!(
+        replica.send("GET", &["seed_key"]).await,
+        Response::Bulk(Some(Bytes::from("seed_value"))),
+        "replica missing the pre-stall seed key after resync"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+    drop(proxy);
 }

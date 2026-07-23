@@ -743,9 +743,18 @@ impl ReplicaSession {
             }
         });
 
+        // When either half ends — the write task after a lag / write-timeout
+        // disconnect, or the read task on a replica-initiated close — abort the
+        // sibling so BOTH halves of the split stream drop and the TCP socket
+        // actually closes. Dropping the `JoinHandle`s alone does *not* abort the
+        // tasks: a detached read task would otherwise keep its half alive after
+        // a lag-disconnect, leaving the replica in a zombie half-open link
+        // (unregistered here, but never sent a FIN, so it never resyncs).
+        let mut read_task = read_task;
+        let mut write_task = write_task;
         tokio::select! {
-            _ = read_task => {}
-            _ = write_task => {}
+            _ = &mut read_task => { write_task.abort(); }
+            _ = &mut write_task => { read_task.abort(); }
         }
         Ok(())
     }
