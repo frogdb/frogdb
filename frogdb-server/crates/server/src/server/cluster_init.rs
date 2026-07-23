@@ -964,4 +964,327 @@ mod tests {
             "unknown new primary must not trigger a demotion"
         );
     }
+
+    // ========================================================================
+    // Split-brain divergence lifecycle (end-to-end through the real logger)
+    //
+    // Issue 15 (audit gap E#5): the individual mechanisms (`divergence_record`,
+    // `write_log`, `has_pending_logs`, the header mapping) are unit-tested, but
+    // nothing drove the full production glue — `SplitBrainLogger::log` on a real
+    // `PrimaryReplicationHandler` that actually diverged — end to end. The old
+    // `noop_logger()` (`primary_handler: None`) never reached `divergence_record`,
+    // so the log-file body, the `SplitBrainOpsDiscardedTotal` count, and the
+    // buffer-overflow truncation path were all unexercised.
+    //
+    // These tests stage a real divergence on a real handler and invoke the exact
+    // code the Raft `DemotionConsumer` runs in production (`logger.log` /
+    // `consumer.handle`), asserting the audit file contents, the telemetry, and
+    // that the demotion (which triggers discard-via-resync-from-the-new-primary)
+    // is still issued.
+    // ========================================================================
+
+    use frogdb_replication::{
+        LagThresholdConfig, Phase, PrimaryReplicationHandler, ReplicationBroadcaster,
+        ReplicationTrackerImpl, SplitBrainBufferConfig, state::ReplicationState,
+    };
+    use frogdb_telemetry::PrometheusRecorder;
+
+    /// Build a real primary handler with an enabled split-brain backlog of
+    /// `buffer_entries` capacity. No I/O beyond a temp state path.
+    fn split_brain_handler(
+        data_dir: &std::path::Path,
+        buffer_entries: usize,
+    ) -> Arc<PrimaryReplicationHandler> {
+        Arc::new(PrimaryReplicationHandler::new(
+            ReplicationState::new(),
+            data_dir.join("replication_state.json"),
+            Arc::new(ReplicationTrackerImpl::new()),
+            None,
+            data_dir.to_path_buf(),
+            LagThresholdConfig {
+                threshold_bytes: 0,
+                threshold_secs: 0,
+                cooldown: Duration::from_secs(0),
+            },
+            SplitBrainBufferConfig {
+                enabled: true,
+                max_entries: buffer_entries,
+                max_bytes: 64 * 1024 * 1024,
+            },
+            0,
+        ))
+    }
+
+    /// Broadcast a `SET key val` through the primary path (advances the live
+    /// offset AND records into the backlog, exactly as production writes do).
+    fn broadcast_set(handler: &PrimaryReplicationHandler, key: &str, val: &str) -> u64 {
+        handler.broadcast_command_on_shard(
+            0,
+            "SET",
+            &[
+                bytes::Bytes::from(key.to_string()),
+                bytes::Bytes::from(val.to_string()),
+            ],
+        )
+    }
+
+    /// Register a streaming replica and pin its acked offset at `acked`, so it
+    /// contributes to `min_acked` (the divergence lower bound).
+    fn streaming_replica_acked_at(handler: &PrimaryReplicationHandler, addr: &str, acked: u64) {
+        let session = handler.tracker().register_replica(addr.parse().unwrap());
+        session.force_phase_for_test(Phase::Streaming);
+        assert!(
+            session.seed_acked_position(acked),
+            "seed must advance the replica's acked offset"
+        );
+    }
+
+    /// Locate the single `split_brain_discarded_*.log` written into `dir` and
+    /// return its contents. Panics if there is not exactly one.
+    fn read_split_brain_log(dir: &std::path::Path) -> String {
+        let mut matches: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().starts_with("split_brain_discarded_"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "expected exactly one split-brain log, found {:?}",
+            matches
+        );
+        std::fs::read_to_string(matches.pop().unwrap()).unwrap()
+    }
+
+    /// Full split-brain lifecycle through the production `DemotionConsumer`:
+    ///
+    /// A primary accepts writes the cluster acknowledged (up to `acked`), then —
+    /// during the partition modelled here by the replica no longer advancing its
+    /// ACK — accepts further "divergent" writes past that acked point. On the
+    /// committed demotion the consumer must:
+    ///   1. capture exactly the divergent writes (offset > acked) into the audit
+    ///      log, excluding the acknowledged ones (which the new primary retains);
+    ///   2. stamp the divergence window (`seq_diverge_start`/`seq_diverge_end`)
+    ///      and `ops_discarded` to match the record;
+    ///   3. bump `SplitBrainOpsDiscardedTotal` / `SplitBrainEventsTotal` and raise
+    ///      the `SplitBrainRecoveryPending` gauge; and
+    ///   4. still issue the Role Demotion — the reconciliation step that discards
+    ///      the divergent writes by resyncing this node from the new primary.
+    ///
+    /// (4) only *initiates* the discard; the data-path replacement is the resync
+    /// path — see `test_broadcast_lag_disconnect_and_resync` in
+    /// `tests/integration_replication.rs`, which pins that a partial resync
+    /// converges the live keyspace while a full resync stages a checkpoint that
+    /// installs on the next boot. The Raft transport that would normally deliver
+    /// the `DemotionEvent` is stubbed by invoking `consumer.handle` directly with
+    /// the event the metadata plane commits.
+    #[test]
+    fn split_brain_lifecycle_captures_audit_and_initiates_discard() {
+        let dir = tempfile::tempdir().unwrap();
+        let handler = split_brain_handler(dir.path(), 1000);
+
+        // Writes the cluster acknowledged.
+        broadcast_set(&handler, "acked_key_a", "va");
+        let acked = broadcast_set(&handler, "acked_key_b", "vb");
+        // A streaming replica pinned at the acked head fixes the divergence floor.
+        streaming_replica_acked_at(&handler, "127.0.0.1:6390", acked);
+
+        // Divergent writes committed past the acked point (the "both sides keep
+        // writing" phase of the split).
+        let mut divergent_keys = Vec::new();
+        let mut last = acked;
+        for i in 0..5 {
+            let key = format!("div_key_{i}");
+            last = broadcast_set(&handler, &key, &format!("div_val_{i}"));
+            divergent_keys.push(key);
+        }
+        let current = last;
+
+        // Sanity: the handler agrees it diverged over exactly (acked, current].
+        let record = handler.divergence_record().expect("primary diverged");
+        assert_eq!(record.start, acked);
+        assert_eq!(record.end, current);
+        assert_eq!(record.writes.len(), divergent_keys.len());
+
+        // Drive the real production consumer with a committed demotion event.
+        let new_id = 0xB0Bu64;
+        let new_primary_addr = addr("127.0.0.1:7002");
+        let recorder = Arc::new(PrometheusRecorder::new());
+        let controller = Arc::new(RecordingController::default());
+        let consumer = DemotionConsumer {
+            split_brain_logger: Some(SplitBrainLogger {
+                data_dir: dir.path().to_path_buf(),
+                primary_handler: Some(handler.clone()),
+                metrics: recorder.clone(),
+            }),
+            cluster_state: cluster_with_primary(new_id, new_primary_addr),
+            role_controller: controller.clone(),
+        };
+
+        let event = DemotionEvent {
+            demoted_node_id: 0xA,
+            new_primary_id: Some(new_id),
+            epoch: 41,
+        };
+        consumer.handle(&event);
+
+        // ---- (1)+(2) audit file: exactly the divergent writes + the window.
+        assert!(
+            frogdb_replication::split_brain_log::has_pending_logs(dir.path()),
+            "a pending split-brain log must exist after a divergent demotion"
+        );
+        let body = read_split_brain_log(dir.path());
+        assert!(body.contains(&format!("seq_diverge_start={acked}")));
+        assert!(body.contains(&format!("seq_diverge_end={current}")));
+        assert!(body.contains(&format!("ops_discarded={}", divergent_keys.len())));
+        assert!(body.contains("old_primary=a")); // 0xA hex
+        assert!(body.contains("new_primary=b0b")); // 0xB0B hex
+        assert!(body.contains("epoch_old=41"));
+        assert!(body.contains("epoch_new=42"));
+        // The divergent writes are present...
+        for key in &divergent_keys {
+            assert!(
+                body.contains(key),
+                "audit log missing divergent write {key}"
+            );
+        }
+        // ...and the acknowledged writes are NOT surrendered (the new primary
+        // already holds them; only writes past the acked floor are discarded).
+        assert!(
+            !body.contains("acked_key_a") && !body.contains("acked_key_b"),
+            "acknowledged writes must not appear in the discard audit"
+        );
+
+        // ---- (3) telemetry matches the discard count exactly.
+        assert_eq!(
+            recorder.counter_value("frogdb_split_brain_ops_discarded_total"),
+            Some(divergent_keys.len() as u64),
+            "SplitBrainOpsDiscardedTotal must equal the number of discarded ops"
+        );
+        assert_eq!(
+            recorder.counter_value("frogdb_split_brain_events_total"),
+            Some(1),
+            "one split-brain event was recorded"
+        );
+        assert_eq!(
+            recorder.gauge_value("frogdb_split_brain_recovery_pending"),
+            Some(1.0),
+            "recovery-pending gauge must be raised while a log awaits processing"
+        );
+
+        // ---- (4) the demotion (discard-via-resync) is still issued.
+        assert_eq!(
+            *controller.demotes.lock().unwrap(),
+            vec![new_primary_addr],
+            "demotion to the new primary must fire so the divergent node resyncs \
+             (discarding its divergent writes)"
+        );
+    }
+
+    /// Buffer-overflow / truncation behavior (issue 15, audit gap E#5: "the
+    /// truncation path untested"). When the divergence exceeds
+    /// `split_brain_buffer_size`, the ring buffer evicts oldest-first (FIFO), so
+    /// the audit captures only the retained *tail* of the divergent writes.
+    ///
+    /// This test pins the *actual* designed behavior and its boundary honestly:
+    ///   - Well-defined, no corruption: every retained RESP entry is intact and
+    ///     the retained set is the newest `max_entries` writes, in order.
+    ///   - NOT fully observable: there is no truncation marker in the file, and
+    ///     `ops_discarded` counts only the *retained* entries — it undercounts
+    ///     the true divergence span `(seq_diverge_start, seq_diverge_end]`. The
+    ///     evicted oldest writes are silently absent from the audit.
+    ///
+    /// The observable signal that truncation occurred is indirect: the first
+    /// retained offset sits strictly above `seq_diverge_start`, leaving an
+    /// unaudited gap. Documented here rather than asserted as "correct" because
+    /// it is a real limitation of the current audit (a follow-up could emit a
+    /// truncation marker / dedicated metric).
+    #[test]
+    fn split_brain_buffer_overflow_truncates_audit_silently() {
+        let dir = tempfile::tempdir().unwrap();
+        const CAP: usize = 8;
+        let handler = split_brain_handler(dir.path(), CAP);
+
+        // No streaming replica ⇒ divergence floor is 0, so *every* write is
+        // divergent — but the buffer only retains the last CAP of them.
+        const TOTAL: usize = 20;
+        let mut last = 0u64;
+        for i in 0..TOTAL {
+            last = broadcast_set(
+                &handler,
+                &format!("of_key_{i:02}"),
+                &format!("of_val_{i:02}"),
+            );
+        }
+        let current = last;
+
+        let record = handler.divergence_record().expect("primary diverged");
+        assert_eq!(record.start, 0, "no acked replica ⇒ zero floor");
+        assert_eq!(record.end, current);
+        // The window spans all TOTAL writes, but only CAP survived the buffer.
+        assert_eq!(
+            record.writes.len(),
+            CAP,
+            "overflow retains exactly the newest max_entries writes"
+        );
+        // Truncation is silent: the oldest retained offset is strictly above the
+        // divergence start, so [start, oldest_retained) is an unaudited gap.
+        let oldest_retained = record.writes.first().map(|(o, _)| *o).unwrap();
+        assert!(
+            oldest_retained > record.start,
+            "overflow leaves an unaudited gap below the oldest retained write"
+        );
+
+        let recorder = Arc::new(PrometheusRecorder::new());
+        let logger = SplitBrainLogger {
+            data_dir: dir.path().to_path_buf(),
+            primary_handler: Some(handler.clone()),
+            metrics: recorder.clone(),
+        };
+        logger.log(&DemotionEvent {
+            demoted_node_id: 1,
+            new_primary_id: Some(2),
+            epoch: 5,
+        });
+
+        let body = read_split_brain_log(dir.path());
+
+        // The newest CAP writes are retained, intact and in order...
+        for i in (TOTAL - CAP)..TOTAL {
+            assert!(
+                body.contains(&format!("of_key_{i:02}")),
+                "retained tail must contain of_key_{i:02}"
+            );
+        }
+        // ...the evicted oldest writes are silently dropped (no truncation marker).
+        for i in 0..(TOTAL - CAP) {
+            assert!(
+                !body.contains(&format!("of_key_{i:02}")),
+                "evicted write of_key_{i:02} must be absent from the audit"
+            );
+        }
+        assert!(
+            !body.to_lowercase().contains("truncat"),
+            "current audit emits NO truncation marker (documented boundary)"
+        );
+
+        // The window header still reports the *true* span (start=0..current),
+        // while ops_discarded reflects only the retained tail — so the header
+        // and the body disagree on the true divergence size. This is the
+        // observability gap: ops_discarded undercounts the real divergence.
+        assert!(body.contains("seq_diverge_start=0"));
+        assert!(body.contains(&format!("seq_diverge_end={current}")));
+        assert!(body.contains(&format!("ops_discarded={CAP}")));
+        assert_eq!(
+            recorder.counter_value("frogdb_split_brain_ops_discarded_total"),
+            Some(CAP as u64),
+            "telemetry counts only the retained (audited) ops, not the true \
+             divergence span — the truncation is not separately observable"
+        );
+    }
 }
