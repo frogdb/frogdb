@@ -78,7 +78,17 @@ pub struct ReplicaReplicationHandler {
     /// reset to `false` whenever [`Self::connect_and_sync`] returns for any
     /// reason (clean close, error, or a fresh attempt not yet past PSYNC).
     link_up: Arc<AtomicBool>,
+    /// Cadence of the spontaneous replica→primary ACK tick (Redis
+    /// `repl-ping-replica-period`). Seeded to a 1s default at construction and
+    /// overridden from `replication.ack-interval-ms` via [`Self::set_ack_interval`];
+    /// stamped into each [`ReplicaConnection`] built in [`Self::connect_and_sync`].
+    ack_interval: Duration,
 }
+
+/// Default spontaneous-ACK cadence when config supplies nothing (1s, matching
+/// `DEFAULT_ACK_INTERVAL_MS` in the config crate and Redis's default
+/// `repl-ping-replica-period`).
+const DEFAULT_ACK_INTERVAL: Duration = Duration::from_secs(1);
 
 impl ReplicaReplicationHandler {
     pub fn new(
@@ -107,8 +117,25 @@ impl ReplicaReplicationHandler {
             shared_offset: None,
             connect_factory: plain_tcp_connect_factory(),
             link_up: Arc::new(AtomicBool::new(false)),
+            ack_interval: DEFAULT_ACK_INTERVAL,
         };
         (handler, frame_rx)
+    }
+
+    /// Override the spontaneous replica→primary ACK cadence from
+    /// `replication.ack-interval-ms`. A zero value is ignored (config validation
+    /// already rejects it), keeping the safe non-zero default rather than
+    /// spinning a zero-duration `tokio::time::interval`.
+    pub fn set_ack_interval(&mut self, ms: u64) {
+        if ms > 0 {
+            self.ack_interval = Duration::from_millis(ms);
+        }
+    }
+
+    /// The spontaneous-ACK cadence this handler stamps into each connection.
+    /// Exposed so the boot/demotion wiring can be asserted without a socket.
+    pub fn ack_interval(&self) -> Duration {
+        self.ack_interval
     }
 
     /// Whether the replica currently has a live, streaming connection to its
@@ -223,6 +250,7 @@ impl ReplicaReplicationHandler {
             data_dir: self.data_dir.clone(),
             offsets,
             link_up: self.link_up.clone(),
+            ack_interval: self.ack_interval,
         };
         // Whatever ends this attempt — clean close, a handshake/sync error, or
         // the caller dropping the stream — the link is no longer up. `conn`

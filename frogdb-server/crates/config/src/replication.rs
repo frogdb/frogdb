@@ -46,7 +46,8 @@ pub struct ReplicationConfigSection {
 
     /// ACK interval - how often replicas send ACKs to primary (milliseconds).
     #[serde(default = "default_ack_interval_ms")]
-    #[param(skip)] // skip: config not yet consumed by server
+    #[param(skip)]
+    // skip: consumed at replica boot; internal ACK cadence (Redis repl-ping-replica-period), not runtime CONFIG
     pub ack_interval_ms: u64,
 
     /// Full sync timeout (seconds).

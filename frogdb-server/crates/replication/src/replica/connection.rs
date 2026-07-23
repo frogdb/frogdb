@@ -106,6 +106,10 @@ pub struct ReplicaConnection {
     /// lockstep with `connection_state` via [`Self::set_state`] so INFO can
     /// read the link status without a lock on this connection.
     pub(crate) link_up: Arc<AtomicBool>,
+    /// Cadence of the spontaneous replica→primary ACK tick, sourced from
+    /// `replication.ack-interval-ms` (Redis `repl-ping-replica-period`) and
+    /// copied in from the owning handler when the connection is built.
+    pub(crate) ack_interval: Duration,
 }
 
 impl ReplicaConnection {
@@ -358,6 +362,7 @@ mod tests {
             data_dir: PathBuf::from("/tmp/frogdb-test"),
             offsets,
             link_up: Arc::new(AtomicBool::new(false)),
+            ack_interval: Duration::from_secs(1),
         };
 
         let mut client = client;
@@ -448,6 +453,7 @@ mod tests {
             data_dir,
             offsets: offsets.clone(),
             link_up: link_up.clone(),
+            ack_interval: Duration::from_secs(1),
         };
 
         // Feed the whole checkpoint body, then close so no read blocks.

@@ -4,12 +4,9 @@ use super::connection::ReplicaConnection;
 use crate::frame::{ReplconfCodec, ReplicationFrame, ReplicationFrameCodec};
 use bytes::BytesMut;
 use std::io;
-use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio_util::codec::Decoder;
-
-const ACK_INTERVAL: Duration = Duration::from_secs(1);
 
 impl ReplicaConnection {
     pub(crate) async fn stream_replication(
@@ -19,7 +16,9 @@ impl ReplicaConnection {
         tracing::info!("Starting replication stream");
         let mut codec = ReplicationFrameCodec::new();
         let mut buf = BytesMut::with_capacity(64 * 1024);
-        let mut ack_interval = tokio::time::interval(ACK_INTERVAL);
+        // The spontaneous ACK cadence comes from config (`replication.ack-interval-ms`,
+        // Redis `repl-ping-replica-period`), threaded in at connection construction.
+        let mut ack_interval = tokio::time::interval(self.ack_interval);
         loop {
             tokio::select! {
                 result = self.stream.read_buf(&mut buf) => {

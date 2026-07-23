@@ -26,6 +26,31 @@ async fn test_replica_handler_creation() {
     assert!(!current_state.replication_id.is_empty());
 }
 
+/// The ACK cadence is config-driven (`replication.ack-interval-ms`), not a
+/// hardcoded constant. A fresh handler defaults to 1s; `set_ack_interval`
+/// overrides it with the configured value, and a zero (which config validation
+/// already rejects) is ignored so we never spin a zero-duration interval.
+#[test]
+fn ack_interval_reflects_injected_config_value() {
+    let addr: SocketAddr = "127.0.0.1:6379".parse().unwrap();
+    let state = ReplicationState::new();
+    let data_dir = PathBuf::from("/tmp/frogdb-test");
+    let state_path = data_dir.join("replication_state.json");
+    let (mut handler, _rx) =
+        ReplicaReplicationHandler::new(addr, 6380, state, state_path, data_dir);
+
+    // Default when config supplies nothing: 1s.
+    assert_eq!(handler.ack_interval(), Duration::from_secs(1));
+
+    // A non-default configured value is adopted.
+    handler.set_ack_interval(250);
+    assert_eq!(handler.ack_interval(), Duration::from_millis(250));
+
+    // Zero is ignored — the previous safe value survives.
+    handler.set_ack_interval(0);
+    assert_eq!(handler.ack_interval(), Duration::from_millis(250));
+}
+
 /// A connect factory that counts every dial attempt and always fails
 /// immediately, keeping `start()` in its retry/backoff loop forever unless
 /// something breaks it out.
