@@ -1,8 +1,26 @@
 //! Integration tests for transaction commands (MULTI, EXEC, DISCARD, WATCH, UNWATCH).
 
-use crate::common::test_server::TestServer;
+use crate::common::test_server::{TestServer, TestServerConfig};
 use bytes::Bytes;
 use frogdb_protocol::Response;
+
+/// Find two plain (non-hash-tagged) keys that hash to different shards, so a
+/// MULTI spanning them is a genuine cross-internal-shard transaction. Mirrors
+/// the helper in `integration_client.rs`; duplicated here to keep this test file
+/// self-contained.
+fn cross_shard_key_pair(num_shards: usize) -> (String, String) {
+    let mut first: Option<(usize, String)> = None;
+    for i in 0..100_000 {
+        let key = format!("txnkey:{i}");
+        let shard = frogdb_core::shard_for_key(key.as_bytes(), num_shards);
+        match &first {
+            None => first = Some((shard, key)),
+            Some((s0, k0)) if *s0 != shard => return (k0.clone(), key),
+            _ => {}
+        }
+    }
+    panic!("could not find a cross-shard key pair for {num_shards} shards");
+}
 
 #[tokio::test]
 async fn test_multi_exec_basic() {
@@ -1006,6 +1024,191 @@ async fn test_exec_nested_null_array_encodes_as_nested_null_resp2() {
         response,
         Response::Array(vec![Response::Bulk(None)]),
         "nested NullArray must encode as RESP2 nested null ($-1), yielding *1\\r\\n$-1\\r\\n"
+    );
+
+    server.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// Cross-shard MULTI/EXEC invariant (testing-gap issue #19)
+//
+// `allow_cross_slot_standalone` lets *single* multi-key commands (MGET/MSET/DEL)
+// scatter across internal shards, backed by VLL execution atomicity. That
+// support is deliberately withheld from MULTI/EXEC transactions, which have no
+// cross-shard failure-atomicity / rollback story. A shard-spanning transaction
+// must therefore ALWAYS reject with CROSSSLOT at EXEC, whether the config flag
+// is on or off. These tests pin that invariant: a future refactor threading the
+// flag into `fold_transaction_keys` / `TransactionTarget::resolve` (state.rs)
+// would permit a non-atomic partial-commit and must fail here.
+// ---------------------------------------------------------------------------
+
+/// Assert an EXEC (or queued-command) response is a CROSSSLOT error.
+fn assert_crossslot(response: &Response, context: &str) {
+    match response {
+        Response::Error(e) => assert!(
+            e.starts_with(b"CROSSSLOT"),
+            "{context}: expected CROSSSLOT error, got {:?}",
+            String::from_utf8_lossy(e)
+        ),
+        other => panic!("{context}: expected CROSSSLOT error, got {other:?}"),
+    }
+}
+
+/// Baseline (default config: `allow_cross_slot_standalone=false`): a plain-key,
+/// no-WATCH MULTI over keys on different internal shards CROSSSLOTs at EXEC.
+/// Previously the only standalone cross-shard-MULTI CROSSSLOT coverage was the
+/// WATCH-fold control case; this pins the plain queued-key path.
+#[tokio::test]
+async fn test_multi_cross_shard_plain_keys_crossslot_default_config() {
+    // Default standalone server uses 4 shards.
+    let (k1, k2) = cross_shard_key_pair(4);
+
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    let response = client.command(&["SET", k1.as_str(), "v1"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    let response = client.command(&["SET", k2.as_str(), "v2"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    let response = client.command(&["EXEC"]).await;
+    assert_crossslot(
+        &response,
+        "cross-shard plain-key MULTI under default config",
+    );
+
+    // Neither write landed (transaction rejected atomically, not partially).
+    assert_eq!(
+        client.command(&["GET", k1.as_str()]).await,
+        Response::Bulk(None)
+    );
+    assert_eq!(
+        client.command(&["GET", k2.as_str()]).await,
+        Response::Bulk(None)
+    );
+
+    server.shutdown().await;
+}
+
+/// Core invariant: with `allow_cross_slot_standalone=true`, single multi-key
+/// commands scatter across shards (proven here by an out-of-transaction MSET
+/// returning OK), yet a MULTI spanning the same two shards STILL CROSSSLOTs at
+/// EXEC. The successful scatter MSET proves the flag is genuinely effective, so
+/// the CROSSSLOT is the transaction restriction — not the flag silently no-oping.
+#[tokio::test]
+async fn test_multi_cross_shard_crossslot_with_allow_cross_slot_standalone() {
+    let (k1, k2) = cross_shard_key_pair(4);
+
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        allow_cross_slot_standalone: true,
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    // Sanity: with the flag on, a single cross-shard MSET scatters and succeeds.
+    let response = client
+        .command(&["MSET", k1.as_str(), "seed1", k2.as_str(), "seed2"])
+        .await;
+    assert_eq!(
+        response,
+        Response::Simple(Bytes::from("OK")),
+        "cross-shard MSET must scatter-succeed when allow_cross_slot_standalone=true"
+    );
+
+    // But a MULTI over the same two shards must still CROSSSLOT at EXEC.
+    let response = client.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    let response = client.command(&["SET", k1.as_str(), "tx1"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    let response = client.command(&["SET", k2.as_str(), "tx2"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    let response = client.command(&["EXEC"]).await;
+    assert_crossslot(
+        &response,
+        "cross-shard MULTI with allow_cross_slot_standalone=true",
+    );
+
+    // The transaction writes did not land: the seed values from MSET survive
+    // unchanged (no partial commit of tx1/tx2).
+    assert_eq!(
+        client.command(&["GET", k1.as_str()]).await,
+        Response::Bulk(Some(Bytes::from("seed1")))
+    );
+    assert_eq!(
+        client.command(&["GET", k2.as_str()]).await,
+        Response::Bulk(Some(Bytes::from("seed2")))
+    );
+
+    server.shutdown().await;
+}
+
+/// Regression baseline mirror: `allow_cross_slot_standalone=false` (explicit)
+/// also CROSSSLOTs a cross-shard MULTI. Together with the `true` case above,
+/// this proves the fold path is config-independent.
+#[tokio::test]
+async fn test_multi_cross_shard_crossslot_with_flag_disabled() {
+    let (k1, k2) = cross_shard_key_pair(4);
+
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        allow_cross_slot_standalone: false,
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    let response = client.command(&["SET", k1.as_str(), "v1"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    let response = client.command(&["SET", k2.as_str(), "v2"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    let response = client.command(&["EXEC"]).await;
+    assert_crossslot(
+        &response,
+        "cross-shard MULTI with allow_cross_slot_standalone=false",
+    );
+
+    server.shutdown().await;
+}
+
+/// Boundary: enabling `allow_cross_slot_standalone` must NOT break a legitimate
+/// single-shard transaction. Two distinct keys sharing a hash tag are colocated
+/// on one slot/shard, so the MULTI commits normally with the flag on.
+#[tokio::test]
+async fn test_multi_single_shard_commits_with_allow_cross_slot_standalone() {
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        allow_cross_slot_standalone: true,
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    // Distinct keys, same hash tag -> same slot -> same shard (colocated).
+    let response = client.command(&["SET", "{tag}foo", "a"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    let response = client.command(&["SET", "{tag}bar", "b"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    let response = client.command(&["EXEC"]).await;
+    match response {
+        Response::Array(results) => {
+            assert_eq!(results.len(), 2, "both queued commands run");
+            assert_eq!(results[0], Response::Simple(Bytes::from("OK")));
+            assert_eq!(results[1], Response::Simple(Bytes::from("OK")));
+        }
+        other => panic!("hash-tag-colocated MULTI must commit, got {other:?}"),
+    }
+
+    assert_eq!(
+        client.command(&["GET", "{tag}foo"]).await,
+        Response::Bulk(Some(Bytes::from("a")))
+    );
+    assert_eq!(
+        client.command(&["GET", "{tag}bar"]).await,
+        Response::Bulk(Some(Bytes::from("b")))
     );
 
     server.shutdown().await;

@@ -1,6 +1,6 @@
 # allow_cross_slot_standalone must not relax MULTI/EXEC cross-shard atomicity — unguarded by test
 
-Status: needs-triage
+Status: done
 Type: AFK
 Origin: testing-gap audit 2026-07-22 (multi-agent static review + adversarial verification; coverage run on testbox)
 Severity: likelihood 2/3, consequence 3/3 (score 6)
@@ -38,3 +38,41 @@ None - can start immediately.
 - `frogdb-server/crates/server/tests/integration_transactions.rs:360-380` (existing WATCH-fold CROSSSLOT control case)
 - `frogdb-server/crates/config/src/server.rs:38-41,91,117` (`allow_cross_slot_standalone` config field — name confirmed correct)
 - `frogdb-server/crates/server/src/connection/deps.rs:172`, `connection.rs:131`, `server/subsystems.rs:449` (config threading to connection-layer `allow_cross_slot`)
+
+## Resolution
+
+Resolved 2026-07-23 by **pinning** the invariant with tests — no bug found; the guarantee holds by construction.
+
+**Actual config field name.** Confirmed as `allow_cross_slot_standalone: bool`
+(`frogdb-server/crates/config/src/server.rs:38-41`, default `false` via
+`default_allow_cross_slot_standalone()`). The audit's guess was correct as written; the earlier
+"may be off" warning was unfounded.
+
+**Observed behavior (verified).** The MULTI co-location rule lives entirely in
+`TxnSlotAccumulator` (`state.rs`): `fold_transaction_keys` → `add_keys` → `fold_shard` promotes a
+shard-spanning transaction to `TransactionTarget::Multi`, and `TransactionTarget::resolve` maps
+`Multi → Err(redirect::crossslot())` at EXEC. Neither path takes `allow_cross_slot_standalone` (or
+any config) as input — the flag is threaded only to the single-op scatter-gather layer, never to
+the transaction fold. So cross-shard MULTI CROSSSLOTs at EXEC regardless of the flag. Confirmed
+live: a cross-shard MSET scatter-succeeds with the flag on, while a MULTI over the same two shards
+still CROSSSLOTs and lands zero writes (no partial commit).
+
+**Fix-or-pin outcome: PIN.** Invariant already held; added regression tests in
+`frogdb-server/crates/server/tests/integration_transactions.rs`:
+- `test_multi_cross_shard_plain_keys_crossslot_default_config` — plain-key, no-WATCH cross-shard
+  MULTI under default config CROSSSLOTs (fills the previously-missing plain-key coverage; only the
+  WATCH-fold control case existed).
+- `test_multi_cross_shard_crossslot_with_allow_cross_slot_standalone` — flag **on**: single MSET
+  scatters OK, but cross-shard MULTI still CROSSSLOTs and seed values survive unchanged.
+- `test_multi_cross_shard_crossslot_with_flag_disabled` — flag **off** (explicit) baseline mirror.
+- `test_multi_single_shard_commits_with_allow_cross_slot_standalone` — boundary: hash-tag-colocated
+  (same-slot, distinct keys) MULTI commits normally with the flag on.
+
+Added a `cross_shard_key_pair` helper (mirrors the `integration_client.rs` one) to pick two
+plain keys on different internal shards.
+
+**Test evidence.** `just test frogdb-server` (matching the 4 tests): `4 passed, 1807 skipped`.
+Load-bearing check: temporarily mutating `TransactionTarget::resolve` to permit `Multi` (return
+`Single(shards[0])`) failed all 3 cross-shard tests (EXEC returned `[OK, OK]` instead of
+CROSSSLOT) while the single-shard boundary test still passed; mutation reverted. This satisfies
+acceptance criterion 4 (tests fail if the fold/resolve path were changed to consult the flag).
