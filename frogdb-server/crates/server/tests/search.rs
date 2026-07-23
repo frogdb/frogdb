@@ -7561,6 +7561,226 @@ async fn regression_rename_json_into_index_prefix_indexes_destination() {
     server.shutdown().await;
 }
 
+/// Cross-source Refresh regression: a JSON value overwriting a key still present
+/// in a HASH-source index must drop the stale hash doc. `refresh_key` used to
+/// dispatch a JSON value straight to `reindex_json_key`, which only visits
+/// JSON-source indexes, so the hash index kept its now-stale document. The fix
+/// clears the key from *every* prefix-matching index first, then re-adds only to
+/// the source-matching (here: none) indexes.
+#[tokio::test]
+async fn regression_copy_json_over_hash_indexed_key_removes_stale_hash_doc() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client.command(&["HSET", "doc:1", "name", "Alice"]).await;
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "Alice"]).await);
+    assert_eq!(unwrap_integer(&arr[0]), 1, "baseline: hash is indexed");
+
+    // A JSON value OUTSIDE the prefix, copied over the indexed hash key.
+    client
+        .command(&["JSON.SET", "src:1", "$", r#"{"name":"bob"}"#])
+        .await;
+    assert_eq!(
+        unwrap_integer(&client.command(&["COPY", "src:1", "doc:1", "REPLACE"]).await),
+        1,
+        "COPY REPLACE should succeed"
+    );
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "Alice"]).await);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        0,
+        "COPY of a JSON value over a hash-indexed key must drop the stale hash doc"
+    );
+
+    server.shutdown().await;
+}
+
+/// Cross-source Refresh regression (RENAME): renaming a JSON value onto a key
+/// present in a HASH-source index must drop the stale hash doc.
+#[tokio::test]
+async fn regression_rename_json_over_hash_indexed_key_removes_stale_hash_doc() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client.command(&["HSET", "doc:1", "name", "Alice"]).await;
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "Alice"]).await);
+    assert_eq!(unwrap_integer(&arr[0]), 1, "baseline: hash is indexed");
+
+    // A JSON value OUTSIDE the prefix, renamed onto the indexed hash key.
+    client
+        .command(&["JSON.SET", "src:1", "$", r#"{"name":"bob"}"#])
+        .await;
+    assert_ok(&client.command(&["RENAME", "src:1", "doc:1"]).await);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "Alice"]).await);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        0,
+        "RENAME of a JSON value onto a hash-indexed key must drop the stale hash doc"
+    );
+
+    server.shutdown().await;
+}
+
+/// Cross-source Refresh regression (RESTORE): restoring a JSON payload over a
+/// key present in a HASH-source index must drop the stale hash doc.
+#[tokio::test]
+async fn regression_restore_json_over_hash_indexed_key_removes_stale_hash_doc() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Build a JSON payload OUTSIDE the prefix and DUMP it.
+    client
+        .command(&["JSON.SET", "tmp:1", "$", r#"{"name":"bob"}"#])
+        .await;
+    let payload = match server.send("DUMP", &["tmp:1"]).await {
+        Response::Bulk(Some(data)) => data,
+        other => panic!("DUMP should return bulk data, got: {other:?}"),
+    };
+
+    client.command(&["HSET", "doc:1", "name", "Alice"]).await;
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "Alice"]).await);
+    assert_eq!(unwrap_integer(&arr[0]), 1, "baseline: hash is indexed");
+
+    // Restore the JSON payload over the indexed hash key (REPLACE clobbers it).
+    let restore = Bytes::from_static(b"RESTORE");
+    let dest = Bytes::from_static(b"doc:1");
+    let ttl = Bytes::from_static(b"0");
+    let replace = Bytes::from_static(b"REPLACE");
+    let resp = client
+        .command_raw(&[&restore, &dest, &ttl, &payload, &replace])
+        .await;
+    assert_ok(&resp);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "Alice"]).await);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        0,
+        "RESTORE of a JSON payload over a hash-indexed key must drop the stale hash doc"
+    );
+
+    server.shutdown().await;
+}
+
+/// Symmetric cross-source Refresh regression: a hash value overwriting a key
+/// present in a JSON-source index must NOT pollute the JSON index. Predates this
+/// branch — `reindex_hash_key` lacked the `source == Hash` guard its JSON twin
+/// has, so it indexed a hash projection into every prefix-matching index,
+/// including JSON-source ones (searchable whenever a hash field name collides
+/// with a JSON alias). The key must be absent from the JSON index entirely.
+#[tokio::test]
+async fn regression_copy_hash_over_json_indexed_key_removes_stale_json_doc() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["JSON.SET", "doc:1", "$", r#"{"name":"alice"}"#])
+        .await;
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "JSON",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "$.name",
+            "AS",
+            "name",
+            "TEXT",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "@name:alice"]).await);
+    assert_eq!(unwrap_integer(&arr[0]), 1, "baseline: JSON doc is indexed");
+
+    // A hash OUTSIDE the prefix, whose field name collides with the JSON alias,
+    // copied over the JSON-indexed key.
+    client.command(&["HSET", "src:1", "name", "bob"]).await;
+    assert_eq!(
+        unwrap_integer(&client.command(&["COPY", "src:1", "doc:1", "REPLACE"]).await),
+        1,
+        "COPY REPLACE should succeed"
+    );
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    // The old JSON doc must be gone...
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "@name:alice"]).await);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        0,
+        "COPY of a hash over a JSON-indexed key must drop the stale JSON doc"
+    );
+    // ...and the hash must NOT have been indexed into the JSON index.
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "@name:bob"]).await);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        0,
+        "a hash value must not be indexed into a JSON-source index"
+    );
+
+    server.shutdown().await;
+}
+
 /// Round-10 follow-up 3: a READONLY command (HGET) that lazily purges an
 /// expired hash field mutates the hash without a WRITE `ReindexSpec`, so the
 /// search index kept the reaped field's stale value. The purge-effect hook now
