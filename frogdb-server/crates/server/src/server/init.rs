@@ -131,6 +131,11 @@ pub(super) async fn init_infrastructure(
     // `metrics_recorder` fan-out below which the `Server` retains.
     let otlp_recorder = build_otlp_recorder(config);
 
+    // Whether at least one real metrics backend is present. This is exactly the
+    // condition under which `assemble_metrics_recorder` returns a non-noop
+    // recorder, so it gates the process-identity gauges below.
+    let has_metrics_backend = prometheus_recorder.is_some() || otlp_recorder.is_some();
+
     // Fan-out recorder handed to the runtime. When both Prometheus and OTLP are
     // present they are combined via `CompositeRecorder`; otherwise whichever
     // exists is used directly, falling back to a no-op. When `otlp-enabled` is
@@ -138,29 +143,14 @@ pub(super) async fn init_infrastructure(
     let metrics_recorder: Arc<dyn MetricsRecorder> =
         assemble_metrics_recorder(prometheus_recorder.clone(), otlp_recorder);
 
-    // Record process-identity gauges when the Prometheus scrape stack is active.
-    // Recorded through the fan-out so OTLP receives them too when enabled.
-    if prometheus_recorder.is_some() {
-        // Record server info
-        frogdb_telemetry::definitions::Info::set(
-            &*metrics_recorder,
-            1.0,
-            env!("CARGO_PKG_VERSION"),
-            "standalone",
-        );
-        // Record binary version metric (info gauge, always 1)
-        frogdb_telemetry::definitions::BinaryVersion::set(
-            &*metrics_recorder,
-            1.0,
-            env!("CARGO_PKG_VERSION"),
-        );
-        // Record maxmemory at startup
-        if config.memory.maxmemory > 0 {
-            frogdb_telemetry::definitions::MemoryMaxmemoryBytes::set(
-                &*metrics_recorder,
-                config.memory.maxmemory as f64,
-            );
-        }
+    // Record process-identity gauges whenever any real backend is active, so both
+    // the Prometheus scrape endpoint and the OTLP exporter receive them — the
+    // latter matters in OTLP-only mode (`http.enabled = false` +
+    // `metrics.otlp-enabled = true`), where Prometheus is absent. When every
+    // backend is disabled this block is skipped, keeping the all-disabled path
+    // byte-identical.
+    if has_metrics_backend {
+        record_process_identity_gauges(&*metrics_recorder, config);
     }
 
     // Process-wide keyspace hit/miss accumulator. Independent of the metrics
@@ -464,6 +454,29 @@ fn build_otlp_recorder(config: &Config) -> Option<Arc<dyn MetricsRecorder>> {
         .map(|recorder| Arc::new(recorder) as Arc<dyn MetricsRecorder>)
 }
 
+/// Record the process-identity gauges (server info, binary version, and the
+/// configured maxmemory) through the fan-out recorder. Called during init
+/// whenever at least one real metrics backend is present so every backend --
+/// Prometheus and/or OTLP -- receives them.
+fn record_process_identity_gauges(recorder: &dyn MetricsRecorder, config: &Config) {
+    // Record server info
+    frogdb_telemetry::definitions::Info::set(
+        recorder,
+        1.0,
+        env!("CARGO_PKG_VERSION"),
+        "standalone",
+    );
+    // Record binary version metric (info gauge, always 1)
+    frogdb_telemetry::definitions::BinaryVersion::set(recorder, 1.0, env!("CARGO_PKG_VERSION"));
+    // Record maxmemory at startup
+    if config.memory.maxmemory > 0 {
+        frogdb_telemetry::definitions::MemoryMaxmemoryBytes::set(
+            recorder,
+            config.memory.maxmemory as f64,
+        );
+    }
+}
+
 /// Combine the Prometheus recorder (if any) and the OTLP recorder (if any) into
 /// the single fan-out recorder handed to the runtime.
 ///
@@ -489,18 +502,22 @@ mod metrics_recorder_tests {
     use frogdb_core::MetricsRecorder;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    /// Test recorder that counts `increment_counter` calls it receives, letting
-    /// a test observe whether it was included in a composite fan-out.
+    /// Test recorder that counts the `increment_counter` and `record_gauge`
+    /// calls it receives, letting a test observe whether it was included in a
+    /// composite fan-out and whether the identity gauges reached it.
     #[derive(Default)]
     struct CountingRecorder {
         increments: AtomicU64,
+        gauges: AtomicU64,
     }
 
     impl MetricsRecorder for CountingRecorder {
         fn increment_counter(&self, _name: &str, value: u64, _labels: &[(&str, &str)]) {
             self.increments.fetch_add(value, Ordering::Relaxed);
         }
-        fn record_gauge(&self, _name: &str, _value: f64, _labels: &[(&str, &str)]) {}
+        fn record_gauge(&self, _name: &str, _value: f64, _labels: &[(&str, &str)]) {
+            self.gauges.fetch_add(1, Ordering::Relaxed);
+        }
         fn record_histogram(&self, _name: &str, _value: f64, _labels: &[(&str, &str)]) {}
     }
 
@@ -533,7 +550,8 @@ mod metrics_recorder_tests {
         let otlp_dyn: Arc<dyn MetricsRecorder> = otlp_backend.clone();
 
         let recorder = assemble_metrics_recorder(Some(prometheus.clone()), Some(otlp_dyn));
-        recorder.increment_counter("wired_total", 3, &[("k", "v")]);
+        // UFCS: chokepoint lint targets method-call emission syntax
+        MetricsRecorder::increment_counter(recorder.as_ref(), "wired_total", 3, &[("k", "v")]);
 
         // The OTLP-slot backend received the sample => it is in the composite.
         assert_eq!(otlp_backend.increments.load(Ordering::Relaxed), 3);
@@ -553,10 +571,34 @@ mod metrics_recorder_tests {
     }
 
     #[test]
+    fn otlp_only_assembly_receives_identity_gauges() {
+        // Regression: in OTLP-only mode (no Prometheus / `http.enabled = false`)
+        // the process-identity gauges must still reach the OTLP backend. Assemble
+        // an OTLP-only recorder (None prometheus, Some otlp) and record the
+        // identity gauges through the fan-out; the OTLP-slot backend must observe
+        // them.
+        let otlp_backend = Arc::new(CountingRecorder::default());
+        let otlp_dyn: Arc<dyn MetricsRecorder> = otlp_backend.clone();
+        let recorder = assemble_metrics_recorder(None, Some(otlp_dyn));
+
+        let mut config = Config::default();
+        // Ensure the maxmemory gauge fires too: Info + BinaryVersion + maxmemory.
+        config.memory.maxmemory = 1024;
+        record_process_identity_gauges(&*recorder, &config);
+
+        assert_eq!(
+            otlp_backend.gauges.load(Ordering::Relaxed),
+            3,
+            "OTLP-only assembly must receive all three identity gauges"
+        );
+    }
+
+    #[test]
     fn assemble_none_yields_noop() {
         // Neither backend => a no-op recorder that cannot read counters back.
         let recorder = assemble_metrics_recorder(None, None);
-        recorder.increment_counter("x", 1, &[]);
+        // UFCS: chokepoint lint targets method-call emission syntax
+        MetricsRecorder::increment_counter(recorder.as_ref(), "x", 1, &[]);
         assert!(recorder.counter_value("x").is_none());
     }
 }
