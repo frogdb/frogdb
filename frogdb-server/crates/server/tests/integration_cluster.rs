@@ -8533,6 +8533,231 @@ async fn test_multi_exec_two_single_key_commands_different_slots_defers_crossslo
     harness.shutdown_all().await;
 }
 
+// ---------------------------------------------------------------------------
+// Blocking multi-key CROSSSLOT rejection (testing-gap issue #31): the only
+// CROSSSLOT coverage above is for MSET/EVAL/MULTI -- nothing pinned that a
+// *blocking* multi-key command (BLPOP/BLMPOP/BZPOPMIN/BZPOPMAX/BZMPOP/BLMOVE/
+// BRPOPLPUSH) presented with keys in different slots is rejected immediately,
+// rather than entering the blocking wait path. A regression here is worse
+// than a wrong reply -- it hangs the client (or blocks against the wrong
+// node) instead of failing fast.
+//
+// Each case below sends the command with an effectively-infinite blocking
+// timeout ("0"). If CROSSSLOT rejection were ever skipped for the blocking
+// family, the command would sit in the wait queue forever instead of
+// replying -- so a bounded elapsed time on the reply is itself proof the
+// command never blocked, on top of the plain error-shape assertion. The
+// `blocked_client_count` check is the PUBSUB-style introspection asked for:
+// it is the same counter `INFO`'s `blocked_clients` field reports and that
+// `wait_for_blocked_clients` polls elsewhere in the suite, so it directly
+// observes whether a waiter was (even partially/transiently) registered. The
+// trailing PING confirms the connection itself is still in a clean state
+// (no stray out-of-band wake frame desyncing the RESP2 stream).
+// ---------------------------------------------------------------------------
+
+/// Shared body for the blocking-multikey-CROSSSLOT cases: stand up a 3-node
+/// cluster, pick two keys the same node owns in different slots (no
+/// hash-tag trick -- that's precisely the untested path), send the command
+/// built by `build_args(key_a, key_b)`, and assert it comes back as an
+/// immediate CROSSSLOT with no waiter ever registered.
+async fn assert_blocking_multikey_crossslot_no_block(
+    build_args: impl Fn(&str, &str) -> Vec<String>,
+    context: &str,
+) {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let (node_id, slot_a, slot_b) = owner_node_with_two_slots(&harness).await;
+    let key_a = key_for_slot(slot_a);
+    let key_b = key_for_slot(slot_b);
+    assert_ne!(
+        slot_for_key(key_a.as_bytes()),
+        slot_for_key(key_b.as_bytes()),
+        "{context}: key_a/key_b must hash to different slots"
+    );
+
+    let node = harness.node(node_id).unwrap();
+    let mut client = node.connect().await;
+
+    let args = build_args(&key_a, &key_b);
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+
+    let start = std::time::Instant::now();
+    client.send_only(&arg_refs).await;
+    let resp = client
+        .read_response(Duration::from_secs(3))
+        .await
+        .unwrap_or_else(|| {
+            panic!(
+                "{context}: no response within 3s -- looks like it entered the blocking wait \
+                 path instead of rejecting cross-slot keys immediately"
+            )
+        });
+    let elapsed = start.elapsed();
+
+    assert_crossslot(&resp, context);
+    assert!(
+        elapsed < Duration::from_millis(1500),
+        "{context}: CROSSSLOT reply took {elapsed:?}, expected an immediate (non-blocking) \
+         rejection well under the 3s bound"
+    );
+
+    assert_eq!(
+        node.blocked_client_count(),
+        0,
+        "{context}: a cross-slot blocking command must never register a waiter"
+    );
+
+    let ping = client.command(&["PING"]).await;
+    assert_eq!(
+        ping,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"PONG")),
+        "{context}: connection must still be clean (no stray frames) after the CROSSSLOT reply"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// `BLPOP key1{slotA} key2{slotB} 0` returns CROSSSLOT immediately, never
+/// blocking.
+#[tokio::test]
+async fn test_blpop_cross_slot_returns_crossslot_immediately() {
+    assert_blocking_multikey_crossslot_no_block(
+        |a, b| {
+            vec![
+                "BLPOP".to_string(),
+                a.to_string(),
+                b.to_string(),
+                "0".to_string(),
+            ]
+        },
+        "BLPOP with cross-slot keys",
+    )
+    .await;
+}
+
+/// `BLMPOP 0 2 key1{slotA} key2{slotB} LEFT` returns CROSSSLOT immediately,
+/// never blocking.
+#[tokio::test]
+async fn test_blmpop_cross_slot_returns_crossslot_immediately() {
+    assert_blocking_multikey_crossslot_no_block(
+        |a, b| {
+            vec![
+                "BLMPOP".to_string(),
+                "0".to_string(),
+                "2".to_string(),
+                a.to_string(),
+                b.to_string(),
+                "LEFT".to_string(),
+            ]
+        },
+        "BLMPOP with cross-slot keys",
+    )
+    .await;
+}
+
+/// `BZPOPMIN key1{slotA} key2{slotB} 0` returns CROSSSLOT immediately, never
+/// blocking.
+#[tokio::test]
+async fn test_bzpopmin_cross_slot_returns_crossslot_immediately() {
+    assert_blocking_multikey_crossslot_no_block(
+        |a, b| {
+            vec![
+                "BZPOPMIN".to_string(),
+                a.to_string(),
+                b.to_string(),
+                "0".to_string(),
+            ]
+        },
+        "BZPOPMIN with cross-slot keys",
+    )
+    .await;
+}
+
+/// `BZPOPMAX key1{slotA} key2{slotB} 0` returns CROSSSLOT immediately, never
+/// blocking.
+#[tokio::test]
+async fn test_bzpopmax_cross_slot_returns_crossslot_immediately() {
+    assert_blocking_multikey_crossslot_no_block(
+        |a, b| {
+            vec![
+                "BZPOPMAX".to_string(),
+                a.to_string(),
+                b.to_string(),
+                "0".to_string(),
+            ]
+        },
+        "BZPOPMAX with cross-slot keys",
+    )
+    .await;
+}
+
+/// `BZMPOP 0 2 key1{slotA} key2{slotB} MIN` returns CROSSSLOT immediately,
+/// never blocking.
+#[tokio::test]
+async fn test_bzmpop_cross_slot_returns_crossslot_immediately() {
+    assert_blocking_multikey_crossslot_no_block(
+        |a, b| {
+            vec![
+                "BZMPOP".to_string(),
+                "0".to_string(),
+                "2".to_string(),
+                a.to_string(),
+                b.to_string(),
+                "MIN".to_string(),
+            ]
+        },
+        "BZMPOP with cross-slot keys",
+    )
+    .await;
+}
+
+/// `BLMOVE src{slotA} dst{slotB} LEFT RIGHT 0` (cross-slot source/dest)
+/// returns CROSSSLOT immediately, never blocking.
+#[tokio::test]
+async fn test_blmove_cross_slot_returns_crossslot_immediately() {
+    assert_blocking_multikey_crossslot_no_block(
+        |a, b| {
+            vec![
+                "BLMOVE".to_string(),
+                a.to_string(),
+                b.to_string(),
+                "LEFT".to_string(),
+                "RIGHT".to_string(),
+                "0".to_string(),
+            ]
+        },
+        "BLMOVE with cross-slot source/destination",
+    )
+    .await;
+}
+
+/// `BRPOPLPUSH src{slotA} dst{slotB} 0` (cross-slot source/dest) returns
+/// CROSSSLOT immediately, never blocking.
+#[tokio::test]
+async fn test_brpoplpush_cross_slot_returns_crossslot_immediately() {
+    assert_blocking_multikey_crossslot_no_block(
+        |a, b| {
+            vec![
+                "BRPOPLPUSH".to_string(),
+                a.to_string(),
+                b.to_string(),
+                "0".to_string(),
+            ]
+        },
+        "BRPOPLPUSH with cross-slot source/destination",
+    )
+    .await;
+}
+
 // ============================================================================
 // Category D: Cluster Persistence & Recovery
 // ============================================================================

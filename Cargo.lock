@@ -1798,6 +1798,7 @@ name = "frogdb-redis-regression"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "frogdb-core",
  "frogdb-protocol",
  "frogdb-server",
  "frogdb-test-harness",
