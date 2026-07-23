@@ -24,8 +24,9 @@
 use crate::common::chaos_configs::{ChaosConfigBuilder, ChaosPreset};
 use crate::common::sim_harness::{OperationHistory, OperationResult};
 use crate::common::sim_helpers::{
-    SERVER_HOST, SERVER_PORT, encode_command, parse_simple_response, real_frogdb_primary,
-    real_frogdb_replica, real_frogdb_server, real_frogdb_server_with_chaos,
+    CLUSTER_BUS_PORT, SERVER_HOST, SERVER_PORT, encode_command, parse_simple_response,
+    real_frogdb_cluster_node, real_frogdb_primary, real_frogdb_replica, real_frogdb_server,
+    real_frogdb_server_with_chaos,
 };
 use bytes::Bytes;
 use frogdb_server::config::ChaosConfig;
@@ -4836,5 +4837,558 @@ fn run_blocking_serve_replication_convergence(seed: u64) {
 fn test_blocking_serve_replication_convergence_random_workload() {
     for seed in [1u64, 7, 42] {
         run_blocking_serve_replication_convergence(seed);
+    }
+}
+
+// =============================================================================
+// Multi-node cluster topology under turmoil: real Raft consensus, MOVED/ASK
+// redirect correctness, and leader-partition-mid-migration single-owner
+// convergence (issue 11).
+//
+// Each host runs `real_frogdb_cluster_node`, a full FrogDB server in cluster
+// mode. Raft RPCs traverse turmoil's simulated cluster bus: incoming via
+// `cluster_bus::run` (framed with `new_framed`), outgoing via the turmoil
+// connect factory injected in `cluster_init.rs`. Node IDs are derived by hashing
+// each node's cluster-bus address, so for a fixed turmoil topology the lowest-ID
+// node is the deterministic bootstrap leader.
+// =============================================================================
+
+/// The three cluster hostnames used by every cluster sim in this section.
+const CLUSTER_HOSTS: [&str; 3] = ["cluster-n1", "cluster-n2", "cluster-n3"];
+
+/// A parsed `MOVED`/`ASK` redirect: `(is_ask, target client address)`.
+fn parse_redirect(err: &str) -> Option<(bool, std::net::SocketAddr)> {
+    let mut parts = err.split_whitespace();
+    let kind = parts.next()?;
+    let _slot = parts.next()?;
+    let addr: std::net::SocketAddr = parts.next()?.parse().ok()?;
+    match kind {
+        "MOVED" => Some((false, addr)),
+        "ASK" => Some((true, addr)),
+        _ => None,
+    }
+}
+
+/// Execute a command starting at `start_ip`, following `MOVED`/`ASK` redirects
+/// (reconnecting to the named owner; `ASK` issues `ASKING` before the retry) and
+/// retrying transient `CLUSTERDOWN`/`TRYAGAIN` errors, up to `max_hops` hops.
+///
+/// This is the client half of MOVED/ASK correctness: a well-behaved client that
+/// always converges on the slot's true owner.
+async fn exec_following_redirects(
+    start_ip: std::net::IpAddr,
+    parts: &[&[u8]],
+    max_hops: usize,
+) -> std::io::Result<RespValue> {
+    let mut conn = RespConn::connect((start_ip, SERVER_PORT)).await?;
+    for _ in 0..max_hops {
+        let reply = conn.cmd(parts).await?;
+        if let RespValue::Error(e) = &reply {
+            if let Some((is_ask, target)) = parse_redirect(e) {
+                conn = RespConn::connect((target.ip(), target.port())).await?;
+                if is_ask {
+                    let _ = conn.cmd(&[b"ASKING"]).await?;
+                }
+                continue;
+            }
+            if e.starts_with("CLUSTERDOWN") || e.starts_with("TRYAGAIN") {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+        }
+        return Ok(reply);
+    }
+    Err(std::io::Error::other("too many redirects"))
+}
+
+/// Poll until the cluster can serve a write (leader elected, all slots assigned):
+/// a `SET` following redirects returns `+OK` rather than `CLUSTERDOWN`.
+async fn wait_cluster_ready(start_ip: std::net::IpAddr) -> std::io::Result<()> {
+    for _ in 0..600 {
+        match exec_following_redirects(start_ip, &[b"SET", b"__ready_probe__", b"1"], 16).await {
+            Ok(RespValue::Simple(s)) if s == "OK" => return Ok(()),
+            _ => tokio::time::sleep(Duration::from_millis(100)).await,
+        }
+    }
+    Err(std::io::Error::other("cluster never became ready"))
+}
+
+/// Read `CLUSTER MYID` from `host` and parse the 40-char hex into a `u64`.
+async fn node_id_of(host: &str) -> std::io::Result<u64> {
+    let ip = turmoil::lookup(host);
+    let mut conn = RespConn::connect((ip, SERVER_PORT)).await?;
+    match conn.cmd(&[b"CLUSTER", b"MYID"]).await? {
+        RespValue::Bulk(Some(b)) => {
+            let s = String::from_utf8_lossy(&b);
+            u128::from_str_radix(s.trim(), 16)
+                .map(|v| v as u64)
+                .map_err(|_| std::io::Error::other("bad MYID hex"))
+        }
+        other => Err(std::io::Error::other(format!("MYID returned {other:?}"))),
+    }
+}
+
+/// Which host currently serves `key` locally (its slot's owner): the node whose
+/// direct (no-redirect) reply is not a `MOVED`. Returns `None` while unassigned.
+async fn owner_host_of(key: &[u8]) -> std::io::Result<Option<usize>> {
+    for (idx, host) in CLUSTER_HOSTS.iter().enumerate() {
+        let ip = turmoil::lookup(*host);
+        let mut conn = RespConn::connect((ip, SERVER_PORT)).await?;
+        let reply = conn.cmd(&[b"GET", key]).await?;
+        let redirected = matches!(&reply, RespValue::Error(e) if e.starts_with("MOVED"));
+        if !redirected {
+            return Ok(Some(idx));
+        }
+    }
+    Ok(None)
+}
+
+/// Assert that exactly one node owns `key`'s slot and every other node redirects
+/// to that same owner address — i.e. the topology has converged on a single
+/// owner. Returns the owner host index.
+async fn assert_single_owner(key: &[u8], ctx: &str) -> std::io::Result<usize> {
+    let mut owners: Vec<usize> = Vec::new();
+    let mut moved_targets: Vec<std::net::SocketAddr> = Vec::new();
+    let mut owner_addr: Option<std::net::SocketAddr> = None;
+
+    for (idx, host) in CLUSTER_HOSTS.iter().enumerate() {
+        let ip = turmoil::lookup(*host);
+        let mut conn = RespConn::connect((ip, SERVER_PORT)).await?;
+        match conn.cmd(&[b"GET", key]).await? {
+            RespValue::Error(e) if e.starts_with("MOVED") => {
+                let (_, target) = parse_redirect(&e).expect("MOVED parses");
+                moved_targets.push(target);
+            }
+            RespValue::Error(e) => {
+                panic!("{ctx}: node {host} returned unexpected error {e:?} for key");
+            }
+            // A local (owner) serve — value or nil.
+            _ => {
+                owners.push(idx);
+                owner_addr = Some(std::net::SocketAddr::new(ip, SERVER_PORT));
+            }
+        }
+    }
+
+    assert_eq!(
+        owners.len(),
+        1,
+        "{ctx}: expected exactly one owner, got owners={owners:?} moved={moved_targets:?}"
+    );
+    let owner_addr = owner_addr.unwrap();
+    for target in &moved_targets {
+        assert_eq!(
+            *target, owner_addr,
+            "{ctx}: a node redirected to {target} but the sole owner is {owner_addr}"
+        );
+    }
+    Ok(owners[0])
+}
+
+/// Soft variant of [`assert_single_owner`]: returns `Ok(Some(idx))` only when
+/// exactly one node serves the key locally and all others redirect to it;
+/// otherwise `Ok(None)`. Used to poll for convergence without panicking.
+async fn single_owner_soft(key: &[u8]) -> std::io::Result<Option<usize>> {
+    let mut owners: Vec<usize> = Vec::new();
+    let mut owner_addr: Option<std::net::SocketAddr> = None;
+    let mut moved_targets: Vec<std::net::SocketAddr> = Vec::new();
+
+    for (idx, host) in CLUSTER_HOSTS.iter().enumerate() {
+        let ip = turmoil::lookup(*host);
+        let mut conn = match RespConn::connect((ip, SERVER_PORT)).await {
+            Ok(c) => c,
+            Err(_) => return Ok(None),
+        };
+        match conn.cmd(&[b"GET", key]).await {
+            Ok(RespValue::Error(e)) if e.starts_with("MOVED") => match parse_redirect(&e) {
+                Some((_, target)) => moved_targets.push(target),
+                None => return Ok(None),
+            },
+            Ok(RespValue::Error(_)) => return Ok(None),
+            Ok(_) => {
+                owners.push(idx);
+                owner_addr = Some(std::net::SocketAddr::new(ip, SERVER_PORT));
+            }
+            Err(_) => return Ok(None),
+        }
+    }
+
+    if owners.len() != 1 {
+        return Ok(None);
+    }
+    let owner_addr = owner_addr.unwrap();
+    if moved_targets.iter().all(|t| *t == owner_addr) {
+        Ok(Some(owners[0]))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Register the three cluster hosts on `sim`, each a real Raft node. Returns the
+/// tempdirs (must be kept alive until after `sim.run()`).
+fn spawn_cluster_hosts(sim: &mut turmoil::Sim<'_>) -> Vec<tempfile::TempDir> {
+    let dirs: Vec<tempfile::TempDir> = (0..CLUSTER_HOSTS.len())
+        .map(|_| tempfile::tempdir().expect("cluster node data dir"))
+        .collect();
+
+    for (idx, host) in CLUSTER_HOSTS.iter().enumerate() {
+        let host = host.to_string();
+        let path = dirs[idx].path().to_path_buf();
+        sim.host(host.clone(), move || {
+            let path = path.clone();
+            let host = host.clone();
+            async move {
+                let own_ip = turmoil::lookup(host.as_str());
+                let initial_nodes: Vec<String> = CLUSTER_HOSTS
+                    .iter()
+                    .map(|peer| format!("{}:{}", turmoil::lookup(*peer), CLUSTER_BUS_PORT))
+                    .collect();
+                if let Err(e) = real_frogdb_cluster_node(1, own_ip, initial_nodes, path).await {
+                    eprintln!("cluster node {host} exited with error: {e}");
+                    return Err(e);
+                }
+                Ok(())
+            }
+        });
+    }
+    dirs
+}
+
+/// One seeded run: bring up a 3-node Raft cluster, then verify writes routed
+/// through `MOVED` redirects converge on — and stay on — a single correct owner.
+fn run_cluster_moved_convergence(seed: u64) {
+    let mut sim = Builder::new()
+        .simulation_duration(Duration::from_secs(180))
+        .rng_seed(seed)
+        .enable_random_order()
+        .build();
+
+    let dirs = spawn_cluster_hosts(&mut sim);
+
+    sim.client("driver", async move {
+        let entry = turmoil::lookup(CLUSTER_HOSTS[0]);
+        wait_cluster_ready(entry).await?;
+
+        // A spread of keys; each hashes to some slot owned by one of the three
+        // nodes. Writing via the entry node exercises MOVED following whenever
+        // the entry node is not the owner.
+        let keys: [&[u8]; 8] = [
+            b"alpha", b"bravo", b"charlie", b"delta", b"echo", b"foxtrot", b"golf", b"hotel",
+        ];
+        for (i, key) in keys.iter().enumerate() {
+            let val = format!("v{i}");
+            let set = exec_following_redirects(entry, &[b"SET", key, val.as_bytes()], 16).await?;
+            assert!(
+                matches!(&set, RespValue::Simple(s) if s == "OK"),
+                "seed {seed}: SET {} did not return OK: {set:?}",
+                String::from_utf8_lossy(key)
+            );
+
+            // The write must be visible on — and only on — the slot's owner.
+            let got = exec_following_redirects(entry, &[b"GET", key], 16).await?;
+            assert_eq!(
+                got,
+                RespValue::Bulk(Some(val.clone().into_bytes())),
+                "seed {seed}: GET {} after MOVED-following did not return the written value",
+                String::from_utf8_lossy(key)
+            );
+
+            assert_single_owner(key, &format!("seed {seed} key {i}")).await?;
+        }
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+    drop(dirs);
+}
+
+/// MOVED/ASK redirect correctness: writes through the simulation follow
+/// redirects to converge on the correct single owner, deterministically across
+/// several turmoil seeds (each seed = a distinct message schedule).
+#[test]
+fn test_cluster_moved_redirect_convergence() {
+    for seed in [1u64, 7, 42] {
+        run_cluster_moved_convergence(seed);
+    }
+}
+
+/// One seeded run of the leader-partition-mid-migration scenario.
+///
+/// Timeline: bring the cluster up; begin a slot migration (source `MIGRATING`,
+/// target `IMPORTING`); partition the Raft **leader** from the other two nodes
+/// while the migration is in flight; the surviving majority re-elects and
+/// commits the ownership transfer; heal the partition; assert the slot has
+/// converged on exactly one owner (the migration target) cluster-wide.
+///
+/// The leader is the lowest-node-ID (bootstrap) node — deterministic for a fixed
+/// turmoil topology — so the same seed always partitions the same node at the
+/// same simulated instant, making failures replayable.
+fn run_cluster_leader_partition_migration(seed: u64) {
+    use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+
+    let mut sim = Builder::new()
+        .simulation_duration(Duration::from_secs(90))
+        // Widen the per-host ephemeral-port range (default 49152..=65535, ~16k).
+        // While the leader is isolated it re-dials its unreachable peers, and the
+        // one-shot Raft transport holds a turmoil ephemeral port for each in-flight
+        // dial. turmoil 0.7.1 only reclaims a connection's port once its stream
+        // halves drop (post-SYN-ACK); a dial that never completes holds its port
+        // for the whole isolation window. `hold`/`release` (below) keeps those
+        // dials *pending* rather than cancelling them, so the headroom only has to
+        // cover the dials simultaneously in flight during the brief hold window.
+        .ephemeral_ports(2048..=65535)
+        // While the leader is isolated via `hold`, its peers' Raft dials queue as
+        // pending SYNs; on `release` they all flush into the victim's cluster-bus
+        // accept deque in a single step before its accept loop can drain them.
+        // turmoil's default per-socket capacity (64) overflows under that burst,
+        // so widen it — this is a simulated in-memory queue, not a real resource.
+        .tcp_capacity(65536)
+        .rng_seed(seed)
+        .enable_random_order()
+        .build();
+
+    let dirs = spawn_cluster_hosts(&mut sim);
+
+    // Shared control channel between the driver client and the manual step loop:
+    // phase 0 = setup, 1 = migration in flight (isolate the leader now),
+    // 2 = ownership committed (release). `leader_idx` names the victim host.
+    let phase = std::sync::Arc::new(AtomicU8::new(0));
+    let leader_idx = std::sync::Arc::new(AtomicUsize::new(usize::MAX));
+    let phase_c = phase.clone();
+    let leader_idx_c = leader_idx.clone();
+
+    sim.client("driver", async move {
+        let entry = turmoil::lookup(CLUSTER_HOSTS[0]);
+        wait_cluster_ready(entry).await?;
+
+        // Discover node IDs; the lowest-ID node is the deterministic bootstrap
+        // leader and our partition victim.
+        let mut ids: Vec<(usize, u64)> = Vec::new();
+        for (idx, host) in CLUSTER_HOSTS.iter().enumerate() {
+            ids.push((idx, node_id_of(host).await?));
+        }
+        let (leader, _) = *ids.iter().min_by_key(|(_, id)| *id).unwrap();
+        leader_idx_c.store(leader, Ordering::Release);
+
+        // Choose a slot to migrate via a representative key. `CLUSTER SETSLOT`
+        // moves ownership *metadata* through Raft only (no data-plane key
+        // transfer — that is the separate `MIGRATE` command), so this scenario
+        // asserts single-owner *ownership* convergence, not key movement. The
+        // key need not exist: on its owning node a `GET` for a missing key
+        // returns nil (a local serve), while every other node returns `MOVED`.
+        let key: &[u8] = b"migrate-me";
+
+        let source = owner_host_of(key)
+            .await?
+            .expect("key slot must have an owner");
+        let target = (0..CLUSTER_HOSTS.len())
+            .find(|&i| i != source && i != leader)
+            .expect("a non-source, non-leader target must exist");
+
+        let source_id = format!("{:040x}", ids[source].1);
+        let target_id = format!("{:040x}", ids[target].1);
+
+        // Slot number for the key.
+        let slot = {
+            let ip = turmoil::lookup(CLUSTER_HOSTS[source]);
+            let mut c = RespConn::connect((ip, SERVER_PORT)).await?;
+            match c.cmd(&[b"CLUSTER", b"KEYSLOT", key]).await? {
+                RespValue::Int(n) => n.to_string(),
+                other => panic!("seed {seed}: KEYSLOT returned {other:?}"),
+            }
+        };
+
+        // Begin the migration while the cluster is fully healthy. Both SETSLOT
+        // commits are forwarded through Raft, so they replicate to all nodes.
+        {
+            let ip = turmoil::lookup(CLUSTER_HOSTS[target]);
+            let mut c = RespConn::connect((ip, SERVER_PORT)).await?;
+            let r = c
+                .cmd(&[
+                    b"CLUSTER",
+                    b"SETSLOT",
+                    slot.as_bytes(),
+                    b"IMPORTING",
+                    source_id.as_bytes(),
+                ])
+                .await?;
+            assert!(
+                !matches!(&r, RespValue::Error(_)),
+                "seed {seed}: SETSLOT IMPORTING failed: {r:?}"
+            );
+        }
+        {
+            let ip = turmoil::lookup(CLUSTER_HOSTS[source]);
+            let mut c = RespConn::connect((ip, SERVER_PORT)).await?;
+            let r = c
+                .cmd(&[
+                    b"CLUSTER",
+                    b"SETSLOT",
+                    slot.as_bytes(),
+                    b"MIGRATING",
+                    target_id.as_bytes(),
+                ])
+                .await?;
+            assert!(
+                !matches!(&r, RespValue::Error(_)),
+                "seed {seed}: SETSLOT MIGRATING failed: {r:?}"
+            );
+        }
+
+        // Signal the step loop to isolate the leader now — mid-migration — and
+        // let the isolation engage (past the election timeout) before attempting
+        // the ownership commit.
+        phase_c.store(1, Ordering::Release);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // Drive the ownership transfer to completion. While the leader is
+        // isolated, commits cannot reach quorum through it; the surviving
+        // majority re-elects and accepts the write. Retry against the target
+        // (always a survivor, never the isolated leader), reusing one connection
+        // and only reconnecting on failure to keep the simulated port pool from
+        // churning.
+        let target_ip = turmoil::lookup(CLUSTER_HOSTS[target]);
+        let mut committed = false;
+        let mut conn: Option<RespConn> = None;
+        for _ in 0..300 {
+            let mut c = match conn.take() {
+                Some(c) => c,
+                None => match RespConn::connect((target_ip, SERVER_PORT)).await {
+                    Ok(c) => c,
+                    Err(_) => {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
+                    }
+                },
+            };
+            match c
+                .cmd(&[
+                    b"CLUSTER",
+                    b"SETSLOT",
+                    slot.as_bytes(),
+                    b"NODE",
+                    target_id.as_bytes(),
+                ])
+                .await
+            {
+                Ok(RespValue::Simple(_)) => {
+                    committed = true;
+                    break;
+                }
+                Ok(_) => {
+                    // Transient (e.g. no leader yet / forward failed): keep the
+                    // connection and retry after a short delay.
+                    conn = Some(c);
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(_) => {
+                    // Connection broke; drop it and reconnect next iteration.
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+        }
+        assert!(
+            committed,
+            "seed {seed}: slot ownership transfer never committed even after heal"
+        );
+
+        // Signal heal, then wait for the topology to reconverge on every node.
+        phase_c.store(2, Ordering::Release);
+
+        let mut converged = false;
+        for _ in 0..600 {
+            if let Ok(Some(owner)) = single_owner_soft(key).await
+                && owner == target
+            {
+                converged = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(
+            converged,
+            "seed {seed}: slot did not converge on the migration target after heal"
+        );
+
+        // Final hard assertion: exactly one owner and all peers agree it is the
+        // migration target — deterministic single-owner convergence after heal.
+        let owner = assert_single_owner(key, &format!("seed {seed} post-heal")).await?;
+        assert_eq!(
+            owner, target,
+            "seed {seed}: converged owner {owner} is not the migration target {target}"
+        );
+
+        Ok(())
+    });
+
+    // Manual step loop: isolate the leader when the driver signals phase 1, then
+    // release once the commit lands (phase 2) or a bounded simulated window
+    // elapses. Isolation uses turmoil's `hold` rather than `partition`: `hold`
+    // *queues* traffic between the victim and its peers instead of dropping it,
+    // so the leader's in-flight Raft dials to those peers stay pending (holding
+    // their turmoil ephemeral ports) and then complete on `release`, rather than
+    // being cancelled — a cancelled dial in turmoil 0.7.1 leaks its ephemeral
+    // port permanently (a dropped SYN never yields a `TcpStream` whose halves
+    // reclaim the port), which a sustained `partition` exhausts. The hold still
+    // starves the followers of heartbeats past the election timeout, so the
+    // surviving majority re-elects and commits, which is the property under test.
+    // Timing is driven by `sim.elapsed()`, keeping the scenario replayable per
+    // seed. The window is kept short (bounded below) so the number of dials in
+    // flight during the hold stays well under the port pool.
+    let mut held = false;
+    let mut released = false;
+    let mut held_at = Duration::ZERO;
+    let mut steps: u64 = 0;
+    loop {
+        let finished = sim.step().unwrap();
+
+        if !held && phase.load(Ordering::Acquire) >= 1 {
+            let victim_idx = leader_idx.load(Ordering::Acquire);
+            if victim_idx != usize::MAX {
+                let victim = CLUSTER_HOSTS[victim_idx];
+                for (i, other) in CLUSTER_HOSTS.iter().enumerate() {
+                    if i != victim_idx {
+                        sim.hold(victim, *other);
+                    }
+                }
+                held = true;
+                held_at = sim.elapsed();
+            }
+        }
+
+        if held
+            && !released
+            && (phase.load(Ordering::Acquire) >= 2
+                || sim.elapsed().saturating_sub(held_at) >= Duration::from_secs(3))
+        {
+            let victim_idx = leader_idx.load(Ordering::Acquire);
+            let victim = CLUSTER_HOSTS[victim_idx];
+            for (i, other) in CLUSTER_HOSTS.iter().enumerate() {
+                if i != victim_idx {
+                    sim.release(victim, *other);
+                }
+            }
+            released = true;
+        }
+
+        if finished {
+            break;
+        }
+        steps += 1;
+        assert!(steps < 5_000_000, "seed {seed}: cluster sim did not finish");
+    }
+
+    drop(dirs);
+}
+
+/// Leader-isolation-mid-migration: with the Raft leader isolated from the group
+/// while a slot migration is in flight, the surviving majority re-elects and
+/// commits the ownership transfer and, once the isolation lifts, the cluster
+/// converges on a single owner — deterministically across several seeds.
+#[test]
+fn test_cluster_leader_partition_mid_migration_converges() {
+    for seed in [1u64, 2, 3] {
+        run_cluster_leader_partition_migration(seed);
     }
 }

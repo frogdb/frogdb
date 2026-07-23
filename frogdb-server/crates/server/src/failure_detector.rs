@@ -507,9 +507,13 @@ impl QuorumChecker for FailureDetector {
 }
 
 /// Check if a node is reachable via TCP connect to its cluster_addr.
+///
+/// Dials through `crate::net::TcpStream` so the probe is routed over turmoil's
+/// simulated network under the `turmoil` feature (tokio's real TCP driver is
+/// disabled inside a simulation) and over tokio in production.
 async fn check_node_reachable(addr: SocketAddr, timeout: Duration) -> bool {
     use tokio::time::timeout as tokio_timeout;
-    tokio_timeout(timeout, tokio::net::TcpStream::connect(addr))
+    tokio_timeout(timeout, crate::net::TcpStream::connect(addr))
         .await
         .map(|r| r.is_ok())
         .unwrap_or(false)

@@ -52,6 +52,17 @@ slow-timeout = { period = "15s", terminate-after = 4 }
 filter = "test(concurrency_workload::seed_sweep) & !test(concurrency_workload::seed_sweep_nightly)"
 slow-timeout = { period = "30s", terminate-after = 4 }
 
+# The multi-node cluster turmoil sims (`simulation::test_cluster_*`) bring up a
+# real 3-node Raft cluster over the simulated network — leader election, MOVED
+# redirect convergence, and (for the partition test) a leader partition held
+# across a slot-ownership commit. Re-election plus RocksDB-backed Raft I/O over
+# several seeds legitimately exceeds the default 15s hard kill, so give them
+# headroom and cap concurrency via the cluster test group.
+[[profile.default.overrides]]
+filter = "test(simulation::test_cluster_)"
+slow-timeout = { period = "30s", terminate-after = 4 }
+test-group = "cluster"
+
 # The nightly generated-workload seed sweep (opt-in via `just concurrency-nightly`;
 # see concurrency_workload.rs) runs however many seeds x profiles the caller asks
 # for via FROGDB_CONCURRENCY_SEEDS, so its runtime is not bounded the way the

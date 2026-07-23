@@ -75,7 +75,20 @@ pub async fn bind_listeners(config: &Config, pre_bound: ServerListeners) -> Resu
         Some(l)
     } else if config.cluster.enabled {
         let cluster_bus_addr = config.cluster.cluster_bus_socket_addr();
-        let listener = tcp_listener_reusable(cluster_bus_addr).await?;
+        // Turmoil's simulated listener only permits binding to an unspecified or
+        // loopback address (never a specific host IP), so under the sim we bind
+        // the unspecified address on the same port. The advertised cluster-bus
+        // address (peer registration + `NodeInfo`) keeps the node's own IP —
+        // `cluster_init` derives it from `cluster_bus_socket_addr()`, taking only
+        // the port from this listener — so peers still dial the reachable IP.
+        #[cfg(feature = "turmoil")]
+        let bind_target = std::net::SocketAddr::new(
+            std::net::Ipv4Addr::UNSPECIFIED.into(),
+            cluster_bus_addr.port(),
+        );
+        #[cfg(not(feature = "turmoil"))]
+        let bind_target = cluster_bus_addr;
+        let listener = tcp_listener_reusable(bind_target).await?;
         info!(
             addr = %listener.local_addr()?,
             "Cluster bus listener bound"

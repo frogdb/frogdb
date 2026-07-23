@@ -14,6 +14,11 @@ use frogdb_server::{Config, Server};
 /// Server port used in simulations.
 pub const SERVER_PORT: u16 = 6379;
 
+/// Cluster-bus (Raft RPC) port used in cluster simulations. Deliberately
+/// `SERVER_PORT + 10000` so `cluster_init`'s client-port derivation
+/// (`bus_port - 10000`) recovers exactly `SERVER_PORT`.
+pub const CLUSTER_BUS_PORT: u16 = SERVER_PORT + 10000;
+
 /// Server host name in simulations.
 pub const SERVER_HOST: &str = "server";
 
@@ -289,6 +294,80 @@ pub async fn real_frogdb_replica(
             role: "replica".to_string(),
             primary_host: primary_ip.to_string(),
             primary_port: SERVER_PORT,
+            ..Default::default()
+        },
+        http: HttpConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        metrics: MetricsConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let server = Server::new(
+        config,
+        frogdb_server::runtime_config::LogReloadHandle::noop(),
+    )
+    .await?;
+    server.run_until(std::future::pending::<()>()).await?;
+
+    Ok(())
+}
+
+/// Start a real FrogDB server as one node of a multi-node Raft cluster inside
+/// turmoil.
+///
+/// Every node runs real openraft consensus over the simulated cluster bus:
+/// incoming Raft RPCs are served by `cluster_bus::run` (framed via `new_framed`
+/// under turmoil), and outgoing RPCs dial through the turmoil connect factory
+/// injected in `cluster_init.rs`. Bootstrap, leader election, slot assignment,
+/// and slot migration therefore all execute deterministically for a given seed.
+///
+/// - `own_ip` is this host's turmoil address (`turmoil::lookup(hostname)`); the
+///   client listener advertises `own_ip:SERVER_PORT` and the cluster bus
+///   `own_ip:CLUSTER_BUS_PORT`.
+/// - `initial_nodes` is the full set of peer cluster-bus addresses (including
+///   this node), each `"<ip>:<CLUSTER_BUS_PORT>"`. Node IDs are derived by
+///   hashing the bus address (config `node_id = 0`), so every node computes the
+///   same ID for every peer — the lowest-ID node bootstraps.
+/// - `data_dir` must be unique per host: the RocksDB Raft log/metadata store
+///   lives at `<data_dir>/raft`. Persistence of the data plane stays disabled.
+pub async fn real_frogdb_cluster_node(
+    num_shards: usize,
+    own_ip: std::net::IpAddr,
+    initial_nodes: Vec<String>,
+    data_dir: std::path::PathBuf,
+) -> Result<(), BoxError> {
+    use frogdb_server::config::ClusterConfigSection;
+
+    let config = Config {
+        server: ServerConfig {
+            bind: "0.0.0.0".to_string(),
+            port: SERVER_PORT,
+            num_shards,
+            scatter_gather_timeout_ms: 5000,
+            ..Default::default()
+        },
+        persistence: PersistenceConfig {
+            enabled: false,
+            data_dir: data_dir.clone(),
+            ..Default::default()
+        },
+        cluster: ClusterConfigSection {
+            enabled: true,
+            node_id: 0, // auto-derive from cluster_bus_addr hash (stable per peer)
+            client_addr: format!("{own_ip}:{SERVER_PORT}"),
+            cluster_bus_addr: format!("{own_ip}:{CLUSTER_BUS_PORT}"),
+            initial_nodes,
+            data_dir,
+            // Fast, simulated-clock timers so elections converge quickly in sim
+            // time. heartbeat must stay strictly below election_timeout_ms.
+            election_timeout_ms: 300,
+            heartbeat_interval_ms: 50,
+            auto_failover: false,
             ..Default::default()
         },
         http: HttpConfig {

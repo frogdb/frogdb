@@ -148,6 +148,67 @@ pub(super) async fn init_cluster(
         #[allow(unused_mut)] // mut needed for set_connect_factory in non-turmoil builds
         let mut network_factory = ClusterNetworkFactory::new();
 
+        // Under turmoil the default `plain_tcp_connect_factory` dials with a real
+        // `tokio::net::TcpStream`, which is not routed through turmoil's simulated
+        // network. Inject a factory that dials via `turmoil::net::TcpStream` so
+        // outgoing Raft RPCs (vote / append-entries / snapshot) reach peers over
+        // the simulated fabric — the cluster twin of the replica connect factory
+        // in `replication_init.rs`.
+        //
+        // The dial is bounded by a connect timeout: the one-shot Raft RPC path
+        // (`send_rpc_oneshot`) does not time out the connect itself, and a
+        // turmoil network partition black-holes the SYN so a naked connect would
+        // hang forever. openraft would then never observe a failure to retry, so
+        // after the partition heals the surviving leader would never re-dial the
+        // recovered node and the cluster would not reconverge — the timeout is
+        // what lets a stuck dial fail and be retried on a fresh (now reachable)
+        // connection.
+        //
+        // The timeout must not be *too* short, though. turmoil 0.7.1 registers a
+        // connection's ephemeral port at dial time (`StreamSocket`, ref_ct=2) and
+        // only reclaims it when the `TcpStream`'s read/write halves drop — which
+        // are constructed *only after* SYN-ACK. A connect that is cancelled or
+        // times out before SYN-ACK (guaranteed while a peer is unreachable) leaks
+        // its port permanently. A very short timeout therefore turns openraft's
+        // retry loop into a rapid port-leak that exhausts the host's range within
+        // a sustained partition. 2s keeps the re-dial cadence low enough that the
+        // leak stays far under the (widened) port pool for the brief partition
+        // windows these sims inject, while still failing fast enough to retry
+        // promptly once the partition heals.
+        #[cfg(feature = "turmoil")]
+        {
+            use frogdb_core::cluster::network::{
+                BoxedStream as ClusterBoxedStream, ConnectFactory as ClusterConnectFactory,
+            };
+            const TURMOIL_CONNECT_TIMEOUT: std::time::Duration =
+                std::time::Duration::from_millis(2000);
+            let factory: ClusterConnectFactory =
+                std::sync::Arc::new(move |addr: std::net::SocketAddr| {
+                    Box::pin(async move {
+                        let stream = tokio::time::timeout(
+                            TURMOIL_CONNECT_TIMEOUT,
+                            turmoil::net::TcpStream::connect(addr),
+                        )
+                        .await
+                        .map_err(|_| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::TimedOut,
+                                "turmoil cluster-bus connect timed out",
+                            )
+                        })??;
+                        Ok(Box::new(stream) as ClusterBoxedStream)
+                    })
+                        as std::pin::Pin<
+                            Box<
+                                dyn std::future::Future<
+                                        Output = std::io::Result<ClusterBoxedStream>,
+                                    > + Send,
+                            >,
+                        >
+                });
+            network_factory.set_connect_factory(factory);
+        }
+
         // Wire up TLS connection factory for encrypted cluster bus.
         // Captures Arc<TlsManager> (not a snapshot connector) so that
         // certificate hot-reload propagates to new outgoing connections.
