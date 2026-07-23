@@ -42,3 +42,14 @@ params, lazy-purge + cross-type reindex hooks, keyless-scatter conflict propagat
 PartialResult::ShardError/FatalReply, RocksStore put/get gating, demotion test). Review-fix
 extras: EsAllMerge error surfacing, no-op SET NX/COPY write_was_noop. Tail smalls:
 issues/16-post-followup-smalls.md.
+
+## Backlog round (issues 14 + 16) — landed 2026-07-22
+- issue 16: ssubscribe-parity de-flake (bounded retry); Refresh reindex extended to JSON docs
+  (COPY/RESTORE/RENAME) + review fixes: cross-source reconcile-to-empty, hash→json-index
+  pollution guard (pre-existing).
+- issue 14: dead-config triage — wired + promoted immutable metrics-otlp-*×3, json-max-depth/size
+  (full ingest+growth+scripting enforcement), repl-ack-interval-ms, tls-ciphersuites (golden
+  104→111); deleted metrics.bind, vll section + runtime mirror, hotshards config chain
+  (collector kept → issues/17), replication fullsync knobs. Downstream: website/helm/docs
+  cleaned (helm bind would have broken boot; website build break fixed). 20 immutable
+  propagation candidates left tracked in issue 14.

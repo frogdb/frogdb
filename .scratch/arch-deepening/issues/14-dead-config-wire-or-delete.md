@@ -1,6 +1,28 @@
 # 14 — Dead config sections: wire or delete
 
-Status: needs-triage
+Status: done (landed 2026-07-22, branch workspace-3)
+
+Resolution — user-approved disposition (wire 7 / delete 11):
+- WIRED + promoted immutable (`GOLDEN_SNAPSHOT` 104→111, `ImmutableParamId` 58→65):
+  `metrics-otlp-enabled`/`-endpoint`/`-interval-secs` (OtlpRecorder + CompositeRecorder at startup,
+  identity gauges included in OTLP-only mode), `json-max-depth`/`json-max-size` (via
+  `CommandContext.json_limits`; enforced at ALL ingest+growth paths incl. JSON.MERGE/ARRAPPEND/
+  ARRINSERT/STRAPPEND and the scripting gate), `repl-ack-interval-ms` (replica ACK tick, both boot
+  and demotion paths), `tls-ciphersuites` (filtered aws-lc-rs provider, server+client builders,
+  hard error on unknown names / no-usable-suite).
+- DELETED: `metrics.bind` (superseded by `http`), whole `vll` section + runtime `VllConfig` mirror
+  in `vll/src/types.rs` + `VllTimeoutOrderingValidator` (validated only dead config),
+  `hotshards.*` + plumb chain (collector KEPT — feature filed as issue 17),
+  `replication.fullsync-timeout-secs`/`fullsync-max-memory-mb` (mechanisms don't exist).
+- Downstream fallout fixed: website configuration.mdx (dangling ConfigTable = build break),
+  helm-gen configmap (`metrics.bind` would fail deny_unknown_fields on boot; also fixed
+  pre-existing snake_case drift in the stale operator copy), replication/vll/concurrency/
+  diagnostics docs. `website/docs-spec/` audit records left as historical snapshots.
+- The 20 immutable propagation-wiring candidates: user chose LEAVE IMMUTABLE — list below stays
+  as the tracked backlog for a future mutability round.
+- Review extras: `refresh_key` cross-source reconcile (delete-first) fixing a stale-doc regression
+  + pre-existing hash-into-json-index pollution; UFCS for chokepoint lint in init.rs tests.
+- `metrics.enabled` determined NOT dead: live http-mapped registry param (`metrics-enabled`).
 
 ## What to build
 

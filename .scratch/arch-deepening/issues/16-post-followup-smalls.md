@@ -1,6 +1,15 @@
 # Post-follow-up smalls (round-10 tail)
 
-Status: needs-triage
+Status: done (landed 2026-07-22, branch workspace-3)
+
+Resolution:
+1. De-flaked via bounded retry (10 × 50ms) of the whole GET/SSUBSCRIBE pair; parity assert intact
+   (persistent disagreement still fails); 5/5 stable.
+2. `refresh_key` now dispatches on current value type (hash → reindex_hash_key, JSON →
+   reindex_json_key, else delete) — COPY/RESTORE/RENAME of JSON docs into JSON-index prefixes
+   index the destination (all three had the gap; red-green). Follow-up review fix: reconcile-to-
+   empty first across ALL index sources (stale hash-index doc on JSON overwrite) + source guard in
+   reindex_hash_key (pre-existing: hash indexed as bogus JSON doc).
 
 Surfaced while landing `issues/15-round10-followups.md`; none block anything.
 
