@@ -16,6 +16,11 @@ impl ShardWorker {
                 }
                 let _ = response_tx.send(());
             }
+            SearchMsg::FlushWal { .. } => {
+                // Intercepted in the async event loop (it must await the WAL
+                // flush thread), so it never reaches this synchronous dispatch.
+                unreachable!("SearchMsg::FlushWal is handled in the async event loop");
+            }
             SearchMsg::GetPubSubLimitsInfo { response_tx } => {
                 let info = super::types::PubSubLimitsInfo {
                     total_subscriptions: self.subscriptions.total_subscription_count(),

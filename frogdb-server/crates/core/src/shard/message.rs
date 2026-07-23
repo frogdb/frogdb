@@ -774,6 +774,16 @@ pub enum SearchMsg {
     /// Used by the snapshot coordinator to ensure search index consistency.
     FlushSearchIndexes { response_tx: oneshot::Sender<()> },
 
+    /// Drain this shard's WAL flush-engine into RocksDB.
+    ///
+    /// Used by the snapshot coordinator so a `BGSAVE` checkpoint captures every
+    /// acknowledged write. Under non-`sync` durability (the default is
+    /// `periodic`) a write is acked once staged in the flush engine and only
+    /// committed to RocksDB on a later size/timeout trigger; without this drain,
+    /// `create_checkpoint` would snapshot a RocksDB that is missing the most
+    /// recent writes, producing a silently-incomplete disaster-recovery artifact.
+    FlushWal { response_tx: oneshot::Sender<()> },
+
     /// Get pub/sub limits info from this shard.
     GetPubSubLimitsInfo {
         /// Channel to send the response.
@@ -990,6 +1000,7 @@ impl SearchMsg {
     pub fn probe_type_str(&self) -> &'static str {
         match self {
             SearchMsg::FlushSearchIndexes { .. } => "FlushSearchIndexes",
+            SearchMsg::FlushWal { .. } => "FlushWal",
             SearchMsg::GetPubSubLimitsInfo { .. } => "GetPubSubLimitsInfo",
         }
     }

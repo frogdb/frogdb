@@ -57,6 +57,13 @@ pub struct TestServerConfig {
     /// crate dir), so leaving it unset leaks snapshot artifacts into the source
     /// tree.
     pub snapshot_dir: Option<PathBuf>,
+    /// Override `snapshot.snapshot_interval_secs` (periodic background-save
+    /// cadence). `None` keeps the server default (3600s). Set to `Some(0)` to
+    /// disable the periodic snapshot task entirely — including the
+    /// fire-immediately first tick, which otherwise races a manual `BGSAVE` by
+    /// writing an empty startup snapshot. Tests that assert on a specific
+    /// `BGSAVE` artifact must disable it for determinism.
+    pub snapshot_interval_secs: Option<u64>,
 
     // --- Logging ---
     /// Log level (default: "warn" to reduce test noise).
@@ -155,6 +162,7 @@ impl Clone for TestServerConfig {
             persistence: self.persistence,
             data_dir: self.data_dir.clone(),
             snapshot_dir: self.snapshot_dir.clone(),
+            snapshot_interval_secs: self.snapshot_interval_secs,
             log_level: self.log_level.clone(),
             requirepass: self.requirepass.clone(),
             admin_enabled: self.admin_enabled,
@@ -373,6 +381,10 @@ impl TestServer {
             }
             None => None,
         };
+
+        if let Some(secs) = test_config.snapshot_interval_secs {
+            config.snapshot.snapshot_interval_secs = secs;
+        }
 
         config.server.allow_cross_slot_standalone = test_config.allow_cross_slot_standalone;
         config.http.bind = "127.0.0.1".to_string();

@@ -330,6 +330,22 @@ pub(super) async fn init_infrastructure(
                 for rx in receivers {
                     let _ = rx.await;
                 }
+                // Drain every shard's WAL flush-engine into RocksDB so the
+                // checkpoint captures all acknowledged writes. Under non-`sync`
+                // durability a write is acked once staged in the flush engine and
+                // committed to RocksDB only on a later size/timeout trigger; without
+                // this drain, `BGSAVE` would snapshot a RocksDB missing the most
+                // recent writes — a silently-incomplete recovery artifact. Done
+                // after the search flush so any search_meta writes are drained too.
+                let mut wal_receivers = Vec::with_capacity(senders.len());
+                for sender in senders.iter() {
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    let _ = sender.send(SearchMsg::FlushWal { response_tx: tx }).await;
+                    wal_receivers.push(rx);
+                }
+                for rx in wal_receivers {
+                    let _ = rx.await;
+                }
                 // Persist the replication offset that matches this snapshot's data.
                 if let Some(handler) = saver.get()
                     && let Err(e) = handler.save_state().await

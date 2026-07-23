@@ -303,7 +303,20 @@ impl ShardWorker {
             }
             ShardMessage::Cluster(m) => self.dispatch_cluster(m).await,
             ShardMessage::Search(m) => {
-                self.dispatch_search(m);
+                // `FlushWal` needs to await the WAL flush thread, so it is handled
+                // here in the async event loop rather than in the sync
+                // `dispatch_search`. All other search messages are synchronous.
+                match m {
+                    super::message::SearchMsg::FlushWal { response_tx } => {
+                        if let Some(wal) = self.persistence.wal_writer()
+                            && let Err(e) = wal.flush_async().await
+                        {
+                            tracing::error!(shard_id = self.shard_id(), error = %e, "Failed to flush WAL for snapshot");
+                        }
+                        let _ = response_tx.send(());
+                    }
+                    other => self.dispatch_search(other),
+                }
                 false
             }
             ShardMessage::Shutdown => {

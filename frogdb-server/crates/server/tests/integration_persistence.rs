@@ -1543,3 +1543,299 @@ async fn test_flushdb_clears_hll_delta_chain_before_readd() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// BGSAVE snapshot artifact -> fresh-directory restore (end-to-end)
+//
+// Unlike `test_bgsave_snapshot_survives_restart` (which reopens the *same live
+// directory* and so only exercises ordinary WAL replay), these tests recover a
+// server from the *actual `snapshot_NNNNN` artifact* a `BGSAVE` produces, using
+// the documented operator restore procedure: stage the snapshot's `checkpoint/`
+// contents as a `checkpoint_ready` sibling of a fresh data dir and let normal
+// startup recovery (`RocksStore::load_staged_checkpoint`) install it before the
+// DB is opened. See `website/src/content/docs/operations/backup-restore.md`
+// (`## Restore`).
+// ============================================================================
+
+/// Copy a directory tree (used to stage a snapshot's `checkpoint/` contents into
+/// a `checkpoint_ready` directory, mirroring the doc's `cp -a checkpoint/. dst/`).
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let target = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursive(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
+/// Poll `snapshot_dir` until a fully-promoted `snapshot_NNNNN` artifact appears,
+/// returning the path to its `checkpoint/` subdirectory (the RocksDB database).
+///
+/// "Fully promoted" = a `snapshot_NNNNN` directory (not the `.snapshot_*.tmp`
+/// staging dir) carrying both `metadata.json` and `checkpoint/CURRENT`. Picks the
+/// highest epoch, matching the `latest` symlink the stager repoints. Panics after
+/// the timeout so a broken/absent BGSAVE fails the test loudly.
+async fn wait_for_snapshot_checkpoint(snapshot_dir: &std::path::Path) -> std::path::PathBuf {
+    for _ in 0..100 {
+        let mut best: Option<(u64, std::path::PathBuf)> = None;
+        if let Ok(entries) = std::fs::read_dir(snapshot_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                let Some(epoch) = name
+                    .strip_prefix("snapshot_")
+                    .and_then(|s| s.parse::<u64>().ok())
+                else {
+                    continue; // skip `.snapshot_*.tmp`, `latest`, etc.
+                };
+                let checkpoint = entry.path().join("checkpoint");
+                let complete = entry.path().join("metadata.json").is_file()
+                    && checkpoint.join("CURRENT").is_file();
+                if complete && best.as_ref().is_none_or(|(e, _)| epoch > *e) {
+                    best = Some((epoch, checkpoint));
+                }
+            }
+        }
+        if let Some((_, checkpoint)) = best {
+            return checkpoint;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!(
+        "BGSAVE snapshot artifact never appeared under {}",
+        snapshot_dir.display()
+    );
+}
+
+/// End-to-end: populate a server, `BGSAVE`, then restore the produced snapshot
+/// artifact into a *fresh* data directory via the documented operator procedure
+/// and assert every key/type survives — while a key written *after* the snapshot
+/// (living only in the original dir's WAL) is correctly absent from the
+/// point-in-time image.
+#[tokio::test]
+async fn test_bgsave_snapshot_restores_into_fresh_data_dir() {
+    // Owned dirs: the snapshot dir must outlive the source server so the artifact
+    // is still on disk to copy from (the harness's auto snapshot dir is dropped
+    // when the server drops).
+    let src_root = tempfile::tempdir().unwrap();
+    let snapshot_root = tempfile::tempdir().unwrap();
+    let src_data = src_root.path().join("data");
+
+    let src_config = TestServerConfig {
+        persistence: true,
+        data_dir: Some(src_data.clone()),
+        snapshot_dir: Some(snapshot_root.path().to_path_buf()),
+        num_shards: Some(1),
+        // Disable the periodic snapshot task so the only artifact is the manual
+        // BGSAVE below. Otherwise its fire-immediately first tick writes an empty
+        // startup snapshot that races (and can be mistaken for) ours.
+        snapshot_interval_secs: Some(0),
+        ..Default::default()
+    };
+
+    // --- Source server: write a spread of types, then snapshot ---
+    let server = TestServer::start_standalone_with_config(src_config).await;
+    let mut client = server.connect().await;
+
+    assert_ok(&client.command(&["SET", "str_key", "str_val"]).await);
+    assert_ok(
+        &client
+            .command(&["SET", "ttl_key", "ttl_val", "EX", "3600"])
+            .await,
+    );
+    assert_eq!(
+        client.command(&["RPUSH", "list_key", "a", "b", "c"]).await,
+        Response::Integer(3)
+    );
+    assert_eq!(
+        client
+            .command(&["HSET", "hash_key", "f1", "v1", "f2", "v2"])
+            .await,
+        Response::Integer(2)
+    );
+    assert_eq!(
+        client.command(&["SADD", "set_key", "m1", "m2", "m3"]).await,
+        Response::Integer(3)
+    );
+    assert_eq!(
+        client
+            .command(&["ZADD", "zset_key", "1", "one", "2", "two"])
+            .await,
+        Response::Integer(2)
+    );
+
+    let bgsave_resp = client.command(&["BGSAVE"]).await;
+    assert!(
+        matches!(&bgsave_resp, Response::Simple(msg)
+            if String::from_utf8_lossy(msg).contains("Background saving started")),
+        "Unexpected BGSAVE response: {bgsave_resp:?}"
+    );
+
+    // Locate the produced artifact (proves the snapshot was actually written).
+    let checkpoint = wait_for_snapshot_checkpoint(snapshot_root.path()).await;
+
+    // Write a key AFTER the snapshot cut. It lives only in the source dir's WAL,
+    // never in the point-in-time checkpoint, so a fresh-dir restore must not see
+    // it — this is what makes the test exercise the artifact, not the live dir.
+    assert_ok(
+        &client
+            .command(&["SET", "post_snapshot_key", "post_val"])
+            .await,
+    );
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // --- Restore into a FRESH data dir via the documented procedure ---
+    // Stage the checkpoint's contents as `checkpoint_ready`, a sibling of the new
+    // (not-yet-existing) data dir; startup recovery installs it before opening.
+    let restore_root = tempfile::tempdir().unwrap();
+    let restore_data = restore_root.path().join("data");
+    let checkpoint_ready = restore_root.path().join("checkpoint_ready");
+    copy_dir_recursive(&checkpoint, &checkpoint_ready).unwrap();
+    assert!(
+        !restore_data.exists(),
+        "restore target must start as a fresh, empty data directory"
+    );
+
+    let restore_config = TestServerConfig {
+        persistence: true,
+        data_dir: Some(restore_data.clone()),
+        num_shards: Some(1),
+        ..Default::default()
+    };
+    let server = TestServer::start_standalone_with_config(restore_config).await;
+    let mut client = server.connect().await;
+
+    // The restore installed the checkpoint (consuming `checkpoint_ready`) rather
+    // than booting an empty fresh dir.
+    assert!(
+        !checkpoint_ready.exists(),
+        "startup recovery must consume checkpoint_ready by installing it"
+    );
+
+    // Every type from the snapshot must be intact.
+    assert_eq!(
+        client.command(&["GET", "str_key"]).await,
+        Response::Bulk(Some(Bytes::from("str_val")))
+    );
+    let ttl = unwrap_integer(&client.command(&["TTL", "ttl_key"]).await);
+    assert!(
+        ttl > 0 && ttl <= 3600,
+        "TTL should survive restore, got {ttl}"
+    );
+    let list = unwrap_array(client.command(&["LRANGE", "list_key", "0", "-1"]).await);
+    let vals: Vec<&[u8]> = list.iter().map(unwrap_bulk).collect();
+    assert_eq!(vals, vec![b"a", b"b", b"c"]);
+    assert_eq!(
+        client.command(&["HGET", "hash_key", "f2"]).await,
+        Response::Bulk(Some(Bytes::from("v2")))
+    );
+    let mut members: Vec<String> = unwrap_array(client.command(&["SMEMBERS", "set_key"]).await)
+        .iter()
+        .map(|r| String::from_utf8(unwrap_bulk(r).to_vec()).unwrap())
+        .collect();
+    members.sort();
+    assert_eq!(members, vec!["m1", "m2", "m3"]);
+    assert_eq!(
+        client.command(&["ZSCORE", "zset_key", "two"]).await,
+        Response::Bulk(Some(Bytes::from("2")))
+    );
+
+    // The post-snapshot key lived only in the source WAL — a point-in-time
+    // restore must not resurrect it.
+    assert_eq!(
+        client.command(&["GET", "post_snapshot_key"]).await,
+        Response::Bulk(None),
+        "a key written after the snapshot cut must not appear in a fresh-dir restore"
+    );
+
+    server.shutdown().await;
+}
+
+/// A server restored from a BGSAVE artifact must behave like any live server:
+/// subsequent writes are WAL-durable and replay on a later restart, layered on
+/// top of the installed checkpoint.
+#[tokio::test]
+async fn test_restored_snapshot_accepts_and_replays_new_writes() {
+    let src_root = tempfile::tempdir().unwrap();
+    let snapshot_root = tempfile::tempdir().unwrap();
+    let src_data = src_root.path().join("data");
+
+    let src_config = TestServerConfig {
+        persistence: true,
+        data_dir: Some(src_data.clone()),
+        snapshot_dir: Some(snapshot_root.path().to_path_buf()),
+        num_shards: Some(1),
+        // See the sibling test: disable periodic snapshots for a deterministic
+        // single BGSAVE artifact.
+        snapshot_interval_secs: Some(0),
+        ..Default::default()
+    };
+
+    let server = TestServer::start_standalone_with_config(src_config).await;
+    let mut client = server.connect().await;
+    assert_ok(&client.command(&["SET", "base_key", "base_val"]).await);
+    let bgsave_resp = client.command(&["BGSAVE"]).await;
+    assert!(
+        matches!(&bgsave_resp, Response::Simple(msg)
+            if String::from_utf8_lossy(msg).contains("Background saving started")),
+        "Unexpected BGSAVE response: {bgsave_resp:?}"
+    );
+    let checkpoint = wait_for_snapshot_checkpoint(snapshot_root.path()).await;
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Install the artifact into a fresh dir.
+    let restore_root = tempfile::tempdir().unwrap();
+    let restore_data = restore_root.path().join("data");
+    let checkpoint_ready = restore_root.path().join("checkpoint_ready");
+    copy_dir_recursive(&checkpoint, &checkpoint_ready).unwrap();
+
+    let restore_config = |data: &std::path::Path| TestServerConfig {
+        persistence: true,
+        data_dir: Some(data.to_path_buf()),
+        num_shards: Some(1),
+        ..Default::default()
+    };
+
+    // Boot from the restored checkpoint, then write a NEW key.
+    let server = TestServer::start_standalone_with_config(restore_config(&restore_data)).await;
+    let mut client = server.connect().await;
+    assert_eq!(
+        client.command(&["GET", "base_key"]).await,
+        Response::Bulk(Some(Bytes::from("base_val")))
+    );
+    assert_ok(
+        &client
+            .command(&["SET", "after_restore_key", "after_val"])
+            .await,
+    );
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Plain reopen of the restored dir: the checkpoint's data AND the write made
+    // against the restored server must both replay from the WAL.
+    let server = TestServer::start_standalone_with_config(restore_config(&restore_data)).await;
+    let mut client = server.connect().await;
+    assert_eq!(
+        client.command(&["GET", "base_key"]).await,
+        Response::Bulk(Some(Bytes::from("base_val"))),
+        "checkpoint data must survive a restart of the restored server"
+    );
+    assert_eq!(
+        client.command(&["GET", "after_restore_key"]).await,
+        Response::Bulk(Some(Bytes::from("after_val"))),
+        "writes to a restored server must be WAL-durable and replay on restart"
+    );
+
+    server.shutdown().await;
+}
