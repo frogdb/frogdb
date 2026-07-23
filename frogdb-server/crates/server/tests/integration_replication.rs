@@ -1816,6 +1816,121 @@ async fn test_promoted_node_via_replicaof_no_one_rejects_downstream_psync(
     primary.shutdown().await;
 }
 
+/// Chained replication (replica-of-replica) contract, pinned (testing-gap
+/// issue 48): FrogDB does **not** implement transitive replication, and this
+/// covers the more common real-world trigger than the manual-promotion case
+/// above — a plain, never-promoted replica as the chain target.
+///
+/// `REPLICAOF` accepts a target that is itself a replica: the command layer
+/// does no target-role validation, flips the sub-replica's own role, and
+/// returns `+OK` synchronously (matching Redis's async REPLICAOF semantics —
+/// REPLICAOF cannot know the target's role without a round trip). But the
+/// background connection then performs a `PSYNC` handshake against that
+/// target, and — same mechanism as
+/// `test_promoted_node_via_replicaof_no_one_rejects_downstream_psync` — a
+/// node without a live `primary_replication_handler` (every replica; it's
+/// wired only for a booted-or-promoted primary, see `replication_init.rs`)
+/// answers PSYNC with an outright `-ERR ... not running as primary`
+/// (`connection/dispatch.rs`'s `PsyncIntercept` presence gate). The
+/// sub-replica's link never comes up and no primary-origin write ever
+/// reaches it — a *reject*, not a silent black hole, just one that is only
+/// visible through the link status and logs rather than the `REPLICAOF`
+/// reply itself.
+///
+/// DIVERGENCE (pinned, intentional): Redis supports arbitrary replica
+/// fan-out chains; FrogDB does not. See `operations/replication.md` "How
+/// FrogDB differs from Redis replication" for the documented contract.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_chained_replication_rejected_sub_replica_never_receives_data(
+    #[case] persistence: bool,
+) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+
+    // Primary <- replica_a: an ordinary, never-promoted replica.
+    let primary = TestServer::start_primary_with_config(config.clone()).await;
+    let replica_a = TestServer::start_replica_with_config(&primary, config.clone()).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    assert_ok(&primary.send("SET", &["k1", "v1"]).await);
+    wait_for_replication(&primary, 2000).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        matches!(&replica_a.send("GET", &["k1"]).await, Response::Bulk(Some(v)) if v.as_ref() == b"v1"),
+        "sanity: replica_a must have synced from primary before B attaches to it"
+    );
+
+    // node_b: boots standalone-writable, then REPLICAOF at runtime targets
+    // replica_a — the literal scenario from the acceptance criteria.
+    let node_b = TestServer::start_primary_with_config(config).await;
+    let a_port = replica_a.port().to_string();
+    assert_ok(&node_b.send("REPLICAOF", &["127.0.0.1", &a_port]).await);
+
+    // node_b's role flips immediately even though no data will ever flow.
+    assert_eq!(
+        role_name(&node_b.send("ROLE", &[]).await).as_deref(),
+        Some("slave"),
+        "REPLICAOF must flip node_b's role even though the target is a replica"
+    );
+
+    // Give the reconnect/backoff loop several attempts to "succeed" (it can't).
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let info = parse_info_replication(&node_b.send("INFO", &["replication"]).await).unwrap();
+    assert_eq!(
+        info.get("master_link_status").map(String::as_str),
+        Some("down"),
+        "a sub-replica pointed at a replica must never report master_link_status:up, got: {info:?}"
+    );
+
+    // Neither the pre-existing key nor a write issued after node_b attached
+    // ever reaches it — no full sync, no streamed frame.
+    assert!(
+        matches!(node_b.send("GET", &["k1"]).await, Response::Bulk(None)),
+        "sub-replica must never receive the pre-existing key via a replica target"
+    );
+
+    assert_ok(&primary.send("SET", &["k2", "v2"]).await);
+    wait_for_replication(&primary, 2000).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        matches!(node_b.send("GET", &["k2"]).await, Response::Bulk(None)),
+        "sub-replica must never receive a primary-origin write relayed through a replica target"
+    );
+
+    // Confirm this is an explicit reject, not merely an absence of data: a raw
+    // PSYNC against replica_a — the same handshake node_b's reconnect loop is
+    // attempting — gets an outright error, never CONTINUE/FULLRESYNC.
+    let (replid, offset) = get_replication_state(&replica_a)
+        .await
+        .expect("replica_a INFO replication");
+    let resp = replica_a
+        .send_raw(&encode_resp_command(&[
+            "PSYNC",
+            &replid,
+            &offset.to_string(),
+        ]))
+        .await;
+    let head = String::from_utf8_lossy(&resp);
+    assert!(
+        head.starts_with("-ERR") && head.contains("not running as primary"),
+        "a plain (never-promoted) replica must reject downstream PSYNC outright, got: {head:?}"
+    );
+    assert!(
+        !head.contains("CONTINUE") && !head.contains("FULLRESYNC"),
+        "a replica must never offer a resync to a would-be sub-replica, got: {head:?}"
+    );
+
+    node_b.shutdown().await;
+    replica_a.shutdown().await;
+    primary.shutdown().await;
+}
+
 // ============================================================================
 // Tier 5: WAL Buffer Tests
 // ============================================================================

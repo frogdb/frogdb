@@ -12,6 +12,7 @@ FrogDB implements asynchronous primary-replica replication using the Redis PSYNC
 - **SHA256 integrity verification.** The checkpoint payload carries a SHA256 checksum that the replica verifies on receipt.
 - **Replicas do not evict independently.** Eviction decisions are made on the primary and applied on replicas through the replicated write stream, not recomputed locally.
 - **Memory-aware full sync.** A full resync is bounded by a fixed internal buffering cap; a `FULLRESYNC` is rejected when the buffered payload would exceed that limit rather than risking an out-of-memory condition.
+- **No chained replication (replica-of-replica).** Redis allows `REPLICAOF` to target another replica, fanning the write stream out transitively. FrogDB does not support this: the primary-side replication handler that serves `PSYNC` only exists on a node that is actually a primary (booted or promoted as one). Pointing `REPLICAOF` at a replica is accepted at the command layer — the sub-replica's role flips and it keeps retrying — but every `PSYNC` attempt against that target is rejected with `-ERR PSYNC not supported - server is not running as primary`, so `master_link_status` never reaches `up` and no data flows. Point every replica directly at the primary.
 
 ## Configuration
 
