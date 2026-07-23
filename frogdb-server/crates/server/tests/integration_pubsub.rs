@@ -5928,3 +5928,237 @@ async fn test_stream_events_ported_from_redis_pubsub_tcl() {
 
     server.shutdown().await;
 }
+
+// ===========================================================================
+// Subscription cap: integration-level residue (issue 50)
+//
+// `admit_subscriptions` (`server/src/connection/state.rs`) enforces the
+// per-connection SUBSCRIBE/PSUBSCRIBE/SSUBSCRIBE cap and a one-shot 80%
+// warning latch; that admission arithmetic is already unit-tested directly
+// in isolation by `state.rs`'s `subscribe_limit_and_80pct_latch` and
+// `subscribe_rejects_over_limit` (do not re-file those as "zero coverage").
+// What's untested is what a real client observes over the wire:
+//   (a) the exact error text/kind per subscription kind;
+//   (b) all-or-nothing batch admission (a multi-channel SUBSCRIBE that
+//       would cross the cap must reject in full, not partially apply);
+//   (c) a duplicate-count quirk: `admit_subscriptions` is charged
+//       `args.len()` (raw arg count) while `add_subscription` inserts into a
+//       `HashSet` — so a command containing a duplicate channel name, or a
+//       re-subscribe to an already-held channel, can be charged more
+//       capacity than it will actually consume, spuriously rejecting a
+//       subscribe that would not have grown the subscription set at all.
+//
+// The caps themselves (`MAX_SUBSCRIPTIONS_PER_CONNECTION` = 10_000,
+// `MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION` = 1_000,
+// `MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION` = 10_000, all in
+// `frogdb_core::pubsub`) are compile-time constants, not a runtime config
+// knob — there is no `CONFIG SET`-style lever to lower them for the test
+// harness (verified: no `max-subscriptions`/`subscription-limit`-shaped
+// param exists anywhere in the config crate). These tests therefore drive
+// real clients to the actual production caps rather than a lowered
+// harness-only value.
+// ===========================================================================
+
+/// Send `cmd` followed by `names` as one multi-bulk command and drain exactly
+/// `names.len()` reply frames (the success path emits one confirmation per
+/// channel/pattern). Panics if fewer than that many frames arrive in time.
+async fn subscribe_batch_ok(client: &mut TestClient, cmd: &str, names: &[String]) {
+    let args: Vec<&str> = std::iter::once(cmd)
+        .chain(names.iter().map(String::as_str))
+        .collect();
+    client.send_only(&args).await;
+    for i in 0..names.len() {
+        client
+            .read_response(Duration::from_secs(20))
+            .await
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing confirmation #{i} for a {cmd} batch of {} names",
+                    names.len()
+                )
+            });
+    }
+}
+
+/// Extract the trailing count integer from a subscribe/psubscribe/ssubscribe
+/// confirmation array (`[kind, name, count]`).
+fn confirmation_count(resp: &Response) -> i64 {
+    match resp {
+        Response::Array(arr) if arr.len() == 3 => match arr[2] {
+            Response::Integer(n) => n,
+            ref other => panic!("expected integer count in confirmation, got {other:?}"),
+        },
+        other => panic!("expected a 3-element array confirmation, got {other:?}"),
+    }
+}
+
+/// What varies between the three subscription kinds for the cap scenario
+/// below.
+struct CapKindSpec {
+    subscribe_cmd: &'static str,
+    publish_cmd: &'static str,
+    limit_error: &'static str,
+    max: usize,
+    prefix: &'static str,
+}
+
+/// Drive a real client through the full subscription-cap lifecycle for one
+/// kind: fill to 3-below-cap, prove all-or-nothing rejection of an
+/// over-sized batch (with prior subscriptions surviving), prove the exact
+/// boundary admits exactly at the cap, then pin the duplicate-count quirk
+/// two ways — a duplicated brand-new name in one command, and a re-subscribe
+/// to an already-held channel once genuinely full.
+async fn run_subscription_cap_scenario(spec: CapKindSpec) {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+    let mut publisher = server.connect().await;
+
+    // Fill to `max - 3` in a single batched command, leaving exactly 3 real
+    // slots free.
+    let base: Vec<String> = (0..spec.max - 3)
+        .map(|i| format!("{}-{i}", spec.prefix))
+        .collect();
+    subscribe_batch_ok(&mut client, spec.subscribe_cmd, &base).await;
+
+    // --- (b) all-or-nothing: only 3 slots remain; a batch of 4 new names
+    // must be rejected in its entirety, with (a) the exact per-kind error
+    // text.
+    let overflow: Vec<String> = (0..4)
+        .map(|i| format!("{}-overflow-{i}", spec.prefix))
+        .collect();
+    let args: Vec<&str> = std::iter::once(spec.subscribe_cmd)
+        .chain(overflow.iter().map(String::as_str))
+        .collect();
+    let resp = client.command(&args).await;
+    assert_eq!(
+        resp,
+        Response::error(spec.limit_error),
+        "{}: an over-cap batch must report the exact per-kind limit error",
+        spec.subscribe_cmd
+    );
+
+    // Prior subscriptions must survive the rejected batch untouched: publish
+    // to one of the base names and confirm the client still gets delivery.
+    let survivor = base[0].clone();
+    let pub_resp = publisher
+        .command(&[spec.publish_cmd, &survivor, "still-alive"])
+        .await;
+    assert_eq!(
+        pub_resp,
+        Response::Integer(1),
+        "{}: the base subscription must survive an all-or-nothing rejection",
+        spec.subscribe_cmd
+    );
+    let msg = client.read_message(Duration::from_secs(2)).await;
+    assert!(
+        msg.is_some(),
+        "{}: expected delivery proving the prior subscription set is intact after the rejected batch",
+        spec.subscribe_cmd
+    );
+
+    // A single legit new name now must land at exactly `base.len() + 1` —
+    // proving none of the 4 overflow names were partially admitted.
+    let resp = client
+        .command(&[spec.subscribe_cmd, &format!("{}-post-reject", spec.prefix)])
+        .await;
+    assert_eq!(
+        confirmation_count(&resp),
+        base.len() as i64 + 1,
+        "{}: all-or-nothing batch must not have partially applied",
+        spec.subscribe_cmd
+    );
+
+    // Climb to exactly `max - 1` (one real slot left).
+    let resp = client
+        .command(&[spec.subscribe_cmd, &format!("{}-almost-full", spec.prefix)])
+        .await;
+    assert_eq!(confirmation_count(&resp), (spec.max - 1) as i64);
+
+    // --- (c) duplicate-count quirk, part 1: one real slot remains.
+    // SUBSCRIBE to a brand-new name TWICE in the same command.
+    // `admit_subscriptions` is charged `args.len() == 2`, even though
+    // `add_subscription`'s `HashSet` would only grow by 1 — so this is
+    // spuriously rejected, even though the real growth (+1) would fit
+    // exactly at the cap. Pinned as current (surprising) behavior; see
+    // issue 50/61.
+    let dup_name = format!("{}-dup", spec.prefix);
+    let resp = client
+        .command(&[spec.subscribe_cmd, &dup_name, &dup_name])
+        .await;
+    assert_eq!(
+        resp,
+        Response::error(spec.limit_error),
+        "{}: a duplicated new name in one command is spuriously rejected by the \
+         args.len()-vs-HashSet quirk (issue 50/61) even though real growth would fit",
+        spec.subscribe_cmd
+    );
+
+    // The spurious rejection must not have leaked a partial insert: reaching
+    // the cap exactly with a single fresh name must still work right after.
+    let resp = client
+        .command(&[spec.subscribe_cmd, &format!("{}-verify", spec.prefix)])
+        .await;
+    assert_eq!(
+        confirmation_count(&resp),
+        spec.max as i64,
+        "{}: reaching the cap exactly must still work after the spurious dup rejection",
+        spec.subscribe_cmd
+    );
+
+    // --- (c) duplicate-count quirk, part 2: now genuinely full (`spec.max`
+    // held). Re-subscribing to an ALREADY-HELD channel is logically a no-op
+    // (the HashSet does not grow), but `admit_subscriptions` still charges
+    // +1 for it with no "already held" carve-out, so it is rejected too.
+    let resp = client.command(&[spec.subscribe_cmd, &survivor]).await;
+    assert_eq!(
+        resp,
+        Response::error(spec.limit_error),
+        "{}: re-subscribing to an already-held channel at a full cap is spuriously \
+         rejected by the same quirk (issue 50/61)",
+        spec.subscribe_cmd
+    );
+
+    server.shutdown().await;
+}
+
+/// Channel (SUBSCRIBE) subscription cap, integration-level, over real RESP.
+#[tokio::test]
+async fn test_subscribe_cap_channel_kind_integration() {
+    run_subscription_cap_scenario(CapKindSpec {
+        subscribe_cmd: "SUBSCRIBE",
+        publish_cmd: "PUBLISH",
+        limit_error: "ERR max subscriptions reached",
+        max: frogdb_core::MAX_SUBSCRIPTIONS_PER_CONNECTION,
+        prefix: "cap-ch",
+    })
+    .await;
+}
+
+/// Pattern (PSUBSCRIBE) subscription cap, integration-level, over real RESP.
+#[tokio::test]
+async fn test_subscribe_cap_pattern_kind_integration() {
+    run_subscription_cap_scenario(CapKindSpec {
+        subscribe_cmd: "PSUBSCRIBE",
+        publish_cmd: "PUBLISH",
+        limit_error: "ERR max pattern subscriptions reached",
+        max: frogdb_core::MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
+        prefix: "cap-pat",
+    })
+    .await;
+}
+
+/// Sharded (SSUBSCRIBE) subscription cap, integration-level, over real RESP.
+/// Standalone mode (no cluster router), so multi-channel SSUBSCRIBE batches
+/// are not subject to the cluster CROSSSLOT restriction covered separately
+/// by `test_ssubscribe_multi_channel_different_slots_rejected`.
+#[tokio::test]
+async fn test_subscribe_cap_sharded_kind_integration() {
+    run_subscription_cap_scenario(CapKindSpec {
+        subscribe_cmd: "SSUBSCRIBE",
+        publish_cmd: "SPUBLISH",
+        limit_error: "ERR max sharded subscriptions reached",
+        max: frogdb_core::MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
+        prefix: "cap-shd",
+    })
+    .await;
+}
