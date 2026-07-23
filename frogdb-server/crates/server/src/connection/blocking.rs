@@ -7,7 +7,7 @@
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use frogdb_core::{BlockingMsg, BlockingOp, UnblockMode, shard_for_key};
+use frogdb_core::{BlockingMsg, BlockingOp, UnblockMode, UnregisterAck, shard_for_key};
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
 
@@ -44,7 +44,7 @@ impl ConnectionHandler {
         let deadline = (timeout > 0.0).then(|| Instant::now() + Duration::from_secs_f64(timeout));
 
         // Register (sends BlockWait, marks blocked, resets stale unblock).
-        let response_rx = match self
+        let mut response_rx = match self
             .register_wait(target_shard, &keys, op.clone(), deadline)
             .await
         {
@@ -53,19 +53,21 @@ impl ConnectionHandler {
         };
 
         // Coordinate the three-way race. The coordinator owns the decision; the
-        // server stays the canonical (precise) timeout authority.
+        // server stays the canonical (precise) timeout authority. `response_rx`
+        // is borrowed (not consumed) so cleanup can still drain a value the
+        // shard sends in the pop→deliver window after a timeout is chosen.
         let outcome = BlockingWaitCoordinator::wait_for_response(
-            response_rx,
+            &mut response_rx,
             deadline,
             &mut self.client_handle,
         )
         .await;
 
-        // Clean up (clears blocked state, resets unblock, unregisters iff the
-        // wait may still be live on the shard).
-        self.cleanup_wait(target_shard, &outcome).await;
-
-        outcome.into_response(&op)
+        // Clean up (clears blocked state, resets unblock) and reconcile the
+        // serve-vs-timeout race with the shard so a raced serve is delivered
+        // rather than lost.
+        self.cleanup_wait(target_shard, outcome, &mut response_rx, &op)
+            .await
     }
 
     /// Register a blocking wait on `target_shard`: send the `BlockWait` message,
@@ -114,28 +116,78 @@ impl ConnectionHandler {
     }
 
     /// Tear down a blocking wait after the race resolved: clear blocked state
-    /// (local + registry), reset the unblock signal, and unregister the shard
-    /// waiter unless the shard already delivered a response.
+    /// (local + registry), reset the unblock signal, and produce the final
+    /// reply — reconciling the serve-vs-timeout race with the shard.
     ///
-    /// The `UnregisterWait` is sent on `Timeout`/`Unblocked` (the wait may still
-    /// be registered on the shard) but skipped on `Response` (the shard already
-    /// removed the entry when it sent — a redundant unregister would be
-    /// harmless, just wasteful).
-    async fn cleanup_wait(&mut self, target_shard: usize, outcome: &WaitOutcome) {
+    /// On `Response` the shard already delivered (the value was drained by the
+    /// coordinator); return it. On `Timeout`/`Unblocked` the wait may still be
+    /// registered on the shard, *or* a serve may have raced the timeout and put
+    /// a value on the response channel that the coordinator did not observe.
+    /// [`Self::reconcile_unregister`] resolves this on the shard's serial
+    /// timeline: if the waiter was already served, its value is drained and
+    /// returned instead of being lost (the serve-vs-timeout race); otherwise the
+    /// op-aware timeout/unblock reply is used.
+    async fn cleanup_wait(
+        &mut self,
+        target_shard: usize,
+        outcome: WaitOutcome,
+        response_rx: &mut oneshot::Receiver<Response>,
+        op: &BlockingOp,
+    ) -> Response {
         self.state.end_block();
         self.admin
             .client_registry
             .update_blocked_state(self.state.id, false);
         self.admin.client_registry.reset_unblock(self.state.id);
 
-        if matches!(outcome, WaitOutcome::Timeout | WaitOutcome::Unblocked(_))
-            && let Some(sender) = self.core.shard_senders.get(target_shard)
+        match outcome {
+            WaitOutcome::Response(resp) => resp,
+            WaitOutcome::Timeout | WaitOutcome::Unblocked(_) => {
+                match self.reconcile_unregister(target_shard, response_rx).await {
+                    Some(served) => served,
+                    None => outcome.into_response(op),
+                }
+            }
+        }
+    }
+
+    /// Send an acknowledged `UnregisterWait` and, if the shard reports the
+    /// waiter was already served, drain and return the served value.
+    ///
+    /// The shard processes its mailbox serially, so its answer is the single
+    /// source of truth for whether the serve or the timeout won:
+    /// - [`UnregisterAck::Unregistered`] — the timeout won; the waiter was
+    ///   removed here and no value was consumed. Return `None` (use the timeout
+    ///   reply).
+    /// - [`UnregisterAck::AlreadyServed`] — a serve (or the GC tick) already
+    ///   removed the waiter and sent on the response channel. Drain that value
+    ///   and return it; a served element is otherwise popped from the store and
+    ///   delivered to nobody.
+    ///
+    /// Returns `None` (fall back to the timeout reply) if the shard is
+    /// unreachable, the ack channel closes, or the drained channel yields no
+    /// value.
+    async fn reconcile_unregister(
+        &mut self,
+        target_shard: usize,
+        response_rx: &mut oneshot::Receiver<Response>,
+    ) -> Option<Response> {
+        let sender = self.core.shard_senders.get(target_shard)?;
+        let (ack_tx, ack_rx) = oneshot::channel();
+        if sender
+            .send(BlockingMsg::UnregisterWait {
+                conn_id: self.state.id,
+                ack: ack_tx,
+            })
+            .await
+            .is_err()
         {
-            let _ = sender
-                .send(BlockingMsg::UnregisterWait {
-                    conn_id: self.state.id,
-                })
-                .await;
+            return None;
+        }
+
+        match ack_rx.await {
+            Ok(UnregisterAck::AlreadyServed) => response_rx.await.ok(),
+            Ok(UnregisterAck::Unregistered) | Err(_) => None,
         }
     }
 

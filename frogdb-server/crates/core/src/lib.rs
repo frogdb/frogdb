@@ -141,8 +141,8 @@ pub use shard::{
     RecoveryOutcome, RecoveryResult, ScatterOp, ScriptingMsg, SearchMsg, ShardBuilderError,
     ShardClusterDeps, ShardConfig, ShardCoreDeps, ShardMemoryStats, ShardMessage,
     ShardPersistenceDeps, ShardReceiver, ShardSender, ShardWaitQueue, ShardWorker,
-    ShardWorkerBuilder, TieredCounts, TrackingMsg, TransactionResult, VllMsg, WaitEntry,
-    WalLagStatsResponse, WatchEntry, extract_hash_tag, shard_for_key, slot_for_key,
+    ShardWorkerBuilder, TieredCounts, TrackingMsg, TransactionResult, UnregisterAck, VllMsg,
+    WaitEntry, WalLagStatsResponse, WatchEntry, extract_hash_tag, shard_for_key, slot_for_key,
 };
 pub use slowlog::{
     DEFAULT_SLOWLOG_LOG_SLOWER_THAN, DEFAULT_SLOWLOG_MAX_ARG_LEN, DEFAULT_SLOWLOG_MAX_LEN, SlowLog,

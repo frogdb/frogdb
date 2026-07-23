@@ -14,6 +14,7 @@ use crate::store::{HashMapStore, Store};
 use crate::types::{BlockingOp, Direction, StreamEntry, Value};
 
 use super::helpers::format_xread_response;
+use super::message::UnregisterAck;
 use super::wait_queue::WaitEntry;
 use super::worker::ShardWorker;
 
@@ -73,15 +74,30 @@ impl ShardWorker {
         }
     }
 
-    /// Handle unregistering a blocking wait (disconnect or explicit cancel).
-    pub(crate) fn handle_unregister_wait(&mut self, conn_id: u64) {
+    /// Handle unregistering a blocking wait (timeout, CLIENT UNBLOCK, or
+    /// disconnect), acknowledging the serve-vs-timeout race.
+    ///
+    /// Runs on the shard's serial timeline, so whether the waiter is still
+    /// registered here is authoritative. If it is (`removed` non-empty) the
+    /// timeout won: remove it and report [`UnregisterAck::Unregistered`]. If it
+    /// is already gone a serve or the GC tick beat the timeout and has sent a
+    /// response on the client's channel: report [`UnregisterAck::AlreadyServed`]
+    /// so the client drains that value instead of discarding it. See
+    /// [`BlockingMsg::UnregisterWait`].
+    pub(crate) fn handle_unregister_wait(
+        &mut self,
+        conn_id: u64,
+        ack: oneshot::Sender<UnregisterAck>,
+    ) {
         let removed = self.wait_queue.unregister(conn_id);
-        if !removed.is_empty() {
+        let reply = if removed.is_empty() {
+            UnregisterAck::AlreadyServed
+        } else {
             tracing::trace!(
                 shard_id = self.shard_id(),
                 conn_id = conn_id,
                 count = removed.len(),
-                "Unregistered blocking waits on disconnect"
+                "Unregistered blocking waits"
             );
 
             // Update blocked clients metric
@@ -91,7 +107,9 @@ impl ShardWorker {
                 self.wait_queue.waiter_count() as f64,
                 &shard_label,
             );
-        }
+            UnregisterAck::Unregistered
+        };
+        let _ = ack.send(reply);
     }
 
     /// Handle a slot migration completion by sending `-MOVED` to all blocked clients
@@ -272,19 +290,17 @@ impl ShardWorker {
                 break;
             };
 
-            // Lost-element race fix. The server is the canonical timeout
-            // authority; this shard only completes waiters on a genuine wake. If
-            // a popped waiter's deadline has already elapsed, or its receiver is
-            // gone, the server has (or is about to) return a timeout nil — so
-            // consuming store data for it would pop an element and deliver it to
-            // nobody. Re-validate before touching the value: drop the doomed
-            // waiter without consuming, and try the next one. Because the shard
-            // reads `now` strictly before it pops (synchronously, no await), and
-            // the server's `biased` select favours a delivered response over a
-            // simultaneous deadline, every element the shard does pop is
-            // guaranteed to reach a still-waiting receiver.
-            if entry.deadline.is_some_and(|d| d <= Instant::now()) || entry.response_tx.is_closed()
-            {
+            // Deadline fast-path. The server is the canonical timeout authority;
+            // if a popped waiter's deadline has already elapsed the server has
+            // (or is about to) return a timeout nil, so skip it without
+            // consuming and try the next one. This is a cheap optimization, not
+            // the correctness backstop: a receiver can still be dropped in the
+            // window *after* this check and *before* the `send` below (the
+            // server fires precisely at the deadline). That residual race is
+            // closed by restoring the consumed data on send failure — see the
+            // `Err` arm and [`Restore`] — so no element is ever popped and
+            // delivered to nobody.
+            if entry.deadline.is_some_and(|d| d <= Instant::now()) {
                 continue;
             }
 
@@ -295,33 +311,61 @@ impl ShardWorker {
                     reply,
                     cascade,
                     events,
+                    restore,
                 } => {
-                    if strat.bumps_version() {
-                        // The wake mutated `key` (e.g. an element popped for a
-                        // BLPOP), so bump only its slot — a watch on a
-                        // different-slot key survives.
-                        self.bump_version_for_key(key);
-                    }
-                    // Publish the same keyspace events the immediate command path
-                    // deposits. Routed through the coordinator seam
-                    // (`emit_keyspace_notification`), which honours the
-                    // notify-keyspace-events config gate; nothing is published
-                    // when notifications are disabled.
-                    for (key, name, class) in &events {
-                        self.emit_keyspace_notification(key, name, *class);
-                    }
-                    self.complete_blocked_waiter(entry, reply);
-                    // A BLMove/BRPOPLPUSH pushes to its destination; wake any
-                    // blockers on that key so wake chains propagate.
-                    if let Some(dest) = cascade {
-                        self.drive_satisfaction_body(strat, &dest, depth + 1);
+                    // Deliver first: `satisfy` already consumed the store data,
+                    // so the externally observable effects (version bump,
+                    // keyspace events, wake cascade) must be committed only if
+                    // the reply actually reaches the client. If the receiver was
+                    // dropped in the pop→send race, restore the consumed data and
+                    // commit nothing — the element is neither lost nor
+                    // double-delivered.
+                    match entry.response_tx.send(reply) {
+                        Ok(()) => {
+                            self.record_blocked_waiter_satisfied();
+                            if strat.bumps_version() {
+                                // The wake mutated `key` (e.g. an element popped
+                                // for a BLPOP), so bump only its slot — a watch on
+                                // a different-slot key survives.
+                                self.bump_version_for_key(key);
+                            }
+                            // Publish the same keyspace events the immediate
+                            // command path deposits. Routed through the
+                            // coordinator seam (`emit_keyspace_notification`),
+                            // which honours the notify-keyspace-events config
+                            // gate; nothing is published when notifications are
+                            // disabled.
+                            for (key, name, class) in &events {
+                                self.emit_keyspace_notification(key, name, *class);
+                            }
+                            // A BLMove/BRPOPLPUSH pushes to its destination; wake
+                            // any blockers on that key so wake chains propagate.
+                            if let Some(dest) = cascade {
+                                self.drive_satisfaction_body(strat, &dest, depth + 1);
+                            }
+                        }
+                        Err(_) => {
+                            self.apply_restore(restore);
+                            let shard_label = self.shard_id().to_string();
+                            BlockedClients::set(
+                                self.observability.metrics(),
+                                self.wait_queue.waiter_count() as f64,
+                                &shard_label,
+                            );
+                        }
                     }
                 }
             }
         }
     }
 
-    /// Send a response to a satisfied blocked client and record metrics.
+    /// Send a response to a blocked client and record metrics.
+    ///
+    /// Used by the terminal-reply paths that consume *no* store data (a
+    /// `Reject` reply — WRONGTYPE/NOGROUP — and the XREADGROUP drains): a
+    /// dropped receiver there loses nothing, so the send result is ignored. The
+    /// data-consuming `Done` path does not route through here; it sends inline
+    /// so it can restore the consumed element on delivery failure.
     fn complete_blocked_waiter(&self, entry: WaitEntry, response: Response) {
         tracing::debug!(
             shard_id = self.shard_id(),
@@ -330,15 +374,84 @@ impl ShardWorker {
         );
 
         let _ = entry.response_tx.send(response);
+        self.record_blocked_waiter_satisfied();
+    }
 
+    /// Record the metrics for one satisfied waiter (satisfied counter + blocked
+    /// gauge).
+    fn record_blocked_waiter_satisfied(&self) {
         let shard_label = self.shard_id().to_string();
         BlockedSatisfiedTotal::inc(self.observability.metrics(), &shard_label);
-
         BlockedClients::set(
             self.observability.metrics(),
             self.wait_queue.waiter_count() as f64,
             &shard_label,
         );
+    }
+
+    /// Put back store data a wake consumed when its reply could not be delivered
+    /// (the receiver was dropped in the pop→send race). Restores exact ordering,
+    /// recreating the key if the wake had emptied and deleted it. No version bump
+    /// or keyspace event fires — from the outside, the wake never happened.
+    fn apply_restore(&mut self, restore: Restore) {
+        match restore {
+            Restore::None => {}
+            Restore::List { key, dir, elems } => {
+                if self.store.get(&key).is_none() {
+                    self.store.set(key.clone(), Value::list());
+                }
+                if let Some(list) = self.store.get_mut(&key).and_then(|v| v.as_list_mut()) {
+                    // `elems` is in pop order; re-insert at the same end in
+                    // reverse to reconstruct the original sequence.
+                    for e in elems.into_iter().rev() {
+                        match dir {
+                            Direction::Left => list.push_front(e),
+                            Direction::Right => list.push_back(e),
+                        }
+                    }
+                }
+            }
+            Restore::Zset { key, members } => {
+                if self.store.get(&key).is_none() {
+                    self.store.set(key.clone(), Value::sorted_set());
+                }
+                if let Some(zset) = self.store.get_mut(&key).and_then(|v| v.as_sorted_set_mut()) {
+                    for (member, score) in members {
+                        zset.add(member, score);
+                    }
+                }
+            }
+            Restore::Move {
+                src,
+                src_dir,
+                dest,
+                dest_dir,
+                value,
+            } => {
+                // Undo the push onto the destination.
+                if let Some(list) = self.store.get_mut(&dest).and_then(|v| v.as_list_mut()) {
+                    match dest_dir {
+                        Direction::Left => {
+                            list.pop_front();
+                        }
+                        Direction::Right => {
+                            list.pop_back();
+                        }
+                    }
+                }
+                cleanup_empty_list(&mut self.store, &dest);
+                // Undo the pop from the source (recreating it if emptied).
+                if self.store.get(&src).is_none() {
+                    self.store.set(src.clone(), Value::list());
+                }
+                if let Some(list) = self.store.get_mut(&src).and_then(|v| v.as_list_mut()) {
+                    match src_dir {
+                        Direction::Left => list.push_front(value),
+                        Direction::Right => list.push_back(value),
+                    }
+                }
+            }
+        }
     }
 
     /// Drain XREADGROUP waiters for a key and send NOGROUP error.
@@ -409,6 +522,9 @@ enum Satisfaction {
         /// Keyspace notifications to publish for this serve (pop, and push for
         /// a move). Empty for stream reads, which emit nothing.
         events: WokenEvents,
+        /// How to put the consumed store data back if delivery fails (the
+        /// receiver was dropped in the pop→send race). See [`Restore`].
+        restore: Restore,
     },
     /// The key is no longer satisfiable for this waiter (it lost a race to an
     /// earlier waiter that emptied the key); drop the waiter and re-loop.
@@ -416,6 +532,45 @@ enum Satisfaction {
     /// A terminal reply that consumed nothing (WRONGTYPE, NOGROUP); deliver it
     /// and drop the waiter without touching the stored value.
     Reject(Response),
+}
+
+/// How to undo the store mutation a [`Satisfaction::Done`] performed, applied
+/// only when delivery to the woken client fails.
+///
+/// The wake path pops/moves data out of the store *before* it can know whether
+/// the reply reaches the client: the server (the canonical timeout authority)
+/// can drop the response receiver in the narrow window between the shard's
+/// deadline re-check and its `send`. When that happens the popped element would
+/// otherwise be lost — removed from the store and delivered to nobody (the
+/// serve-vs-timeout race; guarded by testing-improvements issue 07). Restoring it
+/// keeps every element in exactly one place: delivered, or back in the store.
+#[derive(Debug)]
+enum Restore {
+    /// Nothing was consumed (stream reads: entries stay in the stream), so
+    /// there is nothing to put back.
+    None,
+    /// List elements popped from `dir` end of `key`, in pop order. Re-inserted
+    /// at the same end in reverse so the original ordering is exactly restored.
+    List {
+        key: Bytes,
+        dir: Direction,
+        elems: Vec<Bytes>,
+    },
+    /// Sorted-set members popped from `key`; re-added with their scores.
+    Zset {
+        key: Bytes,
+        members: Vec<(Bytes, f64)>,
+    },
+    /// A BLMOVE/BRPOPLPUSH `value` popped from `src` (`src_dir`) and pushed to
+    /// `dest` (`dest_dir`); undone by popping it off `dest` and pushing it back
+    /// onto `src`.
+    Move {
+        src: Bytes,
+        src_dir: Direction,
+        dest: Bytes,
+        dest_dir: Direction,
+        value: Bytes,
+    },
 }
 
 /// Outcome of validating a key before the driver pops a waiter of the
@@ -503,10 +658,15 @@ impl WaiterSatisfaction for ListSatisfaction {
                         Satisfaction::Done {
                             reply: Response::Array(vec![
                                 Response::bulk(key.clone()),
-                                Response::bulk(value),
+                                Response::bulk(value.clone()),
                             ]),
                             cascade: None,
                             events: vec![(key.clone(), "lpop", KeyspaceEventFlags::LIST)],
+                            restore: Restore::List {
+                                key: key.clone(),
+                                dir: Direction::Left,
+                                elems: vec![value],
+                            },
                         }
                     }
                     None => Satisfaction::Retry,
@@ -523,10 +683,15 @@ impl WaiterSatisfaction for ListSatisfaction {
                         Satisfaction::Done {
                             reply: Response::Array(vec![
                                 Response::bulk(key.clone()),
-                                Response::bulk(value),
+                                Response::bulk(value.clone()),
                             ]),
                             cascade: None,
                             events: vec![(key.clone(), "rpop", KeyspaceEventFlags::LIST)],
+                            restore: Restore::List {
+                                key: key.clone(),
+                                dir: Direction::Right,
+                                elems: vec![value],
+                            },
                         }
                     }
                     None => Satisfaction::Retry,
@@ -589,16 +754,23 @@ impl WaiterSatisfaction for ListSatisfaction {
                     Direction::Right => "rpush",
                 };
                 Satisfaction::Done {
-                    reply: Response::bulk(value),
+                    reply: Response::bulk(value.clone()),
                     cascade: Some(dest.clone()),
                     events: vec![
                         (key.clone(), pop_event, KeyspaceEventFlags::LIST),
                         (dest.clone(), push_event, KeyspaceEventFlags::LIST),
                     ],
+                    restore: Restore::Move {
+                        src: key.clone(),
+                        src_dir: *src_dir,
+                        dest: dest.clone(),
+                        dest_dir: *dest_dir,
+                        value,
+                    },
                 }
             }
             BlockingOp::BLMPop { direction, count } => {
-                let mut elements = Vec::new();
+                let mut popped: Vec<Bytes> = Vec::new();
                 if let Some(list) = store.get_mut(key).and_then(|v| v.as_list_mut()) {
                     for _ in 0..*count {
                         let elem = match direction {
@@ -606,13 +778,13 @@ impl WaiterSatisfaction for ListSatisfaction {
                             Direction::Right => list.pop_back(),
                         };
                         match elem {
-                            Some(e) => elements.push(Response::bulk(e)),
+                            Some(e) => popped.push(e),
                             None => break,
                         }
                     }
                 }
 
-                if elements.is_empty() {
+                if popped.is_empty() {
                     return Satisfaction::Retry;
                 }
 
@@ -621,6 +793,7 @@ impl WaiterSatisfaction for ListSatisfaction {
                     Direction::Left => "lpop",
                     Direction::Right => "rpop",
                 };
+                let elements = popped.iter().cloned().map(Response::bulk).collect();
                 Satisfaction::Done {
                     reply: Response::Array(vec![
                         Response::bulk(key.clone()),
@@ -628,6 +801,11 @@ impl WaiterSatisfaction for ListSatisfaction {
                     ]),
                     cascade: None,
                     events: vec![(key.clone(), pop_event, KeyspaceEventFlags::LIST)],
+                    restore: Restore::List {
+                        key: key.clone(),
+                        dir: *direction,
+                        elems: popped,
+                    },
                 }
             }
             _ => {
@@ -691,11 +869,15 @@ impl WaiterSatisfaction for ZsetSatisfaction {
                 Satisfaction::Done {
                     reply: Response::Array(vec![
                         Response::bulk(key.clone()),
-                        Response::bulk(member),
+                        Response::bulk(member.clone()),
                         zset_score_reply(score, is_resp3),
                     ]),
                     cascade: None,
                     events: vec![(key.clone(), "zpopmin", KeyspaceEventFlags::ZSET)],
+                    restore: Restore::Zset {
+                        key: key.clone(),
+                        members: vec![(member, score)],
+                    },
                 }
             }
             BlockingOp::BZPopMax => {
@@ -713,32 +895,42 @@ impl WaiterSatisfaction for ZsetSatisfaction {
                 Satisfaction::Done {
                     reply: Response::Array(vec![
                         Response::bulk(key.clone()),
-                        Response::bulk(member),
+                        Response::bulk(member.clone()),
                         zset_score_reply(score, is_resp3),
                     ]),
                     cascade: None,
                     events: vec![(key.clone(), "zpopmax", KeyspaceEventFlags::ZSET)],
+                    restore: Restore::Zset {
+                        key: key.clone(),
+                        members: vec![(member, score)],
+                    },
                 }
             }
             BlockingOp::BZMPop { min, count } => {
-                let mut elements = Vec::new();
-                if let Some(zset) = store.get_mut(key).and_then(|v| v.as_sorted_set_mut()) {
-                    let popped = if *min {
-                        zset.pop_min(*count)
+                let popped =
+                    if let Some(zset) = store.get_mut(key).and_then(|v| v.as_sorted_set_mut()) {
+                        if *min {
+                            zset.pop_min(*count)
+                        } else {
+                            zset.pop_max(*count)
+                        }
                     } else {
-                        zset.pop_max(*count)
+                        Vec::new()
                     };
-                    for (member, score) in popped {
-                        elements.push(Response::Array(vec![
-                            Response::bulk(member),
-                            zset_score_reply(score, is_resp3),
-                        ]));
-                    }
-                }
 
-                if elements.is_empty() {
+                if popped.is_empty() {
                     return Satisfaction::Retry;
                 }
+
+                let elements = popped
+                    .iter()
+                    .map(|(member, score)| {
+                        Response::Array(vec![
+                            Response::bulk(member.clone()),
+                            zset_score_reply(*score, is_resp3),
+                        ])
+                    })
+                    .collect();
 
                 cleanup_empty_zset(store, key);
                 let pop_event = if *min { "zpopmin" } else { "zpopmax" };
@@ -749,6 +941,10 @@ impl WaiterSatisfaction for ZsetSatisfaction {
                     ]),
                     cascade: None,
                     events: vec![(key.clone(), pop_event, KeyspaceEventFlags::ZSET)],
+                    restore: Restore::Zset {
+                        key: key.clone(),
+                        members: popped,
+                    },
                 }
             }
             _ => {
@@ -815,6 +1011,9 @@ impl WaiterSatisfaction for StreamSatisfaction {
                     // A blocking stream read emits no keyspace event (reads never
                     // do; XADD already notified when the entry was written).
                     events: Vec::new(),
+                    // XREAD does not remove entries from the stream, so a failed
+                    // delivery leaves nothing to restore.
+                    restore: Restore::None,
                 }
             }
             BlockingOp::XReadGroup {
@@ -846,6 +1045,11 @@ impl WaiterSatisfaction for StreamSatisfaction {
                         reply: format_xread_response(key, &entries),
                         cascade: None,
                         events: Vec::new(),
+                        // XREADGROUP advances the group's last-delivered id and
+                        // PEL but leaves the entries in the stream (reclaimable
+                        // via XPENDING/XAUTOCLAIM), so it consumes no store data
+                        // to restore here.
+                        restore: Restore::None,
                     },
                     _ => Satisfaction::Retry,
                 }
@@ -1159,9 +1363,10 @@ mod tests {
     // ---- Lost-element timeout race (the scoped correctness flag) ----------
 
     /// A push that reaches the shard *after* the server already returned a
-    /// timeout (its receiver dropped) must not pop the element into the
-    /// abandoned channel — the element would be removed from the store and
-    /// delivered to nobody.
+    /// timeout (its receiver dropped) must not lose the element. `satisfy` pops
+    /// it, the inline `send` fails, and `apply_restore` puts it back — so it is
+    /// neither delivered to nobody nor silently dropped (the serve-vs-timeout
+    /// pop→send race; guarded by testing-improvements issue 07).
     #[test]
     fn push_after_receiver_dropped_does_not_lose_element() {
         let (mut worker, _msg_tx, _conn_tx) = build_worker();
@@ -1179,12 +1384,111 @@ mod tests {
         worker.store.set(key.clone(), v);
         worker.try_satisfy_list_waiters(&key);
 
-        // The element must still be in the store — not popped into the void.
+        // The element must still be in the store — restored after the failed
+        // delivery rather than popped into the void.
         let list = worker.store.get_hot(&key).expect("key must survive");
         assert_eq!(
             list.as_list().unwrap().len(),
             1,
             "element must not be lost to an abandoned waiter"
+        );
+        assert_eq!(
+            list.as_list().unwrap().get(0).cloned(),
+            Some(Bytes::from_static(b"x")),
+            "the restored element keeps its value"
+        );
+        // The doomed waiter was consumed off the queue (not left blocking).
+        assert!(
+            !worker
+                .wait_queue
+                .has_waiters_for_kind(&key, WaiterKind::List),
+            "the abandoned waiter is removed from the queue"
+        );
+    }
+
+    /// Multi-element / multi-key restore: a BLMPOP waiter whose receiver is gone
+    /// must have *every* popped element restored, in original order, to the
+    /// correct end — the multi-key exactly-once conservation property (issue 07).
+    #[test]
+    fn blmpop_restore_preserves_all_elements_in_order() {
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        let ka = Bytes::from_static(b"a");
+        let kb = Bytes::from_static(b"b");
+
+        // A BLMPOP LEFT waiter across overlapping keys [a, b], receiver dropped.
+        let (entry, rx) = make_entry(
+            BlockingOp::BLMPop {
+                direction: Direction::Left,
+                count: 10,
+            },
+            vec![ka.clone(), kb.clone()],
+        );
+        worker.wait_queue.register(entry).unwrap();
+        drop(rx);
+
+        // Seed key `a` with three ordered elements.
+        let mut v = Value::list();
+        {
+            let l = v.as_list_mut().unwrap();
+            l.push_back(Bytes::from_static(b"1"));
+            l.push_back(Bytes::from_static(b"2"));
+            l.push_back(Bytes::from_static(b"3"));
+        }
+        worker.store.set(ka.clone(), v);
+
+        worker.try_satisfy_list_waiters(&ka);
+
+        // All three elements are back, in their original order.
+        let list = worker.store.get_hot(&ka).expect("key a must survive");
+        let elems: Vec<Bytes> = list.as_list().unwrap().iter().cloned().collect();
+        assert_eq!(
+            elems,
+            vec![
+                Bytes::from_static(b"1"),
+                Bytes::from_static(b"2"),
+                Bytes::from_static(b"3"),
+            ],
+            "every popped element is restored in original order"
+        );
+        // The waiter is gone from BOTH overlapping keys (multi-key removal).
+        assert!(
+            !worker
+                .wait_queue
+                .has_waiters_for_kind(&ka, WaiterKind::List)
+        );
+        assert!(
+            !worker
+                .wait_queue
+                .has_waiters_for_kind(&kb, WaiterKind::List)
+        );
+    }
+
+    /// Zset restore: a BZPOPMIN waiter whose receiver is gone must have its
+    /// popped member+score put back so the sorted set is whole.
+    #[test]
+    fn bzpopmin_restore_preserves_member_and_score() {
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        let key = Bytes::from_static(b"z");
+
+        let (entry, rx) = make_entry(BlockingOp::BZPopMin, vec![key.clone()]);
+        worker.wait_queue.register(entry).unwrap();
+        drop(rx);
+
+        let mut v = Value::sorted_set();
+        {
+            let z = v.as_sorted_set_mut().unwrap();
+            z.add(Bytes::from_static(b"a"), 1.0);
+            z.add(Bytes::from_static(b"b"), 2.0);
+        }
+        worker.store.set(key.clone(), v);
+
+        worker.try_satisfy_zset_waiters(&key);
+
+        let zset = worker.store.get_hot(&key).expect("zset must survive");
+        assert_eq!(
+            zset.as_sorted_set().unwrap().len(),
+            2,
+            "the popped member must be restored to the sorted set"
         );
     }
 

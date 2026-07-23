@@ -15,8 +15,8 @@ impl ShardWorker {
             } => {
                 self.handle_block_wait(conn_id, keys, op, response_tx, deadline, protocol_version);
             }
-            BlockingMsg::UnregisterWait { conn_id } => {
-                self.handle_unregister_wait(conn_id);
+            BlockingMsg::UnregisterWait { conn_id, ack } => {
+                self.handle_unregister_wait(conn_id, ack);
             }
         }
     }

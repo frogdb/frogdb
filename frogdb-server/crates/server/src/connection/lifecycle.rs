@@ -196,13 +196,18 @@ impl ConnectionHandler {
                 .await;
         }
 
-        // Unregister any blocking waits
+        // Unregister any blocking waits. The connection is closing, so there is
+        // no client to hand a raced serve back to — the ack is discarded (a
+        // serve that raced this teardown is instead made whole by the shard's
+        // restore-on-send-failure path). See `BlockingMsg::UnregisterWait`.
         if let Some(shard_id) = self.state.blocked_shard()
             && let Some(sender) = self.core.shard_senders.get(shard_id)
         {
+            let (ack_tx, _ack_rx) = tokio::sync::oneshot::channel();
             let _ = sender
                 .send(BlockingMsg::UnregisterWait {
                     conn_id: self.state.id,
+                    ack: ack_tx,
                 })
                 .await;
         }

@@ -220,9 +220,11 @@ impl ShardDriver {
         rx
     }
 
-    /// Fire-and-forget waiter cleanup (connection gave up).
+    /// Waiter cleanup (connection gave up). The acknowledgement is discarded —
+    /// these deterministic scenarios do not model the timeout reconciliation.
     pub async fn unregister_wait(&mut self, shard: usize, conn_id: u64) {
-        self.dispatch(shard, BlockingMsg::UnregisterWait { conn_id })
+        let (ack, _ack_rx) = oneshot::channel();
+        self.dispatch(shard, BlockingMsg::UnregisterWait { conn_id, ack })
             .await;
     }
 

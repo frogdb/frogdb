@@ -144,3 +144,53 @@ are TxHeavy WATCH and MultiWaiter/ZSet code respectively — see acceptance crit
   `MultiWaiter`, `Mixed`).
 - `docs/superpowers/specs/2026-07-17-concurrency-invariant-testing-design.md` — phase 5 (CI
   wiring) entry, which references this issue.
+
+## Finding A — root-cause update (2026-07-23, testing-improvements issue 07)
+
+Investigated while building the shuttle exactly-once guard (issue 07). **Finding A is NOT the
+serve-vs-timeout deferred-delivery race** it was hypothesized to be, and remains **open**.
+
+### What was checked
+
+A separate, real hypothesis was pursued and a fix shipped for it: the *serve-vs-timeout race* on
+the deferred blocking-serve path — where the shard pops an element and `oneshot::send()`s it to a
+waiter whose server-side coordinator already timed out and dropped the receiver, losing the popped
+element (`send`-`Ok` does not imply delivery). That race is real; the fix (acknowledged
+`UnregisterWait` handshake making the shard the single serialization point) shipped on branch
+`worktree-agent-a3a766999e8e4f424` and is guarded deterministically by the new shuttle model
+(`frogdb-server/crates/core/tests/concurrency.rs`, "Blocking-pop exactly-once conservation").
+
+**But that fix does not clear Finding A.** With the handshake in place, MultiWaiter seeds 1–5 at
+OPS=100 still fail the exactly-once check identically.
+
+### Evidence that Finding A is a different mechanism
+
+Deterministic local repro (MultiWaiter seed 1, 4 clients, OPS=100, 2 shards, via
+`run_workload_capturing`), instrumented with debug prints on every deferred-serve delivery,
+restore, and deadline-skip:
+
+- The lost element (`[100,116]="dt"`, RPUSH'd to `{t4}ls0` at op 400, list length 78 at push time)
+  produced **zero** deferred-serve events — no `SERVE_OK`, no restore, no deadline-skip. The
+  deferred blocking-serve path the handshake fixes was **never involved** in this loss.
+- `"dt"` appears in **no operation's recorded result** anywhere in the history, and is **absent from
+  the final store**. The only ops touching `{t4}ls0` by first-arg are RPUSHes plus one immediate
+  BLPOP that returned a *different* element.
+- Final list length was **nondeterministic across identical-seed runs** (observed 69 vs 70),
+  i.e. ~8–9 pushed elements left the list via a path recorded in **no** operation result.
+
+This points at a lower-level loss in the blocking-list consume/record path under sustained
+concurrency (candidates: multi-key LMPOP/BLMPOP pop-and-record, or an internal list-element drop),
+**distinct** from the deferred serve-vs-timeout race. It was not fully root-caused; the mechanism
+that removes `"dt"` without recording a delivery is still unidentified.
+
+### Status
+
+- Finding A: **still open.** Not fixed. The serve-vs-timeout handshake shipped alongside is a
+  genuine correctness improvement for a *different* (real) race, not a fix for this.
+- Nightly `ops_per_client` cap stays at **75** — do not raise it; Finding A still reproduces above
+  ~90.
+- Next step for whoever picks this up: instrument the actual element-removal path for `{t4}ls0`
+  (every store mutation, not just deferred serves) in the seed-1/OPS=100 repro to catch the op (or
+  internal path) that removes an element without recording a delivery. The nondeterministic final
+  length is the strongest lead — confirm whether it is a genuine loss or a drainer-readback timing
+  artifact (`DRAIN_SETTLE_MS`) at high op counts before assuming a product bug.

@@ -487,10 +487,37 @@ pub enum BlockingMsg {
     },
 
     /// Cancel a blocking wait (timeout or disconnect).
+    ///
+    /// Acknowledged so the client's timeout path can reconcile against a serve
+    /// that may have raced it: the shard processes its mailbox serially, so
+    /// whether the waiter was still registered here is the single source of
+    /// truth for "did the serve win or the timeout win". Without the ack, a
+    /// serve that popped an element and called `response_tx.send` (returning
+    /// `Ok` because the receiver was still alive) could have that value silently
+    /// discarded when the client dropped the receiver on timeout — the element
+    /// neither delivered nor left in the store (the serve-vs-timeout race). The
+    /// ack lets the client drain the already-sent value instead.
     UnregisterWait {
         /// Connection ID to unregister.
         conn_id: u64,
+        /// Reports whether the waiter was still registered (removed here) or had
+        /// already been served/GC'd (its response is in the client's channel).
+        ack: oneshot::Sender<UnregisterAck>,
     },
+}
+
+/// Reply to [`BlockingMsg::UnregisterWait`], resolving the serve-vs-timeout race
+/// on the shard's serial timeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnregisterAck {
+    /// The waiter was still registered and has been removed. No store data was
+    /// consumed on its behalf, so the client finalizes as a timeout/unblock.
+    Unregistered,
+    /// The waiter was already gone — a serve (or the GC tick) removed it and
+    /// sent a response on the client's channel. The client must drain that
+    /// channel and return the value rather than timing out, or the served
+    /// element is lost.
+    AlreadyServed,
 }
 
 /// Observability messages: slowlog, memory, latency, stats, and runtime config.
