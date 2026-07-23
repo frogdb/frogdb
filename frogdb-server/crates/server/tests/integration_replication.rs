@@ -3448,6 +3448,211 @@ async fn test_set_operations_replicate(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
+// ============================================================================
+// SPOP deterministic propagation (issue 01: nondeterministic verbatim
+// propagation diverged primary and replica).
+//
+// SPOP pops a *random* member; replicating it verbatim let the replica pop a
+// different one. The fix rewrites the broadcast to `SREM <popped members>`
+// (partial drain) or `DEL` (full drain) via the ReplicationOverride mechanism.
+// These tests pin primary/replica set equality for every drain shape.
+// ============================================================================
+
+/// Extract the bulk-string members of an SMEMBERS reply, sorted.
+fn sorted_members(resp: &Response) -> Vec<String> {
+    match resp {
+        Response::Array(arr) => {
+            let mut members: Vec<String> = arr
+                .iter()
+                .filter_map(|r| match r {
+                    Response::Bulk(Some(b)) => Some(String::from_utf8_lossy(b).to_string()),
+                    _ => None,
+                })
+                .collect();
+            members.sort();
+            members
+        }
+        other => panic!("expected array from SMEMBERS, got: {other:?}"),
+    }
+}
+
+/// Poll until the replica's SMEMBERS of `key` equals the primary's (both
+/// sorted), or `timeout_ms` elapses. Returns `(primary, replica)` members for
+/// the caller's assertion (so a timeout fails with the divergent contents).
+async fn wait_for_set_convergence(
+    primary: &TestServer,
+    replica: &TestServer,
+    key: &str,
+    timeout_ms: u64,
+) -> (Vec<String>, Vec<String>) {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        let p = sorted_members(&primary.send("SMEMBERS", &[key]).await);
+        let r = sorted_members(&replica.send("SMEMBERS", &[key]).await);
+        if p == r || tokio::time::Instant::now() >= deadline {
+            return (p, r);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// SPOP with a count that leaves members behind (partial drain): the replica
+/// must end up with exactly the primary's remaining members — the divergence
+/// the verbatim `SPOP` broadcast used to cause.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_spop_partial_drain_replicates(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    let sadd = primary
+        .send("SADD", &["{r}spop", "a", "b", "c", "d", "e"])
+        .await;
+    assert_eq!(parse_integer(&sadd), Some(5), "SADD failed: {sadd:?}");
+
+    let spop = primary.send("SPOP", &["{r}spop", "2"]).await;
+    let popped = match &spop {
+        Response::Array(arr) => arr.len(),
+        other => panic!("expected array from SPOP with count, got: {other:?}"),
+    };
+    assert_eq!(popped, 2, "SPOP 2 must pop exactly 2 members");
+
+    let _ = wait_for_replication(&primary, 5000).await;
+    let (p, r) = wait_for_set_convergence(&primary, &replica, "{r}spop", 5000).await;
+    assert_eq!(p.len(), 3, "primary must retain 3 members, got {p:?}");
+    assert_eq!(
+        p, r,
+        "replica set must equal primary set after SPOP (primary {p:?}, replica {r:?})"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// SPOP draining the whole set (count == cardinality): the rewrite propagates
+/// a `DEL`, so the key must be gone on both nodes.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_spop_full_drain_replicates_as_delete(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    let sadd = primary.send("SADD", &["{r}drain", "x", "y", "z"]).await;
+    assert_eq!(parse_integer(&sadd), Some(3), "SADD failed: {sadd:?}");
+
+    let spop = primary.send("SPOP", &["{r}drain", "3"]).await;
+    match &spop {
+        Response::Array(arr) => assert_eq!(arr.len(), 3),
+        other => panic!("expected array from SPOP, got: {other:?}"),
+    }
+    assert_eq!(
+        parse_integer(&primary.send("EXISTS", &["{r}drain"]).await),
+        Some(0),
+        "full drain must delete the key on the primary"
+    );
+
+    let _ = wait_for_replication(&primary, 5000).await;
+    let (p, r) = wait_for_set_convergence(&primary, &replica, "{r}drain", 5000).await;
+    assert!(
+        p.is_empty() && r.is_empty(),
+        "both must be empty: {p:?} {r:?}"
+    );
+    assert_eq!(
+        parse_integer(&replica.send("EXISTS", &["{r}drain"]).await),
+        Some(0),
+        "full drain must delete the key on the replica"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// SPOP with count exceeding the cardinality pops everything; the key must be
+/// gone on both nodes.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_spop_count_exceeding_cardinality_replicates(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    let sadd = primary.send("SADD", &["{r}over", "p", "q"]).await;
+    assert_eq!(parse_integer(&sadd), Some(2), "SADD failed: {sadd:?}");
+
+    let spop = primary.send("SPOP", &["{r}over", "10"]).await;
+    match &spop {
+        Response::Array(arr) => assert_eq!(arr.len(), 2, "SPOP pops what exists"),
+        other => panic!("expected array from SPOP, got: {other:?}"),
+    }
+
+    let _ = wait_for_replication(&primary, 5000).await;
+    let (p, r) = wait_for_set_convergence(&primary, &replica, "{r}over", 5000).await;
+    assert!(
+        p.is_empty() && r.is_empty(),
+        "both must be empty: {p:?} {r:?}"
+    );
+    assert_eq!(
+        parse_integer(&replica.send("EXISTS", &["{r}over"]).await),
+        Some(0),
+        "key must be deleted on the replica"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// Repeated single-member SPOP (no count): each pop rewrites to `SREM` of the
+/// specific popped member, so the replica tracks the primary exactly.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_spop_single_member_replicates(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    let sadd = primary
+        .send("SADD", &["{r}one", "a", "b", "c", "d", "e"])
+        .await;
+    assert_eq!(parse_integer(&sadd), Some(5), "SADD failed: {sadd:?}");
+
+    for _ in 0..2 {
+        let spop = primary.send("SPOP", &["{r}one"]).await;
+        assert!(
+            matches!(&spop, Response::Bulk(Some(_))),
+            "single SPOP must return a member, got: {spop:?}"
+        );
+    }
+
+    let _ = wait_for_replication(&primary, 5000).await;
+    let (p, r) = wait_for_set_convergence(&primary, &replica, "{r}one", 5000).await;
+    assert_eq!(p.len(), 3, "primary must retain 3 members, got {p:?}");
+    assert_eq!(
+        p, r,
+        "replica set must equal primary set after single SPOPs (primary {p:?}, replica {r:?})"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
 /// Sorted set operations (ZADD) replicate to replica via ZRANGE.
 #[rstest]
 #[case::in_memory(false)]

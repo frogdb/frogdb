@@ -34,6 +34,10 @@ pub(crate) struct WriteCommandMeta {
     /// Populated by the execution seam only when the `n` class is enabled;
     /// empty otherwise (the diff is skipped entirely when `n` is off).
     pub newly_created_keys: Vec<Bytes>,
+    /// Deterministic-propagation override deposited by the command (e.g. SPOP
+    /// rewriting itself to `SREM`/`DEL`); consumed by the replication-broadcast
+    /// write effect. `None` for verbatim-propagating writes.
+    pub repl_override: Option<crate::command::ReplicationOverride>,
 }
 
 impl CommandEffects {
@@ -65,6 +69,7 @@ impl CommandEffects {
             hll_wal_delta,
             keyspace_events,
             script_writes: _,
+            repl_override,
         } = self;
         if write_was_noop {
             return None;
@@ -78,6 +83,7 @@ impl CommandEffects {
             // store access before and after the handler runs); the caller fills
             // this in after `into_write_meta` returns.
             newly_created_keys: Vec::new(),
+            repl_override,
         })
     }
 }
@@ -242,6 +248,7 @@ impl ShardWorker {
             hll_wal_delta: _,
             keyspace_events: _,
             script_writes: _,
+            repl_override: _,
         } = &effects;
         let (lazyfreed_delta, keyspace_hits, keyspace_misses) =
             (*lazyfreed_delta, *keyspace_hits, *keyspace_misses);
@@ -439,6 +446,7 @@ impl ShardWorker {
                     hll_wal_delta: write_meta.hll_wal_delta.as_deref(),
                     keyspace_events: write_meta.keyspace_events.as_slice(),
                     newly_created_keys: write_meta.newly_created_keys.as_slice(),
+                    repl_override: write_meta.repl_override.as_ref(),
                 };
                 match self
                     .persist(
@@ -479,6 +487,7 @@ impl ShardWorker {
                     hll_wal_delta: write_meta.hll_wal_delta.as_deref(),
                     keyspace_events: write_meta.keyspace_events.as_slice(),
                     newly_created_keys: write_meta.newly_created_keys.as_slice(),
+                    repl_override: write_meta.repl_override.as_ref(),
                 };
                 self.run_write_effects(
                     WriteSummary {
@@ -601,6 +610,7 @@ impl ShardWorker {
                     hll_wal_delta: meta.hll_wal_delta.as_deref(),
                     keyspace_events: meta.keyspace_events.as_slice(),
                     newly_created_keys: meta.newly_created_keys.as_slice(),
+                    repl_override: meta.repl_override.as_ref(),
                 })
                 .collect();
 

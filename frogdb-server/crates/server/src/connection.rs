@@ -755,34 +755,27 @@ impl ConnectionHandler {
                 .as_ref()
                 .expect("PsyncIntercept gates handler presence before yielding a handoff");
 
-            // Extract the ConnectionStream from the Framed codec, then get the raw TcpStream.
+            // Extract the ConnectionStream from the Framed codec and type-erase
+            // it for the replication handler (`handle_psync` takes a
+            // `BoxedStream`). Non-turmoil: `into_boxed` preserves TLS if
+            // active; turmoil: the simulated `TcpStream` implements
+            // `AsyncRead`/`AsyncWrite` and boxes directly, so primary+replica
+            // pairs work under simulation too.
             let connection_stream = self.framed.into_inner();
-
             #[cfg(not(feature = "turmoil"))]
-            {
-                // Pass the stream as a boxed trait object, preserving TLS if active.
-                let boxed_stream = connection_stream.into_boxed();
-                if let Err(e) = handler
-                    .handle_psync(boxed_stream, self.state.addr, &replication_id, offset)
-                    .await
-                {
-                    warn!(
-                        conn_id = self.state.id,
-                        error = %e,
-                        "PSYNC handoff failed"
-                    );
-                }
-            }
-
+            let boxed_stream = connection_stream.into_boxed();
             #[cfg(feature = "turmoil")]
+            let boxed_stream: frogdb_replication::BoxedStream = Box::new(connection_stream);
+
+            if let Err(e) = handler
+                .handle_psync(boxed_stream, self.state.addr, &replication_id, offset)
+                .await
             {
-                // In turmoil mode, we can't directly pass the turmoil TcpStream
-                // to the handler which expects tokio TcpStream.
                 warn!(
                     conn_id = self.state.id,
-                    "PSYNC handoff not supported in turmoil simulation mode"
+                    error = %e,
+                    "PSYNC handoff failed"
                 );
-                let _ = (handler, connection_stream);
             }
 
             // Don't run normal cleanup - replication handler has the connection

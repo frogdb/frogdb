@@ -24,8 +24,8 @@
 use crate::common::chaos_configs::{ChaosConfigBuilder, ChaosPreset};
 use crate::common::sim_harness::{OperationHistory, OperationResult};
 use crate::common::sim_helpers::{
-    SERVER_HOST, SERVER_PORT, encode_command, parse_simple_response, real_frogdb_server,
-    real_frogdb_server_with_chaos,
+    SERVER_HOST, SERVER_PORT, encode_command, parse_simple_response, real_frogdb_primary,
+    real_frogdb_replica, real_frogdb_server, real_frogdb_server_with_chaos,
 };
 use bytes::Bytes;
 use frogdb_server::config::ChaosConfig;
@@ -4306,4 +4306,297 @@ fn client_pause_write_expiry_suppression_realpath() {
          {reaped_encoding:?}. Anything else means suppression did not lift or the \
          key was never really expired."
     );
+}
+
+// =============================================================================
+// Primary+replica replication under turmoil: SPOP deterministic propagation
+// (issue 01). The replica dials the primary through turmoil's simulated
+// network via the `turmoil`-gated connect factory in `replication_init.rs`.
+// =============================================================================
+
+/// A complete-message RESP value, as read by [`RespConn`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RespValue {
+    Simple(String),
+    Error(String),
+    Int(i64),
+    Bulk(Option<Vec<u8>>),
+    Array(Option<Vec<RespValue>>),
+}
+
+/// Minimal RESP2 client for the replication sims: frames complete replies
+/// across arbitrary TCP chunking (the one-`read()` helpers elsewhere in this
+/// file assume single-segment replies, which turmoil does not guarantee).
+struct RespConn {
+    stream: TcpStream,
+    buf: Vec<u8>,
+}
+
+impl RespConn {
+    async fn connect(addr: (std::net::IpAddr, u16)) -> std::io::Result<Self> {
+        let stream = TcpStream::connect(addr).await?;
+        Ok(Self {
+            stream,
+            buf: Vec::new(),
+        })
+    }
+
+    /// Send one command and read its complete reply.
+    async fn cmd(&mut self, parts: &[&[u8]]) -> std::io::Result<RespValue> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        self.stream.write_all(&encode_command(parts)).await?;
+        loop {
+            if let Some((value, consumed)) = parse_resp_value(&self.buf) {
+                self.buf.drain(..consumed);
+                return Ok(value);
+            }
+            let mut chunk = [0u8; 4096];
+            let n = self.stream.read(&mut chunk).await?;
+            if n == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "connection closed mid-reply",
+                ));
+            }
+            self.buf.extend_from_slice(&chunk[..n]);
+        }
+    }
+}
+
+/// Parse one complete RESP value from the front of `data`, returning the value
+/// and the number of bytes consumed, or `None` if the message is incomplete.
+fn parse_resp_value(data: &[u8]) -> Option<(RespValue, usize)> {
+    let line_end = data.windows(2).position(|w| w == b"\r\n")?;
+    let line = std::str::from_utf8(&data[1..line_end]).ok()?;
+    let after_line = line_end + 2;
+    match *data.first()? {
+        b'+' => Some((RespValue::Simple(line.to_string()), after_line)),
+        b'-' => Some((RespValue::Error(line.to_string()), after_line)),
+        b':' => Some((RespValue::Int(line.parse().ok()?), after_line)),
+        b'$' => {
+            let len: i64 = line.parse().ok()?;
+            if len < 0 {
+                return Some((RespValue::Bulk(None), after_line));
+            }
+            let len = len as usize;
+            let total = after_line + len + 2;
+            if data.len() < total {
+                return None;
+            }
+            Some((
+                RespValue::Bulk(Some(data[after_line..after_line + len].to_vec())),
+                total,
+            ))
+        }
+        b'*' => {
+            let count: i64 = line.parse().ok()?;
+            if count < 0 {
+                return Some((RespValue::Array(None), after_line));
+            }
+            let mut items = Vec::with_capacity(count as usize);
+            let mut pos = after_line;
+            for _ in 0..count {
+                let (item, consumed) = parse_resp_value(&data[pos..])?;
+                items.push(item);
+                pos += consumed;
+            }
+            Some((RespValue::Array(Some(items)), pos))
+        }
+        _ => None,
+    }
+}
+
+/// Sorted members of an SMEMBERS reply.
+fn resp_sorted_members(value: &RespValue) -> Vec<Vec<u8>> {
+    match value {
+        RespValue::Array(Some(items)) => {
+            let mut members: Vec<Vec<u8>> = items
+                .iter()
+                .filter_map(|item| match item {
+                    RespValue::Bulk(Some(b)) => Some(b.clone()),
+                    _ => None,
+                })
+                .collect();
+            members.sort();
+            members
+        }
+        other => panic!("expected array from SMEMBERS, got {other:?}"),
+    }
+}
+
+/// One seeded run: random SADD/SPOP interleavings against a primary+replica
+/// pair, then quiescent equality of every touched set on both nodes.
+///
+/// SPOP is the nondeterministic write of interest: before the deterministic
+/// rewrite (SPOP -> SREM of the popped members / DEL on a full drain) the
+/// replica re-ran SPOP with its own RNG and permanently diverged whenever a
+/// set was not fully drained.
+fn run_spop_replication_convergence(seed: u64) {
+    use rand::{RngExt, SeedableRng, rngs::StdRng};
+
+    let mut sim = Builder::new()
+        .simulation_duration(Duration::from_secs(300))
+        .rng_seed(seed)
+        .enable_random_order()
+        .build();
+
+    // Unique per-host data dirs (replication state files live there). Keep the
+    // guards alive past `sim.run()`.
+    let primary_dir = tempfile::tempdir().expect("primary data dir");
+    let replica_dir = tempfile::tempdir().expect("replica data dir");
+    let primary_path = primary_dir.path().to_path_buf();
+    let replica_path = replica_dir.path().to_path_buf();
+
+    sim.host("primary", move || {
+        let path = primary_path.clone();
+        async move {
+            if let Err(e) = real_frogdb_primary(1, path).await {
+                eprintln!("primary server exited with error: {e}");
+                return Err(e);
+            }
+            Ok(())
+        }
+    });
+    sim.host("replica", move || {
+        let path = replica_path.clone();
+        async move {
+            let primary_ip = turmoil::lookup("primary");
+            if let Err(e) = real_frogdb_replica(1, primary_ip, path).await {
+                eprintln!("replica server exited with error: {e}");
+                return Err(e);
+            }
+            Ok(())
+        }
+    });
+
+    sim.client("driver", async move {
+        let primary_addr = (turmoil::lookup("primary"), SERVER_PORT);
+        let mut primary = RespConn::connect(primary_addr).await?;
+
+        // Wait for the replica link: WAIT 1 <ms> returns the number of
+        // replicas that acked — 1 once the handshake + stream are live.
+        let mut attempts = 0u32;
+        loop {
+            match primary.cmd(&[b"WAIT", b"1", b"500"]).await? {
+                RespValue::Int(n) if n >= 1 => break,
+                _ => {
+                    attempts += 1;
+                    assert!(attempts < 120, "replica never connected to primary");
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+            }
+        }
+
+        // Seeded random workload over a handful of keys. Weighted toward SADD
+        // so sets are usually non-empty (the partial-drain divergence case),
+        // with single-member SPOP, counted SPOP, and occasional full drains.
+        let mut rng = StdRng::seed_from_u64(seed);
+        let keys: [&[u8]; 3] = [b"s0", b"s1", b"s2"];
+        for _ in 0..150 {
+            let key = keys[rng.random_range(0..keys.len())];
+            match rng.random_range(0..10u32) {
+                // SADD 1-3 members drawn from a small universe (collisions
+                // exercise the no-op SADD path too).
+                0..=5 => {
+                    let count = rng.random_range(1..=3u32);
+                    let members: Vec<Vec<u8>> = (0..count)
+                        .map(|_| format!("m{}", rng.random_range(0..30u32)).into_bytes())
+                        .collect();
+                    let mut parts: Vec<&[u8]> = vec![b"SADD", key];
+                    parts.extend(members.iter().map(|m| m.as_slice()));
+                    let reply = primary.cmd(&parts).await?;
+                    assert!(
+                        matches!(reply, RespValue::Int(_)),
+                        "SADD must return an integer, got {reply:?}"
+                    );
+                }
+                // Single-member SPOP.
+                6 | 7 => {
+                    let reply = primary.cmd(&[b"SPOP", key]).await?;
+                    assert!(
+                        matches!(reply, RespValue::Bulk(_)),
+                        "SPOP must return a bulk reply, got {reply:?}"
+                    );
+                }
+                // Counted SPOP (may partially or fully drain).
+                8 => {
+                    let count = rng.random_range(1..=4u32).to_string();
+                    let reply = primary.cmd(&[b"SPOP", key, count.as_bytes()]).await?;
+                    assert!(
+                        matches!(reply, RespValue::Array(Some(_))),
+                        "SPOP count must return an array, got {reply:?}"
+                    );
+                }
+                // Oversized SPOP: count > cardinality (full drain + delete).
+                _ => {
+                    let reply = primary.cmd(&[b"SPOP", key, b"1000"]).await?;
+                    assert!(
+                        matches!(reply, RespValue::Array(Some(_))),
+                        "SPOP count must return an array, got {reply:?}"
+                    );
+                }
+            }
+        }
+
+        // Quiesce: every broadcast write acked by the replica.
+        let mut attempts = 0u32;
+        loop {
+            match primary.cmd(&[b"WAIT", b"1", b"1000"]).await? {
+                RespValue::Int(n) if n >= 1 => break,
+                _ => {
+                    attempts += 1;
+                    assert!(attempts < 60, "replica never acked the workload");
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+            }
+        }
+
+        // Quiescent equality: each key's members identical on both nodes.
+        // WAIT acks cover the offset, not the replica's apply loop, so poll
+        // briefly for the last frame(s) to be applied before declaring
+        // divergence.
+        let replica_addr = (turmoil::lookup("replica"), SERVER_PORT);
+        let mut replica = RespConn::connect(replica_addr).await?;
+        for key in keys {
+            let p_members = resp_sorted_members(&primary.cmd(&[b"SMEMBERS", key]).await?);
+            let mut attempts = 0u32;
+            loop {
+                let r_members = resp_sorted_members(&replica.cmd(&[b"SMEMBERS", key]).await?);
+                if r_members == p_members {
+                    break;
+                }
+                attempts += 1;
+                assert!(
+                    attempts < 40,
+                    "seed {seed}: divergence on {:?}: primary {:?} vs replica {:?}",
+                    String::from_utf8_lossy(key),
+                    p_members
+                        .iter()
+                        .map(|m| String::from_utf8_lossy(m).into_owned())
+                        .collect::<Vec<_>>(),
+                    r_members
+                        .iter()
+                        .map(|m| String::from_utf8_lossy(m).into_owned())
+                        .collect::<Vec<_>>(),
+                );
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        }
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+    drop(primary_dir);
+    drop(replica_dir);
+}
+
+/// Property test: random SADD/SPOP interleavings on a primary+replica pair
+/// converge to identical sets after quiescence, across several turmoil seeds
+/// (each seed = a different message-timing schedule AND a different workload).
+#[test]
+fn test_spop_replication_convergence_random_workload() {
+    for seed in [1u64, 7, 42] {
+        run_spop_replication_convergence(seed);
+    }
 }

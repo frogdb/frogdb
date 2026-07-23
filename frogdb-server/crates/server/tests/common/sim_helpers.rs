@@ -214,6 +214,104 @@ pub async fn real_frogdb_server_fake_persistence(num_shards: usize) -> Result<()
     Ok(())
 }
 
+/// Start a real FrogDB server in the primary replication role inside turmoil.
+///
+/// `data_dir` must be unique per simulated host (the replication state file
+/// lives there); persistence itself stays disabled, so a full sync ships the
+/// minimal RDB and all data flows through the live command stream.
+pub async fn real_frogdb_primary(
+    num_shards: usize,
+    data_dir: std::path::PathBuf,
+) -> Result<(), BoxError> {
+    let config = Config {
+        server: ServerConfig {
+            bind: "0.0.0.0".to_string(),
+            port: SERVER_PORT,
+            num_shards,
+            allow_cross_slot_standalone: true,
+            scatter_gather_timeout_ms: 5000,
+            ..Default::default()
+        },
+        persistence: PersistenceConfig {
+            enabled: false,
+            data_dir,
+            ..Default::default()
+        },
+        replication: frogdb_server::config::ReplicationConfigSection {
+            role: "primary".to_string(),
+            ..Default::default()
+        },
+        http: HttpConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        metrics: MetricsConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let server = Server::new(
+        config,
+        frogdb_server::runtime_config::LogReloadHandle::noop(),
+    )
+    .await?;
+    server.run_until(std::future::pending::<()>()).await?;
+
+    Ok(())
+}
+
+/// Start a real FrogDB server in the replica role inside turmoil, dialing
+/// `primary_ip:SERVER_PORT` (resolve the IP with `turmoil::lookup` inside the
+/// host closure). Requires the server's turmoil connect-factory wiring in
+/// `replication_init.rs` so the dial goes through the simulated network.
+pub async fn real_frogdb_replica(
+    num_shards: usize,
+    primary_ip: std::net::IpAddr,
+    data_dir: std::path::PathBuf,
+) -> Result<(), BoxError> {
+    let config = Config {
+        server: ServerConfig {
+            bind: "0.0.0.0".to_string(),
+            port: SERVER_PORT,
+            num_shards,
+            allow_cross_slot_standalone: true,
+            scatter_gather_timeout_ms: 5000,
+            ..Default::default()
+        },
+        persistence: PersistenceConfig {
+            enabled: false,
+            data_dir,
+            ..Default::default()
+        },
+        replication: frogdb_server::config::ReplicationConfigSection {
+            role: "replica".to_string(),
+            primary_host: primary_ip.to_string(),
+            primary_port: SERVER_PORT,
+            ..Default::default()
+        },
+        http: HttpConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        metrics: MetricsConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let server = Server::new(
+        config,
+        frogdb_server::runtime_config::LogReloadHandle::noop(),
+    )
+    .await?;
+    server.run_until(std::future::pending::<()>()).await?;
+
+    Ok(())
+}
+
 /// Start a real FrogDB server with a chaos configuration.
 ///
 /// Passes the chaos config through to the server so that failure injection

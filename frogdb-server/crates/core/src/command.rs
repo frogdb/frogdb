@@ -451,6 +451,41 @@ pub type KeyspaceEventDeposit = (Bytes, &'static str, KeyspaceEventFlags);
 /// dominant Dynamic shapes (a move/rename touches two keys; a pop touches one).
 pub type KeyspaceEventDeposits = SmallVec<[KeyspaceEventDeposit; 2]>;
 
+/// One command in a deterministic replication rewrite: the name and owned args
+/// the broadcast effect ships in place of (or alongside) the original.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SynthesizedCommand {
+    /// The replicated command name (e.g. `"SREM"`, `"DEL"`).
+    pub name: &'static str,
+    /// The replicated command's arguments.
+    pub args: Vec<Bytes>,
+}
+
+/// Deterministic-propagation override for the replication broadcast, deposited
+/// by a write whose verbatim re-execution would not reproduce the primary's
+/// mutation on a replica.
+///
+/// The canonical example is `SPOP`: it removes a *random* member, so
+/// re-executing `SPOP` on the replica removes a different one and the two nodes
+/// permanently diverge. The primary instead deposits
+/// [`ReplicationOverride::Rewrite`] naming exactly what it did (`SREM` of the
+/// popped members, or `DEL` when the pop drained the set) — Redis parity with
+/// `rewriteClientCommandVector`/`alsoPropagate`. [`ReplicationOverride::Suppress`]
+/// is the dynamic counterpart of Redis's `preventCommandPropagation`: the write
+/// happened locally but must not be shipped at all.
+///
+/// Consumed only by the replication-broadcast write effect. Every *local*
+/// effect (WAL persistence, keyspace notification, WATCH version, tracking,
+/// search) still runs from the original command record — the override changes
+/// what replicas see, nothing else.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReplicationOverride {
+    /// Broadcast these synthesized commands instead of the original, in order.
+    Rewrite(SmallVec<[SynthesizedCommand; 1]>),
+    /// Broadcast nothing for this write.
+    Suppress,
+}
+
 /// One write performed by a command execution — the unit the post-execution
 /// pipeline and the rollback path both operate on.
 ///
@@ -458,8 +493,9 @@ pub type KeyspaceEventDeposits = SmallVec<[KeyspaceEventDeposit; 2]>;
 /// tracking, search) plus the runtime facts the handler deposited on its
 /// [`CommandContext`]: an optional HyperLogLog register delta (lets
 /// [`WalStrategy::MergeDeltaOrPersistFirstKey`] persist a compact `Merge`
-/// operand rather than a full value `Put`) and the keyspace events of an
-/// [`crate::command_spec::EventSpec::Dynamic`] command.
+/// operand rather than a full value `Put`), the keyspace events of an
+/// [`crate::command_spec::EventSpec::Dynamic`] command, and an optional
+/// [`ReplicationOverride`] replacing the verbatim replication broadcast.
 #[derive(Clone, Copy)]
 pub struct WriteRecord<'a> {
     /// The command handler that performed the write.
@@ -478,10 +514,16 @@ pub struct WriteRecord<'a> {
     /// the handler; empty on every path that does not compute the diff
     /// (reads, scatter, script sub-commands).
     pub newly_created_keys: &'a [Bytes],
+    /// Deterministic-propagation override deposited via
+    /// [`CommandContext::rewrite_propagation`] /
+    /// [`CommandContext::suppress_propagation`]. `None` for every write that
+    /// replicates verbatim (the overwhelmingly common case).
+    pub repl_override: Option<&'a ReplicationOverride>,
 }
 
 impl<'a> WriteRecord<'a> {
-    /// Create a record with no HLL delta and no deposited events (the common case).
+    /// Create a record with no HLL delta, no deposited events, and no
+    /// replication override (the common case).
     pub fn new(handler: &'a dyn Command, args: &'a [Bytes]) -> Self {
         Self {
             handler,
@@ -489,6 +531,7 @@ impl<'a> WriteRecord<'a> {
             hll_wal_delta: None,
             keyspace_events: &[],
             newly_created_keys: &[],
+            repl_override: None,
         }
     }
 
@@ -525,6 +568,9 @@ pub struct ScriptWriteRecord {
     /// Keyspace events deposited via [`CommandContext::notify_event`]
     /// (consulted for [`crate::command_spec::EventSpec::Dynamic`] commands).
     pub keyspace_events: KeyspaceEventDeposits,
+    /// Deterministic-propagation override the sub-command deposited (e.g. a
+    /// scripted `SPOP` rewrites to `SREM`/`DEL` exactly like a direct one).
+    pub repl_override: Option<ReplicationOverride>,
 }
 
 impl ScriptWriteRecord {
@@ -539,6 +585,7 @@ impl ScriptWriteRecord {
             // Script sub-commands do not run through the key-creation diff seam,
             // so scripted `new` events are not emitted (documented gap).
             newly_created_keys: &[],
+            repl_override: self.repl_override.as_ref(),
         }
     }
 }
@@ -865,10 +912,25 @@ bitflags! {
         /// Command modifies server state (not data).
         const ADMIN = 0b0001_0000_0000_0000;
 
-        /// Command returns data that varies by time.
+        /// Command's result varies across invocations with identical inputs
+        /// (randomness or time dependence).
+        ///
+        /// For a WRITE command this is a replication contract, enforced by the
+        /// broadcast effect: verbatim re-execution on a replica would diverge,
+        /// so the execution must either deposit a deterministic
+        /// [`ReplicationOverride`] (via `CommandContext::rewrite_propagation` /
+        /// `suppress_propagation`) or declare the write a no-op
+        /// (`CommandEffects::write_was_noop`). The replication-broadcast write
+        /// effect debug-asserts that a `WRITE | NONDETERMINISTIC` record never
+        /// reaches verbatim propagation. For read-only commands it is
+        /// informational (COMMAND INFO).
         const NONDETERMINISTIC = 0b0010_0000_0000_0000;
 
-        /// Command should not be propagated to replicas.
+        /// Command is never propagated to replicas, even when it writes.
+        ///
+        /// Consulted by the replication-broadcast write effect (a write flagged
+        /// `NO_PROPAGATE` is skipped; its local effects — WAL, notifications,
+        /// WATCH — still run) and reported by COMMAND INFO.
         const NO_PROPAGATE = 0b0100_0000_0000_0000;
 
         // Bit 0b1_0000_0000_0000_0000 was `TRACKS_KEYSPACE`; keyspace hit/miss
@@ -1081,6 +1143,12 @@ pub struct CommandEffects {
     /// bump, tracking invalidation, waiter wake, WAL, replication). Always
     /// empty for ordinary (non-script) command executions.
     pub script_writes: Vec<ScriptWriteRecord>,
+
+    /// Deterministic-propagation override for the replication broadcast,
+    /// deposited via [`CommandContext::rewrite_propagation`] /
+    /// [`CommandContext::suppress_propagation`]. `None` for the overwhelmingly
+    /// common verbatim-propagating write. See [`ReplicationOverride`].
+    pub repl_override: Option<ReplicationOverride>,
 }
 
 impl CommandEffects {
@@ -1103,6 +1171,7 @@ impl CommandEffects {
             dirty_delta: meta.dirty_delta,
             hll_wal_delta: meta.hll_wal_delta,
             keyspace_events: meta.keyspace_events,
+            repl_override: meta.repl_override,
         })
     }
 }
@@ -1284,6 +1353,56 @@ impl<'a> CommandContext<'a> {
     #[inline]
     pub fn notify_event(&mut self, key: Bytes, name: &'static str, class: KeyspaceEventFlags) {
         self.effects.keyspace_events.push((key, name, class));
+    }
+
+    /// Deposit one synthesized replication command, replacing this write's
+    /// verbatim broadcast (Redis `rewriteClientCommandVector`/`alsoPropagate`).
+    ///
+    /// Call once per command the replicas should apply, in order — repeated
+    /// calls append. A nondeterministic write (e.g. `SPOP`) must name exactly
+    /// the mutation it performed (`SREM` of the popped members, `DEL` on a full
+    /// drain) so the replica replays the primary's outcome instead of rolling
+    /// its own. Only the replication broadcast is affected; every local write
+    /// effect (WAL, notifications, WATCH, tracking, search) still runs from the
+    /// original command.
+    ///
+    /// Must not be combined with [`Self::suppress_propagation`] on one
+    /// execution — the two are contradictory.
+    #[inline]
+    pub fn rewrite_propagation(&mut self, name: &'static str, args: Vec<Bytes>) {
+        match &mut self.effects.repl_override {
+            Some(ReplicationOverride::Rewrite(commands)) => {
+                commands.push(SynthesizedCommand { name, args });
+            }
+            Some(ReplicationOverride::Suppress) => {
+                debug_assert!(
+                    false,
+                    "rewrite_propagation after suppress_propagation on one execution"
+                );
+            }
+            slot @ None => {
+                *slot = Some(ReplicationOverride::Rewrite(smallvec![
+                    SynthesizedCommand { name, args }
+                ]));
+            }
+        }
+    }
+
+    /// Suppress replication of this write entirely (Redis
+    /// `preventCommandPropagation`): the local mutation stands, replicas see
+    /// nothing. For a write that changed *nothing*, prefer declaring
+    /// [`CommandEffects::write_was_noop`], which skips the whole effect
+    /// pipeline. Must not be combined with [`Self::rewrite_propagation`].
+    #[inline]
+    pub fn suppress_propagation(&mut self) {
+        debug_assert!(
+            !matches!(
+                self.effects.repl_override,
+                Some(ReplicationOverride::Rewrite(_))
+            ),
+            "suppress_propagation after rewrite_propagation on one execution"
+        );
+        self.effects.repl_override = Some(ReplicationOverride::Suppress);
     }
 
     /// Drain the deposited keyspace events.

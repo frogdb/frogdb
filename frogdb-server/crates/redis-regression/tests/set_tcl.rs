@@ -1030,10 +1030,14 @@ async fn tcl_sdiff_fuzzing() {
 ///
 /// When SPOP removes the last member of a set, the key should be deleted.
 /// In Redis, this test verifies the replication stream contains DEL/UNLINK.
-/// In FrogDB, we verify the *effect*: the key no longer exists after SPOP
-/// removes all members, which confirms the WAL strategy
+/// Here we verify the local *effect* on one node: the key no longer exists
+/// after SPOP removes all members, which confirms the WAL strategy
 /// `PersistOrDeleteFirstKey` correctly deletes the key when the set becomes
-/// empty.
+/// empty. FrogDB's actual replication-stream rewrite (SPOP -> SREM of the
+/// popped members / DEL on a full drain, via `ReplicationOverride`) is
+/// asserted end-to-end by the `test_spop_*_replicates` tests in
+/// `integration_replication.rs` and the turmoil convergence sim in
+/// `simulation.rs`.
 #[tokio::test]
 async fn tcl_spop_propagate_as_del_or_unlink() {
     let server = TestServer::start_standalone().await;

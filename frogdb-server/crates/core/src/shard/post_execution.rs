@@ -59,12 +59,56 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 
-use crate::command::{Command, ScriptWriteRecord, WaiterKind, WaiterWake, WriteRecord};
+use crate::command::{
+    Command, CommandFlags, ReplicationOverride, ScriptWriteRecord, WaiterKind, WaiterWake,
+    WriteRecord,
+};
 use crate::keyspace_event::KeyspaceEventFlags;
 use crate::store::Store;
 
 use super::helpers::REPLICA_INTERNAL_CONN_ID;
 use super::worker::ShardWorker;
+
+/// Resolve the replication broadcast form(s) of one write record — the single
+/// home of the deterministic-propagation rules:
+///
+/// - a deposited [`ReplicationOverride::Rewrite`] replaces the verbatim command
+///   with the synthesized command(s) naming exactly what the primary did
+///   (SPOP → `SREM` of the popped members / `DEL` on a full drain);
+/// - a deposited [`ReplicationOverride::Suppress`] (Redis
+///   `preventCommandPropagation`) and the static
+///   [`CommandFlags::NO_PROPAGATE`] flag ship nothing;
+/// - everything else propagates verbatim.
+///
+/// A `NONDETERMINISTIC` write reaching the verbatim arm is a bug — its
+/// re-execution on the replica would diverge — surfaced by debug assertion so
+/// any newly flagged command fails tests until it deposits an override (or
+/// declares its write a no-op).
+fn replication_forms<'r>(
+    record: &'r WriteRecord<'r>,
+) -> smallvec::SmallVec<[(&'r str, &'r [Bytes]); 1]> {
+    match record.repl_override {
+        Some(ReplicationOverride::Suppress) => smallvec::SmallVec::new(),
+        Some(ReplicationOverride::Rewrite(commands)) => commands
+            .iter()
+            .map(|cmd| (cmd.name, cmd.args.as_slice()))
+            .collect(),
+        None => {
+            let flags = record.handler.flags();
+            if flags.contains(CommandFlags::NO_PROPAGATE) {
+                return smallvec::SmallVec::new();
+            }
+            debug_assert!(
+                !flags.contains(CommandFlags::NONDETERMINISTIC),
+                "nondeterministic write `{}` must deposit a ReplicationOverride \
+                 (rewrite_propagation/suppress_propagation) or declare write_was_noop \
+                 instead of propagating verbatim",
+                record.handler.name()
+            );
+            smallvec::smallvec![(record.handler.name(), record.args)]
+        }
+    }
+}
 
 /// What a (possibly batched) execution wrote — the input to the effect pipeline.
 pub(crate) struct WriteSummary<'a> {
@@ -392,32 +436,35 @@ impl ShardWorker {
                         // intermediate state; a scatter part broadcasts each of
                         // its (synthetic, per-key) writes independently — it is
                         // not a transaction, so no MULTI/EXEC wrap.
+                        //
+                        // Every record resolves through `replication_forms`,
+                        // the single home of the deterministic-propagation
+                        // rules (rewrite override, dynamic suppression, the
+                        // NO_PROPAGATE flag).
                         match scope {
-                            EffectScope::Command => {
-                                let record = &summary.writes[0];
-                                self.replication_broadcaster.broadcast_command_on_shard(
-                                    shard_id,
-                                    record.handler.name(),
-                                    record.args,
-                                );
-                            }
-                            EffectScope::ScatterPart | EffectScope::InternalRemoval { .. } => {
+                            EffectScope::Command
+                            | EffectScope::ScatterPart
+                            | EffectScope::InternalRemoval { .. } => {
                                 for record in summary.writes {
-                                    self.replication_broadcaster.broadcast_command_on_shard(
-                                        shard_id,
-                                        record.handler.name(),
-                                        record.args,
-                                    );
+                                    for (name, args) in replication_forms(record) {
+                                        self.replication_broadcaster
+                                            .broadcast_command_on_shard(shard_id, name, args);
+                                    }
                                 }
                             }
                             EffectScope::Transaction => {
                                 let commands: Vec<(&str, &[Bytes])> = summary
                                     .writes
                                     .iter()
-                                    .map(|record| (record.handler.name(), record.args))
+                                    .flat_map(|record| replication_forms(record))
                                     .collect();
-                                self.replication_broadcaster
-                                    .broadcast_transaction_on_shard(shard_id, &commands);
+                                // A group whose every write was rewritten away
+                                // (suppressed / NO_PROPAGATE) ships nothing —
+                                // not an empty MULTI/EXEC frame.
+                                if !commands.is_empty() {
+                                    self.replication_broadcaster
+                                        .broadcast_transaction_on_shard(shard_id, &commands);
+                                }
                             }
                         }
                     }
@@ -1035,6 +1082,331 @@ mod tests {
         // The write still replicates (the effect happened; only WATCH-dirtying
         // is suppressed).
         assert_eq!(bc.commands.lock().unwrap().len(), 1);
+    }
+
+    // ------------------------------------------------------------------------
+    // Deterministic-propagation pins (`replication_forms`).
+    //
+    // The replication-broadcast effect resolves every record through
+    // `replication_forms`: a deposited `ReplicationOverride::Rewrite` replaces
+    // the verbatim command (SPOP → SREM/DEL), `Suppress` and the static
+    // NO_PROPAGATE flag ship nothing, and everything else propagates verbatim.
+    // These tests pin each rule, including the substitution inside MULTI/EXEC
+    // framing, against the same pipeline the real write path runs.
+    // ------------------------------------------------------------------------
+
+    use crate::command::{ReplicationOverride, SynthesizedCommand};
+
+    /// A WRITE command statically flagged NO_PROPAGATE: local effects run,
+    /// replicas never see it.
+    struct MockNoPropagateWrite;
+    impl Command for MockNoPropagateWrite {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "NOPROPW",
+                arity: Arity::AtLeast(2),
+                flags: CommandFlags::WRITE.union(CommandFlags::NO_PROPAGATE),
+                keys: KeySpec::First,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::NoOp,
+                wakes: WaiterWake::None,
+                event: EventSpec::Suppressed,
+                requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
+                lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
+                strategy: crate::command::ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+        fn execute(
+            &self,
+            _ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            Ok(Response::ok())
+        }
+    }
+
+    /// A WRITE command flagged NONDETERMINISTIC (SPOP's class): the broadcast
+    /// path requires it to carry an override.
+    struct MockNondeterministicWrite;
+    impl Command for MockNondeterministicWrite {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "RANDW",
+                arity: Arity::AtLeast(1),
+                flags: CommandFlags::WRITE.union(CommandFlags::NONDETERMINISTIC),
+                keys: KeySpec::First,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::NoOp,
+                wakes: WaiterWake::None,
+                event: EventSpec::Suppressed,
+                requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
+                lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
+                strategy: crate::command::ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+        fn execute(
+            &self,
+            _ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            Ok(Response::ok())
+        }
+    }
+
+    fn record_with_override<'a>(
+        handler: &'a dyn Command,
+        args: &'a [Bytes],
+        repl_override: Option<&'a ReplicationOverride>,
+    ) -> WriteRecord<'a> {
+        WriteRecord {
+            handler,
+            args,
+            hll_wal_delta: None,
+            keyspace_events: &[],
+            repl_override,
+        }
+    }
+
+    /// A deposited rewrite replaces the verbatim broadcast with the
+    /// synthesized command(s), in deposit order — the SPOP → SREM/DEL shape.
+    #[tokio::test]
+    async fn rewrite_override_replaces_verbatim_broadcast() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with(bc.clone() as SharedBroadcaster);
+
+        let handler = MockNondeterministicWrite;
+        let args = vec![Bytes::from_static(b"k")];
+        let ov = ReplicationOverride::Rewrite(smallvec::smallvec![SynthesizedCommand {
+            name: "SREM",
+            args: vec![Bytes::from_static(b"k"), Bytes::from_static(b"m1")],
+        }]);
+        let record = record_with_override(&handler, &args, Some(&ov));
+        worker
+            .run_write_effects(
+                WriteSummary {
+                    writes: std::slice::from_ref(&record),
+                    dirty_delta: 1,
+                    conn_id: 1,
+                    removal_reasons: &[],
+                },
+                WalPhase::Persist,
+                EffectScope::Command,
+            )
+            .await;
+
+        let cmds = bc.commands.lock().unwrap();
+        assert_eq!(cmds.len(), 1, "exactly the synthesized command is shipped");
+        assert_eq!(cmds[0].0, "SREM");
+        assert_eq!(
+            cmds[0].1,
+            vec![Bytes::from_static(b"k"), Bytes::from_static(b"m1")]
+        );
+        drop(cmds);
+        // Local effects still ran from the original record.
+        assert_eq!(worker.get_key_version(b"k"), 1);
+    }
+
+    /// A rewrite may synthesize several commands; all ship, in order.
+    #[tokio::test]
+    async fn rewrite_override_ships_all_synthesized_commands_in_order() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with(bc.clone() as SharedBroadcaster);
+
+        let handler = MockNondeterministicWrite;
+        let args = vec![Bytes::from_static(b"k")];
+        let ov = ReplicationOverride::Rewrite(smallvec::smallvec![
+            SynthesizedCommand {
+                name: "SREM",
+                args: vec![Bytes::from_static(b"k"), Bytes::from_static(b"m1")],
+            },
+            SynthesizedCommand {
+                name: "DEL",
+                args: vec![Bytes::from_static(b"k")],
+            },
+        ]);
+        let record = record_with_override(&handler, &args, Some(&ov));
+        worker
+            .run_write_effects(
+                WriteSummary {
+                    writes: std::slice::from_ref(&record),
+                    dirty_delta: 1,
+                    conn_id: 1,
+                    removal_reasons: &[],
+                },
+                WalPhase::Persist,
+                EffectScope::Command,
+            )
+            .await;
+
+        let cmds = bc.commands.lock().unwrap();
+        assert_eq!(
+            cmds.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            ["SREM", "DEL"]
+        );
+    }
+
+    /// `Suppress` (dynamic `preventCommandPropagation`) ships nothing while
+    /// local effects (version bump) still run.
+    #[tokio::test]
+    async fn suppress_override_broadcasts_nothing() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with(bc.clone() as SharedBroadcaster);
+
+        let handler = MockWrite;
+        let args = vec![Bytes::from_static(b"k"), Bytes::from_static(b"v")];
+        let ov = ReplicationOverride::Suppress;
+        let record = record_with_override(&handler, &args, Some(&ov));
+        worker
+            .run_write_effects(
+                WriteSummary {
+                    writes: std::slice::from_ref(&record),
+                    dirty_delta: 1,
+                    conn_id: 1,
+                    removal_reasons: &[],
+                },
+                WalPhase::Persist,
+                EffectScope::Command,
+            )
+            .await;
+
+        assert!(
+            bc.commands.lock().unwrap().is_empty(),
+            "a suppressed write must not reach replicas"
+        );
+        assert_eq!(worker.get_key_version(b"k"), 1, "local effects still run");
+    }
+
+    /// The static NO_PROPAGATE flag suppresses the broadcast with no override
+    /// deposited — the flag is consulted, not informational.
+    #[tokio::test]
+    async fn no_propagate_flag_suppresses_broadcast() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with(bc.clone() as SharedBroadcaster);
+
+        let handler = MockNoPropagateWrite;
+        let args = vec![Bytes::from_static(b"k"), Bytes::from_static(b"v")];
+        let record = record_with_override(&handler, &args, None);
+        worker
+            .run_write_effects(
+                WriteSummary {
+                    writes: std::slice::from_ref(&record),
+                    dirty_delta: 1,
+                    conn_id: 1,
+                    removal_reasons: &[],
+                },
+                WalPhase::Persist,
+                EffectScope::Command,
+            )
+            .await;
+
+        assert!(
+            bc.commands.lock().unwrap().is_empty(),
+            "a NO_PROPAGATE write must not reach replicas"
+        );
+        assert_eq!(worker.get_key_version(b"k"), 1, "local effects still run");
+    }
+
+    /// Inside a MULTI/EXEC group the rewrite substitutes in place: the framing
+    /// stays, the rewritten write ships its synthesized form.
+    #[tokio::test]
+    async fn transaction_framing_substitutes_rewritten_commands() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with(bc.clone() as SharedBroadcaster);
+
+        let set = MockWrite;
+        let set_args = vec![Bytes::from_static(b"k"), Bytes::from_static(b"v")];
+        let spop_like = MockNondeterministicWrite;
+        let spop_args = vec![Bytes::from_static(b"s")];
+        let ov = ReplicationOverride::Rewrite(smallvec::smallvec![SynthesizedCommand {
+            name: "SREM",
+            args: vec![Bytes::from_static(b"s"), Bytes::from_static(b"m")],
+        }]);
+        let records = [
+            record_with_override(&set, &set_args, None),
+            record_with_override(&spop_like, &spop_args, Some(&ov)),
+        ];
+        worker
+            .run_write_effects(
+                WriteSummary {
+                    writes: &records,
+                    dirty_delta: 2,
+                    conn_id: 1,
+                    removal_reasons: &[],
+                },
+                WalPhase::Persist,
+                EffectScope::Transaction,
+            )
+            .await;
+
+        let cmds = bc.commands.lock().unwrap();
+        assert_eq!(
+            cmds.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            ["MULTI", "SET", "SREM", "EXEC"],
+            "the rewritten command substitutes inside the MULTI/EXEC frame"
+        );
+    }
+
+    /// A transaction whose every write is suppressed ships nothing at all —
+    /// not an empty MULTI/EXEC frame.
+    #[tokio::test]
+    async fn fully_suppressed_transaction_ships_no_frames() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with(bc.clone() as SharedBroadcaster);
+
+        let handler = MockWrite;
+        let args = vec![Bytes::from_static(b"k"), Bytes::from_static(b"v")];
+        let ov = ReplicationOverride::Suppress;
+        let records = [record_with_override(&handler, &args, Some(&ov))];
+        worker
+            .run_write_effects(
+                WriteSummary {
+                    writes: &records,
+                    dirty_delta: 1,
+                    conn_id: 1,
+                    removal_reasons: &[],
+                },
+                WalPhase::Persist,
+                EffectScope::Transaction,
+            )
+            .await;
+
+        assert!(
+            bc.commands.lock().unwrap().is_empty(),
+            "an all-suppressed transaction must not ship MULTI/EXEC framing"
+        );
+    }
+
+    /// A NONDETERMINISTIC write reaching the verbatim arm is a bug; the debug
+    /// assertion surfaces it. (Debug builds only — release ships verbatim
+    /// rather than crashing.)
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    #[should_panic(expected = "must deposit a ReplicationOverride")]
+    async fn nondeterministic_write_without_override_panics_in_debug() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with(bc as SharedBroadcaster);
+
+        let handler = MockNondeterministicWrite;
+        let args = vec![Bytes::from_static(b"k")];
+        let record = record_with_override(&handler, &args, None);
+        worker
+            .run_write_effects(
+                WriteSummary {
+                    writes: std::slice::from_ref(&record),
+                    dirty_delta: 1,
+                    conn_id: 1,
+                    removal_reasons: &[],
+                },
+                WalPhase::Persist,
+                EffectScope::Command,
+            )
+            .await;
     }
 
     // ------------------------------------------------------------------------

@@ -133,6 +133,29 @@ pub(super) fn init_replication(
         );
         handler.set_ack_interval(config.replication.ack_interval_ms);
 
+        // Under turmoil simulation the replica must dial its primary through
+        // turmoil's simulated network — the default factory's
+        // `tokio::net::TcpStream::connect` would try (and fail) to leave the
+        // simulation. Mirrors the `crate::net` alias the inbound listener uses.
+        #[cfg(feature = "turmoil")]
+        {
+            let factory: frogdb_replication::replica::ConnectFactory =
+                Arc::new(|addr: std::net::SocketAddr| {
+                    Box::pin(async move {
+                        let stream = turmoil::net::TcpStream::connect(addr).await?;
+                        Ok(Box::new(stream) as frogdb_replication::BoxedStream)
+                    })
+                        as std::pin::Pin<
+                            Box<
+                                dyn std::future::Future<
+                                        Output = std::io::Result<frogdb_replication::BoxedStream>,
+                                    > + Send,
+                            >,
+                        >
+                });
+            handler.set_connect_factory(factory);
+        }
+
         // Wire up TLS connection factory for encrypted replication.
         // Captures Arc<TlsManager> (not a snapshot connector) so that
         // certificate hot-reload propagates to new outgoing connections.
