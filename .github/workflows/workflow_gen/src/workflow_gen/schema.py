@@ -195,6 +195,7 @@ class Step:
     run: str | None = None
     with_: CommentedMap | None = None
     if_: str | None = None
+    env: CommentedMap | None = None
 
     def __post_init__(self) -> None:
         if self.uses is not None and self.run is not None:
@@ -212,6 +213,11 @@ class Step:
             m["if"] = self.if_
         if self.uses is not None:
             m["uses"] = self.uses
+        # env is bound before run so untrusted GitHub-context values (event inputs,
+        # schedule) reach the script as shell variables rather than being interpolated
+        # into the command text — the standard script-injection mitigation.
+        if self.env is not None:
+            m["env"] = self.env
         if self.run is not None:
             m["run"] = self.run
         if self.with_ is not None:

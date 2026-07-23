@@ -1,6 +1,6 @@
 # Jepsen suite absent from CI — no automated distributed-regression signal
 
-Status: needs-triage
+Status: done
 Type: AFK
 Origin: testing-gap audit 2026-07-22 (multi-agent static review + adversarial verification; coverage run on testbox)
 Severity: likelihood 3/3, consequence 2/3 (score 6)
@@ -34,12 +34,14 @@ also referenced in `07-shuttle-multiwaiter-exactly-once-guard.md` and
 
 ## Acceptance criteria
 
-- [ ] `jepsen-nightly.yml` (or equivalent) exists, cron-triggered, runs on Blacksmith
-- [ ] Runs `raft` and `replication` suites at minimum; artifacts uploaded on failure
-- [ ] Job depends on / is sequenced after the checker fixes in tasks 04-08 (slot-migration checker,
+- [x] `jepsen-nightly.yml` (or equivalent) exists, cron-triggered, runs on Blacksmith
+- [x] Runs `raft` and `replication` suites at minimum; artifacts uploaded on failure
+- [x] Job depends on / is sequenced after the checker fixes in tasks 04-08 (slot-migration checker,
       raft-chaos checker, orphaned workloads, membership-under-fault) so it isn't gated on
-      known-broken verdicts
-- [ ] At least one full run completed in CI with results linked from this issue
+      known-broken verdicts (04-08 have landed; wired only now)
+- [ ] At least one full run completed in CI with results linked from this issue (requires the
+      workflow on the default branch to fire; local end-to-end smoke of the invocation path passed —
+      see Resolution)
 
 ## Blocked by
 
@@ -56,3 +58,74 @@ those land.
 - `.github/workflows/concurrency-nightly.yml` — template pattern to clone
 - Source: `.scratch/testing-improvements/audit/G-jepsen-harness.md` `jepsen-absent-from-ci`,
   `.scratch/testing-improvements/audit/verdicts-G.md` (same, "Fix noop/blind checkers first")
+
+## Resolution
+
+Landed after the gating checker fixes (tasks 04-08) — the slot-migration / raft-chaos /
+key-routing checkers now assert data, and the orphaned cluster + failover workloads are wired —
+so the nightly produces real signal rather than false-green.
+
+### Workflow design
+
+New generated workflow `.github/workflows/jepsen-nightly.yml`, authored as a `workflow_gen` DSL
+module (`.github/workflows/workflow_gen/src/workflow_gen/workflows/jepsen_nightly.py`, registered
+in `render.py`; the `.yml` is generated, never hand-edited — regenerate with `just workflow-gen`).
+It clones the `concurrency-nightly.yml` pattern: single Blacksmith job
+(`blacksmith-4vcpu-ubuntu-2404`, x86 to match production + the other CI jobs), `timeout-minutes:
+360`, cron + `workflow_dispatch`.
+
+Steps: checkout → `mise` (installs only `just uv java` — no host Rust; the server compiles inside
+Docker) → install Leiningen (guarded bootstrap of the `stable` lein script; Jepsen's control node
+runs `lein` on the host and lein has no mise plugin) → **build the debug image once** via
+`just docker-build-debug` (Dockerfile.builder, in-Docker build) → run suites → `just jepsen-summary`
+into `$GITHUB_STEP_SUMMARY` (always) → upload `testing/jepsen/frogdb/store/` on failure.
+
+Suites are run with `uv run testing/jepsen/run.py run --suite <s> --no-build --teardown --no-color`,
+one invocation per suite in a loop that continues past a failing suite and fails the step at the end
+(full nightly picture, job still goes red). We deliberately bypass `just jepsen-suite`, which forces
+`run.py --build` in its `cross`/zigbuild mode — the path issue 08 flagged as macOS-broken and, here,
+redundant (the image is already built). `--no-build` guarantees run.py never falls back to that host
+build path in CI.
+
+Two cadences in one workflow, selected by `github.event.schedule` (passed via step `env`, not inline
+`${{ }}`, to keep the untrusted dispatch input/schedule out of the command text):
+- Nightly (`37 5 * * *`): `single crash replication raft` — covers the required `raft` +
+  `replication` and equals the `all` suite (single ∪ crash ∪ replication ∪ raft).
+- Weekly (`37 6 * * 0`, Sun): the above plus the heavier `raft-extended`, `replication-extended`,
+  `register-fault` suites.
+- A `suites` `workflow_dispatch` input overrides selection for manual runs.
+
+### Runtime estimate
+
+From `run.py` `TESTS` time-limits + topology bring-up: single ~15 tests, crash ~26, replication ~7,
+raft ~18. Sum of per-suite time-limits ≈ core nightly ~1.5-2h wall (dominated by the raft suite and
+the ~20-30m in-Docker debug build); weekly adds ~20-30m for the 4+2+3 extended/fault tests. Both sit
+well under the 360m ceiling.
+
+### Validation performed (cannot run GH Actions locally)
+
+- `just workflow-gen` + `just workflow-gen --check`: all 9 workflows `OK` (jepsen-nightly generated,
+  reproducible, and recognized by the check's known-file allowlist).
+- `actionlint .github/workflows/jepsen-nightly.yml`: clean (includes shellcheck of the embedded
+  run scripts).
+- `ruamel` structural parse: `on` has both crons + `workflow_dispatch`; single job with the 7
+  expected steps.
+- Every invocation checked against source: `run.py run --help` confirms `--suite/--no-build/
+  --teardown/--no-color`; `run.py list` confirms all suite names used exist
+  (`single`, `crash`, `replication`, `raft`, `raft-extended`, `replication-extended`,
+  `register-fault`); `just docker-build-debug` and `just jepsen-summary` exist in the Justfile.
+- **End-to-end smoke** of the exact CI path against the existing `frogdb:latest` image:
+  `uv run testing/jepsen/run.py run register --no-build --teardown --no-color --time-limit 5`
+  → single topology up → Knossos verdict `Everything looks good!` → `register: PASS` → teardown,
+  exit 0. `just jepsen-summary` then rendered the pass/fail table (the `run.py summary` seam the
+  workflow's summary step uses).
+
+### Caveats / follow-ups
+
+- The full nightly (esp. Elle/Knossos on the raft suite) has not yet run on a Blacksmith runner;
+  4vcpu memory headroom for the 5-node raft cluster + checkers is unverified — a first real run may
+  need a runner-size bump. This satisfies the acceptance criteria except the final "one full run
+  completed in CI with results linked" box, which requires the workflow to be on the default branch
+  to fire — link the first green run here once it lands.
+- Whether Leiningen is pre-baked into the Blacksmith image is unknown; the install step is guarded
+  (`command -v lein`) so a pre-baked lein is a no-op and an absent one is bootstrapped.
