@@ -40,26 +40,38 @@ impl ShardWorker {
     /// Reconcile a key's search-index presence to whatever type it now holds,
     /// after a write that may have clobbered it across types.
     ///
-    /// Dispatches on the key's *current* value type, mirroring how the store
-    /// projects documents on the normal write path:
-    /// - a hash is (re)indexed into every matching hash-source index — identical
-    ///   to [`Self::reindex_hash_key`];
-    /// - a JSON document is (re)indexed into every matching JSON-source index —
-    ///   identical to [`Self::reindex_json_key`], closing the gap where a `COPY`,
-    ///   `RESTORE`, or `RENAME` of a JSON doc into a JSON-index prefix left the
-    ///   destination unindexed;
-    /// - anything else (a string/list/…, or an absent key) is dropped from every
-    ///   matching index.
+    /// Reconciles in two steps, mirroring how the store projects documents on the
+    /// normal write path:
+    /// 1. **Clear first, source-agnostically.** [`Self::delete_from_search_indexes`]
+    ///    drops the key from *every* prefix-matching index — hash- *and*
+    ///    JSON-source. This is the step that makes a cross-type overwrite drop the
+    ///    stale doc no matter which source held it: a JSON value landing on a key
+    ///    still present in a HASH-source index (or a hash value landing on a key in
+    ///    a JSON-source index) is de-indexed here, because the type-matched reindex
+    ///    below only ever *visits* indexes of its own source.
+    /// 2. **Re-add for the current type only.** Dispatch on the key's *current*
+    ///    value type: a hash is (re)indexed into every matching hash-source index
+    ///    ([`Self::reindex_hash_key`]); a JSON document into every matching
+    ///    JSON-source index ([`Self::reindex_json_key`]); anything else (a
+    ///    string/list/…, or an absent key) stays cleared.
+    ///
+    /// The final state is exactly: the key present only in the type-and-prefix
+    /// matching indexes of its current source, and absent from every other index.
+    /// The reindex routines re-`delete_term` the key inside their own indexes
+    /// before adding, so the delete-first step never leaves a half-written doc.
     ///
     /// This is the search analogue of a "reconcile to current state" write:
     /// [`ReindexAction::Reindex`] silently no-ops when the value's type does not
     /// match the reindex kind and so would leave a stale doc behind, which is
     /// exactly the bug for `SET`/`RESTORE`/`COPY`/`RENAME` overwriting an indexed
-    /// key with a value of a different type. `delete_from_search_indexes` is
-    /// source-agnostic (it clears the key from every prefix-matching index, hash-
-    /// or JSON-source), so a cross-type overwrite of an indexed key is de-indexed
-    /// too.
+    /// key with a value of a different type.
     fn refresh_key(&mut self, key: &[u8]) {
+        // Step 1: reconcile to empty across *all* prefix-matching indexes,
+        // regardless of source, so a cross-type overwrite drops any stale doc.
+        self.delete_from_search_indexes(&Bytes::copy_from_slice(key));
+
+        // Step 2: re-add the key only to the indexes whose source matches its
+        // current value type. `None` (non-hash/non-JSON, or absent) stays cleared.
         let value_kind = self.store.get(key).and_then(|value| {
             let value_ref: &crate::types::Value = &value;
             if value_ref.as_hash().is_some() {
@@ -73,7 +85,7 @@ impl ShardWorker {
         match value_kind {
             Some(IndexKind::Hash) => self.reindex_hash_key(key),
             Some(IndexKind::Json) => self.reindex_json_key(key),
-            None => self.delete_from_search_indexes(&Bytes::copy_from_slice(key)),
+            None => {}
         }
     }
 
@@ -104,7 +116,7 @@ impl ShardWorker {
         }
     }
 
-    /// Re-index a hash key in all matching search indexes.
+    /// Re-index a hash key in all matching hash-source search indexes.
     fn reindex_hash_key(&mut self, key: &[u8]) {
         let key_str = match std::str::from_utf8(key) {
             Ok(s) => s,
@@ -124,8 +136,13 @@ impl ShardWorker {
             None => return,
         };
 
+        // Only hash-source indexes may hold a hash projection. Mirrors the
+        // `source == Json` guard in `reindex_json_key`; without it a hash landing
+        // on a JSON-index prefix would be indexed as a bogus JSON document.
         for idx in self.search.indexes.values_mut() {
-            if idx.matches_prefix(key_str) {
+            if idx.definition().source == frogdb_search::IndexSource::Hash
+                && idx.matches_prefix(key_str)
+            {
                 idx.index_hash(key_str, &entries);
             }
         }
