@@ -199,3 +199,8 @@ doc = false
 name = "resp_pipeline"
 path = "fuzz_targets/resp_pipeline.rs"
 doc = false
+
+[[bin]]
+name = "restore_payload"
+path = "fuzz_targets/restore_payload.rs"
+doc = false
