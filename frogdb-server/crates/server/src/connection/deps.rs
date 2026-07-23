@@ -13,7 +13,7 @@ use frogdb_core::{
     ReplicationTrackerImpl, ShardSender, SharedFunctionRegistry, SharedHotkeySession,
     command::QuorumChecker, new_shared_hotkey_session, persistence::SnapshotCoordinator,
 };
-use frogdb_debug::{HotShardConfig, MemoryDiagConfig};
+use frogdb_debug::MemoryDiagConfig;
 use frogdb_telemetry::SharedTracer;
 use tokio::sync::RwLock;
 
@@ -180,9 +180,6 @@ pub struct ConnectionConfig {
     /// Whether admin port separation is enabled.
     pub admin_enabled: bool,
 
-    /// Hot shard detection configuration.
-    pub hotshards_config: HotShardConfig,
-
     /// Memory diagnostics configuration.
     pub memory_diag_config: MemoryDiagConfig,
 
@@ -212,7 +209,6 @@ impl ConnectionConfig {
             scatter_gather_timeout: Duration::from_millis(5000),
             is_admin: false,
             admin_enabled: false,
-            hotshards_config: HotShardConfig::default(),
             memory_diag_config: MemoryDiagConfig::default(),
             per_request_spans: Arc::new(AtomicBool::new(false)),
             is_replica: Arc::new(AtomicBool::new(false)),

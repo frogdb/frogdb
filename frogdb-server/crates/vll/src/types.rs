@@ -59,4 +59,3 @@ pub enum ShardReadyResult {
     /// Shard failed to acquire locks.
     Failed(VllError),
 }
-

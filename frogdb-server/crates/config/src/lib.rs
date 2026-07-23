@@ -56,7 +56,7 @@ pub use replication::ReplicationConfigSection;
 pub use security::{AclFileConfig, SecurityConfig};
 pub use server::ServerConfig;
 pub use slowlog::SlowlogConfig;
-pub use status::{HotShardsConfig, StatusConfig};
+pub use status::StatusConfig;
 pub use tiered::TieredStorageConfig;
 pub use tls::{ClientCertMode, TlsConfig, TlsProtocol};
 
@@ -169,11 +169,6 @@ pub struct Config {
     #[serde(default)]
     #[section]
     pub status: StatusConfig,
-
-    /// Hot shard detection configuration.
-    #[serde(default)]
-    #[section]
-    pub hotshards: HotShardsConfig,
 
     /// Latency testing configuration.
     #[serde(default)]
@@ -325,7 +320,6 @@ impl Config {
         self.tls.validate()?;
         self.json.validate()?;
         self.status.validate()?;
-        self.hotshards.validate()?;
         self.tiered_storage.validate()?;
         if self.tiered_storage.enabled && !self.persistence.enabled {
             anyhow::bail!("tiered_storage.enabled=true requires persistence.enabled=true");
