@@ -464,6 +464,7 @@ impl ShardWorkerBuilder {
             debug_active_expire_disabled: false,
             search,
             expiry: ActiveExpiryCoordinator::default(),
+            json_limits: crate::JsonLimits::default(),
         })
     }
 

@@ -1,6 +1,6 @@
 //! Integration tests for JSON commands (JSON.SET, JSON.GET, JSON.DEL, etc.)
 
-use crate::common::test_server::TestServer;
+use crate::common::test_server::{TestServer, TestServerConfig};
 use bytes::Bytes;
 use frogdb_protocol::Response;
 
@@ -855,6 +855,109 @@ async fn test_json_debug_memory_wrong_type() {
         Response::Error(_) => {} // Expected WRONGTYPE error
         _ => panic!("Expected error for wrong type, got {:?}", response),
     }
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Config-driven document limits (json.max-depth / json.max-size)
+//
+// These prove the `[json]` config section is actually consumed by the JSON
+// command handlers (previously the limits were hardcoded defaults and the
+// config was dead). With a small configured limit, oversized/over-nested
+// documents must be rejected by JSON.SET.
+// ============================================================================
+
+#[tokio::test]
+async fn test_json_set_respects_configured_max_depth() {
+    // Configure a small max nesting depth. json_depth counts each object/array
+    // level as 1 and primitives as 0, so `{"a":{"b":{"c":1}}}` is depth 3.
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        json_max_depth: Some(4),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    // Depth 3 (<= 4): accepted.
+    let ok = client
+        .command(&["JSON.SET", "shallow", "$", r#"{"a":{"b":{"c":1}}}"#])
+        .await;
+    assert_eq!(
+        ok,
+        Response::Simple(Bytes::from("OK")),
+        "document within configured max-depth should be accepted"
+    );
+
+    // Depth 5 (> 4): rejected because it exceeds the configured max-depth.
+    let too_deep = client
+        .command(&[
+            "JSON.SET",
+            "deep",
+            "$",
+            r#"{"a":{"b":{"c":{"d":{"e":1}}}}}"#,
+        ])
+        .await;
+    assert!(
+        matches!(too_deep, Response::Error(_)),
+        "document exceeding configured max-depth must be rejected, got {:?}",
+        too_deep
+    );
+
+    // The rejected key must not have been created.
+    let missing = client.command(&["JSON.GET", "deep", "$"]).await;
+    assert_eq!(
+        missing,
+        Response::Bulk(None),
+        "rejected over-nested document must not be stored"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_json_set_respects_configured_max_size() {
+    // Configure a small max document size in bytes. The handler checks the
+    // serialized value length against this limit.
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        json_max_size: Some(20),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    // 7-byte serialized value (<= 20): accepted.
+    let ok = client
+        .command(&["JSON.SET", "small", "$", r#"{"a":1}"#])
+        .await;
+    assert_eq!(
+        ok,
+        Response::Simple(Bytes::from("OK")),
+        "document within configured max-size should be accepted"
+    );
+
+    // ~50-byte serialized value (> 20): rejected because it exceeds max-size.
+    let too_big = client
+        .command(&[
+            "JSON.SET",
+            "big",
+            "$",
+            r#"{"data":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}"#,
+        ])
+        .await;
+    assert!(
+        matches!(too_big, Response::Error(_)),
+        "document exceeding configured max-size must be rejected, got {:?}",
+        too_big
+    );
+
+    // The rejected key must not have been created.
+    let missing = client.command(&["JSON.GET", "big", "$"]).await;
+    assert_eq!(
+        missing,
+        Response::Bulk(None),
+        "rejected oversized document must not be stored"
+    );
 
     server.shutdown().await;
 }

@@ -24,7 +24,7 @@ pub use object::*;
 pub use string::*;
 
 use bytes::Bytes;
-use frogdb_core::{CommandError, JsonError, JsonLimits};
+use frogdb_core::{CommandError, JsonError};
 use frogdb_protocol::Response;
 use serde_json::Value as JsonData;
 
@@ -46,11 +46,6 @@ fn json_error_to_command_error(err: JsonError) -> CommandError {
     CommandError::InvalidArgument {
         message: err.to_string(),
     }
-}
-
-/// Default JSON limits (will be replaced with config-based limits).
-fn default_limits() -> JsonLimits {
-    JsonLimits::default()
 }
 
 /// Get an immutable clone of the JSON value at `key`, returning null if the key
