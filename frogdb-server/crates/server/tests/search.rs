@@ -7402,6 +7402,165 @@ async fn regression_rename_nonhash_over_indexed_hash_removes_doc() {
     server.shutdown().await;
 }
 
+/// Issue 16 item 2: same-shard `COPY` of a JSON document INTO a JSON-index
+/// prefix key must index the destination. `ReindexSpec::RefreshSecondKey`
+/// reconciles `args[1]` (the destination); the Refresh index path must handle
+/// JSON index kinds, not just hashes.
+#[tokio::test]
+async fn regression_copy_json_into_index_prefix_indexes_destination() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Source JSON doc lives OUTSIDE the index prefix, so it is not itself indexed.
+    client
+        .command(&["JSON.SET", "src:1", "$", r#"{"name":"alice"}"#])
+        .await;
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "JSON",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "$.name",
+            "AS",
+            "name",
+            "TEXT",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Nothing indexed yet.
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "@name:alice"]).await);
+    assert_eq!(unwrap_integer(&arr[0]), 0, "baseline: nothing under prefix");
+
+    // Copy the JSON doc into a prefix-matching destination key.
+    assert_eq!(
+        unwrap_integer(&client.command(&["COPY", "src:1", "doc:1"]).await),
+        1,
+        "COPY should succeed"
+    );
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "@name:alice"]).await);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        1,
+        "COPY of a JSON doc into an index-prefix key must index the destination"
+    );
+
+    server.shutdown().await;
+}
+
+/// Issue 16 item 2: `RESTORE` of a JSON payload INTO a JSON-index prefix key
+/// must index the destination. RESTORE reconciles `args[0]` via
+/// `ReindexSpec::RefreshFirstKey` (this also covers cross-shard COPY, which
+/// reconstructs as RESTORE on the destination shard).
+#[tokio::test]
+async fn regression_restore_json_into_index_prefix_indexes_destination() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Build a JSON payload OUTSIDE the prefix and DUMP it.
+    client
+        .command(&["JSON.SET", "tmp:1", "$", r#"{"name":"carol"}"#])
+        .await;
+    let payload = match server.send("DUMP", &["tmp:1"]).await {
+        Response::Bulk(Some(data)) => data,
+        other => panic!("DUMP should return bulk data, got: {other:?}"),
+    };
+
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "JSON",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "$.name",
+            "AS",
+            "name",
+            "TEXT",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Restore the JSON doc into a prefix-matching destination key.
+    let restore = Bytes::from_static(b"RESTORE");
+    let dest = Bytes::from_static(b"doc:1");
+    let ttl = Bytes::from_static(b"0");
+    let resp = client.command_raw(&[&restore, &dest, &ttl, &payload]).await;
+    assert_ok(&resp);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "@name:carol"]).await);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        1,
+        "RESTORE of a JSON doc into an index-prefix key must index the destination"
+    );
+
+    server.shutdown().await;
+}
+
+/// Issue 16 item 2: `RENAME` of a JSON document INTO a JSON-index prefix key
+/// must index the destination. RENAME reconciles the destination via
+/// `ReindexSpec::Rename` (Delete(old) + Refresh(new)); the Refresh index path
+/// must handle JSON index kinds.
+#[tokio::test]
+async fn regression_rename_json_into_index_prefix_indexes_destination() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Source JSON doc lives OUTSIDE the index prefix, so it is not itself indexed.
+    client
+        .command(&["JSON.SET", "src:1", "$", r#"{"name":"diana"}"#])
+        .await;
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "JSON",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "$.name",
+            "AS",
+            "name",
+            "TEXT",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Nothing indexed yet.
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "@name:diana"]).await);
+    assert_eq!(unwrap_integer(&arr[0]), 0, "baseline: nothing under prefix");
+
+    // Rename the JSON doc into a prefix-matching destination key.
+    assert_ok(&client.command(&["RENAME", "src:1", "doc:1"]).await);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "@name:diana"]).await);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        1,
+        "RENAME of a JSON doc into an index-prefix key must index the destination"
+    );
+
+    server.shutdown().await;
+}
+
 /// Round-10 follow-up 3: a READONLY command (HGET) that lazily purges an
 /// expired hash field mutates the hash without a WRITE `ReindexSpec`, so the
 /// search index kept the reaped field's stale value. The purge-effect hook now
