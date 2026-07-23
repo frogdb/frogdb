@@ -8896,6 +8896,18 @@ async fn test_cluster_slot_assignment_persists() {
 }
 
 /// Config epoch persists across restart.
+///
+/// Strengthened per issue 16: the previous version only asserted `post >=
+/// pre` on `CLUSTER INFO`'s composite `cluster_current_epoch`. Every
+/// restart triggers a fresh Raft election, which bumps `raft_term`
+/// regardless of whether the persisted `config_epoch` survived — so that
+/// assertion passed even if the on-disk `config_epoch` had reset to 0. This
+/// version instead reads the raw per-node `config_epoch` from `CLUSTER
+/// NODES` (parse_cluster_nodes) and asserts strict equality across the
+/// restart. To make that assertion meaningful (a node that never leaves
+/// epoch 0 can't distinguish "persisted" from "reset to 0"), the target
+/// node is first promoted via a real `CLUSTER FAILOVER`, which is the only
+/// path that bumps a node's own `config_epoch` to a nonzero value.
 #[tokio::test]
 async fn test_cluster_epoch_persists() {
     let config = ClusterNodeConfig {
@@ -8903,7 +8915,12 @@ async fn test_cluster_epoch_persists() {
         ..Default::default()
     };
     let mut harness = ClusterTestHarness::with_config(config);
-    harness.start_cluster(3).await.unwrap();
+    // Two primaries plus one replica of the first: a real primary/replica
+    // pair so the replica can run a graceful (non-FORCE) `CLUSTER FAILOVER`
+    // that bumps its own `config_epoch`, without removing any node from the
+    // cluster (unlike the FORCE-on-a-primary path, which absorbs/evicts a
+    // peer and would confound this persistence-focused test).
+    harness.start_cluster(2).await.unwrap();
     harness
         .wait_for_leader(Duration::from_secs(10))
         .await
@@ -8913,32 +8930,92 @@ async fn test_cluster_epoch_persists() {
         .await
         .unwrap();
 
-    let leader = harness.get_leader().await.unwrap();
-    let follower = *harness.node_ids().iter().find(|&&id| id != leader).unwrap();
-
-    // Get epoch before restart
-    let pre_info = harness.get_cluster_info(follower).unwrap();
-    let pre_epoch = pre_info.cluster_current_epoch;
-
-    // Restart follower
-    harness.shutdown_node(follower).await;
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    harness.restart_node(follower).await.unwrap();
-
+    let primary_id = harness.node_ids()[0];
+    let replica_id = harness.add_replica(primary_id).await.unwrap();
     harness
-        .wait_for_node_recognized(follower, Duration::from_secs(15))
+        .wait_for_cluster_convergence(Duration::from_secs(10))
         .await
         .unwrap();
 
-    // Get epoch after restart
-    let post_info = harness.get_cluster_info(follower).unwrap();
-    let post_epoch = post_info.cluster_current_epoch;
-
+    // Promote the replica: this is the only path (Failover, commands.rs)
+    // that sets a node's *own* config_epoch to a nonzero value.
+    let replica = harness.node(replica_id).unwrap();
+    let failover_resp = replica.send("CLUSTER", &["FAILOVER"]).await;
     assert!(
-        post_epoch >= pre_epoch,
-        "Epoch should not decrease after restart: pre={}, post={}",
-        pre_epoch,
-        post_epoch
+        !is_error(&failover_resp),
+        "CLUSTER FAILOVER on a healthy replica should succeed, got: {:?}",
+        failover_resp
+    );
+
+    // Wait for the promotion to commit and this node's own config_epoch to
+    // reflect it.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let pre_epoch = loop {
+        let nodes = parse_cluster_nodes(&replica.send("CLUSTER", &["NODES"]).await).unwrap();
+        let myself = nodes.iter().find(|n| n.is_myself()).unwrap();
+        if myself.is_master() && myself.config_epoch > 0 {
+            break myself.config_epoch;
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!(
+                "Promoted replica never reported a nonzero config_epoch \
+                 (last seen: master={}, config_epoch={})",
+                myself.is_master(),
+                myself.config_epoch
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert!(
+        pre_epoch > 0,
+        "sanity: promotion must produce a nonzero config_epoch to make the \
+         persistence check meaningful"
+    );
+
+    // Restart the promoted node.
+    harness.shutdown_node(replica_id).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    harness.restart_node(replica_id).await.unwrap();
+    harness
+        .wait_for_node_recognized(replica_id, Duration::from_secs(15))
+        .await
+        .unwrap();
+
+    // Read the raw per-node config_epoch again, post-restart. This is
+    // polled (not a single read): `wait_for_node_recognized` above only
+    // confirms that *other* nodes have rediscovered this node -- it says
+    // nothing about the restarted node's own Raft replay. `Raft::new()`
+    // returns as soon as its background core task is spawned, and that
+    // task replays the persisted log (rebuilding `config_epoch` in the
+    // fresh state machine) asynchronously; the server can already be
+    // answering `CLUSTER NODES` while that replay is still in flight. A
+    // single immediate read can therefore observe a transient
+    // `config_epoch == 0` on a node that has not finished catching up,
+    // which is a test-timing race, not a persistence loss. Poll for the
+    // value to converge back to `pre_epoch` (or, if it genuinely never
+    // does, fall out of the loop after the deadline so the assertion
+    // below still fails loudly on a real regression).
+    let replica = harness.node(replica_id).unwrap();
+    let post_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut post_epoch;
+    loop {
+        let post_nodes = parse_cluster_nodes(&replica.send("CLUSTER", &["NODES"]).await).unwrap();
+        post_epoch = post_nodes
+            .iter()
+            .find(|n| n.is_myself())
+            .expect("restarted node must still report a myself entry")
+            .config_epoch;
+        if post_epoch == pre_epoch || tokio::time::Instant::now() > post_deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    assert_eq!(
+        post_epoch, pre_epoch,
+        "raw per-node config_epoch must be identical (not merely >=) across \
+         a restart: pre={}, post={}",
+        pre_epoch, post_epoch
     );
 
     harness.shutdown_all().await;
