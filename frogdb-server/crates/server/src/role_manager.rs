@@ -380,6 +380,30 @@ impl RealReplicaStreamer {
             handler.set_shared_offset(offset.clone());
         }
 
+        // Under turmoil the runtime-demoted replica must dial its new primary
+        // through the simulated network, exactly like the boot-time replica path
+        // in `replication_init.rs`. Without this the default factory's
+        // `tokio::net::TcpStream::connect` panics ("IO is disabled") inside a
+        // turmoil run, so a healed/demoted old primary could never re-attach.
+        #[cfg(feature = "turmoil")]
+        {
+            let factory: frogdb_replication::replica::ConnectFactory =
+                Arc::new(|addr: SocketAddr| {
+                    Box::pin(async move {
+                        let stream = turmoil::net::TcpStream::connect(addr).await?;
+                        Ok(Box::new(stream) as frogdb_replication::BoxedStream)
+                    })
+                        as std::pin::Pin<
+                            Box<
+                                dyn std::future::Future<
+                                        Output = std::io::Result<frogdb_replication::BoxedStream>,
+                                    > + Send,
+                            >,
+                        >
+                });
+            handler.set_connect_factory(factory);
+        }
+
         // Wire TLS for the outgoing connection, mirroring `init_replication`.
         #[cfg(not(feature = "turmoil"))]
         if let Some(tls) = &self.tls {
