@@ -255,6 +255,15 @@ TESTS: tuple[TestDefinition, ...] = (
         cluster_flag=True,
         suites=("raft", "all"),
     ),
+    # raft-chaos: the harshest composed nemesis (kills, pauses, partitions, slow
+    # network, disk, clock, memory on the slot-owning nodes) driven against the
+    # key-routing workload. The key-routing checker now validates DATA — every
+    # acknowledged write must stay readable (durability) and every read must
+    # return a value actually written to that key (value-correctness), on top of
+    # the redirect accounting — so a dropped write or wrong-value read under this
+    # fault schedule is a real data-safety failure rather than passing green.
+    # Un-tagged pool keys keep spreading across every shard, so routing coverage
+    # under chaos is preserved (an Elle workload would co-locate to one slot).
     TestDefinition(
         "raft-chaos",
         "key-routing",

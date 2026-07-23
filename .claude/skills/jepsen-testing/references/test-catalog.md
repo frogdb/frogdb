@@ -58,16 +58,16 @@ All tests are defined in `testing/jepsen/run.py` as `TestDefinition` entries in 
 | `leader-election` | leader-election | none | 30s | Raft leader election correctness |
 | `slot-migration` | slot-migration | none | 60s | Hash slot redistribution during changes |
 | `cross-slot` | cross-slot | none | 30s | Hash tag transactions across slots |
-| `key-routing` | key-routing | none | 30s | MOVED/ASK redirect handling |
+| `key-routing` | key-routing | none | 30s | MOVED/ASK redirect handling + data (durability + value-correctness) |
 
 ### Raft Cluster with Faults
 
 | Test | Workload | Nemesis | Time Limit | What It Tests |
 |------|----------|---------|------------|---------------|
 | `leader-election-partition` | leader-election | partition | 60s | Leader election under network partitions |
-| `key-routing-kill` | key-routing | kill | 60s | Key routing through node crashes |
+| `key-routing-kill` | key-routing | kill | 60s | Key routing through node crashes + value-correctness (durability informational under kills) |
 | `slot-migration-partition` | slot-migration | partition | 90s | Slot migration under partitions |
-| `raft-chaos` | key-routing | raft-cluster | 120s | Key routing under combined Raft faults |
+| `raft-chaos` | key-routing | raft-cluster | 120s | Key routing under combined Raft faults + data validation (durability when no kill, value-correctness always) |
 
 ### Raft Cluster Membership + Recovery
 

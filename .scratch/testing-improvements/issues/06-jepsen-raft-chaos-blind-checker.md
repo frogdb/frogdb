@@ -1,6 +1,6 @@
 # Jepsen: raft-chaos (harshest nemesis) backed by a checker blind to wrong/dropped values
 
-Status: needs-triage
+Status: done
 Type: AFK
 Origin: testing-gap audit 2026-07-22 (multi-agent static review + adversarial verification; coverage run on testbox)
 Severity: likelihood 3/3, consequence 3/3 (score 9)
@@ -53,3 +53,68 @@ None - can start immediately.
 - Source: `.scratch/testing-improvements/audit/G-jepsen-harness.md` `key-routing-checker-blind-to-data`,
   `.scratch/testing-improvements/audit/verdicts-G.md` (same, "key-routing-partition not in run.py; core claim
   stands — backs raft-chaos + key-routing-kill")
+
+## Resolution
+
+Done 2026-07-23. Chose the issue's **alternative** — add value-tracking to `key_routing.clj`
+itself — over switching `raft-chaos` to an Elle workload, and here is why: `raft-chaos` exists to
+stress cluster **routing** under the harshest faults. Both Elle workloads (`elle-list-append`,
+`elle-rw-register`) co-locate every key to a single `{elle}` hash slot — i.e. one node — which
+would collapse the multi-slot routing coverage that is `raft-chaos`'s unique value. The issue
+explicitly offers the in-place alternative "if `key_routing`'s cluster-routing-specific coverage is
+still wanted alongside data correctness." It is, so the checker was made data-aware while keeping
+un-tagged keys spread across every shard. Elle's anomaly detection remains exercised by the
+`raft-extended` suite (`elle-rw-register`).
+
+### What changed
+- `key_routing.clj` generator: reads/writes now draw from a bounded, multi-slot key pool
+  (`kr-0..kr-99`) so reads actually target previously-written keys; written values come from a
+  per-run monotonic counter, so every value is **globally unique** (a value under the wrong key =
+  routing corruption; a never-written value = fabrication — both detectable). A `final-generator`
+  reads every pool key back post-recovery as a distinct `:final-read` op.
+- `key_routing.clj` checker now computes and gates on real data, not just redirect counts:
+  - **Value-correctness (ALWAYS gates `:valid?`):** any successful non-nil read returning a value
+    never written to that key fails. Timing- and topology-independent — closes the "wrong value
+    passes green" hole under every schedule including `raft-chaos`.
+  - **Routing (ALWAYS gates):** no `:too-many-redirects`.
+  - **Durability (conditional gate):** every acked write must be readable in the post-recovery
+    `:final-read` phase. Asserted *soundly* on final reads only (they run after every write
+    completed + after nemesis heal, so a mid-run nil read of a not-yet-written key is not
+    miscounted as loss). It gates `:valid?` **only when no process was killed**: the raft-cluster
+    shards are single-owner with **no per-shard replication** (confirmed in
+    `docker-compose.raft-cluster.yml` — n1/n2/n3 are independent masters; Raft governs only
+    metadata/membership), so a SIGKILL can lose recent un-fsynced acked writes by design
+    (Redis-style async persistence) — the same reasoning the `raft-cluster-membership` nemesis
+    already encodes. Under kills, lost-write counts are surfaced but do not fail the run; without
+    kills, a lost acked write is a hard failure.
+- `run.py` raft-chaos comment updated; `test-catalog.md` "what it tests" columns updated.
+- New `test/jepsen/frogdb/key_routing_test.clj`: 8 deterministic checker tests / 27 assertions
+  (acceptance criterion 3) — proves it catches lost writes (no kill) and wrong values, treats a
+  post-kill loss as informational, treats an early nil-before-write correctly (no false positive),
+  and never excuses corruption.
+
+### Run evidence (Docker, clean topology, `--time-limit 90`, reused image)
+- **First run exposed a false-positive in my own initial checker** (durability asserted on *all*
+  reads, ignoring order): `:valid? false`, `:lost-write-count 29` — but the flagged keys (e.g.
+  `kr-1`) had been written and read back correctly; the "loss" was early reads of not-yet-written
+  pool keys. Notably **no `:kill` fired that run** (only partitions/pauses/slow-net/disk), so it
+  could not be genuine single-master loss. Fixed by scoping durability to `:final-read` +
+  kill-gating (above).
+- **After the fix, `raft-chaos` PASSES legitimately** (`store/frogdb-key-routing-raft-cluster-docker-cluster/`):
+  `:valid? true`, `:values-correct? true`, `:no-lost-writes? true`, `:durability-enforced? true`,
+  `:process-killed? false`, `:final-reads 100`, `:written-keys 92`, `:total-writes 116`,
+  `:wrong-value-count 0` — under a real fault mix (asymmetric + leader-isolated partitions, pauses,
+  add-latency, disk-readonly). All 92 acknowledged writes survived and read back with correct
+  values; routing stayed correct under chaos. The checker is now **sighted** and validating data
+  rather than blind.
+- No genuine FrogDB data-loss bug was surfaced (routing + durability held under the non-kill chaos
+  this run sampled). The `raft-chaos` test stays in the default `raft`/`all` suites — it is not a
+  known-red test.
+
+### Acceptance criteria
+- [x] `raft-chaos` (+ `key-routing-kill`) run against a checker that detects wrong-value reads and
+      dropped writes, not just redirect counts.
+- [x] `key_routing.clj` kept; `:valid?` now incorporates value + last-acked-write tracking.
+- [x] A deliberately-introduced data-loss / wrong-value bug is caught — proven deterministically by
+      `key_routing_test.clj` (lost write with no kill → fail; wrong value → fail), where the old
+      redirect-only checker passed.
