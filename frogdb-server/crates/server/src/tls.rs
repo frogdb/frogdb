@@ -227,6 +227,81 @@ fn load_ca_certs(path: &Path) -> anyhow::Result<RootCertStore> {
     Ok(store)
 }
 
+/// Build a crypto provider restricted to the named `ciphersuites`.
+///
+/// Returns `Ok(None)` when the list is empty, signalling that the caller should
+/// use rustls' default provider and full suite list unchanged. Otherwise returns
+/// a provider whose `cipher_suites` are exactly the named suites, in the order
+/// requested.
+///
+/// Suite names are matched case-insensitively against rustls' IANA names
+/// (e.g. `TLS13_AES_256_GCM_SHA384`, `TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256`).
+/// An unknown name is a hard error listing the valid names. If none of the named
+/// suites are usable with the enabled `versions` (e.g. only TLS 1.2 suites named
+/// while only TLS 1.3 is enabled), that too is a hard error rather than a silent
+/// fallback to the defaults.
+fn ciphersuite_provider(
+    ciphersuites: &[String],
+    versions: &[&'static rustls::SupportedProtocolVersion],
+) -> anyhow::Result<Option<Arc<rustls::crypto::CryptoProvider>>> {
+    if ciphersuites.is_empty() {
+        return Ok(None);
+    }
+
+    let base = rustls::crypto::aws_lc_rs::default_provider();
+
+    let mut selected: Vec<rustls::SupportedCipherSuite> = Vec::with_capacity(ciphersuites.len());
+    let mut unknown: Vec<&str> = Vec::new();
+    for name in ciphersuites {
+        match base.cipher_suites.iter().find(|s| {
+            s.suite()
+                .as_str()
+                .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        }) {
+            // De-dupe: a repeated name should not add the suite twice.
+            Some(suite) if !selected.iter().any(|s| s.suite() == suite.suite()) => {
+                selected.push(*suite);
+            }
+            Some(_) => {}
+            None => unknown.push(name.as_str()),
+        }
+    }
+
+    if !unknown.is_empty() {
+        anyhow::bail!(
+            "unknown tls.ciphersuites {:?}; valid names are: {}",
+            unknown,
+            valid_ciphersuite_names(&base).join(", ")
+        );
+    }
+
+    // Guard against a named set that excludes every suite compatible with the
+    // enabled protocol versions. rustls would also reject this in
+    // `with_protocol_versions`, but a targeted message is clearer.
+    if !selected.iter().any(|s| versions.contains(&s.version())) {
+        anyhow::bail!(
+            "none of the configured tls.ciphersuites {:?} are usable with the enabled \
+             tls.protocols; name suites matching an enabled protocol version",
+            ciphersuites
+        );
+    }
+
+    let provider = rustls::crypto::CryptoProvider {
+        cipher_suites: selected,
+        ..base
+    };
+    Ok(Some(Arc::new(provider)))
+}
+
+/// The IANA names of all cipher suites offered by the default aws-lc-rs provider.
+fn valid_ciphersuite_names(provider: &rustls::crypto::CryptoProvider) -> Vec<&'static str> {
+    provider
+        .cipher_suites
+        .iter()
+        .filter_map(|s| s.suite().as_str())
+        .collect()
+}
+
 /// Build a rustls ServerConfig from the TLS configuration.
 fn build_server_config(config: &TlsConfig) -> anyhow::Result<ServerConfig> {
     let certs = load_certs(&config.cert_file)?;
@@ -242,8 +317,15 @@ fn build_server_config(config: &TlsConfig) -> anyhow::Result<ServerConfig> {
         })
         .collect();
 
-    // Build the server config with appropriate client cert verification
-    let builder = ServerConfig::builder_with_protocol_versions(&versions);
+    // Build the server config with appropriate client cert verification.
+    // A non-empty `ciphersuites` list restricts the crypto provider's suites;
+    // an empty list keeps rustls' default full suite list.
+    let builder = match ciphersuite_provider(&config.ciphersuites, &versions)? {
+        Some(provider) => {
+            ServerConfig::builder_with_provider(provider).with_protocol_versions(&versions)?
+        }
+        None => ServerConfig::builder_with_protocol_versions(&versions),
+    };
 
     let server_config = match config.require_client_cert {
         ClientCertMode::None => builder.with_no_client_auth().with_single_cert(certs, key)?,
@@ -295,8 +377,14 @@ fn build_client_config(config: &TlsConfig) -> anyhow::Result<ClientConfig> {
         store
     };
 
-    let builder =
-        ClientConfig::builder_with_protocol_versions(&versions).with_root_certificates(root_store);
+    // Mirror the server path: restrict the provider's suites when named.
+    let builder = match ciphersuite_provider(&config.ciphersuites, &versions)? {
+        Some(provider) => {
+            ClientConfig::builder_with_provider(provider).with_protocol_versions(&versions)?
+        }
+        None => ClientConfig::builder_with_protocol_versions(&versions),
+    }
+    .with_root_certificates(root_store);
 
     // Use client cert/key if available (for mTLS to peers), fall back to server cert/key
     let (cert_path, key_path) = match (&config.client_cert_file, &config.client_key_file) {
