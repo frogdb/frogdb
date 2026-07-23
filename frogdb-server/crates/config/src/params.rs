@@ -265,6 +265,7 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
         use crate::cluster::ClusterConfigSection;
         use crate::distributed_tracing::TracingConfig;
         use crate::http::HttpConfig;
+        use crate::json::JsonConfig;
         use crate::latency::LatencyBandsConfig;
         use crate::logging::LoggingConfig;
         use crate::memory::MemoryConfig;
@@ -323,8 +324,12 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
         rows.push(pick(PersistenceConfig::PARAMS, "persistence-enabled"));
         rows.push(pick(PersistenceConfig::PARAMS, "flush-compact-range"));
 
-        // metrics (both registered rows, contiguous and in field order)
-        rows.extend_from_slice(MetricsConfig::PARAMS);
+        // metrics: the two originally-registered rows only, picked by name.
+        // The issue-14 wire pass promoted three metrics OTLP fields to immutable;
+        // they are spliced in the issue-14 block below (not by whole-section
+        // slice) so the historical first-104 order stays byte-identical.
+        rows.push(pick(MetricsConfig::PARAMS, "metrics-enabled"));
+        rows.push(pick(MetricsConfig::PARAMS, "metrics-port"));
 
         // tls (8 rows; field order differs from the historical order, so splice
         // by name rather than by slice)
@@ -411,6 +416,24 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
         rows.extend_from_slice(StatusConfig::PARAMS); // status-{memory,connection}-warning-percent, status-durability-lag-{warning,critical}-ms
         rows.push(pick(LatencyBandsConfig::PARAMS, "latency-bands-enabled"));
         rows.push(pick(AclFileConfig::PARAMS, "acllog-max-len")); // mutable
+
+        // --- issue-14 wire pass: 7 promote-immutable (startup-consumed, CONFIG
+        // GET-only) rows, appended after the Pass-2b block so the golden
+        // snapshot's first 104 rows stay byte-identical. Each field was wired to
+        // a real startup consumer in the five config-wiring lanes — the metrics
+        // OTLP recorder, the JSON handler limits (via CommandContext.json_limits),
+        // the replica ACK tick cadence, and the TLS manager's ciphersuite
+        // selection — and is consumed once at startup: GET reports the honest
+        // startup value, SET has no runtime seam. ---
+        rows.push(pick(MetricsConfig::PARAMS, "metrics-otlp-enabled"));
+        rows.push(pick(MetricsConfig::PARAMS, "metrics-otlp-endpoint"));
+        rows.push(pick(MetricsConfig::PARAMS, "metrics-otlp-interval-secs"));
+        rows.extend_from_slice(JsonConfig::PARAMS); // json-max-depth, json-max-size
+        rows.push(pick(
+            ReplicationConfigSection::PARAMS,
+            "repl-ack-interval-ms",
+        ));
+        rows.push(pick(TlsConfig::PARAMS, "tls-ciphersuites"));
 
         rows
     });
@@ -1162,6 +1185,58 @@ mod tests {
             mutable: true,
             noop: false,
         },
+        // --- issue-14 wire pass: 7 promote-immutable rows (all CONFIG GET-only,
+        // mutable: false), appended after the Pass-2b block so the first 104 rows
+        // above stay byte-for-byte unchanged. ---
+        ConfigParamInfo {
+            name: "metrics-otlp-enabled",
+            section: Some("metrics"),
+            field: Some("otlp-enabled"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "metrics-otlp-endpoint",
+            section: Some("metrics"),
+            field: Some("otlp-endpoint"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "metrics-otlp-interval-secs",
+            section: Some("metrics"),
+            field: Some("otlp-interval-secs"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "json-max-depth",
+            section: Some("json"),
+            field: Some("max-depth"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "json-max-size",
+            section: Some("json"),
+            field: Some("max-size"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "repl-ack-interval-ms",
+            section: Some("replication"),
+            field: Some("ack-interval-ms"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "tls-ciphersuites",
+            section: Some("tls"),
+            field: Some("ciphersuites"),
+            mutable: false,
+            noop: false,
+        },
     ];
 
     #[test]
@@ -1189,8 +1264,10 @@ mod tests {
         // rows (26 classified, minus 4 metrics OTLP/bind rows downgraded to justify
         // as dead config), giving 83. 13-01 Pass 2b appended 21 more (20
         // promote-immutable startup-consumed rows + the mutable `acllog-max-len`),
-        // giving 104.
-        assert_eq!(GOLDEN_SNAPSHOT.len(), 104);
+        // giving 104. The issue-14 wire pass appended 7 more promote-immutable
+        // rows (metrics OTLP ×3, json limits ×2, replica ACK cadence, TLS
+        // ciphersuites), giving 111.
+        assert_eq!(GOLDEN_SNAPSHOT.len(), 111);
     }
 
     #[test]

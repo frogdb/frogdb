@@ -12,20 +12,23 @@ pub const DEFAULT_JSON_MAX_SIZE: usize = 64 * 1024 * 1024;
 
 /// JSON configuration.
 //
-// No fields are exposed as CONFIG GET/SET parameters; each carries an explicit
-// `#[param(skip)]` to satisfy the per-field coverage guarantee.
+// Both fields are consumed at runtime via `CommandContext.json_limits`; issue-14
+// promoted them to immutable CONFIG GET/SET params (GET reports the honest
+// startup value, SET is rejected).
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
 #[params(section = "json")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct JsonConfig {
     /// Maximum nesting depth for JSON documents.
     #[serde(default = "default_json_max_depth")]
-    #[param(skip)] // skip: enforced at the JSON handlers, not a CONFIG GET/SET param
+    #[param(name = "json-max-depth")]
+    // issue-14: consumed via CommandContext.json_limits; immutable
     pub max_depth: usize,
 
     /// Maximum size in bytes for JSON documents.
     #[serde(default = "default_json_max_size")]
-    #[param(skip)] // skip: enforced at the JSON handlers, not a CONFIG GET/SET param
+    #[param(name = "json-max-size")]
+    // issue-14: consumed via CommandContext.json_limits; immutable
     pub max_size: usize,
 }
 

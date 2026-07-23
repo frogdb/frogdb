@@ -77,8 +77,9 @@ pub struct TlsConfig {
     /// building the rustls Server/Client config; an unknown name or a set that
     /// excludes every enabled protocol version fails loudly at startup.
     #[serde(default)]
-    #[param(skip)]
-    // skip: param wiring consolidated later; value is consumed by server tls build
+    // issue-14: consumed at TLS manager startup (rustls ciphersuite selection);
+    // immutable CONFIG GET-only. Redis-compat name `tls-ciphersuites`.
+    #[param(name = "tls-ciphersuites")]
     pub ciphersuites: Vec<String>,
 
     /// Whether to encrypt replication connections.

@@ -211,6 +211,16 @@ param_id_enum! {
         StatusDurabilityLagWarningMs => "status-durability-lag-warning-ms",
         StatusDurabilityLagCriticalMs => "status-durability-lag-critical-ms",
         LatencyBandsEnabled => "latency-bands-enabled",
+        // === issue-14 wire pass: 7 promote-immutable params (CONFIG GET-only) ===
+        // Newly-wired startup-consumed fields; GET reports the honest startup
+        // value, SET has no seam. Order mirrors the registry's issue-14 block.
+        MetricsOtlpEnabled => "metrics-otlp-enabled",
+        MetricsOtlpEndpoint => "metrics-otlp-endpoint",
+        MetricsOtlpIntervalSecs => "metrics-otlp-interval-secs",
+        JsonMaxDepth => "json-max-depth",
+        JsonMaxSize => "json-max-size",
+        ReplAckIntervalMs => "repl-ack-interval-ms",
+        TlsCiphersuites => "tls-ciphersuites",
     }
 }
 
@@ -288,7 +298,9 @@ mod tests {
         // 16 original immutable ids + 22 promote-immutable params added by 13-01
         // Pass 2a (26 classified, minus 4 metrics OTLP/bind rows downgraded to
         // justify as dead config) + 20 promote-immutable startup-consumed params
-        // added by 13-01 Pass 2b.
-        assert_eq!(ImmutableParamId::ALL.len(), 58);
+        // added by 13-01 Pass 2b + 7 promote-immutable params added by the
+        // issue-14 wire pass (metrics OTLP ×3, json limits ×2, replica ACK
+        // cadence, TLS ciphersuites).
+        assert_eq!(ImmutableParamId::ALL.len(), 65);
     }
 }

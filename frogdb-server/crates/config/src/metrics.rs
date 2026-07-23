@@ -22,20 +22,20 @@ pub struct MetricsConfig {
 
     /// Whether OTLP export is enabled.
     #[serde(default)]
-    #[param(skip)]
-    // skip: promotion pending consolidation pass
+    // issue-14: consumed at startup (OTLP recorder construction); immutable.
+    #[param(name = "metrics-otlp-enabled")]
     pub otlp_enabled: bool,
 
     /// OTLP endpoint URL.
     #[serde(default = "default_otlp_endpoint")]
-    #[param(skip)]
-    // skip: promotion pending consolidation pass
+    // issue-14: consumed at startup (OTLP recorder construction); immutable.
+    #[param(name = "metrics-otlp-endpoint")]
     pub otlp_endpoint: String,
 
     /// OTLP push interval in seconds.
     #[serde(default = "default_otlp_interval_secs")]
-    #[param(skip)]
-    // skip: promotion pending consolidation pass
+    // issue-14: consumed at startup (OTLP recorder construction); immutable.
+    #[param(name = "metrics-otlp-interval-secs")]
     pub otlp_interval_secs: u64,
 }
 

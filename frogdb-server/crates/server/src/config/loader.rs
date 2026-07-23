@@ -438,9 +438,13 @@ mod tests {
         let sections = default_json
             .as_object()
             .expect("Config serializes to a JSON object");
+        // Floor lowered 25 -> 24 in the issue-14 consolidation pass: the
+        // config-wiring lanes deleted the dead `vll` and `hotshards` sections,
+        // so 24 is the honest current section count. Raise this floor when
+        // sections are added; only lower it when one is deliberately removed.
         assert!(
-            sections.len() >= 25,
-            "expected at least 25 top-level config sections, found {} — \
+            sections.len() >= 24,
+            "expected at least 24 top-level config sections, found {} — \
              this sanity floor should be raised, not deleted, if it fails",
             sections.len()
         );
