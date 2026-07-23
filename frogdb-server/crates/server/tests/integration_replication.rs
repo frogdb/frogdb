@@ -1506,7 +1506,11 @@ async fn test_different_shard_counts(#[case] num_shards: usize) {
 // Tier 4: Partial Sync Tests
 // ============================================================================
 
-/// Test that PSYNC with valid replication ID and offset gets CONTINUE or FULLRESYNC response.
+/// PSYNC presenting the primary's own replid at its current live offset must be
+/// granted a partial resync (`+CONTINUE`) — the fully-caught-up reconnect case.
+/// (Previously this test accepted "CONTINUE, FULLRESYNC, or OK" and only checked
+/// for a non-error; that over-permissive assertion would have let a silent
+/// full-resync regression through — issue 34.)
 #[rstest]
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
@@ -1533,21 +1537,23 @@ async fn test_partial_sync_continue_response(#[case] persistence: bool) {
     let _ = primary.send("WAIT", &["1", "2000"]).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Get replication info from INFO
-    let repl_state = get_replication_state(&primary).await;
-
-    // If we got replication info, test PSYNC with valid offset
-    if let Some((id, offset)) = repl_state {
-        // Create a new connection and attempt PSYNC
-        let response = primary.send("PSYNC", &[&id, &offset.to_string()]).await;
-
-        // Should get CONTINUE, FULLRESYNC, or OK (implementation may vary)
-        // The key is that it should NOT error
-        assert!(
-            !is_error(&response),
-            "PSYNC should not error with valid params"
-        );
-    }
+    // The primary's own replid at its live offset is squarely inside the
+    // continuable window, so PSYNC must answer +CONTINUE (not a full resync).
+    let (id, offset) = get_replication_state(&primary)
+        .await
+        .expect("primary INFO replication");
+    let resp = primary
+        .send_raw(&encode_resp_command(&["PSYNC", &id, &offset.to_string()]))
+        .await;
+    let head = String::from_utf8_lossy(&resp);
+    assert!(
+        head.starts_with("+CONTINUE"),
+        "PSYNC at the live offset with the primary's own replid must get +CONTINUE, got: {head:?}"
+    );
+    assert!(
+        !head.contains("FULLRESYNC"),
+        "no full resync may occur for an in-window reconnect, got: {head:?}"
+    );
 
     replica.shutdown().await;
     primary.shutdown().await;
@@ -1605,8 +1611,10 @@ async fn test_partial_sync_preserves_ordering(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
-/// Test that PSYNC with invalid offset gets handled appropriately.
-/// The server may return FULLRESYNC or OK depending on implementation.
+/// PSYNC presenting a replid the primary does not recognize must fall back to a
+/// full resync (`+FULLRESYNC`) — never a partial resync. (Previously this test
+/// accepted "FULLRESYNC or OK"; the loose `OK` alternative would have masked a
+/// bogus partial-resync grant on an unknown replid — issue 34.)
 #[rstest]
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
@@ -1618,45 +1626,47 @@ async fn test_partial_sync_falls_back_to_full(#[case] persistence: bool) {
     };
     let primary = TestServer::start_primary_with_config(config).await;
 
-    // Try PSYNC with a completely invalid replication ID
-    let response = primary
-        .send("PSYNC", &["invalid_repl_id_12345", "99999"])
+    // A replid the primary has never issued cannot match its window -> FULLRESYNC.
+    let resp = primary
+        .send_raw(&encode_resp_command(&[
+            "PSYNC",
+            "invalid_repl_id_12345",
+            "99999",
+        ]))
         .await;
-
-    // Server should handle this gracefully (FULLRESYNC, OK, or other non-error response)
-    // The key is that invalid replication IDs should be handled, not crash
-    match &response {
-        Response::Simple(s) => {
-            let s_str = String::from_utf8_lossy(s);
-            // FULLRESYNC or OK are both acceptable responses
-            assert!(
-                s_str.starts_with("FULLRESYNC") || s_str == "OK",
-                "Expected FULLRESYNC or OK for invalid repl ID, got: {}",
-                s_str
-            );
-        }
-        Response::Bulk(Some(b)) => {
-            let b_str = String::from_utf8_lossy(b);
-            // FULLRESYNC or OK in bulk form
-            assert!(
-                b_str.starts_with("FULLRESYNC") || b_str == "OK",
-                "Expected FULLRESYNC or OK for invalid repl ID, got: {}",
-                b_str
-            );
-        }
-        _ => {
-            // Any non-error response is acceptable
-            assert!(
-                !is_error(&response),
-                "PSYNC should not error on invalid repl ID"
-            );
-        }
-    }
+    let head = String::from_utf8_lossy(&resp);
+    assert!(
+        head.starts_with("+FULLRESYNC"),
+        "unknown replid must fall back to +FULLRESYNC, got: {head:?}"
+    );
+    assert!(
+        !head.contains("CONTINUE"),
+        "an unknown replid must never be granted a partial resync, got: {head:?}"
+    );
 
     primary.shutdown().await;
 }
 
-/// Test that promoted replica accepts old primary's replication ID for partial sync.
+/// Replication-ID handling across a `REPLICAOF NO ONE` promotion.
+///
+/// This test PINS FrogDB's actual PSYNC2-divergent promotion semantics rather
+/// than asserting Redis parity — see [`docs`](../../../website/src/content/docs/operations/replication.md)
+/// ("do not rely on a specific secondary-ID continuation behavior").
+///
+/// Redis PSYNC2 on promotion: the promoted node mints a *new* `master_replid`
+/// and preserves the old one as `master_replid2` with `second_repl_offset` = the
+/// live offset at promotion, so downstream replicas can partial-resync
+/// (`+CONTINUE`) through the failover.
+///
+/// FrogDB DIVERGES on the manual `REPLICAOF NO ONE` path:
+///   1. the promoted node keeps the *same* `master_replid` it adopted from its
+///      former primary during FULLRESYNC — no new id is minted;
+///   2. no secondary window is established — `master_replid2` stays all-zero and
+///      `second_repl_offset` stays `-1`.
+/// (The replid-rotation machinery — [`ReplicationState::new_replication_id`] and
+/// the `secondary_id`/`secondary_offset` window — exists in the replication
+/// crate but is NOT wired to the runtime promotion path; it currently has no
+/// production caller.)
 #[rstest]
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
@@ -1677,29 +1687,128 @@ async fn test_secondary_replication_id_failover(#[case] persistence: bool) {
     let _ = primary.send("WAIT", &["1", "2000"]).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Get primary's replication ID before failover (informational)
-    let _old_repl_id = get_replication_state(&primary).await.map(|(id, _)| id);
+    // The replica adopts the primary's replication id during FULLRESYNC. This
+    // also gates that the initial sync has completed before we promote.
+    let primary_replid = get_replication_state(&primary)
+        .await
+        .expect("primary INFO replication")
+        .0;
+    let before = parse_info_replication(&replica.send("INFO", &["replication"]).await).unwrap();
+    let replid_before = before.get("master_replid").cloned().unwrap();
+    assert_eq!(
+        replid_before, primary_replid,
+        "replica must adopt the primary's replid via FULLRESYNC before promotion"
+    );
 
-    // Promote replica to primary (stop replication)
+    // Promote replica to primary (stop replication).
     let promote_resp = replica.send("REPLICAOF", &["NO", "ONE"]).await;
     assert_ok(&promote_resp);
 
-    // Check INFO replication on promoted replica
-    let new_info = replica.send("INFO", &["replication"]).await;
-    let info_map = parse_info_replication(&new_info).unwrap();
-    // Should now report as master
+    let after = parse_info_replication(&replica.send("INFO", &["replication"]).await).unwrap();
     assert_eq!(
-        info_map.get("role").map(|s| s.as_str()),
+        after.get("role").map(String::as_str),
         Some("master"),
         "Promoted replica should report as master"
     );
 
-    // Check for master_replid2 (secondary replication ID)
-    // This would contain the old primary's ID if implemented
-    let has_replid2 = info_map.contains_key("master_replid2");
-    eprintln!(
-        "Has secondary replication ID (master_replid2): {}",
-        has_replid2
+    // (a) DIVERGENCE: the replid is NOT rotated on promotion — the promoted node
+    // keeps the id it adopted from its former primary. (Redis mints a new one.)
+    assert_eq!(
+        after.get("master_replid").cloned().unwrap(),
+        replid_before,
+        "FrogDB keeps the same master_replid across REPLICAOF NO ONE promotion \
+         (diverges from Redis, which mints a new replid)"
+    );
+
+    // (b) DIVERGENCE: no secondary window is established — replid2 stays all-zero
+    // and second_repl_offset stays -1. (Redis sets replid2 = the old replid.)
+    assert_eq!(
+        after.get("master_replid2").map(String::as_str),
+        Some("0000000000000000000000000000000000000000"),
+        "FrogDB does not populate master_replid2 on REPLICAOF NO ONE promotion \
+         (diverges from Redis PSYNC2, which stores the prior replid as replid2)"
+    );
+    assert_eq!(
+        after.get("second_repl_offset").map(String::as_str),
+        Some("-1"),
+        "second_repl_offset must remain the -1 sentinel when no failover window is set"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// A node promoted via manual `REPLICAOF NO ONE` becomes *writable* but does NOT
+/// become a replication *source*: it rejects downstream `PSYNC` outright.
+///
+/// This pins a second FrogDB divergence from Redis PSYNC2. In Redis a promoted
+/// replica serves PSYNC to surviving replicas (partial-resync via replid2, or a
+/// full resync). In FrogDB the primary-side replication handler
+/// (`primary_replication_handler`) is wired ONLY at boot for a node started as a
+/// primary; the runtime `REPLICAOF NO ONE` path (`RoleManager::promote`) only
+/// clears the read-only flag and tears down the inbound stream — it never spins
+/// up a `PrimaryReplicationHandler`. So PSYNC stays gated off and a downstream
+/// replica gets neither `+CONTINUE` nor `+FULLRESYNC`.
+///
+/// NOTE: this makes the manual-promotion path unable to head a replication chain
+/// (candidate follow-up: wire promotion to establish the primary handler). It
+/// does not affect boot-configured primaries, whose partial/full resync is
+/// covered by `test_partial_resync_after_brief_disconnect_grants_continue` and
+/// `test_partial_resync_unknown_replid_falls_back_to_full`.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_promoted_node_via_replicaof_no_one_rejects_downstream_psync(
+    #[case] persistence: bool,
+) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    for i in 0..5 {
+        primary.send("SET", &[&format!("k{i}"), "v"]).await;
+    }
+    let _ = primary.send("WAIT", &["1", "2000"]).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Capture the replid + offset a surviving replica would present when it
+    // reconnects to the promoted node.
+    let (replid, offset) = get_replication_state(&replica)
+        .await
+        .expect("replica INFO replication");
+
+    // Promote via manual REPLICAOF NO ONE.
+    assert_ok(&replica.send("REPLICAOF", &["NO", "ONE"]).await);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        parse_info_replication(&replica.send("INFO", &["replication"]).await)
+            .unwrap()
+            .get("role")
+            .map(String::as_str),
+        Some("master"),
+        "promoted node must report role:master"
+    );
+
+    // PSYNC to the promoted node is rejected — not a partial resync, not a full
+    // resync, but an outright "not running as primary" error.
+    let resp = replica
+        .send_raw(&encode_resp_command(&[
+            "PSYNC",
+            &replid,
+            &offset.to_string(),
+        ]))
+        .await;
+    let head = String::from_utf8_lossy(&resp);
+    assert!(
+        head.starts_with("-ERR") && head.contains("not running as primary"),
+        "manual-promoted node must reject downstream PSYNC (not running as primary), got: {head:?}"
+    );
+    assert!(
+        !head.contains("CONTINUE") && !head.contains("FULLRESYNC"),
+        "promoted node must not offer any resync via PSYNC, got: {head:?}"
     );
 
     replica.shutdown().await;
@@ -3983,7 +4092,14 @@ async fn test_role_changes_after_replicaof(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
-/// After REPLICAOF NO ONE, other replicas can partial-sync via secondary repl ID.
+/// Cross-failover behavior after `REPLICAOF NO ONE`, pinning FrogDB's actual
+/// (PSYNC2-divergent) semantics. In Redis a promoted replica hands surviving
+/// replicas a partial resync via `master_replid2`; FrogDB neither sets replid2
+/// nor serves PSYNC from a manually-promoted node (see
+/// `test_secondary_replication_id_failover` and
+/// `test_promoted_node_via_replicaof_no_one_rejects_downstream_psync` for the
+/// primitives). This test pins that whole shape end-to-end from a two-replica
+/// topology, and confirms the promoted node still holds the pre-promotion data.
 #[rstest]
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
@@ -4008,34 +4124,65 @@ async fn test_psync2_failover_partial_sync(#[case] persistence: bool) {
     let _ = primary.send("WAIT", &["2", "5000"]).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Get replica1's replication state before promotion
-    let pre_state = get_replication_state(&replica1).await;
-    eprintln!("Replica1 state before promotion: {:?}", pre_state);
+    // Replica1 adopts the primary's replid; capture it (and the offset a
+    // surviving replica would present) before promotion.
+    let (pre_replid, pre_offset) = get_replication_state(&replica1)
+        .await
+        .expect("replica1 INFO replication");
 
     // Promote replica1 to primary
     let promote = replica1.send("REPLICAOF", &["NO", "ONE"]).await;
     assert_ok(&promote);
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Check that promoted replica has secondary repl ID
-    let info_resp = replica1.send("INFO", &["replication"]).await;
-    let info_map = parse_info_replication(&info_resp).unwrap();
-    let has_replid2 = info_map
-        .get("master_replid2")
-        .map(|v| v != "0000000000000000000000000000000000000000")
-        .unwrap_or(false);
-    eprintln!("Has non-zero master_replid2: {}", has_replid2);
+    let info_map = parse_info_replication(&replica1.send("INFO", &["replication"]).await).unwrap();
+    assert_eq!(
+        info_map.get("role").map(String::as_str),
+        Some("master"),
+        "promoted replica1 must report role:master"
+    );
+    // DIVERGENCE (pinned): the replid is not rotated and no secondary window is
+    // established on promotion.
+    assert_eq!(
+        info_map.get("master_replid").cloned().unwrap(),
+        pre_replid,
+        "promoted node keeps its adopted replid (no rotation)"
+    );
+    assert_eq!(
+        info_map.get("master_replid2").map(String::as_str),
+        Some("0000000000000000000000000000000000000000"),
+        "no secondary replication id is established on REPLICAOF NO ONE promotion"
+    );
 
-    // Write data on promoted replica
-    replica1.send("SET", &["{{psync2}}newkey", "newval"]).await;
+    // DIVERGENCE (pinned): a surviving replica cannot partial-sync (or even
+    // full-sync) from the promoted node — PSYNC is rejected outright, so the
+    // PSYNC2 failover chain does not exist on the manual-promotion path.
+    let psync = replica1
+        .send_raw(&encode_resp_command(&[
+            "PSYNC",
+            &pre_replid,
+            &pre_offset.to_string(),
+        ]))
+        .await;
+    let psync_head = String::from_utf8_lossy(&psync);
+    assert!(
+        psync_head.contains("not running as primary"),
+        "promoted node rejects downstream PSYNC, got: {psync_head:?}"
+    );
+    assert!(
+        !psync_head.contains("CONTINUE") && !psync_head.contains("FULLRESYNC"),
+        "no partial/full resync is offered by a manually-promoted node, got: {psync_head:?}"
+    );
 
-    // Verify promoted replica has all the original data
+    // The promoted node remains writable and still holds all pre-promotion data.
+    assert_ok(&replica1.send("SET", &["{{psync2}}newkey", "newval"]).await);
     for i in 0..5 {
         let key = format!("{{psync2}}key{}", i);
         let resp = replica1.send("GET", &[&key]).await;
-        if let Response::Bulk(Some(v)) = &resp {
-            assert_eq!(v.as_ref(), b"value");
-        }
+        assert!(
+            matches!(&resp, Response::Bulk(Some(v)) if v.as_ref() == b"value"),
+            "promoted node must retain pre-promotion key {key}, got: {resp:?}"
+        );
     }
 
     replica2.shutdown().await;
