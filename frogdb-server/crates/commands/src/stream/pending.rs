@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, ClaimClock, ClaimOpts, Command, CommandContext, CommandError,
-    CommandFlags, CommandSpec, EventSpec, ExecutionStrategy, KeySpec, LookupSpec,
-    StoreTypedFamilyExt, StreamEntry, StreamId, WaiterWake, WalStrategy,
+    CommandFlags, CommandSpec, EventSpec, ExecutionStrategy, KeySpec, KeyspaceEventFlags,
+    LookupSpec, StoreTypedFamilyExt, StreamEntry, StreamId, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -135,7 +135,13 @@ impl Command for XclaimCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
-            event: EventSpec::Suppressed,
+            // XCLAIM itself has no keyspace event in Redis, but it always
+            // ensures the target consumer exists (even when nothing is
+            // claimed) via streamCreateConsumer(SCC_DEFAULT), which fires
+            // "xgroup-createconsumer" when that consumer is newly created
+            // (t_stream.c:4267,:3357-3358) — Dynamic so that conditional fire
+            // can be deposited.
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
             reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
@@ -210,7 +216,7 @@ impl Command for XclaimCommand {
         };
 
         // Second pass: perform mutations
-        {
+        let consumer_created = {
             let Some(stream) = ctx.store.get_stream_mut(key)? else {
                 return Err(CommandError::InvalidArgument {
                     message: format!("No such key '{}'", String::from_utf8_lossy(key)),
@@ -222,6 +228,7 @@ impl Command for XclaimCommand {
 
             // Ensure the target consumer exists even when nothing is claimed
             // (Redis creates it regardless).
+            let consumer_created = !group.has_consumer(&consumer_name);
             group.get_or_create_consumer(consumer_name.clone());
 
             // The IDLE/TIME/RETRYCOUNT/JUSTID rules now live in ClaimOpts::apply;
@@ -239,6 +246,15 @@ impl Command for XclaimCommand {
             for id in &ids_to_claim {
                 group.claim_pending(*id, &consumer_name, opts, clock);
             }
+            consumer_created
+        };
+
+        if consumer_created {
+            ctx.notify_event(
+                key.clone(),
+                "xgroup-createconsumer",
+                KeyspaceEventFlags::STREAM,
+            );
         }
 
         // Third pass: get entries for response (read-only)
@@ -288,7 +304,10 @@ impl Command for XautoclaimCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
-            event: EventSpec::Suppressed,
+            // Same rationale as XCLAIM: no dedicated XAUTOCLAIM event, but its
+            // auto-created consumer fires "xgroup-createconsumer" when new
+            // (t_stream.c:4460,:3357-3358).
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
             reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
@@ -356,7 +375,7 @@ impl Command for XautoclaimCommand {
             .collect();
 
         // Third pass: perform mutations
-        {
+        let consumer_created = {
             let Some(stream) = ctx.store.get_stream_mut(key)? else {
                 return Err(CommandError::InvalidArgument {
                     message: format!("No such key '{}'", String::from_utf8_lossy(key)),
@@ -367,6 +386,7 @@ impl Command for XautoclaimCommand {
                 .ok_or(CommandError::NoGroup)?;
 
             // Ensure the target consumer exists even when nothing is claimed.
+            let consumer_created = !group.has_consumer(&consumer_name);
             group.get_or_create_consumer(consumer_name.clone());
 
             // Live entries are reassigned to the new consumer; entries whose
@@ -384,6 +404,15 @@ impl Command for XautoclaimCommand {
                     group.drop_missing_pending(id);
                 }
             }
+            consumer_created
+        };
+
+        if consumer_created {
+            ctx.notify_event(
+                key.clone(),
+                "xgroup-createconsumer",
+                KeyspaceEventFlags::STREAM,
+            );
         }
 
         // Fourth pass: get entries for response (read-only)

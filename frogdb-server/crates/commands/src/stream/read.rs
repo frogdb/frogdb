@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    EventSpec, ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt, StreamEntry, StreamId,
-    StreamRangeBound, WaiterWake, WalStrategy,
+    EventSpec, ExecutionStrategy, KeySpec, KeyspaceEventFlags, LookupSpec, StoreTypedFamilyExt,
+    StreamEntry, StreamId, StreamRangeBound, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::{BlockingOp, Response};
 
@@ -156,6 +156,16 @@ impl Command for XreadCommand {
 // XREADGROUP - Read entries as consumer
 // ============================================================================
 
+/// Outcome of the stream/group lookup phase of XREADGROUP, computed while
+/// `stream`/`group` are still borrowed. Kept borrow-free so it can be
+/// returned out of that scope and matched on afterward.
+enum XreadgroupOutcome {
+    Blocked { timeout: f64 },
+    NoData,
+    Delivered(Vec<StreamEntry>),
+    Pel(Vec<Response>),
+}
+
 pub struct XreadgroupCommand;
 
 impl Command for XreadgroupCommand {
@@ -168,7 +178,14 @@ impl Command for XreadgroupCommand {
             access: AccessSpec::UniformRW,
             wal: WalStrategy::Dynamic,
             wakes: WaiterWake::None,
-            event: EventSpec::Suppressed,
+            // XREADGROUP has no dedicated event, but it auto-creates the
+            // named consumer if absent (before deciding whether to block),
+            // via streamCreateConsumer(SCC_DEFAULT) — which fires
+            // "xgroup-createconsumer" when that consumer is new (t_stream.c:
+            // 2934,:3357-3358). The blocking wake path (blocking.rs) never
+            // creates a consumer of its own, so this only needs to be
+            // deposited from the initial (possibly-immediately-served) call.
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
             reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
@@ -233,100 +250,132 @@ impl Command for XreadgroupCommand {
         let key = &keys[0];
         let id_arg = &ids[0];
 
-        // Get or check stream
-        let stream = ctx.store.get_stream_mut(key.as_ref())?.ok_or_else(|| {
-            CommandError::InvalidArgument {
-                message: format!("No such key '{}'", String::from_utf8_lossy(key)),
-            }
-        })?;
-
-        // Get the group
-        let group = stream
-            .get_group_mut(&group_name)
-            .ok_or(CommandError::NoGroup)?;
-
-        // Ensure consumer exists and touch seen-time
-        group.get_or_create_consumer(consumer_name.clone()).touch();
-
-        let entries: Vec<StreamEntry> = if id_arg.as_ref() == b">" {
-            // Read new messages (not yet delivered)
-            let last_delivered = group.last_delivered_id();
-            let new_entries = stream.read_after(&last_delivered, count);
-
-            if new_entries.is_empty() {
-                // No new entries - check if we should block
-                if let Some(block_ms) = block_ms {
-                    let timeout = if block_ms == 0 {
-                        0.0
-                    } else {
-                        block_ms as f64 / 1000.0
-                    };
-                    return Ok(Response::BlockingNeeded {
-                        keys: keys.to_vec(),
-                        timeout,
-                        op: BlockingOp::XReadGroup {
-                            group: group_name,
-                            consumer: consumer_name,
-                            noack,
-                            count,
-                        },
-                    });
+        // All access to `stream`/`group` is confined to this block so their
+        // borrow of `ctx.store` ends before we need `&mut ctx` again for
+        // `ctx.notify_event` below (E0499 otherwise: notify_event borrows
+        // `ctx` while `stream`/`group` are still live for later branches).
+        let (consumer_created, outcome) = {
+            // Get or check stream
+            let stream = ctx.store.get_stream_mut(key.as_ref())?.ok_or_else(|| {
+                CommandError::InvalidArgument {
+                    message: format!("No such key '{}'", String::from_utf8_lossy(key)),
                 }
-                return Ok(Response::null());
-            }
+            })?;
 
-            // Update group state: last_delivered_id, entries_read, PEL, consumer timestamps
-            stream.record_group_delivery(&group_name, &consumer_name, &new_entries, noack);
+            // Get the group
+            let group = stream
+                .get_group_mut(&group_name)
+                .ok_or(CommandError::NoGroup)?;
 
-            new_entries
-        } else {
-            // Re-read from PEL (for retry) - never blocks
-            let start_id = if id_arg.as_ref() == b"0" || id_arg.as_ref() == b"0-0" {
-                StreamId::default()
+            // Ensure consumer exists and touch seen-time
+            let consumer_created = !group.has_consumer(&consumer_name);
+            group.get_or_create_consumer(consumer_name.clone()).touch();
+
+            let outcome = if id_arg.as_ref() == b">" {
+                // Read new messages (not yet delivered)
+                let last_delivered = group.last_delivered_id();
+                let new_entries = stream.read_after(&last_delivered, count);
+
+                if new_entries.is_empty() {
+                    // No new entries - check if we should block
+                    if let Some(block_ms) = block_ms {
+                        let timeout = if block_ms == 0 {
+                            0.0
+                        } else {
+                            block_ms as f64 / 1000.0
+                        };
+                        XreadgroupOutcome::Blocked { timeout }
+                    } else {
+                        XreadgroupOutcome::NoData
+                    }
+                } else {
+                    // Update group state: last_delivered_id, entries_read, PEL, consumer timestamps
+                    stream.record_group_delivery(&group_name, &consumer_name, &new_entries, noack);
+
+                    XreadgroupOutcome::Delivered(new_entries)
+                }
             } else {
-                StreamId::parse(id_arg)?
+                // Re-read from PEL (for retry) - never blocks
+                let start_id = if id_arg.as_ref() == b"0" || id_arg.as_ref() == b"0-0" {
+                    StreamId::default()
+                } else {
+                    StreamId::parse(id_arg)?
+                };
+
+                // Find pending entries for this consumer starting from start_id
+                let pending_ids: Vec<StreamId> = group
+                    .pending_entries(
+                        StreamRangeBound::Inclusive(start_id),
+                        StreamRangeBound::Max,
+                        count.unwrap_or(usize::MAX),
+                        None,
+                        Some(&consumer_name),
+                    )
+                    .into_iter()
+                    .map(|pe| pe.id)
+                    .collect();
+
+                // Get the actual entries — deleted entries return [id, []] (empty fields)
+                let mut pel_responses = Vec::new();
+                for id in pending_ids {
+                    if let Some(entry) = stream.get(&id) {
+                        pel_responses.push(entry_to_response(&entry));
+                    } else {
+                        // Entry was deleted from the stream but still in PEL
+                        pel_responses.push(Response::Array(vec![
+                            Response::bulk(Bytes::from(id.to_string())),
+                            Response::Array(vec![]),
+                        ]));
+                    }
+                }
+
+                XreadgroupOutcome::Pel(pel_responses)
             };
 
-            // Find pending entries for this consumer starting from start_id
-            let pending_ids: Vec<StreamId> = group
-                .pending_entries(
-                    StreamRangeBound::Inclusive(start_id),
-                    StreamRangeBound::Max,
-                    count.unwrap_or(usize::MAX),
-                    None,
-                    Some(&consumer_name),
-                )
-                .into_iter()
-                .map(|pe| pe.id)
-                .collect();
-
-            // Get the actual entries — deleted entries return [id, []] (empty fields)
-            let mut pel_responses = Vec::new();
-            for id in pending_ids {
-                if let Some(entry) = stream.get(&id) {
-                    pel_responses.push(entry_to_response(&entry));
-                } else {
-                    // Entry was deleted from the stream but still in PEL
-                    pel_responses.push(Response::Array(vec![
-                        Response::bulk(Bytes::from(id.to_string())),
-                        Response::Array(vec![]),
-                    ]));
-                }
-            }
-
-            // Return PEL results directly (already formatted as responses)
-            // Even when empty, Redis returns [["key", []]] (not null)
-            return Ok(Response::Array(vec![Response::Array(vec![
-                Response::bulk(key.clone()),
-                Response::Array(pel_responses),
-            ])]));
+            (consumer_created, outcome)
         };
 
-        let entry_responses: Vec<Response> = entries.iter().map(entry_to_response).collect();
-        Ok(Response::Array(vec![Response::Array(vec![
-            Response::bulk(key.clone()),
-            Response::Array(entry_responses),
-        ])]))
+        // Redis creates the consumer (and fires `xgroup-createconsumer`) as a
+        // side effect of the lookup itself, before it even checks for new
+        // entries — so the notification fires once here regardless of which
+        // outcome below is taken, including the blocking/no-data cases
+        // (`streamCreateConsumer`, t_stream.c).
+        if consumer_created {
+            ctx.notify_event(
+                key.clone(),
+                "xgroup-createconsumer",
+                KeyspaceEventFlags::STREAM,
+            );
+        }
+
+        match outcome {
+            XreadgroupOutcome::Blocked { timeout } => Ok(Response::BlockingNeeded {
+                keys: keys.to_vec(),
+                timeout,
+                op: BlockingOp::XReadGroup {
+                    group: group_name,
+                    consumer: consumer_name,
+                    noack,
+                    count,
+                },
+            }),
+            XreadgroupOutcome::NoData => Ok(Response::null()),
+            XreadgroupOutcome::Delivered(entries) => {
+                let entry_responses: Vec<Response> =
+                    entries.iter().map(entry_to_response).collect();
+                Ok(Response::Array(vec![Response::Array(vec![
+                    Response::bulk(key.clone()),
+                    Response::Array(entry_responses),
+                ])]))
+            }
+            // Even when empty, Redis returns [["key", []]] (not null).
+            XreadgroupOutcome::Pel(pel_responses) => {
+                Ok(Response::Array(vec![Response::Array(vec![
+                    Response::bulk(key.clone()),
+                    Response::Array(pel_responses),
+                ])]))
+            }
+        }
     }
 
     fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {

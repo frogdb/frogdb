@@ -619,6 +619,16 @@ impl ConsumerGroup {
             .or_insert_with(|| Consumer::new(name))
     }
 
+    /// Whether a consumer with this name currently exists in the group.
+    ///
+    /// Callers that auto-create a consumer as a side effect (XREADGROUP,
+    /// XCLAIM, XAUTOCLAIM) check this first to know whether the creation is
+    /// new — Redis only fires `xgroup-createconsumer` when it is
+    /// (`streamCreateConsumer`, t_stream.c).
+    pub fn has_consumer(&self, name: &[u8]) -> bool {
+        self.consumers.contains_key(name)
+    }
+
     /// Create a consumer if it doesn't exist.
     ///
     /// Returns true if the consumer was created, false if it already existed.

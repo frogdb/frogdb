@@ -5111,3 +5111,820 @@ async fn test_pubsub_mode_resp3_gate_is_unconditional_allow() {
 
     server.shutdown().await;
 }
+
+// ===========================================================================
+// Stream (`t`) keyspace-notification class end-to-end (issue 27)
+//
+// Every stream command's EventSpec was declarative but never asserted, and
+// auditing against live Redis 8.6.4 source (t_stream.c) surfaced real
+// emission gaps beyond the missing tests: XSETID, XDELEX, XACKDEL never
+// notified at all; XGROUP's five subcommands shared one static event name
+// ("xgroup-create") instead of each firing its own; and XCLAIM/XAUTOCLAIM/
+// XREADGROUP never notified their implicit "xgroup-createconsumer" side
+// effect. All of those are fixed in the command implementations; the tests
+// below cover the resulting (correct) behavior and would fail again if any
+// of those emission sites were removed.
+// ===========================================================================
+
+/// XADD fires `xadd` unconditionally on success (basic.rs, unchanged
+/// pre-existing behavior — establishes the baseline the rest of this section
+/// builds on).
+#[tokio::test]
+async fn test_xadd_notifies_xadd_event() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut subscriber, "xadd").await;
+
+    let resp = client
+        .command(&["XADD", "mystream", "*", "field1", "value1"])
+        .await;
+    assert!(matches!(resp, Response::Bulk(Some(_))));
+
+    assert_keyevent_keys(&mut subscriber, "xadd", &["mystream"]).await;
+    server.shutdown().await;
+}
+
+/// Regression (issue 27): XADD's own trailing MAXLEN/MINID clause fires a
+/// second, conditional `xtrim` event (shared with the standalone XTRIM
+/// command) only when that trim actually removed an entry — previously,
+/// `XaddCommand`'s static `Emits{"xadd"}` spec made this impossible to
+/// represent, and the trim's return value was silently discarded.
+#[tokio::test]
+async fn test_xadd_notifies_xtrim_event_when_own_trim_removes_entries() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XADD", "s", "2-0", "f", "v2"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xtrim").await;
+
+    // MAXLEN 1 trims the two existing entries down to one as part of the add.
+    let resp = client
+        .command(&["XADD", "s", "MAXLEN", "1", "3-0", "f", "v3"])
+        .await;
+    assert!(matches!(resp, Response::Bulk(Some(_))));
+
+    assert_keyevent_keys(&mut subscriber, "xtrim", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// XADD with a MAXLEN clause that removes nothing does not fire `xtrim`.
+#[tokio::test]
+async fn test_xadd_not_fired_xtrim_when_own_trim_removes_nothing() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xtrim").await;
+
+    // MAXLEN 10 with only 2 entries after this add: nothing to trim.
+    let resp = client
+        .command(&["XADD", "s", "MAXLEN", "10", "2-0", "f", "v2"])
+        .await;
+    assert!(matches!(resp, Response::Bulk(Some(_))));
+
+    assert_keyevent_keys(&mut subscriber, "xtrim", &[]).await;
+    server.shutdown().await;
+}
+
+/// The stream class is gated behind the `t` flag: with only the generic
+/// class (`g`) enabled, XADD notifies nothing; switching to `t` (or `A`,
+/// which includes it) delivers the same command's `xadd` event.
+#[tokio::test]
+async fn test_stream_events_gated_behind_t_class() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    // `Eg` = keyevent notifications for the generic class only — no `t`.
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Eg"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut subscriber, "xadd").await;
+
+    let resp = client
+        .command(&["XADD", "mystream", "*", "field1", "value1"])
+        .await;
+    assert!(matches!(resp, Response::Bulk(Some(_))));
+
+    // Not delivered: `g` alone does not include the stream class.
+    assert_keyevent_keys(&mut subscriber, "xadd", &[]).await;
+
+    // Now enable `t`: the same command now delivers the event.
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    let resp = client
+        .command(&["XADD", "mystream", "*", "field2", "value2"])
+        .await;
+    assert!(matches!(resp, Response::Bulk(Some(_))));
+
+    assert_keyevent_keys(&mut subscriber, "xadd", &["mystream"]).await;
+    server.shutdown().await;
+}
+
+/// XTRIM fires `xtrim` only when it actually removes an entry (t_stream.c
+/// `xtrimCommand`, `if (deleted)`).
+#[tokio::test]
+async fn test_xtrim_notifies_xtrim_event_when_entries_removed() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XADD", "s", "2-0", "f", "v2"]).await;
+    client.command(&["XADD", "s", "3-0", "f", "v3"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xtrim").await;
+
+    let resp = client.command(&["XTRIM", "s", "MAXLEN", "1"]).await;
+    assert_eq!(resp, Response::Integer(2));
+
+    assert_keyevent_keys(&mut subscriber, "xtrim", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// XTRIM notifies nothing when there was nothing to remove.
+#[tokio::test]
+async fn test_xtrim_not_fired_when_nothing_removed() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xtrim").await;
+
+    let resp = client.command(&["XTRIM", "s", "MAXLEN", "10"]).await;
+    assert_eq!(resp, Response::Integer(0));
+
+    assert_keyevent_keys(&mut subscriber, "xtrim", &[]).await;
+    server.shutdown().await;
+}
+
+/// XDEL fires `xdel` only for a call that actually removes an entry.
+#[tokio::test]
+async fn test_xdel_notifies_xdel_event_when_entry_removed() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xdel").await;
+
+    let resp = client.command(&["XDEL", "s", "1-0"]).await;
+    assert_eq!(resp, Response::Integer(1));
+
+    assert_keyevent_keys(&mut subscriber, "xdel", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// XDEL of an absent ID deletes nothing and notifies nothing.
+#[tokio::test]
+async fn test_xdel_not_fired_when_id_absent() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xdel").await;
+
+    let resp = client.command(&["XDEL", "s", "99-0"]).await;
+    assert_eq!(resp, Response::Integer(0));
+
+    assert_keyevent_keys(&mut subscriber, "xdel", &[]).await;
+    server.shutdown().await;
+}
+
+/// Regression (issue 27): XDELEX previously had `EventSpec::Suppressed` and
+/// never notified. It shares XDEL's `xdel` event and fires only when at
+/// least one ID was actually deleted (t_stream.c `xdelexCommand`).
+#[tokio::test]
+async fn test_xdelex_notifies_xdel_event_when_entry_deleted() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XADD", "s", "2-0", "f", "v2"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xdel").await;
+
+    // Mixed present/absent IDs: still fires once because *something* deleted.
+    let resp = client
+        .command(&["XDELEX", "s", "IDS", "2", "1-0", "99-0"])
+        .await;
+    assert_eq!(
+        resp,
+        Response::Array(vec![Response::Integer(1), Response::Integer(-1)])
+    );
+
+    assert_keyevent_keys(&mut subscriber, "xdel", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// XDELEX notifies nothing when it deletes nothing (all IDs absent).
+#[tokio::test]
+async fn test_xdelex_not_fired_when_nothing_deleted() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xdel").await;
+
+    let resp = client.command(&["XDELEX", "s", "IDS", "1", "99-0"]).await;
+    assert_eq!(resp, Response::Array(vec![Response::Integer(-1)]));
+
+    assert_keyevent_keys(&mut subscriber, "xdel", &[]).await;
+    server.shutdown().await;
+}
+
+/// Regression (issue 27): XACKDEL previously had `EventSpec::Suppressed`.
+/// Like XDELEX, it shares the `xdel` event and fires only when at least one
+/// ID was acked *and* deleted (t_stream.c `xackdelCommand`).
+#[tokio::test]
+async fn test_xackdel_notifies_xdel_event_when_entry_deleted() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+    client
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "g1",
+            "c1",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "s",
+            ">",
+        ])
+        .await;
+
+    subscribe_keyevent(&mut subscriber, "xdel").await;
+
+    let resp = client
+        .command(&["XACKDEL", "s", "g1", "IDS", "1", "1-0"])
+        .await;
+    assert_eq!(resp, Response::Array(vec![Response::Integer(1)]));
+
+    assert_keyevent_keys(&mut subscriber, "xdel", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// XACKDEL notifies nothing when nothing was acked/deleted (ID unknown to
+/// the stream entirely).
+#[tokio::test]
+async fn test_xackdel_not_fired_when_nothing_deleted() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xdel").await;
+
+    // 99-0 was never added to the stream at all, so there's nothing to ack
+    // or delete (ack_and_delete returns -1 for an unknown ID, matching
+    // test_xackdel_not_found in integration_streams.rs).
+    let resp = client
+        .command(&["XACKDEL", "s", "g1", "IDS", "1", "99-0"])
+        .await;
+    assert_eq!(resp, Response::Array(vec![Response::Integer(-1)]));
+
+    assert_keyevent_keys(&mut subscriber, "xdel", &[]).await;
+    server.shutdown().await;
+}
+
+/// Regression (issue 27): XSETID previously had `EventSpec::Suppressed` and
+/// never notified. Redis fires `xsetid` unconditionally on success
+/// (t_stream.c `xsetidCommand`).
+#[tokio::test]
+async fn test_xsetid_notifies_xsetid_event() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xsetid").await;
+
+    let resp = client.command(&["XSETID", "s", "100-0"]).await;
+    assert_eq!(resp, Response::ok());
+
+    assert_keyevent_keys(&mut subscriber, "xsetid", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// XGROUP CREATE fires `xgroup-create` on success.
+#[tokio::test]
+async fn test_xgroup_create_notifies_xgroup_create_event() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xgroup-create").await;
+
+    let resp = client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+    assert_eq!(resp, Response::ok());
+
+    assert_keyevent_keys(&mut subscriber, "xgroup-create", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// Regression (issue 27): before this fix, `XgroupCommand`'s spec used one
+/// static `Emits{name: "xgroup-create"}` for *every* subcommand, so
+/// XGROUP SETID would have mislabeled its event as `xgroup-create` instead
+/// of firing its own `xgroup-setid`. Asserts both: the correct event fires,
+/// and the (wrong, pre-fix) event does not.
+#[tokio::test]
+async fn test_xgroup_setid_notifies_xgroup_setid_event_not_xgroup_create() {
+    let server = TestServer::start_standalone().await;
+    let mut setid_sub = server.connect().await;
+    let mut create_sub = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+
+    subscribe_keyevent(&mut setid_sub, "xgroup-setid").await;
+    subscribe_keyevent(&mut create_sub, "xgroup-create").await;
+
+    let resp = client.command(&["XGROUP", "SETID", "s", "g1", "0"]).await;
+    assert_eq!(resp, Response::ok());
+
+    assert_keyevent_keys(&mut setid_sub, "xgroup-setid", &["s"]).await;
+    assert_keyevent_keys(&mut create_sub, "xgroup-create", &[]).await;
+    server.shutdown().await;
+}
+
+/// Regression (issue 27): XGROUP DESTROY previously mislabeled its event as
+/// `xgroup-create` (see above) and fired unconditionally. Redis's
+/// `xgroupCommand` DESTROY only notifies `xgroup-destroy` when the group
+/// actually existed.
+#[tokio::test]
+async fn test_xgroup_destroy_notifies_xgroup_destroy_event_when_group_existed() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xgroup-destroy").await;
+
+    let resp = client.command(&["XGROUP", "DESTROY", "s", "g1"]).await;
+    assert_eq!(resp, Response::Integer(1));
+
+    assert_keyevent_keys(&mut subscriber, "xgroup-destroy", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// XGROUP DESTROY of a nonexistent group notifies nothing.
+#[tokio::test]
+async fn test_xgroup_destroy_not_fired_when_group_absent() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xgroup-destroy").await;
+
+    let resp = client
+        .command(&["XGROUP", "DESTROY", "s", "nosuchgroup"])
+        .await;
+    assert_eq!(resp, Response::Integer(0));
+
+    assert_keyevent_keys(&mut subscriber, "xgroup-destroy", &[]).await;
+    server.shutdown().await;
+}
+
+/// Regression (issue 27): XGROUP CREATECONSUMER previously mislabeled its
+/// event as `xgroup-create` and fired unconditionally. It should fire
+/// `xgroup-createconsumer` only when the consumer is newly created, not on a
+/// repeat call for a consumer that already exists.
+#[tokio::test]
+async fn test_xgroup_createconsumer_notifies_only_when_consumer_is_new() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xgroup-createconsumer").await;
+
+    let resp = client
+        .command(&["XGROUP", "CREATECONSUMER", "s", "g1", "Bob"])
+        .await;
+    assert_eq!(resp, Response::Integer(1));
+
+    let resp = client
+        .command(&["XGROUP", "CREATECONSUMER", "s", "g1", "Bob"])
+        .await;
+    assert_eq!(resp, Response::Integer(0));
+
+    // Only the first (creating) call notifies.
+    assert_keyevent_keys(&mut subscriber, "xgroup-createconsumer", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// Regression (issue 27): XGROUP DELCONSUMER previously mislabeled its event
+/// as `xgroup-create` and fired unconditionally, even for a consumer that
+/// never existed. It should fire `xgroup-delconsumer` only when the consumer
+/// actually existed.
+#[tokio::test]
+async fn test_xgroup_delconsumer_notifies_only_when_consumer_existed() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+    client
+        .command(&["XGROUP", "CREATECONSUMER", "s", "g1", "Bob"])
+        .await;
+
+    subscribe_keyevent(&mut subscriber, "xgroup-delconsumer").await;
+
+    let resp = client
+        .command(&["XGROUP", "DELCONSUMER", "s", "g1", "NoSuchConsumer"])
+        .await;
+    assert_eq!(resp, Response::Integer(0));
+
+    let resp = client
+        .command(&["XGROUP", "DELCONSUMER", "s", "g1", "Bob"])
+        .await;
+    assert_eq!(resp, Response::Integer(0));
+
+    // Only the second call (Bob, who existed) notifies.
+    assert_keyevent_keys(&mut subscriber, "xgroup-delconsumer", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// Regression (issue 27): XCLAIM has no dedicated event, but it always
+/// ensures its target consumer exists (creating it when FORCE is used and
+/// the entry isn't pending). It previously never notified that implicit
+/// creation; it should fire `xgroup-createconsumer` only when the consumer
+/// is genuinely new.
+#[tokio::test]
+async fn test_xclaim_notifies_xgroup_createconsumer_when_consumer_is_new() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xgroup-createconsumer").await;
+
+    let resp = client
+        .command(&["XCLAIM", "s", "g1", "NewConsumer", "0", "1-0", "FORCE"])
+        .await;
+    assert!(matches!(resp, Response::Array(_)));
+
+    assert_keyevent_keys(&mut subscriber, "xgroup-createconsumer", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// XCLAIM notifies nothing when its target consumer already exists.
+#[tokio::test]
+async fn test_xclaim_not_fired_when_consumer_already_exists() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+    client
+        .command(&["XGROUP", "CREATECONSUMER", "s", "g1", "Bob"])
+        .await;
+
+    subscribe_keyevent(&mut subscriber, "xgroup-createconsumer").await;
+
+    let resp = client
+        .command(&["XCLAIM", "s", "g1", "Bob", "0", "1-0", "FORCE"])
+        .await;
+    assert!(matches!(resp, Response::Array(_)));
+
+    assert_keyevent_keys(&mut subscriber, "xgroup-createconsumer", &[]).await;
+    server.shutdown().await;
+}
+
+/// Regression (issue 27): XAUTOCLAIM has the same implicit
+/// consumer-creation behavior as XCLAIM, and previously never notified it.
+#[tokio::test]
+async fn test_xautoclaim_notifies_xgroup_createconsumer_when_consumer_is_new() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+    client
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "g1",
+            "c1",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "s",
+            ">",
+        ])
+        .await;
+
+    subscribe_keyevent(&mut subscriber, "xgroup-createconsumer").await;
+
+    let resp = client
+        .command(&["XAUTOCLAIM", "s", "g1", "NewConsumer", "0", "0"])
+        .await;
+    assert!(matches!(resp, Response::Array(_)));
+
+    assert_keyevent_keys(&mut subscriber, "xgroup-createconsumer", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// XAUTOCLAIM notifies nothing when its target consumer already exists.
+#[tokio::test]
+async fn test_xautoclaim_not_fired_when_consumer_already_exists() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+    client
+        .command(&["XGROUP", "CREATECONSUMER", "s", "g1", "Bob"])
+        .await;
+
+    subscribe_keyevent(&mut subscriber, "xgroup-createconsumer").await;
+
+    let resp = client
+        .command(&["XAUTOCLAIM", "s", "g1", "Bob", "0", "0"])
+        .await;
+    assert!(matches!(resp, Response::Array(_)));
+
+    assert_keyevent_keys(&mut subscriber, "xgroup-createconsumer", &[]).await;
+    server.shutdown().await;
+}
+
+/// Regression (issue 27): XREADGROUP auto-creates its named consumer as a
+/// side effect (before deciding whether to block), and previously never
+/// notified that creation.
+#[tokio::test]
+async fn test_xreadgroup_notifies_xgroup_createconsumer_when_consumer_is_new() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xgroup-createconsumer").await;
+
+    let resp = client
+        .command(&["XREADGROUP", "GROUP", "g1", "Alice", "STREAMS", "s", ">"])
+        .await;
+    assert!(matches!(resp, Response::Array(_)));
+
+    assert_keyevent_keys(&mut subscriber, "xgroup-createconsumer", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// XREADGROUP notifies nothing when its named consumer already exists —
+/// including on a no-new-entries call (the consumer lookup happens before
+/// the entries check, so this also exercises that ordering).
+#[tokio::test]
+async fn test_xreadgroup_not_fired_when_consumer_already_exists() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client
+        .command(&["XGROUP", "CREATE", "s", "g1", "$", "MKSTREAM"])
+        .await;
+    client
+        .command(&["XGROUP", "CREATECONSUMER", "s", "g1", "Alice"])
+        .await;
+
+    subscribe_keyevent(&mut subscriber, "xgroup-createconsumer").await;
+
+    // No new entries and Alice already exists: neither blocks nor notifies.
+    let resp = client
+        .command(&["XREADGROUP", "GROUP", "g1", "Alice", "STREAMS", "s", ">"])
+        .await;
+    assert_eq!(resp, Response::Bulk(None));
+
+    assert_keyevent_keys(&mut subscriber, "xgroup-createconsumer", &[]).await;
+    server.shutdown().await;
+}
+
+/// Upstream Redis parity port of `tests/unit/pubsub.tcl`'s "Keyspace
+/// notifications: stream events test" (see the exclusion note in
+/// `pubsub_tcl.rs` — the original is skipped because it depends on runtime
+/// `notify-keyspace-events` config, which the TCL-port harness doesn't drive).
+/// Reproduces the exact mystream/mygroup/Bob/Alice/Mike/Lee sequence from
+/// Redis 8.6.4 and asserts the precise 6-event order, including both
+/// intentional non-fire cases (Lee never existed; Bob already existed).
+#[tokio::test]
+async fn test_stream_events_ported_from_redis_pubsub_tcl() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+    let mut subscriber = server.connect().await;
+
+    // `Kt`: keyspace notifications for the stream class only (matches the
+    // upstream test's `config set notify-keyspace-events Kt`).
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Kt"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    let resp = subscriber
+        .command(&["SUBSCRIBE", "__keyspace@0__:mystream"])
+        .await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let resp = client
+        .command(&["XGROUP", "CREATE", "mystream", "mygroup", "$", "MKSTREAM"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    let resp = client
+        .command(&["XGROUP", "CREATECONSUMER", "mystream", "mygroup", "Bob"])
+        .await;
+    assert_eq!(resp, Response::Integer(1));
+
+    let resp = client
+        .command(&["XADD", "mystream", "1-1", "field1", "A"])
+        .await;
+    let id = match resp {
+        Response::Bulk(Some(b)) => String::from_utf8(b.to_vec()).unwrap(),
+        other => panic!("expected a bulk stream ID from XADD, got {other:?}"),
+    };
+
+    client
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "Alice",
+            "STREAMS",
+            "mystream",
+            ">",
+        ])
+        .await;
+
+    client
+        .command(&["XCLAIM", "mystream", "mygroup", "Mike", "0", &id, "FORCE"])
+        .await;
+
+    // Lee has never existed: XGROUP DELCONSUMER must not notify.
+    let resp = client
+        .command(&["XGROUP", "DELCONSUMER", "mystream", "mygroup", "Lee"])
+        .await;
+    assert_eq!(resp, Response::Integer(0));
+
+    // Bob already exists (created above): XAUTOCLAIM's implicit
+    // get-or-create must not notify.
+    client
+        .command(&["XAUTOCLAIM", "mystream", "mygroup", "Bob", "0", &id])
+        .await;
+
+    client
+        .command(&["XGROUP", "DELCONSUMER", "mystream", "mygroup", "Bob"])
+        .await;
+
+    let expected_sequence = [
+        "xgroup-create",
+        "xgroup-createconsumer", // Bob, via XGROUP CREATECONSUMER
+        "xadd",
+        "xgroup-createconsumer", // Alice, via XREADGROUP's implicit creation
+        "xgroup-createconsumer", // Mike, via XCLAIM FORCE's implicit creation
+        "xgroup-delconsumer",    // Bob, via XGROUP DELCONSUMER
+    ];
+    for (i, expected) in expected_sequence.iter().enumerate() {
+        let msg = subscriber.read_message(Duration::from_secs(2)).await;
+        let Some(Response::Array(arr)) = msg else {
+            panic!("expected keyspace message #{i} ('{expected}'), got {msg:?}");
+        };
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("message"))));
+        assert_eq!(
+            arr[1],
+            Response::Bulk(Some(Bytes::from("__keyspace@0__:mystream")))
+        );
+        assert_eq!(
+            arr[2],
+            Response::Bulk(Some(Bytes::from(*expected))),
+            "keyspace message #{i}: wrong event in upstream-parity sequence"
+        );
+    }
+
+    // No further notifications: both intentional non-fire cases (Lee,
+    // Bob-already-existed) produced no extra messages.
+    let extra = subscriber.read_message(Duration::from_millis(400)).await;
+    assert!(
+        extra.is_none(),
+        "unexpected extra keyspace event (over-emission): {extra:?}"
+    );
+
+    server.shutdown().await;
+}

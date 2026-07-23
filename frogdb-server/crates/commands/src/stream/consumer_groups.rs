@@ -25,10 +25,14 @@ impl Command for XgroupCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistDestination,
             wakes: WaiterWake::Kind(WaiterKind::Stream),
-            event: EventSpec::Emits {
-                class: KeyspaceEventFlags::STREAM,
-                name: "xgroup-create",
-            },
+            // XGROUP is a subcommand router: CREATE/SETID/DESTROY/
+            // CREATECONSUMER/DELCONSUMER each fire a distinct event name
+            // (xgroupCommand, t_stream.c:3524/3546/3557/3567/3585), and
+            // DESTROY/CREATECONSUMER/DELCONSUMER notify only when the
+            // group/consumer actually existed/was created. A single static
+            // Emits cannot represent that — each subcommand fn deposits its
+            // own event via `notify_event`.
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
             reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
@@ -139,6 +143,7 @@ fn xgroup_create(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, C
         .expect("key existence checked above");
     stream.create_group(group_name, last_id, entries_read)?;
 
+    ctx.notify_event(key.clone(), "xgroup-create", KeyspaceEventFlags::STREAM);
     Ok(Response::ok())
 }
 
@@ -156,6 +161,9 @@ fn xgroup_destroy(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, 
     match ctx.store.get_stream_mut(key)? {
         Some(stream) => {
             let destroyed = stream.destroy_group(group_name);
+            if destroyed {
+                ctx.notify_event(key.clone(), "xgroup-destroy", KeyspaceEventFlags::STREAM);
+            }
             Ok(Response::Integer(if destroyed { 1 } else { 0 }))
         }
         None => Err(CommandError::InvalidArgument {
@@ -185,6 +193,13 @@ fn xgroup_createconsumer(
                 .get_group_mut(group_name)
                 .ok_or(CommandError::NoGroup)?;
             let created = group.create_consumer(consumer_name);
+            if created {
+                ctx.notify_event(
+                    key.clone(),
+                    "xgroup-createconsumer",
+                    KeyspaceEventFlags::STREAM,
+                );
+            }
             Ok(Response::Integer(if created { 1 } else { 0 }))
         }
         None => Err(CommandError::InvalidArgument {
@@ -210,7 +225,17 @@ fn xgroup_delconsumer(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Respon
             let group = stream
                 .get_group_mut(group_name)
                 .ok_or(CommandError::NoGroup)?;
+            // Redis only notifies when the consumer actually existed
+            // (xgroupCommand DELCONSUMER, t_stream.c:3574 `if (consumer)`).
+            let existed = group.has_consumer(consumer_name);
             let pending_deleted = group.delete_consumer(consumer_name);
+            if existed {
+                ctx.notify_event(
+                    key.clone(),
+                    "xgroup-delconsumer",
+                    KeyspaceEventFlags::STREAM,
+                );
+            }
             Ok(Response::Integer(pending_deleted as i64))
         }
         None => Err(CommandError::InvalidArgument {
@@ -262,6 +287,7 @@ fn xgroup_setid(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
             };
 
             stream.set_group_id(group_name, new_id, entries_read)?;
+            ctx.notify_event(key.clone(), "xgroup-setid", KeyspaceEventFlags::STREAM);
             Ok(Response::ok())
         }
         None => Err(CommandError::InvalidArgument {
@@ -336,7 +362,11 @@ impl Command for XackdelCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
-            event: EventSpec::Suppressed,
+            // Redis fires "xdel" only when an ID was actually removed from the
+            // stream (xackdelCommand, t_stream.c:3901, `if (deleted) { ...
+            // notifyKeyspaceEvent(...,"xdel",...) }`) — a call that only acks
+            // (or finds nothing to ack/delete) notifies nothing.
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
             reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
@@ -360,6 +390,12 @@ impl Command for XackdelCommand {
         match ctx.store.get_stream_mut(key)? {
             Some(stream) => {
                 let results = stream.ack_and_delete(group_name, &ids, strategy)?;
+                // `1` marks an ID that was acked *and* deleted (see
+                // ack_and_delete); `-1` not-found and `2` acked-but-not-deleted
+                // never delete.
+                if results.contains(&1) {
+                    ctx.notify_event(key.clone(), "xdel", KeyspaceEventFlags::STREAM);
+                }
                 Ok(Response::Array(
                     results.into_iter().map(Response::Integer).collect(),
                 ))
