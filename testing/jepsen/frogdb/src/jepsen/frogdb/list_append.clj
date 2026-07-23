@@ -17,6 +17,7 @@
    Checker: jepsen.tests.cycle.append (Elle)"
   (:require [clojure.tools.logging :refer [info warn]]
             [jepsen.client :as client]
+            [jepsen.generator :as gen]
             [jepsen.frogdb.client :as frogdb]
             [jepsen.frogdb.cluster-db :as cluster-db]
             [jepsen.frogdb.cluster-client :as cluster-client]
@@ -107,18 +108,23 @@
     this)
 
   (invoke! [this test op]
-    (frogdb/with-error-handling op
-      (let [txn (:value op)]
-        (if (> (count txn) 1)
-          ;; Multi-op: wrap in MULTI/EXEC
-          (try+
-            (let [results (exec-multi-ops conn txn)]
-              (assoc op :type :ok :value results))
-            (catch [:type :txn-aborted] _
-              (assoc op :type :info :error :txn-aborted)))
-          ;; Single-op: execute directly
-          (let [results (exec-single-op conn (first txn))]
-            (assoc op :type :ok :value results))))))
+    (if (= :read (:f op))
+      ;; Handle final-reads phase from core.clj — not an Elle txn, just ack it
+      ;; with an empty value so it never enters the Elle append checker as a
+      ;; nil-valued op (which crashes elle.txn/intermediate-write-indices).
+      (assoc op :type :ok :value [])
+      (frogdb/with-error-handling op
+        (let [txn (:value op)]
+          (if (> (count txn) 1)
+            ;; Multi-op: wrap in MULTI/EXEC
+            (try+
+              (let [results (exec-multi-ops conn txn)]
+                (assoc op :type :ok :value results))
+              (catch [:type :txn-aborted] _
+                (assoc op :type :info :error :txn-aborted)))
+            ;; Single-op: execute directly
+            (let [results (exec-single-op conn (first txn))]
+              (assoc op :type :ok :value results)))))))
 
   (teardown! [this test]
     nil)
@@ -159,7 +165,11 @@
     this)
 
   (invoke! [this test op]
-    (frogdb/with-error-handling op
+    (if (= :read (:f op))
+      ;; Handle final-reads phase from core.clj — not an Elle txn, just ack it
+      ;; with an empty value (see single-node client for rationale).
+      (assoc op :type :ok :value [])
+      (frogdb/with-error-handling op
       ;; All {elle} keys route to the same slot, so find the owner and
       ;; execute there directly (MULTI/EXEC works on a single node).
       (let [txn (:value op)
@@ -208,7 +218,7 @@
                     :clusterdown
                     (assoc op :type :info :error :clusterdown)
                     (throw e))
-                  (throw e)))))))))
+                  (throw e))))))))))
 
   (teardown! [this test]
     nil)
@@ -246,4 +256,13 @@
                   (map->ClusterElleListAppendClient {})
                   (map->ElleListAppendClient {}))
      :generator (:generator test-map)
+     ;; Final-reads phase: emit Elle-shaped read-only txns (one :r per key)
+     ;; rather than letting core.clj fall back to plain {:f :read} ops, which
+     ;; carry a nil :value and crash the Elle append checker.
+     :final-generator (->> (gen/repeat
+                             {:f :txn
+                              :value (mapv (fn [k] [:r k nil])
+                                           (range (get elle-opts :key-count 12)))})
+                           (gen/limit 10)
+                           (gen/stagger 0.1))
      :checker   (:checker test-map)}))

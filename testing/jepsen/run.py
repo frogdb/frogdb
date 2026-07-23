@@ -118,6 +118,15 @@ TESTS: tuple[TestDefinition, ...] = (
     TestDefinition(
         "blocking", "blocking", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")
     ),
+    # Elle list-append baseline (single-node, no faults). RPUSH/LRANGE driven by
+    # jepsen.tests.cycle.append with the :strict-serializable consistency model —
+    # the strongest cycle-based anomaly detector in the harness (G0/G1a/G1b/G1c/G2).
+    # On a single node with no nemesis this establishes that the transactional
+    # RPUSH/LRANGE path is strict-serializable in the absence of faults; the raft
+    # fault variant below stresses the same checker under real fault injection.
+    TestDefinition(
+        "list-append", "list-append", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")
+    ),
     # Single-node crash workloads
     TestDefinition("crash", "register", "kill", 60, Topology.SINGLE, suites=("crash", "all")),
     TestDefinition(
@@ -313,6 +322,27 @@ TESTS: tuple[TestDefinition, ...] = (
     TestDefinition(
         "raft-chaos",
         "key-routing",
+        "raft-cluster",
+        120,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    # list-append-raft: the Elle strict-serializable list-append workload driven
+    # against the raft-cluster composed nemesis (kills + pauses + partitions +
+    # slow-network + disk + clock + memory on the core nodes). All {elle} keys
+    # co-locate to a single hash slot (hash tag), so this does NOT exercise
+    # cross-shard routing coverage (raft-chaos/key-routing owns that) — instead it
+    # subjects the strongest anomaly detector in the harness to real fault
+    # injection: any G0/G1a/G1b/G1c/G2 cycle or strict-serializability violation
+    # surfacing on the co-located slot while its owner is repeatedly killed and
+    # partitioned is a genuine consistency failure. The cluster client downgrades
+    # unreachable/CLUSTERDOWN ops to :info (Elle ignores indeterminate ops) and
+    # follows MOVED redirects, so faults reduce throughput rather than manufacture
+    # false anomalies. Elle's :cycle-search-timeout is NOT a failure (skill docs).
+    TestDefinition(
+        "list-append-raft",
+        "list-append",
         "raft-cluster",
         120,
         Topology.RAFT,
