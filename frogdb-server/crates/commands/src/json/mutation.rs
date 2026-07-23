@@ -6,7 +6,8 @@ use frogdb_core::{
 use frogdb_protocol::Response;
 
 use super::{
-    get_json_mut, json_error_to_command_error, parse_json_value, parse_path, single_or_multi,
+    enforce_growth_limits, get_json_mut, json_error_to_command_error, parse_json_value_limited,
+    parse_path, single_or_multi,
 };
 
 // ============================================================================
@@ -119,11 +120,16 @@ impl Command for JsonMergeCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let path = String::from_utf8_lossy(&args[1]).to_string();
-        let patch = parse_json_value(&args[2])?;
+        let limits = ctx.json_limits;
+        let patch = parse_json_value_limited(&args[2], &limits)?;
 
         let json = get_json_mut!(ctx, key);
+        // MERGE can grow the stored document past the caps; snapshot for rollback
+        // and validate the merged result.
+        let snapshot = json.clone();
         json.merge(&path, patch)
             .map_err(json_error_to_command_error)?;
+        enforce_growth_limits(json, snapshot, &limits)?;
 
         Ok(Response::ok())
     }

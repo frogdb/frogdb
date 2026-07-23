@@ -6,8 +6,8 @@ use frogdb_core::{
 use frogdb_protocol::Response;
 
 use super::{
-    get_json, get_json_mut, json_error_to_command_error, parse_json_value, parse_path,
-    single_or_multi,
+    enforce_growth_limits, get_json, get_json_mut, json_error_to_command_error,
+    parse_json_value_limited, parse_path, single_or_multi,
 };
 use crate::utils::parse_i64;
 
@@ -42,17 +42,21 @@ impl Command for JsonArrAppendCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let path = String::from_utf8_lossy(&args[1]).to_string();
+        let limits = ctx.json_limits;
 
         // Parse all values
         let mut values = Vec::new();
         for arg in args.iter().skip(2) {
-            values.push(parse_json_value(arg)?);
+            values.push(parse_json_value_limited(arg, &limits)?);
         }
 
         let json = get_json_mut!(ctx, key);
+        // Appending can grow the array past the size cap; snapshot for rollback.
+        let snapshot = json.clone();
         let results = json
             .arr_append(&path, values)
             .map_err(json_error_to_command_error)?;
+        enforce_growth_limits(json, snapshot, &limits)?;
 
         Ok(single_or_multi(results, |len| {
             Response::Integer(len as i64)
@@ -89,7 +93,9 @@ impl Command for JsonArrIndexCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let path = String::from_utf8_lossy(&args[1]).to_string();
-        let value = parse_json_value(&args[2])?;
+        // ARRINDEX is read-only, but the needle is still client-supplied JSON, so
+        // it is bounded at the ingest boundary like every other JSON input.
+        let value = parse_json_value_limited(&args[2], &ctx.json_limits)?;
         let start = if args.len() > 3 {
             parse_i64(&args[3])?
         } else {
@@ -143,17 +149,21 @@ impl Command for JsonArrInsertCommand {
         let key = &args[0];
         let path = String::from_utf8_lossy(&args[1]).to_string();
         let index = parse_i64(&args[2])?;
+        let limits = ctx.json_limits;
 
         // Parse all values
         let mut values = Vec::new();
         for arg in args.iter().skip(3) {
-            values.push(parse_json_value(arg)?);
+            values.push(parse_json_value_limited(arg, &limits)?);
         }
 
         let json = get_json_mut!(ctx, key);
+        // Inserting can grow the array past the size cap; snapshot for rollback.
+        let snapshot = json.clone();
         let results = json
             .arr_insert(&path, index, values)
             .map_err(json_error_to_command_error)?;
+        enforce_growth_limits(json, snapshot, &limits)?;
 
         Ok(single_or_multi(results, |len| {
             Response::Integer(len as i64)
