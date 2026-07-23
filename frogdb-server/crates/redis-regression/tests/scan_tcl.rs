@@ -513,6 +513,12 @@ async fn tcl_scan_guarantees_under_write_load() {
 
     let mut cursor = "0".to_string();
     let mut keys = Vec::new();
+    // Distinct-key counter: every inserted key is brand new so the keyspace
+    // grows monotonically and the hashtable is forced to resize *during* the
+    // scan. (The previous version rewrote the same 10 keys idempotently, so the
+    // table never grew past ~110 keys and no resize-under-scan was exercised —
+    // a naive positional cursor regression would have passed undetected.)
+    let mut added = 0usize;
     loop {
         let resp = client.command(&["SCAN", &cursor]).await;
         let arr = unwrap_array(resp);
@@ -524,15 +530,26 @@ async fn tcl_scan_guarantees_under_write_load() {
             break;
         }
 
-        // Write 10 keys at every iteration to simulate concurrent writes.
-        for j in 0..10 {
-            let rk = format!("addedkey:{j}");
+        // Insert 50 distinct keys at every iteration to simulate concurrent
+        // writes that grow the table and trigger real resizes mid-iteration.
+        for _ in 0..50 {
+            let rk = format!("addedkey:{added}");
             client.command(&["SET", &rk, "foo"]).await;
+            added += 1;
         }
     }
 
-    // Filter to only the original key:0..key:99 keys (len <= 6 chars).
-    let mut original: Vec<String> = keys.into_iter().filter(|k| k.len() <= 6).collect();
+    // The concurrent inserts must have grown the keyspace far beyond the
+    // original 100 keys — otherwise no resize was exercised.
+    assert!(
+        added >= 100,
+        "expected substantial keyspace growth during scan, only added {added}"
+    );
+
+    // Every original key (key:0..key:99), present for the whole scan, must be
+    // returned at least once. Isolate them by prefix so growing addedkey:N
+    // names never collide with the original set regardless of length.
+    let mut original: Vec<String> = keys.into_iter().filter(|k| k.starts_with("key:")).collect();
     original.sort();
     original.dedup();
     assert_eq!(original.len(), 100);

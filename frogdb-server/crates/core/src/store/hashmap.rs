@@ -2675,4 +2675,205 @@ mod tests {
         );
         assert!(s.get_with_expiry_check(b"k").is_none());
     }
+
+    // -----------------------------------------------------------------------
+    // SCAN full-iteration guarantee under mid-scan table resizes (issue 24).
+    //
+    // The store's `data` is a `griddle::HashMap`, which rehashes incrementally
+    // on insert. A naive positional cursor would skip keys whenever the table
+    // resizes mid-scan; the content-hash cursor (`scan_cursor_hash`) makes the
+    // resume ordering independent of table layout so a key present for the
+    // whole scan is always returned at least once. These tests pin that
+    // guarantee by forcing many resizes between SCAN batches.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn scan_full_iteration_survives_resizes_mid_scan() {
+        use std::collections::HashSet;
+
+        let mut store = HashMapStore::new();
+
+        // Seed the keyspace we expect to fully observe.
+        const ORIGINAL: usize = 5_000;
+        for i in 0..ORIGINAL {
+            store.set(Bytes::from(format!("orig:{i}")), Value::string("v"));
+        }
+        let starting_keys = store.data.len();
+
+        let mut seen: HashSet<Bytes> = HashSet::new();
+        let mut cursor = 0u64;
+        let count = 500;
+        // Distinct-key counter so every inserted key is brand new (forces the
+        // table to grow, unlike idempotent rewrites of the same keys). We spend
+        // a fixed budget of ~50k inserts across the early batches, then stop —
+        // if we inserted faster than the cursor drains the scan would never
+        // terminate, so the budget is bounded while still forcing many resizes.
+        let mut extra = 0usize;
+        const INSERT_BUDGET: usize = 50_000;
+
+        loop {
+            let (next, batch) = store.scan(cursor, count, None);
+            seen.extend(batch);
+            cursor = next;
+            if cursor == 0 {
+                break;
+            }
+
+            // Front-load the growth: insert a burst of distinct keys between
+            // batches until the budget is exhausted. The table grows from ~5k
+            // to ~55k while the scan is in flight, forcing multiple griddle
+            // resizes mid-iteration.
+            for _ in 0..5_000 {
+                if extra >= INSERT_BUDGET {
+                    break;
+                }
+                store.set(Bytes::from(format!("extra:{extra}")), Value::string("v"));
+                extra += 1;
+            }
+        }
+
+        // The table must have grown by an order of magnitude (resizes happened).
+        assert!(
+            store.data.len() >= starting_keys * 5,
+            "expected table growth to force resizes: started {starting_keys}, ended {}",
+            store.data.len()
+        );
+
+        // Every original key — present for the entire scan — must be returned.
+        for i in 0..ORIGINAL {
+            let k = Bytes::from(format!("orig:{i}"));
+            assert!(
+                seen.contains(&k),
+                "original key orig:{i} was skipped despite being present the whole scan"
+            );
+        }
+    }
+
+    #[test]
+    fn scan_full_iteration_survives_shrink_mid_scan() {
+        use std::collections::HashSet;
+
+        // Grow large first so the table is at a high capacity, then delete a
+        // large fraction of the (non-original) keys between SCAN batches to
+        // exercise the shrink direction while iterating.
+        let mut store = HashMapStore::new();
+        const ORIGINAL: usize = 2_000;
+        const FILLER: usize = 40_000;
+        for i in 0..ORIGINAL {
+            store.set(Bytes::from(format!("orig:{i}")), Value::string("v"));
+        }
+        for i in 0..FILLER {
+            store.set(Bytes::from(format!("filler:{i}")), Value::string("v"));
+        }
+
+        let mut seen: HashSet<Bytes> = HashSet::new();
+        let mut cursor = 0u64;
+        let count = 100;
+        let mut next_to_delete = 0usize;
+
+        loop {
+            let (next, batch) = store.scan(cursor, count, None);
+            seen.extend(batch);
+            cursor = next;
+            if cursor == 0 {
+                break;
+            }
+
+            // Delete a burst of filler keys between batches (shrinks the table).
+            for _ in 0..1_500 {
+                if next_to_delete < FILLER {
+                    store.delete(format!("filler:{next_to_delete}").as_bytes());
+                    next_to_delete += 1;
+                }
+            }
+        }
+
+        for i in 0..ORIGINAL {
+            let k = Bytes::from(format!("orig:{i}"));
+            assert!(
+                seen.contains(&k),
+                "original key orig:{i} was skipped despite being present the whole scan"
+            );
+        }
+    }
+
+    mod scan_stress {
+        use super::*;
+        use proptest::prelude::*;
+        use std::collections::HashSet;
+
+        fn seed_key(i: usize) -> Bytes {
+            Bytes::from(format!("seed:{i}"))
+        }
+
+        proptest! {
+            // Redis's full-iteration guarantee: any key present for the entire
+            // duration of the scan is returned at least once. We drive a full
+            // keyspace SCAN to completion while applying randomized
+            // insert/delete operations between batches, then assert that the
+            // set of keys present-throughout is a subset of the returned keys.
+            #[test]
+            fn scan_present_throughout_is_subset_of_returned(
+                seed_count in 64usize..512,
+                count in 1usize..24,
+                ops_per_batch in 1usize..8,
+                ops in prop::collection::vec(
+                    (any::<bool>(), 0usize..1024),
+                    0..600,
+                ),
+            ) {
+                let mut store = HashMapStore::new();
+                for i in 0..seed_count {
+                    store.set(seed_key(i), Value::string("v"));
+                }
+
+                // Keys present at scan start.
+                let initial: HashSet<Bytes> =
+                    (0..seed_count).map(seed_key).collect();
+                // Any initial key deleted at any point during the scan is no
+                // longer "present throughout" and is dropped from the required
+                // set (conservative: a delete+reinsert also disqualifies it).
+                let mut disqualified: HashSet<Bytes> = HashSet::new();
+
+                let mut seen: HashSet<Bytes> = HashSet::new();
+                let mut cursor = 0u64;
+                let mut op_iter = ops.into_iter();
+
+                loop {
+                    let (next, batch) = store.scan(cursor, count, None);
+                    seen.extend(batch);
+                    cursor = next;
+                    if cursor == 0 {
+                        break;
+                    }
+
+                    for _ in 0..ops_per_batch {
+                        let Some((is_insert, idx)) = op_iter.next() else {
+                            break;
+                        };
+                        // Index range overlaps the seed range so deletes can
+                        // target present-throughout candidates, while higher
+                        // indices are pure concurrent churn.
+                        let k = seed_key(idx);
+                        if is_insert {
+                            store.set(k, Value::string("v"));
+                        } else {
+                            store.delete(
+                                format!("seed:{idx}").as_bytes(),
+                            );
+                            disqualified.insert(k);
+                        }
+                    }
+                }
+
+                for k in initial.difference(&disqualified) {
+                    prop_assert!(
+                        seen.contains(k),
+                        "key present for the whole scan was not returned: {:?}",
+                        k
+                    );
+                }
+            }
+        }
+    }
 }

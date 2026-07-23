@@ -1,6 +1,6 @@
 # SCAN full-iteration guarantee only tested against a static, non-resizing table
 
-Status: needs-triage
+Status: done
 Type: AFK
 Origin: testing-gap audit 2026-07-22 (multi-agent static review + adversarial verification; coverage run on testbox)
 Severity: likelihood 2/3, consequence 2/3 (score 4)
@@ -33,3 +33,48 @@ None - can start immediately.
 
 - `frogdb-server/crates/core/src/store/hashmap.rs:1044-1085` (content-hash cursor, full-iteration guarantee design)
 - `frogdb-server/crates/redis-regression/tests/scan_tcl.rs:507-538` (`tcl_scan_guarantees_under_write_load`, weak — same 10 keys, no resize)
+
+## Resolution
+
+Added mid-scan resize stress coverage that pins the content-hash cursor's
+full-iteration guarantee (the SCAN rehash-stability fix that already landed).
+
+New tests in `frogdb-server/crates/core/src/store/hashmap.rs` (test module):
+
+- `scan_full_iteration_survives_resizes_mid_scan` — seeds 5,000 keys, drives a
+  full `store.scan()` iteration, and front-loads a 50,000 distinct-key insert
+  budget between batches (COUNT 500), growing the `griddle::HashMap` ~5k→55k
+  and forcing multiple resizes mid-iteration. Asserts every original key is
+  returned at least once, plus that the table grew ≥5× (proves resizes fired).
+- `scan_full_iteration_survives_shrink_mid_scan` — seeds 2,000 originals +
+  40,000 filler keys, then deletes filler in bursts between batches to exercise
+  the shrink direction; asserts all originals are still returned.
+- `scan_stress::scan_present_throughout_is_subset_of_returned` (proptest) —
+  randomized interleavings of insert/delete ops between SCAN batches over 64–512
+  seed keys, COUNT 1–24. Asserts the invariant "every key present for the whole
+  scan duration (initial keys never deleted mid-scan) ⊆ returned keys".
+
+TCL integration test `tcl_scan_guarantees_under_write_load`
+(`scan_tcl.rs`) strengthened: it now inserts 50 *distinct* growing keys per
+batch (was: idempotent rewrites of the same 10 keys) so the server-level table
+actually resizes during the scan, and isolates originals by `key:` prefix.
+
+Verification of acceptance criterion 4: hand-reverting `scan_filtered` to a
+naive positional cursor (drop the content-hash sort + partition_point; resume
+by ordinal index into `data.iter()`) made all three new hashmap tests FAIL
+(`scan_full_iteration_survives_resizes_mid_scan` panicked "original key orig:59
+was skipped"; shrink + proptest also failed). Restored the correct
+implementation; all tests pass.
+
+Test evidence (local, macOS debug):
+
+```
+frogdb-core store::hashmap::tests::scan_full_iteration_survives_resizes_mid_scan  PASS 1.651s
+frogdb-core store::hashmap::tests::scan_full_iteration_survives_shrink_mid_scan   PASS 0.339s
+frogdb-core store::hashmap::tests::scan_stress::scan_present_throughout_is_subset_of_returned  PASS 1.572s
+frogdb-redis-regression scan_tcl::tcl_scan_guarantees_under_write_load            PASS 1.005s
+```
+
+Scope note: kept to keyspace-level SCAN per the acceptance criteria. HSCAN/
+SSCAN/ZSCAN iterate a single value's internal structure (separate cursor code)
+and were not in scope for this issue's guarantee.
