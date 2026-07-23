@@ -973,6 +973,83 @@ mod tests {
         assert!(fx.view().pubsub_mode_ping("GET", &[]).is_none());
     }
 
+    /// `is_allowed_in_pubsub_mode` unit coverage (no unit test existed prior to
+    /// this task — see issue 28). Pins the exact RESP2 allow-set boundary
+    /// against Redis 8.6's `processCommand` subscribe-context gate: SUBSCRIBE,
+    /// UNSUBSCRIBE, PSUBSCRIBE, PUNSUBSCRIBE, SSUBSCRIBE, SUNSUBSCRIBE, PING,
+    /// QUIT, RESET — exactly 9 commands — plus a representative disallowed
+    /// data command.
+    #[test]
+    fn test_is_allowed_in_pubsub_mode_resp2_allow_set_boundary() {
+        let mut fx = ViewFixture::new(None);
+        // Default protocol version is RESP2.
+        assert!(!fx.view().state.protocol_version.is_resp3());
+
+        for allowed in [
+            "SUBSCRIBE",
+            "UNSUBSCRIBE",
+            "PSUBSCRIBE",
+            "PUNSUBSCRIBE",
+            "SSUBSCRIBE",
+            "SUNSUBSCRIBE",
+            "PING",
+            "QUIT",
+            "RESET",
+        ] {
+            assert!(
+                fx.view().is_allowed_in_pubsub_mode(allowed),
+                "{allowed} should be allowed while subscribed under RESP2"
+            );
+        }
+
+        // Representative disallowed data commands.
+        for disallowed in ["GET", "SET", "DEL"] {
+            assert!(
+                !fx.view().is_allowed_in_pubsub_mode(disallowed),
+                "{disallowed} should be rejected while subscribed under RESP2"
+            );
+        }
+    }
+
+    /// RESP3 lifts the restriction entirely: every command, including plain
+    /// data commands and even unknown ones, is allowed while subscribed —
+    /// `is_allowed_in_pubsub_mode` short-circuits to `true` before consulting
+    /// the registry (`guards.rs:202-204`).
+    #[test]
+    fn test_is_allowed_in_pubsub_mode_resp3_allows_everything() {
+        let mut fx = ViewFixture::new(None);
+        fx.state.protocol_version = frogdb_protocol::ProtocolVersion::Resp3;
+
+        for cmd in ["GET", "SET", "DEL", "SUBSCRIBE", "PING", "NOSUCHCOMMAND"] {
+            assert!(
+                fx.view().is_allowed_in_pubsub_mode(cmd),
+                "{cmd} should be allowed while subscribed under RESP3"
+            );
+        }
+    }
+
+    /// KNOWN DIVERGENCE from Redis: `is_allowed_in_pubsub_mode` permits any
+    /// command sharing RESET's `ConnectionLevel(ConnectionState)` execution
+    /// strategy, not just RESET itself. ASKING/READONLY/READWRITE share that
+    /// strategy (`connection_state_conn_command.rs`), so they are — contrary
+    /// to Redis 8.6, which allows only the 9 commands pinned above — also
+    /// permitted while subscribed under RESP2. Pinned here so a future
+    /// strategy split (or intentional accept) is a deliberate test change,
+    /// not a silent behavior drift.
+    #[test]
+    fn test_is_allowed_in_pubsub_mode_resp2_connection_state_siblings_diverge_from_redis() {
+        let mut fx = ViewFixture::new(None);
+        for sibling in ["ASKING", "READONLY", "READWRITE"] {
+            assert!(
+                fx.view().is_allowed_in_pubsub_mode(sibling),
+                "{sibling} shares RESET's ConnectionState strategy, so the \
+                 current gate allows it too (divergence from Redis's 9-command \
+                 allow-set — Redis rejects ASKING/READONLY/READWRITE while \
+                 subscribed)"
+            );
+        }
+    }
+
     #[test]
     fn test_noauth_rejected_when_auth_required() {
         // requires_auth = true, unauthenticated connection.

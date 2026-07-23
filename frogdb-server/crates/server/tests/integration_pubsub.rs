@@ -4823,3 +4823,291 @@ async fn test_slow_subscriber_output_buffer_bound_disconnects() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// Subscribe-mode command gate (issue 28)
+//
+// Pins the RESP2/RESP3 boundary of `is_allowed_in_pubsub_mode`
+// (guards.rs:196-217): verified against Redis 8.6 `processCommand`'s
+// subscribe-context gate (server.c), which allows exactly 9 commands in RESP2
+// while subscribed — SUBSCRIBE, UNSUBSCRIBE, PSUBSCRIBE, PUNSUBSCRIBE,
+// SSUBSCRIBE, SUNSUBSCRIBE, PING, QUIT, RESET — and lifts the restriction
+// entirely in RESP3. Complements the direct unit coverage added on
+// `is_allowed_in_pubsub_mode` itself in `connection::guards::tests`.
+// ============================================================================
+
+/// RESP2: enumerate the full allow-set boundary. A single anchor subscription
+/// is held for the whole test so the connection never leaves pub/sub mode
+/// between assertions (unsubscribing the *last* channel would exit the mode
+/// and stop testing the gate).
+#[tokio::test]
+async fn test_pubsub_mode_resp2_allowed_commands_succeed() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    // Enter pub/sub mode and keep this subscription alive for the duration.
+    let resp = c.command(&["SUBSCRIBE", "anchor"]).await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+
+    // SUBSCRIBE (a second channel) is allowed.
+    match c.command(&["SUBSCRIBE", "s2"]).await {
+        Response::Array(arr) => {
+            assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("subscribe"))));
+            assert_eq!(arr[1], Response::Bulk(Some(Bytes::from("s2"))));
+        }
+        other => panic!("SUBSCRIBE should be allowed while subscribed, got {other:?}"),
+    }
+
+    // UNSUBSCRIBE (of that second channel, not the anchor) is allowed.
+    match c.command(&["UNSUBSCRIBE", "s2"]).await {
+        Response::Array(arr) => {
+            assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("unsubscribe"))));
+        }
+        other => panic!("UNSUBSCRIBE should be allowed while subscribed, got {other:?}"),
+    }
+
+    // PSUBSCRIBE is allowed.
+    match c.command(&["PSUBSCRIBE", "p.*"]).await {
+        Response::Array(arr) => {
+            assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("psubscribe"))));
+        }
+        other => panic!("PSUBSCRIBE should be allowed while subscribed, got {other:?}"),
+    }
+
+    // PUNSUBSCRIBE is allowed.
+    match c.command(&["PUNSUBSCRIBE", "p.*"]).await {
+        Response::Array(arr) => {
+            assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("punsubscribe"))));
+        }
+        other => panic!("PUNSUBSCRIBE should be allowed while subscribed, got {other:?}"),
+    }
+
+    // SSUBSCRIBE is allowed.
+    match c.command(&["SSUBSCRIBE", "sc1"]).await {
+        Response::Array(arr) => {
+            assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("ssubscribe"))));
+        }
+        other => panic!("SSUBSCRIBE should be allowed while subscribed, got {other:?}"),
+    }
+
+    // SUNSUBSCRIBE is allowed.
+    match c.command(&["SUNSUBSCRIBE", "sc1"]).await {
+        Response::Array(arr) => {
+            assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("sunsubscribe"))));
+        }
+        other => panic!("SUNSUBSCRIBE should be allowed while subscribed, got {other:?}"),
+    }
+
+    // PING is allowed (bespoke RESP2 subscribed framing: ["pong", ""]).
+    assert_eq!(
+        c.command(&["PING"]).await,
+        Response::Array(vec![
+            Response::Bulk(Some(Bytes::from("pong"))),
+            Response::Bulk(Some(Bytes::from(""))),
+        ])
+    );
+
+    // Still subscribed to "anchor" throughout: confirm the connection never
+    // fell out of pub/sub mode by asserting a plain data command is still
+    // rejected right now.
+    let resp = c.command(&["GET", "foo"]).await;
+    assert!(matches!(resp, Response::Error(ref e) if e.starts_with(b"ERR Can't execute")));
+
+    server.shutdown().await;
+}
+
+/// RESP2 QUIT is allowed while subscribed and closes the connection (needs its
+/// own connection since QUIT is terminal).
+#[tokio::test]
+async fn test_pubsub_mode_resp2_quit_allowed() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    let resp = c.command(&["SUBSCRIBE", "ch"]).await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+
+    let response = c.command(&["QUIT"]).await;
+    assert!(
+        matches!(response, Response::Simple(_)),
+        "QUIT should return +OK before closing, got {response:?}"
+    );
+
+    // The connection is torn down after QUIT's reply.
+    let after = c.read_response(Duration::from_secs(2)).await;
+    assert!(
+        after.is_none(),
+        "connection should be closed after QUIT, got {after:?}"
+    );
+
+    server.shutdown().await;
+}
+
+/// RESET while subscribed is allowed, and exits pub/sub mode: a plain data
+/// command succeeds immediately afterward (acceptance criterion — RESET is
+/// the documented escape hatch from subscribe mode).
+#[tokio::test]
+async fn test_pubsub_mode_resp2_reset_exits_pubsub_mode() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    let resp = c.command(&["SUBSCRIBE", "ch"]).await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+
+    // RESET itself is allowed while subscribed (it's in the 9-command set).
+    assert_eq!(
+        c.command(&["RESET"]).await,
+        Response::Simple(Bytes::from("RESET"))
+    );
+
+    // Pub/sub mode is exited: a plain data command now succeeds instead of
+    // being rejected with the subscribe-mode gate error.
+    assert_eq!(c.command(&["SET", "foo", "bar"]).await, Response::ok());
+    assert_eq!(
+        c.command(&["GET", "foo"]).await,
+        Response::bulk(Bytes::from("bar"))
+    );
+
+    server.shutdown().await;
+}
+
+/// RESP2: a representative set of disallowed data commands are rejected with
+/// Redis's exact wire text while subscribed.
+#[tokio::test]
+async fn test_pubsub_mode_resp2_disallowed_commands_exact_error_text() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    let resp = c.command(&["SUBSCRIBE", "ch"]).await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+
+    let cases: &[(&str, &[&str])] = &[
+        ("GET", &["foo"]),
+        ("SET", &["foo", "bar"]),
+        ("DEL", &["foo"]),
+    ];
+    for (cmd, args) in cases {
+        let cmd = *cmd;
+        let mut full = vec![cmd];
+        full.extend_from_slice(args);
+        let response = c.command(&full).await;
+        assert_eq!(
+            response,
+            Response::error(format!(
+                "ERR Can't execute '{}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / \
+                 PING / QUIT / RESET are allowed in this context",
+                cmd
+            )),
+            "{cmd} should be rejected with Redis's exact subscribe-mode error text"
+        );
+    }
+
+    server.shutdown().await;
+}
+
+/// KNOWN DIVERGENCE from Redis (pinned, not silently fixed): ASKING /
+/// READONLY / READWRITE share RESET's `ConnectionLevel(ConnectionState)`
+/// execution strategy in `is_allowed_in_pubsub_mode`, so the gate lets them
+/// through too — Redis's 9-command allow-set does *not* include them. This
+/// integration test proves the divergence is visible on the wire: each reply
+/// is the command's own normal response (cluster-support-disabled on a
+/// standalone server), never the subscribe-mode gate's error text.
+#[tokio::test]
+async fn test_pubsub_mode_resp2_connection_state_siblings_bypass_gate() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    let resp = c.command(&["SUBSCRIBE", "ch"]).await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+
+    for cmd in ["ASKING", "READONLY", "READWRITE"] {
+        let response = c.command(&[cmd]).await;
+        assert_eq!(
+            response,
+            Response::error("ERR This instance has cluster support disabled"),
+            "{cmd} reaches its own handler while subscribed (gate divergence), got {response:?}"
+        );
+    }
+
+    server.shutdown().await;
+}
+
+/// RESP3 lifts the subscribe-mode restriction entirely: a normal data command
+/// issued while subscribed returns a normal (non-push) reply, and push
+/// messages continue to arrive independently on the same connection.
+#[tokio::test]
+async fn test_pubsub_mode_resp3_normal_command_succeeds_while_subscribed() {
+    let server = TestServer::start_standalone().await;
+    let mut sub = server.connect_resp3().await;
+    sub.command(&["HELLO", "3"]).await;
+    let mut publisher = server.connect().await;
+
+    // Subscribe (Push confirmation consumed by `command`'s subscribe-aware path).
+    let confirm = sub.command(&["SUBSCRIBE", "resp3chan"]).await;
+    assert_resp3_push_label(Some(confirm), "subscribe");
+
+    // A normal data command succeeds with a normal (non-push) reply while
+    // subscribed under RESP3.
+    let set_resp = sub.command(&["SET", "foo", "bar"]).await;
+    assert!(
+        matches!(&set_resp, Resp3Frame::SimpleString { data, .. } if data.as_ref() == b"OK"),
+        "SET should return a normal +OK reply while subscribed under RESP3, got {set_resp:?}"
+    );
+    let get_resp = sub.command(&["GET", "foo"]).await;
+    assert!(
+        matches!(&get_resp, Resp3Frame::BlobString { data, .. } if data.as_ref() == b"bar"),
+        "GET should return a normal bulk reply while subscribed under RESP3, got {get_resp:?}"
+    );
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Push delivery keeps working independently of the normal command traffic
+    // above.
+    let published = publisher.command(&["PUBLISH", "resp3chan", "hello"]).await;
+    assert!(matches!(published, Response::Integer(n) if n >= 1));
+
+    let msg = sub.read_message(Duration::from_secs(2)).await;
+    match msg {
+        Some(Resp3Frame::Push { data, .. }) => {
+            assert!(
+                matches!(&data[0], Resp3Frame::BlobString { data, .. } if data.as_ref() == b"message")
+            );
+            assert!(
+                matches!(&data[1], Resp3Frame::BlobString { data, .. } if data.as_ref() == b"resp3chan")
+            );
+            assert!(
+                matches!(&data[2], Resp3Frame::BlobString { data, .. } if data.as_ref() == b"hello")
+            );
+        }
+        other => panic!("expected Push message, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// RESP3: even an unknown command is allowed through the gate while
+/// subscribed (the RESP3 branch is unconditional — `guards.rs:202-204` returns
+/// `true` before consulting the registry at all). It still fails downstream as
+/// an unknown command, but *not* with the subscribe-mode gate's error text.
+#[tokio::test]
+async fn test_pubsub_mode_resp3_gate_is_unconditional_allow() {
+    let server = TestServer::start_standalone().await;
+    let mut sub = server.connect_resp3().await;
+    sub.command(&["HELLO", "3"]).await;
+
+    let confirm = sub.command(&["SUBSCRIBE", "ch"]).await;
+    assert_resp3_push_label(Some(confirm), "subscribe");
+
+    let response = sub.command(&["NOSUCHCOMMAND"]).await;
+    match &response {
+        Resp3Frame::SimpleError { data, .. } => {
+            assert!(
+                !data.starts_with("ERR Can't execute"),
+                "unknown command must fail as unknown, not via the subscribe-mode \
+                 gate, got {response:?}"
+            );
+        }
+        other => panic!("expected a SimpleError for an unknown command, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
