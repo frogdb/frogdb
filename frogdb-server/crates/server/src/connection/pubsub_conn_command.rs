@@ -931,14 +931,27 @@ impl ConnectionHandler {
         command.execute_multi(&mut ctx, args).await
     }
 
-    /// Execute a pub/sub command deferred from a transaction (EXEC time),
-    /// preserving the pre-migration MULTI semantics exactly:
-    /// - PUBLISH / SPUBLISH: a single response into the EXEC array;
-    /// - SUBSCRIBE / UNSUBSCRIBE / PSUBSCRIBE / PUNSUBSCRIBE: one confirmation
-    ///   per channel — in RESP3 they ride out-of-band after the EXEC array (the
-    ///   last is the EXEC-slot value); in RESP2 the last is the EXEC-slot value
-    ///   and no out-of-band frames are emitted;
-    /// - PUBSUB / SSUBSCRIBE / SUNSUBSCRIBE: rejected inside MULTI.
+    /// Execute a pub/sub command deferred from a transaction (EXEC time).
+    ///
+    /// Policy verified against Redis 8.6.4 source (`pubsub.c`): a MULTI/EXEC
+    /// client runs with `CLIENT_DENY_BLOCKING` set for the duration of the
+    /// EXEC loop while `CLIENT_MULTI` also remains set, so a queued command's
+    /// gate sees both flags simultaneously.
+    /// - `subscribeCommand`/`psubscribeCommand` guard on
+    ///   `DENY_BLOCKING && !CLIENT_MULTI` — the MULTI flag exempts them, so
+    ///   SUBSCRIBE/PSUBSCRIBE genuinely execute at EXEC time, one confirmation
+    ///   per channel (RESP3: Push frames out-of-band after the EXEC array;
+    ///   RESP2: the last confirmation is the EXEC-slot value, no out-of-band
+    ///   frames). UNSUBSCRIBE/PUNSUBSCRIBE/SUNSUBSCRIBE carry no such guard at
+    ///   all (unconditional execute) and PUBSUB has none either — all execute
+    ///   at EXEC exactly like their non-transaction path.
+    /// - `ssubscribeCommand` is the one exception: its guard is bare
+    ///   `DENY_BLOCKING` with **no** `!CLIENT_MULTI` carve-out, so SSUBSCRIBE
+    ///   is genuinely rejected inside MULTI in real Redis too, with
+    ///   `"SSUBSCRIBE isn't allowed for a DENY BLOCKING client"`.
+    ///
+    /// Do not reintroduce queue-time `NO_MULTI`/`EXECABORT` rejection for any
+    /// of these commands — verified they don't carry that flag upstream.
     ///
     /// Returns `(exec_slot_response, push_confirmations)`.
     pub(crate) async fn exec_pubsub_in_transaction(
@@ -948,14 +961,14 @@ impl ConnectionHandler {
         args: &[Bytes],
     ) -> (Response, Vec<Response>) {
         match cmd_name {
-            "PUBLISH" | "SPUBLISH" => {
+            "PUBLISH" | "SPUBLISH" | "PUBSUB" => {
                 let responses = self.execute_pubsub(command, args).await;
                 (
                     responses.into_iter().next().unwrap_or_else(Response::ok),
                     vec![],
                 )
             }
-            "SUBSCRIBE" | "UNSUBSCRIBE" | "PSUBSCRIBE" | "PUNSUBSCRIBE" => {
+            "SUBSCRIBE" | "UNSUBSCRIBE" | "PSUBSCRIBE" | "PUNSUBSCRIBE" | "SUNSUBSCRIBE" => {
                 // Pub/sub subscription commands inside MULTI: the executor returns
                 // Vec<Response> (one confirmation per channel), already shaped by
                 // the PubSubConfirmation seam — Push in RESP3, Array in RESP2.
@@ -972,6 +985,10 @@ impl ConnectionHandler {
                     )
                 }
             }
+            "SSUBSCRIBE" => (
+                Response::error("ERR SSUBSCRIBE isn't allowed for a DENY BLOCKING client"),
+                vec![],
+            ),
             _ => (
                 Response::error("ERR command not supported inside MULTI"),
                 vec![],

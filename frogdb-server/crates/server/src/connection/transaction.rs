@@ -397,10 +397,11 @@ impl ConnectionHandler {
             // (`dispatch_connection_command`) — never from its string name.
             return match command.spec().mutation {
                 // Pub/sub deferred to EXEC: multi-response with bespoke MULTI
-                // framing (PUBLISH/SPUBLISH single; SUBSCRIBE-family one
-                // confirmation per channel; PUBSUB/SSUBSCRIBE/SUNSUBSCRIBE
-                // rejected inside MULTI). This is a distinct framing path from the
-                // main `execute_pubsub`. See `exec_pubsub_in_transaction`.
+                // framing (PUBLISH/SPUBLISH/PUBSUB single response;
+                // SUBSCRIBE-family incl. SUNSUBSCRIBE one confirmation per
+                // channel; SSUBSCRIBE alone rejected inside MULTI — verified
+                // Redis-parity policy, see `exec_pubsub_in_transaction`). This
+                // is a distinct framing path from the main `execute_pubsub`.
                 frogdb_core::ConnMutation::PubSub => {
                     self.exec_pubsub_in_transaction(cmd_name, command, args)
                         .await

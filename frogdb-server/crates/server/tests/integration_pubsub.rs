@@ -2095,9 +2095,11 @@ async fn test_subscribe_confirmation_in_multi_exec_resp3() {
     server.shutdown().await;
 }
 
-/// SSUBSCRIBE inside MULTI is not supported; EXEC surfaces the error. Pinning
-/// this keeps the confirmation-shape work from silently changing the
-/// unsupported-in-transaction behavior.
+/// SSUBSCRIBE inside MULTI is rejected — pinned against Redis 8.6.4 source
+/// (`pubsub.c: ssubscribeCommand`), which guards on bare `CLIENT_DENY_BLOCKING`
+/// with no `!CLIENT_MULTI` carve-out (unlike SUBSCRIBE/PSUBSCRIBE, which are
+/// MULTI-exempt). This is the one genuinely-rejected member of the subscribe
+/// family; the exact error text matches Redis's own wire text.
 #[tokio::test]
 async fn test_ssubscribe_inside_multi_rejected() {
     let server = TestServer::start_standalone().await;
@@ -2111,11 +2113,211 @@ async fn test_ssubscribe_inside_multi_rejected() {
     match c.command(&["EXEC"]).await {
         Response::Array(items) => {
             assert_eq!(items.len(), 1);
-            assert!(
-                matches!(&items[0], Response::Error(e) if e.starts_with(b"ERR")),
-                "expected an error for SSUBSCRIBE inside MULTI, got {:?}",
+            assert_eq!(
+                items[0],
+                Response::error("ERR SSUBSCRIBE isn't allowed for a DENY BLOCKING client"),
+                "expected Redis's exact SSUBSCRIBE-in-MULTI error text, got {:?}",
                 items[0]
             );
+        }
+        other => panic!("expected Array, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Full subscribe-family-in-MULTI matrix (issue 57)
+//
+// Verified against Redis 8.6.4 source (pubsub.c): SUBSCRIBE/PSUBSCRIBE are
+// MULTI-exempt (`DENY_BLOCKING && !CLIENT_MULTI`); UNSUBSCRIBE/PUNSUBSCRIBE/
+// SUNSUBSCRIBE/PUBSUB carry no DENY_BLOCKING guard at all; only SSUBSCRIBE
+// (above) is unconditionally gated on DENY_BLOCKING and so genuinely rejected.
+// RESET inside MULTI is covered separately by
+// `test_reset_aborts_transaction` (integration_client.rs) — RESET is
+// intercepted before the transaction queue and always executes directly,
+// dropping the queue and returning `+RESET`, which that test already pins.
+// ============================================================================
+
+/// SUBSCRIBE queued in MULTI genuinely subscribes at EXEC time (Redis-exempt,
+/// not rejected). Pinned here as the reference case for the matrix even though
+/// `test_subscribe_confirmation_in_multi_exec_resp2` covers it too.
+#[tokio::test]
+async fn test_subscribe_inside_multi_executes() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    assert_eq!(c.command(&["MULTI"]).await, Response::ok());
+    assert_eq!(
+        c.command(&["SUBSCRIBE", "ch"]).await,
+        Response::Simple(Bytes::from("QUEUED"))
+    );
+    match c.command(&["EXEC"]).await {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1);
+            match &items[0] {
+                Response::Array(conf) => {
+                    assert_eq!(conf[0], Response::Bulk(Some(Bytes::from("subscribe"))));
+                    assert_eq!(conf[1], Response::Bulk(Some(Bytes::from("ch"))));
+                    assert_eq!(conf[2], Response::Integer(1));
+                }
+                other => panic!("expected confirmation Array, got {other:?}"),
+            }
+        }
+        other => panic!("expected Array, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// PSUBSCRIBE queued in MULTI genuinely subscribes at EXEC time (Redis-exempt,
+/// same guard as SUBSCRIBE).
+#[tokio::test]
+async fn test_psubscribe_inside_multi_executes() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    assert_eq!(c.command(&["MULTI"]).await, Response::ok());
+    assert_eq!(
+        c.command(&["PSUBSCRIBE", "ch.*"]).await,
+        Response::Simple(Bytes::from("QUEUED"))
+    );
+    match c.command(&["EXEC"]).await {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1);
+            match &items[0] {
+                Response::Array(conf) => {
+                    assert_eq!(conf[0], Response::Bulk(Some(Bytes::from("psubscribe"))));
+                    assert_eq!(conf[1], Response::Bulk(Some(Bytes::from("ch.*"))));
+                    assert_eq!(conf[2], Response::Integer(1));
+                }
+                other => panic!("expected confirmation Array, got {other:?}"),
+            }
+        }
+        other => panic!("expected Array, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// UNSUBSCRIBE carries no DENY_BLOCKING guard at all in Redis, so it executes
+/// unconditionally inside MULTI too. With no active subscriptions this yields
+/// the same null-channel confirmation shape as the direct path.
+#[tokio::test]
+async fn test_unsubscribe_inside_multi_executes() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    assert_eq!(c.command(&["MULTI"]).await, Response::ok());
+    assert_eq!(
+        c.command(&["UNSUBSCRIBE"]).await,
+        Response::Simple(Bytes::from("QUEUED"))
+    );
+    match c.command(&["EXEC"]).await {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1);
+            match &items[0] {
+                Response::Array(conf) => {
+                    assert_eq!(conf[0], Response::Bulk(Some(Bytes::from("unsubscribe"))));
+                    assert_eq!(conf[1], Response::Bulk(None), "null channel");
+                    assert_eq!(conf[2], Response::Integer(0));
+                }
+                other => panic!("expected confirmation Array, got {other:?}"),
+            }
+        }
+        other => panic!("expected Array, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// PUNSUBSCRIBE carries no DENY_BLOCKING guard either — same treatment as
+/// UNSUBSCRIBE.
+#[tokio::test]
+async fn test_punsubscribe_inside_multi_executes() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    assert_eq!(c.command(&["MULTI"]).await, Response::ok());
+    assert_eq!(
+        c.command(&["PUNSUBSCRIBE"]).await,
+        Response::Simple(Bytes::from("QUEUED"))
+    );
+    match c.command(&["EXEC"]).await {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1);
+            match &items[0] {
+                Response::Array(conf) => {
+                    assert_eq!(conf[0], Response::Bulk(Some(Bytes::from("punsubscribe"))));
+                    assert_eq!(conf[1], Response::Bulk(None), "null pattern");
+                    assert_eq!(conf[2], Response::Integer(0));
+                }
+                other => panic!("expected confirmation Array, got {other:?}"),
+            }
+        }
+        other => panic!("expected Array, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// SUNSUBSCRIBE carries no DENY_BLOCKING guard in Redis (only SSUBSCRIBE
+/// does) — this is the residue fix: FrogDB previously rejected it inside
+/// MULTI with a bespoke error, where Redis genuinely allows it to execute.
+///
+/// Note: this connection is never actually SSUBSCRIBE'd to `sch` first —
+/// doing so would enter pub/sub mode, and (matching Redis) a RESP2 client in
+/// pub/sub mode cannot issue MULTI at all (`is_allowed_in_pubsub_mode`
+/// rejects it, same as real Redis's context restriction). That restriction is
+/// unrelated to this issue; a fresh, never-subscribed connection is
+/// sufficient to prove SUNSUBSCRIBE *executes* (count 0) rather than being
+/// rejected.
+#[tokio::test]
+async fn test_sunsubscribe_inside_multi_executes() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    assert_eq!(c.command(&["MULTI"]).await, Response::ok());
+    assert_eq!(
+        c.command(&["SUNSUBSCRIBE", "sch"]).await,
+        Response::Simple(Bytes::from("QUEUED"))
+    );
+    match c.command(&["EXEC"]).await {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1);
+            match &items[0] {
+                Response::Array(conf) => {
+                    assert_eq!(conf[0], Response::Bulk(Some(Bytes::from("sunsubscribe"))));
+                    assert_eq!(conf[1], Response::Bulk(Some(Bytes::from("sch"))));
+                    assert_eq!(conf[2], Response::Integer(0));
+                }
+                other => panic!("expected confirmation Array, got {other:?}"),
+            }
+        }
+        other => panic!("expected Array, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// PUBSUB carries no DENY_BLOCKING guard in Redis either — it executes inside
+/// MULTI exactly like the direct path, folding its single reply into the EXEC
+/// array slot (same framing as PUBLISH/SPUBLISH). This is the other residue
+/// fix: FrogDB previously rejected PUBSUB inside MULTI.
+#[tokio::test]
+async fn test_pubsub_inside_multi_executes() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    assert_eq!(c.command(&["MULTI"]).await, Response::ok());
+    assert_eq!(
+        c.command(&["PUBSUB", "NUMPAT"]).await,
+        Response::Simple(Bytes::from("QUEUED"))
+    );
+    match c.command(&["EXEC"]).await {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0], Response::Integer(0));
         }
         other => panic!("expected Array, got {other:?}"),
     }
