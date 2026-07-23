@@ -1,10 +1,10 @@
 //! Integration tests for pub/sub commands (SUBSCRIBE, PUBLISH, PSUBSCRIBE, etc.)
 
-use crate::common::test_server::{TestServer, TestServerConfig};
+use crate::common::test_server::{TestClient, TestServer, TestServerConfig};
 use bytes::Bytes;
 use frogdb_protocol::Response;
 use redis_protocol::resp3::types::BytesFrame as Resp3Frame;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[tokio::test]
 async fn test_subscribe_publish() {
@@ -4226,4 +4226,254 @@ async fn test_new_precedes_type_event() {
     assert_eq!(arr[3], Response::Bulk(Some(Bytes::from("ordkey"))));
 
     server.shutdown().await;
+}
+
+// ============================================================================
+// Subscriber disconnect cross-shard deregistration (issue 30)
+// ============================================================================
+//
+// A real client disconnect must deregister the connection from the broadcast
+// subscription map (shard 0, where SUBSCRIBE/PSUBSCRIBE register) *and* from
+// every sharded-channel subscription map on each owning shard. That fan-out
+// rides the `ConnectionClosed` broadcast to all shards
+// (`connection/lifecycle.rs` -> `notify_connection_closed`). These e2e tests
+// subscribe one client across >= 2 shards (broadcast + pattern on shard 0, a
+// sharded channel on a non-zero shard) and then assert PUBSUB introspection and
+// PUBLISH/SPUBLISH receiver counts drop to zero after both a graceful
+// `CLIENT KILL` and an ungraceful raw-socket close.
+
+/// Number of active broadcast channels reported by `PUBSUB CHANNELS`.
+async fn pubsub_channels_len(client: &mut TestClient) -> usize {
+    match client.command(&["PUBSUB", "CHANNELS"]).await {
+        Response::Array(a) => a.len(),
+        other => panic!("expected array from PUBSUB CHANNELS, got {other:?}"),
+    }
+}
+
+/// Subscriber count for a single broadcast channel via `PUBSUB NUMSUB <ch>`
+/// (reply shape `[<ch>, <count>]`).
+async fn pubsub_numsub(client: &mut TestClient, channel: &str) -> i64 {
+    match client.command(&["PUBSUB", "NUMSUB", channel]).await {
+        Response::Array(a) => match a.as_slice() {
+            [_, Response::Integer(n)] => *n,
+            other => panic!("unexpected PUBSUB NUMSUB reply: {other:?}"),
+        },
+        other => panic!("expected array from PUBSUB NUMSUB, got {other:?}"),
+    }
+}
+
+/// Total pattern-subscription count via `PUBSUB NUMPAT`.
+async fn pubsub_numpat(client: &mut TestClient) -> i64 {
+    match client.command(&["PUBSUB", "NUMPAT"]).await {
+        Response::Integer(n) => n,
+        other => panic!("expected integer from PUBSUB NUMPAT, got {other:?}"),
+    }
+}
+
+/// Subscriber count for a single sharded channel via
+/// `PUBSUB SHARDNUMSUB <ch>` (reply shape `[<ch>, <count>]`).
+async fn pubsub_shardnumsub(client: &mut TestClient, channel: &str) -> i64 {
+    match client.command(&["PUBSUB", "SHARDNUMSUB", channel]).await {
+        Response::Array(a) => match a.as_slice() {
+            [_, Response::Integer(n)] => *n,
+            other => panic!("unexpected PUBSUB SHARDNUMSUB reply: {other:?}"),
+        },
+        other => panic!("expected array from PUBSUB SHARDNUMSUB, got {other:?}"),
+    }
+}
+
+/// Poll PUBSUB introspection (via a separate control connection) until every
+/// subscription count for the given broadcast + pattern + sharded channels
+/// reaches zero across all shards, or panic after `deadline`. Uses a polling
+/// deadline rather than a fixed sleep so the test is robust to disconnect
+/// timing (the `ConnectionClosed` fan-out is asynchronous).
+async fn wait_for_full_dereg(
+    client: &mut TestClient,
+    broadcast_channel: &str,
+    sharded_channel: &str,
+    deadline: Duration,
+) {
+    let start = Instant::now();
+    loop {
+        let numsub = pubsub_numsub(client, broadcast_channel).await;
+        let numpat = pubsub_numpat(client).await;
+        let shardnumsub = pubsub_shardnumsub(client, sharded_channel).await;
+        let channels = pubsub_channels_len(client).await;
+
+        if numsub == 0 && numpat == 0 && shardnumsub == 0 && channels == 0 {
+            return;
+        }
+        assert!(
+            start.elapsed() < deadline,
+            "subscriptions leaked after disconnect: \
+             PUBSUB CHANNELS={channels} NUMSUB({broadcast_channel})={numsub} \
+             NUMPAT={numpat} SHARDNUMSUB({sharded_channel})={shardnumsub}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Poll until the subscriptions are visible across all shards (registration is
+/// synchronous per command, but the scatter-gather introspection read is polled
+/// to avoid any startup race), returning once all counts are >= 1.
+async fn wait_for_full_reg(
+    client: &mut TestClient,
+    broadcast_channel: &str,
+    sharded_channel: &str,
+    deadline: Duration,
+) {
+    let start = Instant::now();
+    loop {
+        let numsub = pubsub_numsub(client, broadcast_channel).await;
+        let numpat = pubsub_numpat(client).await;
+        let shardnumsub = pubsub_shardnumsub(client, sharded_channel).await;
+
+        if numsub >= 1 && numpat >= 1 && shardnumsub >= 1 {
+            return;
+        }
+        assert!(
+            start.elapsed() < deadline,
+            "subscriptions never fully registered: \
+             NUMSUB({broadcast_channel})={numsub} NUMPAT={numpat} \
+             SHARDNUMSUB({sharded_channel})={shardnumsub}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// How the subscriber connection is torn down.
+enum DisconnectMode {
+    /// Graceful server-driven close via `CLIENT KILL ID`.
+    ClientKill,
+    /// Ungraceful transport-level close: drop the TCP socket without any RESP
+    /// teardown, exercising the `ConnectionClosed` broadcast fan-out.
+    RawClose,
+}
+
+/// Shared body: subscribe one connection across >= 2 shards (broadcast + pattern
+/// on shard 0, sharded channel off shard 0), disconnect it via `mode`, then
+/// assert every per-shard registration is gone and PUBLISH/SPUBLISH no longer
+/// count it as a receiver.
+async fn run_disconnect_dereg_test(mode: DisconnectMode) {
+    let num_shards = 4;
+    // Sharded channel deliberately owned by a shard other than the broadcast
+    // coordinator (shard 0), so deregistration must fan out across shards.
+    let sharded_channel = key_off_shard_zero(num_shards);
+    assert_ne!(
+        frogdb_core::shard_for_key(sharded_channel.as_bytes(), num_shards),
+        0,
+        "sharded channel must live off shard 0 to exercise the fan-out"
+    );
+    let broadcast_channel = "dereg:broadcast";
+    let pattern = "dereg:pat:*";
+
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(num_shards),
+        ..Default::default()
+    })
+    .await;
+
+    let mut subscriber = server.connect().await;
+    let mut control = server.connect().await;
+    let mut publisher = server.connect().await;
+
+    // Capture the client id *before* entering pub/sub mode (RESP2 pub/sub mode
+    // rejects CLIENT commands).
+    let subscriber_id = match subscriber.command(&["CLIENT", "ID"]).await {
+        Response::Integer(id) => id,
+        other => panic!("expected integer from CLIENT ID, got {other:?}"),
+    };
+
+    // Subscribe across >= 2 shards: broadcast channel + pattern (shard 0) and a
+    // sharded channel owned by a non-zero shard.
+    subscriber.command(&["SUBSCRIBE", broadcast_channel]).await;
+    subscriber.command(&["PSUBSCRIBE", pattern]).await;
+    subscriber.command(&["SSUBSCRIBE", &sharded_channel]).await;
+
+    // Confirm the subscriptions are fully registered across shards first, so the
+    // post-disconnect assertion is meaningful (0 must be a real drop, not a
+    // never-registered state).
+    wait_for_full_reg(
+        &mut control,
+        broadcast_channel,
+        &sharded_channel,
+        Duration::from_secs(5),
+    )
+    .await;
+
+    // Sanity: the live subscriber is counted as a receiver on both namespaces.
+    assert_eq!(
+        publisher
+            .command(&["PUBLISH", broadcast_channel, "hi"])
+            .await,
+        Response::Integer(1),
+        "live subscriber must be counted by PUBLISH"
+    );
+    assert_eq!(
+        publisher
+            .command(&["SPUBLISH", &sharded_channel, "hi"])
+            .await,
+        Response::Integer(1),
+        "live subscriber must be counted by SPUBLISH"
+    );
+
+    // Disconnect.
+    match mode {
+        DisconnectMode::ClientKill => {
+            let resp = control
+                .command(&["CLIENT", "KILL", "ID", &subscriber_id.to_string()])
+                .await;
+            assert_eq!(resp, Response::Integer(1), "CLIENT KILL should kill 1 conn");
+            // Drop the local socket too so no buffered client state masks a
+            // server-side leak.
+            drop(subscriber);
+        }
+        DisconnectMode::RawClose => {
+            // Ungraceful: drop the TCP stream with no RESET/UNSUBSCRIBE/QUIT.
+            drop(subscriber);
+        }
+    }
+
+    // Deregistration is asynchronous (ConnectionClosed fan-out to all shards);
+    // poll to a deadline.
+    wait_for_full_dereg(
+        &mut control,
+        broadcast_channel,
+        &sharded_channel,
+        Duration::from_secs(5),
+    )
+    .await;
+
+    // PUBLISH / SPUBLISH must no longer count the gone subscriber.
+    assert_eq!(
+        publisher
+            .command(&["PUBLISH", broadcast_channel, "after"])
+            .await,
+        Response::Integer(0),
+        "PUBLISH must not count a disconnected subscriber"
+    );
+    assert_eq!(
+        publisher
+            .command(&["SPUBLISH", &sharded_channel, "after"])
+            .await,
+        Response::Integer(0),
+        "SPUBLISH must not count a disconnected subscriber"
+    );
+
+    server.shutdown().await;
+}
+
+/// Variant A: graceful `CLIENT KILL` deregisters the subscriber across every
+/// shard (broadcast, pattern, and the off-shard-0 sharded channel).
+#[tokio::test]
+async fn test_subscriber_dereg_on_client_kill_cross_shard() {
+    run_disconnect_dereg_test(DisconnectMode::ClientKill).await;
+}
+
+/// Variant B: an ungraceful raw TCP close deregisters the subscriber across
+/// every shard, exercising the `ConnectionClosed` broadcast fan-out
+/// (`connection/lifecycle.rs`) rather than a command-driven teardown.
+#[tokio::test]
+async fn test_subscriber_dereg_on_raw_close_cross_shard() {
+    run_disconnect_dereg_test(DisconnectMode::RawClose).await;
 }
