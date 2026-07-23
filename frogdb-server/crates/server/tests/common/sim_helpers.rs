@@ -335,11 +335,16 @@ pub async fn real_frogdb_replica(
 ///   same ID for every peer — the lowest-ID node bootstraps.
 /// - `data_dir` must be unique per host: the RocksDB Raft log/metadata store
 ///   lives at `<data_dir>/raft`. Persistence of the data plane stays disabled.
+/// - `auto_failover` wires `cluster.auto_failover`: when `true`, the leader's
+///   failure detector proposes a `Failover` (successor promotion + slot transfer)
+///   after latching a peer `FAIL`. Left `false` for scenarios that only need the
+///   `MarkNodeFailed` half.
 pub async fn real_frogdb_cluster_node(
     num_shards: usize,
     own_ip: std::net::IpAddr,
     initial_nodes: Vec<String>,
     data_dir: std::path::PathBuf,
+    auto_failover: bool,
 ) -> Result<(), BoxError> {
     use frogdb_server::config::ClusterConfigSection;
 
@@ -367,7 +372,7 @@ pub async fn real_frogdb_cluster_node(
             // time. heartbeat must stay strictly below election_timeout_ms.
             election_timeout_ms: 300,
             heartbeat_interval_ms: 50,
-            auto_failover: false,
+            auto_failover,
             ..Default::default()
         },
         http: HttpConfig {

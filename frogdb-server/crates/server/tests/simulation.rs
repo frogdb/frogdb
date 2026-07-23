@@ -5025,8 +5025,10 @@ async fn single_owner_soft(key: &[u8]) -> std::io::Result<Option<usize>> {
 }
 
 /// Register the three cluster hosts on `sim`, each a real Raft node. Returns the
-/// tempdirs (must be kept alive until after `sim.run()`).
-fn spawn_cluster_hosts(sim: &mut turmoil::Sim<'_>) -> Vec<tempfile::TempDir> {
+/// tempdirs (must be kept alive until after `sim.run()`). `auto_failover` wires
+/// each node's `cluster.auto_failover` (leader promotes a successor after a peer
+/// latches `FAIL`).
+fn spawn_cluster_hosts(sim: &mut turmoil::Sim<'_>, auto_failover: bool) -> Vec<tempfile::TempDir> {
     let dirs: Vec<tempfile::TempDir> = (0..CLUSTER_HOSTS.len())
         .map(|_| tempfile::tempdir().expect("cluster node data dir"))
         .collect();
@@ -5043,7 +5045,9 @@ fn spawn_cluster_hosts(sim: &mut turmoil::Sim<'_>) -> Vec<tempfile::TempDir> {
                     .iter()
                     .map(|peer| format!("{}:{}", turmoil::lookup(*peer), CLUSTER_BUS_PORT))
                     .collect();
-                if let Err(e) = real_frogdb_cluster_node(1, own_ip, initial_nodes, path).await {
+                if let Err(e) =
+                    real_frogdb_cluster_node(1, own_ip, initial_nodes, path, auto_failover).await
+                {
                     eprintln!("cluster node {host} exited with error: {e}");
                     return Err(e);
                 }
@@ -5063,7 +5067,7 @@ fn run_cluster_moved_convergence(seed: u64) {
         .enable_random_order()
         .build();
 
-    let dirs = spawn_cluster_hosts(&mut sim);
+    let dirs = spawn_cluster_hosts(&mut sim, false);
 
     sim.client("driver", async move {
         let entry = turmoil::lookup(CLUSTER_HOSTS[0]);
@@ -5148,7 +5152,7 @@ fn run_cluster_leader_partition_migration(seed: u64) {
         .enable_random_order()
         .build();
 
-    let dirs = spawn_cluster_hosts(&mut sim);
+    let dirs = spawn_cluster_hosts(&mut sim, false);
 
     // Shared control channel between the driver client and the manual step loop:
     // phase 0 = setup, 1 = migration in flight (isolate the leader now),
@@ -5390,6 +5394,283 @@ fn run_cluster_leader_partition_migration(seed: u64) {
 fn test_cluster_leader_partition_mid_migration_converges() {
     for seed in [1u64, 2, 3] {
         run_cluster_leader_partition_migration(seed);
+    }
+}
+
+/// Read `CLUSTER NODES` from `observer_host` and return the flag token of the
+/// node whose id is `target_id_hex` (the 40-char lowercase-hex id), or `None`
+/// if the node is absent. The wire format is one node per line:
+/// `<id> <ip:port@cport> <flags> <master> <ping> <pong> <epoch> <link> [slots…]`
+/// (see `cluster/src/wire.rs`), so the flags are whitespace field index 2.
+async fn cluster_node_flags(
+    observer_host: &str,
+    target_id_hex: &str,
+) -> std::io::Result<Option<String>> {
+    let ip = turmoil::lookup(observer_host);
+    let mut conn = RespConn::connect((ip, SERVER_PORT)).await?;
+    let text = match conn.cmd(&[b"CLUSTER", b"NODES"]).await? {
+        RespValue::Bulk(Some(b)) => String::from_utf8_lossy(&b).into_owned(),
+        other => return Err(std::io::Error::other(format!("CLUSTER NODES: {other:?}"))),
+    };
+    for line in text.lines() {
+        let mut fields = line.split_whitespace();
+        let id = fields.next().unwrap_or("");
+        if id.eq_ignore_ascii_case(target_id_hex) {
+            return Ok(Some(fields.nth(1).unwrap_or("").to_string()));
+        }
+    }
+    Ok(None)
+}
+
+/// One seeded run of the asymmetric-partition false-failover scenario (issue 18).
+///
+/// The gap under test: failure detection is *leader-only* — only the Raft leader
+/// TCP-probes peers and proposes `MarkNodeFailed`
+/// (`frogdb-server/crates/server/src/failure_detector.rs`). This exercises the
+/// documented blind spot: a **non-leader primary is isolated from the leader's
+/// probe path while remaining reachable to clients and to the third node** (so it
+/// keeps Raft quorum). The leader must therefore mark it `FAIL` even though it is
+/// alive and serving — a *false positive*.
+///
+/// Topology: 3 primaries, no replicas (the flat cluster bootstrap). `victim` is a
+/// non-leader primary owning `key`'s slot; `third` is the remaining node. The
+/// partition holds only the `leader ↔ victim` edge, so:
+/// - the leader keeps quorum via `third` and stays leader → its probe of `victim`
+///   times out → after `fail_threshold` it commits `MarkNodeFailed` (majority
+///   `{leader, third}`);
+/// - `victim` keeps quorum via `third` (self-fence never arms) → it keeps serving
+///   client reads *and writes* the whole time.
+///
+/// Pinned designed behavior (regression guard):
+/// 1. The leader *does* mark the client-reachable `victim` `FAIL` (false positive
+///    confirmed): the flag appears in `CLUSTER NODES` observed from `third`.
+/// 2. `auto_failover` is **on**, yet **no slot moves**: `victim` has no replicas,
+///    so `trigger_auto_failover` is a no-op. `victim` still owns `key`'s slot and
+///    is the sole owner cluster-wide throughout.
+/// 3. Fate of client writes: a write accepted by the FAIL-flagged `victim` during
+///    the partition window is **not lost** — because no failover/slot transfer
+///    happened, it survives the heal (the false positive is benign in a
+///    replica-less topology; the write-loss/split-brain bound is *zero* here).
+/// 4. On heal the leader re-probes `victim`, commits `MarkNodeRecovered`, and the
+///    `FAIL` flag clears.
+fn run_cluster_asymmetric_partition_false_failover(seed: u64) {
+    use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+
+    let mut sim = Builder::new()
+        .simulation_duration(Duration::from_secs(90))
+        // Same turmoil-0.7.1 port-budget rationale as the migration sim: while
+        // the leader↔victim edge is held, both nodes' failure-detector probes to
+        // each other time out and drop their dials (each leaking an ephemeral
+        // port until sim end), so widen the pool and the socket capacity. The
+        // hold window is kept short (bounded in the step loop) to cap the leak.
+        .ephemeral_ports(2048..=65535)
+        .tcp_capacity(65536)
+        .rng_seed(seed)
+        .enable_random_order()
+        .build();
+
+    // auto_failover ON: assertion 2 pins that a replica-less false positive still
+    // moves no slots even with failover enabled.
+    let dirs = spawn_cluster_hosts(&mut sim, true);
+
+    // phase 0 = setup, 1 = isolate victim↔leader, 2 = heal. `victim_idx`/`leader_idx`
+    // name the held pair for the step loop.
+    let phase = std::sync::Arc::new(AtomicU8::new(0));
+    let leader_idx = std::sync::Arc::new(AtomicUsize::new(usize::MAX));
+    let victim_idx = std::sync::Arc::new(AtomicUsize::new(usize::MAX));
+    let phase_c = phase.clone();
+    let leader_idx_c = leader_idx.clone();
+    let victim_idx_c = victim_idx.clone();
+
+    sim.client("driver", async move {
+        let entry = turmoil::lookup(CLUSTER_HOSTS[0]);
+        wait_cluster_ready(entry).await?;
+
+        // Node ids; lowest-id node is the deterministic bootstrap leader.
+        let mut ids: Vec<(usize, u64)> = Vec::new();
+        for (idx, host) in CLUSTER_HOSTS.iter().enumerate() {
+            ids.push((idx, node_id_of(host).await?));
+        }
+        let (leader, _) = *ids.iter().min_by_key(|(_, id)| *id).unwrap();
+
+        // Choose a key whose slot owner is a non-leader primary (our victim). The
+        // entry-node key spread guarantees at least one slot lands off the leader.
+        let candidate_keys: [&[u8]; 8] = [
+            b"alpha", b"bravo", b"charlie", b"delta", b"echo", b"foxtrot", b"golf", b"hotel",
+        ];
+        let mut chosen: Option<(&[u8], usize)> = None;
+        for k in candidate_keys {
+            if let Some(owner) = owner_host_of(k).await?
+                && owner != leader
+            {
+                chosen = Some((k, owner));
+                break;
+            }
+        }
+        let (key, victim) = chosen.expect("a non-leader primary must own some probe key");
+        let third = (0..CLUSTER_HOSTS.len())
+            .find(|&i| i != leader && i != victim)
+            .expect("a third node must exist");
+        let victim_id_hex = format!("{:040x}", ids[victim].1);
+
+        // Baseline write before the partition, following redirects to the owner.
+        let set = exec_following_redirects(entry, &[b"SET", key, b"baseline"], 16).await?;
+        assert!(
+            matches!(&set, RespValue::Simple(s) if s == "OK"),
+            "seed {seed}: baseline SET did not return OK: {set:?}"
+        );
+        // Sole owner is the victim, and everyone agrees.
+        let owner = assert_single_owner(key, &format!("seed {seed} pre-partition")).await?;
+        assert_eq!(
+            owner, victim,
+            "seed {seed}: pre-partition owner is not victim"
+        );
+
+        // Signal the step loop to isolate victim↔leader, and let the isolation
+        // engage past the failure-detector threshold (fail_threshold * check
+        // interval = 5 * 50ms) plus a Raft commit before observing.
+        leader_idx_c.store(leader, Ordering::Release);
+        victim_idx_c.store(victim, Ordering::Release);
+        phase_c.store(1, Ordering::Release);
+
+        // Assertion 1: the leader marks the (client-reachable) victim FAIL. Observe
+        // via the third node — a survivor in the leader's committing majority.
+        let mut marked_fail = false;
+        for _ in 0..200 {
+            if let Ok(Some(flags)) = cluster_node_flags(CLUSTER_HOSTS[third], &victim_id_hex).await
+                && flags.split(',').any(|f| f == "fail")
+            {
+                marked_fail = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            marked_fail,
+            "seed {seed}: leader never marked the isolated-but-client-reachable victim FAIL \
+             (leader-only FD false positive did not fire)"
+        );
+
+        // Assertion 3 (write half): the FAIL-flagged victim is still client-reachable
+        // and accepts a write — it keeps quorum via `third`, so the self-fence never
+        // arms. Talk to the victim directly (client path is unaffected by the
+        // leader↔victim hold).
+        let victim_ip = turmoil::lookup(CLUSTER_HOSTS[victim]);
+        {
+            let mut c = RespConn::connect((victim_ip, SERVER_PORT)).await?;
+            let r = c.cmd(&[b"SET", key, b"during-partition"]).await?;
+            assert!(
+                matches!(&r, RespValue::Simple(s) if s == "OK"),
+                "seed {seed}: FAIL-flagged victim rejected a client write while holding \
+                 quorum (expected +OK, got {r:?})"
+            );
+            let g = c.cmd(&[b"GET", key]).await?;
+            assert_eq!(
+                g,
+                RespValue::Bulk(Some(b"during-partition".to_vec())),
+                "seed {seed}: victim did not serve its own in-partition write back"
+            );
+        }
+
+        // Assertion 2: no slot moved despite auto_failover=on — the victim has no
+        // replica to promote, so it is still the sole owner and every peer agrees.
+        let owner = assert_single_owner(key, &format!("seed {seed} during-partition")).await?;
+        assert_eq!(
+            owner, victim,
+            "seed {seed}: slot moved off the victim during the false-positive window \
+             (spurious failover)"
+        );
+
+        // Heal.
+        phase_c.store(2, Ordering::Release);
+
+        // Assertion 4: the leader re-probes the victim and clears FAIL.
+        let mut recovered = false;
+        for _ in 0..300 {
+            if let Ok(Some(flags)) = cluster_node_flags(CLUSTER_HOSTS[third], &victim_id_hex).await
+                && !flags.split(',').any(|f| f == "fail")
+            {
+                recovered = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            recovered,
+            "seed {seed}: FAIL flag never cleared after heal (no MarkNodeRecovered)"
+        );
+
+        // Assertion 3 (durability half): the in-partition write survived the whole
+        // false-positive episode — no failover/slot transfer occurred, so there is
+        // no loss window. Read it back following redirects to the (unchanged) owner.
+        let got = exec_following_redirects(entry, &[b"GET", key], 16).await?;
+        assert_eq!(
+            got,
+            RespValue::Bulk(Some(b"during-partition".to_vec())),
+            "seed {seed}: the write accepted during the false-positive window was lost after heal"
+        );
+        let owner = assert_single_owner(key, &format!("seed {seed} post-heal")).await?;
+        assert_eq!(
+            owner, victim,
+            "seed {seed}: post-heal owner is not the victim"
+        );
+
+        Ok(())
+    });
+
+    // Step loop: hold the leader↔victim edge on phase 1, release on phase 2 (or a
+    // bounded window). `hold` (not `partition`) keeps the timed-out probe dials
+    // *pending* rather than cancelling them mid-flight — same turmoil-0.7.1
+    // port-leak boundary the migration sim documents. The single held edge leaves
+    // both the leader and the victim their third-node link, so both retain quorum:
+    // the leader stays leader (and marks FAIL) and the victim keeps serving.
+    let mut held = false;
+    let mut released = false;
+    let mut held_at = Duration::ZERO;
+    let mut steps: u64 = 0;
+    loop {
+        let finished = sim.step().unwrap();
+
+        if !held && phase.load(Ordering::Acquire) >= 1 {
+            let v = victim_idx.load(Ordering::Acquire);
+            let l = leader_idx.load(Ordering::Acquire);
+            if v != usize::MAX && l != usize::MAX {
+                sim.hold(CLUSTER_HOSTS[v], CLUSTER_HOSTS[l]);
+                held = true;
+                held_at = sim.elapsed();
+            }
+        }
+
+        if held
+            && !released
+            && (phase.load(Ordering::Acquire) >= 2
+                || sim.elapsed().saturating_sub(held_at) >= Duration::from_secs(6))
+        {
+            let v = victim_idx.load(Ordering::Acquire);
+            let l = leader_idx.load(Ordering::Acquire);
+            sim.release(CLUSTER_HOSTS[v], CLUSTER_HOSTS[l]);
+            released = true;
+        }
+
+        if finished {
+            break;
+        }
+        steps += 1;
+        assert!(steps < 5_000_000, "seed {seed}: cluster sim did not finish");
+    }
+
+    drop(dirs);
+}
+
+/// Asymmetric-partition false failover (issue 18): a non-leader primary isolated
+/// from the leader's probe path but still client-reachable is marked `FAIL` by the
+/// leader-only failure detector (the documented false positive), yet — with no
+/// replica to promote — no slot moves and a client write it accepts during the
+/// window survives the heal. Deterministic across several seeds.
+#[test]
+fn test_cluster_asymmetric_partition_false_failover() {
+    for seed in [1u64, 2, 3, 7, 42] {
+        run_cluster_asymmetric_partition_false_failover(seed);
     }
 }
 

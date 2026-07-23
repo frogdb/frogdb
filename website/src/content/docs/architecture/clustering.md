@@ -265,6 +265,34 @@ A node that finds itself demoted (via `SetRole { role: Replica }` or a graceful 
 receives a `DemotionEvent` carrying the new primary's id, and switches to streaming from the new
 primary via PSYNC.
 
+### Asymmetric partitions and false positives
+
+Because detection is leader-only, the leader's view of a peer's health is the *only* input to
+`MarkNodeFailed`. An asymmetric partition — where a primary is cut off from the leader's TCP probe
+but stays reachable to clients and keeps Raft quorum through the remaining nodes — therefore
+produces a *false positive*: the leader marks a live, serving primary `FAIL`. This is the
+deliberate trade-off of leader-centric detection (avoiding O(N²) gossip), and it is bounded so that
+the false positive is benign:
+
+- **No spurious slot movement.** `MarkNodeFailed` only sets the `FAIL` flag and bumps the Config
+  Epoch; it does not move slots. Auto-failover moves slots only when the failed primary has a
+  replica to promote — with none, it is a no-op even when `auto_failover` is enabled, so the
+  wrongly-flagged primary keeps its slots and remains the sole owner cluster-wide.
+- **No split-brain from the flagged node.** A `FAIL` flag does not stop the flagged primary from
+  serving. What stops unsafe writes is the independent self-fence (`self-fence-on-quorum-loss`,
+  default on): a primary rejects writes with `CLUSTERDOWN` once *it* loses quorum. A node that keeps quorum (partitioned
+  from the leader only, not from the majority) safely continues to accept writes; a node that loses
+  quorum fences itself. Either way, a write the flagged primary accepts is not lost, because no
+  failover transferred its slots.
+- **Automatic recovery.** The leader keeps probing flagged nodes; the first successful probe
+  proposes `MarkNodeRecovered`, clearing the flag.
+
+The dangerous case — a promoted replica and the old primary both serving the same slot — requires
+both a replica topology and auto-failover racing the old primary's self-fence; that is a separate,
+replica-topology concern. The replica-less false-positive contract above is regression-guarded by
+`test_cluster_asymmetric_partition_false_failover`
+(`frogdb-server/crates/server/tests/simulation.rs`, deterministic turmoil).
+
 ---
 
 ## Node-to-Node Communication
