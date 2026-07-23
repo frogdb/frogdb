@@ -16,14 +16,22 @@
 //!
 //! ## Intentional exclusions
 //!
-//! Strict-key-validation behavior diff (FrogDB errors immediately on undeclared
-//! keys; upstream tests rely on Redis's lazier validation that lets scripts
-//! rewrite/expand `client->argv` at runtime):
-//! - `SORT BY <constant> output gets ordered for scripting` — intentional-incompatibility:scripting — intentional behavioral diff (strict key validation)
-//! - `SORT BY <constant> with GET gets ordered for scripting` — intentional-incompatibility:scripting — intentional behavioral diff (strict key validation)
-//! - `SPOP: We can call scripts rewriting client->argv from Lua` — intentional-incompatibility:scripting — intentional behavioral diff (strict key validation)
-//! - `EXPIRE: We can call scripts rewriting client->argv from Lua` — intentional-incompatibility:scripting — intentional behavioral diff (strict key validation)
-//! - `INCRBYFLOAT: We can call scripts expanding client->argv from Lua` — intentional-incompatibility:scripting — intentional behavioral diff (strict key validation)
+//! Replication-stream / `client->argv` rewriting for propagation (these upstream
+//! tests `attach_to_replication_stream` and `assert_replication_stream` to pin
+//! how Redis rewrites a script's sub-commands for replication — SPOP→SREM,
+//! EXPIRE→PEXPIREAT, INCRBYFLOAT→SET, SORT-by-constant determinism). FrogDB uses
+//! effect-based replication and does not reproduce Redis's verbatim argv
+//! rewriting, so these are `needs:repl` propagation-model diffs (the SORT case
+//! is additionally `cluster:skip` upstream). NOTE: they are NOT about key
+//! declaration — FrogDB does not require scripts to declare keys in `KEYS[]`
+//! (the SPOP test itself calls `spop 'myset'` with numkeys=0 and expects
+//! success). The real script key-safety policy is slot-cohesion only: see
+//! `frogdb-server/crates/core/src/scripting/gate.rs` module docs.
+//! - `SORT BY <constant> output gets ordered for scripting` — intentional-incompatibility:replication — needs:repl (+cluster:skip upstream)
+//! - `SORT BY <constant> with GET gets ordered for scripting` — intentional-incompatibility:replication — needs:repl (+cluster:skip upstream)
+//! - `SPOP: We can call scripts rewriting client->argv from Lua` — intentional-incompatibility:replication — needs:repl (argv-rewrite propagation)
+//! - `EXPIRE: We can call scripts rewriting client->argv from Lua` — intentional-incompatibility:replication — needs:repl (argv-rewrite propagation)
+//! - `INCRBYFLOAT: We can call scripts expanding client->argv from Lua` — intentional-incompatibility:replication — needs:repl (argv-rewrite propagation)
 //!
 //! Script timeout / SCRIPT KILL (FrogDB has a different script-execution model):
 //! - `Timedout read-only scripts can be killed by SCRIPT KILL` — redis-specific — Redis-internal feature

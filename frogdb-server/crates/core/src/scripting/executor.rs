@@ -995,4 +995,222 @@ mod tests {
             "rejected write must not touch the live store"
         );
     }
+
+    // ---- Undeclared-key slot policy, end-to-end through real Lua -----------
+    //
+    // These drive real `#!lua` shebang scripts through `eval` with
+    // `is_cluster_mode = true`, exercising the exact enforcement path a cluster
+    // shard hits: eval -> execute_script (seed the tracker from the first
+    // declared/accessed key) -> gate.check_all. They pin the true policy the
+    // dead `validate_key_access` never enforced (see gate.rs module docs):
+    // undeclared key access is allowed as long as it stays within the seeded
+    // slot; a different slot is rejected with Redis's same-slot error.
+
+    /// A read-probe command: reads its single key argument from the live store
+    /// and returns it (or nil). Named so the gate's name-based key extraction
+    /// falls to the default single-key-at-position-1 branch.
+    struct ProbeReadKey;
+    impl crate::command::Command for ProbeReadKey {
+        fn spec(&self) -> &'static crate::command_spec::CommandSpec {
+            use crate::command::{Arity, CommandFlags, WaiterWake, WalStrategy};
+            use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec};
+            static SPEC: CommandSpec = CommandSpec {
+                name: "PROBEREADKEY",
+                arity: Arity::Fixed(1),
+                flags: CommandFlags::READONLY,
+                keys: KeySpec::None,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::NoOp,
+                wakes: WaiterWake::None,
+                event: EventSpec::NotApplicable,
+                requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
+                lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
+                strategy: crate::command::ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+        fn execute(
+            &self,
+            ctx: &mut CommandContext,
+            args: &[Bytes],
+        ) -> Result<Response, crate::error::CommandError> {
+            match ctx.store.get(&args[0]) {
+                Some(_) => Ok(Response::bulk(Bytes::from_static(b"v"))),
+                None => Ok(Response::Null),
+            }
+        }
+    }
+
+    /// Find a key whose slot differs from `reference`'s slot.
+    fn key_with_different_slot(reference: &[u8]) -> Bytes {
+        let ref_slot = slot_for_key(reference);
+        for i in 0u32..1_000_000 {
+            let cand = Bytes::from(format!("k{i}"));
+            if slot_for_key(&cand) != ref_slot {
+                return cand;
+            }
+        }
+        panic!("no key with a slot different from the reference");
+    }
+
+    fn probe_executor_and_registry() -> (ScriptExecutor, CommandRegistry) {
+        let e = ScriptExecutor::new(ScriptingConfig::default()).unwrap();
+        let mut registry = CommandRegistry::new();
+        registry.register(ProbeReadKey);
+        (e, registry)
+    }
+
+    /// Cluster + shebang: `numkeys=1` declaring `{tag}a`, script reads the
+    /// UNDECLARED same-slot key `{tag}b` -> succeeds. Undeclared access is fine
+    /// within the seeded slot.
+    #[test]
+    fn eval_cluster_shebang_undeclared_same_slot_key_allowed() {
+        let (mut e, registry) = probe_executor_and_registry();
+        let mut store = crate::store::HashMapStore::new();
+        let shard_senders: Arc<Vec<crate::shard::ShardSender>> = Arc::new(vec![]);
+        let mut ctx = test_command_context(&mut store, &shard_senders);
+
+        let outcome = e.eval(
+            b"#!lua\nreturn redis.call('PROBEREADKEY', '{tag}b')",
+            &[Bytes::from_static(b"{tag}a")],
+            &[],
+            &mut ctx,
+            &registry,
+            false,
+            true, // is_cluster_mode
+        );
+        assert!(
+            outcome.result.is_ok(),
+            "undeclared same-slot key access must succeed, got {:?}",
+            outcome.result
+        );
+    }
+
+    /// Cluster + shebang: `numkeys=1` declaring `{tag}a`, script reads an
+    /// UNDECLARED key in a DIFFERENT slot -> rejected with the same-slot error.
+    #[test]
+    fn eval_cluster_shebang_undeclared_different_slot_key_rejected() {
+        let (mut e, registry) = probe_executor_and_registry();
+        let mut store = crate::store::HashMapStore::new();
+        let shard_senders: Arc<Vec<crate::shard::ShardSender>> = Arc::new(vec![]);
+        let mut ctx = test_command_context(&mut store, &shard_senders);
+
+        let other = key_with_different_slot(b"{tag}a");
+        let src = format!(
+            "#!lua\nreturn redis.call('PROBEREADKEY', '{}')",
+            String::from_utf8_lossy(&other)
+        );
+        let outcome = e.eval(
+            src.as_bytes(),
+            &[Bytes::from_static(b"{tag}a")],
+            &[],
+            &mut ctx,
+            &registry,
+            false,
+            true,
+        );
+        match outcome.result {
+            Err(ScriptError::Runtime(msg)) => {
+                assert!(
+                    msg.contains("do not hash to the same slot"),
+                    "expected same-slot error, got: {msg}"
+                );
+            }
+            other => panic!("expected same-slot rejection, got: {other:?}"),
+        }
+    }
+
+    /// Cluster + shebang, `numkeys=0`: the first ACCESSED key seeds the slot;
+    /// a second access in a different slot -> rejected.
+    #[test]
+    fn eval_cluster_shebang_numkeys0_two_different_slot_keys_rejected() {
+        let (mut e, registry) = probe_executor_and_registry();
+        let mut store = crate::store::HashMapStore::new();
+        let shard_senders: Arc<Vec<crate::shard::ShardSender>> = Arc::new(vec![]);
+        let mut ctx = test_command_context(&mut store, &shard_senders);
+
+        let first = Bytes::from_static(b"{tag}a");
+        let second = key_with_different_slot(&first);
+        let src = format!(
+            "#!lua\nredis.call('PROBEREADKEY', '{}')\nreturn redis.call('PROBEREADKEY', '{}')",
+            String::from_utf8_lossy(&first),
+            String::from_utf8_lossy(&second),
+        );
+        let outcome = e.eval(src.as_bytes(), &[], &[], &mut ctx, &registry, false, true);
+        match outcome.result {
+            Err(ScriptError::Runtime(msg)) => {
+                assert!(
+                    msg.contains("do not hash to the same slot"),
+                    "expected same-slot error, got: {msg}"
+                );
+            }
+            other => panic!("expected same-slot rejection, got: {other:?}"),
+        }
+    }
+
+    /// Regression guard: enforcement is gated on `has_shebang`. A plain
+    /// (non-shebang) cluster-mode EVAL is NOT slot-enforced — an undeclared
+    /// different-slot access routes by its own key (local here) and succeeds.
+    /// This pins why wiring a "strict undeclared-key" mode would silently
+    /// change behaviour for plain EVAL scripts.
+    #[test]
+    fn eval_cluster_non_shebang_does_not_enforce_slot() {
+        let (mut e, registry) = probe_executor_and_registry();
+        let mut store = crate::store::HashMapStore::new();
+        let shard_senders: Arc<Vec<crate::shard::ShardSender>> = Arc::new(vec![]);
+        let mut ctx = test_command_context(&mut store, &shard_senders);
+
+        let other = key_with_different_slot(b"{tag}a");
+        let src = format!(
+            "return redis.call('PROBEREADKEY', '{}')",
+            String::from_utf8_lossy(&other)
+        );
+        let outcome = e.eval(
+            src.as_bytes(),
+            &[Bytes::from_static(b"{tag}a")],
+            &[],
+            &mut ctx,
+            &registry,
+            false,
+            true, // cluster mode, but no shebang -> no enforcement
+        );
+        assert!(
+            outcome.result.is_ok(),
+            "non-shebang cluster EVAL must not slot-enforce, got {:?}",
+            outcome.result
+        );
+    }
+
+    /// Standalone shebang script: enforcement is also gated on
+    /// `is_cluster_mode`, so a cross-slot access outside cluster mode is
+    /// allowed (routes by its own key). Pins the standalone half of the policy.
+    #[test]
+    fn eval_standalone_shebang_does_not_enforce_slot() {
+        let (mut e, registry) = probe_executor_and_registry();
+        let mut store = crate::store::HashMapStore::new();
+        let shard_senders: Arc<Vec<crate::shard::ShardSender>> = Arc::new(vec![]);
+        let mut ctx = test_command_context(&mut store, &shard_senders);
+
+        let other = key_with_different_slot(b"{tag}a");
+        let src = format!(
+            "#!lua\nreturn redis.call('PROBEREADKEY', '{}')",
+            String::from_utf8_lossy(&other)
+        );
+        let outcome = e.eval(
+            src.as_bytes(),
+            &[Bytes::from_static(b"{tag}a")],
+            &[],
+            &mut ctx,
+            &registry,
+            false,
+            false, // standalone -> no enforcement
+        );
+        assert!(
+            outcome.result.is_ok(),
+            "standalone shebang must not slot-enforce, got {:?}",
+            outcome.result
+        );
+    }
 }
