@@ -156,7 +156,13 @@
         nodes (cond
                 local? ["n1"]
                 cluster-mode? (vec (map #(str "n" (inc %)) (range cluster-node-count)))
-                multi-node? ["n1" "n2" "n3"]
+                ;; Multi-node (replication) defaults to the full 3-node set, but an
+                ;; explicit --node/:nodes list (non-empty) pins the client to a subset.
+                ;; This lets a single-key linearizable workload (register) run on the
+                ;; replication topology while only ever talking to the primary — the
+                ;; async replicas stay reachable by the partition nemesis (by IP) yet
+                ;; never serve the client, so Knossos linearizability stays valid.
+                multi-node? (if (seq (:nodes opts)) (vec (:nodes opts)) ["n1" "n2" "n3"])
                 docker? ["n1"]
                 :else (or (:nodes opts) ["n1"]))]
     (merge tests/noop-test

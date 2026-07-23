@@ -87,6 +87,9 @@ class TestDefinition:
     topology: Topology
     cluster_flag: bool = False
     membership_changes: bool = False
+    replication_flag: bool = False  # pass --replication (3-node primary+replicas)
+    client_nodes: tuple[str, ...] = ()  # pin the client to a node subset (--node)
+    concurrency: int | None = None  # cap Jepsen worker threads (bounds Knossos search)
     suites: tuple[str, ...] = ()
 
 
@@ -149,8 +152,41 @@ TESTS: tuple[TestDefinition, ...] = (
     TestDefinition(
         "blocking-crash", "blocking", "kill", 60, Topology.SINGLE, suites=("crash", "all")
     ),
-    # Single-node nemesis (standalone)
-    TestDefinition("nemesis-pause", "register", "pause", 60, Topology.SINGLE),
+    # Register linearizability (Knossos cas-register) under fault injection.
+    # register.clj's linearizable checker is the harness's canonical single-key
+    # linearizability check. Previously it ran only clean or under crash/kill on a
+    # single node; these variants extend it to pause, partition, and the composed
+    # single-node :all nemesis. All are bounded to a 60s time-limit + the default
+    # rate so the Knossos search stays tractable (the extended-fault suite swaps
+    # register for Elle at raft scale specifically because Knossos OOMs on the huge
+    # indeterminate histories those nemeses generate; 60s single-key keeps it small).
+    #
+    # register-pause: SIGSTOP/SIGCONT the sole node. Ops in-flight during a pause
+    # time out to :info (Knossos ignores indeterminate ops); linearizability of the
+    # register across pause/resume must still hold. (Formerly the unreachable
+    # `nemesis-pause` test — suites=() — now named for its workload and wired into
+    # the crash/all suites.)
+    TestDefinition(
+        "register-pause",
+        "register",
+        "pause",
+        60,
+        Topology.SINGLE,
+        suites=("crash", "all", "register-fault"),
+    ),
+    # register-all: the composed single-node :all nemesis (kill + pause interleaved)
+    # against the linearizable register — the harshest single-node fault schedule.
+    # Wires the previously-orphaned :all nemesis (nemesis.clj) which had no test.
+    # A lost acked write across a crash, or a non-linearizable read, is a real
+    # durability/consistency failure here.
+    TestDefinition(
+        "register-all",
+        "register",
+        "all",
+        60,
+        Topology.SINGLE,
+        suites=("crash", "all", "register-fault"),
+    ),
     # Replication workloads
     TestDefinition(
         "replication",
@@ -171,6 +207,39 @@ TESTS: tuple[TestDefinition, ...] = (
     ),
     TestDefinition(
         "zombie", "zombie", "partition", 60, Topology.REPLICATION, suites=("replication", "all")
+    ),
+    # register-partition: the Knossos linearizable register on the 3-node replication
+    # topology, with the client PINNED to the primary (--node n1) while the partition
+    # nemesis isolates that primary from both replicas (:primary-isolated). Pinning is
+    # deliberate: the register's linearizable checker is only valid against a single
+    # authoritative node — an async replica serving stale reads is non-linearizable by
+    # design (consistency.md), which would make an unpinned 3-node register red-by-
+    # construction rather than a real finding. With the client on n1 only, the replicas
+    # stay reachable by the nemesis (partitioned by container IP) but never serve the
+    # client, so this asserts the real property: the primary keeps serving a
+    # linearizable single-key register even when cut off from all its replicas
+    # (availability + linearizability under replica isolation). Bounded to 30s to keep
+    # the Knossos search tractable. Runs in its own `register-fault` suite (sole
+    # replication-topology member -> executes standalone, never batched with the async
+    # replication workloads).
+    TestDefinition(
+        "register-partition",
+        "register",
+        "partition",
+        30,
+        Topology.REPLICATION,
+        replication_flag=True,
+        client_nodes=("n1",),
+        # concurrency=2 bounds the Knossos :linear search, which is exponential in
+        # concurrency. (The OOMs seen while developing this variant were primarily a
+        # harness bug -- CLUSTERDOWN rejections escaping uncaught and piling up as
+        # indeterminate :info ops; fixed in client.clj's with-error-handling. With that
+        # fixed, :info-count is 0, but the register's few distinct values (0-9) still
+        # make the linearization search costly, so the cap is kept as defense-in-depth.)
+        # Two client threads still exercise genuine concurrency; with the 30s limit this
+        # stays green (57 ok / 24 fail / 0 info, :valid? true).
+        concurrency=2,
+        suites=("register-fault",),
     ),
     TestDefinition(
         "replication-chaos",
@@ -724,6 +793,12 @@ def run_test(
         cmd.append("--cluster")
     if test.membership_changes:
         cmd.append("--membership-changes")
+    if test.replication_flag:
+        cmd.append("--replication")
+    for node in test.client_nodes:
+        cmd.extend(["--node", node])
+    if test.concurrency is not None:
+        cmd.extend(["--concurrency", str(test.concurrency)])
     cmd.extend(extra_args)
 
     cwd = root / "testing" / "jepsen" / "frogdb"
@@ -787,6 +862,13 @@ def generate_batch_edn(
             pairs.append(":cluster true")
         if t.membership_changes:
             pairs.append(":membership-changes true")
+        if t.replication_flag:
+            pairs.append(":replication true")
+        if t.client_nodes:
+            node_vec = " ".join(f'"{n}"' for n in t.client_nodes)
+            pairs.append(f":nodes [{node_vec}]")
+        if t.concurrency is not None:
+            pairs.append(f":concurrency {t.concurrency}")
         configs.append("{" + " ".join(pairs) + "}")
 
     edn = "[" + "\n ".join(configs) + "]"

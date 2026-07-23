@@ -32,12 +32,28 @@ All tests are defined in `testing/jepsen/run.py` as `TestDefinition` entries in 
 | `expiry-crash` | expiry | kill | 60s | Expiry correctness through crashes |
 | `expiry-rapid` | expiry | rapid-kill | 60s | Expiry under aggressive kill cycles |
 | `blocking-crash` | blocking | kill | 60s | Blocking ops through crashes |
+| `register-pause` | register | pause | 60s | Linearizability through SIGSTOP/SIGCONT pauses |
+| `register-all` | register | all | 60s | Linearizability under the composed single-node kill+pause nemesis |
 
-### Single-Node Standalone (not in any suite)
+### Register Linearizability Under Faults (`register-fault` suite)
 
-| Test | Workload | Nemesis | Time Limit | What It Tests |
-|------|----------|---------|------------|---------------|
-| `nemesis-pause` | register | pause | 60s | Linearizability through SIGSTOP/SIGCONT pauses |
+The Knossos cas-register (single-key linearizability) driven under fault injection, bounded
+in time so the Knossos search stays tractable. `register-pause`/`register-all` are single-node;
+`register-partition` pins the client to the primary (`--node n1`) on the 3-node replication
+topology so the linearizable model stays valid (async replicas would be non-linearizable by
+design) while the partition nemesis isolates that primary from its replicas. It also caps
+`--concurrency 2` (Knossos `:linear` is exponential in concurrency).
+
+Under partition, the isolated primary rejects writes with `CLUSTERDOWN` (quorum-safety). The
+register client classifies `CLUSTERDOWN`/`READONLY` rejections as `:fail` (the write was
+declined before mutating state), not the indeterminate `:info` — otherwise every rejection is
+a pending op and the Knossos search explodes into OOM.
+
+| Test | Workload | Nemesis | Topology | Time Limit | What It Tests |
+|------|----------|---------|----------|------------|---------------|
+| `register-pause` | register | pause | single | 60s | Linearizability through SIGSTOP/SIGCONT pauses |
+| `register-all` | register | all | single | 60s | Linearizability under composed kill+pause |
+| `register-partition` | register | partition | replication (client pinned to n1, `--concurrency 2`) | 30s | Primary stays available + linearizable when isolated from replicas |
 
 ### Replication
 
@@ -92,14 +108,18 @@ kill-leader, restart-node, slot migration), so they run with the `none` nemesis.
 
 ## Suite Definitions
 
+Counts below reflect the current `TESTS` tuple; run `uv run run.py list` for the authoritative set.
+
 | Suite | Tests | Description |
 |-------|-------|-------------|
-| `single` | 10 basic single-node tests | Baseline correctness without faults |
-| `crash` | 10 basic + 9 crash variants = 19 | Single-node with process kill nemesis |
-| `replication` | 6 replication tests | 3-node replication topology |
-| `raft` | 13 raft tests (core + faults + membership/recovery) | 5-node Raft cluster |
-| `raft-extended` | 4 extended nemesis tests | Advanced fault injection on Raft |
-| `all` | single + crash + replication + raft = 38 | Everything except raft-extended |
+| `single` | 11 basic single-node tests | Baseline correctness without faults |
+| `crash` | 22 | Single-node basics + crash/pause/composed nemesis variants |
+| `replication` | 7 | 3-node replication topology |
+| `replication-extended` | 2 | Clock-skew + slow-network on the replication topology |
+| `raft` | 18 | 5-node Raft cluster (core + faults + membership/recovery) |
+| `raft-extended` | 4 | Advanced fault injection on Raft (Elle) |
+| `register-fault` | 3 | Knossos register under pause / partition / composed faults |
+| `all` | 47 | Everything except the `*-extended` suites and the pinned `register-partition` variant |
 
 ## Nemesis Types
 

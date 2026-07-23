@@ -73,9 +73,18 @@
 
 (defmacro with-error-handling
   "Wrap operations with error handling for Jepsen.
-   Returns {:type :ok/:fail/:info, :error message} on failures."
+   Returns {:type :ok/:fail/:info, :error message} on failures.
+
+   NOTE: uses plain `try`, not slingshot's `try+`. `try+` special-cases
+   `clojure.lang.ExceptionInfo` to unwrap its own `throw+` payloads, so a plain
+   ex-info thrown by Carmine (every RESP error reply, e.g. CLUSTERDOWN) slips
+   past a `(catch clojure.lang.ExceptionInfo ...)` clause *and* the trailing
+   `(catch Exception ...)` and escapes uncaught — crashing the Jepsen worker and
+   turning every rejected write into an indeterminate :info op. Plain `try`
+   catches Carmine ex-info correctly. The operation bodies here only throw plain
+   Java/Carmine exceptions (no slingshot conditions), so `try+` buys us nothing."
   [op & body]
-  `(try+
+  `(try
      ~@body
      (catch java.net.ConnectException e#
        (assoc ~op :type :fail :error :connection-refused))
@@ -84,10 +93,36 @@
      (catch java.io.IOException e#
        (assoc ~op :type :info :error [:io-exception (.getMessage e#)]))
      (catch clojure.lang.ExceptionInfo e#
-       (let [data# (ex-data e#)]
-         (if (= (:prefix data#) :carmine)
+       (let [data# (ex-data e#)
+             ;; Carmine reports a redis error reply as an ExceptionInfo whose
+             ;; ex-data :prefix is the error code lower-cased (e.g. :clusterdown,
+             ;; :readonly) and whose human text lives in the *cause* chain, not
+             ;; necessarily in (.getMessage e). Collect the whole chain so we can
+             ;; classify regardless of where the text lands.
+             prefix# (:prefix data#)
+             msg# (loop [t# e# acc# (str (:message data#))]
+                    (if t#
+                      (recur (.getCause t#) (str acc# " " (.getMessage t#)))
+                      acc#))]
+         (cond
+           ;; A command rejected because the primary lost quorum (CLUSTERDOWN) or a
+           ;; replica refused a write (READONLY) definitively did NOT apply — the
+           ;; server declined it before mutating state. Classify as :fail (not the
+           ;; indeterminate :info) so linearizability checkers treat it as a no-op.
+           ;; Under a partition nemesis these rejections are frequent; leaving them
+           ;; indeterminate makes every one a "pending" op and explodes the Knossos
+           ;; search space into OOM (the very reason the extended-fault suite swaps
+           ;; register for Elle). :fail keeps the single-key register tractable.
+           (or (contains? #{:clusterdown :readonly :masterdown} prefix#)
+               (and msg# (or (clojure.string/includes? msg# "CLUSTERDOWN")
+                             (clojure.string/includes? msg# "READONLY")
+                             (clojure.string/includes? msg# "MASTERDOWN"))))
+           (assoc ~op :type :fail :error [:rejected (clojure.string/trim msg#)])
+
+           (= prefix# :carmine)
            (assoc ~op :type :fail :error [:redis-error (:message data#)])
-           (throw e#))))
+
+           :else (throw e#))))
      (catch Exception e#
        (warn "Unexpected error:" e#)
        (assoc ~op :type :info :error [:unexpected (.getMessage e#)]))))
