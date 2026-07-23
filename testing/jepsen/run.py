@@ -167,6 +167,28 @@ TESTS: tuple[TestDefinition, ...] = (
     TestDefinition(
         "expiry-rapid", "expiry", "rapid-kill", 60, Topology.SINGLE, suites=("crash", "all")
     ),
+    # expiry-clock-skew: the expiry/TTL workload under the clock-skew nemesis.
+    # Expiry is the feature most sensitive to clock divergence, yet it had never
+    # run with any clock fault. The reworked expiry checker is server-time
+    # authoritative — it anchors on the server's own PTTL replies and projects
+    # them with elapsed control-node time (a duration, invariant under a constant
+    # offset between the control node and the DB node), and orders everything by
+    # Jepsen's single control-node clock. So an offset skew between the checker
+    # host and the server can no longer manufacture false premature-expiry /
+    # zombie-key verdicts, while the unconditional safety invariants (no
+    # resurrection, persisted keys don't expire) hold under any clock behaviour.
+    #
+    # The clock-skew nemesis skews via `date -s` where CAP_SYS_TIME is granted,
+    # else falls back to a /tmp/faketime offset file (nemesis.clj). The single
+    # compose grants neither (deliberately: `date -s` in a non-time-namespaced
+    # container would move the HOST clock), so here the nemesis exercises the
+    # skew machinery + workload resilience as an offset perturbation rather than
+    # a true server-clock jump — exactly the control-vs-server offset the checker
+    # is now robust to. 60s gives the 15s-interval skew/reset generator a couple
+    # of full cycles. Baseline: expected clean (:valid? true).
+    TestDefinition(
+        "expiry-clock-skew", "expiry", "clock-skew", 60, Topology.SINGLE, suites=("crash", "all")
+    ),
     TestDefinition(
         "blocking-crash", "blocking", "kill", 60, Topology.SINGLE, suites=("crash", "all")
     ),
