@@ -274,6 +274,10 @@ pub(crate) struct ScriptInvoker<'a> {
     master_host: Option<String>,
     master_port: Option<u16>,
     master_link_up: bool,
+    /// Configured JSON document limits (max depth / max size), propagated so a
+    /// `redis.call('JSON.SET', ...)` inside a script enforces the same caps as a
+    /// direct command instead of silently falling back to defaults.
+    json_limits: crate::JsonLimits,
     /// Effective local writes performed by this script's sub-commands, recorded
     /// so the shard worker can run the canonical write-effect pipeline
     /// (notifications, WATCH bump, tracking, waiter wake, WAL, replication)
@@ -304,6 +308,7 @@ impl<'a> ScriptInvoker<'a> {
             master_host: ctx.master_host.clone(),
             master_port: ctx.master_port,
             master_link_up: ctx.master_link_up,
+            json_limits: ctx.json_limits,
             // Reborrow last, after every scalar field is read, so the mutable
             // borrows of the two written-to fields do not shadow the disjoint
             // scalar reads. `store` and `effects.script_writes` are distinct
@@ -417,6 +422,10 @@ impl CommandInvoker for ScriptInvoker<'_> {
         ctx.master_host = self.master_host.clone();
         ctx.master_port = self.master_port;
         ctx.master_link_up = self.master_link_up;
+        // Propagate the configured JSON limits so scripted JSON writes enforce
+        // the same caps as direct commands (the fresh sub-command context would
+        // otherwise default them).
+        ctx.json_limits = self.json_limits;
 
         let result = handler.execute(&mut ctx, args);
 
@@ -650,6 +659,7 @@ mod tests {
             master_host: None,
             master_port: None,
             master_link_up: false,
+            json_limits: crate::JsonLimits::default(),
             store: RefCell::<&mut dyn Store>::new(store),
             script_writes: RefCell::new(writes),
         }
@@ -845,6 +855,7 @@ mod tests {
             master_host: Some("primary.example".to_string()),
             master_port: Some(6390),
             master_link_up: true,
+            json_limits: crate::JsonLimits::default(),
             store: RefCell::<&mut dyn Store>::new(&mut store),
             script_writes: RefCell::new(&mut writes),
         };

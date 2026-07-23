@@ -24,7 +24,7 @@ pub use object::*;
 pub use string::*;
 
 use bytes::Bytes;
-use frogdb_core::{CommandError, JsonError};
+use frogdb_core::{CommandError, JsonError, JsonLimits, JsonValue};
 use frogdb_protocol::Response;
 use serde_json::Value as JsonData;
 
@@ -34,11 +34,41 @@ fn parse_path(arg: Option<&Bytes>) -> String {
         .unwrap_or_else(|| "$".to_string())
 }
 
-/// Parse a JSON value from bytes.
-fn parse_json_value(bytes: &[u8]) -> Result<JsonData, CommandError> {
-    serde_json::from_slice(bytes).map_err(|e| CommandError::InvalidArgument {
-        message: format!("invalid JSON: {}", e),
-    })
+/// Parse client-supplied JSON, enforcing the configured document limits at the
+/// ingest boundary.
+///
+/// Every command that parses JSON coming off the wire must route through here so
+/// an over-nested or oversized fragment is rejected before it can be stored.
+/// Errors are the same [`JsonError`] family the JSON.SET new-document path
+/// surfaces (via [`JsonValue::parse_with_limits`]), so callers report one
+/// consistent error message. Re-parses of already-stored, already-validated
+/// documents (internal re-serialization) do not belong here and stay unbounded.
+fn parse_json_value_limited(bytes: &[u8], limits: &JsonLimits) -> Result<JsonData, CommandError> {
+    JsonValue::parse_with_limits(bytes, limits)
+        .map(JsonValue::into_data)
+        .map_err(json_error_to_command_error)
+}
+
+/// Enforce configured limits on a document that a growth mutation just produced,
+/// reverting to `snapshot` (leaving the store unmutated) if the result exceeds
+/// them.
+///
+/// Input-side parsing only bounds the *fragment* a command supplies; a mutation
+/// (MERGE, ARRAPPEND, ARRINSERT, STRAPPEND, nested SET) can still push the
+/// *resulting* stored document past the depth or serialized-size cap. Callers
+/// apply the mutation in place through the copy-on-write handle, then call this
+/// to validate the whole document and roll back on violation so the reject is a
+/// true no-op.
+fn enforce_growth_limits(
+    json: &mut JsonValue,
+    snapshot: JsonValue,
+    limits: &JsonLimits,
+) -> Result<(), CommandError> {
+    if let Err(e) = json.validate_limits(limits) {
+        *json = snapshot;
+        return Err(json_error_to_command_error(e));
+    }
+    Ok(())
 }
 
 /// Convert a JsonError to a CommandError.

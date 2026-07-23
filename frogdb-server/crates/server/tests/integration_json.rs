@@ -961,3 +961,179 @@ async fn test_json_set_respects_configured_max_size() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// Limits enforced on every ingest + growth path (not just the new-doc SET)
+//
+// Regression coverage for the bypass where non-new-document paths parsed
+// client JSON unbounded, and for growth mutations (MERGE/ARRAPPEND/...) that
+// could push a stored document past the configured caps incrementally.
+// ============================================================================
+
+#[tokio::test]
+async fn test_json_set_existing_key_respects_configured_max_depth() {
+    // Bypass pre-fix: the existing-key SET branch parsed the value unbounded, so
+    // overwriting an existing key with an over-deep document was accepted.
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        json_max_depth: Some(4),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    // Seed a shallow document so the key exists (existing-key branch on re-SET).
+    let ok = client.command(&["JSON.SET", "k", "$", r#"{"a":1}"#]).await;
+    assert_eq!(ok, Response::Simple(Bytes::from("OK")));
+
+    // Re-SET the existing key with a depth-5 document (> 4): must be rejected.
+    let too_deep = client
+        .command(&["JSON.SET", "k", "$", r#"{"a":{"b":{"c":{"d":{"e":1}}}}}"#])
+        .await;
+    assert!(
+        matches!(too_deep, Response::Error(_)),
+        "existing-key SET exceeding max-depth must be rejected, got {:?}",
+        too_deep
+    );
+
+    // The stored document must be unchanged (still the shallow original).
+    let after = client.command(&["JSON.GET", "k", "$"]).await;
+    assert_eq!(
+        after,
+        Response::Bulk(Some(Bytes::from(r#"[{"a":1}]"#))),
+        "rejected over-deep re-SET must leave the document unchanged"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_json_merge_growth_respects_configured_max_size() {
+    // MERGE can grow a stored document past the size cap even when the patch
+    // fragment itself is within the cap: the growth-side check must reject it and
+    // leave the document unmutated.
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        json_max_size: Some(20),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    // 7-byte document (<= 20): accepted.
+    let ok = client.command(&["JSON.SET", "k", "$", r#"{"a":1}"#]).await;
+    assert_eq!(ok, Response::Simple(Bytes::from("OK")));
+
+    // Patch fragment is 16 bytes (<= 20) so it passes the ingest check, but the
+    // merged result `{"a":1,"b":"aaaaaaaa"}` is 22 bytes (> 20): rejected.
+    let too_big = client
+        .command(&["JSON.MERGE", "k", "$", r#"{"b":"aaaaaaaa"}"#])
+        .await;
+    assert!(
+        matches!(too_big, Response::Error(_)),
+        "MERGE growing past max-size must be rejected, got {:?}",
+        too_big
+    );
+
+    // The document must be unchanged (merge rolled back).
+    let after = client.command(&["JSON.GET", "k", "$"]).await;
+    assert_eq!(
+        after,
+        Response::Bulk(Some(Bytes::from(r#"[{"a":1}]"#))),
+        "rejected MERGE must leave the document unchanged"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_json_arrappend_growth_respects_configured_max_size() {
+    // ARRAPPEND can grow a stored array past the size cap; the growth-side check
+    // must reject and leave the array unmutated.
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        json_max_size: Some(20),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    // 3-byte array document (<= 20): accepted.
+    let ok = client.command(&["JSON.SET", "k", "$", "[1]"]).await;
+    assert_eq!(ok, Response::Simple(Bytes::from("OK")));
+
+    // Appended value is an 18-byte JSON string (<= 20) so it passes ingest, but
+    // the resulting array `[1,"aaaaaaaaaaaaaaaa"]` is 22 bytes (> 20): rejected.
+    let too_big = client
+        .command(&["JSON.ARRAPPEND", "k", "$", r#""aaaaaaaaaaaaaaaa""#])
+        .await;
+    assert!(
+        matches!(too_big, Response::Error(_)),
+        "ARRAPPEND growing past max-size must be rejected, got {:?}",
+        too_big
+    );
+
+    // The array must be unchanged (append rolled back).
+    let after = client.command(&["JSON.GET", "k", "$"]).await;
+    assert_eq!(
+        after,
+        Response::Bulk(Some(Bytes::from("[[1]]"))),
+        "rejected ARRAPPEND must leave the array unchanged"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_json_set_via_eval_respects_configured_max_depth() {
+    // Scripting path pre-fix: the sub-command context built in `run_local`
+    // defaulted json_limits, so a `redis.call('JSON.SET', ...)` inside a script
+    // ignored the configured caps entirely.
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        json_max_depth: Some(4),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    // Depth-5 document (> 4) written from inside a script must be rejected: the
+    // failed redis.call surfaces as an EVAL error.
+    let res = client
+        .command(&[
+            "EVAL",
+            "return redis.call('JSON.SET', KEYS[1], '$', ARGV[1])",
+            "1",
+            "sk",
+            r#"{"a":{"b":{"c":{"d":{"e":1}}}}}"#,
+        ])
+        .await;
+    assert!(
+        matches!(res, Response::Error(_)),
+        "scripted JSON.SET exceeding max-depth must be rejected, got {:?}",
+        res
+    );
+
+    // The key must not have been created.
+    let missing = client.command(&["JSON.GET", "sk", "$"]).await;
+    assert_eq!(
+        missing,
+        Response::Bulk(None),
+        "rejected scripted over-deep document must not be stored"
+    );
+
+    // A within-limit scripted write still succeeds, proving limits (not a broken
+    // script path) are what rejected the deep one.
+    let ok = client
+        .command(&[
+            "EVAL",
+            "return redis.call('JSON.SET', KEYS[1], '$', ARGV[1])",
+            "1",
+            "sk2",
+            r#"{"a":{"b":1}}"#,
+        ])
+        .await;
+    assert_eq!(
+        ok,
+        Response::Simple(Bytes::from("OK")),
+        "scripted JSON.SET within max-depth must succeed"
+    );
+
+    server.shutdown().await;
+}
