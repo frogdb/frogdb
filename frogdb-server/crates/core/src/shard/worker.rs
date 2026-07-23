@@ -181,6 +181,11 @@ pub struct ShardWorker {
     /// sweep under a time budget). Side effects are applied shard-side from the
     /// returned `ExpiryResult`.
     pub(crate) expiry: ActiveExpiryCoordinator,
+
+    /// JSON document limits (max depth / max size) from the server's `[json]`
+    /// config, threaded into every [`CommandContext`](crate::command::CommandContext)
+    /// this worker builds so JSON handlers enforce the configured limits.
+    pub(crate) json_limits: crate::JsonLimits,
 }
 
 impl ShardWorker {
@@ -258,6 +263,13 @@ impl ShardWorker {
         self.observability.set_keyspace_stats(stats);
     }
 
+    /// Set the JSON document limits (max depth / max size) sourced from the
+    /// server's `[json]` config. Threaded into every [`CommandContext`] this
+    /// worker builds so JSON handlers enforce the configured limits.
+    pub fn set_json_limits(&mut self, limits: crate::JsonLimits) {
+        self.json_limits = limits;
+    }
+
     /// Build a fully-populated [`CommandContext`](crate::command::CommandContext)
     /// for executing a command against this shard's local store.
     ///
@@ -302,6 +314,7 @@ impl ShardWorker {
             master_host: self.identity.master_host(),
             master_port: self.identity.master_port(),
             master_link_up: self.identity.master_link_up(),
+            json_limits: self.json_limits,
             effects: Default::default(),
         }
     }

@@ -20,12 +20,12 @@ pub const DEFAULT_JSON_MAX_SIZE: usize = 64 * 1024 * 1024;
 pub struct JsonConfig {
     /// Maximum nesting depth for JSON documents.
     #[serde(default = "default_json_max_depth")]
-    #[param(skip)] // skip: config not yet consumed by server
+    #[param(skip)] // skip: enforced at the JSON handlers, not a CONFIG GET/SET param
     pub max_depth: usize,
 
     /// Maximum size in bytes for JSON documents.
     #[serde(default = "default_json_max_size")]
-    #[param(skip)] // skip: config not yet consumed by server
+    #[param(skip)] // skip: enforced at the JSON handlers, not a CONFIG GET/SET param
     pub max_size: usize,
 }
 

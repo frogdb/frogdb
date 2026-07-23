@@ -11,7 +11,7 @@ use frogdb_core::{
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
-use crate::config::Config;
+use crate::config::{Config, JsonConfigExt};
 use crate::failure_detector::FailureDetector;
 use crate::net::spawn;
 use crate::runtime_config::ConfigManager;
@@ -187,6 +187,10 @@ pub(super) fn spawn_shard_workers(
             ctx.config.blocking.max_waiters_per_key,
             ctx.config.blocking.max_blocked_connections,
         );
+
+        // Set JSON document limits (max depth / max size) from config so JSON
+        // command handlers enforce the configured `[json]` limits.
+        worker.set_json_limits(ctx.config.json.to_limits());
 
         // Share the server-wide is_replica flag with this shard worker
         worker.set_is_replica_flag(ctx.is_replica_flag.clone());

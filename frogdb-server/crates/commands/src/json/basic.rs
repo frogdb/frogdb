@@ -7,8 +7,8 @@ use frogdb_protocol::Response;
 use serde_json::Value as JsonData;
 
 use super::{
-    default_limits, get_json, get_json_mut, json_error_to_command_error, parse_json_value,
-    parse_path, single_or_multi,
+    get_json, get_json_mut, json_error_to_command_error, parse_json_value, parse_path,
+    single_or_multi,
 };
 
 // ============================================================================
@@ -71,7 +71,7 @@ impl Command for JsonSetCommand {
             });
         }
 
-        let limits = default_limits();
+        let limits = ctx.json_limits;
 
         // Check if key exists
         let key_exists = ctx.store.get(key).is_some();

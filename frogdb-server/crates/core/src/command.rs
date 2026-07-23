@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
+use crate::JsonLimits;
 use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::command_spec::{AccessSpec, CommandSpec, KeySpec};
 use crate::error::CommandError;
@@ -1214,6 +1215,13 @@ pub struct CommandContext<'a> {
     /// [`RoleController::master_link_up`].
     pub master_link_up: bool,
 
+    /// Document limits (max nesting depth / max byte size) enforced by JSON
+    /// command handlers when parsing untrusted input. Sourced from the server's
+    /// `[json]` config section at context construction (see the shard worker's
+    /// `command_context`); defaults to [`JsonLimits::default`] for the plain
+    /// [`CommandContext::new`] constructor used in unit/test contexts.
+    pub json_limits: JsonLimits,
+
     /// Everything this execution *produces* besides the [`Response`] — the
     /// command's out-buffer, drained as one value by the execution seam via
     /// `std::mem::take(&mut ctx.effects)`. See [`CommandEffects`].
@@ -1250,6 +1258,7 @@ impl<'a> CommandContext<'a> {
             master_host: None,
             master_port: None,
             master_link_up: false,
+            json_limits: JsonLimits::default(),
             effects: CommandEffects::default(),
         }
     }

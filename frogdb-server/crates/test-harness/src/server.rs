@@ -140,6 +140,12 @@ pub struct TestServerConfig {
     /// Allow multi-key commands whose keys span shards in standalone mode
     /// (default: false). Enables the cross-shard scatter path.
     pub allow_cross_slot_standalone: bool,
+
+    // --- JSON ---
+    /// Override `json.max-depth` (max JSON nesting depth). None = server default.
+    pub json_max_depth: Option<usize>,
+    /// Override `json.max-size` (max JSON document size in bytes). None = server default.
+    pub json_max_size: Option<usize>,
 }
 
 impl Clone for TestServerConfig {
@@ -180,6 +186,8 @@ impl Clone for TestServerConfig {
             tls_client_key_file: self.tls_client_key_file.clone(),
             config_file_path: self.config_file_path.clone(),
             allow_cross_slot_standalone: self.allow_cross_slot_standalone,
+            json_max_depth: self.json_max_depth,
+            json_max_size: self.json_max_size,
         }
     }
 }
@@ -476,6 +484,14 @@ impl TestServer {
         // Max clients
         if let Some(max) = test_config.max_clients {
             config.server.max_clients = max;
+        }
+
+        // JSON document limits
+        if let Some(depth) = test_config.json_max_depth {
+            config.json.max_depth = depth;
+        }
+        if let Some(size) = test_config.json_max_size {
+            config.json.max_size = size;
         }
 
         // Enable DEBUG SLEEP and other unsafe DEBUG subcommands for tests.
