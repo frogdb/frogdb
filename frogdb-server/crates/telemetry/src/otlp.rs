@@ -66,8 +66,16 @@ impl OtlpRecorder {
         })
     }
 
-    /// Increment a counter.
-    pub fn increment_counter(&self, name: &str, value: u64, labels: &[(&str, &str)]) {
+    /// Shutdown the OTLP recorder, flushing any pending metrics.
+    pub fn shutdown(&self) {
+        if let Err(e) = self.meter_provider.shutdown() {
+            warn!(error = %e, "Error shutting down OTLP meter provider");
+        }
+    }
+}
+
+impl frogdb_core::MetricsRecorder for OtlpRecorder {
+    fn increment_counter(&self, name: &str, value: u64, labels: &[(&str, &str)]) {
         let counter = self.counters.get_or_create(name, || {
             self.meter_provider
                 .meter("frogdb")
@@ -77,8 +85,7 @@ impl OtlpRecorder {
         counter.add(value, &labels_to_attributes(labels));
     }
 
-    /// Record a gauge value.
-    pub fn record_gauge(&self, name: &str, value: f64, labels: &[(&str, &str)]) {
+    fn record_gauge(&self, name: &str, value: f64, labels: &[(&str, &str)]) {
         let gauge = self.gauges.get_or_create(name, || {
             self.meter_provider
                 .meter("frogdb")
@@ -88,8 +95,7 @@ impl OtlpRecorder {
         gauge.record(value, &labels_to_attributes(labels));
     }
 
-    /// Record a histogram observation.
-    pub fn record_histogram(&self, name: &str, value: f64, labels: &[(&str, &str)]) {
+    fn record_histogram(&self, name: &str, value: f64, labels: &[(&str, &str)]) {
         let histogram = self.histograms.get_or_create(name, || {
             self.meter_provider
                 .meter("frogdb")
@@ -97,13 +103,6 @@ impl OtlpRecorder {
                 .build()
         });
         histogram.record(value, &labels_to_attributes(labels));
-    }
-
-    /// Shutdown the OTLP recorder, flushing any pending metrics.
-    pub fn shutdown(&self) {
-        if let Err(e) = self.meter_provider.shutdown() {
-            warn!(error = %e, "Error shutting down OTLP meter provider");
-        }
     }
 }
 
