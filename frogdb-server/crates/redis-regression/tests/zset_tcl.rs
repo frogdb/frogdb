@@ -18,7 +18,6 @@
 //! - `ZINTERSTORE with a regular set and weights - $encoding` — intentional-incompatibility:encoding — internal-encoding
 //! - `ZINTERSTORE with AGGREGATE MIN - $encoding` — intentional-incompatibility:encoding — internal-encoding
 //! - `ZINTERSTORE with AGGREGATE MAX - $encoding` — intentional-incompatibility:encoding — internal-encoding
-//! - `$cmd with +inf/-inf scores - $encoding` — intentional-incompatibility:encoding — internal-encoding
 //! - `$cmd with NaN weights - $encoding` — intentional-incompatibility:encoding — internal-encoding
 //! - `ZDIFFSTORE with a regular set - $encoding` — intentional-incompatibility:encoding — internal-encoding
 //! - `ZSCORE - $encoding` — intentional-incompatibility:encoding — internal-encoding
@@ -43,6 +42,13 @@
 //!
 //! DEBUG-dependent (adapted to use server restart with RocksDB recovery):
 //! (none — ZSCORE after DEBUG RELOAD test is now ported)
+//!
+//! Reviewed and un-excluded (issue 54): `$cmd with +inf/-inf scores - $encoding`
+//! was previously bucketed under "internal-encoding" purely because of its
+//! `- $encoding` name suffix, but its actual assertions (ZUNIONSTORE/
+//! ZINTERSTORE SUM aggregate folding +inf/-inf to 0) are portable protocol
+//! behavior unrelated to listpack/skiplist storage — ported as
+//! `tcl_zunionstore_zinterstore_with_inf_scores`.
 //!
 //! Fuzz / stress tests:
 //! - `ZSET sorting stresser - $encoding` — tested-elsewhere — fuzzing/stress
@@ -943,6 +949,48 @@ async fn tcl_zunionstore_with_weights() {
         ),
         vec!["a", "2", "b", "7", "d", "9", "c", "12"]
     );
+}
+
+// Ported from upstream zset.tcl `$cmd with +inf/-inf scores - $encoding`
+// (redis/redis tests/unit/type/zset.tcl:1026-1048, redis 8.6.0). The `-
+// $encoding` suffix loops the same test body over listpack/skiplist storage
+// encodings, which FrogDB doesn't have (single internal encoding) — but the
+// behavior under test (ZUNIONSTORE/ZINTERSTORE's SUM aggregate must fold
+// +inf/-inf to a finite 0, never emit NaN) is portable protocol/business
+// logic, not internal encoding, so it belongs here rather than under the
+// zset_tcl.rs:21 "internal-encoding" exclusion. See issue 54.
+#[tokio::test]
+async fn tcl_zunionstore_zinterstore_with_inf_scores() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    for cmd in ["ZUNIONSTORE", "ZINTERSTORE"] {
+        c.command(&["DEL", "zsetinf1{t}", "zsetinf2{t}"]).await;
+
+        c.command(&["ZADD", "zsetinf1{t}", "+inf", "key"]).await;
+        c.command(&["ZADD", "zsetinf2{t}", "+inf", "key"]).await;
+        c.command(&[cmd, "zsetinf3{t}", "2", "zsetinf1{t}", "zsetinf2{t}"])
+            .await;
+        assert_bulk_eq(&c.command(&["ZSCORE", "zsetinf3{t}", "key"]).await, b"inf");
+
+        c.command(&["ZADD", "zsetinf1{t}", "-inf", "key"]).await;
+        c.command(&["ZADD", "zsetinf2{t}", "+inf", "key"]).await;
+        c.command(&[cmd, "zsetinf3{t}", "2", "zsetinf1{t}", "zsetinf2{t}"])
+            .await;
+        assert_bulk_eq(&c.command(&["ZSCORE", "zsetinf3{t}", "key"]).await, b"0");
+
+        c.command(&["ZADD", "zsetinf1{t}", "+inf", "key"]).await;
+        c.command(&["ZADD", "zsetinf2{t}", "-inf", "key"]).await;
+        c.command(&[cmd, "zsetinf3{t}", "2", "zsetinf1{t}", "zsetinf2{t}"])
+            .await;
+        assert_bulk_eq(&c.command(&["ZSCORE", "zsetinf3{t}", "key"]).await, b"0");
+
+        c.command(&["ZADD", "zsetinf1{t}", "-inf", "key"]).await;
+        c.command(&["ZADD", "zsetinf2{t}", "-inf", "key"]).await;
+        c.command(&[cmd, "zsetinf3{t}", "2", "zsetinf1{t}", "zsetinf2{t}"])
+            .await;
+        assert_bulk_eq(&c.command(&["ZSCORE", "zsetinf3{t}", "key"]).await, b"-inf");
+    }
 }
 
 #[tokio::test]

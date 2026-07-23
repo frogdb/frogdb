@@ -682,3 +682,245 @@ async fn test_pipelined_null_array_preserves_reply_order_resp2() {
 
     server.shutdown().await;
 }
+
+// =============================================================================
+// RESP3 non-finite double wire format (issue 54, regression pin)
+//
+// The original audit gap claimed RESP3 non-finite doubles (inf/-inf/nan) were
+// untested and possibly broken: `WireResponse::Double(f64)` passes the raw
+// `f64` straight into `Resp3BytesFrame::Double` (protocol/src/response.rs:
+// 320-323), bypassing FrogDB's own `format_float` inf/-inf/nan special-casing
+// that RESP2 uses (response.rs:239,876-885). Verified against the actual
+// encoder: `redis-protocol` 6.0.0's RESP3 encoder (resp3/encode.rs:108-120,
+// `f64_to_redis_string` in resp3/utils.rs:595-607) already emits `,inf\r\n` /
+// `,-inf\r\n` / `,nan\r\n` correctly and has its own upstream tests covering
+// exactly this (encode.rs:1484-1506) — there is no live bug in the encoder
+// (verdict ADJUSTED L1/C2, .scratch/testing-improvements/audit/verdicts-A.md
+// #3). These tests pin the wire bytes at the command level so that if FrogDB
+// ever adds its own RESP3 float formatting layer, or the `redis-protocol`
+// dependency is upgraded/swapped and changes behavior, a test fails instead
+// of the regression going unnoticed.
+//
+// IMPORTANT — this is *not* uniform across commands that return a score:
+//   - ZINCRBY (commands/src/sorted_set/basic.rs:410-414) is unconditional:
+//     `Response::Double` is returned whenever the connection is RESP3,
+//     regardless of finiteness. This is real, reachable command-level
+//     coverage of the raw Double passthrough for +inf/-inf.
+//   - ZSCORE/ZMSCORE route through `commands::utils::score_response`, which
+//     *deliberately* falls back to a RESP2-style bulk string (via
+//     `format_float`) for non-finite scores even under RESP3
+//     (commands/src/utils.rs:835-841) — so ZSCORE of an inf/-inf member does
+//     NOT exercise the Double passthrough at all. Pinned below as current
+//     behavior (a bulk string), not the `,inf\r\n` shape one might expect by
+//     analogy with ZINCRBY; ZSCORE *does* use the Double passthrough for
+//     finite scores, which is also pinned below.
+//   - ZADD ... INCR (commands/src/sorted_set/basic.rs:131) is unconditional
+//     the *other* way: it always returns a bulk string via `format_float`,
+//     never `Response::Double`, even in RESP3 and even for a finite result.
+//     Pinned below as current behavior. This looks like a pre-existing
+//     RESP3-consistency gap relative to ZINCRBY (out of scope for this
+//     regression-pin task, which is encoder/dispatch-change-free by design;
+//     flagged for a follow-up issue rather than fixed here).
+// =============================================================================
+
+/// Encode a command as a RESP array of bulk strings (raw wire bytes, no
+/// framing library involved — this constructs exactly what a real RESP3
+/// client would send).
+fn encode_resp_command(args: &[&str]) -> Vec<u8> {
+    let mut buf = format!("*{}\r\n", args.len()).into_bytes();
+    for arg in args {
+        buf.extend_from_slice(format!("${}\r\n", arg.len()).as_bytes());
+        buf.extend_from_slice(arg.as_bytes());
+        buf.extend_from_slice(b"\r\n");
+    }
+    buf
+}
+
+/// Open a raw (non-`redis-protocol`-framed) connection and upgrade it to
+/// RESP3 via `HELLO 3`, draining the HELLO reply so the stream is
+/// positioned exactly at the start of the next command's reply.
+async fn connect_resp3_raw(server: &TestServer) -> TcpStream {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut stream = TcpStream::connect(server.socket_addr()).await.unwrap();
+    stream
+        .write_all(&encode_resp_command(&["HELLO", "3"]))
+        .await
+        .unwrap();
+    let mut buf = [0u8; 4096];
+    let _ = timeout(Duration::from_secs(2), stream.read(&mut buf))
+        .await
+        .expect("timeout reading HELLO reply")
+        .expect("HELLO read error");
+    stream
+}
+
+/// Send a command on a raw stream and return the exact reply bytes.
+async fn send_raw_command(stream: &mut TcpStream, args: &[&str]) -> Vec<u8> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    stream.write_all(&encode_resp_command(args)).await.unwrap();
+    let mut buf = vec![0u8; 4096];
+    let n = timeout(Duration::from_secs(2), stream.read(&mut buf))
+        .await
+        .expect("timeout reading reply")
+        .expect("read error");
+    buf.truncate(n);
+    buf
+}
+
+/// ZINCRBY producing +inf must be the RESP3 Double `,inf\r\n` — the real,
+/// reachable command path through the raw `f64` passthrough.
+#[tokio::test]
+async fn test_zincrby_resp3_positive_infinity_wire_bytes() {
+    let server = start_server().await;
+    let mut stream = connect_resp3_raw(&server).await;
+
+    let raw = send_raw_command(&mut stream, &["ZINCRBY", "zkey", "inf", "member"]).await;
+    assert_eq!(
+        &raw, b",inf\r\n",
+        "ZINCRBY producing +inf must be RESP3 Double ,inf\\r\\n"
+    );
+
+    server.shutdown().await;
+}
+
+/// ZINCRBY producing -inf must be the RESP3 Double `,-inf\r\n`.
+#[tokio::test]
+async fn test_zincrby_resp3_negative_infinity_wire_bytes() {
+    let server = start_server().await;
+    let mut stream = connect_resp3_raw(&server).await;
+
+    let raw = send_raw_command(&mut stream, &["ZINCRBY", "zkey", "-inf", "member"]).await;
+    assert_eq!(
+        &raw, b",-inf\r\n",
+        "ZINCRBY producing -inf must be RESP3 Double ,-inf\\r\\n"
+    );
+
+    server.shutdown().await;
+}
+
+/// A second, independent connection incrementing +inf by -inf would produce
+/// NaN — ZINCRBY rejects this (matching Redis and ZADD INCR's NaN check),
+/// so NaN cannot reach the wire through this path either. Confirms the
+/// error contract rather than a wire shape.
+#[tokio::test]
+async fn test_zincrby_resp3_nan_result_is_rejected_not_wired() {
+    let server = start_server().await;
+    let mut stream = connect_resp3_raw(&server).await;
+
+    send_raw_command(&mut stream, &["ZINCRBY", "zkey", "inf", "member"]).await;
+    let raw = send_raw_command(&mut stream, &["ZINCRBY", "zkey", "-inf", "member"]).await;
+    assert!(
+        raw.starts_with(b"-"),
+        "inf + -inf must be a wire error, not a NaN Double; got {:?}",
+        String::from_utf8_lossy(&raw)
+    );
+
+    server.shutdown().await;
+}
+
+/// Normal (finite) RESP3 double formatting through the same reachable
+/// Double passthrough: Redis and redis-protocol emit `,3\r\n`, not
+/// `,3.0\r\n`, for an integer-valued result.
+#[tokio::test]
+async fn test_zincrby_resp3_integer_valued_double_wire_bytes() {
+    let server = start_server().await;
+    let mut stream = connect_resp3_raw(&server).await;
+
+    let raw = send_raw_command(&mut stream, &["ZINCRBY", "zkey", "3", "member"]).await;
+    assert_eq!(
+        &raw, b",3\r\n",
+        "integer-valued RESP3 double must be ,3\\r\\n, not ,3.0\\r\\n"
+    );
+
+    server.shutdown().await;
+}
+
+/// ZSCORE of a finite score in RESP3 uses the Double passthrough too.
+#[tokio::test]
+async fn test_zscore_resp3_finite_score_wire_bytes() {
+    let server = start_server().await;
+    let mut stream = connect_resp3_raw(&server).await;
+
+    send_raw_command(&mut stream, &["ZADD", "zkey", "3.125", "member"]).await;
+    let raw = send_raw_command(&mut stream, &["ZSCORE", "zkey", "member"]).await;
+    assert_eq!(&raw, b",3.125\r\n");
+
+    server.shutdown().await;
+}
+
+/// ZSCORE of a +inf score in RESP3: `score_response` (commands/src/utils.rs)
+/// deliberately routes non-finite scores to a bulk string even under RESP3,
+/// so this is NOT the `,inf\r\n` Double shape — pinned as current behavior.
+/// See the module doc above for why this differs from ZINCRBY.
+#[tokio::test]
+async fn test_zscore_resp3_positive_infinity_wire_bytes() {
+    let server = start_server().await;
+    let mut stream = connect_resp3_raw(&server).await;
+
+    send_raw_command(&mut stream, &["ZADD", "zkey", "inf", "member"]).await;
+    let raw = send_raw_command(&mut stream, &["ZSCORE", "zkey", "member"]).await;
+    assert_eq!(
+        &raw, b"$3\r\ninf\r\n",
+        "ZSCORE of +inf in RESP3 currently returns a bulk string (not Double) \
+         via score_response's finite-only gate — pinned as current behavior"
+    );
+
+    server.shutdown().await;
+}
+
+/// ZSCORE of a -inf score in RESP3: same bulk-string fallback as +inf above.
+#[tokio::test]
+async fn test_zscore_resp3_negative_infinity_wire_bytes() {
+    let server = start_server().await;
+    let mut stream = connect_resp3_raw(&server).await;
+
+    send_raw_command(&mut stream, &["ZADD", "zkey", "-inf", "member"]).await;
+    let raw = send_raw_command(&mut stream, &["ZSCORE", "zkey", "member"]).await;
+    assert_eq!(
+        &raw, b"$4\r\n-inf\r\n",
+        "ZSCORE of -inf in RESP3 currently returns a bulk string (not Double) \
+         via score_response's finite-only gate — pinned as current behavior"
+    );
+
+    server.shutdown().await;
+}
+
+/// `ZADD ... INCR` in RESP3, finite result: unlike ZINCRBY, ZADD's INCR mode
+/// (commands/src/sorted_set/basic.rs:131) is unconditionally a bulk string —
+/// it never checks `ctx.protocol_version` at all, so it never uses
+/// `Response::Double` even for a finite result. Pinned as current behavior;
+/// flagged in the issue resolution as a RESP3-consistency gap relative to
+/// ZINCRBY, out of scope for this encoder/dispatch-change-free pin task.
+#[tokio::test]
+async fn test_zadd_incr_resp3_finite_wire_bytes() {
+    let server = start_server().await;
+    let mut stream = connect_resp3_raw(&server).await;
+
+    let raw = send_raw_command(&mut stream, &["ZADD", "zkey", "INCR", "3", "member"]).await;
+    assert_eq!(
+        &raw, b"$1\r\n3\r\n",
+        "ZADD ... INCR in RESP3 currently always returns a bulk string, \
+         never Double — pinned as current behavior"
+    );
+
+    server.shutdown().await;
+}
+
+/// `ZADD ... INCR` in RESP3 producing +inf: same bulk-string shape as the
+/// finite case above (never Double, regardless of finiteness).
+#[tokio::test]
+async fn test_zadd_incr_resp3_positive_infinity_wire_bytes() {
+    let server = start_server().await;
+    let mut stream = connect_resp3_raw(&server).await;
+
+    let raw = send_raw_command(&mut stream, &["ZADD", "zkey", "INCR", "inf", "member"]).await;
+    assert_eq!(
+        &raw, b"$3\r\ninf\r\n",
+        "ZADD ... INCR producing +inf in RESP3 currently returns a bulk \
+         string, never Double — pinned as current behavior"
+    );
+
+    server.shutdown().await;
+}
