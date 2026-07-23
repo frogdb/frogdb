@@ -21,8 +21,11 @@
             [jepsen.frogdb.hash :as hash]
             [jepsen.frogdb.lag :as lag]
             [jepsen.frogdb.nemesis :as nemesis]
+            [jepsen.frogdb.pubsub-order :as pubsub-order]
             [jepsen.frogdb.queue :as queue]
             [jepsen.frogdb.register :as register]
+            [jepsen.frogdb.ryw :as ryw]
+            [jepsen.frogdb.wc-order :as wc-order]
             [jepsen.frogdb.replication :as replication]
             [jepsen.frogdb.replication-failover :as replication-failover]
             [jepsen.frogdb.set :as set-workload]
@@ -79,6 +82,10 @@
    :sortedset sortedset/workload
    :expiry expiry/workload
    :blocking blocking/workload
+   ;; Consistency-guarantee workloads (single-connection RYW / ordering / pubsub)
+   :ryw ryw/workload
+   :wc-order wc-order/workload
+   :pubsub-order pubsub-order/workload
    ;; Replication workloads
    :replication replication/workload
    :replication-failover replication-failover/workload

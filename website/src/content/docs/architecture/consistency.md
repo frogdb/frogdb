@@ -24,13 +24,13 @@ All operations on a single key are totally ordered; concurrent writes from diffe
 ### Per-Shard Linearizability — [Tested]
 Within a single internal shard, operations are linearizable. Same evidence as above; all real-server linearizability tests are single-node and single-key.
 
-### Read-Your-Writes — [Design intent]
-A client sees its own writes on the **same connection to the same node**. This follows from per-connection in-order execution and single-key linearizability, but there is no dedicated read-your-writes test.
+### Read-Your-Writes — [Tested]
+A client sees its own writes on the **same connection to the same node**. This follows from per-connection in-order execution and single-key linearizability. Verified by the Jepsen `ryw` workload: each worker holds a dedicated single connection and a private key, and every `SET v` immediately followed by a `GET` on that same connection reads back exactly `v` (200+ ops per run, zero violations). Only the same-connection scenario is exercised; the reconnect and failover rows below remain design intent.
 
 | Scenario | Read-Your-Writes |
 |----------|------------------|
-| Same connection, no failover | Expected |
-| Reconnect to same node | Expected (data persisted per the durability mode) |
+| Same connection, no failover | **Tested** (Jepsen `ryw`) |
+| Reconnect to same node | Expected (data persisted per the durability mode) — [Design intent] |
 | Failover to replica (async) | **Not guaranteed** — unreplicated writes may be lost |
 
 **Mitigation:** for writes that must survive failover, require replica acknowledgment with `min-replicas-to-write` and/or use `WAIT` (see [Cluster Consistency](#cluster-consistency) and [Replication](/architecture/replication/#write-quorum-and-fencing)).
@@ -145,11 +145,11 @@ Verified in `integration_persistence.rs` (`test_checkpoint_preserves_single_shar
 
 ## Ordering Guarantees
 
-### Within a Single Connection — [Design intent]
-Commands execute in the order sent; pipelining preserves order; responses return in order.
+### Within a Single Connection — [Tested]
+Commands execute in the order sent; pipelining preserves order; responses return in order. Verified by the Jepsen `wc-order` workload: each op pipelines N ordered `RPUSH`es on a single connection, then reads the list back. Both the server-observed execution order (the `LRANGE` contents must be `[0,1,…,N-1]`) and the response order (the pipelined return values must be the strictly increasing list lengths `[1,2,…,N]`) are asserted every op, so any reordering of execution or of responses fails the run.
 
 ### Across Connections — [Asserted negative]
 No ordering is guaranteed between different clients beyond per-key serialization.
 
-### Pub/Sub Message Ordering — [Design intent]
-Messages are delivered in publish order per channel, with no ordering across channels and at-most-once delivery (messages may be lost on reconnect).
+### Pub/Sub Message Ordering — [Tested]
+Messages are delivered in publish order per channel, with no ordering across channels and at-most-once delivery (messages may be lost on reconnect). Verified by the Jepsen `pubsub-order` workload: a subscriber records the arrival order while a publisher publishes `0,1,…,N-1` in order on a private channel, and the checker asserts the arrival sequence is a strictly increasing (in-publish-order) subsequence of what was published — delivery may **drop** messages (at-most-once) but must never **reorder** them. A reconnect flavour (drop the subscription and re-subscribe mid-stream) exercises the harder cross-reconnect case, where messages published while unsubscribed are lost but everything actually delivered is still in order. Ordering across channels is not claimed or tested.

@@ -139,6 +139,30 @@ TESTS: tuple[TestDefinition, ...] = (
     TestDefinition(
         "blocking", "blocking", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")
     ),
+    # Consistency-guarantee workloads (consistency.md [Design intent] rows).
+    # ryw: read-your-writes on a SINGLE connection. Each worker holds a dedicated
+    # single-connection pool and a private key; a SET+GET pipelined on that one
+    # connection must read back exactly what it just wrote. Backs the
+    # "Read-Your-Writes (same connection, no failover)" row.
+    TestDefinition("ryw", "ryw", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")),
+    # wc-order: within-connection command ordering. Each op pipelines N ordered
+    # RPUSHes on one connection, then LRANGEs the list back: the server-observed
+    # execution order (list contents) and the response order (pipelined return
+    # values) must both match the send order. Backs the "Ordering -> Within a
+    # Single Connection" row.
+    TestDefinition(
+        "wc-order", "wc-order", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")
+    ),
+    # pubsub-order: pub/sub message ordering per channel. A dedicated subscriber
+    # records arrival order while a publisher publishes 0..N-1 in order on a
+    # private channel; delivery may drop messages (at-most-once) but must never
+    # reorder them. Includes a reconnect flavour (drop + re-subscribe mid-stream).
+    # Backs the "Ordering -> Pub/Sub Message Ordering" row. No crash variant: the
+    # workload already exercises subscriber disconnect via its reconnect op, and a
+    # kill nemesis would only add at-most-once message loss the checker tolerates.
+    TestDefinition(
+        "pubsub-order", "pubsub-order", "none", 30, Topology.SINGLE, suites=("single", "all")
+    ),
     # Elle list-append baseline (single-node, no faults). RPUSH/LRANGE driven by
     # jepsen.tests.cycle.append with the :strict-serializable consistency model —
     # the strongest cycle-based anomaly detector in the harness (G0/G1a/G1b/G1c/G2).
