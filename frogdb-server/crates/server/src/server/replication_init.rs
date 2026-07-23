@@ -131,6 +131,7 @@ pub(super) fn init_replication(
             state_path,
             config.persistence.data_dir.clone(),
         );
+        handler.set_ack_interval(config.replication.ack_interval_ms);
 
         // Wire up TLS connection factory for encrypted replication.
         // Captures Arc<TlsManager> (not a snapshot connector) so that

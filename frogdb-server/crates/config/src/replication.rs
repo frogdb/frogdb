@@ -46,20 +46,9 @@ pub struct ReplicationConfigSection {
 
     /// ACK interval - how often replicas send ACKs to primary (milliseconds).
     #[serde(default = "default_ack_interval_ms")]
-    #[param(skip)] // skip: config not yet consumed by server
+    #[param(skip)]
+    // skip: consumed at replica boot; internal ACK cadence (Redis repl-ping-replica-period), not runtime CONFIG
     pub ack_interval_ms: u64,
-
-    /// Full sync timeout (seconds).
-    /// Maximum time to wait for a full sync operation.
-    #[serde(default = "default_fullsync_timeout_secs")]
-    #[param(skip)] // skip: config not yet consumed by server
-    pub fullsync_timeout_secs: u64,
-
-    /// Maximum memory for full sync buffering (MB).
-    /// If exceeded, FULLRESYNC requests will be rejected.
-    #[serde(default = "default_fullsync_max_memory_mb")]
-    #[param(skip)] // skip: config not yet consumed by server
-    pub fullsync_max_memory_mb: usize,
 
     /// Replication state file path.
     /// Stores replication ID and offset for partial sync recovery.
@@ -159,8 +148,6 @@ fn default_replication_role() -> String {
 pub const DEFAULT_PRIMARY_PORT: u16 = 6379;
 pub const DEFAULT_MIN_REPLICAS_TIMEOUT_MS: u64 = 5000;
 pub const DEFAULT_ACK_INTERVAL_MS: u64 = 1000;
-pub const DEFAULT_FULLSYNC_TIMEOUT_SECS: u64 = 300;
-pub const DEFAULT_FULLSYNC_MAX_MEMORY_MB: usize = 512;
 pub const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5000;
 pub const DEFAULT_HANDSHAKE_TIMEOUT_MS: u64 = 10000;
 pub const DEFAULT_RECONNECT_BACKOFF_INITIAL_MS: u64 = 100;
@@ -182,14 +169,6 @@ fn default_min_replicas_timeout_ms() -> u64 {
 
 fn default_ack_interval_ms() -> u64 {
     DEFAULT_ACK_INTERVAL_MS
-}
-
-fn default_fullsync_timeout_secs() -> u64 {
-    DEFAULT_FULLSYNC_TIMEOUT_SECS
-}
-
-fn default_fullsync_max_memory_mb() -> usize {
-    DEFAULT_FULLSYNC_MAX_MEMORY_MB
 }
 
 fn default_replication_state_file() -> String {
@@ -249,8 +228,6 @@ impl Default for ReplicationConfigSection {
             min_replicas_to_write: 0,
             min_replicas_timeout_ms: default_min_replicas_timeout_ms(),
             ack_interval_ms: default_ack_interval_ms(),
-            fullsync_timeout_secs: default_fullsync_timeout_secs(),
-            fullsync_max_memory_mb: default_fullsync_max_memory_mb(),
             state_file: default_replication_state_file(),
             connect_timeout_ms: default_connect_timeout_ms(),
             handshake_timeout_ms: default_handshake_timeout_ms(),
@@ -283,14 +260,6 @@ impl ReplicationConfigSection {
 
         if self.role.to_lowercase() == "replica" && self.primary_host.is_empty() {
             anyhow::bail!("primary_host must be specified when role is 'replica'");
-        }
-
-        if self.fullsync_timeout_secs == 0 {
-            anyhow::bail!("fullsync_timeout_secs must be > 0");
-        }
-
-        if self.fullsync_max_memory_mb == 0 {
-            anyhow::bail!("fullsync_max_memory_mb must be > 0");
         }
 
         if self.ack_interval_ms == 0 {

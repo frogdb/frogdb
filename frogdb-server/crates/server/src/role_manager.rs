@@ -291,6 +291,9 @@ pub struct RealReplicaStreamer {
     /// runtime-demoted Replica's offset exactly like a boot-configured one. `None`
     /// outside cluster mode.
     shared_offset: Option<Arc<std::sync::atomic::AtomicU64>>,
+    /// Spontaneous replica→primary ACK cadence (`replication.ack-interval-ms`),
+    /// stamped onto every runtime-demoted replica handler in `build_handler`.
+    ack_interval_ms: u64,
     #[cfg(not(feature = "turmoil"))]
     tls: Option<ReplicaTlsConfig>,
 }
@@ -337,6 +340,7 @@ impl RealReplicaStreamer {
             state_path,
             is_replica_flag,
             shared_offset,
+            ack_interval_ms: config.replication.ack_interval_ms,
             #[cfg(not(feature = "turmoil"))]
             tls,
         }
@@ -365,8 +369,8 @@ impl RealReplicaStreamer {
             self.data_dir.clone(),
         );
 
-        #[allow(unused_mut)]
         let mut handler = handler;
+        handler.set_ack_interval(self.ack_interval_ms);
 
         // Publish this stream's applied offset into the cluster-bus HealthProbe
         // atomic, mirroring the boot-time replica path in `init_replication`, so
@@ -621,6 +625,7 @@ mod tests {
             state_path: std::env::temp_dir().join("replication_state.json"),
             is_replica_flag: Arc::new(AtomicBool::new(false)),
             shared_offset,
+            ack_interval_ms: 1000,
             #[cfg(not(feature = "turmoil"))]
             tls: None,
         }
