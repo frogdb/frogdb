@@ -32,7 +32,7 @@ impl ShardWorker {
                 ReindexAction::Delete { key } => {
                     self.delete_from_search_indexes(&Bytes::copy_from_slice(key));
                 }
-                ReindexAction::Refresh { key } => self.refresh_hash_key(key),
+                ReindexAction::Refresh { key } => self.refresh_key(key),
             }
         }
     }
@@ -40,25 +40,40 @@ impl ShardWorker {
     /// Reconcile a key's search-index presence to whatever type it now holds,
     /// after a write that may have clobbered it across types.
     ///
-    /// If the key is currently a hash it is (re)indexed into every matching
-    /// hash-source index — identical to [`Self::reindex_hash_key`]. Otherwise
-    /// (the key is now a string/list/…, or is absent) it is dropped from every
-    /// matching index. This is the search analogue of a "reconcile to current
-    /// state" write: [`ReindexAction::Reindex`] silently no-ops on a
-    /// non-hash value and so would leave a stale doc behind, which is exactly the
-    /// bug for `SET`/`RESTORE`/`COPY`/`RENAME` overwriting an indexed hash with a
-    /// non-hash value. `delete_from_search_indexes` is source-agnostic (it clears
-    /// the key from every prefix-matching index, hash- or JSON-source), so a
-    /// cross-type overwrite of a JSON-indexed key is de-indexed too.
-    fn refresh_hash_key(&mut self, key: &[u8]) {
-        let is_hash = self
-            .store
-            .get(key)
-            .is_some_and(|value| (&value as &crate::types::Value).as_hash().is_some());
-        if is_hash {
-            self.reindex_hash_key(key);
-        } else {
-            self.delete_from_search_indexes(&Bytes::copy_from_slice(key));
+    /// Dispatches on the key's *current* value type, mirroring how the store
+    /// projects documents on the normal write path:
+    /// - a hash is (re)indexed into every matching hash-source index — identical
+    ///   to [`Self::reindex_hash_key`];
+    /// - a JSON document is (re)indexed into every matching JSON-source index —
+    ///   identical to [`Self::reindex_json_key`], closing the gap where a `COPY`,
+    ///   `RESTORE`, or `RENAME` of a JSON doc into a JSON-index prefix left the
+    ///   destination unindexed;
+    /// - anything else (a string/list/…, or an absent key) is dropped from every
+    ///   matching index.
+    ///
+    /// This is the search analogue of a "reconcile to current state" write:
+    /// [`ReindexAction::Reindex`] silently no-ops when the value's type does not
+    /// match the reindex kind and so would leave a stale doc behind, which is
+    /// exactly the bug for `SET`/`RESTORE`/`COPY`/`RENAME` overwriting an indexed
+    /// key with a value of a different type. `delete_from_search_indexes` is
+    /// source-agnostic (it clears the key from every prefix-matching index, hash-
+    /// or JSON-source), so a cross-type overwrite of an indexed key is de-indexed
+    /// too.
+    fn refresh_key(&mut self, key: &[u8]) {
+        let value_kind = self.store.get(key).and_then(|value| {
+            let value_ref: &crate::types::Value = &value;
+            if value_ref.as_hash().is_some() {
+                Some(IndexKind::Hash)
+            } else if value_ref.as_json().is_some() {
+                Some(IndexKind::Json)
+            } else {
+                None
+            }
+        });
+        match value_kind {
+            Some(IndexKind::Hash) => self.reindex_hash_key(key),
+            Some(IndexKind::Json) => self.reindex_json_key(key),
+            None => self.delete_from_search_indexes(&Bytes::copy_from_slice(key)),
         }
     }
 
