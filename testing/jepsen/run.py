@@ -274,6 +274,42 @@ TESTS: tuple[TestDefinition, ...] = (
         cluster_flag=True,
         suites=("raft", "all"),
     ),
+    # cross-slot under fault injection. The cross-slot workload's conservation
+    # checker (balances are hash-tag co-located to a single shard, so every atomic
+    # transfer applies both legs or neither) is the strongest correctness checker
+    # in the harness — but it only ever observed a clean cluster. These variants
+    # subject it to real faults so an atomicity/durability regression that only
+    # manifests under partition/kill (the realistic failure mode for a
+    # single-owner shard commit) is no longer invisible.
+    #
+    # cross-slot-partition: a network partition never destroys committed data, so
+    # the checker enforces conservation AND the always-on safety invariants
+    # (hash-tag co-location, cross-slot-rejection) throughout the fault.
+    TestDefinition(
+        "cross-slot-partition",
+        "cross-slot",
+        "partition",
+        60,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    # cross-slot-kill: SIGKILLs a slot owner mid-run. FrogDB does not promise
+    # failure atomicity across a crash — single-owner shards can lose recent
+    # un-fsynced acked writes, and a cross-shard VLL EXEC may durably partial-commit
+    # by documented design (concurrency issue 05, option 4 fail-stop). The checker
+    # therefore kill-gates conservation: an imbalance under the kill is the
+    # accepted contract (surfaced loudly, not failed), while co-location and
+    # cross-slot-rejection safety still always gate.
+    TestDefinition(
+        "cross-slot-kill",
+        "cross-slot",
+        "kill",
+        60,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
     TestDefinition(
         "key-routing",
         "key-routing",
