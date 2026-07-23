@@ -133,6 +133,14 @@ A transaction is applied as a single RocksDB `WriteBatch` (atomic at the storage
 ### WATCH — [Tested]
 `WATCH` provides optimistic locking: `EXEC` aborts (returns nil) if a watched key was modified by another client. Watched keys must be on the same internal shard as the transaction's keys. Verified in `integration_transactions.rs` (`test_watch_exec_success`, `test_watch_exec_abort`, and the PFADD watch-version regression tests).
 
+### Checkpoint (BGSAVE) Cross-Shard Cut — [Tested]
+A `BGSAVE` checkpoint is a single RocksDB `Checkpoint` over one shared database, so it captures an atomic point-in-time image at one RocksDB sequence number across every internal shard's column family. Before the cut, `BGSAVE` drains every shard's WAL flush engine into RocksDB, so the image is a committed prefix of each shard's history rather than a partial mid-flush state.
+
+- **Single-shard transactions are never torn by the cut.** A single-shard `MULTI`/`EXEC` runs as one shard event-loop step that enqueues all of its writes before the pre-snapshot drain runs, and RocksDB commits in sequence order, so a checkpoint captures either all of a transaction's writes or none. This matters because a torn single-shard transaction in a recovery image would resurrect a half-applied transaction that no client ever observed.
+- **Cross-shard writes may be torn by the cut.** A cross-shard `MSET`/scatter dispatches independent per-shard writes, and the drain is likewise per-shard, so a checkpoint can capture one shard's half of a cross-shard write and not another's. This matches FrogDB's cross-shard model — execution atomicity via locking, without failure/durability atomicity (see [Cross-Slot in Standalone Mode](#cross-slot-in-standalone-mode) and the cross-shard transaction framing tracked for the durability phase). Within any one shard, the subset of a cross-shard write that lands on that shard is still applied atomically, so a shard's own portion is never itself torn.
+
+Verified in `integration_persistence.rs` (`test_checkpoint_preserves_single_shard_multi_atomicity_under_concurrent_bgsave`, `test_checkpoint_cross_shard_mset_contract_under_concurrent_bgsave`, and `test_concurrent_bgsave_stress_restores_cleanly`), which hammer transactions and cross-shard `MSET`s concurrently with repeated `BGSAVE`, then restore the resulting checkpoint and assert the cut preserved single-shard and per-shard atomicity.
+
 ---
 
 ## Ordering Guarantees

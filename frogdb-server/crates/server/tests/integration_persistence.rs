@@ -1839,3 +1839,494 @@ async fn test_restored_snapshot_accepts_and_replays_new_writes() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// BGSAVE checkpoint cross-shard consistent-cut contract (issue 43)
+//
+// A BGSAVE checkpoint is a single RocksDB `Checkpoint` over one shared DB, so it
+// captures an atomic point-in-time image at one RocksDB sequence number across
+// every shard's column family. The pre-snapshot hook first drains every shard's
+// WAL flush engine into RocksDB (issue 13's `FlushWal` fan-out), so the cut
+// captures a prefix of each shard's committed history rather than a lossy
+// mid-flush state.
+//
+// The concern (audit D#5): per-shard writes go through *separate* per-shard
+// `WriteBatch`es and separate flush engines, so the cut could catch one shard's
+// half of a cross-shard write and not another's — a torn cross-shard cut.
+//
+// The intended contract, re-verified against current `main`:
+//
+//   * SINGLE-SHARD atomicity IS preserved in the cut (strong guarantee). A
+//     single-shard `MULTI`/`EXEC` is one shard event-loop message that enqueues
+//     all of its WAL writes before any later message (including the pre-snapshot
+//     `FlushWal`) is processed, and RocksDB commits in sequence order, so the
+//     cut captures either all of a transaction's writes or none — never a torn
+//     prefix. `test_checkpoint_preserves_single_shard_multi_atomicity_*` pins
+//     this. A regression that tore a single-shard transaction across the cut
+//     would be a real bug.
+//
+//   * CROSS-SHARD atomicity is NOT preserved in the cut (accepted limitation).
+//     A cross-shard `MSET`/scatter dispatches independent per-shard writes, and
+//     the pre-snapshot drain is likewise per-shard, so the cut can capture
+//     shard A's half of a cross-shard write and not shard B's. This matches
+//     FrogDB's documented cross-shard model — execution atomicity via locking,
+//     but not failure/durability atomicity (see
+//     `.scratch/concurrency-testing/issues/05-06`; the abort-on-recovery framing
+//     that would close it is deferred issue 06, not built). What IS preserved,
+//     and asserted, is *per-shard* atomicity: the subset of a cross-shard write
+//     that lands on any one shard is applied as one shard event-loop message, so
+//     that shard's subset is never itself torn.
+// ============================================================================
+
+/// Spawn `n` writer tasks that each own an independent client and loop until
+/// `stop` is set, invoking `body` with a fresh monotonic generation each
+/// iteration. Returns their join handles.
+async fn spawn_writers<F, Fut>(
+    server: &TestServer,
+    n: usize,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    body: F,
+) -> Vec<tokio::task::JoinHandle<()>>
+where
+    F: Fn(crate::common::test_server::TestClient, u64) -> Fut + Clone + Send + 'static,
+    Fut: std::future::Future<Output = crate::common::test_server::TestClient> + Send,
+{
+    use std::sync::atomic::Ordering;
+    let mut handles = Vec::with_capacity(n);
+    for _ in 0..n {
+        let mut client = server.connect().await;
+        let stop = stop.clone();
+        let generation = generation.clone();
+        let body = body.clone();
+        handles.push(tokio::spawn(async move {
+            while !stop.load(Ordering::Relaxed) {
+                let g = generation.fetch_add(1, Ordering::SeqCst);
+                client = body(client, g).await;
+            }
+        }));
+    }
+    handles
+}
+
+/// Pick `per_shard` distinct keys for each of `num_shards` internal shards, so
+/// an `MSET` over the returned keys is a genuine cross-shard write.
+fn keys_spanning_shards(num_shards: usize, per_shard: usize) -> Vec<String> {
+    let mut by_shard: Vec<Vec<String>> = vec![Vec::new(); num_shards];
+    let mut i = 0u64;
+    while by_shard.iter().any(|v| v.len() < per_shard) {
+        let key = format!("cs:{i}");
+        let s = frogdb_core::shard_for_key(key.as_bytes(), num_shards);
+        if by_shard[s].len() < per_shard {
+            by_shard[s].push(key);
+        }
+        i += 1;
+    }
+    by_shard.into_iter().flatten().collect()
+}
+
+/// Fire `count` `BGSAVE`s spaced by `gap`, asserting every reply is one of the
+/// accepted simple-string replies (never an error or a hang).
+async fn hammer_bgsave(
+    client: &mut crate::common::test_server::TestClient,
+    count: usize,
+    gap: Duration,
+) {
+    for _ in 0..count {
+        let resp = client.command(&["BGSAVE"]).await;
+        match &resp {
+            Response::Simple(msg) => {
+                let m = String::from_utf8_lossy(msg);
+                assert!(
+                    m.contains("Background saving started")
+                        || m.contains("Background saving scheduled")
+                        || m.contains("Background save already in progress"),
+                    "unexpected BGSAVE simple reply: {m}"
+                );
+            }
+            other => panic!("BGSAVE must reply with a simple string, got {other:?}"),
+        }
+        tokio::time::sleep(gap).await;
+    }
+}
+
+/// Concurrent single-shard `MULTI`/`EXEC` transactions while `BGSAVE` fires
+/// repeatedly. Each transaction rewrites every key of one hash-tag group to a
+/// single generation value; the restored checkpoint must show, for every group,
+/// that its keys are either all absent or all present and equal — a single-shard
+/// transaction is never torn across the cut.
+#[tokio::test]
+async fn test_checkpoint_preserves_single_shard_multi_atomicity_under_concurrent_bgsave() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    const NUM_SHARDS: usize = 4;
+    const NUM_TAGS: u64 = 12;
+    const KEYS_PER_TXN: usize = 5;
+    const NUM_WRITERS: usize = 4;
+
+    let src_root = tempfile::tempdir().unwrap();
+    let snapshot_root = tempfile::tempdir().unwrap();
+    let src_data = src_root.path().join("data");
+
+    let config = TestServerConfig {
+        persistence: true,
+        data_dir: Some(src_data.clone()),
+        snapshot_dir: Some(snapshot_root.path().to_path_buf()),
+        num_shards: Some(NUM_SHARDS),
+        snapshot_interval_secs: Some(0),
+        ..Default::default()
+    };
+    let server = TestServer::start_standalone_with_config(config).await;
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let generation = Arc::new(AtomicU64::new(1));
+    let writers = spawn_writers(
+        &server,
+        NUM_WRITERS,
+        stop.clone(),
+        generation.clone(),
+        |mut client, g| async move {
+            // All keys share one hash tag → one slot → one internal shard, so the
+            // whole transaction is single-shard and must be atomic in any cut.
+            let tag = format!("g{}", g % NUM_TAGS);
+            let gv = g.to_string();
+            let _ = client.command(&["MULTI"]).await;
+            for i in 0..KEYS_PER_TXN {
+                let key = format!("{{{tag}}}:k{i}");
+                let _ = client.command(&["SET", &key, &gv]).await;
+            }
+            let _ = client.command(&["EXEC"]).await;
+            client
+        },
+    )
+    .await;
+
+    // Fire BGSAVEs while writers stream transactions. wait_for_snapshot_checkpoint
+    // afterward confirms at least one artifact was promoted during active writes.
+    let mut driver = server.connect().await;
+    hammer_bgsave(&mut driver, 20, Duration::from_millis(25)).await;
+    let _ = wait_for_snapshot_checkpoint(snapshot_root.path()).await;
+    hammer_bgsave(&mut driver, 10, Duration::from_millis(25)).await;
+
+    stop.store(true, Ordering::Relaxed);
+    for h in writers {
+        h.await.unwrap();
+    }
+    drop(driver);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Restore the latest promoted checkpoint into a fresh dir.
+    let checkpoint = wait_for_snapshot_checkpoint(snapshot_root.path()).await;
+    let restore_root = tempfile::tempdir().unwrap();
+    let restore_data = restore_root.path().join("data");
+    let checkpoint_ready = restore_root.path().join("checkpoint_ready");
+    copy_dir_recursive(&checkpoint, &checkpoint_ready).unwrap();
+
+    let restore_config = TestServerConfig {
+        persistence: true,
+        data_dir: Some(restore_data.clone()),
+        num_shards: Some(NUM_SHARDS),
+        ..Default::default()
+    };
+    let server = TestServer::start_standalone_with_config(restore_config).await;
+    let mut client = server.connect().await;
+
+    // Every hash-tag group must be all-absent or all-present-with-one-value.
+    let mut groups_present = 0;
+    for tag_idx in 0..NUM_TAGS {
+        let tag = format!("g{tag_idx}");
+        let mut values: Vec<Option<String>> = Vec::with_capacity(KEYS_PER_TXN);
+        for i in 0..KEYS_PER_TXN {
+            let key = format!("{{{tag}}}:k{i}");
+            let v = match client.command(&["GET", &key]).await {
+                Response::Bulk(Some(b)) => Some(String::from_utf8(b.to_vec()).unwrap()),
+                Response::Bulk(None) => None,
+                other => panic!("unexpected GET reply for {key}: {other:?}"),
+            };
+            values.push(v);
+        }
+        let present = values.iter().filter(|v| v.is_some()).count();
+        assert!(
+            present == 0 || present == KEYS_PER_TXN,
+            "single-shard transaction torn across BGSAVE cut for tag {tag}: {values:?}"
+        );
+        if present == KEYS_PER_TXN {
+            groups_present += 1;
+            let first = values[0].clone();
+            assert!(
+                values.iter().all(|v| *v == first),
+                "single-shard transaction cut captured mixed generations for tag {tag}: {values:?}"
+            );
+        }
+    }
+    assert!(
+        groups_present > 0,
+        "checkpoint captured no transactions; test would be vacuous"
+    );
+
+    server.shutdown().await;
+}
+
+/// Concurrent cross-shard `MSET` while `BGSAVE` fires repeatedly. Each `MSET`
+/// rewrites the whole cross-shard key set to a single generation. Asserts the
+/// intended contract: per-shard atomicity holds (all present keys on any one
+/// shard share a generation), while cross-shard atomicity is an accepted
+/// limitation (different shards may show different generations — a torn cut).
+#[tokio::test]
+async fn test_checkpoint_cross_shard_mset_contract_under_concurrent_bgsave() {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    const NUM_SHARDS: usize = 4;
+    const PER_SHARD: usize = 3;
+    const NUM_WRITERS: usize = 4;
+
+    let keys = keys_spanning_shards(NUM_SHARDS, PER_SHARD);
+    // Sanity: the key set genuinely spans every shard.
+    let mut spanned = std::collections::BTreeSet::new();
+    for k in &keys {
+        spanned.insert(frogdb_core::shard_for_key(k.as_bytes(), NUM_SHARDS));
+    }
+    assert_eq!(spanned.len(), NUM_SHARDS, "key set must span all shards");
+
+    let src_root = tempfile::tempdir().unwrap();
+    let snapshot_root = tempfile::tempdir().unwrap();
+    let src_data = src_root.path().join("data");
+
+    let config = TestServerConfig {
+        persistence: true,
+        data_dir: Some(src_data.clone()),
+        snapshot_dir: Some(snapshot_root.path().to_path_buf()),
+        num_shards: Some(NUM_SHARDS),
+        snapshot_interval_secs: Some(0),
+        allow_cross_slot_standalone: true,
+        ..Default::default()
+    };
+    let server = TestServer::start_standalone_with_config(config).await;
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let generation = Arc::new(AtomicU64::new(1));
+    let keys_arc = Arc::new(keys.clone());
+    let writers = {
+        let keys_arc = keys_arc.clone();
+        spawn_writers(
+            &server,
+            NUM_WRITERS,
+            stop.clone(),
+            generation.clone(),
+            move |mut client, g| {
+                let keys_arc = keys_arc.clone();
+                async move {
+                    let gv = g.to_string();
+                    let mut args: Vec<&str> = Vec::with_capacity(1 + keys_arc.len() * 2);
+                    args.push("MSET");
+                    for k in keys_arc.iter() {
+                        args.push(k);
+                        args.push(&gv);
+                    }
+                    let _ = client.command(&args).await;
+                    client
+                }
+            },
+        )
+        .await
+    };
+
+    let mut driver = server.connect().await;
+    hammer_bgsave(&mut driver, 20, Duration::from_millis(25)).await;
+    let _ = wait_for_snapshot_checkpoint(snapshot_root.path()).await;
+    hammer_bgsave(&mut driver, 10, Duration::from_millis(25)).await;
+
+    stop.store(true, Ordering::Relaxed);
+    for h in writers {
+        h.await.unwrap();
+    }
+    let max_issued = generation.load(Ordering::SeqCst);
+    drop(driver);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let checkpoint = wait_for_snapshot_checkpoint(snapshot_root.path()).await;
+    let restore_root = tempfile::tempdir().unwrap();
+    let restore_data = restore_root.path().join("data");
+    let checkpoint_ready = restore_root.path().join("checkpoint_ready");
+    copy_dir_recursive(&checkpoint, &checkpoint_ready).unwrap();
+
+    let restore_config = TestServerConfig {
+        persistence: true,
+        data_dir: Some(restore_data.clone()),
+        num_shards: Some(NUM_SHARDS),
+        allow_cross_slot_standalone: true,
+        ..Default::default()
+    };
+    let server = TestServer::start_standalone_with_config(restore_config).await;
+    let mut client = server.connect().await;
+
+    // Collect the restored generation of each key, grouped by shard.
+    let mut per_shard_gens: BTreeMap<usize, Vec<Option<u64>>> = BTreeMap::new();
+    for k in &keys {
+        let shard = frogdb_core::shard_for_key(k.as_bytes(), NUM_SHARDS);
+        let v = match client.command(&["GET", k]).await {
+            Response::Bulk(Some(b)) => {
+                let s = String::from_utf8(b.to_vec()).unwrap();
+                let g: u64 = s
+                    .parse()
+                    .unwrap_or_else(|_| panic!("torn/garbage value for {k}: {s:?}"));
+                assert!(
+                    g >= 1 && g < max_issued.max(2),
+                    "restored value for {k} is not a generation actually issued: {g} (max {max_issued})"
+                );
+                Some(g)
+            }
+            Response::Bulk(None) => None,
+            other => panic!("unexpected GET reply for {k}: {other:?}"),
+        };
+        per_shard_gens.entry(shard).or_default().push(v);
+    }
+
+    // Per-shard atomicity (asserted): every present key on a shard shares one generation.
+    let mut observed_gens = std::collections::BTreeSet::new();
+    let mut shards_with_data = 0;
+    for (shard, gens) in &per_shard_gens {
+        let present: Vec<u64> = gens.iter().filter_map(|g| *g).collect();
+        if !present.is_empty() {
+            shards_with_data += 1;
+            let first = present[0];
+            assert!(
+                present.iter().all(|g| *g == first),
+                "per-shard atomicity violated on shard {shard}: cross-shard MSET subset torn, gens {present:?}"
+            );
+            observed_gens.insert(first);
+        }
+    }
+    assert!(
+        shards_with_data > 0,
+        "checkpoint captured no cross-shard writes; test would be vacuous"
+    );
+
+    // Cross-shard atomicity is NOT asserted: `observed_gens.len() > 1` means the
+    // checkpoint took a torn cross-shard cut, which is an accepted limitation
+    // (issues 05/06). Surface it for the record rather than failing on it.
+    eprintln!(
+        "cross-shard checkpoint cut observed {} distinct generation(s) across {} shard(s): {:?} \
+         (>1 == accepted torn cross-shard cut)",
+        observed_gens.len(),
+        shards_with_data,
+        observed_gens
+    );
+
+    server.shutdown().await;
+}
+
+/// Concurrent-BGSAVE stress: several clients spam `BGSAVE` while writers stream
+/// updates. Every reply must be an accepted simple string (no error, no hang),
+/// the server must stay responsive, and a baseline dataset written before the
+/// storm must restore intact from the resulting checkpoint.
+#[tokio::test]
+async fn test_concurrent_bgsave_stress_restores_cleanly() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    const NUM_SHARDS: usize = 4;
+    const NUM_BASELINE: usize = 50;
+    const NUM_SAVERS: usize = 4;
+    const NUM_WRITERS: usize = 3;
+
+    let src_root = tempfile::tempdir().unwrap();
+    let snapshot_root = tempfile::tempdir().unwrap();
+    let src_data = src_root.path().join("data");
+
+    let config = TestServerConfig {
+        persistence: true,
+        data_dir: Some(src_data.clone()),
+        snapshot_dir: Some(snapshot_root.path().to_path_buf()),
+        num_shards: Some(NUM_SHARDS),
+        snapshot_interval_secs: Some(0),
+        ..Default::default()
+    };
+    let server = TestServer::start_standalone_with_config(config).await;
+
+    // Baseline dataset (present in every subsequent checkpoint).
+    let mut setup = server.connect().await;
+    for i in 0..NUM_BASELINE {
+        assert_ok(
+            &setup
+                .command(&["SET", &format!("baseline:{i}"), &format!("v{i}")])
+                .await,
+        );
+    }
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let generation = Arc::new(AtomicU64::new(1));
+    // Writers churn unrelated keys during the BGSAVE storm.
+    let writers = spawn_writers(
+        &server,
+        NUM_WRITERS,
+        stop.clone(),
+        generation.clone(),
+        |mut client, g| async move {
+            let key = format!("churn:{}", g % 64);
+            let _ = client.command(&["SET", &key, &g.to_string()]).await;
+            client
+        },
+    )
+    .await;
+
+    // Overlapping BGSAVE spammers exercise the coordinator's already-running
+    // coalescing under real concurrency.
+    let mut savers = Vec::with_capacity(NUM_SAVERS);
+    for _ in 0..NUM_SAVERS {
+        let mut client = server.connect().await;
+        savers.push(tokio::spawn(async move {
+            hammer_bgsave(&mut client, 40, Duration::from_millis(5)).await;
+        }));
+    }
+    for s in savers {
+        s.await.unwrap();
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    for h in writers {
+        h.await.unwrap();
+    }
+
+    // Server is still responsive after the storm.
+    assert_eq!(
+        setup.command(&["PING"]).await,
+        Response::Simple(Bytes::from("PONG"))
+    );
+    // A final quiescent BGSAVE to guarantee a fresh, complete artifact.
+    let _ = setup.command(&["BGSAVE"]).await;
+    let _ = wait_for_snapshot_checkpoint(snapshot_root.path()).await;
+    drop(setup);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // The baseline dataset must restore intact from the checkpoint.
+    let checkpoint = wait_for_snapshot_checkpoint(snapshot_root.path()).await;
+    let restore_root = tempfile::tempdir().unwrap();
+    let restore_data = restore_root.path().join("data");
+    let checkpoint_ready = restore_root.path().join("checkpoint_ready");
+    copy_dir_recursive(&checkpoint, &checkpoint_ready).unwrap();
+
+    let restore_config = TestServerConfig {
+        persistence: true,
+        data_dir: Some(restore_data.clone()),
+        num_shards: Some(NUM_SHARDS),
+        ..Default::default()
+    };
+    let server = TestServer::start_standalone_with_config(restore_config).await;
+    let mut client = server.connect().await;
+    for i in 0..NUM_BASELINE {
+        assert_eq!(
+            client.command(&["GET", &format!("baseline:{i}")]).await,
+            Response::Bulk(Some(Bytes::from(format!("v{i}")))),
+            "baseline key {i} lost across concurrent-BGSAVE storm + restore"
+        );
+    }
+
+    server.shutdown().await;
+}
