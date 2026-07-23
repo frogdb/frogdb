@@ -472,6 +472,12 @@ pub struct WriteRecord<'a> {
     /// consulted for [`crate::command_spec::EventSpec::Dynamic`] commands;
     /// empty for every other write.
     pub keyspace_events: &'a [KeyspaceEventDeposit],
+    /// Keys this write created for the first time (absent before, present
+    /// after), used to emit the `new` keyspace event when the `n` class is
+    /// enabled. The execution seam fills this by diffing key existence around
+    /// the handler; empty on every path that does not compute the diff
+    /// (reads, scatter, script sub-commands).
+    pub newly_created_keys: &'a [Bytes],
 }
 
 impl<'a> WriteRecord<'a> {
@@ -482,6 +488,7 @@ impl<'a> WriteRecord<'a> {
             args,
             hll_wal_delta: None,
             keyspace_events: &[],
+            newly_created_keys: &[],
         }
     }
 
@@ -529,6 +536,9 @@ impl ScriptWriteRecord {
             args: self.args.as_slice(),
             hll_wal_delta: self.hll_wal_delta.as_deref(),
             keyspace_events: self.keyspace_events.as_slice(),
+            // Script sub-commands do not run through the key-creation diff seam,
+            // so scripted `new` events are not emitted (documented gap).
+            newly_created_keys: &[],
         }
     }
 }

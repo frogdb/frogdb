@@ -30,6 +30,10 @@ pub(crate) struct WriteCommandMeta {
     /// [`EventSpec::Dynamic`]: crate::command_spec::EventSpec::Dynamic
     /// [`CommandContext::notify_event`]: crate::command::CommandContext::notify_event
     pub keyspace_events: crate::command::KeyspaceEventDeposits,
+    /// Keys this write created for the first time, for the `new` keyspace event.
+    /// Populated by the execution seam only when the `n` class is enabled;
+    /// empty otherwise (the diff is skipped entirely when `n` is off).
+    pub newly_created_keys: Vec<Bytes>,
 }
 
 impl CommandEffects {
@@ -70,6 +74,10 @@ impl CommandEffects {
             dirty_delta,
             hll_wal_delta,
             keyspace_events,
+            // The key-creation diff is computed at the execution seam (it needs
+            // store access before and after the handler runs); the caller fills
+            // this in after `into_write_meta` returns.
+            newly_created_keys: Vec::new(),
         })
     }
 }
@@ -168,6 +176,19 @@ impl ShardWorker {
                         hits += 1;
                     } else {
                         misses += 1;
+                        // `keymiss` (the `m` class) fires on a read lookup that
+                        // misses, before the command runs — matching Redis, which
+                        // emits it only from `lookupKeyRead` (never write lookups),
+                        // so write commands with a `FirstKey`/`EveryKey` read (e.g.
+                        // GETDEL) do not emit it. Guarded internally by the `m`
+                        // flag; `m` is excluded from the `A` alias.
+                        if !is_write {
+                            self.emit_keyspace_notification(
+                                key,
+                                "keymiss",
+                                crate::keyspace_event::KeyspaceEventFlags::MISS,
+                            );
+                        }
                     }
                 }
                 Some((hits, misses))
@@ -175,6 +196,23 @@ impl ShardWorker {
             crate::command_spec::LookupSpec::None | crate::command_spec::LookupSpec::Reported => {
                 None
             }
+        };
+
+        // `new` (key-creation, the `n` class) event seam: when `n` is enabled,
+        // snapshot which of this write's keys are absent *before* it runs. After
+        // the handler executes we keep those that now exist — the keys created
+        // for the first time. Skipped entirely (empty snapshot) when `n` is off,
+        // so the common path pays only one atomic load. `n` is excluded from the
+        // `A` alias, so this never fires under `A` alone.
+        let new_watch: Vec<Bytes> = if is_write && self.new_events_enabled() {
+            handler
+                .keys(&command.args)
+                .into_iter()
+                .filter(|key| !self.store.exists_unexpired(key))
+                .map(Bytes::copy_from_slice)
+                .collect()
+        } else {
+            Vec::new()
         };
 
         // Create command context and execute. `command_context` is the single
@@ -247,7 +285,16 @@ impl ShardWorker {
         // rollback, and MULTI/EXEC paths in one place. Redis parity: no-op
         // writes do not propagate, notify, or dirty WATCH.
         let meta = if is_write {
-            effects.into_write_meta(handler)
+            effects.into_write_meta(handler).map(|mut meta| {
+                // Keep only the pre-absent keys that now exist: the keys this
+                // write created. `new` is emitted for these in the notification
+                // effect, before the command's own type event.
+                meta.newly_created_keys = new_watch
+                    .into_iter()
+                    .filter(|key| self.store.exists_unexpired(key))
+                    .collect();
+                meta
+            })
         } else {
             None
         };
@@ -391,6 +438,7 @@ impl ShardWorker {
                     args: command.args.as_slice(),
                     hll_wal_delta: write_meta.hll_wal_delta.as_deref(),
                     keyspace_events: write_meta.keyspace_events.as_slice(),
+                    newly_created_keys: write_meta.newly_created_keys.as_slice(),
                 };
                 match self
                     .persist(
@@ -430,6 +478,7 @@ impl ShardWorker {
                     args: command.args.as_slice(),
                     hll_wal_delta: write_meta.hll_wal_delta.as_deref(),
                     keyspace_events: write_meta.keyspace_events.as_slice(),
+                    newly_created_keys: write_meta.newly_created_keys.as_slice(),
                 };
                 self.run_write_effects(
                     WriteSummary {
@@ -551,6 +600,7 @@ impl ShardWorker {
                     args: commands[*idx].args.as_slice(),
                     hll_wal_delta: meta.hll_wal_delta.as_deref(),
                     keyspace_events: meta.keyspace_events.as_slice(),
+                    newly_created_keys: meta.newly_created_keys.as_slice(),
                 })
                 .collect();
 

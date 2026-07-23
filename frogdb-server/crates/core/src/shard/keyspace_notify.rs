@@ -62,6 +62,19 @@ impl ShardWorker {
         }
     }
 
+    /// Whether the `new` (key-creation) class is currently enabled.
+    ///
+    /// The execution seam consults this to decide whether to compute the
+    /// key-creation diff at all: when `n` is off the diff is skipped so an
+    /// ordinary write pays only this single atomic load. `n` is deliberately
+    /// excluded from the `A` alias, so `A` alone never enables it.
+    ///
+    /// Cost: one atomic load + branch (< 1ns).
+    pub(crate) fn new_events_enabled(&self) -> bool {
+        let flags_bits = self.notify_keyspace_events.load(Ordering::Relaxed);
+        KeyspaceEventFlags::from_bits_truncate(flags_bits).contains(KeyspaceEventFlags::NEW)
+    }
+
     /// Emit keyspace notifications after a write command executes.
     ///
     /// Called from the post-execution pipeline for write commands. The record's
@@ -79,6 +92,15 @@ impl ShardWorker {
         let flags_bits = self.notify_keyspace_events.load(Ordering::Relaxed);
         if flags_bits == 0 {
             return;
+        }
+
+        // `new` (key-creation) fires first, before the command's own type event
+        // — matching Redis, where `dbAdd` emits `new` at insertion time, ahead of
+        // the command's write notification. The seam only populates this list
+        // when `n` is enabled, and `emit_keyspace_notification` re-checks the
+        // flag, so this is inert unless `n` is set (never under `A` alone).
+        for key in record.newly_created_keys {
+            self.emit_keyspace_notification(key, "new", KeyspaceEventFlags::NEW);
         }
 
         // The event class and name live together on the command's spec.

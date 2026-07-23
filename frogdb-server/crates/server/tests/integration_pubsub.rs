@@ -4007,3 +4007,223 @@ async fn test_eval_scripted_noop_stays_silent() {
     );
     server.shutdown().await;
 }
+
+// ===========================================================================
+// `new` (key-creation, class `n`) and `keymiss` (class `m`) events (task 09)
+//
+// Both classes parse in `notify-keyspace-events` but previously had zero
+// emission sites. Redis 8.x fires `new` from `dbAdd` on first key creation
+// (before the command's own type event) and `keymiss` from `lookupKeyRead`
+// on a read that misses (never from write lookups). Both are excluded from the
+// `A` alias, so `A` alone must deliver neither. These tests assert end-to-end
+// delivery and the `A`-exclusion.
+// ===========================================================================
+
+/// `new` fires on the first creation of a key. SET of a fresh key creates it,
+/// so a `new` keyevent naming the key is delivered when class `n` is enabled.
+#[tokio::test]
+async fn test_new_event_fires_on_key_creation() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    // `En` = keyevent notifications for the new-key class only.
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "En"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut subscriber, "new").await;
+
+    let resp = client.command(&["SET", "freshkey", "v"]).await;
+    assert_eq!(resp, Response::ok());
+
+    assert_keyevent_keys(&mut subscriber, "new", &["freshkey"]).await;
+    server.shutdown().await;
+}
+
+/// `new` fires only on *first* creation: overwriting an existing key does not
+/// create it, so no `new` event is emitted for the second SET.
+#[tokio::test]
+async fn test_new_event_not_fired_on_overwrite() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "En"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // Seed the key *before* subscribing, so the creation `new` event is not
+    // observed; only the subsequent overwrite is under test.
+    client.command(&["SET", "dupkey", "v1"]).await;
+
+    subscribe_keyevent(&mut subscriber, "new").await;
+
+    let resp = client.command(&["SET", "dupkey", "v2"]).await;
+    assert_eq!(resp, Response::ok());
+
+    // Overwrite creates nothing: no `new` event.
+    assert_keyevent_keys(&mut subscriber, "new", &[]).await;
+    server.shutdown().await;
+}
+
+/// `keymiss` fires on a read command that misses (key absent). GET of a missing
+/// key delivers a `keymiss` keyevent naming the key when class `m` is enabled.
+#[tokio::test]
+async fn test_keymiss_event_fires_on_read_miss() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    // `Em` = keyevent notifications for the key-miss class only.
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Em"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut subscriber, "keymiss").await;
+
+    let resp = client.command(&["GET", "absentkey"]).await;
+    assert_eq!(resp, Response::Bulk(None));
+
+    assert_keyevent_keys(&mut subscriber, "keymiss", &["absentkey"]).await;
+    server.shutdown().await;
+}
+
+/// `keymiss` does not fire when the read hits: a present key delivers no
+/// `keymiss` event.
+#[tokio::test]
+async fn test_keymiss_not_fired_on_read_hit() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Em"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["SET", "presentkey", "v"]).await;
+
+    subscribe_keyevent(&mut subscriber, "keymiss").await;
+
+    let resp = client.command(&["GET", "presentkey"]).await;
+    assert_eq!(resp, Response::Bulk(Some(Bytes::from("v"))));
+
+    assert_keyevent_keys(&mut subscriber, "keymiss", &[]).await;
+    server.shutdown().await;
+}
+
+/// `keymiss` fires only from read lookups, never write lookups (Redis parity:
+/// `lookupKeyRead` vs `lookupKeyWrite`). GETDEL is a WRITE command with a
+/// first-key lookup; a GETDEL that misses must emit no `keymiss`.
+#[tokio::test]
+async fn test_keymiss_not_fired_for_write_command() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Em"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut subscriber, "keymiss").await;
+
+    // GETDEL of a missing key: a write-lookup miss, so no `keymiss`.
+    let resp = client.command(&["GETDEL", "absent-write-key"]).await;
+    assert_eq!(resp, Response::Bulk(None));
+
+    assert_keyevent_keys(&mut subscriber, "keymiss", &[]).await;
+    server.shutdown().await;
+}
+
+/// The `A` alias must NOT enable `new` or `keymiss` (both are excluded from
+/// `NOTIFY_ALL` in Redis). With `KEA` set, creating a key and missing a read
+/// deliver their ordinary type events but neither `new` nor `keymiss`.
+#[tokio::test]
+async fn test_all_alias_excludes_new_and_keymiss() {
+    let server = TestServer::start_standalone().await;
+    let mut new_sub = server.connect().await;
+    let mut keymiss_sub = server.connect().await;
+    let mut set_sub = server.connect().await;
+    let mut client = server.connect().await;
+
+    // `KEA` enables keyspace + keyevent for every class in the `A` alias,
+    // which deliberately excludes `n` and `m`.
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut new_sub, "new").await;
+    subscribe_keyevent(&mut keymiss_sub, "keymiss").await;
+    subscribe_keyevent(&mut set_sub, "set").await;
+
+    // Create a key (would fire `new` if `n` were on) and miss a read (would
+    // fire `keymiss` if `m` were on).
+    let resp = client.command(&["SET", "akey", "v"]).await;
+    assert_eq!(resp, Response::ok());
+    let resp = client.command(&["GET", "amiss"]).await;
+    assert_eq!(resp, Response::Bulk(None));
+
+    // The ordinary `set` type event IS delivered (proves notifications are on).
+    assert_keyevent_keys(&mut set_sub, "set", &["akey"]).await;
+    // But neither `new` nor `keymiss` under the `A` alias.
+    assert_keyevent_keys(&mut new_sub, "new", &[]).await;
+    assert_keyevent_keys(&mut keymiss_sub, "keymiss", &[]).await;
+    server.shutdown().await;
+}
+
+/// `new` is emitted before the command's own type event: a single SET of a
+/// fresh key with both `n` and the string class enabled delivers `new` first,
+/// then `set`, on a subscriber pattern-listening to both.
+#[tokio::test]
+async fn test_new_precedes_type_event() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    // `E$n` = keyevent + string class + new-key class.
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "E$n"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // Pattern-subscribe so both `new` and `set` keyevents arrive in order.
+    let resp = subscriber
+        .command(&["PSUBSCRIBE", "__keyevent@0__:*"])
+        .await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let resp = client.command(&["SET", "ordkey", "v"]).await;
+    assert_eq!(resp, Response::ok());
+
+    // First message: `new`. pmessage shape: ["pmessage", pattern, channel, payload].
+    let msg = subscriber.read_message(Duration::from_secs(2)).await;
+    let Some(Response::Array(arr)) = msg else {
+        panic!("expected a `new` pmessage, got {msg:?}");
+    };
+    assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("pmessage"))));
+    assert_eq!(
+        arr[2],
+        Response::Bulk(Some(Bytes::from("__keyevent@0__:new")))
+    );
+    assert_eq!(arr[3], Response::Bulk(Some(Bytes::from("ordkey"))));
+
+    // Second message: `set`.
+    let msg = subscriber.read_message(Duration::from_secs(2)).await;
+    let Some(Response::Array(arr)) = msg else {
+        panic!("expected a `set` pmessage after `new`, got {msg:?}");
+    };
+    assert_eq!(
+        arr[2],
+        Response::Bulk(Some(Bytes::from("__keyevent@0__:set")))
+    );
+    assert_eq!(arr[3], Response::Bulk(Some(Bytes::from("ordkey"))));
+
+    server.shutdown().await;
+}
