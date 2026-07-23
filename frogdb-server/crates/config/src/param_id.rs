@@ -221,6 +221,8 @@ param_id_enum! {
         JsonMaxSize => "json-max-size",
         ReplAckIntervalMs => "repl-ack-interval-ms",
         TlsCiphersuites => "tls-ciphersuites",
+        // === issue-29: pub/sub slow-subscriber output-buffer bound (immutable) ===
+        PubsubOutputBufferHardLimit => "pubsub-output-buffer-hard-limit",
     }
 }
 
@@ -300,7 +302,8 @@ mod tests {
         // justify as dead config) + 20 promote-immutable startup-consumed params
         // added by 13-01 Pass 2b + 7 promote-immutable params added by the
         // issue-14 wire pass (metrics OTLP ×3, json limits ×2, replica ACK
-        // cadence, TLS ciphersuites).
-        assert_eq!(ImmutableParamId::ALL.len(), 65);
+        // cadence, TLS ciphersuites) + 1 promote-immutable param added by
+        // issue-29 (`pubsub-output-buffer-hard-limit`).
+        assert_eq!(ImmutableParamId::ALL.len(), 66);
     }
 }

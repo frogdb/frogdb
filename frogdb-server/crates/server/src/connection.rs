@@ -75,11 +75,10 @@ use std::time::Duration;
 use anyhow::Result;
 use bytes::BytesMut;
 use codec::FrogDbResp2;
-use frogdb_core::{ClientHandle, PubSubMessage, PubSubMsg, PubSubSender};
+use frogdb_core::{ClientHandle, PubSubMsg, PubSubReceiver, PubSubSender};
 use frogdb_protocol::{ParsedCommand, Response, WireResponse};
 use futures::StreamExt;
 use lifecycle::TrackingIo;
-use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
 use tracing::{Instrument, debug, info, trace, warn};
 
@@ -139,7 +138,12 @@ pub struct ConnectionHandler {
 
     /// Receiver for pub/sub messages from shards.
     /// Lazily initialized on first pub/sub command.
-    pubsub_rx: Option<mpsc::UnboundedReceiver<PubSubMessage>>,
+    pubsub_rx: Option<PubSubReceiver>,
+
+    /// Hard limit (bytes) applied to this connection's pub/sub delivery queue
+    /// when it is lazily allocated. `0` disables the bound. A slow subscriber
+    /// that exceeds it has further messages dropped and is disconnected.
+    pubsub_output_buffer_hard_limit: usize,
 
     /// Client-tracking IO plumbing (invalidation channel + REDIRECT forwarding
     /// task). Grouped so the CLIENT executor can borrow it mutably as a
@@ -265,6 +269,7 @@ impl ConnectionHandler {
             scatter_gather_timeout: config.scatter_gather_timeout,
             pubsub_tx: None,
             pubsub_rx: None,
+            pubsub_output_buffer_hard_limit: config.pubsub_output_buffer_hard_limit,
             tracking_io: TrackingIo::default(),
             pending_track_reads: false,
             pending_no_touch: false,
@@ -527,6 +532,20 @@ impl ConnectionHandler {
         FrameAction::Continue
     }
 
+    /// Log and record the teardown of a subscriber whose pub/sub output buffer
+    /// exceeded the hard limit. The caller `break`s the delivery loop, dropping
+    /// the socket — matching Redis's `client-output-buffer-limit pubsub`.
+    fn disconnect_overflowed_subscriber(&self) {
+        let dropped = self.pubsub_rx.as_ref().map(|rx| rx.dropped()).unwrap_or(0);
+        warn!(
+            conn_id = self.state.id,
+            dropped, "pub/sub output buffer hard limit exceeded; disconnecting slow subscriber"
+        );
+        frogdb_telemetry::definitions::PubsubOutputBufferDisconnects::inc(
+            &*self.observability.metrics_recorder,
+        );
+    }
+
     /// Run the connection handling loop.
     pub async fn run(mut self) -> Result<()> {
         debug!(conn_id = self.state.id, "Connection handler started");
@@ -540,12 +559,22 @@ impl ConnectionHandler {
                 }
 
                 // Handle pub/sub messages from shards
-                Some(pubsub_msg) = async {
+                Some(drained) = async {
                     match self.pubsub_rx.as_mut() {
-                        Some(rx) => rx.recv().await,
+                        Some(rx) => rx.recv_or_overflow().await,
                         None => std::future::pending().await,
                     }
                 } => {
+                    // An overflow with an empty channel surfaces here directly:
+                    // the flood was dropped to keep memory bounded, so there is
+                    // no message to drain — tear the slow subscriber down.
+                    let pubsub_msg = match drained {
+                        frogdb_core::Drained::Message(msg) => msg,
+                        frogdb_core::Drained::Overflowed => {
+                            self.disconnect_overflowed_subscriber();
+                            break;
+                        }
+                    };
                     // Buffer the first pub/sub message
                     let response = pubsub_msg.to_response_with_protocol(self.state.protocol_version);
                     if self.feed_response(Self::narrow_to_wire(response)).await.is_err() {
@@ -568,6 +597,19 @@ impl ConnectionHandler {
                     // Single flush for all pub/sub messages
                     if self.flush_responses().await.is_err() {
                         debug!(conn_id = self.state.id, "Failed to flush pub/sub responses");
+                        break;
+                    }
+                    // If the per-connection pub/sub output buffer overflowed while
+                    // this subscriber was too slow to drain it, the server dropped
+                    // messages to keep memory bounded. Redis disconnects such a
+                    // client (client-output-buffer-limit pubsub). We do the same,
+                    // best-effort, on the next drain after a successful flush.
+                    if self
+                        .pubsub_rx
+                        .as_ref()
+                        .is_some_and(|rx| rx.has_overflowed())
+                    {
+                        self.disconnect_overflowed_subscriber();
                         break;
                     }
                 }

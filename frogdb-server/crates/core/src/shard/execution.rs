@@ -1336,7 +1336,7 @@ mod scatter_effect_tests {
         let mut worker = scatter_worker(bc.clone() as SharedBroadcaster);
 
         // Observe the `set` key-event notification the old inline MSET skipped.
-        let (ntx, mut nrx) = mpsc::unbounded_channel();
+        let (ntx, mut nrx) = crate::pubsub::PubSubSender::unbounded();
         worker
             .subscriptions
             .subscribe(Bytes::from_static(b"__keyevent@0__:set"), 1, ntx);
@@ -1403,7 +1403,7 @@ mod scatter_effect_tests {
         );
 
         // Observe the `del` key-event notification.
-        let (ntx, mut nrx) = mpsc::unbounded_channel();
+        let (ntx, mut nrx) = crate::pubsub::PubSubSender::unbounded();
         worker
             .subscriptions
             .subscribe(Bytes::from_static(b"__keyevent@0__:del"), 1, ntx);

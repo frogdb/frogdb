@@ -7,19 +7,252 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use bytes::Bytes;
 use frogdb_protocol::{ProtocolVersion, Response};
 use frogdb_types::metrics::definitions::PubsubShardLimitWarnings;
 use frogdb_types::metrics::labels::PubsubLimitResource;
 use frogdb_types::traits::MetricsRecorder;
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 
 /// Connection ID type.
 pub type ConnId = u64;
 
-/// Sender for delivering pub/sub messages to connections.
-pub type PubSubSender = mpsc::UnboundedSender<PubSubMessage>;
+/// Default hard cap (32 MiB) on the bytes of pending pub/sub messages buffered
+/// for a single slow / non-reading subscriber before further messages are
+/// dropped and the connection is torn down. Mirrors Redis's
+/// `client-output-buffer-limit pubsub 32mb ...` hard limit.
+pub const DEFAULT_PUBSUB_OUTPUT_BUFFER_HARD_LIMIT: usize = 32 * 1024 * 1024;
+
+/// Shared byte budget backing one connection's pub/sub delivery channel.
+///
+/// Every clone of the connection's [`PubSubSender`] (one per shard the
+/// connection has subscribed on) and its single [`PubSubReceiver`] share this
+/// via `Arc`, so enqueue (on any shard) and drain (on the connection task)
+/// account against the same counter. This is what bounds a slow subscriber's
+/// server-side memory footprint: once `queued_bytes` would exceed `hard_limit`,
+/// further messages are dropped rather than buffered without bound.
+#[derive(Debug)]
+struct OutputBudget {
+    /// Bytes currently queued but not yet drained by the connection task.
+    queued_bytes: AtomicUsize,
+    /// Hard cap in bytes; `0` disables the bound (legacy unbounded behavior).
+    hard_limit: usize,
+    /// Latched once the hard cap is first exceeded, so the connection task can
+    /// tear the slow subscriber down (best effort — see [`connection`] loop).
+    overflowed: AtomicBool,
+    /// Count of messages dropped due to overflow (observability).
+    dropped: AtomicUsize,
+    /// Fired once, when `overflowed` first latches, to wake a delivery loop that
+    /// is parked on an empty channel. Without this a flood that overflows the
+    /// budget and is then fully dropped leaves the receiver with nothing to
+    /// `recv`, so the latch would never be observed and the slow subscriber
+    /// would never be disconnected.
+    overflow_notify: Notify,
+}
+
+/// Sender for delivering pub/sub messages to a connection.
+///
+/// Wraps an unbounded [`mpsc`] channel with a shared byte budget
+/// ([`OutputBudget`]) so a stalled subscriber cannot force the server to buffer
+/// publishes without bound. Cloned onto every shard the connection subscribes
+/// on; all clones and the paired [`PubSubReceiver`] share one budget.
+#[derive(Clone, Debug)]
+pub struct PubSubSender {
+    inner: mpsc::UnboundedSender<PubSubMessage>,
+    budget: Arc<OutputBudget>,
+}
+
+/// Receiver half paired with [`PubSubSender`]. Draining decrements the shared
+/// byte budget so the sender side regains headroom.
+#[derive(Debug)]
+pub struct PubSubReceiver {
+    inner: mpsc::UnboundedReceiver<PubSubMessage>,
+    budget: Arc<OutputBudget>,
+}
+
+/// Error returned by [`PubSubSender::send`] when the receiving connection has
+/// gone away (the delivery task dropped its [`PubSubReceiver`]).
+#[derive(Debug)]
+pub struct PubSubClosed;
+
+/// Outcome of [`PubSubReceiver::recv_or_overflow`]: either a drained message or
+/// a signal that the output buffer overflowed and the slow subscriber should be
+/// disconnected.
+#[derive(Debug)]
+pub enum Drained {
+    /// A message drained from the queue (the byte budget has been released).
+    Message(PubSubMessage),
+    /// The output-buffer hard limit was exceeded and no messages remain queued.
+    /// The connection task should disconnect this slow subscriber. Reported even
+    /// when the flood was entirely dropped and the channel is empty, which a
+    /// bare `recv` could never observe.
+    Overflowed,
+}
+
+/// Wait until the shared budget latches an output-buffer overflow.
+///
+/// Never resolves for an unbounded channel (`hard_limit == 0`, which never
+/// overflows), making it a safe fallback arm in a `select!`.
+async fn wait_overflow(budget: &OutputBudget) {
+    loop {
+        // Register for a wake *before* checking the flag so a latch that races
+        // with this check is not missed (`Notify` stores one permit).
+        let notified = budget.overflow_notify.notified();
+        if budget.overflowed.load(Ordering::Relaxed) {
+            return;
+        }
+        notified.await;
+    }
+}
+
+impl PubSubSender {
+    /// Create a byte-bounded pub/sub channel. `hard_limit` is the maximum bytes
+    /// of pending messages tolerated for a slow subscriber before further
+    /// messages are dropped; `0` disables the bound.
+    pub fn channel(hard_limit: usize) -> (PubSubSender, PubSubReceiver) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let budget = Arc::new(OutputBudget {
+            queued_bytes: AtomicUsize::new(0),
+            hard_limit,
+            overflowed: AtomicBool::new(false),
+            dropped: AtomicUsize::new(0),
+            overflow_notify: Notify::new(),
+        });
+        (
+            PubSubSender {
+                inner: tx,
+                budget: Arc::clone(&budget),
+            },
+            PubSubReceiver { inner: rx, budget },
+        )
+    }
+
+    /// Create an unbounded pub/sub channel (no output-buffer limit).
+    ///
+    /// Used by internal delivery paths that never stall on a client socket
+    /// (e.g. the shard-local keyspace-notification capture used in tests) and
+    /// wherever a bound would add no value.
+    pub fn unbounded() -> (PubSubSender, PubSubReceiver) {
+        Self::channel(0)
+    }
+
+    /// Deliver a message to the subscriber.
+    ///
+    /// When the shared byte budget is exhausted the message is *dropped* (not
+    /// enqueued) and the overflow flag is latched so the connection task tears
+    /// the slow subscriber down. The subscriber is still counted as a recipient
+    /// (`Ok`) — matching Redis, where a client that trips its output-buffer
+    /// limit is counted for `PUBLISH` and then disconnected asynchronously.
+    /// `Err(PubSubClosed)` is returned only when the receiver has gone away, so
+    /// callers keep their "closed => not a subscriber" counting semantics.
+    pub fn send(&self, msg: PubSubMessage) -> Result<(), PubSubClosed> {
+        let size = msg.approx_buffer_size();
+        let budget = &self.budget;
+        if budget.hard_limit != 0 {
+            // Approximate check: concurrent senders on different shards may each
+            // pass and overshoot the cap by a bounded amount (a few in-flight
+            // messages), which is fine for a DoS bound.
+            let queued = budget.queued_bytes.load(Ordering::Relaxed);
+            if queued.saturating_add(size) > budget.hard_limit {
+                // Latch overflow and, on the first transition, wake a delivery
+                // loop that may be parked on an otherwise-empty channel so it
+                // can tear the slow subscriber down.
+                if !budget.overflowed.swap(true, Ordering::Relaxed) {
+                    budget.overflow_notify.notify_one();
+                }
+                budget.dropped.fetch_add(1, Ordering::Relaxed);
+                // Report closed vs. still-open honestly so subscriber counts
+                // stay correct even while dropping for overflow.
+                return if self.inner.is_closed() {
+                    Err(PubSubClosed)
+                } else {
+                    Ok(())
+                };
+            }
+        }
+        match self.inner.send(msg) {
+            Ok(()) => {
+                budget.queued_bytes.fetch_add(size, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(_) => Err(PubSubClosed),
+        }
+    }
+}
+
+impl PubSubReceiver {
+    /// Await the next message, decrementing the shared byte budget.
+    pub async fn recv(&mut self) -> Option<PubSubMessage> {
+        let msg = self.inner.recv().await?;
+        self.release(&msg);
+        Some(msg)
+    }
+
+    /// Await either the next queued message or an output-buffer overflow.
+    ///
+    /// A message drains (and releases the byte budget) preferentially; only when
+    /// the channel is empty does a latched overflow surface as
+    /// [`Drained::Overflowed`]. This lets the connection task disconnect a slow
+    /// subscriber whose flood was dropped to keep memory bounded — the latch
+    /// alone never wakes a `recv` parked on the now-empty channel. Returns `None`
+    /// only when the channel is closed with nothing left to drain.
+    pub async fn recv_or_overflow(&mut self) -> Option<Drained> {
+        tokio::select! {
+            biased;
+            msg = self.inner.recv() => {
+                let msg = msg?;
+                self.release(&msg);
+                Some(Drained::Message(msg))
+            }
+            () = wait_overflow(&self.budget) => Some(Drained::Overflowed),
+        }
+    }
+
+    /// Try to dequeue a message without awaiting, decrementing the budget.
+    pub fn try_recv(&mut self) -> Result<PubSubMessage, mpsc::error::TryRecvError> {
+        let msg = self.inner.try_recv()?;
+        self.release(&msg);
+        Ok(msg)
+    }
+
+    /// Whether the sender side has dropped messages after exceeding the hard
+    /// output-buffer limit. The connection task tears the subscriber down when
+    /// this latches true.
+    pub fn has_overflowed(&self) -> bool {
+        self.budget.overflowed.load(Ordering::Relaxed)
+    }
+
+    /// Bytes currently queued for this subscriber (test/observability aid).
+    pub fn queued_bytes(&self) -> usize {
+        self.budget.queued_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Number of messages dropped due to output-buffer overflow.
+    pub fn dropped(&self) -> usize {
+        self.budget.dropped.load(Ordering::Relaxed)
+    }
+
+    fn release(&self, msg: &PubSubMessage) {
+        let size = msg.approx_buffer_size();
+        // Saturating: enqueue/drain use the same per-message size so the
+        // counter stays balanced, but never underflow if accounting drifts.
+        let mut cur = self.budget.queued_bytes.load(Ordering::Relaxed);
+        loop {
+            let next = cur.saturating_sub(size);
+            match self.budget.queued_bytes.compare_exchange_weak(
+                cur,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(observed) => cur = observed,
+            }
+        }
+    }
+}
 
 /// Maximum subscriptions per connection.
 pub const MAX_SUBSCRIPTIONS_PER_CONNECTION: usize = 10_000;
@@ -141,6 +374,26 @@ pub enum PubSubMessage {
 }
 
 impl PubSubMessage {
+    /// Approximate on-the-wire size in bytes, used to charge the per-connection
+    /// output-buffer budget. Counts the variable payload/channel/pattern bytes
+    /// plus a small fixed allowance for the RESP framing and message kind.
+    pub(crate) fn approx_buffer_size(&self) -> usize {
+        /// Fixed allowance covering the RESP array header, kind bulk string,
+        /// and per-element length prefixes.
+        const FRAMING_OVERHEAD: usize = 48;
+        let payload = match self {
+            PubSubMessage::Message { channel, payload } => channel.len() + payload.len(),
+            PubSubMessage::PatternMessage {
+                pattern,
+                channel,
+                payload,
+            } => pattern.len() + channel.len() + payload.len(),
+            PubSubMessage::ShardedMessage { channel, payload } => channel.len() + payload.len(),
+            PubSubMessage::Confirmation(_) => 0,
+        };
+        payload + FRAMING_OVERHEAD
+    }
+
     /// Convert to RESP2 array format.
     pub fn to_response(&self) -> Response {
         self.to_response_with_protocol(ProtocolVersion::Resp2)
@@ -687,7 +940,136 @@ impl ShardSubscriptions {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
+
+    // =========================================================================
+    // Output-buffer bound (slow-subscriber DoS) tests
+    // =========================================================================
+
+    fn msg_of(payload_len: usize) -> PubSubMessage {
+        PubSubMessage::Message {
+            channel: Bytes::from_static(b"ch"),
+            payload: Bytes::from(vec![b'x'; payload_len]),
+        }
+    }
+
+    #[test]
+    fn output_budget_bounds_a_stalled_subscriber() {
+        // A subscriber that never drains must not let the sender buffer without
+        // bound. With a small hard limit, queued bytes stay bounded and excess
+        // sends are dropped (still `Ok` — counted as delivered, Redis-style),
+        // with the overflow flag latched for the connection task to disconnect.
+        let limit = 4 * 1024;
+        let (tx, rx) = PubSubSender::channel(limit);
+
+        let mut dropped_seen = false;
+        for _ in 0..10_000 {
+            // Every send reports Ok while the receiver is alive, even when the
+            // message is dropped for overflow.
+            assert!(tx.send(msg_of(256)).is_ok());
+            if rx.has_overflowed() {
+                dropped_seen = true;
+            }
+        }
+
+        assert!(rx.has_overflowed(), "overflow flag must latch");
+        assert!(dropped_seen);
+        assert!(rx.dropped() > 0, "some messages must be dropped");
+        // Memory stays bounded: queued bytes never exceed the hard limit plus at
+        // most one in-flight message.
+        assert!(
+            rx.queued_bytes() <= limit + msg_of(256).approx_buffer_size(),
+            "queued_bytes {} exceeded bound {}",
+            rx.queued_bytes(),
+            limit
+        );
+    }
+
+    #[test]
+    fn output_budget_draining_frees_space_and_flag_stays_latched() {
+        let limit = 2 * 1024;
+        let (tx, mut rx) = PubSubSender::channel(limit);
+
+        // Fill past the limit.
+        for _ in 0..1_000 {
+            let _ = tx.send(msg_of(256));
+        }
+        assert!(rx.has_overflowed());
+        let filled = rx.queued_bytes();
+        assert!(filled > 0);
+
+        // Draining releases the byte budget.
+        let mut drained = 0;
+        while rx.try_recv().is_ok() {
+            drained += 1;
+        }
+        assert!(drained > 0);
+        assert_eq!(rx.queued_bytes(), 0, "drain must return budget to zero");
+        // The latch is sticky: overflow already happened, disconnect is pending.
+        assert!(rx.has_overflowed());
+
+        // After draining there is room again, so a fresh send enqueues.
+        assert!(tx.send(msg_of(256)).is_ok());
+        assert!(rx.queued_bytes() > 0);
+    }
+
+    #[test]
+    fn unbounded_channel_never_overflows() {
+        // `unbounded()` (hard_limit == 0) preserves the old behavior: no bound,
+        // no drops. Used by the internal keyspace-notification hop, which is
+        // already bounded upstream and must not be double-capped here.
+        let (tx, rx) = PubSubSender::unbounded();
+        for _ in 0..5_000 {
+            assert!(tx.send(msg_of(512)).is_ok());
+        }
+        assert!(!rx.has_overflowed());
+        assert_eq!(rx.dropped(), 0);
+    }
+
+    #[test]
+    fn send_reports_closed_when_receiver_dropped() {
+        let (tx, rx) = PubSubSender::channel(1024);
+        drop(rx);
+        assert!(matches!(tx.send(msg_of(16)), Err(PubSubClosed)));
+    }
+
+    #[tokio::test]
+    async fn recv_or_overflow_surfaces_overflow_on_an_empty_channel() {
+        // The production deadlock this guards against: a hostile publisher floods
+        // past the limit, the excess is dropped to keep memory bounded, and the
+        // subscriber then drains the bounded prefix — leaving the channel EMPTY
+        // with overflow latched. A bare `recv` would park forever and the slow
+        // subscriber would never be disconnected. `recv_or_overflow` must instead
+        // surface the latch so the connection task can tear it down.
+        let limit = 1024;
+        let (tx, mut rx) = PubSubSender::channel(limit);
+        for _ in 0..1_000 {
+            let _ = tx.send(msg_of(256));
+        }
+        assert!(rx.has_overflowed());
+        while rx.try_recv().is_ok() {}
+        assert_eq!(rx.queued_bytes(), 0, "prefix must be fully drained");
+
+        match tokio::time::timeout(Duration::from_secs(1), rx.recv_or_overflow()).await {
+            Ok(Some(Drained::Overflowed)) => {}
+            other => panic!("expected Overflowed on empty overflowed channel, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recv_or_overflow_prefers_draining_a_queued_message() {
+        // With a message available, drain it (releasing budget) rather than
+        // reporting overflow, even on an unbounded channel that never overflows.
+        let (tx, mut rx) = PubSubSender::unbounded();
+        tx.send(msg_of(16)).unwrap();
+        match rx.recv_or_overflow().await {
+            Some(Drained::Message(_)) => {}
+            other => panic!("expected Message, got {other:?}"),
+        }
+        assert_eq!(rx.queued_bytes(), 0);
+    }
 
     // =========================================================================
     // GlobPattern tests
@@ -790,7 +1172,7 @@ mod tests {
     #[test]
     fn test_subscribe_unsubscribe() {
         let mut subs = ShardSubscriptions::new();
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = PubSubSender::unbounded();
 
         // Subscribe
         assert!(subs.subscribe(Bytes::from_static(b"ch1"), 1, tx.clone()));
@@ -807,7 +1189,7 @@ mod tests {
     #[test]
     fn test_psubscribe_punsubscribe() {
         let mut subs = ShardSubscriptions::new();
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = PubSubSender::unbounded();
 
         assert!(subs.psubscribe(Bytes::from_static(b"news.*"), 1, tx.clone()));
         assert!(!subs.psubscribe(Bytes::from_static(b"news.*"), 1, tx.clone())); // Already subscribed
@@ -826,8 +1208,8 @@ mod tests {
     #[test]
     fn test_publish_to_channel() {
         let mut subs = ShardSubscriptions::new();
-        let (tx1, mut rx1) = mpsc::unbounded_channel();
-        let (tx2, mut rx2) = mpsc::unbounded_channel();
+        let (tx1, mut rx1) = PubSubSender::unbounded();
+        let (tx2, mut rx2) = PubSubSender::unbounded();
 
         subs.subscribe(Bytes::from_static(b"ch1"), 1, tx1);
         subs.subscribe(Bytes::from_static(b"ch1"), 2, tx2);
@@ -854,7 +1236,7 @@ mod tests {
     #[test]
     fn test_publish_to_pattern() {
         let mut subs = ShardSubscriptions::new();
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = PubSubSender::unbounded();
 
         subs.psubscribe(Bytes::from_static(b"news.*"), 1, tx);
 
@@ -888,7 +1270,7 @@ mod tests {
     #[test]
     fn test_sharded_subscribe_publish() {
         let mut subs = ShardSubscriptions::new();
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = PubSubSender::unbounded();
 
         subs.ssubscribe(Bytes::from_static(b"orders"), 1, tx);
 
@@ -910,7 +1292,7 @@ mod tests {
     #[test]
     fn test_remove_connection() {
         let mut subs = ShardSubscriptions::new();
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = PubSubSender::unbounded();
 
         subs.subscribe(Bytes::from_static(b"ch1"), 1, tx.clone());
         subs.subscribe(Bytes::from_static(b"ch2"), 1, tx.clone());
@@ -937,7 +1319,7 @@ mod tests {
     #[test]
     fn test_channels_introspection() {
         let mut subs = ShardSubscriptions::new();
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = PubSubSender::unbounded();
 
         subs.subscribe(Bytes::from_static(b"news.sports"), 1, tx.clone());
         subs.subscribe(Bytes::from_static(b"news.weather"), 1, tx.clone());
@@ -954,7 +1336,7 @@ mod tests {
     #[test]
     fn test_numsub_introspection() {
         let mut subs = ShardSubscriptions::new();
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = PubSubSender::unbounded();
 
         subs.subscribe(Bytes::from_static(b"ch1"), 1, tx.clone());
         subs.subscribe(Bytes::from_static(b"ch1"), 2, tx.clone());
@@ -1057,7 +1439,7 @@ mod tests {
     #[test]
     fn test_total_subscription_count() {
         let mut subs = ShardSubscriptions::new();
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = PubSubSender::unbounded();
 
         assert_eq!(subs.total_subscription_count(), 0);
 
@@ -1079,7 +1461,7 @@ mod tests {
     #[test]
     fn test_unique_channel_count() {
         let mut subs = ShardSubscriptions::new();
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = PubSubSender::unbounded();
 
         assert_eq!(subs.unique_channel_count(), 0);
 
@@ -1094,7 +1476,7 @@ mod tests {
     #[test]
     fn test_unique_pattern_count() {
         let mut subs = ShardSubscriptions::new();
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = PubSubSender::unbounded();
 
         assert_eq!(subs.unique_pattern_count(), 0);
 

@@ -259,6 +259,7 @@ pub fn standalone_config(num_shards: usize) -> ConnectionConfig {
         per_request_spans: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         is_replica: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         enable_debug_command: false,
+        pubsub_output_buffer_hard_limit: frogdb_core::DEFAULT_PUBSUB_OUTPUT_BUFFER_HARD_LIMIT,
         #[cfg(feature = "turmoil")]
         chaos_config: std::sync::Arc::new(crate::config::ChaosConfig::default()),
     }

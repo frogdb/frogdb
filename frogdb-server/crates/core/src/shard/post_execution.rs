@@ -1490,7 +1490,7 @@ mod tests {
     fn enable_notify_and_subscribe(
         worker: &mut ShardWorker,
         channels: &[&str],
-    ) -> mpsc::UnboundedReceiver<crate::pubsub::PubSubMessage> {
+    ) -> crate::pubsub::PubSubReceiver {
         let flags = KeyspaceEventFlags::KEYSPACE
             | KeyspaceEventFlags::KEYEVENT
             | KeyspaceEventFlags::GENERIC
@@ -1498,7 +1498,7 @@ mod tests {
             | KeyspaceEventFlags::EVICTED;
         worker
             .set_notify_keyspace_events(Arc::new(std::sync::atomic::AtomicU32::new(flags.bits())));
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = crate::pubsub::PubSubSender::unbounded();
         for ch in channels {
             worker
                 .subscriptions
@@ -1507,9 +1507,7 @@ mod tests {
         rx
     }
 
-    fn keyevents(
-        rx: &mut mpsc::UnboundedReceiver<crate::pubsub::PubSubMessage>,
-    ) -> Vec<(String, String)> {
+    fn keyevents(rx: &mut crate::pubsub::PubSubReceiver) -> Vec<(String, String)> {
         let mut out = Vec::new();
         while let Ok(crate::pubsub::PubSubMessage::Message { channel, payload }) = rx.try_recv() {
             out.push((

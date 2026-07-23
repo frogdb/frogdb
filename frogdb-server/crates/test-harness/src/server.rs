@@ -169,6 +169,13 @@ pub struct TestServerConfig {
     pub json_max_depth: Option<usize>,
     /// Override `json.max-size` (max JSON document size in bytes). None = server default.
     pub json_max_size: Option<usize>,
+
+    // --- Pub/Sub ---
+    /// Override `server.pubsub-output-buffer-hard-limit` (bytes buffered per slow
+    /// subscriber before messages are dropped and the connection is torn down).
+    /// `Some(0)` disables the bound. None = server default. Used by slow-subscriber
+    /// tests to hit the limit with a small, non-OOMing publish volume.
+    pub pubsub_output_buffer_hard_limit: Option<usize>,
 }
 
 impl Clone for TestServerConfig {
@@ -217,6 +224,7 @@ impl Clone for TestServerConfig {
             allow_cross_slot_standalone: self.allow_cross_slot_standalone,
             json_max_depth: self.json_max_depth,
             json_max_size: self.json_max_size,
+            pubsub_output_buffer_hard_limit: self.pubsub_output_buffer_hard_limit,
         }
     }
 }
@@ -542,6 +550,9 @@ impl TestServer {
         }
         if let Some(size) = test_config.json_max_size {
             config.json.max_size = size;
+        }
+        if let Some(limit) = test_config.pubsub_output_buffer_hard_limit {
+            config.server.pubsub_output_buffer_hard_limit = limit;
         }
 
         // Enable DEBUG SLEEP and other unsafe DEBUG subcommands for tests.

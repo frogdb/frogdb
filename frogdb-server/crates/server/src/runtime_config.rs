@@ -415,6 +415,9 @@ pub struct StaticConfig {
     pub repl_ack_interval_ms: u64,
     /// Allowed TLS ciphersuites (rustls IANA names; empty = rustls defaults).
     pub tls_ciphersuites: Vec<String>,
+    /// Hard limit (bytes) on the per-connection pub/sub output buffer for a slow
+    /// subscriber before messages are dropped and the connection is torn down.
+    pub pubsub_output_buffer_hard_limit: usize,
 }
 
 impl StaticConfig {
@@ -528,6 +531,7 @@ impl StaticConfig {
             json_max_size: config.json.max_size,
             repl_ack_interval_ms: config.replication.ack_interval_ms,
             tls_ciphersuites: config.tls.ciphersuites.clone(),
+            pubsub_output_buffer_hard_limit: config.server.pubsub_output_buffer_hard_limit,
         }
     }
 }
@@ -1336,6 +1340,19 @@ impl ConfigManager {
                 // string array via `Vec<String>::to_toml_value`.
                 getter: |mgr| mgr.static_config.tls_ciphersuites.join(" "),
                 toml_getter: |mgr| mgr.static_config.tls_ciphersuites.to_toml_value(),
+            },
+            PubsubOutputBufferHardLimit => ParamMeta {
+                name: id.name(),
+                getter: |mgr| {
+                    mgr.static_config
+                        .pubsub_output_buffer_hard_limit
+                        .to_string()
+                },
+                toml_getter: |mgr| {
+                    mgr.static_config
+                        .pubsub_output_buffer_hard_limit
+                        .to_toml_value()
+                },
             },
         }
     }

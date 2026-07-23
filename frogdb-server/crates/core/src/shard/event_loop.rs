@@ -411,11 +411,11 @@ impl ShardWorker {
         patterns: Vec<Bytes>,
         conn_id: u64,
         flags: u32,
-    ) -> tokio::sync::mpsc::UnboundedReceiver<crate::pubsub::PubSubMessage> {
+    ) -> crate::pubsub::PubSubReceiver {
         self.set_notify_keyspace_events(std::sync::Arc::new(std::sync::atomic::AtomicU32::new(
             flags,
         )));
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, rx) = crate::pubsub::PubSubSender::unbounded();
         for pat in patterns {
             self.subscriptions.psubscribe(pat, conn_id, tx.clone());
         }
@@ -440,7 +440,7 @@ mod effect_tests {
     use crate::eviction::EvictionConfig;
     use crate::keyspace_event::KeyspaceEventFlags;
     use crate::noop::MetricsRecorder;
-    use crate::pubsub::{PubSubMessage, PubSubSender};
+    use crate::pubsub::{PubSubMessage, PubSubReceiver, PubSubSender};
     use crate::registry::CommandRegistry;
     use crate::replication::NoopBroadcaster;
     use crate::shard::ShardWorker;
@@ -547,14 +547,14 @@ mod effect_tests {
     fn enable_notifications_and_subscribe(
         worker: &mut ShardWorker,
         event_channels: &[&str],
-    ) -> mpsc::UnboundedReceiver<PubSubMessage> {
+    ) -> PubSubReceiver {
         let flags = KeyspaceEventFlags::KEYSPACE
             | KeyspaceEventFlags::KEYEVENT
             | KeyspaceEventFlags::GENERIC
             | KeyspaceEventFlags::EXPIRED;
         worker.set_notify_keyspace_events(Arc::new(AtomicU32::new(flags.bits())));
 
-        let (tx, rx): (PubSubSender, _) = mpsc::unbounded_channel();
+        let (tx, rx) = PubSubSender::unbounded();
         for ch in event_channels {
             worker
                 .subscriptions
@@ -564,7 +564,7 @@ mod effect_tests {
     }
 
     /// Collect all currently-queued (channel, payload) pairs.
-    fn drain(rx: &mut mpsc::UnboundedReceiver<PubSubMessage>) -> Vec<(String, String)> {
+    fn drain(rx: &mut PubSubReceiver) -> Vec<(String, String)> {
         let mut out = Vec::new();
         while let Ok(msg) = rx.try_recv() {
             if let PubSubMessage::Message { channel, payload } = msg {

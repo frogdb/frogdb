@@ -532,7 +532,7 @@ mod eviction_effect_tests {
         let bc = Arc::new(RecordingBroadcaster::default());
         let mut w = worker(bc.clone() as SharedBroadcaster);
 
-        let (ntx, mut nrx) = mpsc::unbounded_channel();
+        let (ntx, mut nrx) = crate::pubsub::PubSubSender::unbounded();
         w.subscriptions
             .subscribe(Bytes::from_static(b"__keyevent@0__:evicted"), 1, ntx);
 
@@ -664,7 +664,7 @@ mod eviction_effect_tests {
         let bc = Arc::new(RecordingBroadcaster::default());
         let (mut w, _tmp) = worker_with_warm(bc as SharedBroadcaster);
 
-        let (ntx, mut nrx) = mpsc::unbounded_channel();
+        let (ntx, mut nrx) = crate::pubsub::PubSubSender::unbounded();
         w.subscriptions
             .subscribe(Bytes::from_static(b"__keyevent@0__:evicted"), 1, ntx);
 

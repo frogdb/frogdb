@@ -291,6 +291,10 @@ define_metrics! {
         labels: [resource: PubsubLimitResource],
     }
 
+    /// Total subscriber connections disconnected for exceeding their pub/sub
+    /// output-buffer hard limit (slow / non-reading subscribers).
+    counter PubsubOutputBufferDisconnects("frogdb_pubsub_output_buffer_disconnects_total") {}
+
     // ========================================================================
     // Memory/Eviction Metrics
     // ========================================================================

@@ -194,6 +194,11 @@ pub struct ConnectionConfig {
     /// is enabled. Default false; test harness sets to true.
     pub enable_debug_command: bool,
 
+    /// Hard limit (bytes) on pub/sub messages buffered for a slow subscriber
+    /// before further messages are dropped and the connection is torn down.
+    /// `0` disables the bound. Sourced from `server.pubsub-output-buffer-hard-limit`.
+    pub pubsub_output_buffer_hard_limit: usize,
+
     /// Chaos testing configuration (turmoil simulation only).
     #[cfg(feature = "turmoil")]
     pub chaos_config: std::sync::Arc<crate::config::ChaosConfig>,
@@ -213,6 +218,7 @@ impl ConnectionConfig {
             per_request_spans: Arc::new(AtomicBool::new(false)),
             is_replica: Arc::new(AtomicBool::new(false)),
             enable_debug_command: true,
+            pubsub_output_buffer_hard_limit: frogdb_core::DEFAULT_PUBSUB_OUTPUT_BUFFER_HARD_LIMIT,
             #[cfg(feature = "turmoil")]
             chaos_config: std::sync::Arc::new(crate::config::ChaosConfig::default()),
         }

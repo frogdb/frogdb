@@ -149,7 +149,7 @@ mod tests {
     fn subscribe_ack_fires_after_registration_is_visible() {
         let mut worker = minimal_worker();
         let channel = Bytes::from_static(b"barrier-chan");
-        let (subscriber_tx, _subscriber_rx) = mpsc::unbounded_channel();
+        let (subscriber_tx, _subscriber_rx) = crate::pubsub::PubSubSender::unbounded();
         let (response_tx, mut response_rx) = oneshot::channel::<()>();
 
         worker.dispatch_pubsub(PubSubMsg::Subscribe {

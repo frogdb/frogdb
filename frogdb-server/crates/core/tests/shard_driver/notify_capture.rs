@@ -13,10 +13,9 @@
 #![allow(dead_code)] // used piecemeal by scenario modules
 
 use bytes::Bytes;
-use tokio::sync::mpsc;
 
 use frogdb_core::keyspace_event::KeyspaceEventFlags;
-use frogdb_core::pubsub::PubSubMessage;
+use frogdb_core::pubsub::{PubSubMessage, PubSubReceiver};
 
 /// The `__keyevent@0__:<name>` channel prefix all keyevent notifications use.
 const KEYEVENT_PREFIX: &[u8] = b"__keyevent@0__:";
@@ -66,12 +65,12 @@ impl CapturedNotification {
 /// it after a schedule to read every notification the schedule emitted, in
 /// emission order.
 pub struct NotificationCapture {
-    rx: mpsc::UnboundedReceiver<PubSubMessage>,
+    rx: PubSubReceiver,
 }
 
 impl NotificationCapture {
     /// Wrap a capture receiver.
-    pub fn new(rx: mpsc::UnboundedReceiver<PubSubMessage>) -> Self {
+    pub fn new(rx: PubSubReceiver) -> Self {
         Self { rx }
     }
 

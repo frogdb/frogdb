@@ -118,10 +118,10 @@ pub use persistence::{
     recover_all_shards, recover_shard, serialize, spawn_periodic_sync,
 };
 pub use pubsub::{
-    ConnId, GlobPattern, IntrospectionRequest, IntrospectionResponse,
-    MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
-    MAX_SUBSCRIPTIONS_PER_CONNECTION, PubSubConfirmation, PubSubMessage, PubSubSender,
-    ShardSubscriptions,
+    ConnId, DEFAULT_PUBSUB_OUTPUT_BUFFER_HARD_LIMIT, Drained, GlobPattern, IntrospectionRequest,
+    IntrospectionResponse, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
+    MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION, PubSubClosed,
+    PubSubConfirmation, PubSubMessage, PubSubReceiver, PubSubSender, ShardSubscriptions,
 };
 pub use registry::{CommandEntry, CommandImpl, CommandRegistry};
 pub use replication::{

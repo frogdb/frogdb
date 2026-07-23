@@ -435,6 +435,18 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
         ));
         rows.push(pick(TlsConfig::PARAMS, "tls-ciphersuites"));
 
+        // --- issue-29: pub/sub slow-subscriber output-buffer bound. One
+        // promote-immutable (startup-consumed, CONFIG GET-only) row, appended
+        // after the issue-14 block so the golden snapshot's first 111 rows stay
+        // byte-identical. Consumed once when a connection lazily allocates its
+        // pub/sub channel (`PubSubIo::ensure_pubsub_channel`): GET reports the
+        // honest startup value, SET has no runtime seam (existing channels keep
+        // their limit). ---
+        rows.push(pick(
+            ServerConfig::PARAMS,
+            "pubsub-output-buffer-hard-limit",
+        ));
+
         rows
     });
 
@@ -1237,6 +1249,14 @@ mod tests {
             mutable: false,
             noop: false,
         },
+        // issue-29: pub/sub slow-subscriber output-buffer bound (immutable).
+        ConfigParamInfo {
+            name: "pubsub-output-buffer-hard-limit",
+            section: Some("server"),
+            field: Some("pubsub-output-buffer-hard-limit"),
+            mutable: false,
+            noop: false,
+        },
     ];
 
     #[test]
@@ -1266,8 +1286,9 @@ mod tests {
         // promote-immutable startup-consumed rows + the mutable `acllog-max-len`),
         // giving 104. The issue-14 wire pass appended 7 more promote-immutable
         // rows (metrics OTLP ×3, json limits ×2, replica ACK cadence, TLS
-        // ciphersuites), giving 111.
-        assert_eq!(GOLDEN_SNAPSHOT.len(), 111);
+        // ciphersuites), giving 111. Issue-29 appended 1 more promote-immutable
+        // row (`pubsub-output-buffer-hard-limit`), giving 112.
+        assert_eq!(GOLDEN_SNAPSHOT.len(), 112);
     }
 
     #[test]

@@ -448,6 +448,7 @@ impl Server {
             new_conn_senders: std::mem::take(&mut self.new_conn_senders),
             allow_cross_slot: self.config.server.allow_cross_slot_standalone,
             scatter_gather_timeout_ms: self.config.server.scatter_gather_timeout_ms,
+            pubsub_output_buffer_hard_limit: self.config.server.pubsub_output_buffer_hard_limit,
             admin_enabled,
             memory_diag_config: self.config.memory.to_diag_config(),
             max_clients: self.config_manager.max_clients_flag(),

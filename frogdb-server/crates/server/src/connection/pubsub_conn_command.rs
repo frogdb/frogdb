@@ -31,11 +31,11 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, BoxFuture, CommandFlags, CommandSpec, ConnCtx, ConnId, ConnectionCommand,
     ConnectionLevelOp, EventSpec, ExecutionStrategy, GlobPattern, IntrospectionRequest,
-    IntrospectionResponse, KeySpec, LookupSpec, PubSubConfirmation, PubSubMessage, PubSubMsg,
-    PubSubProvider, PubSubSender, WaiterWake, WalStrategy, shard_for_key, slot_for_key,
+    IntrospectionResponse, KeySpec, LookupSpec, PubSubConfirmation, PubSubMsg, PubSubProvider,
+    PubSubReceiver, PubSubSender, WaiterWake, WalStrategy, shard_for_key, slot_for_key,
 };
 use frogdb_protocol::Response;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 use tracing::debug;
 
 use crate::connection::ConnectionHandler;
@@ -227,7 +227,7 @@ pub(crate) struct PubSubIo<'a> {
     /// Lazily-created pub/sub sender (cloned to shards on first subscribe).
     pubsub_tx: &'a mut Option<PubSubSender>,
     /// Lazily-created pub/sub receiver (paired with `pubsub_tx`).
-    pubsub_rx: &'a mut Option<mpsc::UnboundedReceiver<PubSubMessage>>,
+    pubsub_rx: &'a mut Option<PubSubReceiver>,
     /// Shard senders + ACL manager (channel-access enforcement).
     core: &'a CoreDeps,
     /// Cluster slot-migration routing + cross-node pub/sub forwarding.
@@ -236,18 +236,23 @@ pub(crate) struct PubSubIo<'a> {
     num_shards: usize,
     /// Scatter-gather deadline for PUBSUB introspection.
     scatter_gather_timeout: Duration,
+    /// Hard byte limit for the per-connection pub/sub output buffer (0 = off).
+    /// Applied when the channel is lazily created on first subscribe.
+    pubsub_output_buffer_hard_limit: usize,
 }
 
 impl<'a> PubSubIo<'a> {
     /// Bundle the disjoint handler borrows the pub/sub family needs.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         state: &'a mut ConnectionState,
         pubsub_tx: &'a mut Option<PubSubSender>,
-        pubsub_rx: &'a mut Option<mpsc::UnboundedReceiver<PubSubMessage>>,
+        pubsub_rx: &'a mut Option<PubSubReceiver>,
         core: &'a CoreDeps,
         cluster: &'a ClusterDeps,
         num_shards: usize,
         scatter_gather_timeout: Duration,
+        pubsub_output_buffer_hard_limit: usize,
     ) -> Self {
         Self {
             state,
@@ -257,6 +262,7 @@ impl<'a> PubSubIo<'a> {
             cluster,
             num_shards,
             scatter_gather_timeout,
+            pubsub_output_buffer_hard_limit,
         }
     }
 
@@ -267,7 +273,7 @@ impl<'a> PubSubIo<'a> {
         if let Some(tx) = self.pubsub_tx.as_ref() {
             return tx.clone();
         }
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = PubSubSender::channel(self.pubsub_output_buffer_hard_limit);
         *self.pubsub_tx = Some(tx.clone());
         *self.pubsub_rx = Some(rx);
         tx
@@ -918,6 +924,7 @@ impl ConnectionHandler {
             &self.cluster,
             self.num_shards,
             self.scatter_gather_timeout,
+            self.pubsub_output_buffer_hard_limit,
         );
         let mut ctx = Self::base_ctx(
             &self.admin,

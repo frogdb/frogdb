@@ -3,6 +3,7 @@
 use crate::common::test_server::{TestClient, TestServer, TestServerConfig};
 use bytes::Bytes;
 use frogdb_protocol::Response;
+use futures::StreamExt;
 use redis_protocol::resp3::types::BytesFrame as Resp3Frame;
 use std::time::{Duration, Instant};
 
@@ -4678,4 +4679,147 @@ async fn test_subscriber_dereg_on_client_kill_cross_shard() {
 #[tokio::test]
 async fn test_subscriber_dereg_on_raw_close_cross_shard() {
     run_disconnect_dereg_test(DisconnectMode::RawClose).await;
+}
+
+/// Slow-subscriber output-buffer bound (issue 29).
+///
+/// Regression + policy pin for the pub/sub client-output-buffer DoS: a
+/// subscriber that stops reading its socket must NOT let the server buffer
+/// published messages without bound. FrogDB caps the per-connection pub/sub
+/// output buffer at `server.pubsub-output-buffer-hard-limit` bytes (mirroring
+/// Redis `client-output-buffer-limit pubsub`): once the queue would exceed the
+/// limit, further messages are dropped to keep memory bounded, the overflow is
+/// latched, and the connection task tears the slow subscriber down on its next
+/// drain — exactly as Redis disconnects a client that trips its pubsub buffer
+/// limit.
+///
+/// This exercises the *client-facing* delivery path (shard `publish` ->
+/// per-connection `PubSubSender` -> connection delivery loop -> socket), which
+/// is distinct from the already-bounded cross-shard keyspace-notification hop
+/// (`keyspace_coordinator.rs`): that internal hop is a separate, upstream-capped
+/// channel and is deliberately left uncapped here (`PubSubSender::unbounded`).
+///
+/// # Making the overflow deterministic across kernels
+///
+/// The in-process output budget only accumulates (and overflows) once the
+/// connection's delivery-loop socket write *blocks* — which needs the kernel's
+/// own socket buffering (server `SO_SNDBUF` + the subscriber's `SO_RCVBUF`) to
+/// fill first. Linux loopback autotunes `SO_SNDBUF` up to `tcp_wmem` max (4 MiB
+/// on the CI box), so a small flood is silently absorbed by kernel buffers, the
+/// userspace budget never overflows, and nothing is disconnected. Shrinking the
+/// *receiver* buffer alone does not help: unsent bytes still pile into the
+/// server's send buffer regardless of the advertised window.
+///
+/// So the flood must exceed the total kernel buffering ceiling. We cap the
+/// subscriber's `SO_RCVBUF` to a known small value and publish ~16 MiB — far
+/// past `server SO_SNDBUF (<= 4 MiB) + subscriber SO_RCVBUF (128 KiB) + the
+/// 32 KiB output budget` — so the delivery write is guaranteed to block, the
+/// budget is guaranteed to overflow, and the slow subscriber is torn down. The
+/// per-connection *server memory* stays bounded by the 32 KiB budget throughout
+/// (the kernel buffers are the OS's fixed ceiling, not unbounded growth) — the
+/// whole point of the bound.
+#[tokio::test]
+async fn test_slow_subscriber_output_buffer_bound_disconnects() {
+    // Small budget so accumulation overflows well before the flood ends, but
+    // larger than one message so this tests message *accumulation* (a slow
+    // subscriber), not a single oversized message.
+    let hard_limit = 32 * 1024;
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        pubsub_output_buffer_hard_limit: Some(hard_limit),
+        ..Default::default()
+    })
+    .await;
+
+    let mut subscriber = server.connect().await;
+    let mut publisher = server.connect().await;
+    let mut control = server.connect().await;
+
+    // Cap the subscriber's receive buffer so the kernel buffering ceiling the
+    // flood must exceed is bounded and known (the dominant term is the server's
+    // <= 4 MiB autotuned send buffer). A modest 128 KiB — not a tiny window —
+    // keeps the post-disconnect drain fast. The bound itself is unit-tested in
+    // `core/src/pubsub.rs`; here we pin the end-to-end operator-visible
+    // disconnect across both macOS and the Linux testbox.
+    socket2::SockRef::from(subscriber.framed.get_ref())
+        .set_recv_buffer_size(128 * 1024)
+        .expect("cap subscriber SO_RCVBUF");
+
+    // Subscribe, then deliberately STALL: never read from `subscriber` again
+    // until after the flood, so the server-side output buffer is the only thing
+    // standing between a hostile publisher and unbounded memory growth.
+    let resp = subscriber.command(&["SUBSCRIBE", "flood"]).await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Flood far past the kernel buffering ceiling: 4000 * 4 KiB = ~16 MiB
+    // attempted against a 32 KiB budget. Fire back-to-back without awaiting each
+    // reply so they arrive as a burst the single stalled subscriber cannot drain;
+    // once the kernel buffers fill, the delivery write blocks and the budget
+    // drops the rest.
+    let attempted = 4000;
+    let payload = "x".repeat(4 * 1024);
+    for _ in 0..attempted {
+        publisher.send_only(&["PUBLISH", "flood", &payload]).await;
+    }
+
+    // The server must stay responsive throughout — no OOM, no wedge. A separate
+    // connection completes a round trip while the flood is in flight.
+    let pong = control.command(&["PING"]).await;
+    assert_eq!(pong, Response::Simple(Bytes::from("PONG")));
+
+    // Now let the subscriber drain. It receives the bounded prefix that fit in
+    // the kernel buffers and then hits EOF: the server tore the connection down
+    // because the output buffer overflowed. `framed.next()` yields `None` on the
+    // clean close (or `Some(Err(..))` on an ungraceful reset); either means
+    // disconnected.
+    let mut disconnected = false;
+    let mut frames_read = 0usize;
+    for _ in 0..(attempted + 1) {
+        match tokio::time::timeout(Duration::from_secs(10), subscriber.framed.next()).await {
+            Ok(None) => {
+                disconnected = true;
+                break;
+            }
+            Ok(Some(Ok(_frame))) => {
+                frames_read += 1;
+            }
+            Ok(Some(Err(_))) => {
+                disconnected = true;
+                break;
+            }
+            Err(_) => break, // timeout: still connected (unexpected)
+        }
+    }
+
+    assert!(
+        disconnected,
+        "server must disconnect the slow subscriber after the output buffer \
+         overflowed (read {frames_read} frames before EOF)"
+    );
+    // Memory bound in action: only the bounded prefix that fit in kernel buffers
+    // was ever delivered, well short of the ~4000 published — the rest were
+    // dropped by the output budget rather than buffered without bound.
+    assert!(
+        frames_read < attempted,
+        "far fewer than the published messages should be delivered; got {frames_read}"
+    );
+
+    // The disconnect is observable as a metric for operators.
+    let metrics = server.fetch_metrics().await;
+    let disconnects = frogdb_telemetry::testing::get_counter(
+        &metrics,
+        "frogdb_pubsub_output_buffer_disconnects_total",
+        &[],
+    );
+    assert!(
+        disconnects >= 1.0,
+        "output-buffer disconnect counter must record the teardown; got {disconnects}"
+    );
+
+    // Control connection is still fully functional after the storm.
+    let pong = control.command(&["PING"]).await;
+    assert_eq!(pong, Response::Simple(Bytes::from("PONG")));
+
+    server.shutdown().await;
 }
