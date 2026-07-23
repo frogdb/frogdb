@@ -1199,8 +1199,23 @@
    Options:
    - :interval - time between faults"
   [opts]
-  (let [raft-nem (raft-cluster-nemesis)
-        mem-nem (membership/membership-nemesis opts)
+  (let [;; Restrict the membership nemesis to churning a spare node (n5) that no
+        ;; workload places data on. Data-safety workloads (e.g. membership-routing)
+        ;; explicitly add n4 and migrate a slot onto it, so n4 is reserved for the
+        ;; workload; letting the nemesis FORGET n4 would drop a live slot owner and
+        ;; destroy acknowledged writes through operator misuse rather than a genuine
+        ;; database fault, producing a false data-loss verdict. Churning n5 (which
+        ;; owns no slots) keeps join/leave a clean, orthogonal fault. Callers may
+        ;; override :initial-nodes / :all-nodes via opts.
+        mem-nem (membership/membership-nemesis
+                  (merge {:initial-nodes ["n1" "n2" "n3"]
+                          :all-nodes ["n1" "n2" "n3" "n5"]}
+                         opts))
+        ;; Compose the FULL raft-cluster fault set (kills, pauses, partitions,
+        ;; slow network, disk, clock, memory) plus membership join/leave. This must
+        ;; cover every op raft-cluster-generator can emit (it produces :add-latency
+        ;; and :disk-* faults) — otherwise those ops throw "no nemesis can handle"
+        ;; and are silently downgraded to :info, so the intended fault never fires.
         composed (nemesis/compose
                    {{:kill :kill
                      :start :start} (process-killer)
@@ -1208,14 +1223,36 @@
                      :resume :resume} (process-pauser)
                     {:partition :partition
                      :heal :heal} (raft-cluster-partition-nemesis)
+                    {:add-latency :add-latency
+                     :packet-loss :packet-loss
+                     :network-heal :network-heal
+                     :network-heal-all :network-heal-all} (slow-network-nemesis true)
+                    {:disk-readonly :disk-readonly
+                     :disk-recover :disk-recover
+                     :disk-full :disk-full
+                     :disk-clear :disk-clear} (disk-failure-nemesis true)
+                    {:clock-skew :clock-skew
+                     :clock-reset :clock-reset} (clock-skew-nemesis true)
+                    {:memory-stress :memory-stress
+                     :memory-release :memory-release} (memory-pressure-nemesis true)
                     {:join :join
                      :leave :leave
                      :membership-status :membership-status} mem-nem})]
     {:nemesis composed
      :generator (gen/mix [(raft-cluster-generator opts)
                           (membership/membership-generator opts)])
+     ;; Recover every fault the composed nemesis can apply so final reads run
+     ;; against a healthy cluster: heal partitions + network, recover disk on
+     ;; each core node, release memory, reset clocks, resume/restart processes,
+     ;; then report final membership.
      :final-generator (gen/phases
                         (gen/once {:type :info :f :heal})
+                        (gen/once {:type :info :f :network-heal-all})
+                        (gen/once {:type :info :f :disk-recover :value "n1"})
+                        (gen/once {:type :info :f :disk-recover :value "n2"})
+                        (gen/once {:type :info :f :disk-recover :value "n3"})
+                        (gen/once {:type :info :f :memory-release :value nil})
+                        (gen/once {:type :info :f :clock-reset})
                         (gen/once {:type :info :f :resume})
                         (gen/once {:type :info :f :start})
                         (gen/once {:type :info :f :membership-status}))}))

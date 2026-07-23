@@ -86,6 +86,7 @@ class TestDefinition:
     time_limit: int
     topology: Topology
     cluster_flag: bool = False
+    membership_changes: bool = False
     suites: tuple[str, ...] = ()
 
 
@@ -310,6 +311,42 @@ TESTS: tuple[TestDefinition, ...] = (
         120,
         Topology.RAFT,
         cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    # Membership changes UNDER fault load.
+    #
+    # raft-membership: the membership-routing workload (add node + slot handoff
+    # with acked-write durability checking) driven concurrently against the
+    # raft-cluster-membership composed nemesis, which mixes process kills, pauses,
+    # and network partitions with node join/leave churn. Unlike the "none"-nemesis
+    # membership-routing test, here the add-node + slot-migration + traffic all run
+    # while faults are injected. The workload's durability checker asserts that
+    # every acknowledged write survives the membership change under fault, so a
+    # lost acked write here is a real data-safety violation. The nemesis churns
+    # only spare node n5 (see nemesis/raft-cluster-membership) so it never forgets
+    # the workload's data node n4.
+    TestDefinition(
+        "raft-membership",
+        "membership-routing",
+        "raft-cluster-membership",
+        120,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    # cluster-membership: the cluster-formation workload with --membership-changes
+    # (its generator drives node join/leave via CLUSTER MEET/FORGET) under the
+    # raft-cluster-membership composed nemesis. Exercises the membership-change CLI
+    # flag on an automated path and verifies the cluster returns to a consistent
+    # "ok" state after membership churn combined with kills/pauses/partitions.
+    TestDefinition(
+        "cluster-membership",
+        "cluster-formation",
+        "raft-cluster-membership",
+        120,
+        Topology.RAFT,
+        cluster_flag=True,
+        membership_changes=True,
         suites=("raft", "all"),
     ),
     # Raft extended nemesis tests
@@ -564,6 +601,8 @@ def run_test(
     ]
     if test.cluster_flag:
         cmd.append("--cluster")
+    if test.membership_changes:
+        cmd.append("--membership-changes")
     cmd.extend(extra_args)
 
     cwd = root / "testing" / "jepsen" / "frogdb"
@@ -625,6 +664,8 @@ def generate_batch_edn(
         ]
         if t.cluster_flag:
             pairs.append(":cluster true")
+        if t.membership_changes:
+            pairs.append(":membership-changes true")
         configs.append("{" + " ".join(pairs) + "}")
 
     edn = "[" + "\n ".join(configs) + "]"

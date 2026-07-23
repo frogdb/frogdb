@@ -236,6 +236,9 @@
    [nil "--independent" "Use independent key testing for register workload"
     :default false]
 
+   [nil "--membership-changes" "Drive cluster membership changes (node join/leave) from the workload generator. Currently consumed by the cluster-formation workload, which switches to its membership-change-generator when set."
+    :default false]
+
    [nil "--local" "Local testing mode (FrogDB already running, no Docker)"
     :default false]
 
