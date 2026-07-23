@@ -182,6 +182,52 @@ TESTS: tuple[TestDefinition, ...] = (
         Topology.REPLICATION,
         suites=("replication", "all"),
     ),
+    # replication-failover: the acked-write-durability-across-failover test. The
+    # workload is self-driven (runs with the "none" nemesis, like the raft
+    # membership/recovery workloads): it seeds tracked writes on the primary
+    # (durable ones with WAIT 2 = full replica count, plus async ones), then
+    # `docker stop`s the primary and promotes the freshest replica via
+    # `REPLICAOF NO ONE`, re-points the surviving replica, and continues traffic
+    # against the new primary. The checker asserts the documented strong bound
+    # (consistency.md, Replication -> failover durability): every write
+    # acknowledged by the full replica count MUST be readable on the promoted
+    # primary — an empty loss set. Async (unreplicated) writes MAY be lost and
+    # are reported informationally, never failing the verdict. This is the first
+    # test anywhere that exercises kill-primary -> promote-replica ->
+    # verify-acked-write-fate.
+    TestDefinition(
+        "replication-failover",
+        "replication-failover",
+        "none",
+        120,
+        Topology.REPLICATION,
+        suites=("replication", "all"),
+    ),
+    # Clock-skew and slow-network on the REPLICATION topology (previously these
+    # nemeses ran only under raft-extended). They drive the replication
+    # consistency workload (no-regression + convergence checker, robust to the
+    # lag/skew these faults induce) against the 3-node primary+replicas topology,
+    # so replication behaviour is exercised under realistic fault conditions, not
+    # just clean kill/restart. Grouped in a dedicated `replication-extended`
+    # suite — mirroring how `raft-extended` is kept out of the default `raft`
+    # suite — so the higher-fault, longer-feedback variants stay out of the
+    # per-PR `replication`/`all` suites while remaining runnable on a testbox/CI.
+    TestDefinition(
+        "replication-clock-skew",
+        "replication",
+        "clock-skew",
+        60,
+        Topology.REPLICATION,
+        suites=("replication-extended",),
+    ),
+    TestDefinition(
+        "replication-slow-network",
+        "replication",
+        "slow-network",
+        60,
+        Topology.REPLICATION,
+        suites=("replication-extended",),
+    ),
     # Raft cluster core workloads
     TestDefinition(
         "cluster-formation",

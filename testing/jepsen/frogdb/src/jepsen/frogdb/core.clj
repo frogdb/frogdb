@@ -24,6 +24,7 @@
             [jepsen.frogdb.queue :as queue]
             [jepsen.frogdb.register :as register]
             [jepsen.frogdb.replication :as replication]
+            [jepsen.frogdb.replication-failover :as replication-failover]
             [jepsen.frogdb.set :as set-workload]
             [jepsen.frogdb.sortedset :as sortedset]
             [jepsen.frogdb.split-brain :as split-brain]
@@ -80,6 +81,7 @@
    :blocking blocking/workload
    ;; Replication workloads
    :replication replication/workload
+   :replication-failover replication-failover/workload
    :split-brain split-brain/workload
    :zombie zombie/workload
    :lag lag/workload
@@ -136,7 +138,8 @@
         ;; and available for membership-change tests (CLUSTER MEET).
         cluster-node-count (get opts :cluster-nodes 3)
         ;; Replication workloads default to multi-node
-        replication-workload? (contains? #{:replication :split-brain :zombie :lag
+        replication-workload? (contains? #{:replication :replication-failover
+                                           :split-brain :zombie :lag
                                            :partition-recovery}
                                          (keyword (:workload opts)))
         ;; Cluster workloads default to cluster mode
