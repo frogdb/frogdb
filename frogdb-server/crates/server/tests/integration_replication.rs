@@ -3204,68 +3204,262 @@ async fn test_sync_returns_not_implemented() {
 // ============================================================================
 // Tier 9: Expired Key Replication
 // ============================================================================
+//
+// FrogDB's replica-expiry contract (issue 32) — this differs from Redis, and
+// the tests below pin the *actual* behavior rather than an aspirational one:
+//
+// - Redis: TTL-setting commands are rewritten to an absolute `PEXPIREAT`
+//   before replication, and organic key expiry is propagated to replicas as
+//   an explicit `DEL`/`UNLINK`. Because the replica's deadline is
+//   byte-identical to the primary's, a replica `GET` returns nil at exactly
+//   the same instant the primary would, even before the `DEL` arrives.
+// - FrogDB (`core/src/shard/post_execution.rs::apply_expiry_effects`,
+//   `RemovalPropagation`): a replica expires **independently**, on its own
+//   clock (`get_with_expiry_check` / active expiry are both role-agnostic).
+//   TTL-setting commands (e.g. `PEXPIRE`) replicate **verbatim** — a relative
+//   duration, not an absolute deadline (`expire_tcl.rs` documents this as a
+//   deliberate, accepted incompatibility) — so the replica computes its own
+//   deadline as `replica_apply_time + duration`, which lands later than the
+//   primary's `primary_apply_time + duration` by however long replication
+//   took to deliver the write. The primary never broadcasts a `DEL` for
+//   organic expiry at all (`replicate: false`).
+//
+// Net effect: there is a real, but *bounded* (bounded by replication lag,
+// not unbounded) window after the primary has logically expired a key
+// during which a replica `GET` still returns the stale (pre-expiry) value,
+// and the key only disappears on the replica once, independently, via the
+// replica's own clock — never via a propagated `DEL`.
 
-/// Test that a key that expires on the primary eventually disappears on the replica.
+/// Poll a replica until it reports a positive `PTTL` for `key`, proving it
+/// has actually applied the TTL-setting write (not just that `WAIT`
+/// acknowledged the bytes).
+async fn poll_until_replica_has_positive_pttl(
+    replica: &TestServer,
+    key: &str,
+    timeout_ms: u64,
+) -> Option<i64> {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        if let Some(pttl) = parse_integer(&replica.send("PTTL", &[key]).await)
+            && pttl > 0
+        {
+            return Some(pttl);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// Pins the actual (not Redis's) replica-expiry contract: a real, bounded
+/// drift window where the replica serves a value the primary has already
+/// expired, and eventual independent convergence — never via a propagated
+/// `DEL` — proven by `master_repl_offset` not advancing.
 ///
-/// Inspired by Redis `14-consistency-check.tcl`.
-/// Redis propagates key expiration as DEL commands rather than expiring on the replica.
+/// Previously `test_expire_propagated_as_del_not_expire`, which resolved
+/// every possible outcome via `eprintln!` instead of asserting one.
 #[rstest]
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
 #[tokio::test]
-async fn test_expire_propagated_as_del_not_expire(#[case] persistence: bool) {
+async fn test_replica_expires_independently_not_via_del(#[case] persistence: bool) {
     let config = TestServerConfig {
         persistence,
         ..Default::default()
     };
-
     let (primary, replica) = start_primary_replica_pair(config).await;
+    let key = "expire_drift_test";
 
-    // Set a key with a short TTL (500ms)
-    let set_resp = primary.send("SET", &["expire_test", "expiring"]).await;
-    assert_ok(&set_resp);
-    let expire_resp = primary.send("PEXPIRE", &["expire_test", "500"]).await;
+    assert_ok(&primary.send("SET", &[key, "expiring"]).await);
+    let expire_resp = primary.send("PEXPIRE", &[key, "1500"]).await;
     assert!(
         matches!(expire_resp, Response::Integer(1)),
-        "PEXPIRE should return 1"
+        "PEXPIRE should return 1, got: {:?}",
+        expire_resp
     );
 
-    // Wait for replication
-    let _ = wait_for_replication(&primary, 2000).await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    let _ = wait_for_replication(&primary, 5000).await;
 
-    // Verify key exists on replica before expiry
-    let pre_expire = replica.send("GET", &["expire_test"]).await;
-    if let Response::Bulk(Some(v)) = &pre_expire {
-        assert_eq!(v.as_ref(), b"expiring", "Key should exist before expiry");
-    }
+    // The write-effect pipeline never broadcasts a DEL for organic expiry
+    // (`RemovalPropagation { replicate: false }`), so the primary's
+    // replication offset right after the TTL-setting write is the offset it
+    // must *still* report once the key is gone on both nodes.
+    let (_, offset_after_pexpire) = get_replication_state(&primary)
+        .await
+        .expect("primary should report replication state");
 
-    // Wait for the key to expire on primary
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    // Confirm the replica actually applied PEXPIRE (not just that WAIT
+    // acknowledged bytes) before measuring drift.
+    let replica_pttl_early = poll_until_replica_has_positive_pttl(&replica, key, 2000)
+        .await
+        .expect("replica should apply PEXPIRE and report a positive PTTL");
+    assert!(
+        replica_pttl_early > 0 && replica_pttl_early <= 1500,
+        "replica PTTL right after apply should be in (0, 1500], got {replica_pttl_early}"
+    );
 
-    // Access the key on primary to trigger lazy expiry
-    let primary_get = primary.send("GET", &["expire_test"]).await;
+    // Read both PTTLs as close to simultaneously as possible (concurrent
+    // requests, not sequential) to measure the deadline drift caused by
+    // verbatim relative-TTL propagation.
+    let pttl_args: [&str; 1] = [key];
+    let (primary_pttl_resp, replica_pttl_resp) = tokio::join!(
+        primary.send("PTTL", &pttl_args),
+        replica.send("PTTL", &pttl_args)
+    );
+    let primary_pttl =
+        parse_integer(&primary_pttl_resp).expect("primary PTTL should be an integer");
+    let replica_pttl =
+        parse_integer(&replica_pttl_resp).expect("replica PTTL should be an integer");
+    assert!(
+        primary_pttl > 0,
+        "primary PTTL should still be positive: {primary_pttl}"
+    );
+    assert!(
+        replica_pttl > 0,
+        "replica PTTL should still be positive: {replica_pttl}"
+    );
+
+    let drift_ms = replica_pttl - primary_pttl;
+    eprintln!(
+        "measured replica-primary PTTL drift: {drift_ms}ms (primary={primary_pttl}ms, replica={replica_pttl}ms)"
+    );
+
+    // Sleep exactly past the primary's *measured* deadline (deterministic —
+    // computed from the PTTL we just read, not a guessed knife-edge sleep),
+    // plus a small margin so the primary is guaranteed to have expired.
+    let margin_ms: i64 = 20;
+    tokio::time::sleep(Duration::from_millis((primary_pttl + margin_ms) as u64)).await;
+
+    let primary_get = primary.send("GET", &[key]).await;
     assert!(
         matches!(primary_get, Response::Bulk(None)),
-        "Key should be expired on primary"
+        "primary must have expired the key by now, got: {:?}",
+        primary_get
     );
 
-    // Wait for DEL propagation
-    let _ = wait_for_replication(&primary, 2000).await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Pin the actual drift-window contract. When the measured drift
+    // comfortably exceeds the margin we just slept, the replica's own local
+    // deadline has NOT been reached yet, so it must still serve the
+    // (already primary-expired) stale value — the documented divergence from
+    // Redis. When the measured drift happens to be smaller than the margin
+    // (replication this run was very fast), the replica may have already
+    // expired too; both outcomes are consistent with the pinned contract, so
+    // branch on the measured drift rather than asserting one outcome
+    // blindly.
+    let replica_get = replica.send("GET", &[key]).await;
+    if drift_ms > margin_ms {
+        assert!(
+            matches!(replica_get, Response::Bulk(Some(_))),
+            "replica should still serve the stale pre-expiry value during the \
+             drift window (measured drift {drift_ms}ms > margin {margin_ms}ms); \
+             got: {:?}",
+            replica_get
+        );
+    } else {
+        eprintln!(
+            "measured drift {drift_ms}ms <= margin {margin_ms}ms this run; \
+             replica may already have expired independently too: {:?}",
+            replica_get
+        );
+    }
 
-    // Key should be gone on replica too
-    let replica_get = replica.send("GET", &["expire_test"]).await;
-    match &replica_get {
-        Response::Bulk(None) => {
-            eprintln!("Key correctly expired on replica via DEL propagation");
-        }
-        Response::Bulk(Some(_)) => {
-            eprintln!("Note: Key still present on replica (DEL propagation may be delayed)");
-        }
-        _ => {
-            eprintln!("Unexpected response: {:?}", replica_get);
-        }
+    // Eventually (generous poll, not a knife-edge sleep) the key must be
+    // gone on the replica too, via its OWN clock.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut replica_final = replica.send("GET", &[key]).await;
+    while !matches!(replica_final, Response::Bulk(None)) && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        replica_final = replica.send("GET", &[key]).await;
+    }
+    assert!(
+        matches!(replica_final, Response::Bulk(None)),
+        "replica must eventually expire the key independently, got: {:?}",
+        replica_final
+    );
+
+    // Prove convergence happened via independent expiry, not a propagated
+    // DEL: the primary's replication offset must not have advanced.
+    let (_, offset_final) = get_replication_state(&primary)
+        .await
+        .expect("primary should report replication state");
+    assert_eq!(
+        offset_final, offset_after_pexpire,
+        "primary's replication offset must not advance for organic expiry — \
+         RemovalPropagation {{ replicate: false }} means no DEL is ever \
+         broadcast for TTL-driven removal (core/src/shard/post_execution.rs)"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// PTTL bound test (issue 32 acceptance criteria): the replica's `PTTL` for a
+/// key whose TTL was set by a verbatim-propagated relative-TTL command must
+/// be bounded relative to the primary's `PTTL` by a documented lag bound —
+/// not merely "some value close to the primary's". A large, unbounded
+/// divergence would indicate the drift is not actually governed by
+/// replication lag (or that replication itself is starved).
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_replica_pttl_bounded_by_replication_lag(#[case] persistence: bool) {
+    /// Generous local-test lag bound: real replication lag between two
+    /// in-process servers over loopback is normally single-digit
+    /// milliseconds; this leaves ample headroom for scheduler jitter while
+    /// still being a meaningfully finite bound (not "any value").
+    const DRIFT_BOUND_MS: i64 = 2000;
+
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+    let key = "pttl_drift_bound_test";
+
+    assert_ok(&primary.send("SET", &[key, "v"]).await);
+    let expire_resp = primary.send("PEXPIRE", &[key, "10000"]).await;
+    assert!(
+        matches!(expire_resp, Response::Integer(1)),
+        "PEXPIRE should return 1, got: {:?}",
+        expire_resp
+    );
+    let _ = wait_for_replication(&primary, 5000).await;
+    poll_until_replica_has_positive_pttl(&replica, key, 2000)
+        .await
+        .expect("replica should apply PEXPIRE and report a positive PTTL");
+
+    // Take several concurrent (primary, replica) PTTL samples; every sample
+    // must fall inside the documented bound.
+    let pttl_args: [&str; 1] = [key];
+    for _ in 0..5 {
+        let (primary_pttl_resp, replica_pttl_resp) = tokio::join!(
+            primary.send("PTTL", &pttl_args),
+            replica.send("PTTL", &pttl_args)
+        );
+        let primary_pttl =
+            parse_integer(&primary_pttl_resp).expect("primary PTTL should be an integer");
+        let replica_pttl =
+            parse_integer(&replica_pttl_resp).expect("replica PTTL should be an integer");
+        assert!(
+            primary_pttl > 0,
+            "primary PTTL should be positive: {primary_pttl}"
+        );
+        assert!(
+            replica_pttl > 0,
+            "replica PTTL should be positive: {replica_pttl}"
+        );
+
+        let drift_ms = replica_pttl - primary_pttl;
+        assert!(
+            drift_ms.abs() <= DRIFT_BOUND_MS,
+            "replica/primary PTTL drift must be bounded by replication lag \
+             (documented bound {DRIFT_BOUND_MS}ms), got {drift_ms}ms \
+             (primary={primary_pttl}ms, replica={replica_pttl}ms)"
+        );
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
     replica.shutdown().await;
