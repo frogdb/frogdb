@@ -7,6 +7,7 @@ from ruamel.yaml import YAML
 from workflow_gen.schema import Workflow
 from workflow_gen.workflows.build import build_workflow
 from workflow_gen.workflows.concurrency_nightly import concurrency_nightly_workflow
+from workflow_gen.workflows.coverage_nightly import coverage_nightly_workflow
 from workflow_gen.workflows.deploy_docs import deploy_docs_workflow
 from workflow_gen.workflows.fuzz import fuzz_workflow
 from workflow_gen.workflows.jepsen_nightly import jepsen_nightly_workflow
@@ -38,6 +39,7 @@ WORKFLOWS = {
     "test.yml": test_workflow,
     "fuzz.yml": fuzz_workflow,
     "concurrency-nightly.yml": concurrency_nightly_workflow,
+    "coverage-nightly.yml": coverage_nightly_workflow,
     "jepsen-nightly.yml": jepsen_nightly_workflow,
     "build.yml": build_workflow,
     "release.yml": release_workflow,

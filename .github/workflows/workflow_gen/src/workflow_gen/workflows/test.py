@@ -5,8 +5,6 @@ from ruamel.yaml.scalarstring import SingleQuotedScalarString as SQ
 from workflow_gen.constants import (
     ACTIONLINT,
     CACHE,
-    CODECOV,
-    INSTALL_ACTION,
     PATHS_FILTER,
     SETUP_GO,
 )
@@ -23,9 +21,6 @@ from workflow_gen.helpers import (
     self_hosted_env_step,
 )
 from workflow_gen.schema import Job, PullRequestTrigger, PushTrigger, Step, Trigger, Workflow
-
-# Feature flags — set to True to include the job in the generated workflow
-COVERAGE_ENABLED = False
 
 # Runner label — route to self-hosted only when triggered by a trusted actor.
 # For PRs, key on the immutable PR author (survives re-runs); for push/dispatch,
@@ -186,36 +181,10 @@ def test_workflow() -> Workflow:
         ),
     )
 
-    if COVERAGE_ENABLED:
-        w.job(
-            "coverage",
-            Job(
-                name="Code Coverage",
-                runs_on=RUNS_ON,
-                steps=[
-                    checkout_step(),
-                    self_hosted_env_step(),
-                    mise_setup_step(install_args=MISE_JUST_NEXTEST),
-                    rust_toolchain_step(components="llvm-tools-preview"),
-                    libclang_step(),
-                    Step(
-                        name="Install cargo-llvm-cov",
-                        uses=INSTALL_ACTION,
-                        with_=omap(tool="cargo-llvm-cov"),
-                    ),
-                    cargo_cache_step(shared_key="coverage"),
-                    run_step(
-                        name="Generate coverage data",
-                        run="cargo llvm-cov nextest --all --lcov --output-path lcov.info",
-                    ),
-                    Step(
-                        name="Upload to Codecov",
-                        uses=CODECOV,
-                        with_=omap(files="lcov.info", token="${{ secrets.CODECOV_TOKEN }}"),
-                    ),
-                ],
-            ),
-        )
+    # Coverage tracking lives entirely in the dedicated nightly workflow
+    # (coverage_nightly.py -> coverage-nightly.yml, issue 59): a scheduled,
+    # non-PR-gating job so a red/slow coverage run never blocks a merge. See that
+    # module's docstring for the design and the audit's 84.0% baseline.
 
     shuttle_tests = w.job(
         "shuttle-tests",
