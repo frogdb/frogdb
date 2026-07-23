@@ -48,5 +48,9 @@ APT_REPO_URL = (
 )
 
 CACHE = "actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7"  # v5
+# Restore-only sub-action of actions/cache (same commit): used where a job must read a
+# cache without registering a post-job save (e.g. the PR corpus-replay job, which must
+# not write per-PR corpus cache entries).
+CACHE_RESTORE = "actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7"  # v5
 PATHS_FILTER = "dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d"  # v4
 IMPORT_GPG = "crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd"  # v7

@@ -9,6 +9,8 @@ from ruamel.yaml.scalarstring import LiteralScalarString
 from ruamel.yaml.scalarstring import SingleQuotedScalarString as SQ
 
 from workflow_gen.constants import (
+    CACHE,
+    CACHE_RESTORE,
     CHECKOUT,
     DOCKER_BUILD_PUSH,
     DOCKER_LOGIN,
@@ -171,6 +173,35 @@ def cargo_cache_step(*, shared_key: str) -> Step:
     return Step(
         name="Cache Rust build artifacts", uses=RUST_CACHE, with_=omap(**{"shared-key": shared_key})
     )
+
+
+def cache_step(
+    *,
+    name: str,
+    path: str,
+    key: str,
+    restore_keys: str | None = None,
+    restore_only: bool = False,
+) -> Step:
+    """Generic actions/cache step for persisting an arbitrary directory across runs.
+
+    Unlike `cargo_cache_step` (Swatinem/rust-cache, tuned for the cargo target dir),
+    this wraps plain `actions/cache` for content the fuzz campaign must evolve — the
+    libFuzzer corpus. Pass a unique `key` (e.g. one embedding `github.run_id`) plus a
+    `restore_keys` prefix so every run restores the newest prior cache and always saves
+    a fresh entry, letting the corpus grow monotonically across scheduled runs.
+
+    restore_only:
+        Use the restore-only sub-action (no post-job save). The PR corpus-replay job
+        only reads the corpus; a save would litter the cache with per-PR entries and
+        burn cache quota for no benefit.
+    """
+    w = CommentedMap()
+    w["path"] = path
+    w["key"] = key
+    if restore_keys is not None:
+        w["restore-keys"] = restore_keys
+    return Step(name=name, uses=CACHE_RESTORE if restore_only else CACHE, with_=w)
 
 
 def setup_qemu_step() -> Step:

@@ -1,3 +1,8 @@
+# The libFuzzer corpus and crash reproducers are NOT committed to git. The corpus is
+# persisted across CI runs via GitHub Actions cache (key `fuzz-corpus-*`), grown by the
+# scheduled fuzz campaign and restored (read-only) by the PR corpus-replay gate — see
+# .github/workflows/workflow_gen/src/workflow_gen/workflows/fuzz.py. Crash reproducers are
+# uploaded as the `fuzz-artifacts` workflow artifact on failure, not tracked here.
 corpus/
 artifacts/
 target/
