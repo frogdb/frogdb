@@ -1,7 +1,5 @@
 //! VLL type definitions.
 
-use std::time::Duration;
-
 /// Lock mode for key access.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LockMode {
@@ -62,51 +60,3 @@ pub enum ShardReadyResult {
     Failed(VllError),
 }
 
-/// VLL configuration.
-#[derive(Debug, Clone)]
-pub struct VllConfig {
-    /// Maximum queue depth per shard before rejecting new operations.
-    pub max_queue_depth: usize,
-    /// Timeout for acquiring locks on all shards (ms).
-    pub lock_acquisition_timeout_ms: u64,
-    /// Per-shard lock acquisition timeout (ms).
-    pub per_shard_lock_timeout_ms: u64,
-    /// Interval for checking/cleaning up expired operations (ms).
-    pub timeout_check_interval_ms: u64,
-    /// Maximum time a continuation lock can be held (ms).
-    pub max_continuation_lock_ms: u64,
-}
-
-impl Default for VllConfig {
-    fn default() -> Self {
-        Self {
-            max_queue_depth: 10000,
-            lock_acquisition_timeout_ms: 4000,
-            per_shard_lock_timeout_ms: 2000,
-            timeout_check_interval_ms: 100,
-            max_continuation_lock_ms: 65000,
-        }
-    }
-}
-
-impl VllConfig {
-    /// Get lock acquisition timeout as Duration.
-    pub fn lock_acquisition_timeout(&self) -> Duration {
-        Duration::from_millis(self.lock_acquisition_timeout_ms)
-    }
-
-    /// Get per-shard lock timeout as Duration.
-    pub fn per_shard_lock_timeout(&self) -> Duration {
-        Duration::from_millis(self.per_shard_lock_timeout_ms)
-    }
-
-    /// Get timeout check interval as Duration.
-    pub fn timeout_check_interval(&self) -> Duration {
-        Duration::from_millis(self.timeout_check_interval_ms)
-    }
-
-    /// Get max continuation lock duration as Duration.
-    pub fn max_continuation_lock(&self) -> Duration {
-        Duration::from_millis(self.max_continuation_lock_ms)
-    }
-}

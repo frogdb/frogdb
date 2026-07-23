@@ -1363,13 +1363,13 @@ mod tests {
         #[cfg(not(feature = "turmoil"))]
         assert_eq!(
             crate::Config::SECTION_PARAMS.len(),
-            26,
+            25,
             "expected one SECTION_PARAMS entry per #[section] field of Config"
         );
         #[cfg(feature = "turmoil")]
         assert_eq!(
             crate::Config::SECTION_PARAMS.len(),
-            27,
+            26,
             "expected one SECTION_PARAMS entry per #[section] field of Config (incl. chaos)"
         );
     }

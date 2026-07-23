@@ -3,39 +3,6 @@
 use super::{ConfigValidator, ValidationResult};
 use crate::Config;
 
-/// Validates VLL timeout ordering.
-///
-/// Rule: `per_shard_lock_timeout_ms` < `lock_acquisition_timeout_ms` < `scatter_gather_timeout_ms`
-pub struct VllTimeoutOrderingValidator;
-
-impl ConfigValidator for VllTimeoutOrderingValidator {
-    fn name(&self) -> &'static str {
-        "vll-timeout-ordering"
-    }
-
-    fn validate(&self, config: &Config) -> ValidationResult {
-        let per_shard = config.vll.per_shard_lock_timeout_ms;
-        let lock_acq = config.vll.lock_acquisition_timeout_ms;
-        let scatter = config.server.scatter_gather_timeout_ms;
-
-        if per_shard >= lock_acq {
-            return ValidationResult::Error(format!(
-                "vll.per_shard_lock_timeout_ms ({}) must be less than vll.lock_acquisition_timeout_ms ({})",
-                per_shard, lock_acq
-            ));
-        }
-
-        if lock_acq >= scatter {
-            return ValidationResult::Error(format!(
-                "vll.lock_acquisition_timeout_ms ({}) must be less than server.scatter_gather_timeout_ms ({})",
-                lock_acq, scatter
-            ));
-        }
-
-        ValidationResult::Ok
-    }
-}
-
 /// Validates replication backoff ordering.
 ///
 /// Rule: `reconnect_backoff_initial_ms` <= `reconnect_backoff_max_ms`
@@ -141,39 +108,6 @@ impl ConfigValidator for SnapshotIntervalValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_vll_timeout_ordering_valid() {
-        let mut config = Config::default();
-        config.vll.per_shard_lock_timeout_ms = 1000;
-        config.vll.lock_acquisition_timeout_ms = 2000;
-        config.server.scatter_gather_timeout_ms = 3000;
-
-        let validator = VllTimeoutOrderingValidator;
-        assert!(validator.validate(&config).is_ok());
-    }
-
-    #[test]
-    fn test_vll_timeout_ordering_per_shard_too_large() {
-        let mut config = Config::default();
-        config.vll.per_shard_lock_timeout_ms = 3000;
-        config.vll.lock_acquisition_timeout_ms = 2000;
-        config.server.scatter_gather_timeout_ms = 5000;
-
-        let validator = VllTimeoutOrderingValidator;
-        assert!(validator.validate(&config).is_error());
-    }
-
-    #[test]
-    fn test_vll_timeout_ordering_lock_acq_too_large() {
-        let mut config = Config::default();
-        config.vll.per_shard_lock_timeout_ms = 1000;
-        config.vll.lock_acquisition_timeout_ms = 6000;
-        config.server.scatter_gather_timeout_ms = 5000;
-
-        let validator = VllTimeoutOrderingValidator;
-        assert!(validator.validate(&config).is_error());
-    }
 
     #[test]
     fn test_replication_backoff_ordering_valid() {
