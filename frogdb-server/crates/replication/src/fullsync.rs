@@ -31,9 +31,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::fs::{self, File};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufWriter};
 
-/// Maximum memory for full sync buffering (default: 512 MB).
-pub const DEFAULT_FULLSYNC_MAX_MEMORY_MB: usize = 512;
-
 /// Chunk size for streaming RDB data.
 const CHUNK_SIZE: usize = 64 * 1024;
 
