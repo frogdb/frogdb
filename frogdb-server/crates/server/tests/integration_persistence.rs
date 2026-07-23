@@ -2330,3 +2330,291 @@ async fn test_concurrent_bgsave_stress_restores_cleanly() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// Tiered storage: real spill (hot→warm under memory pressure) survives restart
+// ============================================================================
+//
+// Gap closed (testing-gap issue 42, audit D#4): `recover_warm_shard_into` is
+// unit-tested against a hand-built warm CF, but nothing drove a *genuine* spill
+// — the hot tier overflowing to the RocksDB warm CF under real memory pressure —
+// through a full server restart. These tests fill enough data to trip the
+// `tiered-lru` spill trigger (asserting via `INFO tiered` that a real spill
+// actually happened, not a synthetic fixture), restart the server, and assert
+// every spilled key comes back with the correct value, type, and TTL.
+
+/// Persistence + two-tier storage with a small `maxmemory` and the `tiered-lru`
+/// policy, so cold values spill to the RocksDB warm tier under memory pressure.
+///
+/// `maxmemory` is generous relative to per-key metadata (which stays resident
+/// even for spilled keys) but far below the total value volume the tests write,
+/// so the store spills the bulk of values while never OOM-rejecting a write.
+fn tiered_config(data_dir: &std::path::Path) -> TestServerConfig {
+    TestServerConfig {
+        persistence: true,
+        data_dir: Some(data_dir.to_path_buf()),
+        num_shards: Some(1),
+        tiered_storage_enabled: true,
+        maxmemory: Some(256 * 1024),
+        maxmemory_policy: Some("tiered-lru".to_string()),
+        ..Default::default()
+    }
+}
+
+/// Value of an `INFO <section>` field parsed as `u64` (panics if absent).
+fn info_field_u64(info: &str, name: &str) -> u64 {
+    let prefix = format!("{name}:");
+    info.lines()
+        .map(|l| l.trim_end())
+        .find_map(|l| l.strip_prefix(prefix.as_str()))
+        .unwrap_or_else(|| panic!("field {name} missing from INFO:\n{info}"))
+        .parse()
+        .unwrap_or_else(|e| panic!("field {name} not numeric: {e:?}"))
+}
+
+/// A ~4 KiB value payload, distinct per index, big enough that a few hundred of
+/// them dwarf the `maxmemory` limit and force the store to spill.
+fn big_value(seed: &str, i: usize) -> String {
+    format!("{seed}:{i}:{}", "x".repeat(4096))
+}
+
+/// Real spill of many keys (multiple types) → restart → every key recovers with
+/// the correct value and type. Asserts `INFO tiered` proves a genuine spill
+/// happened before the restart (`tiered_spills > 0`, `tiered_warm_keys > 0`), so
+/// the warm CF holds real spilled artifacts — not a hand-constructed fixture.
+#[tokio::test]
+async fn test_tiered_spill_survives_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+    const NUM_STR: usize = 200;
+
+    // --- First boot: write enough to force real spills ---
+    let server = TestServer::start_standalone_with_config(tiered_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    // Typed keys (written first, so LRU treats them as the coldest and spills
+    // them ahead of the later filler). Each carries a distinct, verifiable shape.
+    assert_ok(
+        &client
+            .command(&["SET", "str:typed", &big_value("typed", 0)])
+            .await,
+    );
+    assert_eq!(
+        client
+            .command(&["RPUSH", "list:typed", "a", "b", "c", &big_value("l", 0)])
+            .await,
+        Response::Integer(4)
+    );
+    assert_eq!(
+        client
+            .command(&["HSET", "hash:typed", "f1", "v1", "f2", &big_value("h", 0)])
+            .await,
+        Response::Integer(2)
+    );
+    assert_eq!(
+        client
+            .command(&["SADD", "set:typed", "m1", "m2", &big_value("s", 0)])
+            .await,
+        Response::Integer(3)
+    );
+    assert_eq!(
+        client
+            .command(&["ZADD", "zset:typed", "1", "one", "2", &big_value("z", 0)])
+            .await,
+        Response::Integer(2)
+    );
+
+    // A typed key with a (long) TTL — its expiry must survive the spill+restart.
+    assert_ok(
+        &client
+            .command(&["SET", "str:ttl", &big_value("ttl", 0)])
+            .await,
+    );
+    assert_eq!(
+        client.command(&["PEXPIRE", "str:ttl", "100000000"]).await,
+        Response::Integer(1)
+    );
+
+    // Bulk string filler to drive the store well past `maxmemory`.
+    for i in 0..NUM_STR {
+        assert_ok(
+            &client
+                .command(&["SET", &format!("str:{i}"), &big_value("v", i)])
+                .await,
+        );
+    }
+
+    // Prove a real spill happened: the warm tier is non-empty and spills fired.
+    let info = client.command(&["INFO", "tiered"]).await;
+    let info = String::from_utf8(unwrap_bulk(&info).to_vec()).unwrap();
+    let spills = info_field_u64(&info, "tiered_spills");
+    let warm_keys = info_field_u64(&info, "tiered_warm_keys");
+    assert!(
+        spills > 0,
+        "expected a genuine hot→warm spill under memory pressure, got tiered_spills=0:\n{info}"
+    );
+    assert!(
+        warm_keys > 0,
+        "expected keys resident in the warm tier, got tiered_warm_keys=0:\n{info}"
+    );
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // --- Second boot: every spilled key must recover intact ---
+    let server = TestServer::start_standalone_with_config(tiered_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    // Typed values + types survive (GET/reads unspill from the warm tier).
+    assert_eq!(
+        client.command(&["GET", "str:typed"]).await,
+        Response::Bulk(Some(Bytes::from(big_value("typed", 0))))
+    );
+    assert_eq!(
+        client.command(&["TYPE", "str:typed"]).await,
+        Response::Simple("string".into())
+    );
+
+    let list = unwrap_array(client.command(&["LRANGE", "list:typed", "0", "-1"]).await);
+    let vals: Vec<&[u8]> = list.iter().map(unwrap_bulk).collect();
+    assert_eq!(
+        vals,
+        vec![b"a".as_ref(), b"b", b"c", big_value("l", 0).as_bytes()]
+    );
+    assert_eq!(
+        client.command(&["TYPE", "list:typed"]).await,
+        Response::Simple("list".into())
+    );
+
+    assert_eq!(
+        client.command(&["HGET", "hash:typed", "f2"]).await,
+        Response::Bulk(Some(Bytes::from(big_value("h", 0))))
+    );
+    assert_eq!(
+        client.command(&["TYPE", "hash:typed"]).await,
+        Response::Simple("hash".into())
+    );
+
+    assert_eq!(
+        client
+            .command(&["SISMEMBER", "set:typed", &big_value("s", 0)])
+            .await,
+        Response::Integer(1)
+    );
+    assert_eq!(
+        client.command(&["TYPE", "set:typed"]).await,
+        Response::Simple("set".into())
+    );
+
+    assert_eq!(
+        client
+            .command(&["ZSCORE", "zset:typed", &big_value("z", 0)])
+            .await,
+        Response::Bulk(Some(Bytes::from("2")))
+    );
+    assert_eq!(
+        client.command(&["TYPE", "zset:typed"]).await,
+        Response::Simple("zset".into())
+    );
+
+    // TTL survives the spill+restart: still present and still counting down.
+    assert_eq!(
+        client.command(&["GET", "str:ttl"]).await,
+        Response::Bulk(Some(Bytes::from(big_value("ttl", 0))))
+    );
+    let pttl = unwrap_integer(&client.command(&["PTTL", "str:ttl"]).await);
+    assert!(
+        pttl > 0 && pttl <= 100_000_000,
+        "TTL of a spilled key must survive restart, got PTTL={pttl}"
+    );
+
+    // Every filler string recovers with its exact value.
+    for i in 0..NUM_STR {
+        assert_eq!(
+            client.command(&["GET", &format!("str:{i}")]).await,
+            Response::Bulk(Some(Bytes::from(big_value("v", i)))),
+            "spilled filler key str:{i} lost or corrupted across restart"
+        );
+    }
+
+    // DBSIZE accounts for every key written (typed + ttl + filler), none lost.
+    assert_eq!(
+        unwrap_integer(&client.command(&["DBSIZE"]).await),
+        (NUM_STR + 6) as i64
+    );
+
+    server.shutdown().await;
+}
+
+/// A spilled key whose TTL has already elapsed by restart time must NOT
+/// resurrect: recovery filters it from both the warm CF and the hot CF. A
+/// non-expiring survivor written alongside it must still come back.
+#[tokio::test]
+async fn test_tiered_spilled_key_past_ttl_does_not_resurrect() {
+    let tmp = tempfile::tempdir().unwrap();
+    const NUM_FILLER: usize = 200;
+
+    let server = TestServer::start_standalone_with_config(tiered_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    // A survivor with no TTL and a victim with a short TTL, both written early so
+    // the later filler makes them the coldest candidates and spills them.
+    assert_ok(
+        &client
+            .command(&["SET", "survivor", &big_value("keep", 0)])
+            .await,
+    );
+    assert_ok(
+        &client
+            .command(&["SET", "victim", &big_value("doomed", 0)])
+            .await,
+    );
+    assert_eq!(
+        client.command(&["PEXPIRE", "victim", "2000"]).await,
+        Response::Integer(1)
+    );
+
+    // Filler to force spills (victim + survivor land in the warm tier).
+    for i in 0..NUM_FILLER {
+        assert_ok(
+            &client
+                .command(&["SET", &format!("f:{i}"), &big_value("f", i)])
+                .await,
+        );
+    }
+
+    let info = client.command(&["INFO", "tiered"]).await;
+    let info = String::from_utf8(unwrap_bulk(&info).to_vec()).unwrap();
+    assert!(
+        info_field_u64(&info, "tiered_warm_keys") > 0,
+        "expected a genuine spill into the warm tier:\n{info}"
+    );
+
+    drop(client);
+    server.shutdown().await;
+
+    // Let the victim's TTL elapse while the server is down.
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+
+    // --- Restart: the expired spilled key must be gone, survivor intact ---
+    let server = TestServer::start_standalone_with_config(tiered_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    assert_eq!(
+        client.command(&["EXISTS", "victim"]).await,
+        Response::Integer(0),
+        "a spilled key past its TTL must not resurrect on restart"
+    );
+    assert_eq!(
+        client.command(&["GET", "victim"]).await,
+        Response::Bulk(None),
+        "expired spilled key must read as nil after restart"
+    );
+    assert_eq!(
+        client.command(&["GET", "survivor"]).await,
+        Response::Bulk(Some(Bytes::from(big_value("keep", 0)))),
+        "non-expiring spilled key must survive the restart"
+    );
+
+    server.shutdown().await;
+}

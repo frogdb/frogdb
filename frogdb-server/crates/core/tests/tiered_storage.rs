@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 use frogdb_core::store::{HashMapStore, Store};
-use frogdb_core::types::{KeyMetadata, KeyType, Value};
+use frogdb_core::types::{KeyMetadata, KeyType, SortedSetValue, Value};
 use frogdb_persistence::{RocksConfig, RocksStore};
 
 /// Create a store with warm tier enabled.
@@ -341,4 +341,146 @@ fn test_recovery_with_warm_entries() {
 
     // Verify warm key count
     assert_eq!(store.warm_tier().warm_keys(), 1); // warm_key only
+}
+
+#[test]
+fn test_real_spill_recovers_across_reopen() {
+    // Unlike `test_recovery_with_warm_entries` (which hand-writes the warm CF via
+    // `put_warm`), this drives the *real* spill operation — `store.spill_key`, the
+    // same call the `tiered-lru` eviction path invokes — so the warm CF holds
+    // genuine spilled artifacts. It then drops the store (a "restart") and
+    // recovers a fresh store from the same RocksDB, asserting every recovery
+    // branch: warm-only keys restored *as warm*, a hot+warm dual-presence key
+    // resolving to the hot copy (its real spilled warm copy pruned as stale), and
+    // an expired spilled key that must not resurrect. This is the store-level
+    // deterministic complement to the server-level memory-pressure restart tests
+    // in `server/tests/integration_persistence.rs`.
+    use frogdb_core::persistence::recover_all_shards;
+    use frogdb_persistence::serialize;
+
+    let (mut store, rocks, _tmp) = store_with_warm();
+
+    // (1) Warm-only string: value lives ONLY in the warm CF, put there by a real
+    //     spill. `store.set` is in-memory only (no WAL wired here), so nothing
+    //     lands in the primary CF — recovery must restore it *as warm*.
+    store.set(Bytes::from("warm_str"), Value::string("warm_string_value"));
+    let freed = store.spill_key(b"warm_str").unwrap();
+    assert!(freed > 0, "a real spill must free value bytes from RAM");
+
+    // (2) Warm-only sorted set: a richer value shape, also via a real spill.
+    let mut zset = SortedSetValue::new();
+    zset.add(Bytes::from("m1"), 1.5);
+    zset.add(Bytes::from("m2"), 2.5);
+    store.set(Bytes::from("warm_zset"), Value::SortedSet(zset));
+    store.spill_key(b"warm_zset").unwrap();
+
+    // (3) Dual presence: a real spilled warm copy AND a hot copy in the primary CF
+    //     (as the WAL flush would leave one). The primary/hot copy carries a
+    //     distinct value so recovery precedence — hot wins — is observable, and
+    //     the redundant real warm artifact must be pruned as stale.
+    store.set(Bytes::from("dual"), Value::string("warm_side_v1"));
+    store.spill_key(b"dual").unwrap(); // warm CF: "warm_side_v1" (real spill)
+    rocks
+        .put(
+            0,
+            b"dual",
+            &serialize(&Value::string("hot_side_v2"), &KeyMetadata::new(11)),
+        )
+        .unwrap(); // primary CF: "hot_side_v2" (as a WAL flush would persist)
+
+    // (4) Expired warm-only key: real spill of an already-past-TTL key. Recovery
+    //     must filter and prune it — no resurrection.
+    store.set(Bytes::from("warm_expired"), Value::string("gone"));
+    store.set_expiry(b"warm_expired", Instant::now() - Duration::from_secs(1));
+    store.spill_key(b"warm_expired").unwrap();
+
+    // (5) Plain hot-only survivor in the primary CF (control: ordinary hot
+    //     recovery must still work alongside the warm-tier paths).
+    rocks
+        .put(
+            0,
+            b"hot_only",
+            &serialize(&Value::string("hot_only_v"), &KeyMetadata::new(10)),
+        )
+        .unwrap();
+
+    // --- "Restart": drop the live store, recover a fresh one from the same DB ---
+    drop(store);
+    let (results, stats) = recover_all_shards(&rocks).unwrap();
+    let mut store = results.into_iter().next().unwrap().0;
+    // Re-wire the warm-tier handle, exactly as the server does after recovery
+    // (`spawn_shard_workers` → `store.set_warm_store`), so unspill reads can
+    // reach the warm CF. Recovery only reinstates the warm-key *bookkeeping*.
+    store.set_warm_store(rocks.clone(), 0);
+
+    // Warm-only keys restored as warm from real spilled artifacts.
+    assert_eq!(
+        stats.warm_keys_loaded, 2,
+        "warm_str + warm_zset must restore as warm entries"
+    );
+    // Dual-presence resolved to the hot copy; its real warm artifact pruned.
+    assert_eq!(
+        stats.warm_keys_stale, 1,
+        "the dual key's warm copy must be pruned as stale (hot wins)"
+    );
+    // Expired spilled key filtered during warm recovery.
+    assert_eq!(
+        stats.keys_expired_skipped, 1,
+        "the past-TTL spilled key must be skipped on recovery"
+    );
+
+    // (1) Warm string recovered with correct value + type; still warm until read.
+    assert_eq!(store.key_type(b"warm_str"), KeyType::String);
+    assert_eq!(
+        store
+            .get(b"warm_str")
+            .unwrap()
+            .as_string()
+            .unwrap()
+            .as_bytes()
+            .as_ref(),
+        b"warm_string_value"
+    );
+
+    // (2) Warm sorted set recovered intact.
+    assert_eq!(store.key_type(b"warm_zset"), KeyType::SortedSet);
+    let z = store.get(b"warm_zset").unwrap();
+    let z = z.as_sorted_set().unwrap();
+    assert_eq!(z.len(), 2);
+    assert_eq!(z.get_score(b"m1"), Some(1.5));
+    assert_eq!(z.get_score(b"m2"), Some(2.5));
+
+    // (3) Dual presence resolved to the HOT copy.
+    assert_eq!(
+        store
+            .get(b"dual")
+            .unwrap()
+            .as_string()
+            .unwrap()
+            .as_bytes()
+            .as_ref(),
+        b"hot_side_v2",
+        "hot copy must win over the spilled warm copy on recovery"
+    );
+    // The stale warm copy was pruned from the warm CF.
+    assert!(rocks.get_warm(0, b"dual").unwrap().is_none());
+
+    // (4) Expired spilled key did NOT resurrect, and its warm CF entry is pruned.
+    assert!(!store.contains(b"warm_expired"));
+    assert!(rocks.get_warm(0, b"warm_expired").unwrap().is_none());
+
+    // (5) Ordinary hot key recovered.
+    assert_eq!(
+        store
+            .get(b"hot_only")
+            .unwrap()
+            .as_string()
+            .unwrap()
+            .as_bytes()
+            .as_ref(),
+        b"hot_only_v"
+    );
+
+    // Exactly the four live keys are present (expired one gone).
+    assert_eq!(store.len(), 4);
 }

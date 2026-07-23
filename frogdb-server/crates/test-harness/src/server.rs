@@ -176,6 +176,22 @@ pub struct TestServerConfig {
     /// `Some(0)` disables the bound. None = server default. Used by slow-subscriber
     /// tests to hit the limit with a small, non-OOMing publish volume.
     pub pubsub_output_buffer_hard_limit: Option<usize>,
+
+    // --- Memory / eviction ---
+    /// Override `memory.maxmemory` (byte limit; 0 = unlimited). `None` keeps the
+    /// server default (unlimited). Set a small value together with a `tiered-*`
+    /// or `*-lru`/`*-lfu` policy to drive eviction/spill under memory pressure.
+    pub maxmemory: Option<u64>,
+    /// Override `memory.maxmemory-policy` (e.g. `"tiered-lru"`, `"allkeys-lru"`,
+    /// `"noeviction"`). `None` keeps the server default (`noeviction`).
+    pub maxmemory_policy: Option<String>,
+
+    // --- Tiered storage ---
+    /// Enable the two-tier (hot/warm) storage subsystem so `tiered-*` eviction
+    /// policies spill cold values to the RocksDB warm tier instead of deleting
+    /// them (default: false). Requires `persistence: true` — the warm tier is
+    /// backed by the same RocksDB instance.
+    pub tiered_storage_enabled: bool,
 }
 
 impl Clone for TestServerConfig {
@@ -225,6 +241,9 @@ impl Clone for TestServerConfig {
             json_max_depth: self.json_max_depth,
             json_max_size: self.json_max_size,
             pubsub_output_buffer_hard_limit: self.pubsub_output_buffer_hard_limit,
+            maxmemory: self.maxmemory,
+            maxmemory_policy: self.maxmemory_policy.clone(),
+            tiered_storage_enabled: self.tiered_storage_enabled,
         }
     }
 }
@@ -553,6 +572,20 @@ impl TestServer {
         }
         if let Some(limit) = test_config.pubsub_output_buffer_hard_limit {
             config.server.pubsub_output_buffer_hard_limit = limit;
+        }
+
+        // Memory / eviction knobs (drive spill/eviction under memory pressure).
+        if let Some(maxmemory) = test_config.maxmemory {
+            config.memory.maxmemory = maxmemory;
+        }
+        if let Some(ref policy) = test_config.maxmemory_policy {
+            config.memory.maxmemory_policy = policy.clone();
+        }
+
+        // Tiered (hot/warm) storage. Startup-only: the warm store is wired into
+        // each shard at boot when this is enabled and persistence is on.
+        if test_config.tiered_storage_enabled {
+            config.tiered_storage.enabled = true;
         }
 
         // Enable DEBUG SLEEP and other unsafe DEBUG subcommands for tests.
