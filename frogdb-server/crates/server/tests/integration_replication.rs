@@ -23,6 +23,7 @@ use crate::common::test_server::{
     parse_simple_string,
 };
 use bytes::Bytes;
+use frogdb_core::{Arity, CommandFlags, CommandRegistry};
 use frogdb_protocol::Response;
 use rstest::rstest;
 use std::time::Duration;
@@ -6391,4 +6392,387 @@ async fn test_broadcast_lag_disconnect_and_resync(#[case] persistence: bool) {
     replica.shutdown().await;
     primary.shutdown().await;
     drop(proxy);
+}
+
+// ============================================================================
+// Issue 46: registry-driven READONLY enforcement + monotonic replica reads
+//
+// `test_replica_readonly_enforcement` (above) only ever exercised SET/DEL/
+// ZADD by hand. That leaves the central READONLY enforcement — gated purely
+// on the `CommandFlags::WRITE` bit in `ConnectionHandler::run_pre_checks`
+// (connection/guards.rs) — unproven for the other ~170 WRITE-flagged
+// commands: a newly registered WRITE command with a flag-assignment bug, or a
+// future carve-out that special-cases some command name, could slip through
+// with only the hand-picked subset ever passing CI.
+//
+// The test below builds the *actual production* command registry (the same
+// `frogdb_server::register_commands` the real server calls at startup — see
+// `frogdb-server/crates/server/src/server/register.rs`) and walks every entry
+// whose flags contain WRITE, rather than a hand-maintained list. A command
+// newly flagged WRITE without READONLY enforcement fails this test the
+// moment it's registered — no test update required.
+// ============================================================================
+
+/// Realistic minimal argument shapes for WRITE commands whose natural
+/// minimum-arity invocation isn't just "N generic tokens" — subcommand-first
+/// commands (FT.*, XGROUP), numkeys-first commands (Z*STORE, CMS.MERGE,
+/// MSETEX), GEO's lon/lat, the hash-field-TTL `FIELDS numfields field...`
+/// family, and blocking commands' trailing timeout.
+///
+/// This table exists for readability/documentation — a real client would
+/// send something shaped like this — not for correctness: READONLY
+/// enforcement (`run_pre_checks`) runs *before* arity/type validation (see
+/// `PRE_DISPATCH_ORDER` in connection/dispatch.rs: `PreChecks` precedes
+/// `Arity`), so the exact argument values never affect this test's outcome.
+/// A WRITE command with **no entry here** still gets exercised: `minimal_args`
+/// falls back to `arity.min()` generic filler tokens, so the registry walk
+/// stays exhaustive without hand-maintenance for every future command.
+fn special_args_for(name: &str) -> Option<&'static [&'static str]> {
+    Some(match name {
+        "APPEND" => &["k", "v"],
+        "BF.ADD" => &["k", "item"],
+        "BF.INSERT" => &["k", "ITEMS", "item"],
+        "BF.LOADCHUNK" => &["k", "1", "chunk"],
+        "BF.MADD" => &["k", "item"],
+        "BF.RESERVE" => &["k", "0.01", "100"],
+        "BITFIELD" => &["k", "GET", "u8", "0"],
+        "BITOP" => &["AND", "dst", "src"],
+        "BLMOVE" => &["src", "dst", "LEFT", "RIGHT", "0.01"],
+        "BLMPOP" => &["0.01", "1", "k", "LEFT"],
+        "BLPOP" => &["k", "0.01"],
+        "BRPOP" => &["k", "0.01"],
+        "BRPOPLPUSH" => &["src", "dst", "0.01"],
+        "BZMPOP" => &["0.01", "1", "k", "MIN"],
+        "BZPOPMAX" => &["k", "0.01"],
+        "BZPOPMIN" => &["k", "0.01"],
+        "CF.ADD" => &["k", "item"],
+        "CF.ADDNX" => &["k", "item"],
+        "CF.DEL" => &["k", "item"],
+        "CF.INSERT" => &["k", "ITEMS", "item"],
+        "CF.INSERTNX" => &["k", "ITEMS", "item"],
+        "CF.LOADCHUNK" => &["k", "1", "chunk"],
+        "CF.RESERVE" => &["k", "100"],
+        "CMS.INCRBY" => &["k", "item", "1"],
+        "CMS.INITBYDIM" => &["k", "100", "5"],
+        "CMS.INITBYPROB" => &["k", "0.01", "0.01"],
+        "CMS.MERGE" => &["dst", "1", "src"],
+        "COPY" => &["src", "dst"],
+        "DECR" => &["k"],
+        "DECRBY" => &["k", "1"],
+        "DEL" => &["k"],
+        "DELEX" => &["k"],
+        "ES.APPEND" => &["k", "1", "event", "data"],
+        "ES.SNAPSHOT" => &["k", "1", "data"],
+        "EXPIRE" => &["k", "10"],
+        "EXPIREAT" => &["k", "9999999999"],
+        "FLUSHALL" => &[],
+        "FLUSHDB" => &[],
+        "FROGDB.FINALIZE" => &["1"],
+        "FT.ALIASADD" => &["alias", "idx"],
+        "FT.ALIASDEL" => &["alias"],
+        "FT.ALIASUPDATE" => &["alias", "idx"],
+        "FT.ALTER" => &["idx", "SCHEMA", "ADD", "f"],
+        "FT.CREATE" => &["idx", "SCHEMA", "f", "TEXT"],
+        "FT.DICTADD" => &["dict", "term"],
+        "FT.DICTDEL" => &["dict", "term"],
+        "FT.DROPINDEX" => &["idx"],
+        "FT.SUGADD" => &["k", "str", "1"],
+        "FT.SUGDEL" => &["k", "str"],
+        "FT.SYNUPDATE" => &["idx", "gid", "term"],
+        "GEOADD" => &["k", "13.361389", "38.115556", "Palermo"],
+        "GEORADIUS" => &["k", "15", "37", "200", "km"],
+        "GEORADIUSBYMEMBER" => &["k", "Palermo", "200", "km"],
+        "GEOSEARCHSTORE" => &["dst", "src", "FROMMEMBER", "m", "BYRADIUS", "10", "km"],
+        "GETDEL" => &["k"],
+        "GETEX" => &["k"],
+        "GETSET" => &["k", "v"],
+        "HDEL" => &["k", "f"],
+        "HEXPIRE" => &["k", "10", "FIELDS", "1", "f"],
+        "HEXPIREAT" => &["k", "9999999999", "FIELDS", "1", "f"],
+        "HGETDEL" => &["k", "FIELDS", "1", "f"],
+        "HGETEX" => &["k", "FIELDS", "1", "f"],
+        "HINCRBY" => &["k", "f", "1"],
+        "HINCRBYFLOAT" => &["k", "f", "1.0"],
+        "HMSET" => &["k", "f", "v"],
+        "HPERSIST" => &["k", "FIELDS", "1", "f"],
+        "HPEXPIRE" => &["k", "10000", "FIELDS", "1", "f"],
+        "HPEXPIREAT" => &["k", "9999999999000", "FIELDS", "1", "f"],
+        "HSET" => &["k", "f", "v"],
+        "HSETEX" => &["k", "10", "FIELDS", "1", "f", "v"],
+        "HSETNX" => &["k", "f", "v"],
+        "INCR" => &["k"],
+        "INCRBY" => &["k", "1"],
+        "INCRBYFLOAT" => &["k", "1.0"],
+        "JSON.ARRAPPEND" => &["k", "$", "1"],
+        "JSON.ARRINSERT" => &["k", "$", "0", "1"],
+        "JSON.ARRPOP" => &["k"],
+        "JSON.ARRTRIM" => &["k", "$", "0", "0"],
+        "JSON.CLEAR" => &["k"],
+        "JSON.DEL" => &["k"],
+        "JSON.MERGE" => &["k", "$", "1"],
+        "JSON.NUMINCRBY" => &["k", "$", "1"],
+        "JSON.NUMMULTBY" => &["k", "$", "1"],
+        "JSON.SET" => &["k", "$", "1"],
+        "JSON.STRAPPEND" => &["k", "$", "\"x\""],
+        "JSON.TOGGLE" => &["k"],
+        "LINSERT" => &["k", "BEFORE", "pivot", "v"],
+        "LMOVE" => &["src", "dst", "LEFT", "RIGHT"],
+        "LMPOP" => &["1", "k", "LEFT"],
+        "LPOP" => &["k"],
+        "LPUSH" => &["k", "v"],
+        "LPUSHX" => &["k", "v"],
+        "LREM" => &["k", "0", "v"],
+        "LSET" => &["k", "0", "v"],
+        "LTRIM" => &["k", "0", "-1"],
+        "MIGRATE" => &["127.0.0.1", "6379", "k", "0", "1000"],
+        "MOVE" => &["k", "1"],
+        "MSET" => &["k", "v"],
+        "MSETEX" => &["1", "k", "v"],
+        "MSETNX" => &["k", "v"],
+        "PERSIST" => &["k"],
+        "PEXPIRE" => &["k", "10000"],
+        "PEXPIREAT" => &["k", "9999999999000"],
+        "PFADD" => &["k", "m"],
+        "PFMERGE" => &["dst"],
+        "PSETEX" => &["k", "10000", "v"],
+        "RENAME" => &["src", "dst"],
+        "RENAMENX" => &["src", "dst"],
+        "RESTORE" => &["k", "0", "payload"],
+        "RPOP" => &["k"],
+        "RPOPLPUSH" => &["src", "dst"],
+        "RPUSH" => &["k", "v"],
+        "RPUSHX" => &["k", "v"],
+        "SADD" => &["k", "m"],
+        "SDIFFSTORE" => &["dst", "src"],
+        "SET" => &["k", "v"],
+        "SETBIT" => &["k", "0", "1"],
+        "SETEX" => &["k", "10", "v"],
+        "SETNX" => &["k", "v"],
+        "SETRANGE" => &["k", "0", "v"],
+        "SINTERSTORE" => &["dst", "src"],
+        "SMOVE" => &["src", "dst", "m"],
+        "SORT" => &["k"],
+        "SPOP" => &["k"],
+        "SREM" => &["k", "m"],
+        "SUNIONSTORE" => &["dst", "src"],
+        "SWAPDB" => &["0", "1"],
+        "TDIGEST.ADD" => &["k", "1"],
+        "TDIGEST.CREATE" => &["k"],
+        "TDIGEST.MERGE" => &["dst", "1", "src"],
+        "TDIGEST.RESET" => &["k"],
+        "TOPK.ADD" => &["k", "item"],
+        "TOPK.INCRBY" => &["k", "item", "1"],
+        "TOPK.RESERVE" => &["k", "10"],
+        "TS.ADD" => &["k", "*", "1"],
+        "TS.ALTER" => &["k"],
+        "TS.CREATE" => &["k"],
+        "TS.CREATERULE" => &["src", "dst", "AGGREGATION", "avg", "60000"],
+        "TS.DECRBY" => &["k", "1"],
+        "TS.DEL" => &["k", "-", "+"],
+        "TS.DELETERULE" => &["src", "dst"],
+        "TS.INCRBY" => &["k", "1"],
+        "TS.MADD" => &["k", "*", "1"],
+        "UNLINK" => &["k"],
+        "VADD" => &["k", "VALUES", "1", "1", "m"],
+        "VREM" => &["k", "m"],
+        "VSETATTR" => &["k", "m", "{}"],
+        "XACK" => &["k", "g", "1-1"],
+        "XACKDEL" => &["k", "g", "IDS", "1", "1-1"],
+        "XADD" => &["k", "*", "f", "v"],
+        "XAUTOCLAIM" => &["k", "g", "c", "0", "0-0"],
+        "XCLAIM" => &["k", "g", "c", "0", "1-1"],
+        "XDEL" => &["k", "1-1"],
+        "XDELEX" => &["k", "IDS", "1", "1-1"],
+        "XGROUP" => &["CREATE", "k", "g", "$"],
+        "XREADGROUP" => &["GROUP", "g", "c", "COUNT", "1", "STREAMS", "k", ">"],
+        "XSETID" => &["k", "1-1"],
+        "XTRIM" => &["k", "MAXLEN", "0"],
+        "ZADD" => &["k", "1", "m"],
+        "ZDIFFSTORE" => &["dst", "1", "k"],
+        "ZINCRBY" => &["k", "1", "m"],
+        "ZINTERSTORE" => &["dst", "1", "k"],
+        "ZMPOP" => &["1", "k", "MIN"],
+        "ZPOPMAX" => &["k"],
+        "ZPOPMIN" => &["k"],
+        "ZRANGESTORE" => &["dst", "src", "0", "-1"],
+        "ZREM" => &["k", "m"],
+        "ZREMRANGEBYLEX" => &["k", "[a", "[z"],
+        "ZREMRANGEBYRANK" => &["k", "0", "-1"],
+        "ZREMRANGEBYSCORE" => &["k", "0", "1"],
+        "ZUNIONSTORE" => &["dst", "1", "k"],
+        _ => return None,
+    })
+}
+
+/// Generic fallback: `min` placeholder tokens. Used only for a WRITE command
+/// with no `special_args_for` entry (i.e. registered after this test was
+/// written) — see that function's doc comment for why argument *validity*
+/// doesn't matter here.
+fn fallback_args(min: usize) -> Vec<String> {
+    (0..min).map(|i| format!("filler{i}")).collect()
+}
+
+/// Build the arguments to invoke `name` with, given its declared [`Arity`].
+fn minimal_args(name: &str, arity: Arity) -> Vec<String> {
+    match special_args_for(name) {
+        Some(args) => args.iter().map(|s| s.to_string()).collect(),
+        None => fallback_args(arity.min()),
+    }
+}
+
+/// Registry-driven READONLY enforcement: every WRITE-flagged command in the
+/// *production* registry, invoked against a replica, must be rejected with
+/// `-READONLY`. Walks `registry.iter()` rather than a hand-picked list, so a
+/// future WRITE command with no enforcement fails this test automatically.
+#[tokio::test]
+async fn test_replica_rejects_every_write_command() {
+    let mut registry = CommandRegistry::new();
+    frogdb_server::register_commands(&mut registry);
+
+    let mut write_commands: Vec<(String, Arity)> = registry
+        .iter()
+        .filter(|(_, entry)| entry.flags().contains(CommandFlags::WRITE))
+        .map(|(name, entry)| (name.to_string(), entry.arity()))
+        .collect();
+    write_commands.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // Sanity check on the walk itself: if `register_commands` stops
+    // registering commands (or the WRITE flag check breaks), this test would
+    // otherwise pass vacuously over an empty/tiny list.
+    assert!(
+        write_commands.len() >= 100,
+        "expected a large number of WRITE-flagged commands from the production \
+         registry, got {} ({:?}) — did `register_commands` or `CommandFlags::WRITE` change shape?",
+        write_commands.len(),
+        write_commands.iter().map(|(n, _)| n).collect::<Vec<_>>()
+    );
+
+    let (primary, replica) = start_primary_replica_pair(TestServerConfig::default()).await;
+
+    let mut failures = Vec::new();
+    for (name, arity) in &write_commands {
+        let owned_args = minimal_args(name, *arity);
+        let args: Vec<&str> = owned_args.iter().map(|s| s.as_str()).collect();
+
+        let resp = replica.send(name, &args).await;
+        if !is_error(&resp) {
+            failures.push(format!(
+                "{name}: expected an error on a replica, got {resp:?}"
+            ));
+            continue;
+        }
+        let msg = get_error_message(&resp).unwrap_or("<no message>");
+        if !msg.starts_with("READONLY") {
+            failures.push(format!("{name}: expected READONLY error, got: {msg}"));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "{} of {} WRITE-flagged commands did not enforce READONLY on a replica:\n{}",
+        failures.len(),
+        write_commands.len(),
+        failures.join("\n")
+    );
+
+    // Sanity check the harness itself: the primary must still accept writes.
+    let primary_set = primary.send("SET", &["sanity_key", "v"]).await;
+    assert_ok(&primary_set);
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// Monotonic-read regression (issue 46): a tight loop of replica reads must
+/// never observe a value regress to an earlier one, both while the primary
+/// is still issuing increasing writes and after `WAIT` has confirmed the
+/// final write reached the replica.
+///
+/// `consistency.md`'s monotonic-reads row (line 38) was [Design intent] only
+/// until this test; RYW (line 27) is exercised by the same WAIT-then-read
+/// pattern (a client observes its own committed write on the replica once
+/// WAIT acks it). Replica lazy-expiry-on-read is explicitly out of scope
+/// (task 32, `replica-expiry-ttl-drift`).
+#[tokio::test]
+async fn test_replica_read_monotonic_after_primary_writes() {
+    let (primary, replica) = start_primary_replica_pair(TestServerConfig::default()).await;
+    let key = "{mono}seq";
+    const WRITES: i64 = 100;
+
+    let mut observed: Vec<i64> = Vec::new();
+
+    // Primary writes a strictly increasing sequence; the replica is polled a
+    // few times per round without waiting for full propagation first — the
+    // property under test is that *whatever* the replica returns, it is
+    // never lower than the highest value already observed, even while later
+    // writes are still in flight.
+    for value in 1..=WRITES {
+        let set_resp = primary.send("SET", &[key, &value.to_string()]).await;
+        assert_ok(&set_resp);
+
+        for _ in 0..3 {
+            let resp = replica.send("GET", &[key]).await;
+            if let Response::Bulk(Some(b)) = &resp
+                && let Ok(v) = String::from_utf8_lossy(b).parse::<i64>()
+            {
+                if let Some(&last) = observed.last() {
+                    assert!(
+                        v >= last,
+                        "monotonic-read violation: replica returned {v} after previously \
+                         returning {last} (primary at write round {value})"
+                    );
+                }
+                observed.push(v);
+            }
+        }
+    }
+
+    // WAIT for the final write to be acknowledged, then keep polling: the
+    // replica must converge to WRITES and must not regress while doing so
+    // (the read-your-writes guarantee: once WAIT acks, a read must observe
+    // at least that write).
+    let acked = primary.send("WAIT", &["1", "5000"]).await;
+    assert!(
+        parse_integer(&acked).unwrap_or(0) >= 1,
+        "WAIT did not report the replica acking the final write, got: {acked:?}"
+    );
+
+    let mut converged = false;
+    for _ in 0..500 {
+        let resp = replica.send("GET", &[key]).await;
+        if let Response::Bulk(Some(b)) = &resp
+            && let Ok(v) = String::from_utf8_lossy(b).parse::<i64>()
+        {
+            if let Some(&last) = observed.last() {
+                assert!(
+                    v >= last,
+                    "monotonic-read violation after WAIT ack: replica returned {v} after \
+                     previously returning {last}"
+                );
+            }
+            observed.push(v);
+            if v == WRITES {
+                converged = true;
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    assert!(
+        converged,
+        "replica never converged to the final written value {WRITES} after a WAIT ack; \
+         last observed: {:?}",
+        observed.last()
+    );
+
+    // Whole-sequence check, in addition to the per-step asserts above: belt
+    // and suspenders against any point the per-step check could miss.
+    assert!(
+        observed.windows(2).all(|w| w[1] >= w[0]),
+        "replica read sequence was not monotonically non-decreasing: {observed:?}"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
 }

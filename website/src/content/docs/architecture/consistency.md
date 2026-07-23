@@ -31,12 +31,13 @@ A client sees its own writes on the **same connection to the same node**. This f
 |----------|------------------|
 | Same connection, no failover | **Tested** (Jepsen `ryw`) |
 | Reconnect to same node | Expected (data persisted per the durability mode) — [Design intent] |
+| `WAIT`-acked write, then read from the replica | **Tested** (`test_replica_read_monotonic_after_primary_writes`, `frogdb-server/crates/server/tests/integration_replication.rs`) |
 | Failover to replica (async) | **Not guaranteed** — unreplicated writes may be lost |
 
-**Mitigation:** for writes that must survive failover, require replica acknowledgment with `min-replicas-to-write` and/or use `WAIT` (see [Cluster Consistency](#cluster-consistency) and [Replication](/architecture/replication/#write-quorum-and-fencing)).
+**Mitigation:** for writes that must survive failover, require replica acknowledgment with `min-replicas-to-write` and/or use `WAIT` (see [Cluster Consistency](#cluster-consistency) and [Replication](/architecture/replication/#write-quorum-and-fencing)). The `WAIT` row above confirms that once `WAIT` reports the replica acknowledged, a read on that replica observes the acknowledged value.
 
-### Monotonic Reads — [Design intent]
-On a single connection to a single node, a client will not see an older value for a key after seeing a newer one. Implied by linearizability on the connection; no dedicated test.
+### Monotonic Reads — [Tested]
+A client will not see an older value for a key after seeing a newer one. Verified by `test_replica_read_monotonic_after_primary_writes` (`frogdb-server/crates/server/tests/integration_replication.rs`): while the primary writes a strictly increasing sequence, a tight read loop against the **replica** — a stronger cross-node case than the single-connection scenario this row previously described — never observes a value lower than one already returned, both before and after `WAIT` acknowledgment.
 
 ### Cross-Slot Handling — [Tested]
 Multi-key commands spanning multiple hash slots are rejected with a `CROSSSLOT` error before execution, matching Redis Cluster. Verified by the Jepsen `cross_slot` workload (which also confirms same-slot atomic transfers conserve their invariant). Use hash tags `{tag}` to colocate keys on one slot:
@@ -89,7 +90,7 @@ During failover, writes accepted by the old primary but not yet replicated may b
 | Write to an isolated old primary during split-brain | Discarded and audit-logged — [Tested] |
 
 ### Reads from a Replica — [Design intent]
-A replica may return a value older than the primary's; staleness is bounded only by replication lag.
+A replica may return a value older than the primary's; staleness is bounded only by replication lag. The magnitude of that lag is untested, but the *ordering* of what a replica returns over time is — see [Monotonic Reads](#monotonic-reads--tested) above.
 
 ---
 
