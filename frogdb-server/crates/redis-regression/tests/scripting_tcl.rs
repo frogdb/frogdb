@@ -567,6 +567,112 @@ async fn tcl_eval_scripts_do_not_block_on_bzpopmax() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tcl_eval_scripts_do_not_block_on_blmpop() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["LPUSH", "empty_list_mpop", "1"]).await;
+    client.command(&["LPOP", "empty_list_mpop"]).await;
+    let resp = client
+        .command(&[
+            "EVAL",
+            "return redis.pcall('blmpop','0','1',KEYS[1],'LEFT')",
+            "1",
+            "empty_list_mpop",
+        ])
+        .await;
+    assert_nil(&resp);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tcl_eval_scripts_do_not_block_on_bzmpop() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["ZADD", "empty_zset_mpop", "10", "foo"])
+        .await;
+    client
+        .command(&["ZMPOP", "1", "empty_zset_mpop", "MIN"])
+        .await;
+    let resp = client
+        .command(&[
+            "EVAL",
+            "return redis.pcall('bzmpop','0','1',KEYS[1],'MIN')",
+            "1",
+            "empty_zset_mpop",
+        ])
+        .await;
+    assert_nil(&resp);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tcl_eval_scripts_do_not_block_on_xread_block() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Create the stream so `$` resolves to its last id; a caught-up XREAD
+    // BLOCK would otherwise block forever waiting on new entries.
+    client
+        .command(&["XADD", "empty_stream", "*", "f", "v"])
+        .await;
+    let resp = client
+        .command(&[
+            "EVAL",
+            "return redis.pcall('xread','block','0','streams',KEYS[1],'$')",
+            "1",
+            "empty_stream",
+        ])
+        .await;
+    assert_nil(&resp);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tcl_eval_scripts_blmpop_bzmpop_return_data_when_available() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["RPUSH", "list_mpop_data", "a", "b"]).await;
+    client
+        .command(&["ZADD", "zset_mpop_data", "1", "one", "2", "two"])
+        .await;
+
+    // BLMPOP with data present pops immediately from a script: [key, [elements]]
+    let resp = client
+        .command(&[
+            "EVAL",
+            "return redis.pcall('blmpop','0','1',KEYS[1],'LEFT')",
+            "1",
+            "list_mpop_data",
+        ])
+        .await;
+    let blmpop = unwrap_array(resp);
+    assert_eq!(blmpop.len(), 2);
+    assert_bulk_eq(&blmpop[0], b"list_mpop_data");
+    let popped = unwrap_array(blmpop[1].clone());
+    assert_eq!(popped.len(), 1);
+    assert_bulk_eq(&popped[0], b"a");
+
+    // BZMPOP with data present pops immediately from a script: [key, [[member, score]]]
+    let resp = client
+        .command(&[
+            "EVAL",
+            "return redis.pcall('bzmpop','0','1',KEYS[1],'MIN')",
+            "1",
+            "zset_mpop_data",
+        ])
+        .await;
+    let bzmpop = unwrap_array(resp);
+    assert_eq!(bzmpop.len(), 2);
+    assert_bulk_eq(&bzmpop[0], b"zset_mpop_data");
+    let popped = unwrap_array(bzmpop[1].clone());
+    assert_eq!(popped.len(), 1);
+    let member = unwrap_array(popped[0].clone());
+    assert_bulk_eq(&member[0], b"one");
+    assert_bulk_eq(&member[1], b"1");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_scripts_do_not_block_on_wait() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

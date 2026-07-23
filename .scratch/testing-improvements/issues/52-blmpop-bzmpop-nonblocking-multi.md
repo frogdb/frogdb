@@ -1,6 +1,6 @@
 # Extend MULTI and Lua non-blocking regressions to cover BLMPOP/BZMPOP (and XREAD BLOCK in Lua)
 
-Status: needs-triage
+Status: done
 Type: AFK
 Origin: testing-gap audit 2026-07-22 (multi-agent static review + adversarial verification; coverage run on testbox)
 Severity: likelihood 1/3, consequence 2/3 (score 2)
@@ -50,3 +50,40 @@ None - can start immediately
 - frogdb-server/crates/redis-regression/tests/multi_tcl.rs:516-578
 - frogdb-server/crates/redis-regression/tests/scripting_tcl.rs:462-576
 - frogdb-server/crates/commands/src/blocking.rs:307-318,614-625
+
+## Resolution
+
+No live bug: BLMPOP/BZMPOP already share the generic `Response::BlockingNeeded` seam
+(`frogdb-core/src/shard/execution.rs:584-588` for MULTI/EXEC, `frogdb-core/src/scripting/bindings.rs:184-189`
+for Lua) that every other blocking command in the pinned suites goes through — the omission was
+purely a test-coverage gap, as the verdict predicted (L1/C2).
+
+Extended both suites, matching the existing style, and added dedicated "data available" coverage
+since the immediate-pop path (the loop before `BlockingNeeded` is returned in `blocking.rs`) is a
+separate code path from the empty-key path and wasn't pinned for these commands either:
+
+- `frogdb-server/crates/redis-regression/tests/multi_tcl.rs`
+  - `tcl_blocking_commands_ignore_timeout_in_multi`: added queued `BLMPOP 0 1 empty_list{t} LEFT`
+    and `BZMPOP 0 1 empty_zset{t} MIN` against empty keys (results count bumped 8 -> 10, all still
+    asserted nil at EXEC).
+  - New `tcl_blmpop_bzmpop_return_data_immediately_in_multi`: BLMPOP/BZMPOP against non-empty
+    keys inside MULTI, asserting the real `[key, [elements]]` / `[key, [[member, score]]]` payload
+    is returned at EXEC (not nil) — pins the immediate-pop path also runs non-blocking.
+
+- `frogdb-server/crates/redis-regression/tests/scripting_tcl.rs`
+  - New `tcl_eval_scripts_do_not_block_on_blmpop`, `tcl_eval_scripts_do_not_block_on_bzmpop`,
+    `tcl_eval_scripts_do_not_block_on_xread_block`: empty-key/caught-up-stream case via
+    `redis.pcall`, asserting nil, matching the existing BLPOP/BRPOP/BZPOPMIN/BZPOPMAX sibling
+    tests' style.
+  - New `tcl_eval_scripts_blmpop_bzmpop_return_data_when_available`: data-present case for both
+    commands called from a script, asserting the real payload is returned.
+
+No explicit per-test timeout was added: the repo's default nextest profile already terminates any
+test at 15s (`slow-timeout = { period = "5s", terminate-after = 3 }` in `.config/nextest.toml`), so
+a regression that made either command actually block on an empty key would fail as a timeout, not
+hang the suite.
+
+Verified: `just fmt frogdb-redis-regression` (no changes needed), `just lint frogdb-redis-regression`
+and `cargo clippy -p frogdb-redis-regression --tests -- -D warnings` (clean, both with and without
+`--tests`), and the full `multi_tcl::` + `scripting_tcl::` suites (153 tests) run 3x locally with 0
+failures — new tests run individually 3x and as part of 3 full-file runs, all green.

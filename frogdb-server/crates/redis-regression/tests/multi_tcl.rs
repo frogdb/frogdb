@@ -563,10 +563,20 @@ async fn tcl_blocking_commands_ignore_timeout_in_multi() {
             ])
             .await,
     );
+    assert_queued(
+        &client
+            .command(&["BLMPOP", "0", "1", "empty_list{t}", "LEFT"])
+            .await,
+    );
+    assert_queued(
+        &client
+            .command(&["BZMPOP", "0", "1", "empty_zset{t}", "MIN"])
+            .await,
+    );
 
     let resp = client.command(&["EXEC"]).await;
     let results = unwrap_array(resp);
-    assert_eq!(results.len(), 8);
+    assert_eq!(results.len(), 10);
 
     // All blocking commands on empty keys inside MULTI return nil
     for (i, r) in results.iter().enumerate() {
@@ -575,6 +585,51 @@ async fn tcl_blocking_commands_ignore_timeout_in_multi() {
             "expected nil for blocking command {i}, got {r:?}"
         );
     }
+}
+
+#[tokio::test]
+async fn tcl_blmpop_bzmpop_return_data_immediately_in_multi() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["RPUSH", "list{t}", "a", "b"]).await;
+    client
+        .command(&["ZADD", "zset{t}", "1", "one", "2", "two"])
+        .await;
+
+    assert_ok(&client.command(&["MULTI"]).await);
+    assert_queued(
+        &client
+            .command(&["BLMPOP", "0", "1", "list{t}", "LEFT"])
+            .await,
+    );
+    assert_queued(
+        &client
+            .command(&["BZMPOP", "0", "1", "zset{t}", "MIN"])
+            .await,
+    );
+
+    let resp = client.command(&["EXEC"]).await;
+    let results = unwrap_array(resp);
+    assert_eq!(results.len(), 2);
+
+    // BLMPOP with data present pops immediately inside MULTI: [key, [elements]]
+    let blmpop = unwrap_array(results[0].clone());
+    assert_eq!(blmpop.len(), 2);
+    assert_bulk_eq(&blmpop[0], b"list{t}");
+    let popped = unwrap_array(blmpop[1].clone());
+    assert_eq!(popped.len(), 1);
+    assert_bulk_eq(&popped[0], b"a");
+
+    // BZMPOP with data present pops immediately inside MULTI: [key, [[member, score]]]
+    let bzmpop = unwrap_array(results[1].clone());
+    assert_eq!(bzmpop.len(), 2);
+    assert_bulk_eq(&bzmpop[0], b"zset{t}");
+    let popped = unwrap_array(bzmpop[1].clone());
+    assert_eq!(popped.len(), 1);
+    let member = unwrap_array(popped[0].clone());
+    assert_bulk_eq(&member[0], b"one");
+    assert_bulk_eq(&member[1], b"1");
 }
 
 // ---------------------------------------------------------------------------
