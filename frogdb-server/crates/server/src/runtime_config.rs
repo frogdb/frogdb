@@ -2335,6 +2335,20 @@ impl ConfigManager {
         self.runtime.read().unwrap().maxmemory_policy
     }
 
+    /// Minimum number of "good" replicas required before a write is accepted
+    /// (Redis `min-replicas-to-write`). `0` disables the gate. Read live on the
+    /// write path so `CONFIG SET min-replicas-to-write` takes effect at once.
+    pub fn min_replicas_to_write(&self) -> u32 {
+        self.runtime.read().unwrap().min_replicas_to_write
+    }
+
+    /// Maximum replica ACK lag (ms) for a replica to count as "good" toward
+    /// [`Self::min_replicas_to_write`] (Redis `min-replicas-max-lag`, kept in
+    /// ms internally).
+    pub fn min_replicas_timeout_ms(&self) -> u64 {
+        self.runtime.read().unwrap().min_replicas_timeout_ms
+    }
+
     /// Get the slowlog threshold in microseconds.
     /// Returns -1 if disabled, 0 to log all, or positive value for threshold.
     pub fn slowlog_log_slower_than(&self) -> i64 {

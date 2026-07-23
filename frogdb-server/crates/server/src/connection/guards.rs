@@ -65,6 +65,9 @@ pub(crate) struct PreDispatchView<'a> {
     pub(crate) cluster: &'a ClusterDeps,
     /// ACL manager, for building the per-connection [`PermissionGuard`].
     pub(crate) acl_manager: &'a AclManager,
+    /// Runtime config, read live on the write path for the
+    /// `min-replicas-to-write` gate (so `CONFIG SET` takes effect at once).
+    pub(crate) config_manager: &'a crate::runtime_config::ConfigManager,
     /// Shard senders, for the multi-key MIGRATING presence scatter.
     pub(crate) shard_senders: &'a [ShardSender],
     /// Replica flag: writes are rejected on a read-only replica.
@@ -91,6 +94,7 @@ impl ConnectionHandler {
             registry: &self.core.registry,
             cluster: &self.cluster,
             acl_manager: &self.core.acl_manager,
+            config_manager: &self.admin.config_manager,
             shard_senders: &self.core.shard_senders,
             is_replica: &self.is_replica,
             is_admin: self.is_admin,
@@ -292,6 +296,41 @@ impl PreDispatchView<'_> {
             return Some(Response::error(
                 "CLUSTERDOWN The cluster is down (quorum lost, writes rejected)",
             ));
+        }
+
+        // min-replicas-to-write: reject writes when fewer than the configured
+        // number of "good" (recently-ACKing streaming) replicas are connected —
+        // Redis's `NOREPLICAS` write-safety gate. Unlike the self-fence checker
+        // above this does not "arm": with `min-replicas-to-write N` and zero
+        // replicas the primary refuses writes from boot, exactly as Redis does.
+        // The config is read live so `CONFIG SET` applies immediately; the read
+        // only happens for WRITE-flagged commands.
+        //
+        // NOTE: like the self-fence gate this fires only in `run_pre_checks`,
+        // which covers direct writes and MULTI *queue* time. Writes issued from
+        // inside a Lua script (`redis.call`, EVAL lacks the WRITE flag) and the
+        // narrow window where a MULTI is queued while replicas are healthy and
+        // then EXEC'd after they drop are NOT gated here — a bound shared with
+        // self-fence, tracked as a follow-up (uniform enforcement belongs at the
+        // shard/script-gate write seam).
+        if let Some(cmd_impl) = self.registry.get_entry(cmd_name)
+            && cmd_impl.flags().contains(CommandFlags::WRITE)
+        {
+            let min_replicas = self.config_manager.min_replicas_to_write();
+            if min_replicas > 0 {
+                let max_lag = Duration::from_millis(self.config_manager.min_replicas_timeout_ms());
+                let good = self
+                    .cluster
+                    .replication_tracker
+                    .as_ref()
+                    .map(|t| t.count_good_replicas(max_lag))
+                    .unwrap_or(0);
+                if good < min_replicas {
+                    return Some(Response::error(
+                        "NOREPLICAS Not enough good replicas to write.",
+                    ));
+                }
+            }
         }
 
         // Block admin commands on regular port when admin port is enabled
@@ -751,6 +790,7 @@ mod tests {
         is_replica: AtomicBool,
         is_admin: bool,
         admin_enabled: bool,
+        config_manager: Arc<crate::runtime_config::ConfigManager>,
     }
 
     impl ViewFixture {
@@ -770,6 +810,9 @@ mod tests {
                 is_replica: AtomicBool::new(false),
                 is_admin: false,
                 admin_enabled: false,
+                config_manager: Arc::new(crate::runtime_config::ConfigManager::new(
+                    &crate::config::Config::default(),
+                )),
             }
         }
 
@@ -779,6 +822,7 @@ mod tests {
                 registry: &self.registry,
                 cluster: &self.cluster,
                 acl_manager: self.acl_manager.as_ref(),
+                config_manager: &self.config_manager,
                 shard_senders: &self.shard_senders,
                 is_replica: &self.is_replica,
                 is_admin: self.is_admin,

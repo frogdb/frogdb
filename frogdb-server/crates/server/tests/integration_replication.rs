@@ -5311,3 +5311,385 @@ async fn test_served_blpop_multi_waiter_replicates(#[case] persistence: bool) {
     replica.shutdown().await;
     primary.shutdown().await;
 }
+
+// ============================================================================
+// Tier 4: Write fencing — self-fence-on-replica-loss + min-replicas-to-write
+// ============================================================================
+//
+// End-to-end coverage for the two write-safety gates enforced in
+// `connection/guards.rs::run_pre_checks`:
+//
+//   * self-fence-on-replica-loss — rejects writes with `CLUSTERDOWN ...` once a
+//     primary that *had* a healthy streaming replica loses quorum. It "arms"
+//     only after the first fresh streaming replica, so a primary that never had
+//     a replica keeps accepting writes.
+//   * min-replicas-to-write — Redis's `NOREPLICAS ...` gate. Does not arm: with
+//     `min-replicas-to-write N` and fewer than N good (streaming, recently
+//     ACKing) replicas the primary refuses writes immediately, from boot.
+//
+// Both gates fire in `run_pre_checks`, which covers direct writes and MULTI
+// *queue* time, but NOT writes issued from inside Lua (`EVAL` lacks the WRITE
+// flag). The Lua-bypass tests below pin that known gap so a future fix flips
+// them deliberately.
+
+/// Fast self-fence config: arm the checker quickly and let it detect replica
+/// loss within ~0.5s. `replica_freshness_timeout_ms` must be >= 3x
+/// `ack_interval_ms` (config validation), hence 500 vs 100.
+fn fence_config() -> TestServerConfig {
+    TestServerConfig {
+        replication_self_fence_on_replica_loss: Some(true),
+        replication_ack_interval_ms: Some(100),
+        replication_replica_freshness_timeout_ms: Some(500),
+        ..Default::default()
+    }
+}
+
+/// `min-replicas-to-write N` with self-fence disabled (so the NOREPLICAS gate
+/// is exercised in isolation, not shadowed by the earlier CLUSTERDOWN check).
+fn min_replicas_config(n: u32) -> TestServerConfig {
+    TestServerConfig {
+        replication_min_replicas_to_write: Some(n),
+        replication_min_replicas_timeout_ms: Some(500),
+        replication_ack_interval_ms: Some(100),
+        replication_self_fence_on_replica_loss: Some(false),
+        ..Default::default()
+    }
+}
+
+/// True when `resp` is an error whose message starts with `prefix`.
+fn err_has_prefix(resp: &Response, prefix: &str) -> bool {
+    matches!(get_error_message(resp), Some(m) if m.starts_with(prefix))
+}
+
+/// Poll `SET <key> vN` on `server` until `pred` matches the response or the
+/// deadline elapses, then return the last response. This is polling with a hard
+/// deadline (short interval, no fixed sleep-then-assert), so it tolerates the
+/// asynchronous window between replica loss and the gate engaging.
+async fn poll_set<F: Fn(&Response) -> bool>(
+    server: &TestServer,
+    key: &str,
+    deadline: Duration,
+    pred: F,
+) -> Response {
+    let start = std::time::Instant::now();
+    let mut n = 0u64;
+    loop {
+        n += 1;
+        let resp = server.send("SET", &[key, &format!("v{n}")]).await;
+        if pred(&resp) || start.elapsed() >= deadline {
+            return resp;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Self-fence engages on replica loss: a primary that had a healthy replica
+/// rejects writes with the exact `CLUSTERDOWN ...` string once the replica
+/// drops, while reads stay allowed.
+#[tokio::test]
+async fn test_self_fence_engages_on_replica_loss() {
+    let (primary, replica) = start_primary_replica_pair(fence_config()).await;
+
+    // A streaming replica must exist, then a write arms the fence checker.
+    assert!(
+        wait_for_replication(&primary, 3000).await >= 1,
+        "replica never reached streaming"
+    );
+    assert_ok(&primary.send("SET", &["fk", "armed"]).await);
+
+    // Drop the replica; the checker loses its only fresh streaming replica.
+    replica.shutdown().await;
+
+    // Poll until writes are fenced (freshness window + margin).
+    let fenced = poll_set(&primary, "fk", Duration::from_secs(5), |r| {
+        err_has_prefix(r, "CLUSTERDOWN")
+    })
+    .await;
+    assert!(
+        err_has_prefix(&fenced, "CLUSTERDOWN"),
+        "self-fence did not engage after replica loss: {fenced:?}"
+    );
+
+    // Exact error string. NOTE: the "cluster is down" wording is surfaced here
+    // on a *non-cluster* primary — a documented divergence from Redis, which has
+    // no CLUSTERDOWN in this configuration and would instead refuse the write
+    // via `min-replicas-to-write` (NOREPLICAS). Pinned so any reword is
+    // intentional.
+    assert_eq!(
+        get_error_message(&primary.send("SET", &["fk", "x"]).await),
+        Some("CLUSTERDOWN The cluster is down (quorum lost, writes rejected)"),
+    );
+
+    // Reads remain allowed while fenced.
+    assert!(!is_error(&primary.send("GET", &["fk"]).await));
+
+    primary.shutdown().await;
+}
+
+/// Self-fence recovers: once a fresh replica reconnects and restores quorum,
+/// writes are accepted again.
+#[tokio::test]
+async fn test_self_fence_recovers_after_replica_reconnect() {
+    let (primary, replica) = start_primary_replica_pair(fence_config()).await;
+    assert!(
+        wait_for_replication(&primary, 3000).await >= 1,
+        "replica never reached streaming"
+    );
+    assert_ok(&primary.send("SET", &["rk", "armed"]).await);
+
+    replica.shutdown().await;
+    let fenced = poll_set(&primary, "rk", Duration::from_secs(5), |r| {
+        err_has_prefix(r, "CLUSTERDOWN")
+    })
+    .await;
+    assert!(
+        err_has_prefix(&fenced, "CLUSTERDOWN"),
+        "fence never engaged: {fenced:?}"
+    );
+
+    // Bring a fresh replica back; quorum is restored.
+    let replica2 = TestServer::start_replica_with_config(&primary, fence_config()).await;
+
+    let recovered = poll_set(&primary, "rk", Duration::from_secs(10), |r| {
+        parse_simple_string(r) == Some("OK")
+    })
+    .await;
+    assert_ok(&recovered);
+
+    replica2.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// A primary that never had a replica does not fence: the checker never arms,
+/// so writes are always allowed even with self-fence enabled.
+#[tokio::test]
+async fn test_self_fence_unarmed_allows_writes() {
+    let primary = TestServer::start_primary_with_config(fence_config()).await;
+    assert_ok(&primary.send("SET", &["uk", "v"]).await);
+    assert_ok(&primary.send("SET", &["uk", "v2"]).await);
+    primary.shutdown().await;
+}
+
+/// The self-fence gate runs at MULTI *queue* time: the queued write is rejected
+/// with CLUSTERDOWN and, because FrogDB does not queue it, EXEC runs an empty
+/// transaction.
+#[tokio::test]
+async fn test_self_fence_multi_rejected_at_queue_time() {
+    let (primary, replica) = start_primary_replica_pair(fence_config()).await;
+    assert!(
+        wait_for_replication(&primary, 3000).await >= 1,
+        "replica never reached streaming"
+    );
+    assert_ok(&primary.send("SET", &["mk", "armed"]).await);
+    replica.shutdown().await;
+
+    let fenced = poll_set(&primary, "mk", Duration::from_secs(5), |r| {
+        err_has_prefix(r, "CLUSTERDOWN")
+    })
+    .await;
+    assert!(
+        err_has_prefix(&fenced, "CLUSTERDOWN"),
+        "fence never engaged: {fenced:?}"
+    );
+
+    let mut c = primary.connect().await;
+    assert_eq!(
+        parse_simple_string(&c.command(&["MULTI"]).await),
+        Some("OK")
+    );
+    let queued = c.command(&["SET", "mk", "v"]).await;
+    assert!(
+        err_has_prefix(&queued, "CLUSTERDOWN"),
+        "queued write not fenced: {queued:?}"
+    );
+    // FrogDB applies the fence at MULTI *queue* time and does NOT queue the
+    // rejected write, so EXEC runs an empty transaction (empty array) rather
+    // than aborting with EXECABORT. This diverges from Redis, where the fence
+    // is an exec-time condition and the SET would be queued then fail at EXEC.
+    // Pinned as current behavior; the safety guarantee (the write does not
+    // apply) still holds — `mk` keeps its pre-MULTI value.
+    let exec = c.command(&["EXEC"]).await;
+    assert_eq!(
+        exec,
+        Response::Array(vec![]),
+        "expected empty EXEC after queue-time fence, got {exec:?}"
+    );
+    assert_eq!(
+        primary.send("GET", &["mk"]).await,
+        Response::Bulk(Some(Bytes::from_static(b"armed"))),
+        "fenced MULTI must not have mutated the key"
+    );
+
+    primary.shutdown().await;
+}
+
+/// KNOWN GAP (pinned): writes issued from inside a Lua script bypass the
+/// self-fence gate because `EVAL` lacks the WRITE flag and so skips
+/// `run_pre_checks`. A future fix that enforces at the script/shard write seam
+/// must flip this assertion deliberately. See the NOTE in `guards.rs`.
+#[tokio::test]
+async fn test_self_fence_does_not_gate_lua_writes() {
+    let (primary, replica) = start_primary_replica_pair(fence_config()).await;
+    assert!(
+        wait_for_replication(&primary, 3000).await >= 1,
+        "replica never reached streaming"
+    );
+    assert_ok(&primary.send("SET", &["lk", "armed"]).await);
+    replica.shutdown().await;
+
+    // Direct writes are fenced.
+    let fenced = poll_set(&primary, "lk", Duration::from_secs(5), |r| {
+        err_has_prefix(r, "CLUSTERDOWN")
+    })
+    .await;
+    assert!(
+        err_has_prefix(&fenced, "CLUSTERDOWN"),
+        "fence never engaged: {fenced:?}"
+    );
+
+    // But a Lua-internal write slips through and applies.
+    let lua = primary
+        .send(
+            "EVAL",
+            &[
+                "return redis.call('SET', KEYS[1], ARGV[1])",
+                "1",
+                "lua_key",
+                "lua_val",
+            ],
+        )
+        .await;
+    assert!(
+        !is_error(&lua),
+        "EVAL write unexpectedly fenced (gap closed?): {lua:?}"
+    );
+    let got = primary.send("GET", &["lua_key"]).await;
+    assert_eq!(
+        got,
+        Response::Bulk(Some(Bytes::from_static(b"lua_val"))),
+        "Lua write did not apply despite bypassing the fence: {got:?}"
+    );
+
+    primary.shutdown().await;
+}
+
+/// `min-replicas-to-write 1` with zero replicas refuses writes from boot with
+/// the exact `NOREPLICAS ...` string (no arming), while reads stay allowed.
+#[tokio::test]
+async fn test_min_replicas_to_write_rejects_without_replicas() {
+    let primary = TestServer::start_primary_with_config(min_replicas_config(1)).await;
+    assert_eq!(
+        get_error_message(&primary.send("SET", &["k", "v"]).await),
+        Some("NOREPLICAS Not enough good replicas to write."),
+    );
+    assert!(!is_error(&primary.send("GET", &["k"]).await));
+    primary.shutdown().await;
+}
+
+/// The `min-replicas-to-write` gate tracks replica health live: writes are
+/// allowed while a good replica streams, then rejected with NOREPLICAS once it
+/// drops below the configured count.
+#[tokio::test]
+async fn test_min_replicas_to_write_gate_tracks_replica_health() {
+    let (primary, replica) = start_primary_replica_pair(min_replicas_config(1)).await;
+
+    // A good (streaming, fresh-ACKing) replica satisfies the gate.
+    let allowed = poll_set(&primary, "k", Duration::from_secs(5), |r| {
+        parse_simple_string(r) == Some("OK")
+    })
+    .await;
+    assert_ok(&allowed);
+
+    // Drop the replica: good-replica count falls below 1 → NOREPLICAS.
+    replica.shutdown().await;
+    let rejected = poll_set(&primary, "k", Duration::from_secs(5), |r| {
+        err_has_prefix(r, "NOREPLICAS")
+    })
+    .await;
+    assert!(
+        err_has_prefix(&rejected, "NOREPLICAS"),
+        "min-replicas gate did not re-engage after replica loss: {rejected:?}"
+    );
+
+    primary.shutdown().await;
+}
+
+/// `min-replicas-to-write` gates MULTI at queue time (the queued write is
+/// rejected with NOREPLICAS and, un-queued, EXEC runs empty) but — same known
+/// gap as self-fence — does NOT gate Lua-internal writes.
+#[tokio::test]
+async fn test_min_replicas_to_write_multi_and_lua_paths() {
+    let primary = TestServer::start_primary_with_config(min_replicas_config(1)).await;
+
+    // MULTI: the queue-time pre-check rejects the write and does not queue it,
+    // so EXEC runs an empty transaction (see the CLUSTERDOWN twin test for the
+    // divergence-from-Redis note).
+    let mut c = primary.connect().await;
+    assert_eq!(
+        parse_simple_string(&c.command(&["MULTI"]).await),
+        Some("OK")
+    );
+    let queued = c.command(&["SET", "k", "v"]).await;
+    assert!(
+        err_has_prefix(&queued, "NOREPLICAS"),
+        "queued write not gated: {queued:?}"
+    );
+    assert_eq!(
+        c.command(&["EXEC"]).await,
+        Response::Array(vec![]),
+        "expected empty EXEC after queue-time NOREPLICAS gate"
+    );
+
+    // KNOWN GAP (pinned): Lua-internal write bypasses the gate.
+    let lua = primary
+        .send(
+            "EVAL",
+            &[
+                "return redis.call('SET', KEYS[1], ARGV[1])",
+                "1",
+                "lk",
+                "lv",
+            ],
+        )
+        .await;
+    assert!(
+        !is_error(&lua),
+        "EVAL write unexpectedly gated (gap closed?): {lua:?}"
+    );
+
+    primary.shutdown().await;
+}
+
+/// `CONFIG SET min-replicas-to-write` takes effect on the hot write path
+/// immediately (the gate reads the value live, not at boot).
+#[tokio::test]
+async fn test_min_replicas_to_write_config_set_live() {
+    let config = TestServerConfig {
+        replication_self_fence_on_replica_loss: Some(false),
+        ..Default::default()
+    };
+    let primary = TestServer::start_primary_with_config(config).await;
+
+    // Default min-replicas-to-write 0 → writes allowed.
+    assert_ok(&primary.send("SET", &["k", "v"]).await);
+
+    // Raise the bar at runtime; with zero replicas writes now fail.
+    assert_ok(
+        &primary
+            .send("CONFIG", &["SET", "min-replicas-to-write", "1"])
+            .await,
+    );
+    assert!(
+        err_has_prefix(&primary.send("SET", &["k", "v2"]).await, "NOREPLICAS"),
+        "live CONFIG SET min-replicas-to-write did not take effect"
+    );
+
+    // Lower it again; writes resume immediately.
+    assert_ok(
+        &primary
+            .send("CONFIG", &["SET", "min-replicas-to-write", "0"])
+            .await,
+    );
+    assert_ok(&primary.send("SET", &["k", "v3"]).await);
+    primary.shutdown().await;
+}

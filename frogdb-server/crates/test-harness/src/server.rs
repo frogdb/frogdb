@@ -84,6 +84,22 @@ pub struct TestServerConfig {
     pub replication_primary_host: Option<String>,
     /// Primary port for replica mode.
     pub replication_primary_port: Option<u16>,
+    /// Override `replication.self-fence-on-replica-loss` (primary refuses writes
+    /// once a streaming replica has been seen and then goes stale/disconnects).
+    /// `None` keeps the server default (currently `true`).
+    pub replication_self_fence_on_replica_loss: Option<bool>,
+    /// Override `replication.replica-freshness-timeout-ms` (self-fence ACK
+    /// freshness window). `None` keeps the server default.
+    pub replication_replica_freshness_timeout_ms: Option<u64>,
+    /// Override `replication.repl-ack-interval-ms` (how often a replica ACKs).
+    /// Lowering this makes fence engage/recover tests converge faster.
+    pub replication_ack_interval_ms: Option<u64>,
+    /// Override `replication.min-replicas-to-write` (Redis `NOREPLICAS` gate:
+    /// refuse writes with fewer than N good replicas). `None` keeps the default 0.
+    pub replication_min_replicas_to_write: Option<u32>,
+    /// Override `replication.min-replicas-max-lag` (ms), the good-replica ACK
+    /// freshness window for `min-replicas-to-write`. `None` keeps the default.
+    pub replication_min_replicas_timeout_ms: Option<u64>,
 
     // --- Cluster ---
     /// Enable cluster mode (default: false).
@@ -169,6 +185,11 @@ impl Clone for TestServerConfig {
             replication_role: self.replication_role.clone(),
             replication_primary_host: self.replication_primary_host.clone(),
             replication_primary_port: self.replication_primary_port,
+            replication_self_fence_on_replica_loss: self.replication_self_fence_on_replica_loss,
+            replication_replica_freshness_timeout_ms: self.replication_replica_freshness_timeout_ms,
+            replication_ack_interval_ms: self.replication_ack_interval_ms,
+            replication_min_replicas_to_write: self.replication_min_replicas_to_write,
+            replication_min_replicas_timeout_ms: self.replication_min_replicas_timeout_ms,
             cluster_enabled: self.cluster_enabled,
             cluster_node_id: self.cluster_node_id,
             cluster_initial_nodes: self.cluster_initial_nodes.clone(),
@@ -421,6 +442,23 @@ impl TestServer {
                     config.replication.primary_port = port;
                 }
             }
+        }
+
+        // Replication write-safety knobs (self-fence + min-replicas-to-write).
+        if let Some(v) = test_config.replication_self_fence_on_replica_loss {
+            config.replication.self_fence_on_replica_loss = v;
+        }
+        if let Some(v) = test_config.replication_replica_freshness_timeout_ms {
+            config.replication.replica_freshness_timeout_ms = v;
+        }
+        if let Some(v) = test_config.replication_ack_interval_ms {
+            config.replication.ack_interval_ms = v;
+        }
+        if let Some(v) = test_config.replication_min_replicas_to_write {
+            config.replication.min_replicas_to_write = v;
+        }
+        if let Some(v) = test_config.replication_min_replicas_timeout_ms {
+            config.replication.min_replicas_timeout_ms = v;
         }
 
         // Pre-bind all listeners before creating Server to eliminate TOCTOU

@@ -137,6 +137,17 @@ impl ReplicationTrackerImpl {
             .collect()
     }
 
+    /// Count streaming replicas whose last ACK is within `max_lag` — the "good"
+    /// replicas for Redis's `min-replicas-to-write` gate. A `max_lag` of zero
+    /// disables the freshness filter (every streaming replica counts), matching
+    /// Redis's `min-replicas-max-lag 0` semantics.
+    pub fn count_good_replicas(&self, max_lag: Duration) -> u32 {
+        self.get_streaming_replicas()
+            .iter()
+            .filter(|r| max_lag.is_zero() || r.last_ack_time.elapsed() < max_lag)
+            .count() as u32
+    }
+
     /// Set the current replication offset.
     ///
     /// Used at wiring time to seed the offset from recovered state. The live
