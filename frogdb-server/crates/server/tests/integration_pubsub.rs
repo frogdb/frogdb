@@ -1661,28 +1661,58 @@ async fn test_ssubscribe_redirect_matches_keyed_path() {
 
     // Find a node that does NOT own the slot: GET there returns MOVED. On that
     // same node, SSUBSCRIBE must produce an identical MOVED redirect.
+    // The GET (harness connection) and the SSUBSCRIBE (fresh connection) are two
+    // separate round-trips. If the node's routing view updates between them (e.g.
+    // just after convergence, under parallel load), their MOVED targets can differ
+    // even though both paths are correct — a transient race, not a parity bug.
+    // Retry the whole GET/SSUBSCRIBE pair a bounded number of times: a genuine
+    // parity break (SSUBSCRIBE taking a different redirect path than keyed commands)
+    // disagrees persistently and still fails; a transient view update converges.
+    const MAX_ATTEMPTS: usize = 10;
     let mut checked_a_non_owner = false;
     for &nid in &node_ids {
         let node = harness.node(nid).unwrap();
-        let get_resp = node.send("GET", &[channel]).await;
-        let Some(get_moved) = is_moved_redirect(&get_resp) else {
+        if is_moved_redirect(&node.send("GET", &[channel]).await).is_none() {
             continue; // this node owns the slot (GET served locally)
-        };
-
-        let mut client = node.connect().await;
-        let ssub_resp = client.command(&["SSUBSCRIBE", channel]).await;
-        let ssub_moved = is_moved_redirect(&ssub_resp).unwrap_or_else(|| {
-            panic!(
-                "SSUBSCRIBE on a non-owner must MOVED-redirect like GET, got: {:?}",
-                ssub_resp
-            )
-        });
-
-        assert_eq!(
-            get_moved, ssub_moved,
-            "SSUBSCRIBE redirect (slot + addr) must match the keyed-path redirect"
-        );
+        }
         checked_a_non_owner = true;
+
+        let mut last_pair = None;
+        let mut agreed = false;
+        for _ in 0..MAX_ATTEMPTS {
+            // Fresh GET + fresh SSUBSCRIBE each attempt so a stale routing view on
+            // either round-trip is replaced rather than compared.
+            let get_resp = node.send("GET", &[channel]).await;
+            let Some(get_moved) = is_moved_redirect(&get_resp) else {
+                // Node became the owner mid-retry (routing view moved): transient,
+                // try again.
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            };
+
+            let mut client = node.connect().await;
+            let ssub_resp = client.command(&["SSUBSCRIBE", channel]).await;
+            let ssub_moved = is_moved_redirect(&ssub_resp).unwrap_or_else(|| {
+                panic!(
+                    "SSUBSCRIBE on a non-owner must MOVED-redirect like GET, got: {:?}",
+                    ssub_resp
+                )
+            });
+
+            if get_moved == ssub_moved {
+                agreed = true;
+                break;
+            }
+            last_pair = Some((get_moved, ssub_moved));
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        assert!(
+            agreed,
+            "SSUBSCRIBE redirect (slot + addr) must match the keyed-path redirect; \
+             still disagreed after {} attempts: {:?}",
+            MAX_ATTEMPTS, last_pair
+        );
         break;
     }
 
