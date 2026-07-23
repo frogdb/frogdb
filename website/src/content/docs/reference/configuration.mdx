@@ -267,16 +267,6 @@ Limits for blocking commands (`BLPOP`, `BRPOP`, `BLMOVE`, etc.).
 
 <ConfigTable section="blocking" />
 
-## VLL
-
-Very Lightweight Locking — controls the shard-level locking system.
-
-```toml
-[vll]
-```
-
-<ConfigTable section="vll" />
-
 ## JSON
 
 Limits for the JSON data type (`JSON.SET`, `JSON.GET`, etc.).
@@ -328,16 +318,6 @@ Health endpoint thresholds used by the status API.
 ```
 
 <ConfigTable section="status" />
-
-## Hot Shard Detection
-
-Thresholds for identifying hot shards in the shard status report.
-
-```toml
-[hotshards]
-```
-
-<ConfigTable section="hotshards" />
 
 ## Latency Testing
 
