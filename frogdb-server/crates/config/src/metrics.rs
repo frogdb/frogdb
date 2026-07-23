@@ -15,13 +15,6 @@ pub struct MetricsConfig {
     #[param(name = "metrics-enabled")]
     pub enabled: bool,
 
-    /// Bind address for the metrics HTTP server.
-    #[serde(default = "default_metrics_bind")]
-    #[param(skip)]
-    // skip: config not yet consumed by server (metrics HTTP listener superseded by the `http`
-    // section; only validated for bind-overlap, no listener binds here)
-    pub bind: String,
-
     /// Port for the metrics HTTP server.
     #[serde(default = "default_metrics_port")]
     #[param(name = "metrics-port")]
@@ -30,29 +23,24 @@ pub struct MetricsConfig {
     /// Whether OTLP export is enabled.
     #[serde(default)]
     #[param(skip)]
-    // skip: config not yet consumed by server (OtlpRecorder::new is never constructed from this
-    // section at startup; the OTLP metrics exporter is unwired)
+    // skip: promotion pending consolidation pass
     pub otlp_enabled: bool,
 
     /// OTLP endpoint URL.
     #[serde(default = "default_otlp_endpoint")]
     #[param(skip)]
-    // skip: config not yet consumed by server (OTLP metrics exporter unwired; see otlp_enabled)
+    // skip: promotion pending consolidation pass
     pub otlp_endpoint: String,
 
     /// OTLP push interval in seconds.
     #[serde(default = "default_otlp_interval_secs")]
     #[param(skip)]
-    // skip: config not yet consumed by server (OTLP metrics exporter unwired; see otlp_enabled)
+    // skip: promotion pending consolidation pass
     pub otlp_interval_secs: u64,
 }
 
 fn default_metrics_enabled() -> bool {
     true
-}
-
-fn default_metrics_bind() -> String {
-    "127.0.0.1".to_string()
 }
 
 pub const DEFAULT_METRICS_PORT: u16 = 9090;
@@ -74,7 +62,6 @@ impl Default for MetricsConfig {
     fn default() -> Self {
         Self {
             enabled: default_metrics_enabled(),
-            bind: default_metrics_bind(),
             port: default_metrics_port(),
             otlp_enabled: false,
             otlp_endpoint: default_otlp_endpoint(),
@@ -84,11 +71,6 @@ impl Default for MetricsConfig {
 }
 
 impl MetricsConfig {
-    /// Get the full bind address.
-    pub fn bind_addr(&self) -> String {
-        format!("{}:{}", self.bind, self.port)
-    }
-
     /// Validate the configuration.
     pub fn validate(&self) -> Result<()> {
         if self.port == 0 {
@@ -115,16 +97,9 @@ mod tests {
     fn test_default_metrics_config() {
         let config = MetricsConfig::default();
         assert!(config.enabled);
-        assert_eq!(config.bind, "127.0.0.1");
         assert_eq!(config.port, DEFAULT_METRICS_PORT);
         assert!(!config.otlp_enabled);
         assert_eq!(config.otlp_endpoint, "http://localhost:4317");
         assert_eq!(config.otlp_interval_secs, DEFAULT_OTLP_INTERVAL_SECS);
-    }
-
-    #[test]
-    fn test_metrics_bind_addr() {
-        let config = MetricsConfig::default();
-        assert_eq!(config.bind_addr(), "127.0.0.1:9090");
     }
 }
