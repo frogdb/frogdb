@@ -144,10 +144,9 @@ Implemented in `frogdb-server/crates/server/src/connection/hotkeys.rs`.
 Earlier drafts of this page documented `DEBUG HOTSHARDS [PERIOD <seconds>]` for per-shard
 traffic analysis. It is not a runnable command — the `DEBUG` dispatch table has no `HOTSHARDS`
 arm, so it returns an unknown-subcommand error. The underlying report machinery
-(`frogdb-server/crates/debug/src/hotshards.rs`) and its config section (`[hotshards]`, in
-`frogdb-server/crates/config/src/status.rs`) exist and are threaded down to each connection, but
-nothing currently invokes them — the field is unused. Do not rely on `DEBUG HOTSHARDS` or
-`[hotshards]`.
+(`frogdb-server/crates/debug/src/hotshards.rs`) still exists but is unused — nothing currently
+invokes it, and there is no `[hotshards]` configuration section. Do not rely on
+`DEBUG HOTSHARDS`.
 </Aside>
 
 For per-shard (rather than per-key) imbalance, watch the Prometheus ratio of the busiest shard
@@ -242,7 +241,7 @@ curl -H "Authorization: Bearer my-secret-token" http://localhost:9090/debug/api/
 | `GET /debug/api/shard-stats` | Per-shard key count, memory, hot/warm key counts |
 
 `shard-stats` is the same per-shard data the debug UI's shard view renders — it's a live,
-scatter-gathered snapshot (`ShardStats`), unrelated to the dead `DEBUG HOTSHARDS`/`[hotshards]`
+scatter-gathered snapshot (`ShardStats`), unrelated to the dead `DEBUG HOTSHARDS`
 machinery described above.
 
 Routes are defined in `frogdb-server/crates/debug/src/web_ui/routes.rs`.

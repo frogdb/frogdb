@@ -399,10 +399,11 @@ The overall multi-shard operation is bounded by a single configurable timeout:
 |---------|---------|-------|
 | `scatter-gather-timeout-ms` | 5000 | Total multi-shard operation time |
 
-Finer-grained VLL lock timeouts (`vll.per-shard-lock-timeout-ms`,
-`vll.lock-acquisition-timeout-ms`) nest inside this bound; they are validated to
-be strictly ordered below it. See the configuration reference and
-[vll.md](/architecture/vll/) for those.
+The finer-grained VLL lock-acquisition timeout is a compile-time constant
+(`DEFAULT_LOCK_ACQUISITION_TIMEOUT`, 4000 ms, in
+`frogdb-server/crates/vll/src/coordinator.rs`) that nests inside this bound,
+smaller than `scatter-gather-timeout-ms`. See [vll.md](/architecture/vll/) for
+more on VLL queueing.
 
 ### Client Error Handling
 
