@@ -8251,7 +8251,107 @@ async fn test_eval_cross_slot_returns_error() {
     harness.shutdown_all().await;
 }
 
-/// MULTI + mixed-slot commands returns error.
+// ---------------------------------------------------------------------------
+// Cluster cross-slot MULTI/EXEC contract (testing-gap issue #49, tightening
+// issue #19's cross-shard MULTI coverage to the *cluster*-mode queue-time
+// path). FrogDB has two independent, differently-shaped cross-slot rejections
+// for a MULTI transaction, and this section pins both exactly rather than
+// accepting "an error occurs somewhere":
+//
+// 1. Queue-time abort (`PreDispatchView::try_queue_in_transaction` ->
+//    `validate_cluster_slots`, guards.rs:454-461): fires when a SINGLE queued
+//    command's OWN keys already span two slots (e.g. RENAME src dst). The
+//    CROSSSLOT error is returned immediately as that command's reply (never
+//    `+QUEUED`), `abort_transaction` is set, and the subsequent EXEC returns
+//    `EXECABORT` without touching the shard.
+// 2. Deferred EXEC-time rejection (`TxnSlotAccumulator`/`TransactionTarget`,
+//    state.rs): fires when two *separate* single-key commands queue keys that
+//    individually validate fine but land in different slots. Both commands
+//    get `+QUEUED` (queuing never compares a command's keys against
+//    previously queued commands), and the mismatch is only caught when EXEC
+//    folds the queue and calls `TransactionTarget::resolve()`, which returns a
+//    plain `CROSSSLOT` reply -- NOT `EXECABORT` (`exec_abort` is never set on
+//    this path; nothing was aborted, EXEC itself declined to run).
+//
+// These are verified empirically (not inferred from reading the code): see
+// the two tests below. A regression that merged these two paths, or that
+// moved either detection point, will now fail a concrete assertion.
+// ---------------------------------------------------------------------------
+
+/// Find a node this harness can connect to directly, plus two distinct
+/// cluster slots that node owns (`(node_id, slot_a, slot_b)`). Locating an
+/// owning node up front (rather than connecting to `node_ids()[0]` and hoping
+/// for the best, as the original weak test did) means both `slot_a` and
+/// `slot_b` are guaranteed to be served locally: any CROSSSLOT this test
+/// observes is the slot-mismatch check, never a MOVED redirect in disguise.
+async fn owner_node_with_two_slots(harness: &ClusterTestHarness) -> (u64, u16, u16) {
+    let node_ids = harness.node_ids();
+    let first_node = harness.node(node_ids[0]).unwrap();
+    let nodes_response = first_node.send("CLUSTER", &["NODES"]).await;
+    let nodes = parse_cluster_nodes(&nodes_response).unwrap();
+    let owner = nodes
+        .iter()
+        .find(|n| !n.slots.is_empty() && n.slots[0].1 > n.slots[0].0 + 1)
+        .expect("expected some node to own a contiguous range of >= 2 slots");
+    let (start, _end) = owner.slots[0];
+    let (slot_a, slot_b) = (start, start + 1);
+
+    for &nid in &node_ids {
+        if harness.node(nid).unwrap().client_addr() == owner.addr {
+            return (nid, slot_a, slot_b);
+        }
+    }
+    panic!(
+        "could not match CLUSTER NODES owner addr {} to a harness node id",
+        owner.addr
+    );
+}
+
+/// Assert a response is the exact `CROSSSLOT` wire error (not merely an error,
+/// not a prefix match). Mirrors the `assert_crossslot` helper introduced in
+/// `integration_transactions.rs` (testing-gap issue #19); duplicated rather
+/// than shared because every `tests/*.rs` file compiles as its own
+/// independent test binary.
+fn assert_crossslot(response: &frogdb_protocol::Response, context: &str) {
+    assert_exact_error(
+        response,
+        b"CROSSSLOT Keys in request don't hash to the same slot",
+        context,
+    );
+}
+
+/// Assert a response is the exact `EXECABORT` wire error.
+fn assert_execabort(response: &frogdb_protocol::Response, context: &str) {
+    assert_exact_error(
+        response,
+        b"EXECABORT Transaction discarded because of previous errors.",
+        context,
+    );
+}
+
+fn assert_exact_error(response: &frogdb_protocol::Response, expected: &[u8], context: &str) {
+    match response {
+        frogdb_protocol::Response::Error(e) => assert_eq!(
+            e.as_ref(),
+            expected,
+            "{context}: expected exact error {:?}, got {:?}",
+            String::from_utf8_lossy(expected),
+            String::from_utf8_lossy(e)
+        ),
+        other => panic!(
+            "{context}: expected error {:?}, got {other:?}",
+            String::from_utf8_lossy(expected)
+        ),
+    }
+}
+
+/// Queue-time CROSSSLOT + EXECABORT: a command whose own two keys (RENAME's
+/// source/destination) span different slots is rejected immediately as its
+/// queue reply -- it never becomes `+QUEUED` -- and the transaction is marked
+/// aborted so EXEC returns `EXECABORT` without running anything. A same-slot
+/// command queued beforehand still gets a plain `+QUEUED` reply, proving the
+/// rejection is specifically about slot-crossing detection and not a blanket
+/// refusal of the whole transaction once one is open.
 #[tokio::test]
 async fn test_multi_exec_cross_slot_returns_error() {
     let mut harness = ClusterTestHarness::new();
@@ -8265,30 +8365,169 @@ async fn test_multi_exec_cross_slot_returns_error() {
         .await
         .unwrap();
 
-    let node = harness.node(harness.node_ids()[0]).unwrap();
+    let (node_id, slot_a, slot_b) = owner_node_with_two_slots(&harness).await;
+    let key_a = key_for_slot(slot_a);
+    let key_b = key_for_slot(slot_b);
+    assert_ne!(
+        slot_for_key(key_a.as_bytes()),
+        slot_for_key(key_b.as_bytes()),
+        "key_a/key_b must hash to different slots"
+    );
+
+    let node = harness.node(node_id).unwrap();
     let mut client = node.connect().await;
 
     let multi_resp = client.command(&["MULTI"]).await;
-    assert!(!is_error(&multi_resp), "MULTI should succeed");
+    assert_eq!(
+        multi_resp,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        "MULTI should succeed"
+    );
 
-    // Queue two commands for different slots
-    let set1_resp = client.command(&["SET", "txn_key_a", "v1"]).await;
-    let set2_resp = client.command(&["SET", "txn_key_b", "v2"]).await;
+    // Same-slot (trivially, against itself) command queues normally.
+    let set_resp = client.command(&["SET", key_a.as_str(), "v1"]).await;
+    assert_eq!(
+        set_resp,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        "the first, non-cross-slot command must be QUEUED"
+    );
+
+    // RENAME's own two keys span different slots -> rejected immediately as
+    // ITS OWN queue reply, at queue time, not deferred to EXEC.
+    let rename_resp = client
+        .command(&["RENAME", key_a.as_str(), key_b.as_str()])
+        .await;
+    assert_crossslot(
+        &rename_resp,
+        "cross-slot RENAME must CROSSSLOT at queue time, not return QUEUED",
+    );
+
+    // The transaction is now aborted: EXEC must EXECABORT, not run a partial
+    // transaction and not silently succeed.
+    let exec_resp = client.command(&["EXEC"]).await;
+    assert_execabort(&exec_resp, "EXEC after a queue-time CROSSSLOT abort");
+
+    // Nothing committed: the SET that did get QUEUED never ran either.
+    assert_eq!(
+        client.command(&["GET", key_a.as_str()]).await,
+        frogdb_protocol::Response::Bulk(None),
+        "EXECABORT must not partially apply the queued SET"
+    );
+
+    // DISCARD after a queue-time-aborted transaction clears connection state
+    // cleanly: a fresh MULTI immediately afterwards behaves normally.
+    let multi_resp = client.command(&["MULTI"]).await;
+    assert_eq!(
+        multi_resp,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK"))
+    );
+    let set_resp = client.command(&["SET", key_a.as_str(), "v1"]).await;
+    assert_eq!(
+        set_resp,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED"))
+    );
+    let rename_resp = client
+        .command(&["RENAME", key_a.as_str(), key_b.as_str()])
+        .await;
+    assert_crossslot(&rename_resp, "second cross-slot RENAME (pre-DISCARD)");
+    let discard_resp = client.command(&["DISCARD"]).await;
+    assert_eq!(
+        discard_resp,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        "DISCARD must succeed even after a queue-time-aborted transaction"
+    );
+
+    let multi_resp = client.command(&["MULTI"]).await;
+    assert_eq!(
+        multi_resp,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        "MULTI immediately after DISCARD must succeed (no lingering abort state)"
+    );
+    let get_resp = client.command(&["GET", key_a.as_str()]).await;
+    assert_eq!(
+        get_resp,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        "a plain queued command in the fresh MULTI must not inherit the prior abort"
+    );
+    let exec_resp = client.command(&["EXEC"]).await;
+    assert_eq!(
+        exec_resp,
+        frogdb_protocol::Response::Array(vec![frogdb_protocol::Response::Bulk(None)]),
+        "the fresh transaction must commit normally post-DISCARD"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Deferred EXEC-time CROSSSLOT (distinct from the queue-time path above):
+/// two *separate* single-key commands, each individually valid, that target
+/// different slots both get `+QUEUED` -- queuing only validates a command's
+/// own keys, never compares against previously queued commands -- and the
+/// mismatch is caught only when EXEC folds the queue's keys into one
+/// transaction target. That EXEC-time rejection is a plain `CROSSSLOT` reply,
+/// not `EXECABORT`: nothing was marked aborted, EXEC itself declined to run.
+#[tokio::test]
+async fn test_multi_exec_two_single_key_commands_different_slots_defers_crossslot_to_exec() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let (node_id, slot_a, slot_b) = owner_node_with_two_slots(&harness).await;
+    let key_a = key_for_slot(slot_a);
+    let key_b = key_for_slot(slot_b);
+
+    let node = harness.node(node_id).unwrap();
+    let mut client = node.connect().await;
+
+    let multi_resp = client.command(&["MULTI"]).await;
+    assert_eq!(
+        multi_resp,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK"))
+    );
+
+    let set1_resp = client.command(&["SET", key_a.as_str(), "v1"]).await;
+    assert_eq!(
+        set1_resp,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        "first single-key command queues normally"
+    );
+
+    let set2_resp = client.command(&["SET", key_b.as_str(), "v2"]).await;
+    assert_eq!(
+        set2_resp,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        "second single-key command (different slot) ALSO queues normally -- \
+         each command's own keys validate independently of what's already queued"
+    );
 
     let exec_resp = client.command(&["EXEC"]).await;
+    assert_crossslot(
+        &exec_resp,
+        "EXEC folding two different-slot queued keys must CROSSSLOT (not EXECABORT)",
+    );
+    assert_ne!(
+        exec_resp,
+        frogdb_protocol::Response::Error(bytes::Bytes::from_static(
+            b"EXECABORT Transaction discarded because of previous errors."
+        )),
+        "this path must NOT be EXECABORT -- nothing was aborted at queue time"
+    );
 
-    // Either the EXEC should fail, or the queued commands should have errors
-    // in the response array. The exact behavior depends on implementation.
-    let has_errors = is_error(&exec_resp)
-        || is_error(&set1_resp)
-        || is_error(&set2_resp)
-        || matches!(&exec_resp, frogdb_protocol::Response::Array(arr) if arr.iter().any(is_error));
-
-    assert!(
-        has_errors,
-        "MULTI/EXEC with cross-slot keys should produce errors somewhere; \
-         MULTI={:?}, SET1={:?}, SET2={:?}, EXEC={:?}",
-        multi_resp, set1_resp, set2_resp, exec_resp
+    // Neither write landed (rejected atomically, not partially).
+    assert_eq!(
+        client.command(&["GET", key_a.as_str()]).await,
+        frogdb_protocol::Response::Bulk(None)
+    );
+    assert_eq!(
+        client.command(&["GET", key_b.as_str()]).await,
+        frogdb_protocol::Response::Bulk(None)
     );
 
     harness.shutdown_all().await;
