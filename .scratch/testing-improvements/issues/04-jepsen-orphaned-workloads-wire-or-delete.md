@@ -1,6 +1,6 @@
 # Jepsen: 5 registered cluster workloads never run + membership_routing checker doesn't assert durability
 
-Status: needs-triage
+Status: done
 Type: AFK
 Origin: testing-gap audit 2026-07-22 (multi-agent static review + adversarial verification; coverage run on testbox)
 Severity: likelihood 3/3, consequence 3/3 (score 9)
@@ -63,3 +63,67 @@ None - can start immediately.
 - Git: commit `d7c60603` "implement 6 new Jepsen workloads from gap analysis plan"
 - Source: `.scratch/testing-improvements/audit/G-jepsen-harness.md` `orphaned-cluster-workloads`,
   `.scratch/testing-improvements/audit/verdicts-G.md` (same)
+
+## Resolution
+
+Wired all five orphaned workloads into `run.py`; deleted none — inspection confirmed every one
+is fully implemented (real generators, nemeses, and checkers), not a stub. Fixed the two
+`membership_routing.clj` checker gaps and validated end-to-end against Docker.
+
+### Wired (none deleted)
+
+`run.py` `TestDefinition`s added:
+
+| Workload | Nemesis | Time | Topology | Suites |
+|---|---|---|---|---|
+| `partition-recovery` | partition | 90s | replication | replication, all |
+| `migration-recovery` | none (self-driving) | 120s | raft (cluster) | raft, all |
+| `concurrent-migration` | none (self-driving) | 90s | raft (cluster) | raft, all |
+| `membership-routing` | none (self-driving) | 120s | raft (cluster) | raft, all |
+| `rolling-restart` | none (self-driving) | 120s | raft (cluster) | raft, all |
+
+The four raft-cluster workloads drive their own fault injection (slot migration / membership
+changes / node restarts) inside the workload, so they run with `nemesis="none"` and
+`cluster_flag=True`. `partition-recovery` is a replication-topology test driven by the
+`partition` nemesis. `core.clj` already registered and routed all five names, so no `core.clj`
+change was needed. `just jepsen-list` now shows raft suite = 13, replication = 6, all = 38.
+`test-catalog.md` updated to match.
+
+### membership_routing.clj checker fixes
+
+1. **Durability now asserted.** `:valid?` was `(and node-added? migration-completed?)` — it
+   computed `written-keys`/`reads-with-nil` but never used them. Now computes `lost-writes` =
+   keys that were acked-written but read back `nil`, restricted to the `written-keys` set (index
+   0 is never written and reads pick `rand-int(counter)`, so unwritten keys can't produce false
+   positives), and folds `durable? (empty? lost-writes)` into `:valid?`. Output gains
+   `:durable? :lost-write-keys`.
+2. **Redirect count now thresholded.** The `:info`-downgraded MOVED/ASK redirects (previously
+   unbounded, lines 169-171) now have an explicit pass/fail limit:
+   `redirect-limit = max(25, 0.50 * data-op-count)`, `redirects-ok? (<= redirect-count limit)`,
+   folded into `:valid?`. A `redirect-info?` helper counts both downgrade paths: this workload's
+   own `:error [:redirect ..]` tag AND redirects that escaped `invoke!` and were downgraded to
+   `:info` by Jepsen carrying a MOVED/ASK `:exception`. Output gains
+   `:redirect-info-count :redirect-info-limit :redirects-ok?`. The 0.50/25 threshold reflects
+   that all keys share one hash tag → all land in the single migrating slot → a transient
+   redirect burst during migration is expected, not pathological.
+
+### Validation (Docker smoke, reused existing image — harness-only changes)
+
+- `lein check` — exit 0, all namespaces compile (only pre-existing reflection warnings in
+  client.clj/cluster_client.clj/lag.clj; membership_routing.clj compiles clean).
+- `just jepsen-list` — all five workloads listed.
+- `membership-routing` on a clean fresh raft topology — **PASS** (1:02):
+  `:valid? true, :durable? true, :lost-write-keys [], :redirect-info-count 21,
+  :redirect-info-limit 50, :redirects-ok? true`.
+- `membership-routing` on a deliberately dirty topology (stale slot owner) — **FAIL**:
+  `:valid? false, :durable? false, :lost-write-keys ["{mem-route}:k:96"]` — the new durability
+  assertion fires on a real acked-write loss the old checker masked (bidirectional proof the
+  checker works).
+- `rolling-restart` on a fresh raft topology — **PASS** (1:52): `:valid? true`.
+
+### Files changed
+
+- `testing/jepsen/run.py` — 5 `TestDefinition`s.
+- `testing/jepsen/frogdb/src/jepsen/frogdb/membership_routing.clj` — durability + redirect
+  threshold checker fixes.
+- `.claude/skills/jepsen-testing/references/test-catalog.md` — catalog rows + suite counts.

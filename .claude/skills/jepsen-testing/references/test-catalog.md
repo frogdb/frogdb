@@ -48,6 +48,7 @@ All tests are defined in `testing/jepsen/run.py` as `TestDefinition` entries in 
 | `split-brain` | split-brain | partition | 60s | Behavior under network partition (primary isolation) |
 | `zombie` | zombie | partition | 60s | Zombie primary detection after partition heals |
 | `replication-chaos` | replication | all-replication | 120s | Replication under combined faults |
+| `partition-recovery` | partition-recovery | partition | 90s | Replica catch-up + convergence after a partition heals |
 
 ### Raft Cluster Core
 
@@ -68,6 +69,18 @@ All tests are defined in `testing/jepsen/run.py` as `TestDefinition` entries in 
 | `slot-migration-partition` | slot-migration | partition | 90s | Slot migration under partitions |
 | `raft-chaos` | key-routing | raft-cluster | 120s | Key routing under combined Raft faults |
 
+### Raft Cluster Membership + Recovery
+
+These workloads drive their own fault injection through operations (CLUSTER MEET,
+kill-leader, restart-node, slot migration), so they run with the `none` nemesis.
+
+| Test | Workload | Nemesis | Time Limit | What It Tests |
+|------|----------|---------|------------|---------------|
+| `migration-recovery` | migration-recovery | none | 120s | Leader crash mid slot-migration; cluster recovers, no data loss |
+| `concurrent-migration` | concurrent-migration | none | 90s | 4 parallel slot migrations converge to consistent owners |
+| `membership-routing` | membership-routing | none | 120s | Add node (CLUSTER MEET) + slot handoff; MOVED handling, durability |
+| `rolling-restart` | rolling-restart | none | 120s | Sequential node restarts; availability >80%, no data loss |
+
 ### Raft Extended Nemesis
 
 | Test | Workload | Nemesis | Time Limit | What It Tests |
@@ -83,10 +96,10 @@ All tests are defined in `testing/jepsen/run.py` as `TestDefinition` entries in 
 |-------|-------|-------------|
 | `single` | 10 basic single-node tests | Baseline correctness without faults |
 | `crash` | 10 basic + 9 crash variants = 19 | Single-node with process kill nemesis |
-| `replication` | 5 replication tests | 3-node replication topology |
-| `raft` | 9 raft tests (core + faults) | 5-node Raft cluster |
+| `replication` | 6 replication tests | 3-node replication topology |
+| `raft` | 13 raft tests (core + faults + membership/recovery) | 5-node Raft cluster |
 | `raft-extended` | 4 extended nemesis tests | Advanced fault injection on Raft |
-| `all` | single + crash + replication + raft = 33 | Everything except raft-extended |
+| `all` | single + crash + replication + raft = 38 | Everything except raft-extended |
 
 ## Nemesis Types
 

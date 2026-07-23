@@ -250,18 +250,52 @@
 ;; Checker
 ;; ===========================================================================
 
+;; Maximum tolerated fraction of data operations that surface an unresolved
+;; MOVED/ASK redirect as :info. The cluster client is expected to follow
+;; redirects internally and retry; a redirect leaking out as :info means a
+;; data op could not be routed. Because every test key shares one hash tag,
+;; all keys live in the single slot being migrated, so a substantial burst of
+;; redirects is EXPECTED during the migration window. The threshold therefore
+;; guards against a routing breakdown — the majority of ops failing to route —
+;; rather than the normal transient churn, which would otherwise be silently
+;; absorbed with no signal at all.
+(def redirect-info-fraction-threshold 0.50)
+;; Absolute floor so that a handful of redirects on a tiny history does not
+;; trip the ratio threshold (avoids false positives on very short runs).
+(def redirect-info-count-floor 25)
+
+(defn- redirect-info?
+  "True if op is an :info result caused by an unresolved MOVED/ASK redirect,
+   whether it was downgraded by this workload's own catch (:error [:redirect ..])
+   or escaped invoke! and was downgraded to :info by Jepsen (carrying an
+   :exception whose message is a MOVED/ASK reply)."
+  [op]
+  (when (= :info (:type op))
+    (let [e (:error op)
+          tagged? (and (vector? e) (= :redirect (first e)))
+          ex-msg (some-> op :exception :cause str)
+          ex-redirect? (and ex-msg
+                            (or (str/starts-with? ex-msg "MOVED")
+                                (str/starts-with? ex-msg "ASK")))]
+      (boolean (or tagged? ex-redirect?)))))
+
 (defn checker
   "Checker for membership-routing workload.
 
    Verifies:
-   - All acknowledged writes are durable (readable after membership change)
+   - All acknowledged writes are durable (readable after membership change):
+     any successful read of a key that was acknowledged-written must return a
+     non-nil value. Reads of never-written keys are ignored (they are legally
+     nil), so this asserts durability without false positives.
    - Slot ownership transferred to the new node
-   - No lost writes during transition"
+   - A new node was added and the migration completed
+   - Unresolved MOVED/ASK redirects (surfaced as :info) stay under threshold"
   []
   (reify checker/Checker
     (check [_ test history opts]
       (let [completed (filter #(= :ok (:type %)) history)
             failed (filter #(= :fail (:type %)) history)
+            info-ops (filter #(= :info (:type %)) history)
 
             ;; Track all acknowledged writes
             writes (filter #(= :write (:f %)) completed)
@@ -271,6 +305,30 @@
             reads (filter #(= :read (:f %)) completed)
             final-reads (take-last 20 reads)
             reads-with-nil (filter #(nil? (get-in % [:value :value])) final-reads)
+
+            ;; Durability: an acknowledged write must remain readable. For every
+            ;; successful read of a key we know was acked-written, the value must
+            ;; be present. A nil there is a lost acknowledged write.
+            lost-writes (->> reads
+                             (filter (fn [r]
+                                       (let [k (get-in r [:value :key])]
+                                         (and (contains? written-keys k)
+                                              (nil? (get-in r [:value :value]))))))
+                             (map #(get-in % [:value :key]))
+                             distinct
+                             vec)
+            durable? (empty? lost-writes)
+
+            ;; Redirect thresholding: count unresolved MOVED/ASK redirects that
+            ;; leaked out as :info, and fail if they exceed the tolerated volume.
+            redirect-ops (filter redirect-info? info-ops)
+            redirect-count (count redirect-ops)
+            data-op-count (count (filter #(and (= :invoke (:type %))
+                                               (#{:read :write} (:f %)))
+                                         history))
+            redirect-limit (max redirect-info-count-floor
+                                (long (* redirect-info-fraction-threshold data-op-count)))
+            redirects-ok? (<= redirect-count redirect-limit)
 
             ;; Slot ownership
             slot-reads (filter #(= :read-slot-owner (:f %)) completed)
@@ -285,9 +343,16 @@
             migration-completed? (seq finish-ops)]
 
         {:valid? (boolean (and node-added?
-                              migration-completed?))
+                               migration-completed?
+                               durable?
+                               redirects-ok?))
          :node-added? (boolean node-added?)
          :migration-completed? (boolean migration-completed?)
+         :durable? durable?
+         :lost-write-keys lost-writes
+         :redirect-info-count redirect-count
+         :redirect-info-limit redirect-limit
+         :redirects-ok? redirects-ok?
          :final-slot-owner final-slot-owner
          :total-writes (count writes)
          :total-reads (count reads)

@@ -170,6 +170,17 @@ TESTS: tuple[TestDefinition, ...] = (
         Topology.REPLICATION,
         suites=("replication", "all"),
     ),
+    # Replica catch-up after a network partition heals. The workload drives
+    # writes (some with WAIT) while the :partition nemesis isolates a replica,
+    # then asserts convergence + no value regression once healed.
+    TestDefinition(
+        "partition-recovery",
+        "partition-recovery",
+        "partition",
+        90,
+        Topology.REPLICATION,
+        suites=("replication", "all"),
+    ),
     # Raft cluster core workloads
     TestDefinition(
         "cluster-formation",
@@ -247,6 +258,55 @@ TESTS: tuple[TestDefinition, ...] = (
         "raft-chaos",
         "key-routing",
         "raft-cluster",
+        120,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    # Raft cluster membership + recovery workloads.
+    # These workloads drive their own fault injection through operations
+    # (CLUSTER MEET, kill-leader, restart-node, slot migration), so they run
+    # with the "none" nemesis — the disruption is generated inside the workload.
+    #
+    # migration-recovery: kill the Raft leader mid-slot-migration and verify the
+    # cluster recovers, the orphaned migration is resolvable, and no data is lost.
+    TestDefinition(
+        "migration-recovery",
+        "migration-recovery",
+        "none",
+        120,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    # concurrent-migration: run 4 slot migrations in parallel and verify all
+    # converge to a consistent owner with no lost keys.
+    TestDefinition(
+        "concurrent-migration",
+        "concurrent-migration",
+        "none",
+        90,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    # membership-routing: add a node (CLUSTER MEET) and migrate a slot to it
+    # while traffic flows; verify MOVED handling, durability, and slot handoff.
+    TestDefinition(
+        "membership-routing",
+        "membership-routing",
+        "none",
+        120,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    # rolling-restart: SIGTERM + restart each node in sequence and verify the
+    # cluster stays available (>80%) with no data loss.
+    TestDefinition(
+        "rolling-restart",
+        "rolling-restart",
+        "none",
         120,
         Topology.RAFT,
         cluster_flag=True,
