@@ -8,6 +8,7 @@ use crate::serialization::serialize;
 use bytes::Bytes;
 use frogdb_types::traits::NoopMetricsRecorder;
 use frogdb_types::types::{KeyMetadata, Value};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -683,4 +684,416 @@ async fn test_wal_clear_reclamation_end_to_end() {
     let rocks = crate::rocks::RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
     assert_eq!(rocks.iter_cf(0).unwrap().count(), 10);
     assert!(rocks.get(0, b"old000").unwrap().is_none());
+}
+
+// ============================================================================
+// Fsync-boundary (durability-mode) crash tests — issue 12.
+//
+// The prior per-mode "crash" tests (crash_recovery_tests.rs) dropped the
+// `RocksStore` handle and reopened the *same* directory. That preserves the OS
+// page cache: unsynced-but-acked WAL bytes were flushed by the kernel anyway,
+// so `sync`/`periodic`/`async` were indistinguishable and their per-mode
+// assertions collapsed to `keys_loaded >= 1`. Nothing exercised the fsync
+// boundary the durability modes exist to control.
+//
+// These tests sever that boundary at the `WriteSink::commit(sync)` seam — the
+// exact point the durability mode decides whether to fsync (`FlushEngine`'s
+// `is_sync` -> `WriteOptions::set_sync`). A `PageCacheSink` models two storage
+// tiers behind that seam:
+//
+//   * a **durable** log that survives a crash (data that has been fsynced), and
+//   * a volatile **page cache** log that a crash discards (committed but not
+//     yet fsynced).
+//
+// `commit(sync = true)` promotes the whole page cache — this batch and every
+// earlier unsynced batch — into the durable tier, exactly as a single fsync of
+// the shared WAL file makes all preceding writes durable. `commit(sync = false)`
+// only appends to the page cache. An external `fsync()` models the out-of-band
+// durability sources a mode may still have: the `periodic` mode's
+// `spawn_periodic_sync` task calling `rocks.flush()`, or RocksDB flushing a
+// memtable on its own. `crash()` clears the page cache, modelling a power / OS
+// loss that drops precisely the unfsynced-but-acked writes.
+//
+// Driving the *real* flush-thread loop over this sink turns the previously
+// vacuous per-mode claims into distinct, asserted loss windows:
+//   * sync    — zero acked-write loss,
+//   * periodic — loss bounded by the last periodic fsync (one flush interval),
+//   * async   — unbounded until an out-of-band fsync lands.
+// ============================================================================
+
+/// One durability-log entry: a key set to a value, or deleted (tombstone).
+#[derive(Debug, Clone, PartialEq)]
+enum LogOp {
+    Put(Vec<u8>, Vec<u8>),
+    Delete(Vec<u8>),
+}
+
+/// Storage state behind the fsync seam, shared between the flush thread (which
+/// commits batches) and the test thread (which fsyncs / crashes / recovers).
+#[derive(Default)]
+struct PageCacheState {
+    /// Fsynced data — survives a crash. Applied in commit order.
+    durable: Vec<LogOp>,
+    /// Committed-but-unsynced data — a crash discards it (the OS page cache).
+    page_cache: Vec<LogOp>,
+    /// The `sync` flag seen by each `commit`, in order. Lets a test pin the
+    /// `DurabilityMode` -> `is_sync` -> `set_sync` wiring behaviourally.
+    commit_syncs: Vec<bool>,
+}
+
+impl PageCacheState {
+    /// fsync the WAL file: every unsynced byte becomes durable. Models both the
+    /// `periodic` sync task's `rocks.flush()` and any RocksDB-internal flush.
+    fn fsync(&mut self) {
+        self.durable.append(&mut self.page_cache);
+    }
+
+    /// Power loss: the volatile page cache evaporates; durable data remains.
+    fn crash(&mut self) {
+        self.page_cache.clear();
+    }
+
+    /// Fold the durable log into the surviving key/value set.
+    fn recovered(&self) -> BTreeMap<Vec<u8>, Vec<u8>> {
+        let mut map = BTreeMap::new();
+        for op in &self.durable {
+            match op {
+                LogOp::Put(k, v) => {
+                    map.insert(k.clone(), v.clone());
+                }
+                LogOp::Delete(k) => {
+                    map.remove(k);
+                }
+            }
+        }
+        map
+    }
+}
+
+/// [`WriteSink`] whose commits land in a shared [`PageCacheState`]. `sync=true`
+/// commits fsync (promote page cache to durable); `sync=false` commits stay in
+/// the page cache until an external fsync or are lost on crash.
+struct PageCacheSink {
+    staged: Vec<LogOp>,
+    state: Arc<Mutex<PageCacheState>>,
+}
+
+impl WriteSink for PageCacheSink {
+    fn stage_put(&mut self, key: &[u8], value: &[u8]) -> std::io::Result<()> {
+        self.staged.push(LogOp::Put(key.to_vec(), value.to_vec()));
+        Ok(())
+    }
+
+    fn stage_delete(&mut self, key: &[u8]) -> std::io::Result<()> {
+        self.staged.push(LogOp::Delete(key.to_vec()));
+        Ok(())
+    }
+
+    fn stage_merge(&mut self, _key: &[u8], _operand: &[u8]) -> std::io::Result<()> {
+        unimplemented!("fsync-boundary tests exercise Put/Delete only")
+    }
+
+    fn stage_clear(&mut self) -> std::io::Result<()> {
+        unimplemented!("fsync-boundary tests exercise Put/Delete only")
+    }
+
+    fn commit(&mut self, sync: bool) -> std::io::Result<()> {
+        let batch = std::mem::take(&mut self.staged);
+        let mut st = self.state.lock().unwrap();
+        st.commit_syncs.push(sync);
+        st.page_cache.extend(batch);
+        if sync {
+            // fsync semantics: this batch and every earlier unsynced write are
+            // now durable.
+            st.fsync();
+        }
+        Ok(())
+    }
+
+    fn staged_len(&self) -> usize {
+        self.staged.len()
+    }
+}
+
+/// A running flush thread over a [`PageCacheSink`], parameterised by mode.
+struct PageCacheWal {
+    tx: Option<flume::Sender<WalCommand>>,
+    outcomes: Arc<FlushOutcomes>,
+    state: Arc<Mutex<PageCacheState>>,
+    handle: Option<std::thread::JoinHandle<()>>,
+    last_seq: u64,
+}
+
+impl PageCacheWal {
+    fn spawn(mode: DurabilityMode) -> Self {
+        let state = Arc::new(Mutex::new(PageCacheState::default()));
+        let sink = PageCacheSink {
+            staged: Vec::new(),
+            state: Arc::clone(&state),
+        };
+        let lag = Arc::new(WalLagAtomics {
+            pending_ops: AtomicUsize::new(0),
+            pending_bytes: AtomicUsize::new(0),
+            last_flush_timestamp_ms: AtomicU64::new(0),
+        });
+        let outcomes = Arc::new(FlushOutcomes::new());
+        let engine = FlushEngine::new(
+            sink,
+            0,
+            &mode,
+            Arc::clone(&lag),
+            Arc::clone(&outcomes),
+            Arc::new(NoopMetricsRecorder::new()),
+        );
+        // Large threshold + long timeout: batches commit only on the explicit
+        // flushes these tests issue, so the fsync boundary is deterministic.
+        let (tx, rx) = flume::bounded(256);
+        let handle = std::thread::spawn(move || {
+            flush_thread_loop(rx, engine, 1024 * 1024, Duration::from_secs(60));
+        });
+        Self {
+            tx: Some(tx),
+            outcomes,
+            state,
+            handle: Some(handle),
+            last_seq: 0,
+        }
+    }
+
+    fn put(&mut self, key: &[u8], value: &[u8]) -> u64 {
+        self.last_seq += 1;
+        let seq = self.last_seq;
+        self.tx
+            .as_ref()
+            .unwrap()
+            .send(WalCommand::Write(WalEntry::Put {
+                seq,
+                key: Bytes::copy_from_slice(key),
+                value: value.to_vec(),
+                size_estimate: key.len() + value.len(),
+            }))
+            .unwrap();
+        seq
+    }
+
+    /// Explicit flush: drain the staged batch through `commit`. In `sync` mode
+    /// this fsyncs; in `periodic`/`async` it only reaches the page cache.
+    fn flush(&self) {
+        let (done_tx, done_rx) = flume::bounded(1);
+        self.tx
+            .as_ref()
+            .unwrap()
+            .send(WalCommand::Flush { done_tx })
+            .unwrap();
+        done_rx.recv().unwrap().unwrap();
+    }
+
+    /// Out-of-band fsync — the `periodic` sync task's `rocks.flush()`, or a
+    /// RocksDB-internal memtable flush. Promotes the page cache to durable.
+    fn periodic_fsync(&self) {
+        self.state.lock().unwrap().fsync();
+    }
+
+    /// Crash after every sent write has reached the commit seam, then recover.
+    ///
+    /// We first wait until the flush thread has committed everything sent (so
+    /// no entry is still staged), then stop it — its disconnect drain now sees
+    /// an empty buffer and cannot "clean shutdown"-persist anything. Only then
+    /// is the page cache severed, so the crash drops exactly the acked writes
+    /// that were committed unsynced.
+    fn crash_and_recover(mut self) -> BTreeMap<Vec<u8>, Vec<u8>> {
+        let target = self.last_seq;
+        spin_until("all sent writes committed to the sink", || {
+            self.outcomes.durable_sequence() >= target
+        });
+        drop(self.tx.take());
+        self.handle.take().unwrap().join().unwrap();
+        let mut st = self.state.lock().unwrap();
+        st.crash();
+        st.recovered()
+    }
+
+    fn commit_syncs(&self) -> Vec<bool> {
+        self.state.lock().unwrap().commit_syncs.clone()
+    }
+}
+
+fn spin_until(what: &str, cond: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if cond() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    panic!("timed out waiting for: {what}");
+}
+
+fn key(i: u32) -> Vec<u8> {
+    format!("k{i:04}").into_bytes()
+}
+
+/// The seam wiring itself: `Sync` mode fsyncs on every commit, `Periodic` and
+/// `Async` never do at the commit seam. This behaviourally pins
+/// `FlushEngine::is_sync` -> `WriteOptions::set_sync` — previously only
+/// statically verified, never asserted at the durability boundary.
+#[test]
+fn test_fsync_seam_sync_flag_matches_mode() {
+    for (mode, expect_sync) in [
+        (DurabilityMode::Sync, true),
+        (DurabilityMode::Periodic { interval_ms: 1000 }, false),
+        (DurabilityMode::Async, false),
+    ] {
+        let mut wal = PageCacheWal::spawn(mode.clone());
+        wal.put(b"a", b"1");
+        wal.put(b"b", b"2");
+        wal.flush();
+        let syncs = wal.commit_syncs();
+        assert!(!syncs.is_empty(), "{mode:?}: a commit must have happened");
+        assert!(
+            syncs.iter().all(|&s| s == expect_sync),
+            "{mode:?}: every commit sync flag must be {expect_sync}, got {syncs:?}"
+        );
+    }
+}
+
+/// Sync mode: **zero acked-write loss**. Every write is fsynced at commit, so a
+/// page-cache-severing crash cannot drop any acknowledged write.
+#[test]
+fn test_sync_mode_zero_acked_write_loss() {
+    let mut wal = PageCacheWal::spawn(DurabilityMode::Sync);
+    let n = 200u32;
+    for i in 0..n {
+        wal.put(&key(i), format!("v{i}").as_bytes());
+        // In sync mode a write is acked only once its commit fsyncs; flush after
+        // each write models that per-write durability ack.
+        wal.flush();
+    }
+    // The page cache is always empty in sync mode: every commit fsynced.
+    assert!(
+        wal.state.lock().unwrap().page_cache.is_empty(),
+        "sync mode must leave nothing unsynced"
+    );
+
+    let recovered = wal.crash_and_recover();
+    assert_eq!(
+        recovered.len(),
+        n as usize,
+        "every acked write must survive the crash in sync mode"
+    );
+    for i in 0..n {
+        assert_eq!(
+            recovered.get(&key(i)).map(|v| v.as_slice()),
+            Some(format!("v{i}").as_bytes()),
+            "sync-mode key {i} lost or wrong after crash"
+        );
+    }
+}
+
+/// Periodic mode: the loss window is **bounded by the last periodic fsync**.
+/// Writes committed before a periodic sync survive a crash; only writes since
+/// that sync (the current flush interval) are at risk — never an unbounded
+/// suffix reaching back before the sync.
+#[test]
+fn test_periodic_mode_loss_bounded_by_flush_interval() {
+    let mut wal = PageCacheWal::spawn(DurabilityMode::Periodic { interval_ms: 1000 });
+
+    // Interval 1: writes that a periodic sync makes durable ("before the last
+    // tick").
+    let durable_keys = 100u32;
+    for i in 0..durable_keys {
+        wal.put(&key(i), format!("v{i}").as_bytes());
+    }
+    wal.flush(); // commit to page cache (sync=false)...
+    wal.periodic_fsync(); // ...then the periodic sync task fsyncs them.
+
+    // Interval 2: writes accepted after the last tick, still in the page cache
+    // when the crash hits ("within the window").
+    let window_start = durable_keys;
+    let window_end = durable_keys + 50;
+    for i in window_start..window_end {
+        wal.put(&key(i), format!("v{i}").as_bytes());
+    }
+    wal.flush(); // committed unsynced; NOT fsynced (interval not elapsed).
+
+    let recovered = wal.crash_and_recover();
+
+    // Bound, lower edge: every write that predates the periodic sync survived —
+    // the loss window does not extend back past the last fsync.
+    for i in 0..durable_keys {
+        assert_eq!(
+            recovered.get(&key(i)).map(|v| v.as_slice()),
+            Some(format!("v{i}").as_bytes()),
+            "periodic-mode key {i} predates the last fsync and must survive"
+        );
+    }
+    // Bound, upper edge: the within-interval writes were the only ones lost.
+    for i in window_start..window_end {
+        assert!(
+            !recovered.contains_key(&key(i)),
+            "periodic-mode key {i} was written after the last fsync; a crash must drop it"
+        );
+    }
+    assert_eq!(
+        recovered.len(),
+        durable_keys as usize,
+        "exactly the pre-fsync writes survive — loss is bounded to one interval"
+    );
+}
+
+/// Async mode, worst case: with no out-of-band fsync, the entire window of
+/// acked-but-unsynced writes is lost. Nothing at the commit seam bounds it.
+#[test]
+fn test_async_mode_unbounded_loss_without_fsync() {
+    let mut wal = PageCacheWal::spawn(DurabilityMode::Async);
+    let n = 200u32;
+    for i in 0..n {
+        wal.put(&key(i), format!("v{i}").as_bytes());
+    }
+    wal.flush(); // committed to the page cache, never fsynced.
+
+    let recovered = wal.crash_and_recover();
+    assert!(
+        recovered.is_empty(),
+        "async mode fsyncs nothing on its own; every acked write is at risk, \
+         yet {} survived",
+        recovered.len()
+    );
+}
+
+/// Async mode window is bounded only by the *next out-of-band fsync* (RocksDB
+/// memtable flush, or a manual sync), and it can reach arbitrarily far back:
+/// data fsynced by such a flush survives, everything written since is lost with
+/// no interval bound.
+#[test]
+fn test_async_mode_window_bounded_only_by_external_fsync() {
+    let mut wal = PageCacheWal::spawn(DurabilityMode::Async);
+
+    // A batch that a background/manual fsync happens to catch.
+    let synced = 40u32;
+    for i in 0..synced {
+        wal.put(&key(i), format!("v{i}").as_bytes());
+    }
+    wal.flush();
+    wal.periodic_fsync(); // e.g. a RocksDB memtable flush fsyncs the WAL.
+
+    // A long tail written afterwards with no further fsync — unbounded window.
+    let tail = 300u32;
+    for i in synced..(synced + tail) {
+        wal.put(&key(i), format!("v{i}").as_bytes());
+    }
+    wal.flush();
+
+    let recovered = wal.crash_and_recover();
+    for i in 0..synced {
+        assert!(
+            recovered.contains_key(&key(i)),
+            "async-mode key {i} was fsynced before the crash and must survive"
+        );
+    }
+    assert_eq!(
+        recovered.len(),
+        synced as usize,
+        "only the externally-fsynced prefix survives; the unbounded tail is lost"
+    );
 }
