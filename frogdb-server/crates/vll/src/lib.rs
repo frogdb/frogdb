@@ -24,4 +24,4 @@ pub use shard::{
     PendingOpSnapshot, QUEUE_DEPTH_WARN_THRESHOLD, VllShardState,
 };
 pub use traits::{MetricsSink, NoopMetricsSink, ShardSink, ShardSinkError};
-pub use types::{LockMode, PendingOpState, ShardReadyResult, VllConfig, VllError};
+pub use types::{LockMode, PendingOpState, ShardReadyResult, VllError};

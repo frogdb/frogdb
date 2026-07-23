@@ -162,9 +162,6 @@ pub struct ConnectionHandler {
     /// Default false in production; test harness sets to true.
     enable_debug_command: bool,
 
-    /// Hot shard detection configuration.
-    _hotshards_config: frogdb_debug::HotShardConfig,
-
     /// Memory diagnostics provider (MEMORY DOCTOR), wrapping the configured
     /// [`frogdb_debug::MemoryDiagConfig`] behind the core `MemoryDiagProvider`
     /// seam so it can be exposed through [`ConnCtx::memory_diag`].
@@ -274,7 +271,6 @@ impl ConnectionHandler {
             is_admin: config.is_admin,
             admin_enabled: config.admin_enabled,
             enable_debug_command: config.enable_debug_command,
-            _hotshards_config: config.hotshards_config,
             memory_diag: crate::connection::observability_conn_command::MemoryDiag(
                 config.memory_diag_config,
             ),

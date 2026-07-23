@@ -12,7 +12,7 @@ use frogdb_core::{
     CommandRegistry, MetricsRecorder, ReplicationTrackerImpl, ShardSender, SharedFunctionRegistry,
     persistence::SnapshotCoordinator,
 };
-use frogdb_debug::{HotShardConfig, MemoryDiagConfig};
+use frogdb_debug::MemoryDiagConfig;
 use frogdb_telemetry::SharedTracer;
 
 use crate::config::TracingConfig;
@@ -255,7 +255,6 @@ pub fn standalone_config(num_shards: usize) -> ConnectionConfig {
         scatter_gather_timeout: Duration::from_millis(5000),
         is_admin: false,
         admin_enabled: false,
-        hotshards_config: HotShardConfig::default(),
         memory_diag_config: MemoryDiagConfig::default(),
         per_request_spans: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         is_replica: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),

@@ -430,7 +430,7 @@ mod tests {
     /// struct that isn't `#[serde(skip)]`) must appear as a `[section]`
     /// header in the generated default TOML. This is section-level coverage
     /// specifically for the sections that regressed before this test existed:
-    /// blocking, tiered-storage, compat, hotshards, debug-bundle, monitor.
+    /// blocking, tiered-storage, compat, debug-bundle, monitor.
     #[test]
     fn default_toml_contains_every_config_section() {
         let text = default_toml_impl();
@@ -453,7 +453,7 @@ mod tests {
         }
     }
 
-    /// Names the six sections that were missing from the hand-maintained
+    /// Names sections that were missing from the hand-maintained
     /// `default_toml_impl()` string prior to this fix, so a regression to a
     /// hand-maintained (and incomplete) string is caught with a specific,
     /// readable failure rather than only the generic round-trip assertion.
@@ -464,7 +464,6 @@ mod tests {
             "blocking",
             "tiered-storage",
             "compat",
-            "hotshards",
             "debug-bundle",
             "monitor",
         ] {

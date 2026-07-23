@@ -118,9 +118,6 @@ pub struct AcceptorContext {
     /// the regular port).
     pub admin_enabled: bool,
 
-    /// Hot shard detection configuration.
-    pub hotshards_config: frogdb_debug::HotShardConfig,
-
     /// Memory diagnostics configuration.
     pub memory_diag_config: frogdb_debug::MemoryDiagConfig,
 
@@ -173,7 +170,6 @@ impl Acceptor {
             scatter_gather_timeout: std::time::Duration::from_millis(ctx.scatter_gather_timeout_ms),
             is_admin: spec.is_admin,
             admin_enabled: ctx.admin_enabled,
-            hotshards_config: ctx.hotshards_config,
             memory_diag_config: ctx.memory_diag_config,
             per_request_spans: ctx.admin.config_manager.per_request_spans_flag(),
             is_replica: ctx.is_replica,
@@ -407,7 +403,6 @@ mod tests {
             allow_cross_slot: false,
             scatter_gather_timeout_ms: 5000,
             admin_enabled: true,
-            hotshards_config: frogdb_debug::HotShardConfig::default(),
             memory_diag_config: frogdb_debug::MemoryDiagConfig::default(),
             max_clients: Arc::new(AtomicU64::new(0)),
             is_replica: Arc::new(AtomicBool::new(false)),

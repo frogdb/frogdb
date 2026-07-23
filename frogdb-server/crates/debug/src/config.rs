@@ -2,27 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Configuration for hot shard detection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HotShardConfig {
-    /// Threshold percentage for "HOT" status (default: 20.0).
-    pub hot_threshold_percent: f64,
-    /// Threshold percentage for "WARM" status (default: 15.0).
-    pub warm_threshold_percent: f64,
-    /// Default period for stats collection in seconds (default: 10).
-    pub default_period_secs: u64,
-}
-
-impl Default for HotShardConfig {
-    fn default() -> Self {
-        Self {
-            hot_threshold_percent: 20.0,
-            warm_threshold_percent: 15.0,
-            default_period_secs: 10,
-        }
-    }
-}
-
 /// Configuration for memory diagnostics (MEMORY DOCTOR).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryDiagConfig {

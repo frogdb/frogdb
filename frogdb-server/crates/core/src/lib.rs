@@ -157,4 +157,4 @@ pub use tracking::{
     BroadcastTable, DEFAULT_TRACKING_TABLE_MAX_KEYS, InvalidationMessage, InvalidationRegistry,
     InvalidationSender, TrackedConnection, TrackingTable,
 };
-pub use vll::{LockMode, PendingOpState, ShardReadyResult, VllConfig, VllError};
+pub use vll::{LockMode, PendingOpState, ShardReadyResult, VllError};
