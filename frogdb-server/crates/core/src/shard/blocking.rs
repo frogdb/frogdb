@@ -8,7 +8,7 @@ use frogdb_types::metrics::definitions::{
     BlockedClients, BlockedMigrationMoved, BlockedSatisfiedTotal, BlockedTimeoutTotal,
 };
 
-use crate::command::WaiterKind;
+use crate::command::{SynthesizedCommand, WaiterKind};
 use crate::keyspace_event::KeyspaceEventFlags;
 use crate::store::{HashMapStore, Store};
 use crate::types::{BlockingOp, Direction, StreamEntry, Value};
@@ -312,14 +312,15 @@ impl ShardWorker {
                     cascade,
                     events,
                     restore,
+                    propagate,
                 } => {
                     // Deliver first: `satisfy` already consumed the store data,
                     // so the externally observable effects (version bump,
-                    // keyspace events, wake cascade) must be committed only if
-                    // the reply actually reaches the client. If the receiver was
-                    // dropped in the pop→send race, restore the consumed data and
-                    // commit nothing — the element is neither lost nor
-                    // double-delivered.
+                    // keyspace events, replication propagation, wake cascade)
+                    // must be committed only if the reply actually reaches the
+                    // client. If the receiver was dropped in the pop→send race,
+                    // restore the consumed data and commit nothing — the element
+                    // is neither lost nor double-delivered.
                     match entry.response_tx.send(reply) {
                         Ok(()) => {
                             self.record_blocked_waiter_satisfied();
@@ -328,6 +329,18 @@ impl ShardWorker {
                                 // for a BLPOP), so bump only its slot — a watch on
                                 // a different-slot key survives.
                                 self.bump_version_for_key(key);
+                            }
+                            // Record the deterministic pop for replication (issue
+                            // 02). Only a committed delivery propagates — the
+                            // restore arm below undoes the pop, so nothing must
+                            // ship there. Pushed *before* the BLMove cascade
+                            // recurses so a wake chain replicates in apply order
+                            // (each hop's `LMOVE` lands ahead of the next):
+                            // replicas must apply push-then-pop. Flushed at the
+                            // terminal `ReplicationBroadcast` effect, after the
+                            // waking write's own broadcast.
+                            if let Some(cmd) = propagate {
+                                self.pending_serve_propagations.push(cmd);
                             }
                             // Publish the same keyspace events the immediate
                             // command path deposits. Routed through the
@@ -525,6 +538,18 @@ enum Satisfaction {
         /// How to put the consumed store data back if delivery fails (the
         /// receiver was dropped in the pop→send race). See [`Restore`].
         restore: Restore,
+        /// The deterministic command replicas must apply to reproduce this
+        /// served mutation (issue 02). A served blocking pop mutates the store
+        /// directly here; the *waking* write (e.g. `LPUSH`) is the only thing
+        /// broadcast otherwise, so a replica that re-executes it keeps the
+        /// element the primary's blocked client consumed. Naming the exact
+        /// deterministic pop (`LPOP`/`RPOP`/`LMOVE`/`ZPOPMIN` …) and shipping it
+        /// after the waking write closes that divergence — the blocking-serve
+        /// counterpart of SPOP's `SREM`/`DEL` rewrite. `None` for a pure read
+        /// (blocking `XREAD`), which mutates nothing replicas do not already
+        /// derive from the broadcast `XADD`. Applied only when delivery
+        /// commits — a restored (undelivered) pop ships nothing.
+        propagate: Option<SynthesizedCommand>,
     },
     /// The key is no longer satisfiable for this waiter (it lost a race to an
     /// earlier waiter that emptied the key); drop the waiter and re-loop.
@@ -667,6 +692,12 @@ impl WaiterSatisfaction for ListSatisfaction {
                                 dir: Direction::Left,
                                 elems: vec![value],
                             },
+                            // The served BLPOP popped one element off the front:
+                            // replicas reproduce it with `LPOP key`.
+                            propagate: Some(SynthesizedCommand {
+                                name: "LPOP",
+                                args: vec![key.clone()],
+                            }),
                         }
                     }
                     None => Satisfaction::Retry,
@@ -692,6 +723,12 @@ impl WaiterSatisfaction for ListSatisfaction {
                                 dir: Direction::Right,
                                 elems: vec![value],
                             },
+                            // The served BRPOP popped one element off the back:
+                            // replicas reproduce it with `RPOP key`.
+                            propagate: Some(SynthesizedCommand {
+                                name: "RPOP",
+                                args: vec![key.clone()],
+                            }),
                         }
                     }
                     None => Satisfaction::Retry,
@@ -767,6 +804,21 @@ impl WaiterSatisfaction for ListSatisfaction {
                         dest_dir: *dest_dir,
                         value,
                     },
+                    // A served BLMOVE/BRPOPLPUSH both pops the source and pushes
+                    // the destination. `LMOVE` reproduces both ends
+                    // deterministically in one command, so replicas match the
+                    // primary on *both* keys (BRPOPLPUSH is `LMOVE src dst RIGHT
+                    // LEFT`). A wake cascade appends the next hop's `LMOVE`
+                    // after this one, preserving apply order.
+                    propagate: Some(SynthesizedCommand {
+                        name: "LMOVE",
+                        args: vec![
+                            key.clone(),
+                            dest.clone(),
+                            direction_arg(*src_dir),
+                            direction_arg(*dest_dir),
+                        ],
+                    }),
                 }
             }
             BlockingOp::BLMPop { direction, count } => {
@@ -789,9 +841,10 @@ impl WaiterSatisfaction for ListSatisfaction {
                 }
 
                 cleanup_empty_list(store, key);
-                let pop_event = match direction {
-                    Direction::Left => "lpop",
-                    Direction::Right => "rpop",
+                let popped_count = popped.len();
+                let (pop_event, pop_cmd) = match direction {
+                    Direction::Left => ("lpop", "LPOP"),
+                    Direction::Right => ("rpop", "RPOP"),
                 };
                 let elements = popped.iter().cloned().map(Response::bulk).collect();
                 Satisfaction::Done {
@@ -806,6 +859,15 @@ impl WaiterSatisfaction for ListSatisfaction {
                         dir: *direction,
                         elems: popped,
                     },
+                    // The served BLMPOP popped exactly `popped_count` elements
+                    // off one end. `LPOP key N` / `RPOP key N` reproduces that
+                    // count deterministically (the count is the *actual* number
+                    // popped, so a partial drain replicates exactly what the
+                    // primary removed).
+                    propagate: Some(SynthesizedCommand {
+                        name: pop_cmd,
+                        args: vec![key.clone(), Bytes::from(popped_count.to_string())],
+                    }),
                 }
             }
             _ => {
@@ -878,6 +940,12 @@ impl WaiterSatisfaction for ZsetSatisfaction {
                         key: key.clone(),
                         members: vec![(member, score)],
                     },
+                    // The served BZPOPMIN popped the single lowest-scoring
+                    // member: `ZPOPMIN key` reproduces it deterministically.
+                    propagate: Some(SynthesizedCommand {
+                        name: "ZPOPMIN",
+                        args: vec![key.clone()],
+                    }),
                 }
             }
             BlockingOp::BZPopMax => {
@@ -904,6 +972,12 @@ impl WaiterSatisfaction for ZsetSatisfaction {
                         key: key.clone(),
                         members: vec![(member, score)],
                     },
+                    // The served BZPOPMAX popped the single highest-scoring
+                    // member: `ZPOPMAX key` reproduces it deterministically.
+                    propagate: Some(SynthesizedCommand {
+                        name: "ZPOPMAX",
+                        args: vec![key.clone()],
+                    }),
                 }
             }
             BlockingOp::BZMPop { min, count } => {
@@ -933,7 +1007,12 @@ impl WaiterSatisfaction for ZsetSatisfaction {
                     .collect();
 
                 cleanup_empty_zset(store, key);
-                let pop_event = if *min { "zpopmin" } else { "zpopmax" };
+                let popped_count = popped.len();
+                let (pop_event, pop_cmd) = if *min {
+                    ("zpopmin", "ZPOPMIN")
+                } else {
+                    ("zpopmax", "ZPOPMAX")
+                };
                 Satisfaction::Done {
                     reply: Response::Array(vec![
                         Response::bulk(key.clone()),
@@ -945,6 +1024,13 @@ impl WaiterSatisfaction for ZsetSatisfaction {
                         key: key.clone(),
                         members: popped,
                     },
+                    // The served BZMPOP popped `popped_count` members off one
+                    // end: `ZPOPMIN key N` / `ZPOPMAX key N` reproduces exactly
+                    // the count removed (partial drain included).
+                    propagate: Some(SynthesizedCommand {
+                        name: pop_cmd,
+                        args: vec![key.clone(), Bytes::from(popped_count.to_string())],
+                    }),
                 }
             }
             _ => {
@@ -1014,6 +1100,10 @@ impl WaiterSatisfaction for StreamSatisfaction {
                     // XREAD does not remove entries from the stream, so a failed
                     // delivery leaves nothing to restore.
                     restore: Restore::None,
+                    // A plain blocking `XREAD` mutates nothing — the replica
+                    // already holds the entries from the broadcast `XADD`, so
+                    // there is nothing to reproduce.
+                    propagate: None,
                 }
             }
             BlockingOp::XReadGroup {
@@ -1050,6 +1140,18 @@ impl WaiterSatisfaction for StreamSatisfaction {
                         // via XPENDING/XAUTOCLAIM), so it consumes no store data
                         // to restore here.
                         restore: Restore::None,
+                        // KNOWN GAP (issue 02 follow-up): a served blocking
+                        // XREADGROUP advances consumer-group state
+                        // (last-delivered-id, PEL) that is NOT reproduced on the
+                        // replica — the waking XADD is broadcast but the group
+                        // advancement is not. Unlike the list/zset pops handled
+                        // above, reproducing it means synthesizing an
+                        // XREADGROUP/XCLAIM against the replica's group, a
+                        // distinct mechanism (Redis propagates XCLAIM). Deferred
+                        // to a dedicated stream-consumer-group replication task;
+                        // `None` here preserves today's behaviour rather than
+                        // shipping an untested stream path.
+                        propagate: None,
                     },
                     _ => Satisfaction::Retry,
                 }
@@ -1062,6 +1164,15 @@ impl WaiterSatisfaction for StreamSatisfaction {
                 Satisfaction::Retry
             }
         }
+    }
+}
+
+/// The `LEFT`/`RIGHT` keyword a synthesized `LMOVE` replication command uses
+/// for a [`Direction`] end.
+fn direction_arg(dir: Direction) -> Bytes {
+    match dir {
+        Direction::Left => Bytes::from_static(b"LEFT"),
+        Direction::Right => Bytes::from_static(b"RIGHT"),
     }
 }
 
@@ -1287,6 +1398,176 @@ mod tests {
             }
             other => panic!("expected Reject(NOGROUP), got {other:?}"),
         }
+    }
+
+    // ---- Served-pop replication synthesis (issue 02) ----------------------
+    //
+    // Each served blocking pop must name the deterministic command a replica
+    // re-applies to reproduce the primary's mutation. Verbatim propagation of
+    // the *waking* write alone (LPUSH/ZADD/…) leaves the consumed element on the
+    // replica; these pins assert the synthesized pop for every op family.
+
+    /// Extract the synthesized replication command from a `Done` outcome.
+    fn propagate_of(s: Satisfaction) -> Option<SynthesizedCommand> {
+        match s {
+            Satisfaction::Done { propagate, .. } => propagate,
+            other => panic!("expected Done, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn blpop_propagates_as_lpop() {
+        let key = Bytes::from_static(b"k");
+        let mut store = list_with(&key, &["a", "b"]);
+        let (entry, _rx) = make_entry(BlockingOp::BLPop, vec![key.clone()]);
+        let cmd = propagate_of(ListSatisfaction.satisfy(&mut store, &key, &entry))
+            .expect("BLPOP serve must synthesize a pop");
+        assert_eq!(cmd.name, "LPOP");
+        assert_eq!(cmd.args, vec![key]);
+    }
+
+    #[test]
+    fn brpop_propagates_as_rpop() {
+        let key = Bytes::from_static(b"k");
+        let mut store = list_with(&key, &["a", "b"]);
+        let (entry, _rx) = make_entry(BlockingOp::BRPop, vec![key.clone()]);
+        let cmd = propagate_of(ListSatisfaction.satisfy(&mut store, &key, &entry))
+            .expect("BRPOP serve must synthesize a pop");
+        assert_eq!(cmd.name, "RPOP");
+        assert_eq!(cmd.args, vec![key]);
+    }
+
+    #[test]
+    fn blmove_propagates_as_lmove_with_directions() {
+        let src = Bytes::from_static(b"s");
+        let dst = Bytes::from_static(b"d");
+        let mut store = list_with(&src, &["a"]);
+        let (entry, _rx) = make_entry(
+            BlockingOp::BLMove {
+                dest: dst.clone(),
+                src_dir: Direction::Right,
+                dest_dir: Direction::Left,
+            },
+            vec![src.clone()],
+        );
+        // BRPOPLPUSH is exactly `LMOVE src dst RIGHT LEFT`; the synthesized
+        // command must carry both keys and both resolved directions so the
+        // replica reproduces the pop AND the push.
+        let cmd = propagate_of(ListSatisfaction.satisfy(&mut store, &src, &entry))
+            .expect("BLMOVE serve must synthesize a move");
+        assert_eq!(cmd.name, "LMOVE");
+        assert_eq!(
+            cmd.args,
+            vec![
+                src,
+                dst,
+                Bytes::from_static(b"RIGHT"),
+                Bytes::from_static(b"LEFT"),
+            ]
+        );
+    }
+
+    #[test]
+    fn blmpop_propagates_as_lpop_with_actual_count() {
+        let key = Bytes::from_static(b"k");
+        // Only two elements present but COUNT 5 requested: the propagated count
+        // must be the *actual* number popped (2), not the requested 5, so a
+        // partial drain replicates exactly what the primary removed.
+        let mut store = list_with(&key, &["a", "b"]);
+        let (entry, _rx) = make_entry(
+            BlockingOp::BLMPop {
+                direction: Direction::Left,
+                count: 5,
+            },
+            vec![key.clone()],
+        );
+        let cmd = propagate_of(ListSatisfaction.satisfy(&mut store, &key, &entry))
+            .expect("BLMPOP serve must synthesize a pop");
+        assert_eq!(cmd.name, "LPOP");
+        assert_eq!(cmd.args, vec![key, Bytes::from_static(b"2")]);
+    }
+
+    #[test]
+    fn bzpopmin_propagates_as_zpopmin() {
+        let key = Bytes::from_static(b"z");
+        let mut store = HashMapStore::new();
+        let mut v = Value::sorted_set();
+        let z = v.as_sorted_set_mut().unwrap();
+        z.add(Bytes::from_static(b"a"), 1.0);
+        z.add(Bytes::from_static(b"b"), 2.0);
+        store.set(key.clone(), v);
+        let (entry, _rx) = make_entry(BlockingOp::BZPopMin, vec![key.clone()]);
+        let cmd = propagate_of(ZsetSatisfaction.satisfy(&mut store, &key, &entry))
+            .expect("BZPOPMIN serve must synthesize a pop");
+        assert_eq!(cmd.name, "ZPOPMIN");
+        assert_eq!(cmd.args, vec![key]);
+    }
+
+    #[test]
+    fn bzpopmax_propagates_as_zpopmax() {
+        let key = Bytes::from_static(b"z");
+        let mut store = HashMapStore::new();
+        let mut v = Value::sorted_set();
+        let z = v.as_sorted_set_mut().unwrap();
+        z.add(Bytes::from_static(b"a"), 1.0);
+        z.add(Bytes::from_static(b"b"), 2.0);
+        store.set(key.clone(), v);
+        let (entry, _rx) = make_entry(BlockingOp::BZPopMax, vec![key.clone()]);
+        let cmd = propagate_of(ZsetSatisfaction.satisfy(&mut store, &key, &entry))
+            .expect("BZPOPMAX serve must synthesize a pop");
+        assert_eq!(cmd.name, "ZPOPMAX");
+        assert_eq!(cmd.args, vec![key]);
+    }
+
+    #[test]
+    fn bzmpop_propagates_as_zpop_with_actual_count() {
+        let key = Bytes::from_static(b"z");
+        let mut store = HashMapStore::new();
+        let mut v = Value::sorted_set();
+        let z = v.as_sorted_set_mut().unwrap();
+        z.add(Bytes::from_static(b"a"), 1.0);
+        z.add(Bytes::from_static(b"b"), 2.0);
+        z.add(Bytes::from_static(b"c"), 3.0);
+        store.set(key.clone(), v);
+        let (entry, _rx) = make_entry(
+            BlockingOp::BZMPop {
+                min: false,
+                count: 2,
+            },
+            vec![key.clone()],
+        );
+        let cmd = propagate_of(ZsetSatisfaction.satisfy(&mut store, &key, &entry))
+            .expect("BZMPOP serve must synthesize a pop");
+        assert_eq!(cmd.name, "ZPOPMAX");
+        assert_eq!(cmd.args, vec![key, Bytes::from_static(b"2")]);
+    }
+
+    #[test]
+    fn blocking_xread_propagates_nothing() {
+        // A plain blocking XREAD is a pure read: the replica already holds the
+        // entries from the broadcast XADD, so there is nothing to reproduce.
+        let key = Bytes::from_static(b"st");
+        let mut store = HashMapStore::new();
+        let mut v = Value::stream();
+        v.as_stream_mut()
+            .unwrap()
+            .add(
+                crate::types::StreamIdSpec::Explicit(crate::types::StreamId::new(1, 0)),
+                vec![(Bytes::from_static(b"f"), Bytes::from_static(b"1"))],
+            )
+            .unwrap();
+        store.set(key.clone(), v);
+        let (entry, _rx) = make_entry(
+            BlockingOp::XRead {
+                after_ids: vec![crate::types::StreamId::new(0, 0)],
+                count: None,
+            },
+            vec![key.clone()],
+        );
+        assert!(
+            propagate_of(StreamSatisfaction.satisfy(&mut store, &key, &entry)).is_none(),
+            "a blocking XREAD serve replicates nothing"
+        );
     }
 
     // ---- Driver test: BLMOVE fan-out depth cap (needs a worker) -----------
@@ -1544,6 +1825,100 @@ mod tests {
                 .wait_queue
                 .has_waiters_for_kind(&key, WaiterKind::List),
             "the satisfied waiter is removed from the queue"
+        );
+    }
+
+    // ---- Served-pop propagation buffer accumulation (issue 02) ------------
+
+    /// Driving satisfaction for a live BLPOP waiter records the equivalent
+    /// `LPOP` in the worker's `pending_serve_propagations` buffer, which the
+    /// `ReplicationBroadcast` effect later flushes to replicas.
+    #[test]
+    fn served_blpop_records_pending_propagation() {
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        let key = Bytes::from_static(b"k");
+
+        let (mut entry, _rx) = make_entry(BlockingOp::BLPop, vec![key.clone()]);
+        entry.deadline = Some(Instant::now() + std::time::Duration::from_secs(60));
+        worker.wait_queue.register(entry).unwrap();
+
+        let mut v = Value::list();
+        v.as_list_mut().unwrap().push_back(Bytes::from_static(b"x"));
+        worker.store.set(key.clone(), v);
+        worker.try_satisfy_list_waiters(&key);
+
+        assert_eq!(worker.pending_serve_propagations.len(), 1);
+        assert_eq!(worker.pending_serve_propagations[0].name, "LPOP");
+        assert_eq!(worker.pending_serve_propagations[0].args, vec![key]);
+    }
+
+    /// A doomed waiter (receiver dropped) records NO propagation: nothing was
+    /// consumed, so nothing must ship to replicas.
+    #[test]
+    fn doomed_waiter_records_no_propagation() {
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        let key = Bytes::from_static(b"k");
+
+        let (entry, rx) = make_entry(BlockingOp::BLPop, vec![key.clone()]);
+        worker.wait_queue.register(entry).unwrap();
+        drop(rx);
+
+        let mut v = Value::list();
+        v.as_list_mut().unwrap().push_back(Bytes::from_static(b"x"));
+        worker.store.set(key.clone(), v);
+        worker.try_satisfy_list_waiters(&key);
+
+        assert!(
+            worker.pending_serve_propagations.is_empty(),
+            "a served element that reached no client must not replicate a pop"
+        );
+    }
+
+    /// A BLMOVE wake chain records one `LMOVE` per served hop, in apply order:
+    /// the parent hop's move lands ahead of the cascade's so a replica applies
+    /// them push-then-pop and converges.
+    #[test]
+    fn blmove_cascade_records_ordered_propagations() {
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        let a = Bytes::from_static(b"a");
+        let b = Bytes::from_static(b"b");
+        let c = Bytes::from_static(b"c");
+
+        // Waiter 1: BLMOVE a -> b (LEFT, RIGHT). Waiter 2: BLMOVE b -> c.
+        for (src, dest) in [(a.clone(), b.clone()), (b.clone(), c.clone())] {
+            let (mut entry, rx) = make_entry(
+                BlockingOp::BLMove {
+                    dest,
+                    src_dir: Direction::Left,
+                    dest_dir: Direction::Right,
+                },
+                vec![src],
+            );
+            entry.deadline = Some(Instant::now() + std::time::Duration::from_secs(60));
+            worker.wait_queue.register(entry).unwrap();
+            std::mem::forget(rx); // keep the receiver open for the whole cascade
+        }
+
+        let mut v = Value::list();
+        v.as_list_mut().unwrap().push_back(Bytes::from_static(b"x"));
+        worker.store.set(a.clone(), v);
+        worker.try_satisfy_list_waiters(&a);
+
+        // Element cascaded a -> b -> c; both hops recorded, parent first.
+        let names: Vec<&str> = worker
+            .pending_serve_propagations
+            .iter()
+            .map(|c| c.name)
+            .collect();
+        assert_eq!(names, ["LMOVE", "LMOVE"]);
+        assert_eq!(worker.pending_serve_propagations[0].args[0], a);
+        assert_eq!(worker.pending_serve_propagations[0].args[1], b);
+        assert_eq!(worker.pending_serve_propagations[1].args[0], b);
+        assert_eq!(worker.pending_serve_propagations[1].args[1], c);
+        assert_eq!(
+            worker.store.get_hot(&c).unwrap().as_list().unwrap().len(),
+            1,
+            "the element rests at the end of the chain"
         );
     }
 

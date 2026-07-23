@@ -4979,3 +4979,335 @@ async fn test_writes_during_full_sync_are_not_lost() {
     replica.shutdown().await;
     primary.shutdown().await;
 }
+
+// ============================================================================
+// Served blocking-pop propagation (issue 02: a blocking pop satisfied by a
+// later write mutated the primary's store but was never broadcast).
+//
+// When a parked BLPOP/BZPOPMIN/BLMOVE/BLMPOP is SERVED by a subsequent push,
+// the primary consumes the element, but only the *waking* write (LPUSH/ZADD)
+// was replicated — the replica re-executed the push and kept the element the
+// primary handed to its blocked client, diverging forever. The fix synthesizes
+// the equivalent deterministic pop and broadcasts it after the waking write.
+// These tests park a real blocked client, wake it, and pin primary/replica
+// equality for every served-pop shape.
+// ============================================================================
+
+/// Poll until `replica`'s reply to `cmd args` equals `primary`'s, or
+/// `timeout_ms` elapses. Returns both replies so a timeout fails with the
+/// divergent contents.
+async fn wait_for_cmd_convergence(
+    primary: &TestServer,
+    replica: &TestServer,
+    cmd: &str,
+    args: &[&str],
+    timeout_ms: u64,
+) -> (Response, Response) {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        let p = primary.send(cmd, args).await;
+        let r = replica.send(cmd, args).await;
+        if p == r || tokio::time::Instant::now() >= deadline {
+            return (p, r);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// A served BLPOP consumes the pushed element on the primary; the replica must
+/// end with the same (empty) list — before the fix it retained the element.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_served_blpop_replicates(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    // Park a real blocked BLPOP on the primary.
+    let mut blocker = primary.connect().await;
+    blocker.send_only(&["BLPOP", "{b}list", "0"]).await;
+    primary.wait_for_blocked_clients(1).await;
+
+    // Wake it with a push; the blocked client receives the element.
+    primary.send("LPUSH", &["{b}list", "v1"]).await;
+    let served = blocker.read_response(Duration::from_secs(2)).await;
+    assert_eq!(
+        served,
+        Some(Response::Array(vec![
+            Response::Bulk(Some(Bytes::from("{b}list"))),
+            Response::Bulk(Some(Bytes::from("v1"))),
+        ])),
+        "BLPOP must be served the pushed element"
+    );
+
+    // Primary consumed the element — the list is empty there.
+    assert_eq!(
+        parse_integer(&primary.send("LLEN", &["{b}list"]).await),
+        Some(0),
+        "the served pop must leave the primary list empty"
+    );
+
+    let _ = wait_for_replication(&primary, 5000).await;
+    let (p, r) =
+        wait_for_cmd_convergence(&primary, &replica, "LRANGE", &["{b}list", "0", "-1"], 5000).await;
+    assert_eq!(
+        p,
+        Response::Array(vec![]),
+        "primary list must be empty after the served BLPOP"
+    );
+    assert_eq!(
+        p, r,
+        "replica list must equal primary after served BLPOP (primary {p:?}, replica {r:?})"
+    );
+
+    drop(blocker);
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// A served BZPOPMIN pops the minimum on the primary; the replica's sorted set
+/// must match (only the untouched members remain).
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_served_bzpopmin_replicates(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    // The key must be absent so BZPOPMIN actually blocks (an ZADD before it
+    // would satisfy it inline). The waking ZADD adds *two* members at once —
+    // the waiter pops the min, and the higher-scored member is the residue we
+    // converge on (proving the synthesized pop, not just the add, replicated).
+    let mut blocker = primary.connect().await;
+    blocker.send_only(&["BZPOPMIN", "{z}set", "0"]).await;
+    primary.wait_for_blocked_clients(1).await;
+
+    // Two members added in one write; the lower score wins the min and is popped.
+    primary
+        .send("ZADD", &["{z}set", "1", "low", "5", "keep"])
+        .await;
+    let served = blocker.read_response(Duration::from_secs(2)).await;
+    assert_eq!(
+        served,
+        Some(Response::Array(vec![
+            Response::Bulk(Some(Bytes::from("{z}set"))),
+            Response::Bulk(Some(Bytes::from("low"))),
+            Response::Bulk(Some(Bytes::from("1"))),
+        ])),
+        "BZPOPMIN must be served the lowest-scored member"
+    );
+
+    let _ = wait_for_replication(&primary, 5000).await;
+    let (p, r) = wait_for_cmd_convergence(
+        &primary,
+        &replica,
+        "ZRANGE",
+        &["{z}set", "0", "-1", "WITHSCORES"],
+        5000,
+    )
+    .await;
+    assert_eq!(
+        p,
+        Response::Array(vec![
+            Response::Bulk(Some(Bytes::from("keep"))),
+            Response::Bulk(Some(Bytes::from("5"))),
+        ]),
+        "primary must retain only the untouched member after the served BZPOPMIN"
+    );
+    assert_eq!(
+        p, r,
+        "replica sorted set must equal primary after served BZPOPMIN (primary {p:?}, replica {r:?})"
+    );
+
+    drop(blocker);
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// A served BLMOVE writes *both* keys on the primary (pop source, push dest);
+/// both must converge on the replica.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_served_blmove_replicates_both_keys(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    let mut blocker = primary.connect().await;
+    // Same hash-tag keeps src+dst in one slot.
+    blocker
+        .send_only(&["BLMOVE", "{m}src", "{m}dst", "LEFT", "RIGHT", "0"])
+        .await;
+    primary.wait_for_blocked_clients(1).await;
+
+    // Pushing to the source wakes the waiter, which atomically moves the
+    // element to the destination.
+    primary.send("LPUSH", &["{m}src", "x"]).await;
+    let served = blocker.read_response(Duration::from_secs(2)).await;
+    assert_eq!(
+        served,
+        Some(Response::Bulk(Some(Bytes::from("x")))),
+        "BLMOVE must return the moved element"
+    );
+
+    // Primary: source drained, destination holds the element.
+    assert_eq!(
+        parse_integer(&primary.send("LLEN", &["{m}src"]).await),
+        Some(0),
+        "source must be empty on the primary"
+    );
+    assert_eq!(
+        primary.send("LRANGE", &["{m}dst", "0", "-1"]).await,
+        Response::Array(vec![Response::Bulk(Some(Bytes::from("x")))]),
+        "destination must hold the moved element on the primary"
+    );
+
+    let _ = wait_for_replication(&primary, 5000).await;
+    let (ps, rs) =
+        wait_for_cmd_convergence(&primary, &replica, "LRANGE", &["{m}src", "0", "-1"], 5000).await;
+    assert_eq!(ps, Response::Array(vec![]), "primary source must be empty");
+    assert_eq!(
+        ps, rs,
+        "replica source must equal primary (src {ps:?} / {rs:?})"
+    );
+    let (pd, rd) =
+        wait_for_cmd_convergence(&primary, &replica, "LRANGE", &["{m}dst", "0", "-1"], 5000).await;
+    assert_eq!(
+        pd,
+        Response::Array(vec![Response::Bulk(Some(Bytes::from("x")))]),
+        "primary destination must hold the element"
+    );
+    assert_eq!(
+        pd, rd,
+        "replica destination must equal primary (dst {pd:?} / {rd:?})"
+    );
+
+    drop(blocker);
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// A served BLMPOP (multi-key list pop) consumes the element on the primary;
+/// the replica must converge.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_served_blmpop_replicates(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    let mut blocker = primary.connect().await;
+    blocker
+        .send_only(&["BLMPOP", "0", "1", "{p}list", "LEFT"])
+        .await;
+    primary.wait_for_blocked_clients(1).await;
+
+    primary.send("RPUSH", &["{p}list", "a", "b"]).await;
+    let served = blocker.read_response(Duration::from_secs(2)).await;
+    assert_eq!(
+        served,
+        Some(Response::Array(vec![
+            Response::Bulk(Some(Bytes::from("{p}list"))),
+            Response::Array(vec![Response::Bulk(Some(Bytes::from("a")))]),
+        ])),
+        "BLMPOP LEFT must return the head element"
+    );
+
+    // Primary popped exactly one; "b" remains.
+    assert_eq!(
+        primary.send("LRANGE", &["{p}list", "0", "-1"]).await,
+        Response::Array(vec![Response::Bulk(Some(Bytes::from("b")))]),
+        "primary must retain the un-popped element"
+    );
+
+    let _ = wait_for_replication(&primary, 5000).await;
+    let (p, r) =
+        wait_for_cmd_convergence(&primary, &replica, "LRANGE", &["{p}list", "0", "-1"], 5000).await;
+    assert_eq!(
+        p,
+        Response::Array(vec![Response::Bulk(Some(Bytes::from("b")))]),
+        "primary must retain exactly the un-popped element"
+    );
+    assert_eq!(
+        p, r,
+        "replica list must equal primary after served BLMPOP (primary {p:?}, replica {r:?})"
+    );
+
+    drop(blocker);
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// Two blocked BLPOP clients served by a single multi-element push: each
+/// consumes one element on the primary, and the replica must end empty (not
+/// retain the pushed elements).
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_served_blpop_multi_waiter_replicates(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    let mut a = primary.connect().await;
+    let mut b = primary.connect().await;
+    a.send_only(&["BLPOP", "{w}list", "0"]).await;
+    b.send_only(&["BLPOP", "{w}list", "0"]).await;
+    primary.wait_for_blocked_clients(2).await;
+
+    // One push carrying two elements satisfies both waiters (FIFO order).
+    primary.send("RPUSH", &["{w}list", "e1", "e2"]).await;
+    let sa = a.read_response(Duration::from_secs(2)).await;
+    let sb = b.read_response(Duration::from_secs(2)).await;
+    // Both must be served; the two consumed values are e1 and e2 in some order.
+    let val = |r: &Option<Response>| match r {
+        Some(Response::Array(arr)) if arr.len() == 2 => match &arr[1] {
+            Response::Bulk(Some(v)) => String::from_utf8_lossy(v).to_string(),
+            other => panic!("expected bulk element, got {other:?}"),
+        },
+        other => panic!("both waiters must be served, got {other:?}"),
+    };
+    let mut vals = vec![val(&sa), val(&sb)];
+    vals.sort();
+    assert_eq!(vals, vec!["e1".to_string(), "e2".to_string()]);
+
+    // Primary fully drained.
+    assert_eq!(
+        parse_integer(&primary.send("LLEN", &["{w}list"]).await),
+        Some(0),
+        "both served pops must leave the primary list empty"
+    );
+
+    let _ = wait_for_replication(&primary, 5000).await;
+    let (p, r) =
+        wait_for_cmd_convergence(&primary, &replica, "LRANGE", &["{w}list", "0", "-1"], 5000).await;
+    assert_eq!(p, Response::Array(vec![]), "primary must be empty");
+    assert_eq!(
+        p, r,
+        "replica must be empty after both served BLPOPs (primary {p:?}, replica {r:?})"
+    );
+
+    drop(a);
+    drop(b);
+    replica.shutdown().await;
+    primary.shutdown().await;
+}

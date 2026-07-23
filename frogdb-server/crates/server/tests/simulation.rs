@@ -4600,3 +4600,241 @@ fn test_spop_replication_convergence_random_workload() {
         run_spop_replication_convergence(seed);
     }
 }
+
+/// Extract the ordered bulk-string elements of an LRANGE reply.
+fn resp_list_elems(v: &RespValue) -> Vec<Vec<u8>> {
+    match v {
+        RespValue::Array(Some(items)) => items
+            .iter()
+            .filter_map(|it| match it {
+                RespValue::Bulk(Some(b)) => Some(b.clone()),
+                _ => None,
+            })
+            .collect(),
+        RespValue::Array(None) => Vec::new(),
+        other => panic!("expected array from LRANGE, got {other:?}"),
+    }
+}
+
+/// One seeded run of the served-blocking-pop convergence property (issue 02):
+/// concurrent blocked poppers (BLPOP/BRPOP and a BLMOVE mover) race a random
+/// push workload against a primary+replica pair, then every touched list must
+/// be identical on both nodes after quiescence.
+///
+/// The bug: a blocking pop *served* by a later push mutated the primary's store
+/// but was never broadcast — the replica re-ran the push and kept the element
+/// the primary handed to its blocked client. The fix synthesizes the equivalent
+/// deterministic pop (LPOP/RPOP/LMOVE...) and ships it after the waking write.
+fn run_blocking_serve_replication_convergence(seed: u64) {
+    use rand::{RngExt, SeedableRng, rngs::StdRng};
+
+    let mut sim = Builder::new()
+        .simulation_duration(Duration::from_secs(300))
+        .rng_seed(seed)
+        .enable_random_order()
+        .build();
+
+    let primary_dir = tempfile::tempdir().expect("primary data dir");
+    let replica_dir = tempfile::tempdir().expect("replica data dir");
+    let primary_path = primary_dir.path().to_path_buf();
+    let replica_path = replica_dir.path().to_path_buf();
+
+    sim.host("primary", move || {
+        let path = primary_path.clone();
+        async move {
+            if let Err(e) = real_frogdb_primary(1, path).await {
+                eprintln!("primary server exited with error: {e}");
+                return Err(e);
+            }
+            Ok(())
+        }
+    });
+    sim.host("replica", move || {
+        let path = replica_path.clone();
+        async move {
+            let primary_ip = turmoil::lookup("primary");
+            if let Err(e) = real_frogdb_replica(1, primary_ip, path).await {
+                eprintln!("replica server exited with error: {e}");
+                return Err(e);
+            }
+            Ok(())
+        }
+    });
+
+    // The list keys every actor shares (single shard, so cross-key BLMOVE is
+    // fine). `d` is the BLMOVE destination.
+    const SRC: [&[u8]; 3] = [b"s0", b"s1", b"s2"];
+    const DEST: &[u8] = b"d";
+
+    // Two blocked poppers per iteration, each on a random source key with a
+    // short finite timeout so they cannot stall the sim. Each serves as a
+    // multi-waiter contributor when they collide on a key.
+    for popper in 0..2u32 {
+        sim.client(format!("popper{popper}"), async move {
+            let primary_addr = (turmoil::lookup("primary"), SERVER_PORT);
+            let mut c = RespConn::connect(primary_addr).await?;
+            let mut rng = StdRng::seed_from_u64(seed ^ (0x9e37_79b9 + popper as u64));
+            for _ in 0..70 {
+                let key = SRC[rng.random_range(0..SRC.len())];
+                // Alternate ends so served pops synthesize both LPOP and RPOP.
+                let op: &[u8] = if rng.random_range(0..2u32) == 0 {
+                    b"BLPOP"
+                } else {
+                    b"BRPOP"
+                };
+                // A served pop replies [key, elem]; a timeout replies nil.
+                let _ = c.cmd(&[op, key, b"0.2"]).await?;
+            }
+            Ok(())
+        });
+    }
+
+    // A BLMOVE mover: exercises the two-key served write (pop source + push
+    // dest) and its ordered synthesized LMOVE.
+    sim.client("mover", async move {
+        let primary_addr = (turmoil::lookup("primary"), SERVER_PORT);
+        let mut c = RespConn::connect(primary_addr).await?;
+        let mut rng = StdRng::seed_from_u64(seed ^ 0x1234_5678);
+        for _ in 0..50 {
+            let key = SRC[rng.random_range(0..SRC.len())];
+            let _ = c
+                .cmd(&[b"BLMOVE", key, DEST, b"LEFT", b"RIGHT", b"0.2"])
+                .await?;
+        }
+        Ok(())
+    });
+
+    // Driver = pusher + quiescent comparator.
+    sim.client("driver", async move {
+        let primary_addr = (turmoil::lookup("primary"), SERVER_PORT);
+        let mut primary = RespConn::connect(primary_addr).await?;
+
+        // Wait for the replica link.
+        let mut attempts = 0u32;
+        loop {
+            match primary.cmd(&[b"WAIT", b"1", b"500"]).await? {
+                RespValue::Int(n) if n >= 1 => break,
+                _ => {
+                    attempts += 1;
+                    assert!(attempts < 120, "replica never connected to primary");
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+            }
+        }
+
+        // Random push workload: LPUSH/RPUSH of 1-2 elements to random keys. Some
+        // land while a popper is parked (served pop) and some just accumulate.
+        let mut rng = StdRng::seed_from_u64(seed);
+        for i in 0..220u32 {
+            let key = SRC[rng.random_range(0..SRC.len())];
+            let push: &[u8] = if rng.random_range(0..2u32) == 0 {
+                b"LPUSH"
+            } else {
+                b"RPUSH"
+            };
+            let count = rng.random_range(1..=2u32);
+            let vals: Vec<Vec<u8>> = (0..count)
+                .map(|j| format!("v{i}_{j}").into_bytes())
+                .collect();
+            let mut parts: Vec<&[u8]> = vec![push, key];
+            parts.extend(vals.iter().map(|v| v.as_slice()));
+            let reply = primary.cmd(&parts).await?;
+            assert!(
+                matches!(reply, RespValue::Int(_)),
+                "push must return an integer, got {reply:?}"
+            );
+            // Yield periodically so parked poppers get scheduled to consume.
+            if i % 8 == 0 {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+
+        let all_keys: [&[u8]; 4] = [SRC[0], SRC[1], SRC[2], DEST];
+
+        // Settle: wait until the primary's list lengths stop changing (every
+        // bounded popper/mover loop has finished) so the snapshot we compare
+        // against is final.
+        let mut prev: Vec<i64> = vec![-1; all_keys.len()];
+        let mut stable_rounds = 0u32;
+        let mut settle_attempts = 0u32;
+        loop {
+            let mut cur = Vec::with_capacity(all_keys.len());
+            for key in all_keys {
+                let n = match primary.cmd(&[b"LLEN", key]).await? {
+                    RespValue::Int(n) => n,
+                    other => panic!("LLEN must return an integer, got {other:?}"),
+                };
+                cur.push(n);
+            }
+            if cur == prev {
+                stable_rounds += 1;
+                if stable_rounds >= 3 {
+                    break;
+                }
+            } else {
+                stable_rounds = 0;
+                prev = cur;
+            }
+            settle_attempts += 1;
+            assert!(settle_attempts < 200, "primary lengths never settled");
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+
+        // Quiesce replication: every broadcast write acked.
+        let mut attempts = 0u32;
+        loop {
+            match primary.cmd(&[b"WAIT", b"1", b"1000"]).await? {
+                RespValue::Int(n) if n >= 1 => break,
+                _ => {
+                    attempts += 1;
+                    assert!(attempts < 60, "replica never acked the workload");
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+            }
+        }
+
+        // Quiescent equality: each list identical (ordered) on both nodes.
+        let replica_addr = (turmoil::lookup("replica"), SERVER_PORT);
+        let mut replica = RespConn::connect(replica_addr).await?;
+        for key in all_keys {
+            let p = resp_list_elems(&primary.cmd(&[b"LRANGE", key, b"0", b"-1"]).await?);
+            let mut attempts = 0u32;
+            loop {
+                let r = resp_list_elems(&replica.cmd(&[b"LRANGE", key, b"0", b"-1"]).await?);
+                if r == p {
+                    break;
+                }
+                attempts += 1;
+                assert!(
+                    attempts < 40,
+                    "seed {seed}: divergence on {:?}: primary {:?} vs replica {:?}",
+                    String::from_utf8_lossy(key),
+                    p.iter()
+                        .map(|m| String::from_utf8_lossy(m).into_owned())
+                        .collect::<Vec<_>>(),
+                    r.iter()
+                        .map(|m| String::from_utf8_lossy(m).into_owned())
+                        .collect::<Vec<_>>(),
+                );
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        }
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+    drop(primary_dir);
+    drop(replica_dir);
+}
+
+/// Property test: concurrent blocked poppers (BLPOP/BRPOP/BLMOVE) served by a
+/// random push workload converge to identical lists on a primary+replica pair
+/// after quiescence, across several turmoil seeds (each = a distinct timing
+/// schedule AND workload).
+#[test]
+fn test_blocking_serve_replication_convergence_random_workload() {
+    for seed in [1u64, 7, 42] {
+        run_blocking_serve_replication_convergence(seed);
+    }
+}

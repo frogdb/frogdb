@@ -161,6 +161,19 @@ pub struct ShardWorker {
     /// Replication broadcaster for streaming writes to replicas.
     pub(crate) replication_broadcaster: SharedBroadcaster,
 
+    /// Deterministic pop commands synthesized while satisfying blocking waiters
+    /// (issue 02), pending broadcast to replicas.
+    ///
+    /// When a blocking pop (BLPOP/BZPOPMIN/BLMOVE/…) is served by a later write,
+    /// the store mutation happens at the `WaiterSatisfaction` effect but only
+    /// the *waking* write is broadcast — a replica re-executing it keeps the
+    /// element the primary's blocked client consumed. The satisfaction driver
+    /// records the equivalent deterministic command(s) here; the terminal
+    /// `ReplicationBroadcast` effect flushes them **after** the waking write's
+    /// own broadcast, so replicas apply push-then-pop and converge. Populated
+    /// and drained within a single `run_write_effects` call.
+    pub(crate) pending_serve_propagations: Vec<crate::command::SynthesizedCommand>,
+
     /// Whether per-request tracing spans are enabled.
     pub(crate) per_request_spans: Arc<AtomicBool>,
 

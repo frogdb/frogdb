@@ -458,6 +458,7 @@ impl ShardWorkerBuilder {
             scripting: ShardScripting::new(script_executor, self.function_registry),
             wait_queue: ShardWaitQueue::new(),
             replication_broadcaster,
+            pending_serve_propagations: Vec::new(),
             per_request_spans,
             expiry_paused: Arc::new(AtomicBool::new(false)),
             notify_keyspace_events: Arc::new(AtomicU32::new(0)),

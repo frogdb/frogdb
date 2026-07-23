@@ -411,6 +411,13 @@ impl ShardWorker {
                     }
                 }
                 WriteEffectKind::ReplicationBroadcast => {
+                    // Deterministic pop commands the `WaiterSatisfaction` effect
+                    // synthesized for served blocking pops (issue 02). Drained
+                    // unconditionally so the buffer never leaks into the next
+                    // `run_write_effects` call — broadcast only when the gate
+                    // below passes (a suppressed / replica-sourced / no-replica
+                    // write ships nothing, and neither do its served pops).
+                    let served_pops = std::mem::take(&mut self.pending_serve_propagations);
                     // Internal removals gate the broadcast on their propagation
                     // policy (`replicate`): expiry defaults to `false` (replicas
                     // expire independently — documented divergence), eviction to
@@ -466,6 +473,19 @@ impl ShardWorker {
                                         .broadcast_transaction_on_shard(shard_id, &commands);
                                 }
                             }
+                        }
+                        // Served blocking pops ship AFTER the waking write's
+                        // broadcast, as independent commands (issue 02). The
+                        // waking write (LPUSH/ZADD/…) reaches the replica first,
+                        // then each deterministic pop the primary served —
+                        // preserving the primary's push-then-pop order so the
+                        // consumed element is removed on the replica too. They
+                        // are not part of any MULTI/EXEC frame: waiter
+                        // satisfaction runs after the transaction commits, so
+                        // Redis likewise propagates the serve outside the frame.
+                        for cmd in &served_pops {
+                            self.replication_broadcaster
+                                .broadcast_command_on_shard(shard_id, cmd.name, &cmd.args);
                         }
                     }
                 }
@@ -1711,5 +1731,179 @@ mod tests {
             }
             other => panic!("tracking client must be invalidated, got {other:?}"),
         }
+    }
+
+    // ------------------------------------------------------------------------
+    // Served-blocking-pop replication (issue 02).
+    //
+    // A blocking pop served by a later write mutates the store at the
+    // `WaiterSatisfaction` effect (idx 4), but only the *waking* write is
+    // broadcast at `ReplicationBroadcast` (idx 8) — a replica re-executing it
+    // keeps the element the primary's blocked client consumed. The satisfaction
+    // driver records the equivalent deterministic pop in
+    // `pending_serve_propagations`; this test pins that the terminal broadcast
+    // ships the waking write FIRST, then the served pop, so replicas apply
+    // push-then-pop and converge.
+    // ------------------------------------------------------------------------
+
+    /// A minimal `LPUSH`-shaped write: WRITE, wakes List waiters, first-key. Its
+    /// `execute` is never called — `run_write_effects` assumes the store
+    /// mutation already happened, so the test seeds the popped element directly.
+    struct MockListPush;
+    impl Command for MockListPush {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "LPUSH",
+                arity: Arity::AtLeast(2),
+                flags: CommandFlags::WRITE,
+                keys: KeySpec::First,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::NoOp,
+                wakes: WaiterWake::Kind(WaiterKind::List),
+                event: EventSpec::Suppressed,
+                requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
+                lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
+                strategy: crate::command::ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+        fn execute(
+            &self,
+            _ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            Ok(Response::Integer(1))
+        }
+    }
+
+    /// The headline issue-02 fix at the pipeline level: a waking `LPUSH` that
+    /// serves a blocked `BLPOP` broadcasts BOTH the push and the served `LPOP`,
+    /// in that order — the divergence-closing sequence a replica must apply.
+    #[tokio::test]
+    async fn served_blpop_broadcasts_push_then_pop() {
+        use crate::types::BlockingOp;
+        use tokio::sync::oneshot;
+
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with(bc.clone() as SharedBroadcaster);
+
+        let key = Bytes::from_static(b"k");
+
+        // Park a live BLPOP waiter on the key (future deadline, receiver kept
+        // open so the serve is not treated as doomed).
+        let (tx, _rx) = oneshot::channel();
+        worker
+            .wait_queue
+            .register(crate::shard::wait_queue::WaitEntry {
+                conn_id: 1,
+                keys: vec![key.clone()],
+                op: BlockingOp::BLPop,
+                response_tx: tx,
+                deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(60)),
+                protocol_version: frogdb_protocol::ProtocolVersion::default(),
+            })
+            .unwrap();
+
+        // The waking LPUSH already ran: seed the pushed element so the waiter
+        // can consume it during the WaiterSatisfaction effect.
+        let mut v = crate::types::Value::list();
+        v.as_list_mut()
+            .unwrap()
+            .push_back(Bytes::from_static(b"val"));
+        worker.store.set(key.clone(), v);
+
+        let push = MockListPush;
+        let push_args = vec![key.clone(), Bytes::from_static(b"val")];
+        let record = WriteRecord::new(&push as &dyn Command, &push_args);
+        worker
+            .run_write_effects(
+                WriteSummary {
+                    writes: std::slice::from_ref(&record),
+                    dirty_delta: 1,
+                    conn_id: 1,
+                    removal_reasons: &[],
+                },
+                WalPhase::Persist,
+                EffectScope::Command,
+            )
+            .await;
+
+        // Broadcast order: the waking LPUSH first, then the served LPOP.
+        let cmds = bc.commands.lock().unwrap();
+        assert_eq!(
+            cmds.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            ["LPUSH", "LPOP"],
+            "the served pop must ship after the waking write, not before"
+        );
+        assert_eq!(cmds[1].1, vec![key.clone()], "LPOP names the served key");
+        drop(cmds);
+        // The element was consumed on the primary — the whole point.
+        assert!(
+            worker.store.get_hot(&key).is_none(),
+            "the served BLPOP consumed the element on the primary"
+        );
+        // Buffer drained: nothing leaks into the next call.
+        assert!(worker.pending_serve_propagations.is_empty());
+    }
+
+    /// The served-pop broadcast inherits the waking write's gate: a
+    /// replica-sourced write (conn_id == REPLICA_INTERNAL_CONN_ID) broadcasts
+    /// nothing, and the pending buffer is still drained (no leak). This is the
+    /// loop-guard that stops a replica re-propagating a pop it applied.
+    #[tokio::test]
+    async fn served_pop_respects_replica_loop_guard_and_drains() {
+        use crate::types::BlockingOp;
+        use tokio::sync::oneshot;
+
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with(bc.clone() as SharedBroadcaster);
+        let key = Bytes::from_static(b"k");
+
+        let (tx, _rx) = oneshot::channel();
+        worker
+            .wait_queue
+            .register(crate::shard::wait_queue::WaitEntry {
+                conn_id: 1,
+                keys: vec![key.clone()],
+                op: BlockingOp::BLPop,
+                response_tx: tx,
+                deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(60)),
+                protocol_version: frogdb_protocol::ProtocolVersion::default(),
+            })
+            .unwrap();
+
+        let mut v = crate::types::Value::list();
+        v.as_list_mut()
+            .unwrap()
+            .push_back(Bytes::from_static(b"val"));
+        worker.store.set(key.clone(), v);
+
+        let push = MockListPush;
+        let push_args = vec![key.clone(), Bytes::from_static(b"val")];
+        let record = WriteRecord::new(&push as &dyn Command, &push_args);
+        worker
+            .run_write_effects(
+                WriteSummary {
+                    writes: std::slice::from_ref(&record),
+                    dirty_delta: 1,
+                    // Replica-internal origin: the whole broadcast is suppressed.
+                    conn_id: REPLICA_INTERNAL_CONN_ID,
+                    removal_reasons: &[],
+                },
+                WalPhase::Persist,
+                EffectScope::Command,
+            )
+            .await;
+
+        assert!(
+            bc.commands.lock().unwrap().is_empty(),
+            "a replica-sourced write must broadcast neither the push nor the served pop"
+        );
+        assert!(
+            worker.pending_serve_propagations.is_empty(),
+            "the served-pop buffer must drain even when the broadcast is gated off"
+        );
     }
 }
