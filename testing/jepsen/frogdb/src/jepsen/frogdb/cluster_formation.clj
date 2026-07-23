@@ -210,9 +210,16 @@
   "Checker for cluster formation workload.
 
    Verifies:
-   - Cluster eventually reaches 'ok' state
-   - Node counts are consistent
-   - Quorum is maintained (or detected as lost)"
+   - Cluster actually reported a final 'ok' state. A `nil` final-state (the
+     cluster-state read never ran / never observed a value) is a FAILURE, not a
+     vacuous pass — otherwise a run that never actually inspected the cluster
+     would slip through green.
+   - Node-count consistency across the observed reads. For a stable run (no
+     membership changes) every CLUSTER NODES count must agree and match the
+     configured cluster size; a split view (some reads see fewer nodes) or a
+     zero/empty view is a real membership bug. Membership-change runs vary the
+     count by design, so there we only require every observed count to be
+     positive (the cluster never reports a broken/empty view)."
   []
   (reify checker/Checker
     (check [this test history opts]
@@ -225,10 +232,28 @@
                              (map :value))
             final-state (last cluster-states)
             final-count (last node-counts)
-            had-quorum-loss (some #{"fail"} cluster-states)]
-        {:valid? (or (= "ok" final-state) (nil? final-state))
+            had-quorum-loss (some #{"fail"} cluster-states)
+            expected-count (count (:nodes test))
+            membership-run? (boolean (:membership-changes test))
+            ;; A nil/absent final-state must fail (see docstring): require an
+            ;; explicit "ok".
+            state-ok? (= "ok" final-state)
+            ;; We must have actually observed node counts, and every observed
+            ;; view must be non-broken (positive). For a stable cluster every
+            ;; count must additionally agree with the configured size.
+            node-count-consistent?
+            (boolean
+              (and (seq node-counts)
+                   (every? pos-int? node-counts)
+                   (or membership-run?
+                       (every? #(= expected-count %) node-counts))))]
+        {:valid? (and state-ok? node-count-consistent?)
          :final-cluster-state final-state
          :final-node-count final-count
+         :expected-node-count expected-count
+         :state-ok? state-ok?
+         :node-count-consistent? node-count-consistent?
+         :node-counts-observed (distinct node-counts)
          :unique-states (set cluster-states)
          :had-quorum-loss had-quorum-loss
          :state-transitions (count (partition-by identity cluster-states))

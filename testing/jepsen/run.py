@@ -87,6 +87,7 @@ class TestDefinition:
     topology: Topology
     cluster_flag: bool = False
     membership_changes: bool = False
+    independent: bool = False  # pass --independent (per-key linearizable checking)
     replication_flag: bool = False  # pass --replication (3-node primary+replicas)
     client_nodes: tuple[str, ...] = ()  # pin the client to a node subset (--node)
     concurrency: int | None = None  # cap Jepsen worker threads (bounds Knossos search)
@@ -112,6 +113,23 @@ TESTS: tuple[TestDefinition, ...] = (
     ),
     TestDefinition("set", "set", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")),
     TestDefinition("hash", "hash", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")),
+    # hash-independent: the STRONG per-field checker. --independent splits the
+    # single hash into one linearizable register per field and runs
+    # jepsen.independent/checker over Knossos-linearizable subhistories — the
+    # path the plain `hash` test never exercised (the weak default checker only
+    # asserts reads-were-written). --concurrency 10 = 5 fields x 2 threads/field
+    # (independent-generator's :threads-per-field default), so every field gets
+    # genuine concurrency for the linearizable checker to inspect.
+    TestDefinition(
+        "hash-independent",
+        "hash",
+        "none",
+        30,
+        Topology.SINGLE,
+        independent=True,
+        concurrency=10,
+        suites=("single", "crash", "all"),
+    ),
     TestDefinition(
         "sortedset", "sortedset", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")
     ),
@@ -793,6 +811,8 @@ def run_test(
         cmd.append("--cluster")
     if test.membership_changes:
         cmd.append("--membership-changes")
+    if test.independent:
+        cmd.append("--independent")
     if test.replication_flag:
         cmd.append("--replication")
     for node in test.client_nodes:
@@ -862,6 +882,8 @@ def generate_batch_edn(
             pairs.append(":cluster true")
         if t.membership_changes:
             pairs.append(":membership-changes true")
+        if t.independent:
+            pairs.append(":independent true")
         if t.replication_flag:
             pairs.append(":replication true")
         if t.client_nodes:

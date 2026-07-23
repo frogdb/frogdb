@@ -242,7 +242,7 @@
     :parse-fn #(Long/parseLong %)
     :validate [pos? "Must be positive"]]
 
-   [nil "--independent" "Use independent key testing for register workload"
+   [nil "--independent" "Use independent per-key linearizable testing (register: per-key registers; hash: per-field registers)"
     :default false]
 
    [nil "--membership-changes" "Drive cluster membership changes (node join/leave) from the workload generator. Currently consumed by the cluster-formation workload, which switches to its membership-change-generator when set."
