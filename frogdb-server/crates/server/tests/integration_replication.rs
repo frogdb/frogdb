@@ -625,6 +625,25 @@ async fn test_client_unblock_releases_wait() {
 
 /// WAIT inside MULTI/EXEC never blocks: it returns the current acked count
 /// immediately (Redis CLIENT_DENY_BLOCKING semantics), not nil.
+///
+/// Matches documented Redis behavior (redis.io `WAIT` docs, "Details"): "If
+/// the command is sent as part of a MULTI transaction (since Redis 7.0, any
+/// context that does not allow blocking, such as inside scripts), the
+/// command does not block but instead just return ASAP the number of
+/// replicas that acknowledged the previous write commands."
+///
+/// Regression guard, not a bug fix (testing-gap issue 51 / audit
+/// B-transactions#4, verdict ADJUSTED L1/C2 — correct by design). `WAIT`
+/// keeps `ExecutionStrategy::Standard`, so a queued `WAIT` is executed on
+/// the shard at EXEC time (`connection/transaction.rs:277-298`), landing in
+/// `WaitCommand::execute`'s deny-blocking branch
+/// (`commands/replication.rs:568-575`) — never the connection-level
+/// `WaitIntercept`/`WaitCoordinator` blocking path, which `dispatch.rs`
+/// documents (`connection/dispatch.rs:491-494`) as reachable only *outside*
+/// MULTI. `WAIT 1 0` requests a 1-replica quorum with timeout 0 (Redis:
+/// block forever until reached) — a maximally strict probe, since a
+/// regression that routed this through the blocking coordinator would hang
+/// EXEC permanently rather than merely running long.
 #[tokio::test]
 async fn test_wait_inside_multi_returns_count_immediately() {
     let config = TestServerConfig::default();
@@ -653,6 +672,136 @@ async fn test_wait_inside_multi_returns_count_immediately() {
         other => panic!("expected EXEC array, got {other:?}"),
     }
 
+    primary.shutdown().await;
+}
+
+/// `MULTI; WAIT 0 0; EXEC` — the literal acceptance-criteria case for
+/// testing-gap issue 51: zero replicas requested, zero timeout. Same
+/// non-blocking routing as `test_wait_inside_multi_returns_count_immediately`
+/// (`ExecutionStrategy::Standard` -> `transaction.rs:277-298` -> shard
+/// deny-blocking branch `replication.rs:568-575`; the blocking
+/// `WaitIntercept` path is documented as unreachable inside MULTI,
+/// `dispatch.rs:491-494`). Asserts a tight (<1s) elapsed bound rather than
+/// relying on the nextest 15s force-kill to reveal a hang.
+#[tokio::test]
+async fn test_wait_inside_multi_zero_replicas_zero_timeout() {
+    let config = TestServerConfig::default();
+    let primary = TestServer::start_primary_with_config(config).await;
+
+    let mut client = primary.connect().await;
+    assert_ok(&client.command(&["MULTI"]).await);
+    client.command(&["WAIT", "0", "0"]).await; // QUEUED
+
+    let start = std::time::Instant::now();
+    let response = client.command(&["EXEC"]).await;
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "WAIT 0 0 queued in MULTI must return immediately via the shard's \
+         non-blocking branch; took {elapsed:?}"
+    );
+    match &response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1);
+            assert_eq!(parse_integer(&items[0]), Some(0));
+        }
+        other => panic!("expected EXEC array, got {other:?}"),
+    }
+
+    primary.shutdown().await;
+}
+
+/// `MULTI; WAIT 3 100; EXEC` on standalone (0 replicas connected) with a
+/// nonzero, finite timeout — the second acceptance-criteria case for issue
+/// 51. Asserts completion well *under* the requested 100ms window (not just
+/// under it), which is the only way to tell "returned immediately via the
+/// non-blocking shard branch" apart from "blocked for the full timeout and
+/// then returned the same answer." Same routing citation as the sibling
+/// tests above (`transaction.rs:277-298` -> `replication.rs:568-575`;
+/// blocking path unreachable inside MULTI per `dispatch.rs:491-494`).
+#[tokio::test]
+async fn test_wait_inside_multi_nonzero_timeout_does_not_block() {
+    let config = TestServerConfig::default();
+    let primary = TestServer::start_primary_with_config(config).await;
+
+    let mut client = primary.connect().await;
+    assert_ok(&client.command(&["MULTI"]).await);
+    client.command(&["WAIT", "3", "100"]).await; // QUEUED
+
+    let start = std::time::Instant::now();
+    let response = client.command(&["EXEC"]).await;
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(50),
+        "WAIT 3 100 queued in MULTI must return immediately, well under its \
+         own 100ms timeout window (a blocking implementation would also \
+         finish under 1s, so a tight sub-window bound is the only assertion \
+         that actually distinguishes the two); took {elapsed:?}"
+    );
+    match &response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1);
+            assert_eq!(parse_integer(&items[0]), Some(0));
+        }
+        other => panic!("expected EXEC array, got {other:?}"),
+    }
+
+    primary.shutdown().await;
+}
+
+/// With a live, acknowledged replica, a queued `WAIT` at EXEC returns the
+/// *correct* acked-replica count (1), not just a fast 0 — closing the last
+/// acceptance-criterion gap for issue 51 (the pre-existing MULTI/WAIT tests
+/// above only ever exercised the no-replica case). A plain (non-MULTI) WAIT
+/// first drives the connection-level `WaitCoordinator` to solicit `REPLCONF
+/// GETACK *` and confirm the replica has acked the current offset; only then
+/// is the *queued* WAIT known to hit an already-satisfied `count_acked`
+/// (`replication.rs:568-575`) via the shard non-blocking branch reached from
+/// `transaction.rs:277-298`, rather than coincidentally returning 0 because
+/// the replica hadn't caught up yet.
+#[tokio::test]
+async fn test_wait_inside_multi_returns_correct_acked_count_with_replica() {
+    let (primary, replica) = start_primary_replica_pair(TestServerConfig::default()).await;
+
+    let mut client = primary.connect().await;
+    client
+        .command(&["SET", "wait_multi_replica_key", "v"])
+        .await;
+
+    // Sync point: a blocking, non-MULTI WAIT confirms the replica has acked
+    // the offset written above before we probe the non-blocking MULTI path.
+    let synced = client.command(&["WAIT", "1", "5000"]).await;
+    assert_eq!(
+        parse_integer(&synced),
+        Some(1),
+        "setup WAIT must observe the replica ack before the MULTI probe, got {synced:?}"
+    );
+
+    assert_ok(&client.command(&["MULTI"]).await);
+    client.command(&["WAIT", "1", "5000"]).await; // QUEUED
+
+    let start = std::time::Instant::now();
+    let response = client.command(&["EXEC"]).await;
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "WAIT queued in MULTI must not block even with a real, unsatisfied-\
+         at-queue-time-looking timeout (5000ms); took {elapsed:?}"
+    );
+    match &response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1);
+            assert_eq!(
+                parse_integer(&items[0]),
+                Some(1),
+                "WAIT in MULTI must report the already-acked replica count, got {:?}",
+                items[0]
+            );
+        }
+        other => panic!("expected EXEC array, got {other:?}"),
+    }
+
+    replica.shutdown().await;
     primary.shutdown().await;
 }
 
