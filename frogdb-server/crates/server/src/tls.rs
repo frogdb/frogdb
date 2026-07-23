@@ -420,3 +420,107 @@ pub async fn tls_connect(
 
     Ok(Box::new(tls_stream))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TLS13: &[&rustls::SupportedProtocolVersion] = &[&rustls::version::TLS13];
+    const TLS12: &[&rustls::SupportedProtocolVersion] = &[&rustls::version::TLS12];
+    const BOTH: &[&rustls::SupportedProtocolVersion] =
+        &[&rustls::version::TLS13, &rustls::version::TLS12];
+
+    /// The IANA names of the suites carried by a provider, uppercased.
+    fn suite_names(provider: &rustls::crypto::CryptoProvider) -> Vec<String> {
+        provider
+            .cipher_suites
+            .iter()
+            .filter_map(|s| s.suite().as_str().map(|n| n.to_ascii_uppercase()))
+            .collect()
+    }
+
+    #[test]
+    fn empty_ciphersuites_uses_defaults() {
+        // Empty list => None, i.e. caller keeps rustls' full default suite list.
+        let provider = ciphersuite_provider(&[], BOTH).unwrap();
+        assert!(provider.is_none());
+    }
+
+    #[test]
+    fn named_subset_restricts_provider_suites() {
+        let names = vec![
+            "TLS13_AES_256_GCM_SHA384".to_string(),
+            "TLS13_AES_128_GCM_SHA256".to_string(),
+        ];
+        let provider = ciphersuite_provider(&names, TLS13)
+            .unwrap()
+            .expect("named suites yield a filtered provider");
+        // The provider carries exactly the two named suites, nothing else.
+        assert_eq!(
+            suite_names(&provider),
+            vec![
+                "TLS13_AES_256_GCM_SHA384".to_string(),
+                "TLS13_AES_128_GCM_SHA256".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn matching_is_case_insensitive() {
+        let names = vec!["tls13_aes_256_gcm_sha384".to_string()];
+        let provider = ciphersuite_provider(&names, TLS13).unwrap().unwrap();
+        assert_eq!(
+            suite_names(&provider),
+            vec!["TLS13_AES_256_GCM_SHA384".to_string()]
+        );
+    }
+
+    #[test]
+    fn repeated_name_is_deduped() {
+        let names = vec![
+            "TLS13_AES_128_GCM_SHA256".to_string(),
+            "TLS13_AES_128_GCM_SHA256".to_string(),
+        ];
+        let provider = ciphersuite_provider(&names, TLS13).unwrap().unwrap();
+        assert_eq!(provider.cipher_suites.len(), 1);
+    }
+
+    #[test]
+    fn unknown_name_is_a_hard_error_listing_valid_names() {
+        let names = vec!["TLS_NOT_A_REAL_SUITE".to_string()];
+        let err = ciphersuite_provider(&names, TLS13).unwrap_err();
+        let msg = err.to_string();
+        // Error names the offending suite ...
+        assert!(
+            msg.contains("TLS_NOT_A_REAL_SUITE"),
+            "error should name the unknown suite: {msg}"
+        );
+        // ... and lists at least one valid suite name to guide the operator.
+        assert!(
+            msg.contains("TLS13_AES_256_GCM_SHA384"),
+            "error should list valid names: {msg}"
+        );
+    }
+
+    #[test]
+    fn named_suites_incompatible_with_protocol_fail_loudly() {
+        // Only a TLS 1.2 suite is named, but only TLS 1.3 is enabled: must be a
+        // hard error, not a silent fallback to the default suite list.
+        let names = vec!["TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256".to_string()];
+        let err = ciphersuite_provider(&names, TLS13).unwrap_err();
+        assert!(
+            err.to_string().contains("usable with the enabled"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn tls12_suite_ok_when_tls12_enabled() {
+        let names = vec!["TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256".to_string()];
+        let provider = ciphersuite_provider(&names, TLS12).unwrap().unwrap();
+        assert_eq!(
+            suite_names(&provider),
+            vec!["TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256".to_string()]
+        );
+    }
+}
