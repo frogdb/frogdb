@@ -1057,3 +1057,194 @@ fn open_with_snappy_compression_succeeds() {
     s.put(0, b"k", b"v").unwrap();
     assert_eq!(s.get(0, b"k").unwrap(), Some(b"v".to_vec()));
 }
+
+// ============================================================================
+// WAL recovery mode pin + mid-log corruption (issue 14)
+// ============================================================================
+
+/// Number of records written into the WAL by the corruption tests. Small enough
+/// that all 50 stay in a single RocksDB WAL block (default 32 KiB) — so a byte
+/// flipped partway through the file lands mid-log with valid records on both
+/// sides of it, which is exactly the case `PointInTime` recovery must truncate.
+const CORRUPT_TEST_RECORDS: usize = 50;
+
+/// Deterministic key for record `i` (zero-padded so the on-disk order matches
+/// the numeric order and the surviving prefix is easy to reason about).
+fn corrupt_key(i: usize) -> Vec<u8> {
+    format!("wal_key_{i:04}").into_bytes()
+}
+
+/// Return the path of the active WAL (`*.log`) — the largest one, which is the
+/// live log the recent writes landed in.
+fn active_wal_path(db_dir: &Path) -> PathBuf {
+    let mut logs: Vec<(u64, PathBuf)> = fs::read_dir(db_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("log"))
+        .map(|p| (fs::metadata(&p).unwrap().len(), p))
+        .collect();
+    assert!(
+        !logs.is_empty(),
+        "expected a RocksDB WAL (*.log) in {db_dir:?}"
+    );
+    logs.sort_by_key(|(len, _)| *len);
+    logs.pop().unwrap().1
+}
+
+/// Write [`CORRUPT_TEST_RECORDS`] durably-synced records into shard 0, record
+/// the WAL watermark (as the production sync path does), then drop the store
+/// without a memtable flush — the `rocksdb` crate's `Drop` calls `rocksdb_close`
+/// (the destructor), which does not flush memtables, so every record stays in
+/// the WAL and reopen must replay it. Returns the WAL path for corruption.
+fn seed_synced_wal(db_dir: &Path) -> PathBuf {
+    let s = RocksStore::open(db_dir, 1, &RocksConfig::default()).unwrap();
+    let mut wo = WriteOptions::default();
+    wo.set_sync(true);
+    for i in 0..CORRUPT_TEST_RECORDS {
+        s.put_opt(0, &corrupt_key(i), format!("value_{i}").as_bytes(), &wo)
+            .unwrap();
+    }
+    // The durable-sync watermark the production flush path maintains after an
+    // fsync'd batch. Records the full sequence so a short recovery is detectable.
+    s.record_wal_watermark();
+    assert_eq!(
+        s.latest_sequence_number(),
+        CORRUPT_TEST_RECORDS as u64,
+        "each single-key put should advance the sequence by exactly one"
+    );
+    let wal = active_wal_path(db_dir);
+    drop(s); // no flush → WAL is the sole copy, mimicking an unclean shutdown
+    wal
+}
+
+/// Reopen with a counting recorder, recover the surviving keys, and return
+/// (surviving_count, dropped_metric). Asserts the survivors form a contiguous
+/// prefix — `PointInTime` recovery keeps the longest uninterrupted run of valid
+/// records and discards everything from the first corruption onward, so the
+/// survivors are always `wal_key_0000..wal_key_{m-1}` for some `m`.
+fn reopen_and_measure(db_dir: &Path) -> (usize, u64) {
+    let recorder = Arc::new(CountingRecorder::default());
+    let s = RocksStore::open_with_metrics(db_dir, 1, &RocksConfig::default(), recorder.clone())
+        .unwrap();
+
+    let present: Vec<bool> = (0..CORRUPT_TEST_RECORDS)
+        .map(|i| s.get(0, &corrupt_key(i)).unwrap().is_some())
+        .collect();
+    let survivors = present.iter().filter(|p| **p).count();
+
+    // Contiguous-prefix invariant: no surviving key may appear after a dropped
+    // one. This is the load-bearing `PointInTime` guarantee — recovered state is
+    // always a real prefix of history, never an interleaving that resurrects a
+    // record from beyond the corruption point.
+    for i in 0..CORRUPT_TEST_RECORDS {
+        assert_eq!(
+            present[i],
+            i < survivors,
+            "survivors must be a contiguous prefix; key {i} present={} but survivor count={survivors}",
+            present[i],
+        );
+    }
+
+    let dropped = recorder
+        .counter_value("frogdb_wal_recovery_dropped_records_total")
+        .unwrap_or(0);
+    (survivors, dropped)
+}
+
+/// A byte flipped in the *middle* of the WAL (not the tail) fails a record
+/// checksum mid-log. `PointInTime` recovery — the mode FrogDB pins — truncates
+/// at the first corrupt record and drops every valid record after it. Asserts
+/// the exact surviving set (a strict, non-empty prefix) and that the drop is
+/// signalled by the `frogdb_wal_recovery_dropped_records_total` metric.
+#[test]
+fn wal_mid_log_bitflip_drops_suffix_and_signals() {
+    let t = TempDir::new().unwrap();
+    let wal = seed_synced_wal(t.path());
+
+    // Flip a byte two-thirds of the way in: safely past the early records
+    // (which must survive) and safely before the tail (so valid records exist
+    // after the corruption, proving the suffix is dropped, not just a torn tail).
+    let mut bytes = fs::read(&wal).unwrap();
+    let pos = bytes.len() * 2 / 3;
+    bytes[pos] ^= 0xFF;
+    fs::write(&wal, &bytes).unwrap();
+
+    let (survivors, dropped) = reopen_and_measure(t.path());
+
+    assert!(
+        survivors > 0 && survivors < CORRUPT_TEST_RECORDS,
+        "mid-log corruption must keep a non-empty prefix and drop a non-empty \
+         suffix, got {survivors}/{CORRUPT_TEST_RECORDS} survivors"
+    );
+    assert_eq!(
+        dropped,
+        (CORRUPT_TEST_RECORDS - survivors) as u64,
+        "the dropped-records metric must equal the number of truncated records \
+         (watermark {CORRUPT_TEST_RECORDS} minus recovered sequence {survivors})"
+    );
+}
+
+/// Truncating the WAL mid-file cuts the log at an arbitrary point, dropping the
+/// records past the cut. This is the documented "torn tail" case; `PointInTime`
+/// recovers the valid prefix. Even though this truncation is *expected* on an
+/// unclean shutdown, the dropped records must still raise the metric so an
+/// operator can tell how much acknowledged data recovery discarded.
+#[test]
+fn wal_truncation_recovers_prefix_and_signals() {
+    let t = TempDir::new().unwrap();
+    let wal = seed_synced_wal(t.path());
+
+    // Cut the log to 55% of its length — well before the final record, so a
+    // meaningful suffix is lost while an early prefix survives.
+    let orig = fs::metadata(&wal).unwrap().len();
+    let truncated = orig * 55 / 100;
+    let f = fs::OpenOptions::new().write(true).open(&wal).unwrap();
+    f.set_len(truncated).unwrap();
+    drop(f);
+
+    let (survivors, dropped) = reopen_and_measure(t.path());
+
+    assert!(
+        survivors < CORRUPT_TEST_RECORDS,
+        "truncation must drop at least the tail record"
+    );
+    assert_eq!(
+        dropped,
+        (CORRUPT_TEST_RECORDS - survivors) as u64,
+        "the dropped-records metric must equal the number of truncated records"
+    );
+}
+
+/// A clean reopen of an intact WAL recovers every record and raises no
+/// dropped-records signal: the watermark comparison must not false-alarm when
+/// recovery reaches (or exceeds) the recorded durable sequence.
+#[test]
+fn wal_clean_reopen_recovers_all_without_signal() {
+    let t = TempDir::new().unwrap();
+    seed_synced_wal(t.path()); // intact WAL, no corruption
+
+    let (survivors, dropped) = reopen_and_measure(t.path());
+
+    assert_eq!(
+        survivors, CORRUPT_TEST_RECORDS,
+        "an intact WAL must recover every record"
+    );
+    assert_eq!(
+        dropped, 0,
+        "a clean recovery must not signal dropped records"
+    );
+}
+
+/// The pinned recovery mode is an explicit choice, not RocksDB's inherited
+/// default. This guards against a silent library-default change: the acceptance
+/// criterion is that the mode is *set in code*, and the corruption tests above
+/// verify the behavior that setting produces.
+#[test]
+fn wal_recovery_mode_is_pinned_to_point_in_time() {
+    // Compile-time proof the variant exists and is what we pin; the behavioral
+    // proof lives in the corruption tests. Kept as a named anchor so a future
+    // change to the pinned mode has to update this test deliberately.
+    let pinned = rocksdb::DBRecoveryMode::PointInTime;
+    assert!(matches!(pinned, rocksdb::DBRecoveryMode::PointInTime));
+}

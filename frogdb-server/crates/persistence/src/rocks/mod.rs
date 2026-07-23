@@ -7,13 +7,14 @@ mod reclaim;
 pub mod staged;
 #[cfg(test)]
 mod tests;
+pub(crate) mod wal_watermark;
 
 pub use columns::{CfTier, RocksIterator};
 pub use config::{CompressionType, RocksConfig, RocksError};
 use manifest::ColumnFamilyManifest;
 use rocksdb::{
-    BlockBasedOptions, BoundColumnFamily, ColumnFamilyDescriptor, DB, DBWithThreadMode,
-    MergeOperands, MultiThreaded, Options, WriteBatch, WriteOptions,
+    BlockBasedOptions, BoundColumnFamily, ColumnFamilyDescriptor, DB, DBRecoveryMode,
+    DBWithThreadMode, MergeOperands, MultiThreaded, Options, WriteBatch, WriteOptions,
 };
 pub use staged::StagedCheckpoint;
 use std::path::Path;
@@ -134,6 +135,36 @@ impl RocksStore {
         db_opts.create_if_missing(config.create_if_missing);
         db_opts.create_missing_column_families(true);
         db_opts.set_max_background_jobs(config.max_background_jobs);
+        // Pin the WAL recovery mode deliberately rather than inheriting RocksDB's
+        // implicit default. We choose `PointInTime`, which also happens to be the
+        // library default — the point is that it is now an *explicit, documented*
+        // decision, verified by the corruption tests in `rocks/tests.rs`, not an
+        // assumption about what version of RocksDB we linked.
+        //
+        // Why `PointInTime` for Redis-comparable durability:
+        //   * A crash mid-append leaves a torn record at the *tail* of the WAL.
+        //     Every mode except `AbsoluteConsistency` tolerates that torn tail;
+        //     `AbsoluteConsistency` would refuse to open the database at all,
+        //     turning an ordinary unclean shutdown into a hard startup failure —
+        //     the opposite of Redis AOF, which trims a partial trailing command
+        //     and carries on.
+        //   * `PointInTime` recovers the longest *uninterrupted* prefix of valid
+        //     records and stops at the first checksum failure, discarding the
+        //     (possibly still-valid) suffix behind it. This mirrors Redis
+        //     `aof-load-truncated`/point-in-time AOF loading: replay up to the
+        //     first inconsistency, then stop, so recovered state is always a real
+        //     prefix of history and never interleaves post-corruption records.
+        //   * `TolerateCorruptedTailRecords` only tolerates corruption in the
+        //     final log and would treat a mid-log checksum failure as fatal;
+        //     `SkipAnyCorruptedRecord` keeps replaying *past* a corrupt record,
+        //     which can resurrect stale values and reorder history — unacceptable
+        //     for a database that promises prefix-consistent recovery.
+        //
+        // The one sharp edge `PointInTime` has — silently dropping the valid
+        // suffix behind a mid-log corruption with no signal — is covered by the
+        // durable-sync watermark in [`wal_watermark`], which emits a metric + log
+        // when recovery lands below the last synced sequence.
+        db_opts.set_wal_recovery_mode(DBRecoveryMode::PointInTime);
         if let Some(rate_mb) = config.compaction_rate_limit_mb {
             db_opts.set_ratelimiter(rate_mb as i64 * 1024 * 1024, 100_000, 10);
         }
@@ -230,6 +261,17 @@ impl RocksStore {
                 RocksError::from(e)
             })?
         };
+        // Detect (and log/count) any point-in-time WAL truncation that just
+        // happened, by comparing what RocksDB recovered to against the
+        // durable-sync watermark persisted before the crash. Only meaningful for
+        // an existing database — a freshly created one replayed nothing. On a
+        // fresh open we still seed the watermark to the current sequence so the
+        // first subsequent recovery has a baseline. See [`wal_watermark`].
+        if db_exists {
+            wal_watermark::detect_and_reset(path, db.latest_sequence_number(), &*metrics);
+        } else if let Err(e) = wal_watermark::write(path, db.latest_sequence_number()) {
+            debug!(path = %path_str, error = %e, "Failed to seed WAL watermark on fresh open");
+        }
         info!(path = %path_str, num_shards, warm_enabled, "RocksDB opened");
         Ok(Self {
             db,

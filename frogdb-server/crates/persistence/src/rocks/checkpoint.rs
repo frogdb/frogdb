@@ -20,6 +20,18 @@ impl RocksStore {
     pub fn latest_sequence_number(&self) -> u64 {
         self.db.latest_sequence_number()
     }
+    /// Persist the current RocksDB sequence number as the durable-sync WAL
+    /// watermark (see [`super::wal_watermark`]). Call this *after* a durable
+    /// sync — the sync flush path and graceful shutdown — so the recorded
+    /// sequence reflects data that survived to disk. Best-effort: a failed write
+    /// only costs a future corruption-detection, never correctness, so it is
+    /// logged at debug level and swallowed rather than propagated.
+    pub fn record_wal_watermark(&self) {
+        let seq = self.db.latest_sequence_number();
+        if let Err(e) = super::wal_watermark::write(self.db.path(), seq) {
+            tracing::debug!(seq, error = %e, "Failed to record WAL watermark");
+        }
+    }
     pub fn path(&self) -> &Path {
         self.db.path()
     }

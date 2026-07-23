@@ -4,7 +4,7 @@
     "source": "frogdb-server/crates/telemetry/src/definitions.rs",
     "regenerate": "just docs-gen"
   },
-  "count": 90,
+  "count": 91,
   "metrics": [
     {
       "name": "frogdb_active_version",
@@ -1025,6 +1025,13 @@
           "type": "string"
         }
       ]
+    },
+    {
+      "name": "frogdb_wal_recovery_dropped_records_total",
+      "type": "counter",
+      "help": "Total committed records dropped by point-in-time WAL recovery on corruption",
+      "group": "wal",
+      "labels": []
     },
     {
       "name": "frogdb_wal_rollbacks_total",

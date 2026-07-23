@@ -206,6 +206,16 @@ define_metrics! {
     /// Total store mutations rolled back after a WAL append failure
     counter WalRollbacks("frogdb_wal_rollbacks_total") {}
 
+    // Non-zero means point-in-time WAL recovery hit a corrupt mid-log record and
+    // truncated the durable suffix, silently dropping acknowledged writes. The
+    // value is the gap between the durable-sync sequence watermark recorded
+    // before the crash and the sequence RocksDB actually recovered to — see the
+    // `rocks::wal_watermark` module in `frogdb-persistence`. (Kept as a single
+    // doc line below because the macro derives Prometheus HELP from the last
+    // doc-comment line.)
+    /// Total committed records dropped by point-in-time WAL recovery on corruption
+    counter WalRecoveryDroppedRecords("frogdb_wal_recovery_dropped_records_total") {}
+
     /// Total HyperLogLog register-delta operands persisted as WAL merges
     /// (dense-HLL PFADD writes that took the merge-delta path instead of a
     /// full value Put).
