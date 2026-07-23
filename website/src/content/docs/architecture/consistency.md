@@ -58,13 +58,15 @@ In **standalone mode only**, FrogDB can optionally serve atomic cross-shard oper
 
 ## Durability — [Tested]
 
-Durability follows the configured mode (`DurabilityMode`; default `periodic`, 1000 ms). Per-mode crash windows are verified by crash-recovery tests (`frogdb-server/crates/core/src/persistence/crash_recovery_tests.rs`).
+Durability follows the configured mode (`DurabilityMode`; default `periodic`, 1000 ms).
 
 | Mode | Write Acknowledged When | Data at Risk on Crash |
 |------|------------------------|----------------------|
 | `async` | Written to memory | All writes not yet flushed |
 | `periodic` | Written to memory | Up to one flush interval (default ~1 s) |
 | `sync` | fsync completes | None — every acknowledged write is durable |
+
+The per-mode loss windows are verified by fsync-boundary fault-injection tests (`test_sync_mode_zero_acked_write_loss`, `test_periodic_mode_loss_bounded_by_flush_interval`, and the async-window tests in `frogdb-server/crates/persistence/src/wal/tests.rs`). These drive the real WAL flush thread and durability-mode selection, but substitute the storage backend with a page-cache model that discards committed-but-unfsynced writes on a simulated crash — the fsync boundary the modes exist to control. That is exactly the boundary the ordinary crash-recovery tests (`crash_recovery_tests.rs`) cannot exercise, because they reopen the same directory in-process and the OS page cache flushes unsynced writes anyway. A full end-to-end power-loss test against real storage (VM hard reset or block-device fault injection) remains design intent.
 
 See [Persistence Internals](/architecture/persistence/#durability-modes) for the mechanism.
 

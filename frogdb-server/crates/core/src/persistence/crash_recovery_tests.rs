@@ -119,11 +119,17 @@ mod durability_mode {
         }
     }
 
-    /// Test 1.3: Periodic mode - documents potential data loss within window.
+    /// Test 1.3: Periodic mode - recovery plumbing after an immediate crash.
     ///
-    /// This test documents the expected behavior: writes within the sync
-    /// interval MAY be lost. This is not a failure - it's the expected
-    /// trade-off for better performance.
+    /// NOTE: `crash()` here drops the `RocksStore` handle and `recover()`
+    /// reopens the same directory, which preserves the OS page cache — so
+    /// unflushed writes may still be recovered and this test cannot actually
+    /// distinguish the periodic loss window. It only exercises that recovery
+    /// after a mid-write crash succeeds and the flushed baseline is intact. The
+    /// real per-mode fsync-boundary window (bounded by the flush interval) is
+    /// verified by `test_periodic_mode_loss_bounded_by_flush_interval` in
+    /// `frogdb-persistence`'s `wal::tests`, which severs the page cache at the
+    /// `WriteSink::commit(sync)` seam.
     #[test]
     fn test_periodic_mode_within_window() {
         let mut harness = CrashTestHarness::with_periodic_mode(60000); // 60s interval (long)
@@ -159,10 +165,17 @@ mod durability_mode {
         );
     }
 
-    /// Test 1.4: Async mode - only explicitly flushed writes guaranteed.
+    /// Test 1.4: Async mode - recovery plumbing after a crash.
     ///
-    /// With Async mode, writes are buffered and only guaranteed to persist
-    /// after an explicit flush.
+    /// NOTE: like `test_periodic_mode_within_window`, `crash()`+`recover()`
+    /// preserve the OS page cache (same-process reopen of the same directory),
+    /// so the unflushed `key2` may still be recovered and this test cannot
+    /// distinguish async's (unbounded) loss window. It only exercises that
+    /// recovery succeeds and the flushed `key1` is intact. The real async
+    /// window — everything acked-but-unsynced is lost until an out-of-band
+    /// fsync — is verified by `test_async_mode_unbounded_loss_without_fsync`
+    /// and `test_async_mode_window_bounded_only_by_external_fsync` in
+    /// `frogdb-persistence`'s `wal::tests`.
     #[test]
     fn test_async_mode_explicit_flush() {
         let mut harness = CrashTestHarness::with_async_mode();
