@@ -26,13 +26,17 @@ This repo wraps the testbox lifecycle so boxes are always cleaned up:
 - Idle timeout is 5 minutes (cost control; the user is price-sensitive). An expired box just
   needs another `just tb-warmup`; re-hydration is cheap thanks to the Rust build cache.
 - Runner is `blacksmith-8vcpu-ubuntu-2404-arm` (aarch64 Linux). RocksDB compiles from vendored
-  source there (Linux system RocksDB is too old); the first-ever hydration is slow (~10-20 min)
-  while later ones restore from cache.
+  source there (Linux system RocksDB is too old). Warm hydration takes ~1 min; a cold cache
+  (evicted or first-ever) rebuilds in ~7 min.
 - Build caching uses Blacksmith sticky disks (`target/` + cargo registry, ~$0.50/GB/mo): the
   last committed snapshot mounts in seconds and commits at VM teardown, including on
-  cancellation. Caveat: a fresh commit takes ~10-15 min to become the clone base, so a re-warm
+  cancellation. Caveats: a fresh commit takes ~10-15 min to become the clone base, so a re-warm
   shortly after a stop mounts the previous snapshot — mild staleness the hydration prebuild
-  recompiles. Do NOT change caching to sccache — deliberate cost/compat decision.
+  recompiles. Cache hits depend on two invariants: source mtimes are restored to commit times
+  during hydration (scripts/testbox-restore-mtime.py — the git-restore-mtime apt package is
+  broken by git 2.51), and tb-run exports CARGO_INCREMENTAL=0 to match the hydration build (a
+  mismatch recompiles every workspace crate and bloats the disk). Do NOT change caching to
+  sccache — deliberate cost/compat decision.
 - The box is Linux: build/runtime behavior can differ from local macOS (good — it matches
   production). `just` recipes work unchanged on the box.
 
