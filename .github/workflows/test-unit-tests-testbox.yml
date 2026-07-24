@@ -53,19 +53,19 @@ jobs:
       - name: Install Rust 1.92.0
         uses: dtolnay/rust-toolchain@1.92.0
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libclang-dev pkg-config libssl-dev git-restore-mtime
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev pkg-config libssl-dev
       # Fresh checkouts stamp every source file with a new mtime, which dirties
       # cargo's fingerprints and forces a full workspace recompile even when the
       # sticky-disk target/ already holds artifacts for this exact commit.
-      # Restoring commit mtimes keeps unchanged crates fresh.
+      # Restoring commit mtimes keeps unchanged crates fresh. The vendored script
+      # replaces the git-restore-mtime package, which git 2.51's removal of
+      # `git whatchanged` broke into a silent no-op. Unshallow first: the
+      # runner's git cache serves a shallow clone even with fetch-depth: 0, and
+      # per-file history is required.
       - name: Restore source mtimes
-        # The runner's git cache serves a shallow clone even with fetch-depth: 0,
-        # and restore-mtime silently no-ops without per-file history.
         run: |
           git fetch --unshallow --quiet || git fetch --quiet
-          git rev-parse --is-shallow-repository
-          git restore-mtime
-          stat -c '%y' Cargo.toml
+          python3 scripts/testbox-restore-mtime.py
       - name: Prebuild workspace test binaries
         run: cargo nextest run --no-run --workspace
       - name: Run Testbox
