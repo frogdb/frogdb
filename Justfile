@@ -956,8 +956,11 @@ tb-run cmd:
     id=$(tail -1 "$(git rev-parse --git-dir)/blacksmith-testboxes" 2>/dev/null || true)
     [ -n "$id" ] || { echo "no testbox recorded; run 'just tb-warmup' first" >&2; exit 1; }
     # The testbox SSH session does not inherit the workflow's PATH; mise-managed
-    # tools (just, cargo-nextest) live in the shims dir.
-    blacksmith testbox run --id "$id" 'export PATH="$HOME/.local/share/mise/shims:$PATH" && '{{quote(cmd)}}
+    # tools (just, cargo-nextest) live in the shims dir. CARGO_INCREMENTAL=0
+    # matches the hydration build — a mismatch flips rustc flags and recompiles
+    # every workspace crate on the first build of each SSH session (and bloats
+    # the sticky-disk target/ with incremental artifacts).
+    blacksmith testbox run --id "$id" 'export PATH="$HOME/.local/share/mise/shims:$PATH" CARGO_INCREMENTAL=0 && '{{quote(cmd)}}
 
 # Show status of the most recently warmed testbox
 tb-status *args="":

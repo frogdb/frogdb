@@ -22,6 +22,11 @@ jobs:
           testbox_id: ${{ inputs.testbox_id }}
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          # restore-mtime needs history: with a shallow clone every file resolves
+          # to the single fetched commit and gets stamped "today", dirtying all
+          # cargo fingerprints against the sticky-disk target/.
+          fetch-depth: 0
       # Sticky disks replace Swatinem/rust-cache here: the last committed snapshot
       # mounts in seconds regardless of size, and the commit happens at VM teardown
       # even though testbox jobs always end by cancellation (stop or idle-timeout).
