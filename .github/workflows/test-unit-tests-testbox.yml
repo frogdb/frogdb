@@ -59,7 +59,13 @@ jobs:
       # sticky-disk target/ already holds artifacts for this exact commit.
       # Restoring commit mtimes keeps unchanged crates fresh.
       - name: Restore source mtimes
-        run: git restore-mtime
+        # The runner's git cache serves a shallow clone even with fetch-depth: 0,
+        # and restore-mtime silently no-ops without per-file history.
+        run: |
+          git fetch --unshallow --quiet || git fetch --quiet
+          git rev-parse --is-shallow-repository
+          git restore-mtime
+          stat -c '%y' Cargo.toml
       - name: Prebuild workspace test binaries
         run: cargo nextest run --no-run --workspace
       - name: Run Testbox
