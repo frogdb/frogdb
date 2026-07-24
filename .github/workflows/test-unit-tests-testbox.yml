@@ -48,7 +48,13 @@ jobs:
       - name: Install Rust 1.92.0
         uses: dtolnay/rust-toolchain@1.92.0
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libclang-dev pkg-config libssl-dev
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev pkg-config libssl-dev git-restore-mtime
+      # Fresh checkouts stamp every source file with a new mtime, which dirties
+      # cargo's fingerprints and forces a full workspace recompile even when the
+      # sticky-disk target/ already holds artifacts for this exact commit.
+      # Restoring commit mtimes keeps unchanged crates fresh.
+      - name: Restore source mtimes
+        run: git restore-mtime
       - name: Prebuild workspace test binaries
         run: cargo nextest run --no-run --workspace
       - name: Run Testbox
