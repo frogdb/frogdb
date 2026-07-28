@@ -3,10 +3,12 @@
 //! Tests for multi-node cluster formation, leader election, node membership,
 //! and failover scenarios.
 //!
-//! NOTE: Many tests are marked `#[ignore]` because they require full cluster mode
-//! implementation. The CLUSTER commands currently return hardcoded standalone
-//! responses. These tests verify the harness works correctly and will be enabled
-//! once the cluster state machine is integrated with the CLUSTER commands.
+//! Every test here runs against a live multi-node cluster: `ClusterTestHarness`
+//! starts real servers whose `ClusterState` is replicated by real Raft, and
+//! `CLUSTER INFO`/`NODES`/`SLOTS`/`SHARDS` render that live state (see
+//! `server/src/commands/cluster/mod.rs`). The hardcoded standalone responses
+//! those commands can return apply only when a server runs without cluster mode
+//! (`ctx.cluster_state == None`), which is never the case in this file.
 
 use frogdb_test_harness::cluster_harness::{ClusterNodeConfig, ClusterTestHarness};
 use frogdb_test_harness::cluster_helpers::{
@@ -9366,19 +9368,9 @@ async fn test_frogdb_finalize_success() {
         .wait_for_cluster_convergence(Duration::from_secs(10))
         .await
         .unwrap();
-    // Each node self-registers its real address+version (0.1.0) via a one-shot
-    // Raft AddNode after startup. That entry replaces the whole NodeInfo, so if
-    // it commits *after* `fake_all_node_versions`, it clobbers the faked 0.2.0
-    // back to 0.1.0 and FINALIZE rejects the cluster as mixed-version. Address
-    // convergence only holds once every self-registration AddNode has applied,
-    // so waiting for it here guarantees the fake below is the last writer.
-    harness
-        .wait_for_address_convergence(Duration::from_secs(10))
-        .await
-        .unwrap();
-
-    // Fake all nodes to version 0.2.0
-    harness.fake_all_node_versions("0.2.0");
+    // Fake all nodes to version 0.2.0. `fake_all_node_versions` waits for
+    // self-registration to settle so the fake is the last writer.
+    harness.fake_all_node_versions("0.2.0").await.unwrap();
 
     // Send FROGDB.FINALIZE to the leader
     let (_, response) = send_to_leader(&harness, "FROGDB.FINALIZE", &["0.2.0"]).await;
@@ -9425,8 +9417,11 @@ async fn test_frogdb_finalize_rejects_mixed_version() {
 
     // Set all nodes to 0.2.0 except one at 0.1.0
     let node_ids = harness.node_ids();
-    harness.fake_all_node_versions("0.2.0");
-    harness.fake_node_version(node_ids[2], "0.1.0");
+    harness.fake_all_node_versions("0.2.0").await.unwrap();
+    harness
+        .fake_node_version(node_ids[2], "0.1.0")
+        .await
+        .unwrap();
 
     // Send FROGDB.FINALIZE — should fail
     let (_, response) = send_to_leader(&harness, "FROGDB.FINALIZE", &["0.2.0"]).await;
@@ -9490,23 +9485,29 @@ async fn test_frogdb_version_reports_cluster_info() {
     );
 
     // Finalize
-    harness.fake_all_node_versions("0.2.0");
+    harness.fake_all_node_versions("0.2.0").await.unwrap();
     let (_, finalize_resp) = send_to_leader(&harness, "FROGDB.FINALIZE", &["0.2.0"]).await;
     assert!(
         matches!(&finalize_resp, frogdb_protocol::Response::Simple(s) if s.as_ref() == b"OK"),
-        "Finalize should succeed"
+        "Finalize should succeed, got {:?}",
+        finalize_resp
     );
 
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    // Query FROGDB.VERSION after finalization
-    let response = node.send("FROGDB.VERSION", &[]).await;
-    let info = parse_version_response(&response);
-    assert_eq!(
-        info.get("active_version").map(|s| s.as_str()),
-        Some("0.2.0"),
-        "active_version should be 0.2.0 after finalization"
-    );
+    // FINALIZE may have been served by a different node than `node`, which
+    // applies the replicated entry asynchronously — poll instead of sleeping.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let info = parse_version_response(&node.send("FROGDB.VERSION", &[]).await);
+        if info.get("active_version").map(|s| s.as_str()) == Some("0.2.0") {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "active_version should be 0.2.0 after finalization, got {:?}",
+            info.get("active_version")
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 
     harness.shutdown_all().await;
 }
@@ -9525,7 +9526,7 @@ async fn test_frogdb_finalize_non_leader_redirects() {
         .await
         .unwrap();
 
-    harness.fake_all_node_versions("0.2.0");
+    harness.fake_all_node_versions("0.2.0").await.unwrap();
 
     // Find a follower
     let follower_id = harness
@@ -9610,9 +9611,12 @@ async fn test_admin_upgrade_status_cluster() {
         .unwrap();
 
     // Fake mixed versions
-    harness.fake_all_node_versions("0.2.0");
+    harness.fake_all_node_versions("0.2.0").await.unwrap();
     let node_ids = harness.node_ids();
-    harness.fake_node_version(node_ids[2], "0.1.0");
+    harness
+        .fake_node_version(node_ids[2], "0.1.0")
+        .await
+        .unwrap();
 
     // GET /admin/upgrade-status from any node
     let node = harness.node(node_ids[0]).unwrap();
@@ -9675,7 +9679,7 @@ async fn test_admin_upgrade_status_after_finalize() {
         .await
         .unwrap();
 
-    harness.fake_all_node_versions("0.2.0");
+    harness.fake_all_node_versions("0.2.0").await.unwrap();
 
     // Finalize via admin RESP port (FROGDB.FINALIZE requires admin flag)
     let (_, response) = admin_send_to_leader(&harness, "FROGDB.FINALIZE", &["0.2.0"]).await;
@@ -9760,7 +9764,7 @@ async fn test_info_gate_suppressed_before_finalize() {
         .unwrap();
 
     // Fake versions but do NOT finalize — gate should be inactive
-    harness.fake_all_node_versions("0.2.0");
+    harness.fake_all_node_versions("0.2.0").await.unwrap();
 
     let node_ids = harness.node_ids();
     let node = harness.node(node_ids[0]).unwrap();
@@ -9796,16 +9800,7 @@ async fn test_info_gate_active_after_finalize() {
         .wait_for_cluster_convergence(Duration::from_secs(10))
         .await
         .unwrap();
-    // Wait for self-registration AddNode entries to settle before faking node
-    // versions; otherwise a late self-registration (real version 0.1.0)
-    // clobbers the fake and FINALIZE rejects the cluster. See
-    // `test_frogdb_finalize_success` for the full explanation.
-    harness
-        .wait_for_address_convergence(Duration::from_secs(10))
-        .await
-        .unwrap();
-
-    harness.fake_all_node_versions("0.2.0");
+    harness.fake_all_node_versions("0.2.0").await.unwrap();
 
     // Finalize
     let (_, response) = admin_send_to_leader(&harness, "FROGDB.FINALIZE", &["0.2.0"]).await;
@@ -9861,8 +9856,11 @@ async fn test_info_gate_suppressed_during_partial_upgrade() {
 
     // Mixed versions — cannot finalize
     let node_ids = harness.node_ids();
-    harness.fake_all_node_versions("0.2.0");
-    harness.fake_node_version(node_ids[2], "0.1.0");
+    harness.fake_all_node_versions("0.2.0").await.unwrap();
+    harness
+        .fake_node_version(node_ids[2], "0.1.0")
+        .await
+        .unwrap();
 
     // Attempt finalize — should fail
     let (_, response) = send_to_leader(&harness, "FROGDB.FINALIZE", &["0.2.0"]).await;
@@ -10009,7 +10007,7 @@ async fn test_rolling_upgrade_with_continuous_traffic() {
         eprintln!("Upgrading node {}/{}: {}", i + 1, node_ids.len(), node_id);
 
         // Fake this node's version to 0.2.0 across all local states
-        harness.fake_node_version(node_id, "0.2.0");
+        harness.fake_node_version(node_id, "0.2.0").await.unwrap();
 
         // Graceful shutdown
         harness.shutdown_node(node_id).await;
@@ -10044,7 +10042,7 @@ async fn test_rolling_upgrade_with_continuous_traffic() {
 
         // Re-fake version on the restarted node's local state
         // (restart resets it to the compile-time binary version)
-        harness.fake_node_version(node_id, "0.2.0");
+        harness.fake_node_version(node_id, "0.2.0").await.unwrap();
 
         // Send more traffic after restart
         for j in 0..10 {
@@ -10059,7 +10057,7 @@ async fn test_rolling_upgrade_with_continuous_traffic() {
     }
 
     // All nodes upgraded — fake all versions consistently and finalize
-    harness.fake_all_node_versions("0.2.0");
+    harness.fake_all_node_versions("0.2.0").await.unwrap();
 
     let (_, response) = admin_send_to_leader(&harness, "FROGDB.FINALIZE", &["0.2.0"]).await;
     assert!(
@@ -10067,18 +10065,21 @@ async fn test_rolling_upgrade_with_continuous_traffic() {
         "Expected OK after upgrade, got {:?}",
         response
     );
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    // Verify finalization replicated
+    // Verify finalization replicated. Followers apply the committed entry
+    // asynchronously, so poll each node rather than betting on a fixed sleep.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     for &node_id in &harness.node_ids() {
         let node = harness.node(node_id).unwrap();
         let cs = node.cluster_state().unwrap();
-        assert_eq!(
-            cs.active_version(),
-            Some("0.2.0".to_string()),
-            "Node {} should have active_version 0.2.0 after finalize",
-            node_id
-        );
+        while cs.active_version() != Some("0.2.0".to_string()) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Node {} should have active_version 0.2.0 after finalize (got {:?})",
+                node_id,
+                cs.active_version()
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
 
     // Verify data integrity: read back a sample of pre-upgrade keys
@@ -11678,6 +11679,8 @@ async fn test_cluster_scan_is_per_node_and_unions_to_full_keyspace() {
         union, want,
         "the union of per-node SCANs must equal the full written keyspace"
     );
+
+    harness.shutdown_all().await;
 }
 
 // ============================================================================

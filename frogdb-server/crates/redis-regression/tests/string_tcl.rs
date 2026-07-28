@@ -1694,7 +1694,7 @@ async fn tcl_delex_invalid_condition() {
 
 // ---------------------------------------------------------------------------
 // Extended SET with IFEQ / IFNE / IFDEQ / IFDNE
-// These are Redis 8.x features not yet implemented in FrogDB.
+// Redis 8.x conditional-SET features; implemented in FrogDB and asserted below.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]

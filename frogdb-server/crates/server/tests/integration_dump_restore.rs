@@ -1,10 +1,9 @@
 //! Integration tests for DUMP / RESTORE command round-trips.
 //!
 //! Verifies that every value type can be serialized with DUMP and restored with
-//! RESTORE, preserving the original data.  Types whose serialization is still
-//! stubbed out (Stream, BloomFilter, TimeSeries) are documented with `#[ignore]`
-//! tests that assert the *correct* behaviour so they can be enabled once
-//! serialization is implemented.
+//! RESTORE, preserving the original data. Every supported type — including
+//! Stream, BloomFilter, and TimeSeries — has an active round-trip test here; no
+//! type's serialization is stubbed out and no test in this file is `#[ignore]`d.
 
 use crate::common::response_helpers::{unwrap_bulk, unwrap_integer};
 use crate::common::test_server::{TestServer, is_error};
@@ -181,7 +180,7 @@ async fn test_dump_restore_hll_round_trip() {
 }
 
 // ============================================================================
-// Known-gap documentation tests (stubbed serialization)
+// Module-type round-trips (Stream / BloomFilter / TimeSeries)
 // ============================================================================
 
 #[tokio::test]
@@ -198,7 +197,6 @@ async fn test_dump_restore_stream_round_trip() {
 
     dump_delete_restore(&server, "{dr}stream").await;
 
-    // After proper serialization, stream should have 2 entries
     let len = unwrap_integer(&server.send("XLEN", &["{dr}stream"]).await);
     assert_eq!(len, 2, "Stream should have 2 entries after DUMP/RESTORE");
 
@@ -214,7 +212,6 @@ async fn test_dump_restore_bloom_filter_round_trip() {
 
     dump_delete_restore(&server, "{dr}bloom").await;
 
-    // After proper serialization, bloom filter should contain items
     let resp = server.send("BF.EXISTS", &["{dr}bloom", "item1"]).await;
     assert_eq!(
         unwrap_integer(&resp),
@@ -234,7 +231,6 @@ async fn test_dump_restore_timeseries_round_trip() {
 
     dump_delete_restore(&server, "{dr}ts").await;
 
-    // After proper serialization, the latest sample should be accessible
     let resp = server.send("TS.GET", &["{dr}ts"]).await;
     assert!(
         !is_error(&resp),

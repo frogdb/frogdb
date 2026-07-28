@@ -925,21 +925,43 @@ impl ClusterTestHarness {
 
     /// Override the reported binary version for all nodes in all local cluster states.
     /// Used for testing version-gated features without rebuilding binaries.
-    pub fn fake_all_node_versions(&self, version: &str) {
+    ///
+    /// Waits for [`Self::wait_for_address_convergence`] first, and that wait is
+    /// load-bearing rather than incidental: after startup every node proposes a
+    /// one-shot `AddNode` for itself over Raft, and applying it replaces the whole
+    /// `NodeInfo` — real address *and* real `CARGO_PKG_VERSION`. A fake written
+    /// before that entry applies is silently clobbered back to the compile-time
+    /// version, and `FROGDB.FINALIZE` then rejects the cluster as mixed-version.
+    /// Correct addresses are the observable proof that every self-registration has
+    /// applied, so waiting for them makes this call the last writer.
+    pub async fn fake_all_node_versions(&self, version: &str) -> Result<(), ClusterError> {
+        self.wait_for_address_convergence(Duration::from_secs(10))
+            .await?;
         for node in self.nodes.values() {
             if let Some(cs) = node.cluster_state() {
                 cs.set_all_node_versions(version);
             }
         }
+        Ok(())
     }
 
     /// Override the reported binary version for a specific node across all local states.
-    pub fn fake_node_version(&self, target_node_id: u64, version: &str) {
+    ///
+    /// Waits for self-registration to settle for the same reason as
+    /// [`Self::fake_all_node_versions`].
+    pub async fn fake_node_version(
+        &self,
+        target_node_id: u64,
+        version: &str,
+    ) -> Result<(), ClusterError> {
+        self.wait_for_address_convergence(Duration::from_secs(10))
+            .await?;
         for node in self.nodes.values() {
             if let Some(cs) = node.cluster_state() {
                 cs.set_node_version(target_node_id, version.to_string());
             }
         }
+        Ok(())
     }
 
     // -- Replica support --
