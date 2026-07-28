@@ -207,6 +207,7 @@ fn bench_wal_write_async(c: &mut Criterion) {
                         batch_size_threshold: 64 * 1024 * 1024, // Large threshold to avoid auto-flush
                         batch_timeout_ms: 60000,                // Long timeout
                         channel_capacity: 8192,
+                        batch_size_threshold_handle: None,
                     },
                     metrics,
                 );
@@ -256,6 +257,7 @@ fn bench_wal_write_sync(c: &mut Criterion) {
                         batch_size_threshold: 1, // Flush every write
                         batch_timeout_ms: 0,
                         channel_capacity: 8192,
+                        batch_size_threshold_handle: None,
                     },
                     metrics,
                 );
@@ -304,6 +306,7 @@ fn bench_wal_write_periodic(c: &mut Criterion) {
                         batch_size_threshold: 64 * 1024 * 1024,
                         batch_timeout_ms: 10,
                         channel_capacity: 8192,
+                        batch_size_threshold_handle: None,
                     },
                     metrics,
                 );
