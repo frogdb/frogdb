@@ -144,9 +144,13 @@ impl syn::parse::Parse for MetricsInput {
         let mut metrics = Vec::new();
 
         while !input.is_empty() {
-            // Parse doc comments using Attribute::parse_outer
+            // Parse doc comments using Attribute::parse_outer. Each source line
+            // of a `///` comment arrives as its own `#[doc]` attribute, so the
+            // lines are joined back into one sentence — keeping only the last
+            // one truncated every multi-line description mid-clause, and that
+            // text is the metric's Prometheus HELP string.
             let attrs = syn::Attribute::parse_outer(input)?;
-            let mut doc = None;
+            let mut doc_lines: Vec<String> = Vec::new();
             for attr in &attrs {
                 if attr.path().is_ident("doc")
                     && let syn::Meta::NameValue(nv) = &attr.meta
@@ -155,9 +159,13 @@ impl syn::parse::Parse for MetricsInput {
                         ..
                     }) = &nv.value
                 {
-                    doc = Some(s.value().trim().to_string());
+                    let line = s.value().trim().to_string();
+                    if !line.is_empty() {
+                        doc_lines.push(line);
+                    }
                 }
             }
+            let doc = (!doc_lines.is_empty()).then(|| doc_lines.join(" "));
 
             // Parse: metric_type StructName("metric_name") { ... }
             let metric_type: Ident = input.parse()?;

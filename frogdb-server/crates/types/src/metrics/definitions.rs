@@ -210,9 +210,9 @@ define_metrics! {
     // truncated the durable suffix, silently dropping acknowledged writes. The
     // value is the gap between the durable-sync sequence watermark recorded
     // before the crash and the sequence RocksDB actually recovered to — see the
-    // `rocks::wal_watermark` module in `frogdb-persistence`. (Kept as a single
-    // doc line below because the macro derives Prometheus HELP from the last
-    // doc-comment line.)
+    // `rocks::wal_watermark` module in `frogdb-persistence`. Kept as an
+    // implementation comment: the doc comment below is the operator-facing
+    // Prometheus HELP string.
     /// Total committed records dropped by point-in-time WAL recovery on corruption
     counter WalRecoveryDroppedRecords("frogdb_wal_recovery_dropped_records_total") {}
 
@@ -232,8 +232,8 @@ define_metrics! {
 
     /// Total post-clear space-reclamation passes that finished executing
     /// (the compaction routine returned). Pairs with
-    /// [`FlushCompactStarted`]; a persistent gap between the two indicates
-    /// reclamation passes still running or a stuck compaction.
+    /// frogdb_flush_compact_started_total; a persistent gap between the two
+    /// indicates reclamation passes still running or a stuck compaction.
     counter FlushCompactCompleted("frogdb_flush_compact_completed_total") {
         labels: [shard: &str],
     }

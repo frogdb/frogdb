@@ -260,7 +260,7 @@
     {
       "name": "frogdb_flush_compact_completed_total",
       "type": "counter",
-      "help": "reclamation passes still running or a stuck compaction.",
+      "help": "Total post-clear space-reclamation passes that finished executing (the compaction routine returned). Pairs with frogdb_flush_compact_started_total; a persistent gap between the two indicates reclamation passes still running or a stuck compaction.",
       "group": "flush",
       "labels": [
         {
@@ -272,7 +272,7 @@
     {
       "name": "frogdb_flush_compact_started_total",
       "type": "counter",
-      "help": "same shard/tier does not increment this.",
+      "help": "Total post-clear space-reclamation passes started (a FLUSHDB/FLUSHALL range tombstone was followed by an async DeleteFilesInRange + CompactRange over the cleared column family). Only counts passes that actually began; a reclamation coalesced away because one was already in flight for the same shard/tier does not increment this.",
       "group": "flush",
       "labels": [
         {
@@ -362,7 +362,7 @@
     {
       "name": "frogdb_latency_band_requests_total",
       "type": "gauge",
-      "help": "from the band tracker at scrape time",
+      "help": "Cumulative requests at or under each configured latency band, flushed from the band tracker at scrape time",
       "group": "latency",
       "labels": [
         {
@@ -546,7 +546,7 @@
     {
       "name": "frogdb_pubsub_output_buffer_disconnects_total",
       "type": "counter",
-      "help": "output-buffer hard limit (slow / non-reading subscribers).",
+      "help": "Total subscriber connections disconnected for exceeding their pub/sub output-buffer hard limit (slow / non-reading subscribers).",
       "group": "pubsub",
       "labels": []
     },
@@ -1005,7 +1005,7 @@
     {
       "name": "frogdb_wal_merge_operands_total",
       "type": "counter",
-      "help": "full value Put).",
+      "help": "Total HyperLogLog register-delta operands persisted as WAL merges (dense-HLL PFADD writes that took the merge-delta path instead of a full value Put).",
       "group": "wal",
       "labels": []
     },
