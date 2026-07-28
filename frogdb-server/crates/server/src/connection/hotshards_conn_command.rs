@@ -70,6 +70,7 @@ impl ConnectionCommand for HotShardsConnCommand {
 }
 
 /// Parse the optional `PERIOD <seconds>` argument pair.
+#[allow(clippy::result_large_err)]
 fn parse_period(args: &[Bytes]) -> Result<Option<u64>, Response> {
     match args.len() {
         0 => Ok(None),

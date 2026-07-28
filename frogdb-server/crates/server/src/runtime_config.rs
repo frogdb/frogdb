@@ -574,6 +574,9 @@ const TLS_NOT_RUNNING: &str =
 ///
 /// See [`ConfigManager::apply_tls`] for why this is a value rather than a
 /// closure over `TlsRuntimeHandle`.
+// The turmoil build compiles no TLS, so `apply_tls` rejects every mutation there
+// without reading its payload.
+#[cfg_attr(feature = "turmoil", allow(dead_code))]
 enum TlsMutation {
     CertFile(PathBuf),
     KeyFile(PathBuf),
