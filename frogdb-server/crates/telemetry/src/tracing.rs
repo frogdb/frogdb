@@ -9,9 +9,10 @@
 use crate::config::TracingConfig;
 use opentelemetry::{
     Context, KeyValue, global,
-    trace::{SpanKind, Status, TraceContextExt, Tracer, TracerProvider as _},
+    trace::{SamplingResult, SpanKind, Status, TraceContextExt, Tracer, TracerProvider as _},
 };
 use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::trace::ShouldSample;
 use opentelemetry_sdk::{
     Resource,
     trace::{RandomIdGenerator, Sampler, SdkTracerProvider},
@@ -19,9 +20,86 @@ use opentelemetry_sdk::{
 use parking_lot::RwLock;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Default maximum recent traces to retain.
 pub const DEFAULT_RECENT_TRACES_MAX: usize = 100;
+
+/// Shared, runtime-mutable OTLP head-sampling rate.
+///
+/// The OpenTelemetry SDK bakes a `Sampler` into the tracer provider at build
+/// time, so a rate copied in at startup can never change. This handle stores the
+/// rate as `f64` bits in an `AtomicU64` and is consulted by [`DynamicSampler`]
+/// on **every** sampling decision, making `CONFIG SET tracing-sampling-rate`
+/// effective for the next span with no tracer rebuild.
+#[derive(Debug)]
+pub struct SamplingRate(AtomicU64);
+
+impl SamplingRate {
+    /// Create a handle seeded with `rate` (0.0 = never sample, 1.0 = always).
+    pub fn new(rate: f64) -> Self {
+        Self(AtomicU64::new(rate.to_bits()))
+    }
+
+    /// Current sampling rate.
+    pub fn get(&self) -> f64 {
+        f64::from_bits(self.0.load(Ordering::Relaxed))
+    }
+
+    /// Set the sampling rate; applies to the next sampling decision.
+    pub fn set(&self, rate: f64) {
+        self.0.store(rate.to_bits(), Ordering::Relaxed);
+    }
+
+    /// The sampler this rate currently implies.
+    ///
+    /// Mirrors the startup mapping exactly (>= 1.0 always on, <= 0.0 always off,
+    /// otherwise trace-id ratio) so making the rate live changes *when* the
+    /// choice is made, never what it decides.
+    fn sampler(&self) -> Sampler {
+        let rate = self.get();
+        if rate >= 1.0 {
+            Sampler::AlwaysOn
+        } else if rate <= 0.0 {
+            Sampler::AlwaysOff
+        } else {
+            Sampler::TraceIdRatioBased(rate)
+        }
+    }
+}
+
+impl Default for SamplingRate {
+    fn default() -> Self {
+        Self::new(1.0)
+    }
+}
+
+/// Head sampler that re-reads [`SamplingRate`] per decision.
+#[derive(Debug, Clone)]
+struct DynamicSampler {
+    rate: Arc<SamplingRate>,
+}
+
+impl ShouldSample for DynamicSampler {
+    fn should_sample(
+        &self,
+        parent_context: Option<&Context>,
+        trace_id: opentelemetry::trace::TraceId,
+        name: &str,
+        span_kind: &SpanKind,
+        attributes: &[KeyValue],
+        links: &[opentelemetry::trace::Link],
+    ) -> SamplingResult {
+        self.rate.sampler().should_sample(
+            parent_context,
+            trace_id,
+            name,
+            span_kind,
+            attributes,
+            links,
+        )
+    }
+}
 
 /// Entry for recent trace tracking.
 #[derive(Debug, Clone)]
@@ -71,12 +149,25 @@ pub struct OtelTracer {
     tracer: opentelemetry_sdk::trace::Tracer,
     enabled: bool,
     config: TracingConfig,
+    sampling_rate: Arc<SamplingRate>,
     diagnostics: TraceDiagnostics,
 }
 
 impl OtelTracer {
     /// Create a new OpenTelemetry tracer with the given configuration.
+    ///
+    /// The sampling rate is owned privately; use [`OtelTracer::with_sampling_rate`]
+    /// to share it with a config manager so `CONFIG SET tracing-sampling-rate`
+    /// can retune sampling without a restart.
     pub fn new(config: &TracingConfig) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        Self::with_sampling_rate(config, Arc::new(SamplingRate::new(config.sampling_rate)))
+    }
+
+    /// Create a tracer whose head sampling reads `sampling_rate` on every decision.
+    pub fn with_sampling_rate(
+        config: &TracingConfig,
+        sampling_rate: Arc<SamplingRate>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let max_recent = config.recent_traces_max;
 
         if !config.enabled {
@@ -87,6 +178,7 @@ impl OtelTracer {
                 tracer,
                 enabled: false,
                 config: config.clone(),
+                sampling_rate,
                 diagnostics: TraceDiagnostics {
                     recent_traces: RwLock::new(VecDeque::with_capacity(max_recent)),
                     max_recent,
@@ -100,19 +192,12 @@ impl OtelTracer {
             .with_endpoint(&config.otlp_endpoint)
             .build()?;
 
-        // Configure the sampler based on sampling rate
-        let sampler = if config.sampling_rate >= 1.0 {
-            Sampler::AlwaysOn
-        } else if config.sampling_rate <= 0.0 {
-            Sampler::AlwaysOff
-        } else {
-            Sampler::TraceIdRatioBased(config.sampling_rate)
-        };
-
         // Build the tracer provider
         let provider = SdkTracerProvider::builder()
             .with_batch_exporter(exporter)
-            .with_sampler(sampler)
+            .with_sampler(DynamicSampler {
+                rate: Arc::clone(&sampling_rate),
+            })
             .with_id_generator(RandomIdGenerator::default())
             .with_resource(
                 Resource::builder()
@@ -133,6 +218,7 @@ impl OtelTracer {
             tracer,
             enabled: true,
             config: config.clone(),
+            sampling_rate,
             diagnostics: TraceDiagnostics {
                 recent_traces: RwLock::new(VecDeque::with_capacity(max_recent)),
                 max_recent,
@@ -147,19 +233,13 @@ impl OtelTracer {
     #[cfg(test)]
     pub fn new_for_test(config: &TracingConfig) -> Self {
         let max_recent = config.recent_traces_max;
-
-        // Configure the sampler based on sampling rate
-        let sampler = if config.sampling_rate >= 1.0 {
-            Sampler::AlwaysOn
-        } else if config.sampling_rate <= 0.0 {
-            Sampler::AlwaysOff
-        } else {
-            Sampler::TraceIdRatioBased(config.sampling_rate)
-        };
+        let sampling_rate = Arc::new(SamplingRate::new(config.sampling_rate));
 
         // Build provider WITHOUT exporter - no network, no blocking
         let provider = SdkTracerProvider::builder()
-            .with_sampler(sampler)
+            .with_sampler(DynamicSampler {
+                rate: Arc::clone(&sampling_rate),
+            })
             .with_id_generator(RandomIdGenerator::default())
             .with_resource(
                 Resource::builder()
@@ -178,11 +258,17 @@ impl OtelTracer {
             tracer,
             enabled: config.enabled,
             config: config.clone(),
+            sampling_rate,
             diagnostics: TraceDiagnostics {
                 recent_traces: RwLock::new(VecDeque::with_capacity(max_recent)),
                 max_recent,
             },
         }
+    }
+
+    /// Shared handle to the live head-sampling rate.
+    pub fn sampling_rate(&self) -> &Arc<SamplingRate> {
+        &self.sampling_rate
     }
 
     /// Check if tracing is enabled.
@@ -245,7 +331,7 @@ impl OtelTracer {
     pub fn get_status(&self) -> TracingStatus {
         TracingStatus {
             enabled: self.enabled,
-            sampling_rate: self.config.sampling_rate,
+            sampling_rate: self.sampling_rate.get(),
             otlp_endpoint: self.config.otlp_endpoint.clone(),
             service_name: self.config.service_name.clone(),
             recent_traces_count: self.diagnostics.recent_traces.read().len(),
@@ -580,19 +666,14 @@ mod test_tracer {
         pub fn new(config: &TracingConfig) -> Self {
             let exporter = InMemorySpanExporter::default();
             let max_recent = config.recent_traces_max;
-
-            let sampler = if config.sampling_rate >= 1.0 {
-                Sampler::AlwaysOn
-            } else if config.sampling_rate <= 0.0 {
-                Sampler::AlwaysOff
-            } else {
-                Sampler::TraceIdRatioBased(config.sampling_rate)
-            };
+            let sampling_rate = Arc::new(SamplingRate::new(config.sampling_rate));
 
             // Use SimpleSpanProcessor for immediate export (not batched)
             let provider = SdkTracerProvider::builder()
                 .with_span_processor(SimpleSpanProcessor::new(exporter.clone()))
-                .with_sampler(sampler)
+                .with_sampler(DynamicSampler {
+                    rate: Arc::clone(&sampling_rate),
+                })
                 .with_id_generator(RandomIdGenerator::default())
                 .with_resource(
                     Resource::builder()
@@ -611,6 +692,7 @@ mod test_tracer {
                     tracer,
                     enabled: config.enabled,
                     config: config.clone(),
+                    sampling_rate,
                     diagnostics: TraceDiagnostics {
                         recent_traces: RwLock::new(VecDeque::with_capacity(max_recent)),
                         max_recent,
@@ -636,10 +718,15 @@ mod test_tracer {
 pub use test_tracer::TestTracer;
 
 /// Create a shared tracer from configuration.
+///
+/// `sampling_rate` is the live handle the sampler consults per decision; pass the
+/// one owned by the config manager so `CONFIG SET tracing-sampling-rate` applies
+/// without rebuilding the tracer provider.
 pub fn create_tracer(
     config: &TracingConfig,
+    sampling_rate: Arc<SamplingRate>,
 ) -> Result<SharedTracer, Box<dyn std::error::Error + Send + Sync>> {
-    let tracer = OtelTracer::new(config)?;
+    let tracer = OtelTracer::with_sampling_rate(config, sampling_rate)?;
     Ok(Arc::new(tracer))
 }
 
@@ -842,8 +929,42 @@ mod tests {
     #[test]
     fn test_create_tracer_helper() {
         let config = TracingConfig::default();
-        let tracer = create_tracer(&config).unwrap();
+        let tracer =
+            create_tracer(&config, Arc::new(SamplingRate::new(config.sampling_rate))).unwrap();
         assert!(!tracer.is_enabled()); // Default is disabled
+    }
+
+    #[test]
+    fn sampling_rate_store_changes_sampling_decisions() {
+        let config = TracingConfig {
+            enabled: true,
+            sampling_rate: 0.0,
+            ..Default::default()
+        };
+        let tracer = OtelTracer::new_for_test(&config);
+
+        // Startup rate 0.0 => AlwaysOff: spans are created but not sampled.
+        let span = tracer.start_request_span("GET", 1);
+        let ctx = span.context().expect("span context");
+        assert!(!ctx.span().span_context().is_sampled());
+        span.end();
+
+        // A live store must take effect on the very next sampling decision,
+        // with no tracer/provider rebuild.
+        tracer.sampling_rate().set(1.0);
+        assert_eq!(tracer.get_status().sampling_rate, 1.0);
+
+        let span = tracer.start_request_span("GET", 2);
+        let ctx = span.context().expect("span context");
+        assert!(ctx.span().span_context().is_sampled());
+        span.end();
+
+        // ...and back off again.
+        tracer.sampling_rate().set(0.0);
+        let span = tracer.start_request_span("GET", 3);
+        let ctx = span.context().expect("span context");
+        assert!(!ctx.span().span_context().is_sampled());
+        span.end();
     }
 
     // ===== Store Span Tests =====

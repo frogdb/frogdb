@@ -8,7 +8,7 @@
 
 use serde::Serialize;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use frogdb_core::{
@@ -26,26 +26,100 @@ use crate::node_state::{NodeStateSnapshot, ShardState};
 /// snapshot (see [`StatusCollector::collect`]) rather than blocking the report.
 const STATUS_SCATTER_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Configuration for the status collector.
-#[derive(Debug, Clone)]
-pub struct StatusCollectorConfig {
+/// Health-classification thresholds for the status collector.
+///
+/// Held as atomics behind an `Arc` rather than copied into the collector at
+/// startup: [`StatusCollector::build_health_status`] reads each threshold at
+/// classification time, so a `CONFIG SET status-*` changes the very next
+/// `/status` (or `STATUS JSON`) report without a restart. The owner of the
+/// handle (the server's config manager) mutates it through the setters below.
+#[derive(Debug)]
+pub struct StatusThresholds {
     /// Threshold percentage for memory warning (default 90).
-    pub memory_warning_percent: u8,
+    memory_warning_percent: AtomicU8,
     /// Threshold percentage for connection warning (default 90).
-    pub connection_warning_percent: u8,
+    connection_warning_percent: AtomicU8,
     /// Durability lag warning threshold in milliseconds (default 5000 = 5 seconds).
-    pub durability_lag_warning_ms: u64,
+    durability_lag_warning_ms: AtomicU64,
     /// Durability lag critical threshold in milliseconds (default 30000 = 30 seconds).
-    pub durability_lag_critical_ms: u64,
+    durability_lag_critical_ms: AtomicU64,
 }
 
-impl Default for StatusCollectorConfig {
+/// Default threshold percentage for memory warnings.
+pub const DEFAULT_MEMORY_WARNING_PERCENT: u8 = 90;
+/// Default threshold percentage for connection warnings.
+pub const DEFAULT_CONNECTION_WARNING_PERCENT: u8 = 90;
+/// Default durability-lag warning threshold (5 seconds).
+pub const DEFAULT_DURABILITY_LAG_WARNING_MS: u64 = 5_000;
+/// Default durability-lag critical threshold (30 seconds).
+pub const DEFAULT_DURABILITY_LAG_CRITICAL_MS: u64 = 30_000;
+
+impl StatusThresholds {
+    /// Build a shared threshold set.
+    pub fn new(
+        memory_warning_percent: u8,
+        connection_warning_percent: u8,
+        durability_lag_warning_ms: u64,
+        durability_lag_critical_ms: u64,
+    ) -> Self {
+        Self {
+            memory_warning_percent: AtomicU8::new(memory_warning_percent),
+            connection_warning_percent: AtomicU8::new(connection_warning_percent),
+            durability_lag_warning_ms: AtomicU64::new(durability_lag_warning_ms),
+            durability_lag_critical_ms: AtomicU64::new(durability_lag_critical_ms),
+        }
+    }
+
+    /// Memory-usage percentage at which a `MEMORY_PRESSURE` issue is raised.
+    pub fn memory_warning_percent(&self) -> u8 {
+        self.memory_warning_percent.load(Ordering::Relaxed)
+    }
+
+    /// Set the memory-warning percentage; applies to the next status report.
+    pub fn set_memory_warning_percent(&self, percent: u8) {
+        self.memory_warning_percent
+            .store(percent, Ordering::Relaxed);
+    }
+
+    /// Connection-usage percentage at which `NEAR_CONNECTION_LIMIT` is raised.
+    pub fn connection_warning_percent(&self) -> u8 {
+        self.connection_warning_percent.load(Ordering::Relaxed)
+    }
+
+    /// Set the connection-warning percentage; applies to the next status report.
+    pub fn set_connection_warning_percent(&self, percent: u8) {
+        self.connection_warning_percent
+            .store(percent, Ordering::Relaxed);
+    }
+
+    /// Durability lag (ms) at which `ELEVATED_DURABILITY_LAG` is raised.
+    pub fn durability_lag_warning_ms(&self) -> u64 {
+        self.durability_lag_warning_ms.load(Ordering::Relaxed)
+    }
+
+    /// Set the durability-lag warning threshold; applies to the next report.
+    pub fn set_durability_lag_warning_ms(&self, ms: u64) {
+        self.durability_lag_warning_ms.store(ms, Ordering::Relaxed);
+    }
+
+    /// Durability lag (ms) at which `HIGH_DURABILITY_LAG` (critical) is raised.
+    pub fn durability_lag_critical_ms(&self) -> u64 {
+        self.durability_lag_critical_ms.load(Ordering::Relaxed)
+    }
+
+    /// Set the durability-lag critical threshold; applies to the next report.
+    pub fn set_durability_lag_critical_ms(&self, ms: u64) {
+        self.durability_lag_critical_ms.store(ms, Ordering::Relaxed);
+    }
+}
+
+impl Default for StatusThresholds {
     fn default() -> Self {
         Self {
-            memory_warning_percent: 90,
-            connection_warning_percent: 90,
-            durability_lag_warning_ms: 5000,   // 5 seconds
-            durability_lag_critical_ms: 30000, // 30 seconds
+            memory_warning_percent: AtomicU8::new(DEFAULT_MEMORY_WARNING_PERCENT),
+            connection_warning_percent: AtomicU8::new(DEFAULT_CONNECTION_WARNING_PERCENT),
+            durability_lag_warning_ms: AtomicU64::new(DEFAULT_DURABILITY_LAG_WARNING_MS),
+            durability_lag_critical_ms: AtomicU64::new(DEFAULT_DURABILITY_LAG_CRITICAL_MS),
         }
     }
 }
@@ -377,7 +451,9 @@ impl LiveMode {
 
 /// Collects status information from various server components.
 pub struct StatusCollector {
-    config: StatusCollectorConfig,
+    /// Shared health thresholds, read at classification time (never snapshotted)
+    /// so `CONFIG SET status-*` shows up in the next report.
+    thresholds: Arc<StatusThresholds>,
     health_checker: HealthChecker,
     shard_senders: Arc<Vec<ShardSender>>,
     client_registry: Arc<ClientRegistry>,
@@ -402,7 +478,7 @@ impl StatusCollector {
     /// Create a new status collector.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        config: StatusCollectorConfig,
+        thresholds: Arc<StatusThresholds>,
         health_checker: HealthChecker,
         shard_senders: Arc<Vec<ShardSender>>,
         client_registry: Arc<ClientRegistry>,
@@ -415,7 +491,7 @@ impl StatusCollector {
         mode: LiveMode,
     ) -> Self {
         Self {
-            config,
+            thresholds,
             health_checker,
             shard_senders,
             client_registry,
@@ -427,6 +503,14 @@ impl StatusCollector {
             durability_mode,
             mode,
         }
+    }
+
+    /// The shared thresholds this collector classifies against.
+    ///
+    /// Handed out so the config layer can mutate them in place; there is no
+    /// second copy to keep in sync.
+    pub fn thresholds(&self) -> &Arc<StatusThresholds> {
+        &self.thresholds
     }
 
     /// Collect the current server status.
@@ -601,7 +685,7 @@ impl StatusCollector {
         if memory.limit_bytes > 0 {
             let usage_percent =
                 (memory.used_bytes as f64 / memory.limit_bytes as f64 * 100.0) as u8;
-            if usage_percent >= self.config.memory_warning_percent {
+            if usage_percent >= self.thresholds.memory_warning_percent() {
                 let severity = if usage_percent >= 95 {
                     "critical"
                 } else {
@@ -619,7 +703,7 @@ impl StatusCollector {
         if clients.max_clients > 0 {
             let usage_percent =
                 (clients.connected as f64 / clients.max_clients as f64 * 100.0) as u8;
-            if usage_percent >= self.config.connection_warning_percent {
+            if usage_percent >= self.thresholds.connection_warning_percent() {
                 issues.push(HealthIssue {
                     severity: "warning".to_string(),
                     code: "NEAR_CONNECTION_LIMIT".to_string(),
@@ -633,22 +717,24 @@ impl StatusCollector {
 
         // Check durability lag (persistence health)
         if let Some(lag) = wal_lag {
-            if lag.max_durability_lag_ms >= self.config.durability_lag_critical_ms {
+            if lag.max_durability_lag_ms >= self.thresholds.durability_lag_critical_ms() {
                 issues.push(HealthIssue {
                     severity: "critical".to_string(),
                     code: "HIGH_DURABILITY_LAG".to_string(),
                     message: format!(
                         "Durability lag at {}ms exceeds critical threshold ({}ms)",
-                        lag.max_durability_lag_ms, self.config.durability_lag_critical_ms
+                        lag.max_durability_lag_ms,
+                        self.thresholds.durability_lag_critical_ms()
                     ),
                 });
-            } else if lag.max_durability_lag_ms >= self.config.durability_lag_warning_ms {
+            } else if lag.max_durability_lag_ms >= self.thresholds.durability_lag_warning_ms() {
                 issues.push(HealthIssue {
                     severity: "warning".to_string(),
                     code: "ELEVATED_DURABILITY_LAG".to_string(),
                     message: format!(
                         "Durability lag at {}ms exceeds warning threshold ({}ms)",
-                        lag.max_durability_lag_ms, self.config.durability_lag_warning_ms
+                        lag.max_durability_lag_ms,
+                        self.thresholds.durability_lag_warning_ms()
                     ),
                 });
             }
@@ -775,10 +861,12 @@ mod tests {
     }
 
     #[test]
-    fn test_status_collector_config_default() {
-        let config = StatusCollectorConfig::default();
-        assert_eq!(config.memory_warning_percent, 90);
-        assert_eq!(config.connection_warning_percent, 90);
+    fn test_status_thresholds_default() {
+        let thresholds = StatusThresholds::default();
+        assert_eq!(thresholds.memory_warning_percent(), 90);
+        assert_eq!(thresholds.connection_warning_percent(), 90);
+        assert_eq!(thresholds.durability_lag_warning_ms(), 5_000);
+        assert_eq!(thresholds.durability_lag_critical_ms(), 30_000);
     }
 
     #[test]
@@ -921,7 +1009,7 @@ mod tests {
         persistence_enabled: bool,
     ) -> StatusCollector {
         StatusCollector::new(
-            StatusCollectorConfig::default(),
+            Arc::new(StatusThresholds::default()),
             HealthChecker::new(),
             Arc::new(shard_senders),
             Arc::new(ClientRegistry::new()),
@@ -1102,7 +1190,7 @@ mod tests {
         let recorder = Arc::new(PrometheusRecorder::new());
         let flag = Arc::new(AtomicBool::new(false));
         let collector = StatusCollector::new(
-            StatusCollectorConfig::default(),
+            Arc::new(StatusThresholds::default()),
             HealthChecker::new(),
             Arc::new(vec![]),
             Arc::new(ClientRegistry::new()),
@@ -1146,5 +1234,94 @@ mod tests {
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"total_processed\":42"));
         assert!(!json.contains("ops_per_sec"));
+    }
+
+    /// All four `status-*` thresholds are read at classification time: storing
+    /// new values on the shared handle re-classifies the *same* collector's next
+    /// report, with no restart and no re-construction.
+    #[test]
+    fn status_thresholds_are_live() {
+        let thresholds = Arc::new(StatusThresholds::default());
+        let collector = StatusCollector::new(
+            thresholds.clone(),
+            HealthChecker::new(),
+            Arc::new(vec![]),
+            Arc::new(ClientRegistry::new()),
+            Arc::new(PrometheusRecorder::new()) as Arc<dyn MetricsRecorder>,
+            Instant::now(),
+            Arc::new(AtomicU64::new(0)),
+            0,
+            false,
+            "async".to_string(),
+            LiveMode::new(false, Arc::new(AtomicBool::new(false)), "standalone"),
+        );
+
+        // 50% memory, 50% connections, 1000ms lag: under every default threshold.
+        let clients = ClientsStatus {
+            connected: 50,
+            max_clients: 100,
+            blocked: 0,
+        };
+        let memory = MemoryStatus {
+            used_bytes: 500,
+            peak_bytes: 500,
+            limit_bytes: 1000,
+            fragmentation_ratio: 1.0,
+            rss_bytes: None,
+        };
+        let lag = Some(WalLagStatus {
+            pending_ops_total: 0,
+            pending_bytes_total: 0,
+            max_durability_lag_ms: 1_000,
+            avg_durability_lag_ms: 1_000.0,
+            flush_failures_total: 0,
+            lost_ops_total: 0,
+            last_flush_ok: true,
+            shards: Vec::new(),
+        });
+
+        let codes = |h: &HealthStatusInfo| -> Vec<String> {
+            h.issues.iter().map(|i| i.code.clone()).collect()
+        };
+
+        let before = collector.build_health_status(&clients, &memory, &lag);
+        assert!(
+            !codes(&before).contains(&"MEMORY_PRESSURE".to_string()),
+            "50% memory must be healthy under the default 90% threshold"
+        );
+        assert!(!codes(&before).contains(&"NEAR_CONNECTION_LIMIT".to_string()));
+        assert!(!codes(&before).contains(&"ELEVATED_DURABILITY_LAG".to_string()));
+        assert!(!codes(&before).contains(&"HIGH_DURABILITY_LAG".to_string()));
+
+        // Tighten every threshold below the observed values at runtime.
+        thresholds.set_memory_warning_percent(40);
+        thresholds.set_connection_warning_percent(40);
+        thresholds.set_durability_lag_warning_ms(100);
+        thresholds.set_durability_lag_critical_ms(500);
+
+        let after = collector.build_health_status(&clients, &memory, &lag);
+        let after_codes = codes(&after);
+        assert!(after_codes.contains(&"MEMORY_PRESSURE".to_string()));
+        assert!(after_codes.contains(&"NEAR_CONNECTION_LIMIT".to_string()));
+        // Lag 1000ms is now past the *critical* threshold, not just the warning.
+        assert!(after_codes.contains(&"HIGH_DURABILITY_LAG".to_string()));
+        assert!(!after_codes.contains(&"ELEVATED_DURABILITY_LAG".to_string()));
+
+        // Relax the critical threshold only: the same lag downgrades to a warning.
+        thresholds.set_durability_lag_critical_ms(5_000);
+        let relaxed = codes(&collector.build_health_status(&clients, &memory, &lag));
+        assert!(relaxed.contains(&"ELEVATED_DURABILITY_LAG".to_string()));
+        assert!(!relaxed.contains(&"HIGH_DURABILITY_LAG".to_string()));
+
+        // And back to the startup values: healthy again, same collector.
+        thresholds.set_memory_warning_percent(90);
+        thresholds.set_connection_warning_percent(90);
+        thresholds.set_durability_lag_warning_ms(5_000);
+        thresholds.set_durability_lag_critical_ms(30_000);
+        let restored = codes(&collector.build_health_status(&clients, &memory, &lag));
+        assert!(!restored.contains(&"MEMORY_PRESSURE".to_string()));
+        assert!(!restored.contains(&"NEAR_CONNECTION_LIMIT".to_string()));
+        assert!(!restored.contains(&"ELEVATED_DURABILITY_LAG".to_string()));
+        assert!(!restored.contains(&"HIGH_DURABILITY_LAG".to_string()));
     }
 }
