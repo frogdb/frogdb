@@ -34,6 +34,9 @@ pub(super) struct SubsystemHandles {
     pub admin_acceptor: Option<JoinHandle<()>>,
     #[cfg(not(feature = "turmoil"))]
     pub tls_acceptor: Option<JoinHandle<()>>,
+    /// Certificate file watcher; `None` when TLS or `tls.watch-certs` is off.
+    #[cfg(not(feature = "turmoil"))]
+    pub cert_watcher: Option<JoinHandle<()>>,
     pub failure_detector: Option<JoinHandle<()>>,
     /// Handle to the shard-worker supervisor. Completes once every shard worker
     /// has terminated, so shutdown awaits it in place of the per-worker handles.
@@ -536,6 +539,17 @@ impl Server {
             None
         };
 
+        // Spawn the certificate watcher. Deliberately not tied to the TLS
+        // listener above: the cluster bus, replication links and the admin port
+        // can all use TLS without a TLS client port being configured, and their
+        // certificates need reloading just the same. Returns `None` when
+        // `tls.watch-certs` is off.
+        #[cfg(not(feature = "turmoil"))]
+        let cert_watcher_handle = self
+            .tls_runtime
+            .as_ref()
+            .and_then(|tls_rt| crate::tls_watch::spawn_cert_watcher(tls_rt.clone()));
+
         // Record initial max_clients gauge
         {
             let max_clients = self.config_manager.max_clients();
@@ -565,6 +579,8 @@ impl Server {
             admin_acceptor: admin_acceptor_handle,
             #[cfg(not(feature = "turmoil"))]
             tls_acceptor: tls_acceptor_handle,
+            #[cfg(not(feature = "turmoil"))]
+            cert_watcher: cert_watcher_handle,
             failure_detector: failure_detector_handle,
             shard_supervisor,
             periodic_sync_handle,
@@ -673,6 +689,12 @@ impl Server {
         }
         #[cfg(not(feature = "turmoil"))]
         if let Some(handle) = handles.tls_acceptor {
+            handle.abort();
+        }
+
+        // Stop the certificate watcher
+        #[cfg(not(feature = "turmoil"))]
+        if let Some(handle) = handles.cert_watcher {
             handle.abort();
         }
     }

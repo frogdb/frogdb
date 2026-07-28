@@ -155,13 +155,24 @@ pub struct TlsConfig {
     pub client_key_file: Option<PathBuf>,
 
     /// Whether to watch certificate files for changes and auto-reload.
+    ///
+    /// When enabled, the server polls every file this section references
+    /// (`cert-file`, `key-file`, `ca-file`, the client pair and every
+    /// `[[tls.additional-certs]]` pair) and re-reads them once they stop
+    /// changing, so rotating certificates in place needs no restart. A reload
+    /// that fails (mismatched pair, unparseable PEM) is logged and the
+    /// previously loaded certificates keep serving.
     #[serde(default = "default_true")]
-    #[param(skip)] // skip: borderline: cert file-watcher lifecycle established at startup
+    #[param(skip)] // skip: cert file-watcher task lifetime is fixed at startup
     pub watch_certs: bool,
 
-    /// Debounce interval in milliseconds for certificate file watcher.
+    /// Poll/debounce interval in milliseconds for the certificate file watcher.
+    ///
+    /// A rotation writes the certificate and key as two separate files, so the
+    /// watcher waits for one full quiet interval before reloading; reaction
+    /// latency is between one and two intervals. Values below 10ms are clamped.
     #[serde(default = "default_watch_debounce_ms")]
-    #[param(skip)] // skip: internal cert file-watcher debounce interval; no operator story
+    #[param(skip)] // skip: read once when the watcher task starts; no operator story
     pub watch_debounce_ms: u64,
 
     /// TLS handshake timeout in milliseconds.
