@@ -59,6 +59,63 @@ fn streaming_replica_acked_at(
     handler.offsets.ingest_replica_ack(session.id(), acked);
 }
 
+/// The broadcast gate stays OPEN after the last replica disconnects, for as
+/// long as the backlog can still serve a `+CONTINUE`.
+///
+/// Regression guard for silent divergence: the gate used to be
+/// `replica_count() > 0`, so a primary that dropped a laggy replica stopped
+/// stamping offsets and recording writes. The replica then reconnected inside
+/// the (stale) window, was granted a partial resync, and resumed past every
+/// write made while it was away — `master_link_status:up`, WAIT acking, and a
+/// keyspace missing thousands of keys.
+#[test]
+fn broadcast_gate_stays_open_while_backlog_can_resume() {
+    use crate::ReplicationBroadcaster;
+    use frogdb_types::ReplicationTracker;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let handler = divergence_handler(dir.path());
+
+    // A primary that never had a replica records nothing and stays inactive, so
+    // standalone writes pay no replication cost.
+    assert!(
+        !handler.is_active(),
+        "no replica and an empty backlog ⇒ inactive"
+    );
+
+    // A replica connects; the writes it streams populate the backlog.
+    let session = handler
+        .tracker
+        .register_replica("127.0.0.1:6380".parse().unwrap());
+    session.force_phase_for_test(crate::replica_session::Phase::Streaming);
+    assert!(handler.is_active(), "a connected replica opens the gate");
+    let before_drop = push_write(&handler, "k0", "v0");
+
+    // ... and then drops.
+    handler.tracker.unregister_replica(session.id());
+    assert_eq!(handler.tracker.replica_count(), 0);
+
+    assert!(
+        handler.is_active(),
+        "zero replicas but a live resume window ⇒ the gate must stay open"
+    );
+
+    // The writes made while nobody is connected still advance the offset and
+    // land in the backlog, so the replay tail covers them when the replica
+    // returns.
+    let after_drop = push_write(&handler, "k1", "v1");
+    assert!(
+        after_drop > before_drop,
+        "an unreplicated write must still advance the offset"
+    );
+    let tail = handler.replay.extract_backlog(before_drop, after_drop);
+    assert_eq!(
+        tail.len(),
+        1,
+        "the write made with no replica connected must be replayable, got {tail:?}"
+    );
+}
+
 /// `end == min_acked` ⇒ `None` (pins the `end > start` gate — `current > min_acked`
 /// today). A fully caught-up demoted primary diverged from nothing.
 #[test]

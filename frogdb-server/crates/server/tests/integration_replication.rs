@@ -6174,6 +6174,19 @@ struct LagProxy {
     accept_task: tokio::task::JoinHandle<()>,
 }
 
+/// Cap on the proxy's receive buffer for the primary→proxy leg, so the kernel
+/// buffering the stall flood must overrun is bounded and known instead of
+/// autotuned. See [`test_broadcast_lag_disconnect_and_resync`] for why the flood
+/// has to exceed it.
+const LAG_PROXY_RCVBUF_BYTES: usize = 128 * 1024;
+
+/// Padding added to every value in the stall flood of
+/// [`test_broadcast_lag_disconnect_and_resync`]. 20_000 frames x ~840 B is
+/// ~16 MiB — several times the kernel send-buffer ceiling the flood must overrun
+/// before the primary's write can block (Linux `tcp_wmem` max is 4 MiB by
+/// default), while staying far inside the primary's backlog cap.
+const FLOOD_VALUE_PAD: usize = 800;
+
 impl LagProxy {
     /// Bind an ephemeral port and start accepting replica connections, each
     /// dialed through to `primary_port`.
@@ -6196,6 +6209,9 @@ impl LagProxy {
                         Ok(stream) => stream,
                         Err(_) => continue,
                     };
+                socket2::SockRef::from(&outbound)
+                    .set_recv_buffer_size(LAG_PROXY_RCVBUF_BYTES)
+                    .expect("cap lag-proxy SO_RCVBUF");
                 let stalled_conn = stalled_accept.clone();
                 tokio::spawn(proxy_connection(inbound, outbound, stalled_conn));
             }
@@ -6347,6 +6363,36 @@ async fn wait_connected_slaves(server: &TestServer, want: i64, within: Duration)
 ///      streaming `select!` dropped the sibling task's `JoinHandle` instead of
 ///      aborting it, leaving a zombie half-open link the replica never saw close
 ///      (`replica_session.rs`).
+///
+/// It also guards a third bug this test found once the flood was sized to stall
+/// the link on Linux: the primary stopped stamping offsets and recording the
+/// backlog the moment the last replica dropped, so every write made while the
+/// laggy replica was away was invisible to the `+CONTINUE` that followed and the
+/// replica silently resumed past the hole (`ReplicationBroadcaster::is_active`).
+///
+/// # Making the disconnect deterministic across kernels
+///
+/// A stall only becomes visible to the primary's *userspace* once the kernel
+/// buffers between the two ends are full: until then `write_all` returns
+/// immediately, the write task keeps draining the broadcast receiver, and
+/// neither the write timeout nor the `Lagged` overflow can fire. The flood must
+/// therefore exceed `primary SO_SNDBUF + proxy SO_RCVBUF`, and both terms are
+/// per-kernel: macOS keeps the loopback send buffer small enough that a ~1.4 MiB
+/// flood blocked, while Linux autotunes it up to `tcp_wmem` max (4 MiB on the
+/// aarch64 testbox, `net.ipv4.tcp_wmem = 4096 16384 4194304`) and absorbed that
+/// whole flood — the primary never blocked, never disconnected, and the test
+/// failed on Linux only. Capping the receiver alone does not help: the bytes
+/// pile into the *sender's* buffer regardless of the advertised window
+/// (measured: still no disconnect at 1.4 MiB with the proxy's `SO_RCVBUF`
+/// pinned to 128 KiB).
+///
+/// So the proxy pins its `SO_RCVBUF` ([`LAG_PROXY_RCVBUF_BYTES`]) and the flood
+/// carries [`FLOOD_VALUE_PAD`]-padded values for ~16 MiB total — several times
+/// the 4 MiB Linux ceiling, so the write is guaranteed to block on either
+/// platform. (Measured on the testbox: ~1.4 MiB never disconnects, ~6.5 MiB
+/// disconnects mid-flood with `Write to replica timed out`.) The flood stays
+/// well inside the 64 MiB backlog byte cap, so the reconnect still earns a
+/// partial resync.
 #[rstest]
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
@@ -6407,19 +6453,22 @@ async fn test_broadcast_lag_disconnect_and_resync(#[case] persistence: bool) {
     // ---- Stall the replica and flood the primary past the 10k broadcast cap.
     proxy.stall();
 
-    // 20k frames: the stalled socket blocks the primary's per-replica write
-    // task, tripping the 1s write-timeout (the deterministic disconnect here),
-    // and the volume also overruns the 10_000-slot broadcast channel — either
-    // way the primary drops the replica for resync. The flood stays within the
-    // 100k-entry backlog, so the reconnect earns a partial resync.
+    // 20k frames, ~16 MiB: once the kernel buffers fill (see "Making the
+    // disconnect deterministic across kernels" above) the stalled socket blocks
+    // the primary's per-replica write task, tripping the 1s write-timeout (the
+    // deterministic disconnect here), and the frame count also overruns the
+    // 10_000-slot broadcast channel — either way the primary drops the replica
+    // for resync. The flood stays within the 100k-entry / 64 MiB backlog, so the
+    // reconnect earns a partial resync.
     const FLOOD: usize = 20_000;
+    let padding = "p".repeat(FLOOD_VALUE_PAD);
     let mut writer = primary.connect().await;
     let mut i = 0usize;
     while i < FLOOD {
         let end = (i + 200).min(FLOOD);
         for j in i..end {
             let key = format!("flood_key_{j}");
-            let val = format!("flood_val_{j}");
+            let val = format!("flood_val_{j}{padding}");
             writer.send_only(&["SET", &key, &val]).await;
         }
         for _ in i..end {
@@ -6490,12 +6539,12 @@ async fn test_broadcast_lag_disconnect_and_resync(#[case] persistence: bool) {
     // plus the pre-stall seed — the resync must have delivered them.
     for idx in [0usize, 1, FLOOD / 2, FLOOD - 2, FLOOD - 1] {
         let key = format!("flood_key_{idx}");
-        let expected = format!("flood_val_{idx}");
+        let expected = format!("flood_val_{idx}{padding}");
         let got = replica.send("GET", &[&key]).await;
         assert_eq!(
             got,
             Response::Bulk(Some(Bytes::from(expected.clone()))),
-            "replica missing flood key {key} after resync (expected {expected})"
+            "replica missing or truncated flood key {key} after resync"
         );
     }
     assert_eq!(
