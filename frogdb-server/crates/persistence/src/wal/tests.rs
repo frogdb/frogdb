@@ -195,6 +195,7 @@ async fn test_wal_backpressure_no_data_loss() {
             batch_size_threshold: 1024 * 1024,
             batch_timeout_ms: 60000,
             channel_capacity: 1,
+            ..Default::default()
         },
         m,
     );
@@ -1162,4 +1163,51 @@ fn test_async_mode_window_bounded_only_by_external_fsync() {
         synced as usize,
         "only the externally-fsynced prefix survives; the unbounded tail is lost"
     );
+}
+
+/// The WAL writer must *adopt* the shared threshold cell handed to it, not copy
+/// the number out of `WalConfig`. This is the seam CONFIG SET
+/// `batch-size-threshold-kb` writes into: the manager owns the cell, every
+/// writer built afterwards reads the same one, and a live set is visible to the
+/// flush path without rebuilding the WAL.
+#[tokio::test]
+async fn test_wal_adopts_shared_batch_size_threshold_handle() {
+    let tmp = TempDir::new().unwrap();
+    let rocks =
+        Arc::new(crate::rocks::RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
+    let m = Arc::new(NoopMetricsRecorder::new());
+    let shared = Arc::new(AtomicUsize::new(64 * 1024));
+    let wal = RocksWalWriter::new(
+        rocks.clone(),
+        0,
+        WalConfig {
+            // Deliberately different from the handle: the handle wins.
+            batch_size_threshold: 1024 * 1024,
+            batch_size_threshold_handle: Some(shared.clone()),
+            ..Default::default()
+        },
+        m.clone(),
+    );
+    assert_eq!(wal.batch_size_threshold(), 64 * 1024);
+
+    // A later write through the shared cell is seen by the running writer.
+    shared.store(8 * 1024, Ordering::Relaxed);
+    assert_eq!(wal.batch_size_threshold(), 8 * 1024);
+
+    // And the writer's own setter is visible through the shared cell, so the two
+    // directions cannot drift apart.
+    wal.set_batch_size_threshold(4 * 1024);
+    assert_eq!(shared.load(Ordering::Relaxed), 4 * 1024);
+
+    // Without a handle the writer falls back to the configured value.
+    let solo = RocksWalWriter::new(
+        rocks,
+        1,
+        WalConfig {
+            batch_size_threshold: 2048,
+            ..Default::default()
+        },
+        m,
+    );
+    assert_eq!(solo.batch_size_threshold(), 2048);
 }

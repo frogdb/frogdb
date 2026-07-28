@@ -4380,4 +4380,690 @@ maxmemory = 0
         manager.set("maxmemory-clients", "0").unwrap();
         assert!(!handle.is_killed());
     }
+
+    // === config-mutability round: propagation-truth tests ===
+    //
+    // Each promoted parameter is proved twice: CONFIG GET round-trips the new
+    // value, and the *live* runtime object the server actually reads at decision
+    // time observes the change. A test that only asserted GET would pass against
+    // a parameter that stores into the manager and reaches nothing.
+
+    #[test]
+    fn cluster_flag_sets_reach_the_live_flags() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+        let flags = manager.cluster_flags();
+
+        assert!(!flags.auto_failover());
+        manager.set("cluster-auto-failover", "yes").unwrap();
+        assert!(flags.auto_failover(), "failover flag must flip live");
+        assert_eq!(manager.get("cluster-auto-failover")[0].1, "yes");
+
+        assert!(flags.self_fence_on_quorum_loss());
+        manager
+            .set("cluster-self-fence-on-quorum-loss", "no")
+            .unwrap();
+        assert!(!flags.self_fence_on_quorum_loss());
+        assert_eq!(manager.get("cluster-self-fence-on-quorum-loss")[0].1, "no");
+
+        manager.set("replica-priority", "42").unwrap();
+        assert_eq!(flags.replica_priority(), 42);
+        assert_eq!(manager.get("replica-priority")[0].1, "42");
+    }
+
+    #[test]
+    fn status_threshold_sets_reach_the_live_thresholds() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+        let thresholds = manager.status_thresholds();
+
+        manager.set("status-memory-warning-percent", "75").unwrap();
+        assert_eq!(thresholds.memory_warning_percent(), 75);
+        assert_eq!(manager.get("status-memory-warning-percent")[0].1, "75");
+
+        manager
+            .set("status-connection-warning-percent", "80")
+            .unwrap();
+        assert_eq!(thresholds.connection_warning_percent(), 80);
+
+        // Raise critical first: warning must stay strictly below it.
+        manager
+            .set("status-durability-lag-critical-ms", "60000")
+            .unwrap();
+        assert_eq!(thresholds.durability_lag_critical_ms(), 60000);
+        manager
+            .set("status-durability-lag-warning-ms", "10000")
+            .unwrap();
+        assert_eq!(thresholds.durability_lag_warning_ms(), 10000);
+    }
+
+    #[test]
+    fn status_threshold_sets_enforce_the_section_validator_bounds() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+
+        // 0 and >100 are what `StatusConfig::validate` rejects.
+        assert!(manager.set("status-memory-warning-percent", "0").is_err());
+        assert!(manager.set("status-memory-warning-percent", "101").is_err());
+        assert!(
+            manager
+                .set("status-connection-warning-percent", "0")
+                .is_err()
+        );
+
+        // warning < critical, checked against the live sibling in both
+        // directions so the pair cannot be driven into an illegal ordering.
+        let critical = manager.status_thresholds().durability_lag_critical_ms();
+        assert!(
+            manager
+                .set("status-durability-lag-warning-ms", &critical.to_string())
+                .is_err()
+        );
+        let warning = manager.status_thresholds().durability_lag_warning_ms();
+        assert!(
+            manager
+                .set("status-durability-lag-critical-ms", &warning.to_string())
+                .is_err()
+        );
+        // Rejected sets change nothing.
+        assert_eq!(
+            manager.status_thresholds().durability_lag_critical_ms(),
+            critical
+        );
+    }
+
+    #[test]
+    fn tracing_sampling_rate_set_reaches_the_live_sampler_handle() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+        let rate = manager.tracing_sampling_rate_handle();
+
+        manager.set("tracing-sampling-rate", "0.25").unwrap();
+        assert_eq!(rate.get(), 0.25);
+        assert_eq!(manager.get("tracing-sampling-rate")[0].1, "0.25");
+
+        // Same 0.0..=1.0 bound as `TracingConfig::validate`.
+        assert!(manager.set("tracing-sampling-rate", "1.5").is_err());
+        assert!(manager.set("tracing-sampling-rate", "-0.1").is_err());
+        assert_eq!(rate.get(), 0.25, "a rejected set must not change the rate");
+    }
+
+    #[test]
+    fn latency_bands_enabled_set_reaches_the_live_tracker() {
+        let config = test_config();
+        let tracker = Arc::new(frogdb_telemetry::LatencyBandTracker::new(
+            vec![1000, 10_000],
+            false,
+        ));
+        let manager = manager_with(&config, |_rt, c| {
+            c.latency_band_tracker = tracker.clone();
+        });
+
+        manager.set("latency-bands-enabled", "yes").unwrap();
+        assert!(tracker.is_enabled());
+        assert_eq!(manager.get("latency-bands-enabled")[0].1, "yes");
+
+        manager.set("latency-bands-enabled", "no").unwrap();
+        assert!(!tracker.is_enabled());
+    }
+
+    #[test]
+    fn hotshard_threshold_sets_reach_the_collector_handle() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+        // The handle the collector adopts at startup.
+        let shared = manager.hotshard_config();
+
+        manager
+            .set("hotshards-hot-threshold-percent", "40")
+            .unwrap();
+        assert_eq!(shared.hot_threshold_percent(), 40.0);
+        manager
+            .set("hotshards-warm-threshold-percent", "30")
+            .unwrap();
+        assert_eq!(shared.warm_threshold_percent(), 30.0);
+        manager.set("hotshards-default-period-secs", "5").unwrap();
+        assert_eq!(shared.default_period_secs(), 5);
+
+        // `snapshot()` is what the collector classifies with.
+        let snap = shared.snapshot();
+        assert_eq!(snap.hot_threshold_percent, 40.0);
+        assert_eq!(snap.warm_threshold_percent, 30.0);
+        assert_eq!(snap.default_period_secs, 5);
+    }
+
+    #[test]
+    fn hotshard_threshold_sets_enforce_the_section_validator_bounds() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+        let shared = manager.hotshard_config();
+
+        // 0..=100 range, as in `HotShardsConfig::validate`.
+        assert!(
+            manager
+                .set("hotshards-hot-threshold-percent", "101")
+                .is_err()
+        );
+        assert!(
+            manager
+                .set("hotshards-warm-threshold-percent", "-1")
+                .is_err()
+        );
+        // warm <= hot, checked against the live sibling from both sides.
+        assert!(
+            manager
+                .set("hotshards-warm-threshold-percent", "99")
+                .is_err()
+        );
+        assert!(manager.set("hotshards-hot-threshold-percent", "1").is_err());
+        // A zero sampling window would make every report empty.
+        assert!(manager.set("hotshards-default-period-secs", "0").is_err());
+
+        assert_eq!(
+            shared.snapshot().hot_threshold_percent,
+            frogdb_config::hotshards::DEFAULT_HOT_THRESHOLD_PERCENT,
+            "rejected sets must leave the collector untouched"
+        );
+    }
+
+    #[test]
+    fn snapshot_interval_set_reaches_the_published_coordinator() {
+        use frogdb_core::SnapshotCoordinator;
+
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+        let coordinator = Arc::new(frogdb_core::persistence::NoopSnapshotCoordinator::new());
+        manager.set_snapshot_coordinator(coordinator.clone());
+
+        manager.set("snapshot-interval-secs", "120").unwrap();
+        assert_eq!(
+            coordinator.periodic_interval_secs(),
+            120,
+            "the periodic task reads its cadence from the coordinator"
+        );
+        assert_eq!(manager.get("snapshot-interval-secs")[0].1, "120");
+
+        // 0 disables periodic saves without stopping the task.
+        manager.set("snapshot-interval-secs", "0").unwrap();
+        assert_eq!(coordinator.periodic_interval_secs(), 0);
+    }
+
+    #[test]
+    fn snapshot_interval_set_before_publication_is_not_lost() {
+        use frogdb_core::SnapshotCoordinator;
+
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+
+        // A set that lands before server init publishes the coordinator.
+        manager.set("snapshot-interval-secs", "900").unwrap();
+
+        let coordinator = Arc::new(frogdb_core::persistence::NoopSnapshotCoordinator::new());
+        manager.set_snapshot_coordinator(coordinator.clone());
+        assert_eq!(
+            coordinator.periodic_interval_secs(),
+            900,
+            "publication must sync the coordinator to the configured cadence"
+        );
+    }
+
+    #[test]
+    fn batch_size_threshold_set_reaches_the_shared_wal_cell() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+        // The exact cell every RocksWalWriter adopts through
+        // `WalConfig::batch_size_threshold_handle`.
+        let cell = manager.wal_batch_size_threshold_handle();
+
+        manager.set("batch-size-threshold-kb", "512").unwrap();
+        assert_eq!(
+            cell.load(Ordering::Relaxed),
+            512 * 1024,
+            "the wire value is KiB; flush threads compare bytes"
+        );
+        assert_eq!(manager.get("batch-size-threshold-kb")[0].1, "512");
+
+        // A zero threshold would flush every single entry.
+        assert!(manager.set("batch-size-threshold-kb", "0").is_err());
+        assert_eq!(cell.load(Ordering::Relaxed), 512 * 1024);
+    }
+
+    #[test]
+    fn replication_lag_threshold_sets_reach_the_published_thresholds() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+        let thresholds = Arc::new(frogdb_replication::LagThresholds::new(0, 0));
+        manager.set_replication_lag_thresholds(thresholds.clone());
+
+        manager
+            .set("replication-lag-threshold-bytes", "1048576")
+            .unwrap();
+        assert_eq!(thresholds.threshold_bytes(), 1_048_576);
+        assert_eq!(
+            manager.get("replication-lag-threshold-bytes")[0].1,
+            "1048576"
+        );
+
+        manager.set("replication-lag-threshold-secs", "30").unwrap();
+        assert_eq!(thresholds.threshold_secs(), 30);
+        assert_eq!(manager.get("replication-lag-threshold-secs")[0].1, "30");
+    }
+
+    #[test]
+    fn replication_lag_thresholds_are_recorded_without_a_primary_handler() {
+        // On a replica there is no primary-side lag machinery to retune. The set
+        // must still be accepted and reported, so it takes effect if the node is
+        // later initialised as a primary.
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+
+        manager
+            .set("replication-lag-threshold-bytes", "4096")
+            .unwrap();
+        assert_eq!(manager.get("replication-lag-threshold-bytes")[0].1, "4096");
+
+        let thresholds = Arc::new(frogdb_replication::LagThresholds::new(0, 0));
+        manager.set_replication_lag_thresholds(thresholds.clone());
+        assert_eq!(
+            thresholds.threshold_bytes(),
+            4096,
+            "publication must carry the recorded value into the live handle"
+        );
+    }
+
+    #[test]
+    fn self_fence_sets_reach_the_published_quorum_checker() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+        let checker = Arc::new(crate::replication_quorum::ReplicationQuorumChecker::new(
+            Arc::new(frogdb_core::ReplicationTrackerImpl::new()),
+            true,
+            std::time::Duration::from_millis(3000),
+        ));
+        manager.set_replication_self_fence(checker.clone());
+
+        manager.set("self-fence-on-replica-loss", "no").unwrap();
+        assert!(!checker.self_fence_enabled());
+        assert_eq!(manager.get("self-fence-on-replica-loss")[0].1, "no");
+
+        manager.set("replica-freshness-timeout-ms", "7500").unwrap();
+        assert_eq!(checker.freshness_timeout().as_millis(), 7500);
+        assert_eq!(manager.get("replica-freshness-timeout-ms")[0].1, "7500");
+
+        // A zero freshness window would make every replica instantly stale.
+        assert!(manager.set("replica-freshness-timeout-ms", "0").is_err());
+        assert_eq!(checker.freshness_timeout().as_millis(), 7500);
+    }
+
+    // === TLS propagation truth ===
+    //
+    // TLS parameters are the only family whose live state is rustls itself, so
+    // these drive a real `TlsRuntimeHandle` and complete real loopback
+    // handshakes: the assertion is which certificate the server presents, not
+    // merely what the manager remembers.
+
+    #[cfg(not(feature = "turmoil"))]
+    fn manager_with_tls(
+        config: &Config,
+        cert: std::path::PathBuf,
+        key: std::path::PathBuf,
+    ) -> (ConfigManager, Arc<crate::tls_runtime::TlsRuntimeHandle>) {
+        let tls_config = frogdb_config::TlsConfig {
+            enabled: true,
+            cert_file: cert,
+            key_file: key,
+            ..Default::default()
+        };
+        let handle = Arc::new(crate::tls_runtime::TlsRuntimeHandle::new(&tls_config).unwrap());
+        let manager = ConfigManager::new(config);
+        manager.set_tls_runtime(handle.clone());
+        (manager, handle)
+    }
+
+    #[cfg(not(feature = "turmoil"))]
+    #[tokio::test]
+    async fn tls_identity_sets_are_atomic_against_a_mismatched_pair() {
+        use crate::tls_runtime::test_support::{handshake_leaf, write_identity};
+
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_identity(dir.path(), "first");
+        let (other_cert, other_key) = write_identity(dir.path(), "second");
+        let (manager, handle) = manager_with_tls(&test_config(), cert.clone(), key.clone());
+
+        let before = handshake_leaf(&handle).await;
+
+        // Each set rebuilds rustls from the full config, and `CertifiedKey`
+        // checks the key against the leaf. Pointing one half of the pair at a
+        // different identity is therefore rejected instead of producing a
+        // server that fails every later handshake.
+        assert!(
+            manager
+                .set("tls-key-file", other_key.to_str().unwrap())
+                .is_err()
+        );
+        assert!(
+            manager
+                .set("tls-cert-file", other_cert.to_str().unwrap())
+                .is_err()
+        );
+
+        assert_eq!(
+            before,
+            handshake_leaf(&handle).await,
+            "rejected sets must leave the served identity untouched"
+        );
+        // CONFIG GET reads the live handle, so it still reports the running pair.
+        assert_eq!(
+            manager.get("tls-cert-file")[0].1,
+            cert.display().to_string()
+        );
+        assert_eq!(manager.get("tls-key-file")[0].1, key.display().to_string());
+    }
+
+    #[cfg(not(feature = "turmoil"))]
+    #[tokio::test]
+    async fn tls_cert_rotation_in_place_is_visible_to_config_get_and_clients() {
+        use crate::tls_runtime::test_support::{handshake_leaf, rotate_in_place, write_identity};
+
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_identity(dir.path(), "server");
+        let (manager, handle) = manager_with_tls(&test_config(), cert.clone(), key.clone());
+
+        let before = handshake_leaf(&handle).await;
+        let rotated_der = rotate_in_place(&cert, &key);
+
+        // Re-setting the same path re-reads the file: the operator-visible
+        // "rotate under the configured path" flow, driven by CONFIG SET.
+        manager
+            .set("tls-cert-file", cert.to_str().unwrap())
+            .unwrap();
+
+        let after = handshake_leaf(&handle).await;
+        assert_ne!(before, after, "clients must be served the rotated leaf");
+        assert_eq!(after, rotated_der);
+        assert_eq!(
+            manager.get("tls-cert-file")[0].1,
+            cert.display().to_string()
+        );
+    }
+
+    #[cfg(not(feature = "turmoil"))]
+    #[tokio::test]
+    async fn tls_cert_file_set_to_a_bad_path_errors_and_keeps_serving() {
+        use crate::tls_runtime::test_support::{handshake_leaf, write_identity};
+
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_identity(dir.path(), "server");
+        let (manager, handle) = manager_with_tls(&test_config(), cert.clone(), key);
+
+        let before = handshake_leaf(&handle).await;
+        let err = manager
+            .set(
+                "tls-cert-file",
+                dir.path().join("nope.crt").to_str().unwrap(),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, ConfigError::InvalidValue { ref param, .. } if param == "tls-cert-file"),
+            "unexpected error: {err:?}"
+        );
+
+        // Build-then-commit: neither the stored config nor the served leaf moved.
+        assert_eq!(
+            manager.get("tls-cert-file")[0].1,
+            cert.display().to_string()
+        );
+        assert_eq!(before, handshake_leaf(&handle).await);
+    }
+
+    #[cfg(not(feature = "turmoil"))]
+    #[test]
+    fn tls_ciphersuite_set_is_validated_by_rustls_and_round_trips() {
+        use crate::tls_runtime::test_support::write_identity;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_identity(dir.path(), "server");
+        let (manager, handle) = manager_with_tls(&test_config(), cert, key);
+
+        manager
+            .set("tls-ciphersuites", "TLS13_AES_256_GCM_SHA384")
+            .unwrap();
+        assert_eq!(
+            handle.current_config().ciphersuites,
+            vec!["TLS13_AES_256_GCM_SHA384".to_string()]
+        );
+        assert_eq!(
+            manager.get("tls-ciphersuites")[0].1,
+            "TLS13_AES_256_GCM_SHA384",
+            "CONFIG GET renders the live list space-joined"
+        );
+
+        // An unknown name is rejected by the rustls rebuild, not by a duplicated
+        // allow-list in the config layer.
+        let err = manager.set("tls-ciphersuites", "TLS_NOPE").unwrap_err();
+        assert!(format!("{err:?}").contains("unknown tls.ciphersuites"));
+        assert_eq!(
+            handle.current_config().ciphersuites,
+            vec!["TLS13_AES_256_GCM_SHA384".to_string()],
+            "a rejected suite list must not be committed"
+        );
+    }
+
+    #[cfg(not(feature = "turmoil"))]
+    #[test]
+    fn tls_handshake_timeout_and_cluster_migration_sets_reach_live_flags() {
+        use crate::tls_runtime::test_support::write_identity;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_identity(dir.path(), "server");
+        let (manager, handle) = manager_with_tls(&test_config(), cert, key);
+
+        manager.set("tls-handshake-timeout-ms", "2500").unwrap();
+        assert_eq!(
+            handle.handshake_timeout().millis(),
+            2500,
+            "accept loops hold this shared timeout"
+        );
+        assert_eq!(manager.get("tls-handshake-timeout-ms")[0].1, "2500");
+        assert!(manager.set("tls-handshake-timeout-ms", "0").is_err());
+
+        let flag = handle.cluster_migration_flag();
+        manager.set("tls-cluster-migration", "yes").unwrap();
+        assert!(
+            flag.load(Ordering::Relaxed),
+            "the cluster bus reads this flag per inbound connection"
+        );
+        assert_eq!(manager.get("tls-cluster-migration")[0].1, "yes");
+    }
+
+    #[cfg(not(feature = "turmoil"))]
+    #[test]
+    fn tls_optional_path_sets_round_trip_and_clear_on_empty() {
+        use crate::tls_runtime::test_support::write_identity;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_identity(dir.path(), "server");
+        let (client_cert, client_key) = write_identity(dir.path(), "client");
+        let (manager, handle) = manager_with_tls(&test_config(), cert, key);
+
+        manager
+            .set("tls-client-cert-file", client_cert.to_str().unwrap())
+            .unwrap();
+        manager
+            .set("tls-client-key-file", client_key.to_str().unwrap())
+            .unwrap();
+        assert_eq!(handle.current_config().client_cert_file, Some(client_cert));
+        assert_eq!(handle.current_config().client_key_file, Some(client_key));
+
+        // The empty string is how CONFIG SET clears an optional path.
+        manager.set("tls-client-cert-file", "").unwrap();
+        manager.set("tls-client-key-file", "").unwrap();
+        assert_eq!(handle.current_config().client_cert_file, None);
+        assert_eq!(manager.get("tls-client-cert-file")[0].1, "");
+        assert_eq!(manager.get("tls-client-key-file")[0].1, "");
+
+        // The CA bundle follows the same optional-path contract.
+        let (ca, _ca_key) = write_identity(dir.path(), "ca");
+        manager
+            .set("tls-ca-cert-file", ca.to_str().unwrap())
+            .unwrap();
+        assert_eq!(handle.current_config().ca_file, Some(ca.clone()));
+        assert_eq!(
+            manager.get("tls-ca-cert-file")[0].1,
+            ca.display().to_string()
+        );
+        manager.set("tls-ca-cert-file", "").unwrap();
+        assert_eq!(handle.current_config().ca_file, None);
+        assert_eq!(manager.get("tls-ca-cert-file")[0].1, "");
+    }
+
+    /// With `require-client-cert = none` the CA bundle is only recorded, so the
+    /// file is not read until a client verifier is built. Under mutual TLS it is
+    /// loaded on every rebuild, and a bad path must fail the set rather than
+    /// leave the server unable to verify clients.
+    #[cfg(not(feature = "turmoil"))]
+    #[test]
+    fn tls_ca_cert_file_set_is_validated_under_mutual_tls() {
+        use crate::tls_runtime::test_support::write_identity;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_identity(dir.path(), "server");
+        let (ca, _ca_key) = write_identity(dir.path(), "ca");
+        let tls_config = frogdb_config::TlsConfig {
+            enabled: true,
+            cert_file: cert,
+            key_file: key,
+            ca_file: Some(ca.clone()),
+            require_client_cert: frogdb_config::ClientCertMode::Required,
+            ..Default::default()
+        };
+        let handle = Arc::new(crate::tls_runtime::TlsRuntimeHandle::new(&tls_config).unwrap());
+        let manager = ConfigManager::new(&test_config());
+        manager.set_tls_runtime(handle.clone());
+
+        let (ca2, _ca2_key) = write_identity(dir.path(), "ca2");
+        manager
+            .set("tls-ca-cert-file", ca2.to_str().unwrap())
+            .unwrap();
+        assert_eq!(handle.current_config().ca_file, Some(ca2.clone()));
+
+        assert!(
+            manager
+                .set(
+                    "tls-ca-cert-file",
+                    dir.path().join("absent.pem").to_str().unwrap()
+                )
+                .is_err()
+        );
+        assert_eq!(
+            handle.current_config().ca_file,
+            Some(ca2),
+            "a failed CA reload must not be committed"
+        );
+
+        // Clearing the bundle while client certs are required is refused by the
+        // rustls rebuild: there would be nothing to verify against.
+        assert!(manager.set("tls-ca-cert-file", "").is_err());
+    }
+
+    #[cfg(not(feature = "turmoil"))]
+    #[test]
+    fn tls_sets_are_rejected_when_no_tls_runtime_is_running() {
+        // With TLS off there is no rustls state to change. Accepting the set
+        // would make the next CONFIG GET report a value the server is not using,
+        // so the set is refused outright.
+        let manager = ConfigManager::new(&test_config());
+        for name in [
+            "tls-cert-file",
+            "tls-key-file",
+            "tls-ca-cert-file",
+            "tls-client-cert-file",
+            "tls-client-key-file",
+            "tls-ciphersuites",
+            "tls-handshake-timeout-ms",
+            "tls-cluster-migration",
+        ] {
+            let err = manager.set(name, "1").unwrap_err();
+            assert!(
+                format!("{err:?}").contains("TLS is not running"),
+                "{name}: unexpected error {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rewrite_emits_the_values_set_on_promoted_params() {
+        // REWRITE must serialise what the running server is using. A promoted
+        // parameter whose GET reads a live seam but whose rewrite path still
+        // read the startup snapshot would silently persist the old value.
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("frogdb.toml");
+        std::fs::write(
+            &config_path,
+            "[server]\nbind = \"127.0.0.1\"\nport = 6379\n",
+        )
+        .unwrap();
+
+        let mut config = test_config();
+        config.config_source_path = Some(config_path.clone());
+        let manager = ConfigManager::new(&config);
+
+        let coordinator = Arc::new(frogdb_core::persistence::NoopSnapshotCoordinator::new());
+        manager.set_snapshot_coordinator(coordinator);
+
+        for (param, value) in [
+            ("cluster-auto-failover", "yes"),
+            ("replica-priority", "7"),
+            ("status-memory-warning-percent", "77"),
+            ("tracing-sampling-rate", "0.5"),
+            ("latency-bands-enabled", "yes"),
+            ("hotshards-hot-threshold-percent", "44"),
+            ("hotshards-default-period-secs", "9"),
+            ("snapshot-interval-secs", "1234"),
+            ("batch-size-threshold-kb", "256"),
+            ("replication-lag-threshold-secs", "17"),
+            ("self-fence-on-replica-loss", "no"),
+            ("replica-freshness-timeout-ms", "8000"),
+        ] {
+            manager
+                .set(param, value)
+                .unwrap_or_else(|e| panic!("{param}: {e:?}"));
+        }
+        manager.rewrite_config().unwrap();
+
+        let contents = std::fs::read_to_string(&config_path).unwrap();
+        for needle in [
+            "auto-failover = true",
+            "replica-priority = 7",
+            "memory-warning-percent = 77",
+            "sampling-rate = 0.5",
+            "hot-threshold-percent = 44",
+            "default-period-secs = 9",
+            "snapshot-interval-secs = 1234",
+            "batch-size-threshold-kb = 256",
+            "replication-lag-threshold-secs = 17",
+            "self-fence-on-replica-loss = false",
+            "replica-freshness-timeout-ms = 8000",
+        ] {
+            assert!(
+                contents.contains(needle),
+                "missing `{needle}` after rewrite; file:\n{contents}"
+            );
+        }
+    }
+
+    #[test]
+    fn tls_watch_params_stay_immutable() {
+        // The cert watcher is spawned once at startup from these two values.
+        let manager = ConfigManager::new(&test_config());
+        for (name, want) in [("tls-watch-certs", "yes"), ("tls-watch-debounce-ms", "500")] {
+            let got = manager.get(name);
+            assert_eq!(got.len(), 1);
+            assert_eq!(got[0].1, want);
+            assert!(matches!(
+                manager.set(name, "1"),
+                Err(ConfigError::ImmutableParameter(_))
+            ));
+        }
+    }
 }
