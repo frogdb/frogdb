@@ -841,9 +841,19 @@ fn get_process_rss() -> Option<u64> {
 
     #[cfg(not(target_os = "linux"))]
     {
-        // For non-Linux platforms, RSS is not easily available without libc
-        // Return None to indicate it's not available
-        None
+        // No `/proc`: ask sysinfo for this process only. This is the same source
+        // the `frogdb_memory_rss_bytes` gauge uses, so `/status` and `/metrics`
+        // agree on non-Linux instead of `/status` reporting RSS as absent.
+        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+
+        let pid = Pid::from_u32(std::process::id());
+        let mut system = System::new();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            true,
+            ProcessRefreshKind::nothing().with_memory(),
+        );
+        system.process(pid).map(|p| p.memory())
     }
 }
 

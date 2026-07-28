@@ -16,7 +16,7 @@ use crate::net::{JoinHandle, spawn};
 use crate::observability_server::ObservabilityServer;
 use crate::replication::{ReplicaCommandExecutor, consume_frames};
 
-use crate::config::{MemoryConfigExt, StatusConfigExt};
+use crate::config::MemoryConfigExt;
 
 use super::Server;
 
@@ -72,7 +72,7 @@ impl Server {
         // JSON works even when the HTTP server is disabled (the no-op recorder
         // reports absent counters as 0, never faked).
         let status_collector = Arc::new(StatusCollector::new(
-            self.config.status.to_collector_config(),
+            self.config_manager.status_thresholds(),
             self.health_checker.clone(),
             self.shard_senders.clone(),
             self.client_registry.clone(),
@@ -353,14 +353,18 @@ impl Server {
         };
 
         // Create quorum checker for self-fencing (write rejection on quorum loss)
-        // Prefer failure_detector (Raft mode), fallback to replication_quorum_checker
+        // Prefer failure_detector (Raft mode), fallback to replication_quorum_checker.
+        //
+        // In Raft mode the checker is always installed and wrapped in a
+        // `SelfFenceGate`, which consults the live `self-fence-on-quorum-loss`
+        // flag at each write pre-check. Gating installation instead would freeze
+        // the decision at startup.
         let quorum_checker: Option<Arc<dyn frogdb_core::command::QuorumChecker>> =
             if let Some(ref fd) = self.failure_detector {
-                if self.config.cluster.self_fence_on_quorum_loss {
-                    Some(fd.clone() as Arc<dyn frogdb_core::command::QuorumChecker>)
-                } else {
-                    None
-                }
+                Some(Arc::new(crate::cluster_flags::SelfFenceGate::new(
+                    fd.clone() as Arc<dyn frogdb_core::command::QuorumChecker>,
+                    self.config_manager.cluster_flags(),
+                )))
             } else {
                 self.replication_quorum_checker.clone()
             };

@@ -77,6 +77,9 @@ pub struct ClusterConfigSection {
     /// Enable automatic failover when a primary fails.
     /// When enabled, the leader will automatically promote a replica to primary
     /// if the primary becomes unreachable.
+    //
+    // Live seam: the failure detector reads this through `ClusterRuntimeFlags`
+    // at failover-decision time, not at construction.
     #[serde(default)]
     #[param(name = "cluster-auto-failover")]
     pub auto_failover: bool,
@@ -90,12 +93,20 @@ pub struct ClusterConfigSection {
     /// Reject write commands when this node cannot form a quorum with reachable nodes.
     /// When enabled, writes return CLUSTERDOWN if quorum is lost, preventing
     /// split-brain data divergence. Reads remain available.
+    //
+    // Live seam: `SelfFenceGate` consults this through `ClusterRuntimeFlags` on
+    // every write pre-check, so the fence can be lifted or armed at runtime.
     #[serde(default = "default_self_fence_on_quorum_loss")]
     #[param(name = "cluster-self-fence-on-quorum-loss")]
     pub self_fence_on_quorum_loss: bool,
 
     /// Priority for replica promotion during auto-failover.
     /// Lower values are preferred. 0 means this replica will never be promoted.
+    //
+    // Partially live: a runtime SET changes how *this* node scores itself when
+    // it runs the failover selection (via `ClusterRuntimeFlags`). Other nodes
+    // still score it from the Raft-replicated `NodeInfo.replica_priority`, which
+    // only refreshes on an `AddNode` re-registration.
     #[serde(default = "default_replica_priority")]
     #[param]
     pub replica_priority: u32,

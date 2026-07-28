@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 
 /// Status endpoint configuration for health thresholds.
 //
-// The four health thresholds are exposed CONFIG GET-only (immutable) as of
-// 13-01 Pass 2b: the status endpoint reads them from a startup snapshot
-// (`StatusCollectorConfig`), so their startup values are honest to report but a
-// runtime SET would not reach the collector without new propagation wiring.
+// The four health thresholds have a live seam: the status collector reads them
+// through the shared `frogdb_telemetry::StatusThresholds` handle owned by the
+// ConfigManager, re-read on every health classification, so a runtime SET takes
+// effect on the next status render.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
 #[params(section = "status")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]

@@ -666,6 +666,20 @@ pub struct ConfigManager {
     /// Client registry for maxmemory-clients eviction on CONFIG SET. Injected at
     /// construction so eviction always fires.
     client_eviction_registry: Arc<frogdb_core::ClientRegistry>,
+    /// Live `[cluster]` decision flags (auto-failover, self-fence, replica
+    /// priority). Shared with the failure detector and the self-fence gate,
+    /// which read them at decision time.
+    cluster_flags: Arc<crate::cluster_flags::ClusterRuntimeFlags>,
+    /// Live `[status]` health thresholds. Shared with the status collector, which
+    /// classifies each `/status` report against the current values.
+    status_thresholds: Arc<frogdb_telemetry::StatusThresholds>,
+    /// Live OpenTelemetry sampling rate. Shared with the tracer's sampler, which
+    /// reads it per sampling decision.
+    tracing_sampling_rate: Arc<frogdb_telemetry::SamplingRate>,
+    /// Latency-band tracker backing `latency-bands-enabled`. Injected at
+    /// construction (the metrics recorder is built before this manager) so the
+    /// toggle always reaches the live tracker.
+    latency_band_tracker: Arc<frogdb_telemetry::LatencyBandTracker>,
 }
 
 /// Bundle of live collaborators injected into [`ConfigManager`] at construction.
@@ -688,6 +702,11 @@ pub struct ConfigCollaborators {
     /// [`ShardConfigNotifier::new`]), so the caller must build it from the same
     /// runtime handle passed to [`ConfigManager::with_collaborators`].
     pub shard_notifier: Arc<ShardConfigNotifier>,
+    /// Latency-band tracker backing `latency-bands-enabled`.
+    ///
+    /// Injected (rather than built here) because the Prometheus recorder that
+    /// records into it is constructed before the config manager exists.
+    pub latency_band_tracker: Arc<frogdb_telemetry::LatencyBandTracker>,
 }
 
 impl ConfigCollaborators {
@@ -708,6 +727,10 @@ impl ConfigCollaborators {
                 Arc::new(Vec::new()),
                 runtime.clone(),
                 0,
+            )),
+            latency_band_tracker: Arc::new(frogdb_telemetry::LatencyBandTracker::new(
+                Vec::new(),
+                false,
             )),
         }
     }
@@ -746,6 +769,7 @@ impl ConfigManager {
             latency_histograms,
             client_eviction_registry,
             shard_notifier,
+            latency_band_tracker,
         } = collaborators;
 
         Self {
@@ -772,7 +796,33 @@ impl ConfigManager {
             typed_params: Self::build_typed_params(),
             shard_notifier,
             client_eviction_registry,
+            cluster_flags: crate::cluster_flags::ClusterRuntimeFlags::from_config(&config.cluster),
+            status_thresholds: crate::config::StatusConfigExt::to_thresholds(&config.status),
+            tracing_sampling_rate: Arc::new(frogdb_telemetry::SamplingRate::new(
+                config.tracing.sampling_rate,
+            )),
+            latency_band_tracker,
         }
+    }
+
+    /// Live `[cluster]` decision flags, for the failure detector and fence gate.
+    pub fn cluster_flags(&self) -> Arc<crate::cluster_flags::ClusterRuntimeFlags> {
+        self.cluster_flags.clone()
+    }
+
+    /// Live `[status]` health thresholds, for the status collector.
+    pub fn status_thresholds(&self) -> Arc<frogdb_telemetry::StatusThresholds> {
+        self.status_thresholds.clone()
+    }
+
+    /// Live OpenTelemetry sampling rate, for the tracer's sampler.
+    pub fn tracing_sampling_rate_handle(&self) -> Arc<frogdb_telemetry::SamplingRate> {
+        self.tracing_sampling_rate.clone()
+    }
+
+    /// Latency-band tracker backing `latency-bands-enabled`.
+    pub fn latency_band_tracker(&self) -> Arc<frogdb_telemetry::LatencyBandTracker> {
+        self.latency_band_tracker.clone()
     }
 
     /// Get the shared per_request_spans flag for connections and shard workers.

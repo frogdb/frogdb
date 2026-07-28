@@ -139,18 +139,18 @@ impl MemoryConfigExt for MemoryConfig {
 
 /// Extension trait for StatusConfig conversion methods.
 pub trait StatusConfigExt {
-    /// Convert to StatusCollectorConfig.
-    fn to_collector_config(&self) -> frogdb_telemetry::StatusCollectorConfig;
+    /// Seed a shared, runtime-mutable threshold handle from static config.
+    fn to_thresholds(&self) -> std::sync::Arc<frogdb_telemetry::StatusThresholds>;
 }
 
 impl StatusConfigExt for StatusConfig {
-    fn to_collector_config(&self) -> frogdb_telemetry::StatusCollectorConfig {
-        frogdb_telemetry::StatusCollectorConfig {
-            memory_warning_percent: self.memory_warning_percent,
-            connection_warning_percent: self.connection_warning_percent,
-            durability_lag_warning_ms: self.durability_lag_warning_ms,
-            durability_lag_critical_ms: self.durability_lag_critical_ms,
-        }
+    fn to_thresholds(&self) -> std::sync::Arc<frogdb_telemetry::StatusThresholds> {
+        std::sync::Arc::new(frogdb_telemetry::StatusThresholds::new(
+            self.memory_warning_percent,
+            self.connection_warning_percent,
+            self.durability_lag_warning_ms,
+            self.durability_lag_critical_ms,
+        ))
     }
 }
 
