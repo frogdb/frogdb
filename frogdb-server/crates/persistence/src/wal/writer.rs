@@ -9,7 +9,7 @@ use crate::serialization::{serialize, serialize_hll_delta};
 use bytes::Bytes;
 use frogdb_types::types::{KeyMetadata, Value};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 use tracing::{debug, error};
 
@@ -19,6 +19,10 @@ pub struct RocksWalWriter {
     cmd_tx: flume::Sender<WalCommand>,
     lag: Arc<WalLagAtomics>,
     outcomes: Arc<FlushOutcomes>,
+    /// Live batch-size flush threshold (bytes). Shared with the flush thread,
+    /// which re-reads it on every batch decision, so `CONFIG SET
+    /// persistence-batch-size-threshold-kb` retunes batching without a restart.
+    batch_size_threshold: Arc<AtomicUsize>,
     flush_thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -43,6 +47,7 @@ impl RocksWalWriter {
             last_flush_timestamp_ms: AtomicU64::new(now_ms),
         });
         let outcomes = Arc::new(FlushOutcomes::new());
+        let batch_size_threshold = Arc::new(AtomicUsize::new(config.batch_size_threshold));
         let flush_thread = {
             let engine = FlushEngine::new(
                 RocksSink::new(rocks, shard_id),
@@ -52,7 +57,7 @@ impl RocksWalWriter {
                 Arc::clone(&outcomes),
                 metrics_recorder,
             );
-            let bst = config.batch_size_threshold;
+            let bst = Arc::clone(&batch_size_threshold);
             let bt = Duration::from_millis(config.batch_timeout_ms);
             std::thread::Builder::new()
                 .name(format!("wal-flush-{shard_id}"))
@@ -67,8 +72,22 @@ impl RocksWalWriter {
             cmd_tx,
             lag,
             outcomes,
+            batch_size_threshold,
             flush_thread: Some(flush_thread),
         }
+    }
+
+    /// Live flush batch-size threshold in bytes. The flush thread re-reads this
+    /// on every batch decision (drain loop + flush trigger), so a store takes
+    /// effect on the next batch without restarting the flush thread.
+    pub fn batch_size_threshold(&self) -> usize {
+        self.batch_size_threshold.load(Ordering::Relaxed)
+    }
+
+    /// Update the flush batch-size threshold (bytes). Reachable from
+    /// `ConfigManager` for `CONFIG SET persistence-batch-size-threshold-kb`.
+    pub fn set_batch_size_threshold(&self, bytes: usize) {
+        self.batch_size_threshold.store(bytes, Ordering::Relaxed);
     }
     pub async fn write_set(
         &self,
