@@ -384,20 +384,11 @@ pub struct StaticConfig {
     // Each is copied once from `Config` at startup; CONFIG GET reports that
     // startup value (honest — it is what the server runs with), but they carry
     // no runtime-SET seam, so they live here rather than in the mutable registry.
+    // Params that *did* grow a live seam (WAL batch size, snapshot interval,
+    // replication lag thresholds, self-fence + replica freshness) are served from
+    // `ConfigManager`'s atomics instead and must not be duplicated here.
     /// RocksDB background-compaction rate limit in MB/s (0 = unlimited).
     pub compaction_rate_limit_mb: u64,
-    /// WAL flush batch-size threshold in KB.
-    pub batch_size_threshold_kb: usize,
-    /// Periodic snapshot interval in seconds (0 = disabled).
-    pub snapshot_interval_secs: u64,
-    /// Replica byte-lag disconnect threshold.
-    pub replication_lag_threshold_bytes: u64,
-    /// Replica time-lag disconnect threshold in seconds.
-    pub replication_lag_threshold_secs: u64,
-    /// Whether the primary self-fences (refuses writes) on replica loss.
-    pub self_fence_on_replica_loss: bool,
-    /// Replica freshness window in ms used by self-fencing.
-    pub replica_freshness_timeout_ms: u64,
     /// Whether dual-accept TLS cluster migration mode is enabled.
     pub tls_cluster_migration: bool,
     /// Outgoing (replication/cluster) client certificate path (empty when unset).
@@ -509,12 +500,6 @@ impl StaticConfig {
                 .unwrap_or_default(),
             // --- 13-01 Pass 2b: immutable startup-consumed params ---
             compaction_rate_limit_mb: config.persistence.compaction_rate_limit_mb,
-            batch_size_threshold_kb: config.persistence.batch_size_threshold_kb,
-            snapshot_interval_secs: config.snapshot.snapshot_interval_secs,
-            replication_lag_threshold_bytes: config.replication.replication_lag_threshold_bytes,
-            replication_lag_threshold_secs: config.replication.replication_lag_threshold_secs,
-            self_fence_on_replica_loss: config.replication.self_fence_on_replica_loss,
-            replica_freshness_timeout_ms: config.replication.replica_freshness_timeout_ms,
             tls_cluster_migration: config.tls.tls_cluster_migration,
             tls_client_cert_file: config
                 .tls
@@ -806,21 +791,25 @@ pub struct ConfigManager {
         std::sync::OnceLock<Arc<dyn frogdb_core::persistence::SnapshotCoordinator>>,
     /// Configured primary replication lag thresholds (bytes / seconds).
     ///
-    /// Authority for CONFIG GET/REWRITE on *every* node. The live
-    /// [`frogdb_replication::LagThresholds`] exists only on primaries, so on a
-    /// replica a SET is recorded here and takes effect if the node is later
-    /// re-initialised as a primary.
+    /// Authority for CONFIG GET/REWRITE, and the value pushed into the live
+    /// [`frogdb_replication::LagThresholds`] below.
     replication_lag_threshold_bytes: Arc<AtomicU64>,
     replication_lag_threshold_secs: Arc<AtomicU64>,
-    /// Live primary-side lag thresholds; absent on replicas.
+    /// Live primary-side lag thresholds.
+    ///
+    /// Published once at boot on *every* role, because the primary handler that
+    /// owns them is constructed on every role so a runtime promotion has live
+    /// seams (see `server::replication_init`). A SET therefore governs this node
+    /// the moment it becomes a primary, instead of being recorded and forgotten.
     replication_lag_thresholds: std::sync::OnceLock<Arc<frogdb_replication::LagThresholds>>,
     /// Configured replica-loss self-fence policy and freshness window.
     ///
-    /// Same primary-only story as the lag thresholds: authority for GET/REWRITE
-    /// here, pushed into the live quorum checker when one exists.
+    /// Authority for GET/REWRITE here, pushed into the live quorum checker.
     self_fence_on_replica_loss: Arc<AtomicBool>,
     replica_freshness_timeout_ms: Arc<AtomicU64>,
-    /// Live replication self-fence quorum checker; absent on replicas.
+    /// Live replication self-fence quorum checker. Published on every role, same
+    /// reason as the lag thresholds above; it never fences until a replica has
+    /// actually streamed from this node.
     replication_self_fence:
         std::sync::OnceLock<Arc<crate::replication_quorum::ReplicationQuorumChecker>>,
     /// Serializes the whole CONFIG SET lifecycle (see [`Self::set`]).
@@ -1011,8 +1000,8 @@ impl ConfigManager {
 
     /// Publish the live primary-side replication lag thresholds.
     ///
-    /// Primary-only: replicas never call this. Syncs the configured values into
-    /// the handle on publish.
+    /// Called on every role (the owning handler exists on every role). Syncs the
+    /// configured values into the handle on publish.
     pub fn set_replication_lag_thresholds(
         &self,
         thresholds: Arc<frogdb_replication::LagThresholds>,
@@ -1027,8 +1016,8 @@ impl ConfigManager {
 
     /// Publish the live replication self-fence quorum checker.
     ///
-    /// Primary-only: replicas never call this. Syncs the configured values into
-    /// the checker on publish.
+    /// Called on every role (the checker exists on every role). Syncs the
+    /// configured values into the checker on publish.
     pub fn set_replication_self_fence(
         &self,
         checker: Arc<crate::replication_quorum::ReplicationQuorumChecker>,
@@ -2913,10 +2902,12 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::None,
             }),
-            // Primary-only live seam: the lag thresholds exist inside the primary
-            // replication handler. On a replica the value is still recorded (and
-            // reported by GET/REWRITE) so it takes effect if the node is later
-            // initialised as a primary.
+            // Live seam on every role: the lag thresholds live inside the
+            // primary replication handler, which is constructed on every role so
+            // a runtime promotion inherits them (see
+            // `server::replication_init`). A SET applies to the handler
+            // immediately and governs this node's replicas as soon as it is a
+            // primary.
             ReplicationLagThresholdBytes => Box::new(ConfigParam::<u64, ConfigManager> {
                 name: id.name(),
                 parse: |s| {
@@ -2966,8 +2957,10 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::None,
             }),
-            // Primary-only live seam, same story as the lag thresholds: the
-            // quorum checker only exists on a primary.
+            // Live seam on every role, same story as the lag thresholds: the
+            // quorum checker is built on every role and arms only once a replica
+            // has streamed from this node, so a SET here governs the write gate
+            // from the moment this node is a primary.
             SelfFenceOnReplicaLoss => Box::new(ConfigParam::<bool, ConfigManager> {
                 name: id.name(),
                 parse: |s| parse_yes_no("self-fence-on-replica-loss", s),
@@ -3100,6 +3093,23 @@ impl ConfigManager {
                     Ok(())
                 },
                 render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            // The feature's kill switch. One `Arc<AtomicBool>` shared by the
+            // collector and every shard worker, so a SET both silences the
+            // report and stops the per-command accounting behind it.
+            HotshardsEnabled => Box::new(ConfigParam::<bool, ConfigManager> {
+                name: id.name(),
+                parse: |s| parse_yes_no("hotshards-enabled", s),
+                validate: ConfigParam::no_validate,
+                default: || frogdb_config::hotshards::DEFAULT_ENABLED,
+                get: |mgr| mgr.hotshards.enabled(),
+                apply: |mgr, v| {
+                    mgr.hotshards.set_enabled(v);
+                    info!(enabled = v, "Hot-shard op-rate accounting toggled");
+                    Ok(())
+                },
+                render: |v| yes_no(*v),
                 propagation: Propagation::None,
             }),
         }
@@ -4643,6 +4653,33 @@ maxmemory = 0
         assert_eq!(snap.hot_threshold_percent, 40.0);
         assert_eq!(snap.warm_threshold_percent, 30.0);
         assert_eq!(snap.default_period_secs, 5);
+    }
+
+    /// Propagation truth for `hotshards-enabled`: a SET must reach *both* halves
+    /// of the feature — the collector's report and the `Arc<AtomicBool>` each
+    /// shard worker consults per dispatched command, which is the same cell.
+    #[test]
+    fn hotshards_enabled_set_reaches_the_collector_and_the_shard_workers() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+        let shared = manager.hotshard_config();
+        // The flag a shard worker adopts at spawn.
+        let worker_flag = shared.enabled_flag();
+
+        assert_eq!(manager.get("hotshards-enabled")[0].1, "yes");
+        assert!(worker_flag.load(Ordering::Relaxed));
+
+        manager.set("hotshards-enabled", "no").unwrap();
+        assert!(!shared.enabled());
+        assert!(
+            !worker_flag.load(Ordering::Relaxed),
+            "the shard workers' flag must be the cell CONFIG SET writes"
+        );
+        assert!(!shared.snapshot().enabled);
+        assert_eq!(manager.get("hotshards-enabled")[0].1, "no");
+
+        manager.set("hotshards-enabled", "yes").unwrap();
+        assert!(worker_flag.load(Ordering::Relaxed));
     }
 
     #[test]

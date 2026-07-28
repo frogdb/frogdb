@@ -229,6 +229,14 @@
           "mutable": true
         },
         {
+          "name": "enabled",
+          "type": "boolean",
+          "default": true,
+          "description": "Whether per-shard op-rate accounting runs at all.\n\nThe kill switch for the feature: with this off, shard workers skip the\nwindowed counters entirely (one relaxed atomic load per dispatched\ncommand) and every hot-shard surface reports no shards rather than a\nstale window. Re-enabling starts a fresh window.",
+          "config_param": "hotshards-enabled",
+          "mutable": true
+        },
+        {
           "name": "hot-threshold-percent",
           "type": "number",
           "default": 20.0,

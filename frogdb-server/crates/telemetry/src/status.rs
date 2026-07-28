@@ -13,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use frogdb_core::{
     ClientFlags, ClientRegistry, HotShardDetector, HotShardSnapshot, MetricsRecorder, ShardSender,
-    ShardWalLag, WalLagAggregate,
+    ShardWalLag, WalLagAggregate, WriteFenceReporter,
 };
 
 use crate::definitions::{
@@ -178,6 +178,16 @@ pub struct ClusterStatus {
     pub mode: String,
     /// Number of shards.
     pub num_shards: usize,
+    /// Why writes are currently being rejected by the node's write gate, e.g.
+    /// `"replica quorum lost"`.
+    ///
+    /// Absent whenever writes are not fenced — a fence that is not in force is
+    /// not reported, and a node with no fence source installed (standalone) omits
+    /// the field rather than claiming writes are allowed on authority it lacks.
+    /// This is what turns an otherwise unattributable `CLUSTERDOWN` reply into a
+    /// diagnosable one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub write_fence: Option<String>,
 }
 
 /// Health status with issues.
@@ -484,6 +494,11 @@ pub struct StatusCollector {
     /// collector is installed, which omits the status section rather than
     /// reporting zeros.
     hot_shards: Option<Arc<dyn HotShardDetector>>,
+    /// Optional source of "writes are fenced right now, and why" — the very
+    /// object the write gate consults, so `/status` cannot claim a fence state
+    /// the gate disagrees with. `None` on nodes with no fence source (standalone),
+    /// which omits the field.
+    write_fence: Option<Arc<dyn WriteFenceReporter>>,
 }
 
 impl StatusCollector {
@@ -515,6 +530,7 @@ impl StatusCollector {
             durability_mode,
             mode,
             hot_shards: None,
+            write_fence: None,
         }
     }
 
@@ -533,6 +549,17 @@ impl StatusCollector {
     /// optional, and `new` is already at the argument limit.
     pub fn with_hot_shards(mut self, detector: Arc<dyn HotShardDetector>) -> Self {
         self.hot_shards = Some(detector);
+        self
+    }
+
+    /// Install the node's write-fence reporter, so `cluster.write_fence` names
+    /// the reason writes are being rejected while a fence is engaged.
+    ///
+    /// Takes the same object the write gate consults, not a copy of its inputs:
+    /// the reported reason is then the decision itself rather than a second
+    /// evaluation that could drift from it.
+    pub fn with_write_fence(mut self, reporter: Arc<dyn WriteFenceReporter>) -> Self {
+        self.write_fence = Some(reporter);
         self
     }
 
@@ -618,6 +645,11 @@ impl StatusCollector {
                 database_available: self.health_checker.check_ready().is_ok(),
                 mode: self.mode.current().to_string(),
                 num_shards: self.shard_senders.len(),
+                write_fence: self
+                    .write_fence
+                    .as_ref()
+                    .and_then(|r| r.write_fence_reason())
+                    .map(str::to_string),
             },
             health: health_status,
             clients: clients_status,
@@ -857,42 +889,28 @@ fn is_leap_year(year: i32) -> bool {
 
 /// Get the process RSS (Resident Set Size) in bytes.
 ///
-/// Reads it through `sysinfo`, the same source the `frogdb_memory_rss_bytes`
-/// Prometheus gauge samples, so `/status` and `/metrics` cannot disagree — and
-/// so the field is populated on every platform (the previous `/proc/self/statm`
-/// reader silently reported `None` off Linux).
+/// Reads it through `sysinfo` on every platform — the same source the
+/// `frogdb_memory_rss_bytes` Prometheus gauge samples (see
+/// `crate::system::SystemMetricsCollector`), so `/status` and `/metrics` cannot
+/// disagree, and the field is populated everywhere (an earlier
+/// `/proc/self/statm` reader reported `None` off Linux).
+///
+/// The `/proc` fast path this replaced also multiplied the resident page count
+/// by a hard-coded 4096, so it under-reported RSS by 4x/16x on Linux kernels
+/// built with 16K/64K pages (common on aarch64 distributions). `/status` is a
+/// low-frequency endpoint, so one `sysinfo` process refresh per call is cheaper
+/// than carrying a second, platform-specific RSS definition.
 fn get_process_rss() -> Option<u64> {
-    #[cfg(target_os = "linux")]
-    {
-        // Read from /proc/self/statm
-        if let Ok(contents) = std::fs::read_to_string("/proc/self/statm") {
-            let fields: Vec<&str> = contents.split_whitespace().collect();
-            if fields.len() >= 2
-                && let Ok(pages) = fields[1].parse::<u64>()
-            {
-                // Page size is typically 4096 bytes
-                return Some(pages * 4096);
-            }
-        }
-        None
-    }
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
-    #[cfg(not(target_os = "linux"))]
-    {
-        // No `/proc`: ask sysinfo for this process only. This is the same source
-        // the `frogdb_memory_rss_bytes` gauge uses, so `/status` and `/metrics`
-        // agree on non-Linux instead of `/status` reporting RSS as absent.
-        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
-
-        let pid = Pid::from_u32(std::process::id());
-        let mut system = System::new();
-        system.refresh_processes_specifics(
-            ProcessesToUpdate::Some(&[pid]),
-            true,
-            ProcessRefreshKind::nothing().with_memory(),
-        );
-        system.process(pid).map(|p| p.memory())
-    }
+    let pid = Pid::from_u32(std::process::id());
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing().with_memory(),
+    );
+    system.process(pid).map(|p| p.memory())
 }
 
 #[cfg(test)]
@@ -1293,6 +1311,56 @@ mod tests {
         let json = collector.to_json(&status);
         assert!(json.contains("\"hot_shards\""), "got:\n{json}");
         assert!(json.contains("\"hot\""), "class renders lowercase: {json}");
+    }
+
+    /// A fence reporter whose verdict flips, standing in for the live quorum
+    /// checker the write gate consults.
+    struct StubFence(Arc<AtomicBool>);
+
+    impl WriteFenceReporter for StubFence {
+        fn write_fence_reason(&self) -> Option<&'static str> {
+            self.0
+                .load(Ordering::Relaxed)
+                .then_some("replica quorum lost")
+        }
+    }
+
+    #[tokio::test]
+    async fn write_fence_reason_is_reported_only_while_fenced() {
+        let recorder = Arc::new(PrometheusRecorder::new());
+        let fenced = Arc::new(AtomicBool::new(false));
+        let collector = test_collector(recorder, vec![], false)
+            .with_write_fence(Arc::new(StubFence(fenced.clone())));
+
+        // Writes flowing: the field is absent, not `null`/"none" — a report that
+        // never claims a fence state it is not in.
+        let status = collector.collect().await;
+        assert_eq!(status.cluster.write_fence, None);
+        let json = collector.to_json(&status);
+        assert!(
+            !json.contains("write_fence"),
+            "unfenced status must omit the field, got:\n{json}"
+        );
+
+        // Fence engages -> the reason appears on the next report, no restart.
+        fenced.store(true, Ordering::Relaxed);
+        let status = collector.collect().await;
+        assert_eq!(
+            status.cluster.write_fence.as_deref(),
+            Some("replica quorum lost")
+        );
+        assert!(collector.to_json(&status).contains("replica quorum lost"));
+    }
+
+    #[tokio::test]
+    async fn write_fence_absent_without_a_reporter() {
+        // Standalone: no fence source installed, so the field is omitted rather
+        // than asserting writes are unfenced on authority the collector lacks.
+        let recorder = Arc::new(PrometheusRecorder::new());
+        let collector = test_collector(recorder, vec![], false);
+        let status = collector.collect().await;
+        assert_eq!(status.cluster.write_fence, None);
+        assert!(!collector.to_json(&status).contains("write_fence"));
     }
 
     #[tokio::test]

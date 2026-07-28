@@ -67,7 +67,7 @@ mod worker;
 pub use active_expiry::{ActiveExpiryCoordinator, ExpiryResult};
 pub use builder::{ShardBuilderError, ShardWorkerBuilder, WalMode};
 pub use connection::NewConnection;
-pub use counters::{HotShardStatsResponse, OperationBucket, OperationCounters};
+pub use counters::{HotShardStatsResponse, OpClass, OperationBucket, OperationCounters};
 #[cfg(any(test, feature = "fake-wal"))]
 pub use fake_wal_registry::FakeWalRegistry;
 pub use helpers::REPLICA_INTERNAL_CONN_ID;

@@ -127,6 +127,20 @@ pub trait HotShardDetector: Send + Sync {
     fn collect_snapshot(&self, period_secs: Option<u64>) -> BoxFuture<'_, HotShardSnapshot>;
 }
 
+/// A source of "why are writes being rejected right now" for operator surfaces.
+///
+/// A write gate that rejects writes without saying why forces the operator to
+/// guess between the several independent gates (replica quorum loss,
+/// `min-replicas-to-write`, cluster health). Implementations report the reason
+/// for a fence that is engaged *at this instant*, and `None` whenever writes
+/// would be accepted — per the observability convention, the field is absent
+/// rather than reporting a fence that is not in force.
+pub trait WriteFenceReporter: Send + Sync {
+    /// A short, stable reason a write would be rejected now, or `None` if
+    /// writes are not fenced by this reporter.
+    fn write_fence_reason(&self) -> Option<&'static str>;
+}
+
 /// Configuration for observability features.
 ///
 /// This trait provides access to optional observability collectors.

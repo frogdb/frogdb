@@ -137,6 +137,19 @@ impl ReplicationTrackerImpl {
             .collect()
     }
 
+    /// Whether *any* replica is currently in the live-streaming phase.
+    ///
+    /// The existence-only counterpart of [`Self::get_streaming_replicas`], for
+    /// callers that only need the boolean and would otherwise pay a `Vec` of
+    /// snapshots per call. Sits on the per-write path of the primary self-fence
+    /// arming check, so it short-circuits and allocates nothing.
+    pub fn has_streaming_replica(&self) -> bool {
+        self.replicas
+            .read()
+            .values()
+            .any(|s| matches!(s.phase(), Phase::Streaming))
+    }
+
     /// Count streaming replicas whose last ACK is within `max_lag` — the "good"
     /// replicas for Redis's `min-replicas-to-write` gate. A `max_lag` of zero
     /// disables the freshness filter (every streaming replica counts), matching

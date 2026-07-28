@@ -78,6 +78,12 @@ pub struct RoleManager {
     /// Role Promotion of a boot-spawned Replica actually halts the boot
     /// reconnect loop instead of leaving it dialing the old primary forever.
     boot_replica_handler: Option<Arc<ReplicaReplicationHandler>>,
+    /// The replication self-fence checker, whose arming latch is scoped to a
+    /// single stint as a primary: a Role Demotion un-latches it so a later
+    /// re-promotion starts unarmed instead of inheriting a fence earned by
+    /// replica sessions that are no longer this node's. `None` only in unit
+    /// tests that exercise the flag lifecycle without replication wiring.
+    replication_self_fence: Option<Arc<crate::replication_quorum::ReplicationQuorumChecker>>,
 }
 
 impl RoleManager {
@@ -103,7 +109,17 @@ impl RoleManager {
             stream: None,
             streamer,
             boot_replica_handler: None,
+            replication_self_fence: None,
         }
+    }
+
+    /// Adopt the replication self-fence checker so Role Demotion can un-latch
+    /// its arming. Called once, during cluster init.
+    pub fn set_replication_self_fence(
+        &mut self,
+        checker: Arc<crate::replication_quorum::ReplicationQuorumChecker>,
+    ) {
+        self.replication_self_fence = Some(checker);
     }
 
     /// Register the boot-spawned replica handler so a later `promote()` /
@@ -160,6 +176,15 @@ impl RoleManager {
 
     /// Role Promotion: become a writable primary. Stops any inbound stream
     /// (runtime-demotion or boot-spawned) and clears the flag. Idempotent.
+    ///
+    /// Clearing the flag is all a promotion has to do to acquire the
+    /// primary-side replication seams: the tracker, the
+    /// `PrimaryReplicationHandler` and the `ReplicationQuorumChecker` are built
+    /// for every role at boot and gate their *behavior* on this flag (see
+    /// `server::replication_init`), so a promoted node broadcasts, serves PSYNC,
+    /// and enforces `self-fence-on-replica-loss` / `min-replicas-to-write` /
+    /// `replication-lag-threshold-*` — including values a `CONFIG SET` applied
+    /// while it was still a replica.
     pub fn promote(&mut self) {
         // Dropping the handle stops a runtime-demotion stream.
         self.stream = None;
@@ -192,6 +217,15 @@ impl RoleManager {
         // alongside the new stream.
         if let Some(handler) = self.boot_replica_handler.take() {
             handler.stop();
+        }
+        // Un-latch self-fence arming: the replica sessions that armed it belong
+        // to the stint as a primary that just ended. Leaving it armed would make
+        // a later re-promotion reject writes from its very first command (no
+        // fresh replica has acked *this* stint) — a fence attributed to the
+        // wrong role. Freshness/enable state are live atomics and stay as
+        // configured.
+        if let Some(ref checker) = self.replication_self_fence {
+            checker.reset_arming();
         }
         self.stream = Some(self.streamer.start(primary));
         self.primary_target = Some(primary);
@@ -619,6 +653,45 @@ mod tests {
         // demote, promote, demote => two starts, one stop (from the promote).
         assert_eq!(streamer.started.lock().unwrap().len(), 2);
         assert_eq!(streamer.stops.load(Ordering::SeqCst), 1);
+    }
+
+    /// Demotion must un-latch the replication self-fence's arming. The replica
+    /// sessions this node tracked as a primary belong to the old role; carrying
+    /// their arming across `REPLICAOF host port` would fence the node the moment
+    /// it is promoted again, before it has ever had a replica of its own.
+    #[test]
+    fn demote_resets_replication_self_fence_arming() {
+        use frogdb_core::{ReplicationTracker, ReplicationTrackerImpl, command::QuorumChecker};
+        use std::time::Duration;
+
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let checker = Arc::new(crate::replication_quorum::ReplicationQuorumChecker::new(
+            tracker.clone(),
+            true,
+            Duration::from_secs(3),
+        ));
+        let (mut mgr, _streamer) = manager(false);
+        mgr.set_replication_self_fence(checker.clone());
+
+        // Serve a replica as a primary, then lose it: armed, quorum lost.
+        let session = tracker.register_replica(addr("127.0.0.1:9001"));
+        session.force_phase_for_test(frogdb_replication::Phase::Streaming);
+        tracker.record_ack(session.id(), 10);
+        assert!(checker.has_quorum());
+        assert!(checker.is_armed());
+        tracker.unregister_replica(session.id());
+        assert!(!checker.has_quorum(), "lost replica must fence the primary");
+
+        mgr.demote(addr("127.0.0.1:7000"));
+
+        assert!(
+            !checker.is_armed(),
+            "demote must un-latch self-fence arming"
+        );
+        // A promotion right after therefore starts from the
+        // never-had-a-replica state instead of an inherited fence.
+        mgr.promote();
+        assert!(checker.has_quorum());
     }
 
     #[test]

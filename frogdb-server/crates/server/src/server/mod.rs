@@ -255,21 +255,27 @@ impl Server {
             &infra.recovered_replication,
             &infra.rocks_store,
             &infra.metrics_recorder,
+            &infra.is_replica_flag,
             #[cfg(not(feature = "turmoil"))]
             &infra.tls_runtime,
         )?;
 
         // Make the primary replication handler available to the pre-snapshot
         // hook so the replication offset is persisted alongside each snapshot.
+        // The hook itself skips the save while this node is a replica (the two
+        // handlers share one state file) and resumes after a promotion.
         if let Some(ref handler) = repl.primary_replication_handler {
             let _ = infra.repl_state_save_slot.set(handler.clone());
         }
 
-        // Publish the primary-only replication seams to the ConfigManager so
+        // Publish the primary-side replication seams to the ConfigManager so
         // `CONFIG SET replication-lag-threshold-*` / `self-fence-on-replica-loss`
         // / `replica-freshness-timeout-ms` reach live state instead of stopping
-        // at the manager's own record of the configured value. Both are absent
-        // on a replica, which has no primary-side lag or quorum machinery.
+        // at the manager's own record of the configured value. Published on
+        // every role — a replica can be promoted at runtime, and a knob whose
+        // seam was skipped at boot would then govern nothing for the rest of the
+        // process lifetime while still answering `CONFIG GET` with the value the
+        // operator set.
         if let Some(ref handler) = repl.primary_replication_handler {
             infra
                 .config_manager
@@ -297,6 +303,8 @@ impl Server {
             repl.primary_addr,
             repl.shared_replication_offset,
             infra.config_manager.cluster_flags(),
+            infra.is_replica_flag.clone(),
+            repl.replication_self_fence.clone(),
             #[cfg(not(feature = "turmoil"))]
             &infra.tls_runtime,
         )

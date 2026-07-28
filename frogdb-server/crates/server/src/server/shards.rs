@@ -217,6 +217,11 @@ pub(super) fn spawn_shard_workers(
         // Share the per-request spans toggle with shard workers
         worker.set_per_request_spans(ctx.config_manager.per_request_spans_flag());
 
+        // Share the hot-shard kill switch with shard workers, so CONFIG SET
+        // hotshards-enabled stops the per-command op-rate accounting itself and
+        // not merely the report the collector renders.
+        worker.set_hotshards_enabled_flag(ctx.config_manager.hotshard_config().enabled_flag());
+
         // Share the WAL failure policy toggle with shard workers
         worker.set_wal_failure_policy_flag(ctx.config_manager.wal_failure_policy_flag());
 

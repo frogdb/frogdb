@@ -6,9 +6,14 @@
 
 use frogdb_core::ReplicationTrackerImpl;
 use frogdb_core::command::QuorumChecker;
+use frogdb_core::metrics::WriteFenceReporter;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
+
+/// The `/status` + log wording for an active replica-loss fence. One constant so
+/// the operator surface and the transition warning cannot drift apart.
+const FENCE_REASON: &str = "replica quorum lost";
 
 /// Quorum checker for replication mode (primary + N replicas).
 ///
@@ -21,6 +26,13 @@ use std::time::Duration;
 /// simply makes every decision permissive, so `CONFIG SET
 /// replication-self-fence-on-replica-loss yes` starts fencing without a restart
 /// (the checker is already installed on every shard worker and connection).
+///
+/// The checker is installed on *every* node at boot, not only on a
+/// boot-configured primary: the tracker it reads is likewise process-wide and
+/// simply empty while this node is a replica, so a node promoted at runtime
+/// (`REPLICAOF NO ONE`) fences on the very same object the write gate has been
+/// holding since boot. Nothing is rebuilt, and no publication has to reach the
+/// per-connection write gate after the fact.
 pub struct ReplicationQuorumChecker {
     tracker: Arc<ReplicationTrackerImpl>,
     /// Live `self-fence-on-replica-loss`. When false, [`has_quorum`] is
@@ -55,8 +67,24 @@ impl ReplicationQuorumChecker {
 
     /// Enable/disable self-fencing at the next fence decision. Reachable from
     /// `ConfigManager` for `CONFIG SET replication-self-fence-on-replica-loss`.
+    ///
+    /// Enabling is deliberately *immediate*: arming is latched independently of
+    /// the toggle (see [`QuorumChecker::has_quorum`]), so a primary that has
+    /// already served a replica and then lost it starts rejecting writes on the
+    /// very next command rather than getting a fresh grace period — the same
+    /// immediacy `min-replicas-to-write` has. That is a large behaviour change
+    /// to make silently, so the false -> true transition logs a `warn!` naming
+    /// the consequence when the fence engages on the spot.
     pub fn set_self_fence_enabled(&self, enabled: bool) {
-        self.self_fence_enabled.store(enabled, Ordering::Relaxed);
+        let was_enabled = self.self_fence_enabled.swap(enabled, Ordering::Relaxed);
+        if enabled && !was_enabled && self.fence_engaged() {
+            tracing::warn!(
+                reason = FENCE_REASON,
+                freshness_timeout_ms = self.freshness_timeout_ms.load(Ordering::Relaxed),
+                "replication self-fencing enabled while replica quorum was already lost: writes \
+                 are now rejected with CLUSTERDOWN until a replica streams and ACKs again"
+            );
+        }
     }
 
     /// The current ACK-freshness window.
@@ -71,6 +99,21 @@ impl ReplicationQuorumChecker {
         self.freshness_timeout_ms.store(ms, Ordering::Relaxed);
     }
 
+    /// Whether this checker has latched "a replica has streamed at least once".
+    pub fn is_armed(&self) -> bool {
+        self.armed.load(Ordering::Relaxed)
+    }
+
+    /// Un-latch arming, so the next fence decision starts from the
+    /// never-had-a-replica state.
+    ///
+    /// Called on Role Demotion: the replica sessions this node was tracking as a
+    /// primary are gone, and a later re-promotion must not inherit their arming
+    /// (which would fence the fresh primary before it has ever had a replica).
+    pub fn reset_arming(&self) {
+        self.armed.store(false, Ordering::Relaxed);
+    }
+
     /// Count streaming replicas whose last ACK is within the freshness timeout.
     /// The window is loaded here, per check, not captured at construction.
     fn count_fresh_streaming_replicas(&self) -> usize {
@@ -81,36 +124,61 @@ impl ReplicationQuorumChecker {
             .filter(|r| r.last_ack_time.elapsed() < freshness_timeout)
             .count()
     }
+
+    /// Latch arming once any replica reaches Streaming, and report the latched
+    /// state.
+    ///
+    /// Arming is tracked even while fencing is disabled, so enabling the toggle
+    /// on a primary that has already served replicas fences immediately rather
+    /// than granting a fresh grace period. Once latched this is a single relaxed
+    /// load: the tracker is only consulted while still unarmed, and then through
+    /// the existence-only [`ReplicationTrackerImpl::has_streaming_replica`],
+    /// which allocates nothing (this path runs per write command, and previously
+    /// built a `Vec` of replica snapshots every time).
+    fn arm_if_streaming(&self) -> bool {
+        if self.armed.load(Ordering::Relaxed) {
+            return true;
+        }
+        if self.tracker.has_streaming_replica() {
+            self.armed.store(true, Ordering::Relaxed);
+            return true;
+        }
+        false
+    }
+
+    /// Whether a fence decision made *right now* would reject writes.
+    fn fence_engaged(&self) -> bool {
+        self.self_fence_enabled()
+            && self.armed.load(Ordering::Relaxed)
+            && self.count_fresh_streaming_replicas() == 0
+    }
 }
 
 impl QuorumChecker for ReplicationQuorumChecker {
     fn has_quorum(&self) -> bool {
-        // Check if any replica is streaming (and arm if so). Arming is tracked
-        // even while fencing is disabled, so enabling the toggle on a primary
-        // that has already served replicas fences immediately rather than
-        // granting a fresh grace period.
-        let streaming = self.tracker.get_streaming_replicas();
-        if !streaming.is_empty() && !self.armed.load(Ordering::Relaxed) {
-            self.armed.store(true, Ordering::Relaxed);
-        }
+        // Cheapest gate first: one relaxed load. Nothing below it may cost a
+        // tracker walk on the write path when fencing is disabled *and* the
+        // checker is already armed.
+        let fencing = self.self_fence_enabled();
 
-        // Fence decision point: read the live toggle. Disabled = never fence.
-        if !self.self_fence_enabled() {
-            return true;
-        }
+        // Arming is latched regardless of the toggle (see `arm_if_streaming`),
+        // so this runs either way — but it only touches the tracker while still
+        // unarmed, and never allocates.
+        let armed = self.arm_if_streaming();
 
-        // Before any replica has ever streamed, allow all writes
-        if !self.armed.load(Ordering::Relaxed) {
+        // Fencing disabled, or no replica has ever streamed: allow all writes.
+        if !fencing || !armed {
             return true;
         }
 
         // Armed: require at least 1 fresh streaming replica
         self.count_fresh_streaming_replicas() >= 1
     }
+}
 
-    fn count_reachable_nodes(&self) -> usize {
-        // 1 (self) + fresh streaming replicas
-        1 + self.count_fresh_streaming_replicas()
+impl WriteFenceReporter for ReplicationQuorumChecker {
+    fn write_fence_reason(&self) -> Option<&'static str> {
+        self.fence_engaged().then_some(FENCE_REASON)
     }
 }
 
@@ -135,7 +203,7 @@ mod tests {
         let tracker = make_tracker();
         let checker = ReplicationQuorumChecker::new(tracker, true, Duration::from_secs(3));
         assert!(checker.has_quorum());
-        assert_eq!(checker.count_reachable_nodes(), 1);
+        assert_eq!(checker.write_fence_reason(), None);
     }
 
     #[test]
@@ -147,7 +215,7 @@ mod tests {
 
         let checker = ReplicationQuorumChecker::new(tracker, true, Duration::from_secs(3));
         assert!(checker.has_quorum());
-        assert_eq!(checker.count_reachable_nodes(), 2);
+        assert_eq!(checker.write_fence_reason(), None);
     }
 
     #[test]
@@ -163,7 +231,7 @@ mod tests {
         // But the replica is already stale
         std::thread::sleep(Duration::from_millis(1));
         assert!(!checker.has_quorum());
-        assert_eq!(checker.count_reachable_nodes(), 1);
+        assert_eq!(checker.write_fence_reason(), Some(FENCE_REASON));
     }
 
     #[test]
@@ -180,7 +248,7 @@ mod tests {
         // Remove the replica
         tracker.unregister_replica(session.id());
         assert!(!checker.has_quorum());
-        assert_eq!(checker.count_reachable_nodes(), 1);
+        assert_eq!(checker.write_fence_reason(), Some(FENCE_REASON));
     }
 
     #[test]
@@ -190,23 +258,30 @@ mod tests {
 
         // Not armed yet — quorum is true
         assert!(checker.has_quorum());
-        assert!(!checker.armed.load(Ordering::Relaxed));
+        assert!(!checker.is_armed());
 
         // Register a replica in Connecting state — still not armed
         let session = tracker.register_replica(addr(9001));
         assert!(checker.has_quorum());
-        assert!(!checker.armed.load(Ordering::Relaxed));
+        assert!(!checker.is_armed());
 
         // Move to Streaming — now it arms
         session.force_phase_for_test(Phase::Streaming);
         tracker.record_ack(session.id(), 0);
         assert!(checker.has_quorum());
-        assert!(checker.armed.load(Ordering::Relaxed));
+        assert!(checker.is_armed());
 
         // Remove replica — armed stays true, quorum lost
         tracker.unregister_replica(session.id());
         assert!(!checker.has_quorum());
-        assert!(checker.armed.load(Ordering::Relaxed));
+        assert!(checker.is_armed());
+
+        // Role Demotion un-latches arming, so a later re-promotion does not
+        // inherit a fence from replicas that are no longer this node's.
+        checker.reset_arming();
+        assert!(!checker.is_armed());
+        assert!(checker.has_quorum());
+        assert_eq!(checker.write_fence_reason(), None);
     }
 
     /// Propagation truth for `replication-self-fence-on-replica-loss`: the
@@ -231,7 +306,10 @@ mod tests {
         );
         // Arming still happened while disabled, so enabling does not hand out a
         // fresh grace period.
-        assert!(checker.armed.load(Ordering::Relaxed));
+        assert!(checker.is_armed());
+        // Disabled means "not fencing", so nothing is reported as fenced even
+        // though quorum is lost.
+        assert_eq!(checker.write_fence_reason(), None);
 
         // CONFIG SET replication-self-fence-on-replica-loss yes.
         checker.set_self_fence_enabled(true);
@@ -240,10 +318,13 @@ mod tests {
             !checker.has_quorum(),
             "enabling the fence must reject writes on the same checker instance"
         );
+        // ...and the fence is *attributable* rather than a silent CLUSTERDOWN.
+        assert_eq!(checker.write_fence_reason(), Some(FENCE_REASON));
 
         // ...and back off again, same instance.
         checker.set_self_fence_enabled(false);
         assert!(checker.has_quorum());
+        assert_eq!(checker.write_fence_reason(), None);
     }
 
     /// Propagation truth for `replica-freshness-timeout-ms`: the window is
@@ -258,7 +339,6 @@ mod tests {
 
         let checker = ReplicationQuorumChecker::new(tracker, true, Duration::from_secs(3600));
         assert!(checker.has_quorum());
-        assert_eq!(checker.count_reachable_nodes(), 2);
         assert_eq!(checker.freshness_timeout(), Duration::from_secs(3600));
 
         // Let a measurable amount of ACK age accumulate, then CONFIG SET the
@@ -270,11 +350,24 @@ mod tests {
             !checker.has_quorum(),
             "a shrunk freshness window must stale the replica on the next check"
         );
-        assert_eq!(checker.count_reachable_nodes(), 1);
+        assert_eq!(checker.write_fence_reason(), Some(FENCE_REASON));
 
         // Widening it again restores quorum on the same instance.
         checker.set_freshness_timeout_ms(3_600_000);
         assert!(checker.has_quorum());
-        assert_eq!(checker.count_reachable_nodes(), 2);
+        assert_eq!(checker.write_fence_reason(), None);
+    }
+
+    /// An empty tracker is the shape a *replica* (or standalone) node carries
+    /// from boot: the checker is installed but has nothing to fence on, so it is
+    /// permissive until a promotion actually attracts replicas.
+    #[test]
+    fn empty_tracker_never_fences() {
+        let checker = ReplicationQuorumChecker::new(make_tracker(), true, Duration::from_secs(3));
+        for _ in 0..3 {
+            assert!(checker.has_quorum());
+        }
+        assert!(!checker.is_armed());
+        assert_eq!(checker.write_fence_reason(), None);
     }
 }

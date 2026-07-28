@@ -72,19 +72,20 @@ pub(super) async fn init_cluster(
     // priority), owned by the ConfigManager. The failure detector reads them at
     // decision time rather than copying them at construction.
     cluster_flags: Arc<crate::cluster_flags::ClusterRuntimeFlags>,
+    // The process-wide live role flag, minted in phase 1 and shared by all shard
+    // workers, the acceptor, every connection handler and the replication
+    // broadcaster. The `RoleManager` built here is its sole writer, driving Role
+    // Promotion/Demotion (REPLICAOF, failover) and the streaming lifecycle each
+    // implies.
+    is_replica_flag: Arc<std::sync::atomic::AtomicBool>,
+    // The replication self-fence checker, so a Role Demotion can un-latch its
+    // arming (a re-promoted node must not inherit a fence earned by replica
+    // sessions that are no longer its own).
+    replication_self_fence: Option<Arc<crate::replication_quorum::ReplicationQuorumChecker>>,
     #[cfg(not(feature = "turmoil"))] tls_runtime: &Option<
         Arc<crate::tls_runtime::TlsRuntimeHandle>,
     >,
 ) -> Result<ClusterInitResult> {
-    // Create the shared is_replica flag and the RoleManager that owns it. This
-    // single AtomicBool is shared by all shard workers, the acceptor, and all
-    // connection handlers; the RoleManager is the sole writer, driving Role
-    // Promotion/Demotion (REPLICAOF, failover) and the streaming lifecycle each
-    // implies. Built here (before the demotion-event consumer) so both the
-    // consumer and the shard workers share one controller.
-    let is_replica_flag = Arc::new(std::sync::atomic::AtomicBool::new(
-        config.replication.is_replica(),
-    ));
     // The single offset atomic the cluster-bus HealthProbe answers with. In
     // cluster mode it must always exist so a runtime-demoted node (which may
     // have booted as a primary or standalone, i.e. with no boot-time replica
@@ -109,8 +110,11 @@ pub(super) async fn init_cluster(
             #[cfg(not(feature = "turmoil"))]
             tls_runtime,
         ));
-    let role_manager =
+    let mut role_manager =
         crate::role_manager::RoleManager::new(is_replica_flag.clone(), streamer, boot_primary_addr);
+    if let Some(checker) = replication_self_fence {
+        role_manager.set_replication_self_fence(checker);
+    }
     let role_handle = crate::role_manager::RoleManagerHandle::new(role_manager);
     let role_controller: Arc<dyn frogdb_core::RoleController> = Arc::new(role_handle.clone());
 

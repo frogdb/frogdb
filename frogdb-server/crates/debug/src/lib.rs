@@ -19,9 +19,7 @@ pub use config::{HotShardConfig, MemoryDiagConfig};
 pub use memory::{MemoryDiagCollector, format_memory_report};
 
 // Hot shard detection re-exports
-pub use hotshards::{
-    HotShardCollector, SharedHotShardConfig, format_hotshards_info, format_hotshards_report,
-};
+pub use hotshards::{HotShardCollector, SharedHotShardConfig};
 
 // Bundle re-exports
 pub use bundle::store::BundleInfo;

@@ -68,6 +68,15 @@ pub(super) struct InitResult {
     /// during the replication init phase (in `mod.rs`).
     pub repl_state_save_slot:
         Arc<std::sync::OnceLock<Arc<crate::replication::PrimaryReplicationHandler>>>,
+    /// The process-wide live role flag (`true` = read-only replica).
+    ///
+    /// Minted here, in the earliest phase, because every later phase needs the
+    /// *same* instance: the replication phase gates the broadcaster and the
+    /// primary-state save hook on it, and the cluster phase hands it to the
+    /// `RoleManager` — the sole writer, which flips it on every runtime
+    /// promotion/demotion. One atomic, many readers, no copies that can go
+    /// stale after a role change.
+    pub is_replica_flag: Arc<std::sync::atomic::AtomicBool>,
     pub metrics_recorder: Arc<dyn MetricsRecorder>,
     pub prometheus_recorder: Option<Arc<PrometheusRecorder>>,
     /// Process-wide keyspace hit/miss accumulator, shared between the shard
@@ -327,14 +336,21 @@ pub(super) async fn init_infrastructure(
         std::sync::OnceLock<Arc<crate::replication::PrimaryReplicationHandler>>,
     > = Arc::new(std::sync::OnceLock::new());
 
+    // The one live role flag for the whole process (see `InitResult`).
+    let is_replica_flag = Arc::new(std::sync::atomic::AtomicBool::new(
+        config.replication.is_replica(),
+    ));
+
     // Set pre-snapshot hook to flush all shard search indexes and persist the
     // replication offset before snapshotting.
     if let Some(ref coord) = rocks_snapshot_coordinator {
         let senders = shard_senders.clone();
         let saver = repl_state_save_slot.clone();
+        let saver_is_replica = is_replica_flag.clone();
         coord.set_pre_snapshot_hook(std::sync::Arc::new(move || {
             let senders = senders.clone();
             let saver = saver.clone();
+            let saver_is_replica = saver_is_replica.clone();
             Box::pin(async move {
                 let mut receivers = Vec::with_capacity(senders.len());
                 for sender in senders.iter() {
@@ -363,8 +379,17 @@ pub(super) async fn init_infrastructure(
                 for rx in wal_receivers {
                     let _ = rx.await;
                 }
-                // Persist the replication offset that matches this snapshot's data.
-                if let Some(handler) = saver.get()
+                // Persist the replication offset that matches this snapshot's
+                // data — but only while this node is actually a primary. The
+                // handler is constructed on every role (so a promotion has live
+                // primary seams), and it shares `replication.state_file` with
+                // the replica handler: saving the primary's copy on a replica
+                // would overwrite the replica's adopted replication id/offset
+                // with this node's boot-time snapshot of it, forcing a full
+                // resync after restart. Read live, so the first snapshot after
+                // a promotion does persist the promoted primary's offset.
+                if !saver_is_replica.load(std::sync::atomic::Ordering::Relaxed)
+                    && let Some(handler) = saver.get()
                     && let Err(e) = handler.save_state().await
                 {
                     warn!(error = %e, "Failed to persist replication state before snapshot");
@@ -454,6 +479,7 @@ pub(super) async fn init_infrastructure(
         snapshot_coordinator,
         periodic_snapshot_handle,
         repl_state_save_slot,
+        is_replica_flag,
         metrics_recorder,
         prometheus_recorder,
         keyspace_stats,

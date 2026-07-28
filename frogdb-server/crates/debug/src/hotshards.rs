@@ -16,13 +16,13 @@
 //! the same [`HotShardSnapshot`].
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use tokio::sync::oneshot;
 
 use frogdb_core::{
     BoxFuture, HotShardDetector, HotShardSnapshot, HotShardStatsResponse, ObservabilityMsg,
-    ShardLoad, ShardLoadClass, ShardSender,
+    OperationCounters, ShardLoad, ShardLoadClass, ShardSender,
 };
 
 pub use crate::config::HotShardConfig;
@@ -40,6 +40,12 @@ pub struct SharedHotShardConfig {
     hot_threshold_percent: AtomicU64,
     warm_threshold_percent: AtomicU64,
     default_period_secs: AtomicU64,
+    /// The feature's kill switch. Held as an `Arc<AtomicBool>` rather than a
+    /// plain atomic because the shard workers need the *same* cell: each one
+    /// reads it per dispatched command to decide whether to touch its op-rate
+    /// ring at all, so `CONFIG SET hotshards-enabled no` stops the accounting
+    /// itself, not merely the reporting.
+    enabled: Arc<AtomicBool>,
 }
 
 impl SharedHotShardConfig {
@@ -49,6 +55,7 @@ impl SharedHotShardConfig {
             hot_threshold_percent: AtomicU64::new(config.hot_threshold_percent.to_bits()),
             warm_threshold_percent: AtomicU64::new(config.warm_threshold_percent.to_bits()),
             default_period_secs: AtomicU64::new(config.default_period_secs),
+            enabled: Arc::new(AtomicBool::new(config.enabled)),
         }
     }
 
@@ -84,12 +91,30 @@ impl SharedHotShardConfig {
         self.default_period_secs.store(secs, Ordering::Relaxed);
     }
 
+    /// Whether hot-shard accounting is switched on.
+    pub fn enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
+    /// Turn hot-shard accounting on or off. Reachable from `ConfigManager` for
+    /// `CONFIG SET hotshards-enabled`; shard workers see it on their next
+    /// dispatched command.
+    pub fn set_enabled(&self, enabled: bool) {
+        self.enabled.store(enabled, Ordering::Relaxed);
+    }
+
+    /// The kill-switch cell itself, for the shard workers' per-command check.
+    pub fn enabled_flag(&self) -> Arc<AtomicBool> {
+        self.enabled.clone()
+    }
+
     /// Read every knob back out as a plain config value.
     pub fn snapshot(&self) -> HotShardConfig {
         HotShardConfig {
             hot_threshold_percent: self.hot_threshold_percent(),
             warm_threshold_percent: self.warm_threshold_percent(),
             default_period_secs: self.default_period_secs(),
+            enabled: self.enabled(),
         }
     }
 }
@@ -146,7 +171,32 @@ impl HotShardCollector {
         // thresholds.
         let hot_threshold = self.config.hot_threshold_percent();
         let warm_threshold = self.config.warm_threshold_percent();
-        let period_secs = period_secs.unwrap_or_else(|| self.config.default_period_secs());
+        // The window a shard can actually answer for is bounded by its ring, so
+        // report the *clamped* value rather than echoing the request back: a
+        // reply that says `period_secs 3600` over 60 seconds of data is a lie
+        // about what was measured.
+        let period_secs = period_secs
+            .unwrap_or_else(|| self.config.default_period_secs())
+            .min(OperationCounters::MAX_WINDOW_SECS);
+
+        // Kill switch: no shard is recording, so report *no shards* rather than
+        // a fleet of fabricated zeros (which would read as a healthy, idle
+        // node), and say why.
+        if !self.config.enabled() {
+            return HotShardSnapshot {
+                period_secs,
+                total_ops_per_sec: 0.0,
+                imbalance_ratio: 1.0,
+                hot_count: 0,
+                warm_count: 0,
+                shards: Vec::new(),
+                recommendations: vec![
+                    "Hot-shard accounting is disabled (hotshards-enabled no); no per-shard \
+                     rates are being recorded"
+                        .to_string(),
+                ],
+            };
+        }
 
         let shard_responses = self.gather_shard_stats(period_secs).await;
 
@@ -321,83 +371,6 @@ fn generate_recommendations(
     recommendations
 }
 
-/// Format a hot shard snapshot as the human-readable operator table.
-pub fn format_hotshards_report(report: &HotShardSnapshot) -> String {
-    let mut output = String::new();
-
-    output.push_str(&format!(
-        "# Hot Shard Report (period: {}s)\n",
-        report.period_secs
-    ));
-    output.push_str(&format!(
-        "# Total: {:.0} ops/sec across {} shards\n",
-        report.total_ops_per_sec,
-        report.shards.len()
-    ));
-    output.push_str(&format!(
-        "# Imbalance ratio: {:.1}x (max/avg)\n",
-        report.imbalance_ratio
-    ));
-    output.push('\n');
-
-    output.push_str("shard  ops/sec  reads/sec  writes/sec  pct    queue  status\n");
-    output.push_str("-----  -------  ---------  ----------  -----  -----  ------\n");
-
-    for shard in &report.shards {
-        output.push_str(&format!(
-            "{:<5}  {:>7.0}  {:>9.0}  {:>10.0}  {:>5.1}%  {:>5}  {}\n",
-            shard.shard_id,
-            shard.ops_per_sec,
-            shard.reads_per_sec,
-            shard.writes_per_sec,
-            shard.percentage,
-            shard.queue_depth,
-            shard.class.as_str()
-        ));
-    }
-
-    if !report.recommendations.is_empty() {
-        output.push('\n');
-        output.push_str("# Recommendations:\n");
-        for rec in &report.recommendations {
-            output.push_str(&format!("# - {}\n", rec));
-        }
-    }
-
-    output
-}
-
-/// Format a hot shard snapshot as an INFO-style `# Hotshards` section.
-pub fn format_hotshards_info(report: &HotShardSnapshot) -> String {
-    let hottest_shard = report.shards.first().map(|s| s.shard_id).unwrap_or(0);
-    let max_ops_per_sec = report.shards.first().map(|s| s.ops_per_sec).unwrap_or(0.0);
-    let avg_ops_per_sec = if report.shards.is_empty() {
-        0.0
-    } else {
-        report.total_ops_per_sec / report.shards.len() as f64
-    };
-
-    format!(
-        "# Hotshards\r\n\
-         num_shards:{}\r\n\
-         hot_shards:{}\r\n\
-         warm_shards:{}\r\n\
-         total_ops_sec:{:.0}\r\n\
-         max_ops_sec:{:.0}\r\n\
-         avg_ops_sec:{:.0}\r\n\
-         imbalance_ratio:{:.2}\r\n\
-         hottest_shard:{}\r\n",
-        report.shards.len(),
-        report.hot_count,
-        report.warm_count,
-        report.total_ops_per_sec,
-        max_ops_per_sec,
-        avg_ops_per_sec,
-        report.imbalance_ratio,
-        hottest_shard
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,6 +400,7 @@ mod tests {
         assert_eq!(config.hot_threshold_percent, 20.0);
         assert_eq!(config.warm_threshold_percent, 15.0);
         assert_eq!(config.default_period_secs, 10);
+        assert!(config.enabled);
     }
 
     #[test]
@@ -439,11 +413,61 @@ mod tests {
         shared.set_hot_threshold_percent(42.5);
         shared.set_warm_threshold_percent(11.25);
         shared.set_default_period_secs(30);
+        shared.set_enabled(false);
 
         let snapshot = shared.snapshot();
         assert_eq!(snapshot.hot_threshold_percent, 42.5);
         assert_eq!(snapshot.warm_threshold_percent, 11.25);
         assert_eq!(snapshot.default_period_secs, 30);
+        assert!(!snapshot.enabled);
+    }
+
+    /// The kill switch is one cell shared with the shard workers: the flag the
+    /// workers hold must see a `CONFIG SET hotshards-enabled` through the
+    /// collector's handle, or the two halves of the feature could disagree.
+    #[test]
+    fn enabled_flag_is_shared_with_shard_workers() {
+        let shared = SharedHotShardConfig::new(&HotShardConfig::default());
+        let worker_flag = shared.enabled_flag();
+        assert!(worker_flag.load(Ordering::Relaxed));
+        shared.set_enabled(false);
+        assert!(!worker_flag.load(Ordering::Relaxed));
+        assert!(!shared.enabled());
+    }
+
+    #[tokio::test]
+    async fn disabled_collector_reports_no_shards_and_says_why() {
+        let collector = HotShardCollector::new(Arc::new(Vec::new()), &HotShardConfig::default());
+        collector.shared_config().set_enabled(false);
+        let report = collector.collect(None).await;
+        assert!(report.shards.is_empty());
+        assert_eq!(report.total_ops_per_sec, 0.0);
+        assert!(
+            report
+                .recommendations
+                .iter()
+                .any(|r| r.contains("hotshards-enabled no")),
+            "a disabled report must name the switch that silenced it: {:?}",
+            report.recommendations
+        );
+    }
+
+    /// The reported window is the one the shards can answer for: a request
+    /// beyond the ring is clamped, and the clamped value is what every surface
+    /// renders.
+    #[tokio::test]
+    async fn reported_period_is_the_clamped_window() {
+        let collector = HotShardCollector::new(Arc::new(Vec::new()), &HotShardConfig::default());
+        assert_eq!(
+            collector.collect(Some(86_400)).await.period_secs,
+            OperationCounters::MAX_WINDOW_SECS
+        );
+        // A configured default beyond the ring is clamped the same way.
+        collector.shared_config().set_default_period_secs(3_600);
+        assert_eq!(
+            collector.collect(None).await.period_secs,
+            OperationCounters::MAX_WINDOW_SECS
+        );
     }
 
     #[tokio::test]
@@ -464,50 +488,6 @@ mod tests {
         assert_eq!(collector.collect(None).await.period_secs, 45);
         // An explicit period still wins over the configured default.
         assert_eq!(collector.collect(Some(5)).await.period_secs, 5);
-    }
-
-    #[test]
-    fn format_info_reports_fleet_summary() {
-        let report = HotShardSnapshot {
-            period_secs: 10,
-            total_ops_per_sec: 1000.0,
-            imbalance_ratio: 1.0,
-            hot_count: 1,
-            warm_count: 0,
-            shards: vec![
-                load(0, 500.0, 50.0, ShardLoadClass::Hot),
-                load(1, 500.0, 50.0, ShardLoadClass::Ok),
-            ],
-            recommendations: vec![],
-        };
-
-        let info = format_hotshards_info(&report);
-        assert!(info.contains("num_shards:2"));
-        assert!(info.contains("hot_shards:1"));
-        assert!(info.contains("total_ops_sec:1000"));
-        assert!(info.contains("hottest_shard:0"));
-    }
-
-    #[test]
-    fn format_report_renders_a_row_per_shard() {
-        let report = HotShardSnapshot {
-            period_secs: 10,
-            total_ops_per_sec: 1000.0,
-            imbalance_ratio: 1.6,
-            hot_count: 1,
-            warm_count: 0,
-            shards: vec![
-                load(0, 800.0, 80.0, ShardLoadClass::Hot),
-                load(1, 200.0, 20.0, ShardLoadClass::Ok),
-            ],
-            recommendations: vec!["something".to_string()],
-        };
-
-        let text = format_hotshards_report(&report);
-        assert!(text.contains("Hot Shard Report (period: 10s)"));
-        assert!(text.contains("HOT"));
-        assert!(text.contains("OK"));
-        assert!(text.contains("# Recommendations:"));
     }
 
     #[test]

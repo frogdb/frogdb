@@ -476,6 +476,15 @@ impl ShardWorker {
         self.per_request_spans = flag;
     }
 
+    /// Adopt the shared `hotshards-enabled` kill switch, so `CONFIG SET
+    /// hotshards-enabled no` stops this shard's op-rate accounting from the next
+    /// dispatched command (and re-enabling starts a fresh window).
+    pub fn set_hotshards_enabled_flag(&mut self, flag: Arc<AtomicBool>) {
+        self.observability
+            .operation_counters_mut()
+            .set_enabled_flag(flag);
+    }
+
     /// Set the shared keyspace notification event flags (from ConfigManager).
     pub fn set_notify_keyspace_events(&mut self, flag: Arc<AtomicU32>) {
         self.notify_keyspace_events = flag;

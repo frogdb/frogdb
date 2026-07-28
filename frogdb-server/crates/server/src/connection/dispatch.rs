@@ -459,17 +459,23 @@ impl ConnectionHandler {
             }
 
             // Handle PSYNC: this stage owns the entire takeover decision. It is
-            // the single site that presence-gates the primary replication
-            // handler *and* parses the args, yielding a typed
-            // `StageOutcome::Handoff` (carried out as a raw-socket takeover by
-            // the connection task) or a client error. It never runs the shard
-            // `PsyncCommand::execute` — parsing happens once, here.
+            // the single site that role-gates the replication handoff *and*
+            // parses the args, yielding a typed `StageOutcome::Handoff` (carried
+            // out as a raw-socket takeover by the connection task) or a client
+            // error. It never runs the shard `PsyncCommand::execute` — parsing
+            // happens once, here.
             DispatchStage::PsyncIntercept => {
                 if cmd_name == "PSYNC" {
-                    // Presence gate: only a primary can hand off a replication
-                    // stream. This is now the *sole* place this check lives (the
-                    // post-loop `else` that duplicated it is gone).
-                    if self.cluster.primary_replication_handler.is_none() {
+                    // Role gate: only a primary can hand off a replication
+                    // stream. Read live, because the handler itself is built on
+                    // every role (a runtime promotion must be able to head a
+                    // chain) — so the *role*, not the handler's presence, is
+                    // what decides. A replica refusing PSYNC here is what keeps
+                    // chained replication unsupported rather than silently
+                    // half-working. This is the sole place this check lives.
+                    if self.is_replica.load(std::sync::atomic::Ordering::Relaxed)
+                        || self.cluster.primary_replication_handler.is_none()
+                    {
                         return StageOutcome::ShortCircuit(vec![Response::error(
                             "ERR PSYNC not supported - server is not running as primary",
                         )]);

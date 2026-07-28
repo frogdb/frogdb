@@ -149,6 +149,7 @@ impl HotShardsConfigExt for frogdb_config::HotShardsConfig {
             hot_threshold_percent: self.hot_threshold_percent,
             warm_threshold_percent: self.warm_threshold_percent,
             default_period_secs: self.default_period_secs,
+            enabled: self.enabled,
         }
     }
 }
@@ -629,6 +630,7 @@ mod tests {
             toml_defaults.default_period_secs,
             collector_defaults.default_period_secs
         );
+        assert_eq!(toml_defaults.enabled, collector_defaults.enabled);
     }
 
     #[test]
@@ -637,10 +639,12 @@ mod tests {
             hot_threshold_percent: 33.0,
             warm_threshold_percent: 22.0,
             default_period_secs: 5,
+            enabled: false,
         };
         let collector = config.to_collector_config();
         assert_eq!(collector.hot_threshold_percent, 33.0);
         assert_eq!(collector.warm_threshold_percent, 22.0);
         assert_eq!(collector.default_period_secs, 5);
+        assert!(!collector.enabled);
     }
 }

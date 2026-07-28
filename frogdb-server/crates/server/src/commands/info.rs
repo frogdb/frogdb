@@ -373,8 +373,11 @@ fn build_stats_info(_ctx: &mut CommandContext) -> String {
 }
 
 fn build_replication_info(ctx: &CommandContext) -> String {
-    // Check if we have a replication tracker (running as primary)
-    if let Some(tracker) = ctx.replication_tracker {
+    // Gate on the live role, not on the tracker's presence: the tracker is wired
+    // at boot for every role (so a runtime promotion has live primary seams), so
+    // its presence says nothing about whether this node is currently a primary.
+    // Same rule the connection-level INFO handler follows.
+    if let Some(tracker) = ctx.replication_tracker.filter(|_| !ctx.is_replica) {
         let replicas = tracker.get_streaming_replicas();
         let repl_offset = tracker.current_offset();
         let connected_slaves = replicas.len();

@@ -156,6 +156,7 @@ durability-lag-critical-ms = 30000
 hot-threshold-percent = 20.0
 warm-threshold-percent = 15.0
 default-period-secs = 10
+enabled = true
 
 [latency]
 startup-test = false

@@ -156,24 +156,39 @@ scatter-gathers each shard's op-rate ring buffer and reports the per-shard traff
 FROGDB.HOTSHARDS [PERIOD <seconds>]
 ```
 
-`PERIOD` selects the averaging window (default `10`, capped at the 60-second ring buffer). The
-reply carries `period_secs`, `num_shards`, `total_ops_per_sec`, `imbalance_ratio` (busiest shard
-over the fleet average), `hot_count`, `warm_count`, `recommendations`, and a `shards` array
+`PERIOD` selects the averaging window (default `10`, capped at the 60-second ring buffer). A
+larger request is accepted and clamped, and `period_secs` in the reply is always the window
+actually measured — `PERIOD 3600` reports `period_secs 60`, never an hour it has no history for.
+Rates are divided by the seconds of data the ring holds rather than by the window you asked for,
+so a 60-second query a few seconds after startup reports real load instead of a fraction of it.
+The reply carries `period_secs`, `num_shards`, `total_ops_per_sec`, `imbalance_ratio` (busiest
+shard over the fleet average), `hot_count`, `warm_count`, `recommendations`, and a `shards` array
 sorted hottest-first with per-shard `ops_per_sec`, `reads_per_sec`, `writes_per_sec`,
 `percentage`, `queue_depth`, and `status` (`HOT` / `WARM` / `OK`).
+
+The window is driven by a monotonic clock, so a wall-clock jump (an NTP correction after boot,
+say) neither stalls a shard walking the ring forward nor inflates the rates it reports.
 
 A shard is `HOT` when it carries more than `hot-threshold-percent` of fleet traffic and `WARM`
 above `warm-threshold-percent`:
 
 ```toml
 [hotshards]
-hot-threshold-percent = 20.0    # Share of fleet ops/sec that marks a shard hot
+enabled = true                  # Whether per-shard op-rate accounting runs at all
+hot-threshold-percent = 20.0    # Share of the fleet op rate that marks a shard hot
 warm-threshold-percent = 15.0   # Share that marks a shard warm
 default-period-secs = 10        # Averaging window when PERIOD is omitted
 ```
 
 With an even key distribution every shard sits near `100 / num_shards` percent, so the
 thresholds are meaningful only above a handful of shards — tune them to your shard count.
+
+All four are live-mutable (`CONFIG SET hotshards-enabled no`). `hotshards-enabled` is the
+feature's kill switch: turning it off stops the per-command accounting in the shard workers, not
+merely the report, and every hot-shard surface then returns an empty `shards` array with a
+recommendation saying why rather than a fleet of zeros that would read as an idle server.
+Re-enabling starts a fresh window instead of resurrecting a stale one, so expect a rate of `0`
+for the first second after the switch.
 
 The same report is rendered by the `hot_shards` section of [`STATUS JSON`](#server-status) and
 by the debug UI's Shard Load panel (`GET /debug/api/hot-shards`). All three read one collector

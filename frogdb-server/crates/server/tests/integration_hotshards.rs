@@ -165,11 +165,14 @@ async fn test_hotshards_reports_non_uniform_load() {
     );
 }
 
-/// `PERIOD` selects the averaging window: the same op count over a longer
-/// window is a lower rate. This proves the argument reaches the shards rather
-/// than being parsed and dropped.
+/// `PERIOD` selects the window the shards answer over, and the rate is divided
+/// by the seconds of data that window actually covers — not by the number the
+/// operator asked for. A burst measured seconds after startup is the same rate
+/// through a 5s and a 30s window, because neither has 30 seconds of history;
+/// dividing by the request would report a fraction of real load exactly when
+/// someone is hunting a hot shard.
 #[tokio::test]
-async fn test_hotshards_period_argument_widens_the_window() {
+async fn test_hotshards_period_rates_are_divided_by_observed_seconds() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
@@ -181,6 +184,7 @@ async fn test_hotshards_period_argument_widens_the_window() {
     let short = client.command(&["FROGDB.HOTSHARDS", "PERIOD", "5"]).await;
     let long = client.command(&["FROGDB.HOTSHARDS", "PERIOD", "30"]).await;
 
+    // The requested window still reaches the shards and is reported back.
     assert_eq!(int_field(&short, "period_secs"), 5);
     assert_eq!(int_field(&long, "period_secs"), 30);
 
@@ -191,9 +195,60 @@ async fn test_hotshards_period_argument_widens_the_window() {
         "both windows see the ops"
     );
     assert!(
-        long_rate < short_rate,
-        "the same burst averaged over 30s must be a lower rate than over 5s \
-         ({long_rate} vs {short_rate})"
+        long_rate >= short_rate * 0.5,
+        "a wider window must not deflate a rate the node has no history for \
+         ({long_rate} vs {short_rate}); dividing 200 ops by 30 would report ~1/6 \
+         of real load"
+    );
+}
+
+/// The window slides, and `PERIOD` chooses how far back it reaches: once a
+/// burst is older than the requested window it drops out of the rate, while a
+/// wider window still covers it. This is what proves the argument reaches the
+/// shards rather than being parsed and dropped.
+#[tokio::test]
+async fn test_hotshards_period_argument_selects_how_far_back_the_window_reaches() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    for i in 0..200 {
+        let value = i.to_string();
+        client.command(&["SET", "period:key", &value]).await;
+    }
+
+    // Let the burst age out of a 1-second window while staying inside a wide one.
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+
+    let narrow = client.command(&["FROGDB.HOTSHARDS", "PERIOD", "1"]).await;
+    let wide = client.command(&["FROGDB.HOTSHARDS", "PERIOD", "30"]).await;
+
+    let narrow_rate = rate_field(&narrow, "total_ops_per_sec");
+    let wide_rate = rate_field(&wide, "total_ops_per_sec");
+    assert!(
+        narrow_rate < 1.0,
+        "a 1s window must have slid past a burst that stopped 2.5s ago, got {narrow_rate}"
+    );
+    assert!(
+        wide_rate > 10.0,
+        "a 30s window must still cover that burst, got {wide_rate}"
+    );
+}
+
+/// The averaging window is bounded by the per-shard ring (60x1s buckets), and
+/// the *clamped* value is what the reply reports: a reply claiming a 1-hour
+/// window over 60 seconds of data would misdescribe what was measured.
+#[tokio::test]
+async fn test_hotshards_period_is_clamped_and_reported_honestly() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let report = client
+        .command(&["FROGDB.HOTSHARDS", "PERIOD", "3600"])
+        .await;
+    assert_eq!(
+        int_field(&report, "period_secs"),
+        60,
+        "an over-long window must be reported as the window actually used"
     );
 }
 

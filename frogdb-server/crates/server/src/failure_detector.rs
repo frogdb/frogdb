@@ -272,18 +272,6 @@ impl FailureDetector {
         }
     }
 
-    /// Count the number of nodes that are currently reachable from this node's perspective.
-    /// A node is reachable if:
-    /// - It's this node (self), OR
-    /// - It has been checked recently AND is not marked as failed
-    pub fn count_reachable_nodes(&self) -> usize {
-        let all_nodes = self.cluster_state.get_all_nodes();
-        self.health
-            .read()
-            .unwrap()
-            .reachable_count(&all_nodes, self.self_node_id, Instant::now())
-    }
-
     /// Check if this node can form a quorum with reachable nodes.
     pub fn has_quorum(&self) -> bool {
         let all_nodes = self.cluster_state.get_all_nodes();
@@ -556,10 +544,6 @@ fn select_failover_target<'a>(
 impl QuorumChecker for FailureDetector {
     fn has_quorum(&self) -> bool {
         FailureDetector::has_quorum(self)
-    }
-
-    fn count_reachable_nodes(&self) -> usize {
-        FailureDetector::count_reachable_nodes(self)
     }
 }
 
