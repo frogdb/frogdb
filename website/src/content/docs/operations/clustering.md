@@ -94,7 +94,7 @@ The `[cluster]` keys and defaults:
 | `connect-timeout-ms` | `5000` | Cluster-bus connect timeout. |
 | `request-timeout-ms` | `10000` | Cluster-bus RPC timeout. |
 | `auto-failover` | `false` | Let the Raft leader promote a replica automatically. |
-| `fail-threshold` | `5` | Consecutive failures before a node is marked failed. |
+| `fail-threshold` | `5` | Consecutive failed probes before a node is marked failed — and consecutive successful probes before the flag is cleared again. |
 | `self-fence-on-quorum-loss` | `true` | Reject writes when this node cannot form a quorum. |
 | `replica-priority` | `100` | Promotion preference during auto-failover (lower is preferred; `0` never promotes). |
 
@@ -143,7 +143,7 @@ Secure the admin surfaces with network isolation and, for the HTTP endpoints, an
 
 ## Monitoring
 
-Inspect cluster health and membership with `CLUSTER INFO`, `CLUSTER NODES`, and `CLUSTER SHARDS`; `CLUSTER INFO` reports the cluster state (`ok`/`fail`), the number of assigned slots, known nodes, and the config epoch. Exported Prometheus metrics are listed in the [Metrics reference](/reference/metrics/).
+Inspect cluster health and membership with `CLUSTER INFO`, `CLUSTER NODES`, and `CLUSTER SHARDS`; `CLUSTER INFO` reports the cluster state (`ok`/`fail`), the number of assigned slots, known nodes, the config epoch (`cluster_current_epoch`, which moves only when a topology change commits), and the Raft leadership term (`cluster_raft_term`, a FrogDB extension that moves on every election). Alert on the first if you care about topology changes and the second if you care about consensus churn; they answer different questions. See [epoch semantics](/architecture/clustering/#config-epoch-vs-raft-term) for the guarantees each one carries. Exported Prometheus metrics are listed in the [Metrics reference](/reference/metrics/).
 
 ## See also
 

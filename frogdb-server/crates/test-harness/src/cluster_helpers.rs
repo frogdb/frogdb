@@ -48,8 +48,14 @@ pub struct ClusterInfo {
     pub cluster_slots_fail: u16,
     pub cluster_known_nodes: usize,
     pub cluster_size: usize,
+    /// The cluster-wide replicated config-epoch counter (reported verbatim,
+    /// never folded with the Raft term).
     pub cluster_current_epoch: u64,
+    /// This node's own `NodeInfo::config_epoch`.
     pub cluster_my_epoch: u64,
+    /// The local Raft leadership term — a FrogDB extension with no Redis
+    /// equivalent. Node-local and unreplicated.
+    pub cluster_raft_term: u64,
 }
 
 /// Parsed node info from CLUSTER NODES response.
@@ -141,6 +147,9 @@ pub fn parse_cluster_info(response: &Response) -> Result<ClusterInfo, ClusterErr
     }
     if let Some(val) = map.get("cluster_my_epoch") {
         info.cluster_my_epoch = val.parse().unwrap_or(0);
+    }
+    if let Some(val) = map.get("cluster_raft_term") {
+        info.cluster_raft_term = val.parse().unwrap_or(0);
     }
 
     Ok(info)

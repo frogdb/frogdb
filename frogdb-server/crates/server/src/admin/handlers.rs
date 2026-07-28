@@ -42,7 +42,15 @@ pub struct ClusterStateResponse {
     pub slots_assigned: u16,
     pub slots_ok: u16,
     pub known_nodes: usize,
+    /// The cluster-wide replicated config-epoch counter — the same value
+    /// `CLUSTER INFO` reports as `cluster_current_epoch`. Moves only on an
+    /// epoch-owning event, and agrees across nodes.
     pub config_epoch: u64,
+    /// The local Raft leadership term, or `None` outside cluster mode.
+    /// Node-local and unreplicated: it moves on every election attempt, with or
+    /// without a topology change, so it is reported separately from (never
+    /// folded into) `config_epoch`.
+    pub raft_term: Option<u64>,
     pub my_id: Option<String>,
 }
 
@@ -115,6 +123,10 @@ pub async fn cluster_state(
             slots_ok: slots_assigned, // TODO: Track unhealthy slots
             known_nodes: snapshot.nodes.len(),
             config_epoch: snapshot.config_epoch,
+            raft_term: state
+                .raft
+                .as_ref()
+                .map(|raft| raft.metrics().borrow().current_term),
             my_id,
         }
     } else {
@@ -125,6 +137,7 @@ pub async fn cluster_state(
             slots_ok: 0,
             known_nodes: 0,
             config_epoch: 0,
+            raft_term: None,
             my_id: None,
         }
     };

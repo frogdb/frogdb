@@ -161,3 +161,66 @@ unused) snapshot-persistence path, which is out of scope for "strengthen this as
   appears to be a pre-existing, unrelated broken/flaky test on current main (hardcoded
   version `0.2.0` expectation vs. reported `0.1.0`) — worth its own issue; not fixed here as
   out of scope for issue 16.
+
+---
+
+## Follow-up resolution: the persistence residue is closed (2026-07-28)
+
+This issue strengthened `test_cluster_epoch_persists` and explicitly left two things open: the
+assertion was still masked by the raft-term fold, and `ClusterStateMachine` had no persisted
+snapshot, so a log purge plus a restart would lose everything before the purge point. Both are
+fixed under [PRD: Cluster epoch fold redesign](../../replication-cluster-rework/epoch-fold-redesign.md)
+(branch `worktree-agent-a8eb890ba0f01c596`).
+
+**Fold removed** (`41c1727d`): `cluster_current_epoch` is the replicated counter verbatim, so this
+issue's persistence assertion now observes the epoch it claims to observe. The Raft term moved to
+its own `cluster_raft_term` field.
+
+**Snapshot persistence** (`16340389`): `ClusterSnapshotStore`
+(`frogdb-server/crates/cluster/src/storage.rs`) writes openraft's `SnapshotMeta` plus the serialized
+`ClusterStateInner` under meta key `state_machine_snapshot`, in the **same** RocksDB as the Raft
+log — deliberately sharing the handle so a snapshot and the log it authorizes purging cannot end up
+in different databases. `ClusterStateMachine::attach_snapshot_store` restores any persisted snapshot
+at startup and is wired into the server at
+`frogdb-server/crates/server/src/server/cluster_init.rs`. The store is opt-in, so state machines
+built without one keep the previous purely in-memory behaviour.
+
+Regression test: `test_state_machine_snapshot_survives_restart_without_log_replay`
+(`crates/cluster/src/storage.rs`) builds a snapshot, drops the state machine, re-attaches a fresh
+one to the same store, and asserts `config_epoch` is restored with **no** log entry available to
+replay — the exact scenario this issue described as unreachable without wiring up the snapshot path.
+`test_snapshot_store_is_opt_in` pins the detached behaviour.
+
+Deliberate non-change: `read_committed` is still not overridden. `append` does not fsync, so a
+restored commit index can outrun the surviving log tail, which openraft treats as corruption.
+
+Also note, for the caveat this issue left for reviewers: `integration_cluster.rs` has since been
+run in full locally (169/169) against the changes above.
+
+### Review-fix round (2026-07-28)
+
+Adversarial review found the snapshot store's durability claim unbacked. Corrected in the same
+branch:
+
+- **The write is now actually durable.** `DB::flush()` flushes the *default* column family, which
+  this store never writes — the record was sitting in the `meta` memtable behind an unsynced WAL.
+  `save` now issues a `WriteBatch` with `WriteOptions::set_sync(true)`.
+- **The write is now monotonic.** openraft can run a spawned `BuildSnapshot` concurrently with an
+  inline `InstallFullSnapshot`; last-writer-wins let a late-finishing stale builder move the durable
+  snapshot *backwards*, behind entries purge had already deleted. `save` takes a lock, compares
+  `meta.last_log_id`, and no-ops unless the incoming snapshot is strictly newer
+  (`test_snapshot_save_never_moves_backwards`).
+- **Two keys, not one.** `state_machine_snapshot_meta` + `state_machine_snapshot_data` in one
+  atomic batch; the payload is stored raw instead of as a `serde_json` integer array (~4x smaller).
+  Metadata found without its payload is treated as "no snapshot".
+- **The regression test now covers the real hazard.** It writes the log entries, `purge`s them,
+  asserts the purge survived the restart, and drives `StorageHelper::get_initial_state` over the
+  reopened storage + state machine — the path where the corruption actually surfaced.
+- **`last_log_id` after a purge.** `RaftLogStorage::get_log_state` now reports
+  `last_log_id.or(last_purged)`, per openraft's contract; reporting `None` over a fully purged log
+  told openraft the log was behind the state machine and made it re-purge on every restart.
+- **`read_committed` rationale corrected.** Still deliberately not overridden, but the operative
+  hazard is not "openraft treats `committed > last_log_id` as corruption": `get_initial_state`
+  clamps `committed` *up* to `last_applied` and never down, then fails in `read_log_at_index` while
+  re-applying `(last_applied, committed]` over entries a crash lost. Same conclusion, correct
+  reason.

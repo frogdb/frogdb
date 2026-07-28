@@ -155,6 +155,13 @@ pub(super) async fn init_cluster(
         cluster.set_self_node_id(node_id);
         let mut state_machine = ClusterStateMachine::with_state(cluster.clone());
 
+        // Point the state machine at the durable snapshot store (same RocksDB as
+        // the Raft log) and restore whatever it already holds. Without this the
+        // state machine is in-memory only, so a restart after openraft purged the
+        // log prefix would silently lose nodes, slot ownership and the epoch
+        // counter (issue 16).
+        state_machine.attach_snapshot_store(raft_storage.snapshot_store())?;
+
         // Enable demotion detection unconditionally. The demotion-event consumer
         // performs a real data-path Role Demotion (via `request_demote`) during
         // failover, so it must run whenever cluster mode is on — the kill-switch

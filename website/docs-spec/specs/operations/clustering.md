@@ -145,7 +145,9 @@ Structure (H2/H3 — one line each):
   `auto-failover`, `fail-threshold`, `replica-priority`), quorum loss
   (CLUSTERDOWN self-fence, reads stay up), leader loss (election). Replaces the
   bogus "Orchestrator Failure Modes" table.
-- **## Monitoring** — `CLUSTER INFO`, `CLUSTER NODES`, config-epoch tracking.
+- **## Monitoring** — `CLUSTER INFO`, `CLUSTER NODES`, config-epoch tracking
+  (`cluster_current_epoch` = topology changes, `cluster_raft_term` = elections;
+  do not conflate them).
   Cluster metric names are UNVERIFIED — do NOT copy
   `frogdb_cluster_last_orchestrator_contact` (fabricated); either verify real
   cluster metric names against the metrics registry / Metrics reference at write

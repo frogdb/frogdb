@@ -230,10 +230,21 @@ pub struct ClusterOverviewSnapshot {
     pub slots_assigned: usize,
     /// Total slot count (always 16384).
     pub total_slots: u16,
-    /// Current configuration epoch.
+    /// The cluster-wide replicated config-epoch counter.
+    ///
+    /// Moves only on an epoch-owning event (`IncrementEpoch`, `Failover`,
+    /// `MarkNodeFailed`, or a collision resolution at `AddNode`), so it is a
+    /// topology-change signal. Every node reports the same value for the same
+    /// replicated state — it is *not* the local Raft term (see
+    /// [`Self::raft_term`]).
     pub config_epoch: u64,
     /// Raft leader node ID, if known.
     pub leader_id: Option<u64>,
+    /// The local Raft leadership term, or `None` when no Raft handle is
+    /// available. Node-local and unreplicated: it moves on every election
+    /// attempt, with or without any topology change, and peers may legitimately
+    /// report different terms. Watch it for control-plane churn.
+    pub raft_term: Option<u64>,
     /// Finalized active version for rolling upgrades.
     pub active_version: Option<String>,
     /// Active slot migrations.

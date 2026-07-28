@@ -168,47 +168,59 @@ Nodes detect that their local view is stale by:
 | Client redirect | A `-MOVED` reply names the current owner of a slot |
 | Replication handshake | The primary's Config Epoch travels with the replication stream |
 
-### `CLUSTER INFO`'s current epoch folds in the Raft term
+### Config Epoch vs. Raft term
 
-`CLUSTER INFO` reports `cluster_current_epoch` as `max(config_epoch, raft_term)`, where
-`config_epoch` is the cluster-wide counter above and `raft_term` is the local Raft leadership term
-(`commands/cluster/mod.rs`, `fold_current_epoch`). Every Raft election bumps the term, whether or
-not it changes cluster topology, so a leader re-election with no `Failover`/`MarkNodeFailed`/
-`IncrementEpoch` committed can push `cluster_current_epoch` strictly above every per-node
-`config_epoch` reported by `CLUSTER NODES`.
+`CLUSTER INFO` reports two separate counters, and conflating them is a mistake:
 
-This is a deliberate **divergence from Redis**: Redis's `currentEpoch` is agreed by gossip and
-bumped only by epoch-owning commands (`CLUSTER BUMPEPOCH`, failover votes, `CLUSTER
-SET-CONFIG-EPOCH`), never by a leader-election mechanism, because Redis Cluster has none. FrogDB's
-consensus plane does have one, and folding its term into the reported epoch means a stale reader
-can tell "the cluster's control plane has moved on" (a new Raft term) even when no slot ownership
-changed — at the cost of `cluster_current_epoch` no longer being a pure count of committed
-topology events.
+| Field | Meaning | Moves when |
+|-------|---------|-----------|
+| `cluster_current_epoch` | The cluster-wide replicated Config Epoch counter, verbatim | A topology transition commits (`IncrementEpoch`, `Failover`, `MarkNodeFailed`, an `AddNode` claim above the counter) |
+| `cluster_raft_term` | The local Raft leadership term (a FrogDB extension; Redis has no equivalent) | Any Raft election, including ones that change no cluster topology |
+| `cluster_my_epoch` | This node's own `NodeInfo::config_epoch` | This node claims an epoch (promotion via `Failover`, or joining with a claim) |
 
-The relationship this guarantees, and the one regression tests pin
-(`frogdb-server/crates/server/tests/integration_cluster.rs`,
-`test_cluster_info_epoch_vs_nodes_epoch_after_reelection_no_topology_change` and
-`test_cluster_info_epoch_monotonic_across_failover`), is `cluster_current_epoch >= max(per-node
-config_epoch)` — never the reverse. A node's own `config_epoch` is only ever set to a value it
-claims from the same counter `cluster_current_epoch` folds in (the `Failover` transition, see
-below), so the cluster-wide counter can never trail behind any individual node. Do not assert
-`cluster_current_epoch <= max(NODES config_epoch)`: an audit once proposed that bound and it does
-not hold — a passing test asserting it would be testing a coincidence, not a guarantee (issue 47).
+`cluster_current_epoch` used to be reported as `max(config_epoch, raft_term)`. The fold is gone
+(issue 47): it made the field mean neither counter. Every restart and every re-election bumped the
+term, so the reported epoch moved when nothing about the topology had — and, in the other
+direction, a real Config Epoch bump was invisible whenever the term already dominated (on a fresh
+cluster the first election takes the term to 1 while the counter is 0, so the first `CLUSTER
+FAILOVER` moved the counter 0 → 1 and left the folded value at 1 before and after). Both readings
+were wrong for the same reason: a topology counter and a consensus-liveness counter answer
+different questions and cannot share a field. Monitoring for topology changes now reads
+`cluster_current_epoch` directly; the Raft term is available beside it for anyone who wants to see
+consensus churn.
 
-The fold is lossy in the other direction too, which matters if you are monitoring for topology
-changes. `cluster_current_epoch` is monotonic (both inputs to the `max` only ever move forward) but
-**not strictly increasing**: a `config_epoch` bump is invisible whenever `raft_term` already
-dominates. On a freshly bootstrapped cluster the first election takes `raft_term` to 1 while
-`config_epoch` is still 0, so the first `CLUSTER FAILOVER` moves `config_epoch` from 0 to 1 and
-leaves `cluster_current_epoch` at 1 before and after. To detect that a topology event happened, read
-the raw per-node `config_epoch` from `CLUSTER NODES` rather than `CLUSTER INFO`'s folded value.
+`cluster_current_epoch` is a pure count of committed topology events, which makes it directly
+comparable to Redis's `currentEpoch` — bumped there by epoch-owning commands (`CLUSTER BUMPEPOCH`,
+failover votes, `CLUSTER SET-CONFIG-EPOCH`) and agreed by gossip rather than by a log.
+
+A standalone (non-cluster) server omits the `cluster_raft_term` line entirely rather than reporting
+`0`, because it runs no Raft group and a zero there would be charted as a real term. The epoch
+fields are still reported as `0` — Redis defines them for standalone servers and clients parse them
+unconditionally.
+
+The relationship regression tests pin (`frogdb-server/crates/server/tests/integration_cluster.rs`,
+`test_cluster_info_epoch_vs_nodes_epoch_after_reelection_no_topology_change`,
+`test_cluster_info_epoch_monotonic_across_failover` and
+`test_join_with_large_epoch_keeps_current_epoch_above_my_epoch`) is `cluster_current_epoch >=
+max(per-node config_epoch)` — never the reverse. A node's own `config_epoch` is either minted by the
+counter (the `Failover` transition) or ratchets the counter up to it on admission (`AddNode`, see
+[Config Epoch collisions](#config-epoch-collisions)), so the cluster-wide counter can never trail an
+individual node. Do not assert `cluster_current_epoch <= max(NODES config_epoch)`: an audit once
+proposed that bound and it does not hold — a passing test asserting it would be testing a
+coincidence, not a guarantee (issue 47).
+
+`cluster_current_epoch` never decreases *within the life of a cluster*, and with the fold removed
+every bump is now visible. `CLUSTER RESET HARD` is the exception operators should know about: it
+resets the node's replicated state, counter included, because the point of a hard reset is to
+produce a node that is no longer part of that cluster.
 
 ### Config Epoch collisions
 
 Two primaries claiming the same nonzero `config_epoch` is the invariant violation worth watching
 for — it is what Redis's `redis-cli --cluster check` flags, and it makes slot-ownership arbitration
-undecidable, because the epoch is the tiebreaker. Epoch drift or exceedance (the `CLUSTER INFO` fold
-above) is not a collision and is not a bug.
+undecidable, because the epoch is the tiebreaker. `cluster_current_epoch` running ahead of every
+per-node `config_epoch` is neither a collision nor a bug — see
+[Config Epoch vs. Raft term](#config-epoch-vs-raft-term).
 
 **Prevention.** Every epoch FrogDB mints comes from the single Raft-replicated counter, so
 `Failover`, `MarkNodeFailed`, and `IncrementEpoch` cannot produce a duplicate. `AddNode` is the one
@@ -403,8 +415,11 @@ the false positive is benign:
   from the leader only, not from the majority) safely continues to accept writes; a node that loses
   quorum fences itself. Either way, a write the flagged primary accepts is not lost, because no
   failover transferred its slots.
-- **Automatic recovery.** The leader keeps probing flagged nodes; the first successful probe
-  proposes `MarkNodeRecovered`, clearing the flag.
+- **Automatic recovery.** The leader keeps probing flagged nodes and proposes `MarkNodeRecovered`
+  once a peer answers `fail-threshold` consecutive probes — the same count it took to flag it. The
+  hysteresis is symmetric on purpose: clearing the flag on a single successful probe let a peer that
+  answered one connect in five oscillate between flagged and clear, and each round trip cost two
+  Raft writes and a Config Epoch bump.
 
 The dangerous case — a promoted replica and the old primary both serving the same slot — requires
 both a replica topology and auto-failover racing the old primary's self-fence; that is a separate,
@@ -422,9 +437,13 @@ with `FAIL` taking precedence over `PFAIL`, so `slots_ok + slots_pfail + slots_f
 
 This matters because those three fields are the standard health signal that cluster-aware clients
 and monitoring read; if `slots_ok` always equalled `slots_assigned`, an operator watching them would
-see a healthy cluster while a primary was flagged failed. They now agree with the coarser
-`cluster_state` field, which reports `fail` whenever any primary carries the `FAIL` flag or the
-local node has lost quorum.
+see a healthy cluster while a primary was flagged failed. The coarser `cluster_state` field is
+derived from the same accounting: it reports `fail` when `cluster_slots_fail > 0`, when the local
+node cannot form a quorum, or when Raft reports no usable leader. A `FAIL`-flagged node that owns no
+slots leaves `cluster_state` at `ok`, matching Redis, whose `clusterUpdateState` degrades only on
+slot coverage or majority loss. That case is common in practice — a node that failed to finish
+joining sits in the topology at a dead address and gets flagged within seconds — and treating it as
+a cluster-wide failure would tell every client the keyspace was down while every key kept answering.
 
 `cluster_slots_pfail` reports 0 in practice today, because nothing sets `PFAIL`. `PFAIL` in Redis
 means "one node suspects this peer, but the cluster has not agreed yet" — a distinction that only

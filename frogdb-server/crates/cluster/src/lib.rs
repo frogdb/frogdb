@@ -57,7 +57,7 @@ pub use network::{
     send_rpc_response, spawn_add_raft_voter,
 };
 pub use state::{ClusterState, ClusterStateMachine, DemotionEvent, SlotMigrationCompleteEvent};
-pub use storage::ClusterStorage;
+pub use storage::{ClusterSnapshotStore, ClusterStorage, StoredClusterSnapshot};
 pub use types::{
     CLUSTER_SLOTS, ClusterCommand, ClusterConfig, ClusterError, ClusterResponse, ClusterSnapshot,
     ConfigEpoch, NodeId, NodeInfo, NodeRole, SlotRange, TypeConfig, even_slot_ranges,

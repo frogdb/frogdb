@@ -101,6 +101,60 @@ async fn test_admin_port_allows_config_get_on_regular_port() {
     server.shutdown().await;
 }
 
+/// Pins today's behavior: with an admin port configured, the *client* port
+/// refuses every `CLUSTER` subcommand — including the four a cluster-aware
+/// client needs to bootstrap its slot map (`SLOTS`, `SHARDS`, `INFO`, `NODES`).
+/// `CLUSTER` carries a single `ADMIN` flag for the whole command
+/// (`commands/cluster/mod.rs`), and the gate in `connection/guards.rs` is
+/// per-command, not per-subcommand.
+///
+/// This is a real interoperability problem — redis-cli, every cluster client
+/// library, and FrogDB's own Jepsen `leader_election` workload read `CLUSTER
+/// INFO` / `CLUSTER SLOTS` on the normal port — but changing it is a behavior
+/// change with a security dimension, so it is filed rather than fixed here:
+/// `.scratch/replication-cluster-rework/issues/05-cluster-admin-gating-breaks-client-bootstrap.md`.
+/// If that issue is implemented, this test must be *inverted*, not deleted.
+#[tokio::test]
+async fn test_admin_port_blocks_cluster_discovery_subcommands_on_regular_port() {
+    let server = TestServer::start_with_admin_port().await;
+    let mut client = server.connect().await;
+
+    for args in [
+        vec!["CLUSTER", "SLOTS"],
+        vec!["CLUSTER", "SHARDS"],
+        vec!["CLUSTER", "INFO"],
+        vec!["CLUSTER", "NODES"],
+    ] {
+        let response = client.command(&args).await;
+        assert!(
+            is_error(&response),
+            "{args:?} is currently blocked on the client port"
+        );
+        let err = get_error_message(&response).expect("should have error message");
+        assert!(
+            err.contains("NOADMIN"),
+            "{args:?} must fail with NOADMIN, got: {err}"
+        );
+    }
+
+    // The same subcommands answer on the admin port.
+    let mut admin_client = server.connect_admin().await;
+    for args in [
+        vec!["CLUSTER", "SLOTS"],
+        vec!["CLUSTER", "SHARDS"],
+        vec!["CLUSTER", "INFO"],
+        vec!["CLUSTER", "NODES"],
+    ] {
+        let response = admin_client.command(&args).await;
+        assert!(
+            !is_error(&response),
+            "{args:?} must succeed on the admin port, got {response:?}"
+        );
+    }
+
+    server.shutdown().await;
+}
+
 // ============================================================================
 // Admin port enabled - admin commands work on admin port
 // ============================================================================

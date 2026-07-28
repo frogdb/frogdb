@@ -3,14 +3,13 @@
 
    Tests:
    - Leader election within timeout
-   - Single leader per term (no split-brain)
+   - Single leader per config epoch (no split-brain)
    - Minority partition cannot elect leader
    - Leadership transfer consistency
    - Leader stability under normal operation
 
    Operations:
-   - :read-leader - Get current leader node
-   - :read-term - Get current Raft term
+   - :read-leader - Get current leader node and its config epoch
    - :write - Write to verify leader accepts writes
    - :read - Read to verify consistency"
   (:require [clojure.string :as str]
@@ -30,7 +29,7 @@
 
 (defn get-leader-info
   "Get information about the current leader from cluster nodes.
-   Returns {:node <node-name>, :id <node-id>, :term <term>} or nil."
+   Returns {:node <node-name>, :id <node-id>, :config-epoch <config-epoch>} or nil."
   [conn]
   (let [leader (cluster-db/get-current-leader conn)]
     (when leader

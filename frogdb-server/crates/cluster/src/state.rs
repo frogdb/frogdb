@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use tokio::sync::mpsc;
 
+use crate::storage::{ClusterSnapshotStore, StoredClusterSnapshot};
 use crate::types::{
     CLUSTER_SLOTS, ClusterCommand, ClusterError, ClusterEvent, ClusterResponse, ClusterSnapshot,
     ConfigEpoch, NodeId, NodeInfo, SlotMigration, SlotRange, TypeConfig,
@@ -85,6 +86,43 @@ impl ClusterState {
     /// Get the shared `self_node_id` atomic for passing to `from_snapshot`.
     pub fn self_node_id_atomic(&self) -> Arc<AtomicU64> {
         self.self_node_id.clone()
+    }
+
+    /// Serialize the replicated state together with the openraft metadata
+    /// describing how far it has advanced.
+    ///
+    /// Both halves are produced under a single read lock so the metadata always
+    /// describes exactly the bytes it accompanies.
+    pub fn encode_snapshot(
+        &self,
+    ) -> Result<(SnapshotMeta<NodeId, openraft::BasicNode>, Vec<u8>), serde_json::Error> {
+        let inner = self.inner.read();
+        let data = serde_json::to_vec(&*inner)?;
+        let meta = SnapshotMeta {
+            last_log_id: inner.last_applied_log,
+            last_membership: inner.last_membership.clone(),
+            snapshot_id: match inner.last_applied_log {
+                Some(log_id) => format!("snapshot-{}", log_id.index),
+                None => "snapshot-0".to_string(),
+            },
+        };
+        Ok((meta, data))
+    }
+
+    /// Replace the replicated state wholesale with the contents of a snapshot.
+    ///
+    /// `last_applied_log` and `last_membership` are taken from the snapshot
+    /// metadata rather than the serialized body: openraft treats the metadata as
+    /// authoritative for how far the state machine has advanced, and the two can
+    /// legitimately differ when a leader ships a snapshot it trimmed itself.
+    pub fn restore_from_snapshot(
+        &self,
+        mut restored: ClusterStateInner,
+        meta: &SnapshotMeta<NodeId, openraft::BasicNode>,
+    ) {
+        restored.last_applied_log = meta.last_log_id;
+        restored.last_membership = meta.last_membership.clone();
+        *self.inner.write() = restored;
     }
 
     /// Get a snapshot of the current state.
@@ -300,6 +338,9 @@ pub struct ClusterStateMachine {
     demotion_tx: Option<mpsc::UnboundedSender<DemotionEvent>>,
     /// Channel to notify when a slot migration completes.
     migration_complete_tx: Option<mpsc::UnboundedSender<SlotMigrationCompleteEvent>>,
+    /// Durable home for snapshots. When absent the state machine is purely
+    /// in-memory and a restart re-derives everything from the log or the leader.
+    snapshot_store: Option<ClusterSnapshotStore>,
 }
 
 impl ClusterStateMachine {
@@ -310,6 +351,7 @@ impl ClusterStateMachine {
             self_node_id: None,
             demotion_tx: None,
             migration_complete_tx: None,
+            snapshot_store: None,
         }
     }
 
@@ -320,7 +362,62 @@ impl ClusterStateMachine {
             self_node_id: None,
             demotion_tx: None,
             migration_complete_tx: None,
+            snapshot_store: None,
         }
+    }
+
+    /// Give the state machine a durable home for its snapshots, restoring any
+    /// snapshot already persisted there.
+    ///
+    /// Call this before handing the state machine to openraft: the restored
+    /// `last_applied_log` is what [`RaftStateMachine::applied_state`] reports, so
+    /// openraft replays only the entries after the snapshot instead of expecting
+    /// a log prefix that purge already deleted.
+    #[allow(clippy::result_large_err)]
+    pub fn attach_snapshot_store(
+        &mut self,
+        store: ClusterSnapshotStore,
+    ) -> Result<(), StorageError<NodeId>> {
+        if let Some(stored) = store.load()? {
+            let restored: ClusterStateInner =
+                serde_json::from_slice(&stored.data).map_err(|e| {
+                    StorageError::from_io_error(
+                        openraft::ErrorSubject::Snapshot(Some(stored.meta.signature())),
+                        openraft::ErrorVerb::Read,
+                        std::io::Error::new(std::io::ErrorKind::InvalidData, e),
+                    )
+                })?;
+
+            let config_epoch = restored.config_epoch;
+            let node_count = restored.nodes.len();
+            self.state.restore_from_snapshot(restored, &stored.meta);
+
+            tracing::info!(
+                last_log_id = ?stored.meta.last_log_id,
+                config_epoch,
+                node_count,
+                "Restored cluster state machine from persisted snapshot"
+            );
+        }
+
+        self.snapshot_store = Some(store);
+        Ok(())
+    }
+
+    /// Write a snapshot to the durable store, if one is attached.
+    #[allow(clippy::result_large_err)]
+    fn persist_snapshot(
+        &self,
+        meta: &SnapshotMeta<NodeId, openraft::BasicNode>,
+        data: &[u8],
+    ) -> Result<(), StorageError<NodeId>> {
+        let Some(store) = &self.snapshot_store else {
+            return Ok(());
+        };
+        store.save(&StoredClusterSnapshot {
+            meta: meta.clone(),
+            data: data.to_vec(),
+        })
     }
 
     /// Configure self-demotion detection.
@@ -462,6 +559,10 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
             self_node_id: None,
             demotion_tx: None,
             migration_complete_tx: None,
+            // The builder must keep the store: it is the component that actually
+            // produces snapshots, and an unpersisted snapshot is exactly what
+            // makes log purge lossy.
+            snapshot_store: self.snapshot_store.clone(),
         }
     }
 
@@ -485,10 +586,10 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
             )
         })?;
 
-        let mut inner = self.state.inner.write();
-        *inner = snapshot_state;
-        inner.last_applied_log = meta.last_log_id;
-        inner.last_membership = meta.last_membership.clone();
+        // Persist before applying: a snapshot visible in memory but absent from
+        // disk is the durability gap this store exists to close.
+        self.persist_snapshot(meta, &data)?;
+        self.state.restore_from_snapshot(snapshot_state, meta);
 
         tracing::info!(
             last_log_id = ?meta.last_log_id,
@@ -500,13 +601,17 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
     async fn get_current_snapshot(
         &mut self,
     ) -> Result<Option<Snapshot<TypeConfig>>, StorageError<NodeId>> {
-        let inner = self.state.inner.read();
+        // With a store attached, only a *durable* snapshot counts. Synthesizing
+        // one from live state here would let openraft purge the log entries that
+        // snapshot covers while nothing on disk reproduces them.
+        if let Some(store) = &self.snapshot_store {
+            return Ok(store.load()?.map(|stored| Snapshot {
+                meta: stored.meta,
+                snapshot: Box::new(Cursor::new(stored.data)),
+            }));
+        }
 
-        let Some(last_applied_log) = inner.last_applied_log else {
-            return Ok(None);
-        };
-
-        let data = serde_json::to_vec(&*inner).map_err(|e| {
+        let (meta, data) = self.state.encode_snapshot().map_err(|e| {
             StorageError::from_io_error(
                 openraft::ErrorSubject::Snapshot(None),
                 openraft::ErrorVerb::Write,
@@ -514,26 +619,20 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
             )
         })?;
 
-        let snapshot = Snapshot {
-            meta: SnapshotMeta {
-                last_log_id: Some(last_applied_log),
-                last_membership: inner.last_membership.clone(),
-                snapshot_id: format!("snapshot-{}", last_applied_log.index),
-            },
-            snapshot: Box::new(Cursor::new(data)),
-        };
+        if meta.last_log_id.is_none() {
+            return Ok(None);
+        }
 
-        Ok(Some(snapshot))
+        Ok(Some(Snapshot {
+            meta,
+            snapshot: Box::new(Cursor::new(data)),
+        }))
     }
 }
 
 impl openraft::storage::RaftSnapshotBuilder<TypeConfig> for ClusterStateMachine {
     async fn build_snapshot(&mut self) -> Result<Snapshot<TypeConfig>, StorageError<NodeId>> {
-        let inner = self.state.inner.read();
-
-        let last_applied_log = inner.last_applied_log;
-
-        let data = serde_json::to_vec(&*inner).map_err(|e| {
+        let (meta, data) = self.state.encode_snapshot().map_err(|e| {
             StorageError::from_io_error(
                 openraft::ErrorSubject::Snapshot(None),
                 openraft::ErrorVerb::Write,
@@ -541,26 +640,20 @@ impl openraft::storage::RaftSnapshotBuilder<TypeConfig> for ClusterStateMachine 
             )
         })?;
 
-        let snapshot_id = match last_applied_log {
-            Some(log_id) => format!("snapshot-{}", log_id.index),
-            None => "snapshot-0".to_string(),
-        };
-
-        let snapshot = Snapshot {
-            meta: SnapshotMeta {
-                last_log_id: last_applied_log,
-                last_membership: inner.last_membership.clone(),
-                snapshot_id,
-            },
-            snapshot: Box::new(Cursor::new(data)),
-        };
+        // openraft purges log entries covered by a snapshot it believes exists,
+        // so the snapshot has to reach disk before it is handed back.
+        self.persist_snapshot(&meta, &data)?;
 
         tracing::info!(
-            last_log_id = ?last_applied_log,
+            last_log_id = ?meta.last_log_id,
+            persisted = self.snapshot_store.is_some(),
             "Built cluster state snapshot"
         );
 
-        Ok(snapshot)
+        Ok(Snapshot {
+            meta,
+            snapshot: Box::new(Cursor::new(data)),
+        })
     }
 }
 
@@ -568,6 +661,7 @@ impl openraft::storage::RaftSnapshotBuilder<TypeConfig> for ClusterStateMachine 
 mod tests {
     use super::*;
     use crate::types::{ClusterError, NodeRole};
+    use std::collections::HashMap;
     use std::net::SocketAddr;
 
     fn test_addr(port: u16) -> SocketAddr {
@@ -1246,6 +1340,157 @@ mod tests {
         let node = state.get_node(1).unwrap();
         assert_eq!(node.config_epoch, 4);
         assert_eq!(node.addr, test_addr(6390));
+    }
+
+    /// The invariant every epoch-touching command must preserve:
+    /// `config_epoch >= max(per-node config_epoch)`.
+    ///
+    /// `CLUSTER INFO` reports the counter verbatim (the `max(counter, raft_term)`
+    /// fold is gone), so `cluster_current_epoch >= cluster_my_epoch` now holds
+    /// only because the state machine keeps it true. A command that recorded a
+    /// per-node epoch above the counter would also make the next mint hand out a
+    /// duplicate, so this is a correctness invariant, not just a display one.
+    ///
+    /// Driven as a sweep over a mixed sequence rather than one case per command:
+    /// the invariant is global, and the failure mode is a *new* command forgetting
+    /// it — which a per-command test cannot catch.
+    #[test]
+    fn test_config_epoch_counter_dominates_every_node_epoch_across_command_sequence() {
+        let state = ClusterState::new();
+
+        let assert_invariant = |label: &str| {
+            let inner = state.inner.read();
+            let highest = inner
+                .nodes
+                .values()
+                .map(|node| node.config_epoch)
+                .max()
+                .unwrap_or(0);
+            assert!(
+                inner.config_epoch >= highest,
+                "after {label}: counter {} trails node epoch {highest}",
+                inner.config_epoch
+            );
+
+            // The second half of the same guarantee: an epoch identifies at most
+            // one primary. Two primaries at the same nonzero epoch is the
+            // collision Redis's `clusterHandleConfigEpochCollision` exists to
+            // break, and it is what makes "highest epoch wins" ambiguous when
+            // two nodes claim the same slot. Epoch 0 is the unassigned marker
+            // and is deliberately shareable.
+            let mut by_epoch: HashMap<ConfigEpoch, NodeId> = HashMap::new();
+            for node in inner.nodes.values().filter(|n| n.is_primary()) {
+                if node.config_epoch == 0 {
+                    continue;
+                }
+                if let Some(other) = by_epoch.insert(node.config_epoch, node.id) {
+                    panic!(
+                        "after {label}: primaries {other} and {} share config_epoch {}",
+                        node.id, node.config_epoch
+                    );
+                }
+            }
+        };
+
+        let sequence = vec![
+            // Fresh nodes at the "unassigned" epoch.
+            (
+                "add node 1",
+                ClusterCommand::AddNode {
+                    node: NodeInfo::new_primary(1, test_addr(6379), test_addr(16379)),
+                },
+            ),
+            (
+                "add node 2",
+                ClusterCommand::AddNode {
+                    node: NodeInfo::new_primary(2, test_addr(6380), test_addr(16380)),
+                },
+            ),
+            // A rejoining node carrying a large restored epoch: the ratchet case.
+            (
+                "add node 3 claiming 42",
+                ClusterCommand::AddNode {
+                    node: primary_claiming(3, 6381, 42),
+                },
+            ),
+            // A colliding claim: resolution mints above the counter.
+            (
+                "add node 4 colliding at 42",
+                ClusterCommand::AddNode {
+                    node: primary_claiming(4, 6382, 42),
+                },
+            ),
+            ("increment", ClusterCommand::IncrementEpoch),
+            (
+                "assign slots",
+                ClusterCommand::AssignSlots {
+                    node_id: 3,
+                    slots: vec![SlotRange::new(0, 100)],
+                },
+            ),
+            (
+                "mark 3 failed",
+                ClusterCommand::MarkNodeFailed { node_id: 3 },
+            ),
+            (
+                "fail over 3 to 4",
+                ClusterCommand::Failover {
+                    old_primary_id: 3,
+                    new_primary_id: 4,
+                    force: true,
+                },
+            ),
+            (
+                "demote 2",
+                ClusterCommand::SetRole {
+                    node_id: 2,
+                    role: NodeRole::Replica,
+                    primary_id: Some(4),
+                },
+            ),
+            ("remove node 1", ClusterCommand::RemoveNode { node_id: 1 }),
+            // Re-add the removed node claiming the epoch it left with: the
+            // counter must still dominate afterwards.
+            (
+                "re-add node 1 claiming 41",
+                ClusterCommand::AddNode {
+                    node: primary_claiming(1, 6379, 41),
+                },
+            ),
+            (
+                "hard reset on node 4",
+                ClusterCommand::ResetCluster {
+                    node_id: 4,
+                    new_node_id: Some(99),
+                },
+            ),
+        ];
+
+        assert_invariant("empty state");
+        for (label, command) in sequence {
+            // Every step's outcome is pinned: a sweep that silently accepted
+            // errors would keep passing if a command started rejecting the
+            // input it is supposed to handle, and the invariant would then be
+            // asserted against a state that never changed.
+            state
+                .apply_command(command)
+                .unwrap_or_else(|e| panic!("step \"{label}\" must succeed, got {e:?}"));
+            assert_invariant(label);
+        }
+
+        // The last step resets node 4 to id 99, which forgets every peer: the
+        // final membership is that node alone. Pinned so a change in any
+        // command's semantics shows up here rather than silently reshaping the
+        // state the invariant was being checked against.
+        let inner = state.inner.read();
+        let mut ids: Vec<NodeId> = inner.nodes.keys().copied().collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![99], "final membership after the hard reset");
+        assert_eq!(
+            inner.slot_assignment.len(),
+            0,
+            "the hard reset must drop every slot assignment"
+        );
     }
 
     // ========================================================================

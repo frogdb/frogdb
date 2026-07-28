@@ -1016,6 +1016,16 @@ impl TestServer {
         TestClient { framed }
     }
 
+    /// Connect to the admin port, reporting failure instead of panicking.
+    ///
+    /// Polling helpers need "the node is not accepting connections yet" to be a
+    /// retryable outcome rather than a test failure.
+    pub async fn try_connect_admin(&self) -> std::io::Result<TestClient> {
+        let stream = TcpStream::connect(self.admin_socket_addr()).await?;
+        let framed = Framed::new(stream, Resp2::default());
+        Ok(TestClient { framed })
+    }
+
     /// Connect to this server with RESP3 codec.
     pub async fn connect_resp3(&self) -> Resp3TestClient {
         let stream = TcpStream::connect(self.socket_addr()).await.unwrap();

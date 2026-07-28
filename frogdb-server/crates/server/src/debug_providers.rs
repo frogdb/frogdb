@@ -20,22 +20,32 @@ use frogdb_telemetry::LiveMode;
 
 use crate::role_manager::RoleManagerHandle;
 
-/// The current Raft leader, read live from the Metadata Plane.
+/// Raft **runtime** state, read live from the Metadata Plane.
 ///
-/// The leader is Raft **runtime** state (it lives on the Raft node, not in the
-/// replicated `ClusterStateInner`), so it cannot be sourced from the applied
-/// state machine's `ClusterState::snapshot()`. This trait is the seam that lets
-/// the debug provider read the leader from the one object that owns it — the
-/// live `ClusterRaft` in production, a stub in tests.
-pub trait LeaderReader: Send + Sync {
+/// The leader and the term live on the Raft node, not in the replicated
+/// `ClusterStateInner`, so neither can be sourced from the applied state
+/// machine's `ClusterState::snapshot()`. This trait is the seam that lets the
+/// debug provider read them from the one object that owns them — the live
+/// `ClusterRaft` in production, a stub in tests.
+pub trait RaftMetricsReader: Send + Sync {
     /// The current Raft leader node ID, or `None` when standalone or no leader
     /// is currently known (e.g. an election is in progress).
     fn current_leader(&self) -> Option<u64>;
+
+    /// The current Raft leadership term. Node-local and unreplicated: it moves
+    /// on every election attempt, with or without a topology change, so peers
+    /// may legitimately report different terms. It is deliberately *not* folded
+    /// into the replicated config-epoch counter.
+    fn current_term(&self) -> u64;
 }
 
-impl LeaderReader for ClusterRaft {
+impl RaftMetricsReader for ClusterRaft {
     fn current_leader(&self) -> Option<u64> {
         self.metrics().borrow().current_leader
+    }
+
+    fn current_term(&self) -> u64 {
+        self.metrics().borrow().current_term
     }
 }
 
@@ -52,13 +62,13 @@ pub struct ServerDebugProvider {
     role_manager: RoleManagerHandle,
     /// Live Raft leader source, `Some` only in cluster mode. Read at the display
     /// seam because the leader is Raft runtime state, not replicated metadata.
-    leader_reader: Option<Arc<dyn LeaderReader>>,
+    raft_metrics: Option<Arc<dyn RaftMetricsReader>>,
 }
 
 impl ServerDebugProvider {
     /// Build a provider. `cluster_state` is `Some` only in cluster mode;
     /// `replication_tracker` is `Some` only when replication is configured;
-    /// `leader_reader` is `Some` only in cluster mode (the live `ClusterRaft`).
+    /// `raft_metrics` is `Some` only in cluster mode (the live `ClusterRaft`).
     pub fn new(
         client_registry: Arc<ClientRegistry>,
         cluster_state: Option<Arc<ClusterState>>,
@@ -66,7 +76,7 @@ impl ServerDebugProvider {
         replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
         mode: LiveMode,
         role_manager: RoleManagerHandle,
-        leader_reader: Option<Arc<dyn LeaderReader>>,
+        raft_metrics: Option<Arc<dyn RaftMetricsReader>>,
     ) -> Self {
         Self {
             client_registry,
@@ -75,14 +85,20 @@ impl ServerDebugProvider {
             replication_tracker,
             mode,
             role_manager,
-            leader_reader,
+            raft_metrics,
         }
     }
 
     /// The current Raft leader, read live from metrics. `None` when standalone or
     /// no leader is currently known (election in progress) — the honest value.
     fn current_leader(&self) -> Option<u64> {
-        self.leader_reader.as_ref()?.current_leader()
+        self.raft_metrics.as_ref()?.current_leader()
+    }
+
+    /// The current Raft term, or `None` when standalone. `None` rather than `0`
+    /// so the UI can distinguish "no Raft here" from "term 0".
+    fn current_term(&self) -> Option<u64> {
+        Some(self.raft_metrics.as_ref()?.current_term())
     }
 }
 
@@ -137,6 +153,7 @@ impl NodeStateProvider for ServerDebugProvider {
             total_slots: CLUSTER_SLOTS,
             config_epoch: snapshot.config_epoch,
             leader_id: self.current_leader(),
+            raft_term: self.current_term(),
             active_version: snapshot.active_version.clone(),
             migrations,
         })
@@ -362,11 +379,15 @@ mod tests {
         RoleManagerHandle::new(RoleManager::new(flag, Arc::new(NoopStreamer), None))
     }
 
-    /// A stub leader source standing in for the live `ClusterRaft` metrics watch.
-    struct StubLeaderReader(Option<u64>);
-    impl LeaderReader for StubLeaderReader {
+    /// A stub Raft metrics source standing in for the live `ClusterRaft`
+    /// metrics watch: `(current_leader, current_term)`.
+    struct StubRaftMetrics(Option<u64>, u64);
+    impl RaftMetricsReader for StubRaftMetrics {
         fn current_leader(&self) -> Option<u64> {
             self.0
+        }
+        fn current_term(&self) -> u64 {
+            self.1
         }
     }
 
@@ -385,7 +406,7 @@ mod tests {
             None,
             LiveMode::new(true, flag, "primary"),
             noop_role_handle(),
-            Some(Arc::new(StubLeaderReader(Some(7)))),
+            Some(Arc::new(StubRaftMetrics(Some(7), 4))),
         );
 
         let overview = provider.cluster_overview().expect("cluster mode overview");
@@ -394,6 +415,49 @@ mod tests {
             Some(7),
             "overview must report the live Raft leader, not the always-None DTO field"
         );
+    }
+
+    /// The Raft term is reported as its own field, sourced from live metrics —
+    /// never folded into `config_epoch`, which is the replicated counter and
+    /// stays put while the term moves.
+    #[test]
+    fn cluster_overview_reports_raft_term_separately_from_config_epoch() {
+        let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let provider = ServerDebugProvider::new(
+            Arc::new(ClientRegistry::new()),
+            Some(Arc::new(ClusterState::new())),
+            Some(1),
+            None,
+            LiveMode::new(true, flag, "primary"),
+            noop_role_handle(),
+            Some(Arc::new(StubRaftMetrics(Some(7), 4))),
+        );
+
+        let overview = provider.cluster_overview().expect("cluster mode overview");
+        assert_eq!(overview.raft_term, Some(4), "term comes from live metrics");
+        assert_eq!(
+            overview.config_epoch, 0,
+            "the replicated counter is untouched by the term"
+        );
+    }
+
+    /// Without a Raft source the term is absent, not `0` — a zeroed term would
+    /// read as "term 0", which is a different (and wrong) claim.
+    #[test]
+    fn cluster_overview_reports_absent_raft_term_without_source() {
+        let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let provider = ServerDebugProvider::new(
+            Arc::new(ClientRegistry::new()),
+            Some(Arc::new(ClusterState::new())),
+            Some(1),
+            None,
+            LiveMode::new(true, flag, "primary"),
+            noop_role_handle(),
+            None,
+        );
+
+        let overview = provider.cluster_overview().expect("cluster mode overview");
+        assert_eq!(overview.raft_term, None);
     }
 
     /// Proposal 33: when no leader source is present (or no leader is currently

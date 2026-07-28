@@ -7,10 +7,10 @@
 
 #![allow(dead_code)]
 
-use crate::cluster_helpers::{ClusterError, ClusterInfo};
+use crate::cluster_helpers::{ClusterError, ClusterInfo, parse_cluster_info};
 use crate::server::{TestClient, TestServer, TestServerConfig};
 use frogdb_core::ClusterState;
-use frogdb_core::cluster::ClusterRaft;
+use frogdb_core::cluster::{CLUSTER_SLOTS, ClusterRaft};
 use frogdb_protocol::Response;
 use frogdb_server::net::tcp_listener_reusable;
 use std::collections::HashMap;
@@ -18,6 +18,57 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+
+/// A node's canonicalized view of the replicated cluster topology.
+///
+/// Two running nodes agree exactly when their views compare equal, so tests
+/// that cannot assert `cluster_state:ok` (see
+/// [`ClusterTestHarness::wait_for_topology_agreement`]) can still assert
+/// convergence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TopologyView {
+    /// The cluster-wide replicated config-epoch counter.
+    pub current_epoch: u64,
+    /// Slots assigned cluster-wide.
+    pub slots_assigned: u16,
+    /// One canonicalized `CLUSTER NODES` line per known node, sorted.
+    pub nodes: Vec<String>,
+}
+
+/// Canonicalize one `CLUSTER NODES` line so two nodes' lines for the same peer
+/// are byte-identical when they agree.
+///
+/// Dropped: `ping-sent`/`pong-recv` (per-node liveness bookkeeping, not
+/// topology) and the `myself` flag, which is different on every node by
+/// definition. Kept: node id, address, remaining flags, primary id, config
+/// epoch, link state, and every slot token — which covers slot *ownership* and
+/// the `[slot-<-node]` / `[slot->-node]` migration markers.
+fn canonical_topology_line(line: &str) -> Option<String> {
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    if parts.len() < 8 {
+        return None;
+    }
+
+    let mut flags: Vec<&str> = parts[2]
+        .split(',')
+        .filter(|flag| *flag != "myself")
+        .collect();
+    flags.sort_unstable();
+
+    let mut slots: Vec<&str> = parts[8..].to_vec();
+    slots.sort_unstable();
+
+    Some(format!(
+        "{id} {addr} {flags} {primary} {epoch} {link} {slots}",
+        id = parts[0],
+        addr = parts[1],
+        flags = flags.join(","),
+        primary = parts[3],
+        epoch = parts[6],
+        link = parts[7],
+        slots = slots.join(" "),
+    ))
+}
 
 /// Configuration for a cluster test node.
 #[derive(Clone, Debug)]
@@ -283,6 +334,60 @@ impl ClusterTestNode {
         let mut all_args = vec![cmd];
         all_args.extend(args);
         client.command(&all_args).await
+    }
+
+    /// Send a command, returning an error instead of panicking when the node is
+    /// stopped or not currently accepting connections.
+    ///
+    /// [`Self::send`] retries then panics, which is what a test that has
+    /// already asserted the node is up wants. Polling helpers
+    /// (`wait_for_cluster_convergence` and friends) instead need to treat an
+    /// unreachable node as "not converged yet" and keep waiting, so they use
+    /// this.
+    pub async fn try_send(&self, cmd: &str, args: &[&str]) -> Result<Response, ClusterError> {
+        let server = self
+            .server
+            .as_ref()
+            .ok_or_else(|| ClusterError::new(format!("Node {} is not running", self.node_id)))?;
+        let mut client = server.try_connect().await.map_err(|e| {
+            ClusterError::new(format!("Failed to connect to node {}: {}", self.node_id, e))
+        })?;
+        let mut all_args = vec![cmd];
+        all_args.extend(args);
+        Ok(client.command(&all_args).await)
+    }
+
+    /// Send an ADMIN-flagged command to whichever port will answer it.
+    ///
+    /// `CLUSTER` carries [`CommandFlags::ADMIN`], so on a node started with an
+    /// admin port the *client* port answers `NOADMIN` and only the admin port
+    /// serves `CLUSTER INFO`. Harness polling helpers must not read that
+    /// rejection as "not converged yet", so they route through here; nodes
+    /// without an admin port keep using the client port.
+    ///
+    /// [`CommandFlags::ADMIN`]: frogdb_core::command::CommandFlags
+    pub async fn try_send_admin_aware(
+        &self,
+        cmd: &str,
+        args: &[&str],
+    ) -> Result<Response, ClusterError> {
+        let server = self
+            .server
+            .as_ref()
+            .ok_or_else(|| ClusterError::new(format!("Node {} is not running", self.node_id)))?;
+        let connect = async {
+            if server.has_admin_port() {
+                server.try_connect_admin().await
+            } else {
+                server.try_connect().await
+            }
+        };
+        let mut client = connect.await.map_err(|e| {
+            ClusterError::new(format!("Failed to connect to node {}: {}", self.node_id, e))
+        })?;
+        let mut all_args = vec![cmd];
+        all_args.extend(args);
+        Ok(client.command(&all_args).await)
     }
 
     /// Send a command via the admin RESP port (for admin-flagged commands when admin is enabled).
@@ -630,28 +735,22 @@ impl ClusterTestHarness {
         self.node_order.clone()
     }
 
-    /// Get cluster info from a specific node via direct state access (no network round-trip).
-    pub fn get_cluster_info(&self, node_id: u64) -> Result<ClusterInfo, ClusterError> {
+    /// Issue a real `CLUSTER INFO` against a node and parse the reply.
+    ///
+    /// This used to synthesize a `ClusterInfo` from the node's in-process
+    /// `ClusterState`, which meant every harness-based assertion tested a
+    /// server FrogDB does not ship: `cluster_state` was a hardcoded `"ok"`,
+    /// `cluster_slots_ok` ignored FAIL/PFAIL accounting, `cluster_size` counted
+    /// every node instead of only primaries, and `cluster_my_epoch` was the
+    /// cluster-wide counter rather than this node's own `config_epoch` (which
+    /// made the `current >= my` invariant vacuously true). Going through the
+    /// RESP path is the whole point of the assertions built on it.
+    pub async fn get_cluster_info(&self, node_id: u64) -> Result<ClusterInfo, ClusterError> {
         let node = self
             .node(node_id)
             .ok_or_else(|| ClusterError::new(format!("Node {} not found", node_id)))?;
-        let cs = node
-            .cluster_state()
-            .ok_or_else(|| ClusterError::new("No cluster state"))?;
-        let snapshot = cs.snapshot();
-
-        let slots_assigned = snapshot.slot_assignment.len() as u16;
-        Ok(ClusterInfo {
-            cluster_state: "ok".to_string(),
-            cluster_slots_assigned: slots_assigned,
-            cluster_slots_ok: slots_assigned,
-            cluster_slots_pfail: 0,
-            cluster_slots_fail: 0,
-            cluster_known_nodes: snapshot.nodes.len(),
-            cluster_size: snapshot.nodes.len(),
-            cluster_current_epoch: snapshot.config_epoch,
-            cluster_my_epoch: snapshot.config_epoch,
-        })
+        let response = node.try_send_admin_aware("CLUSTER", &["INFO"]).await?;
+        parse_cluster_info(&response)
     }
 
     /// Get the cluster node ID string (40-char hex) for a node, matching CLUSTER MYID format.
@@ -730,13 +829,13 @@ impl ClusterTestHarness {
                         continue;
                     }
 
-                    match self.get_cluster_info(node_id) {
+                    match self.get_cluster_info(node_id).await {
                         Ok(info) => {
                             if info.cluster_state != "ok" {
                                 all_ok = false;
                                 break;
                             }
-                            if info.cluster_slots_assigned != 16384 {
+                            if info.cluster_slots_assigned != CLUSTER_SLOTS {
                                 all_slots_assigned = false;
                             }
                             known_nodes_counts.push(info.cluster_known_nodes);
@@ -761,6 +860,96 @@ impl ClusterTestHarness {
         }
 
         Err(ClusterError::new("Timeout waiting for cluster convergence"))
+    }
+
+    /// One node's view of the replicated topology, canonicalized so that two
+    /// nodes' views compare equal exactly when they agree.
+    ///
+    /// Built from `CLUSTER NODES` (per-node identity, flags, primary, epoch,
+    /// slot ownership and migration markers) plus the two `CLUSTER INFO`
+    /// aggregates that are not derivable from it.
+    pub async fn get_topology_view(&self, node_id: u64) -> Result<TopologyView, ClusterError> {
+        let node = self
+            .node(node_id)
+            .ok_or_else(|| ClusterError::new(format!("Node {} not found", node_id)))?;
+        let info = self.get_cluster_info(node_id).await?;
+        let response = node.try_send_admin_aware("CLUSTER", &["NODES"]).await?;
+        let text = match &response {
+            Response::Bulk(Some(bytes)) => String::from_utf8_lossy(bytes).into_owned(),
+            other => {
+                return Err(ClusterError::new(format!(
+                    "CLUSTER NODES returned {other:?}"
+                )));
+            }
+        };
+
+        let mut nodes: Vec<String> = text.lines().filter_map(canonical_topology_line).collect();
+        nodes.sort();
+
+        Ok(TopologyView {
+            current_epoch: info.cluster_current_epoch,
+            slots_assigned: info.cluster_slots_assigned,
+            nodes,
+        })
+    }
+
+    /// Wait until every running node reports the same topology, without
+    /// requiring the cluster to be *healthy*.
+    ///
+    /// [`Self::wait_for_cluster_convergence`] also demands `cluster_state:ok`,
+    /// which a cluster that permanently lost a slot-owning primary can never
+    /// report again: the surviving leader FAIL-flags the dead node and
+    /// `CLUSTER INFO` answers `fail` from then on. Tests that kill such a node
+    /// and only care that the survivors agree with each other use this
+    /// instead of asserting a health state the scenario rules out.
+    ///
+    /// Agreement is compared over a full [`TopologyView`] — every known node's
+    /// flags, primary, config epoch, owned slots and migration markers, plus
+    /// the cluster-wide epoch — not over aggregate counters that can coincide
+    /// while the underlying views differ.
+    pub async fn wait_for_topology_agreement(
+        &self,
+        timeout_duration: Duration,
+    ) -> Result<(), ClusterError> {
+        let start = std::time::Instant::now();
+        let mut last_seen: Vec<(u64, TopologyView)>;
+
+        loop {
+            let mut views: Vec<(u64, TopologyView)> = Vec::new();
+            let mut readable = true;
+
+            for &node_id in &self.node_order {
+                let Some(node) = self.nodes.get(&node_id) else {
+                    continue;
+                };
+                if !node.is_running() {
+                    continue;
+                }
+                match self.get_topology_view(node_id).await {
+                    Ok(view) => views.push((node_id, view)),
+                    Err(_) => {
+                        readable = false;
+                        break;
+                    }
+                }
+            }
+
+            if readable
+                && let Some((_, first)) = views.first()
+                && first.slots_assigned == CLUSTER_SLOTS
+                && views.iter().all(|(_, view)| view == first)
+            {
+                return Ok(());
+            }
+            last_seen = views;
+
+            if start.elapsed() >= timeout_duration {
+                return Err(ClusterError::new(format!(
+                    "Timeout waiting for topology agreement; last seen per running node: {last_seen:?}"
+                )));
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
     }
 
     /// Wait for Raft self-registration to propagate correct node addresses.
@@ -848,7 +1037,7 @@ impl ClusterTestHarness {
                         continue;
                     }
 
-                    match self.get_cluster_info(other_id) {
+                    match self.get_cluster_info(other_id).await {
                         Ok(info) => {
                             let expected = self.nodes.values().filter(|n| n.is_running()).count();
                             if info.cluster_known_nodes < expected {
@@ -987,7 +1176,9 @@ impl ClusterTestHarness {
         // Issue CLUSTER REPLICATE
         let primary_hex = format!("{:040x}", primary_id);
         let replica = self.nodes.get(&replica_id).unwrap();
-        let resp = replica.send("CLUSTER", &["REPLICATE", &primary_hex]).await;
+        let resp = replica
+            .try_send_admin_aware("CLUSTER", &["REPLICATE", &primary_hex])
+            .await?;
         match &resp {
             Response::Simple(s) if s.as_ref() == b"OK" => {}
             _ => {

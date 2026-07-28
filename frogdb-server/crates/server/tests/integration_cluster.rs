@@ -45,7 +45,7 @@ async fn test_cluster_formation_3_nodes() {
         .unwrap();
 
     for node_id in harness.node_ids() {
-        let info = harness.get_cluster_info(node_id).unwrap();
+        let info = harness.get_cluster_info(node_id).await.unwrap();
         assert_eq!(info.cluster_state, "ok");
         assert_eq!(info.cluster_known_nodes, 3);
     }
@@ -102,7 +102,7 @@ async fn test_single_node_cluster() {
     assert_eq!(harness.node_ids().len(), 1);
 
     let node_id = harness.node_ids()[0];
-    let info = harness.get_cluster_info(node_id).unwrap();
+    let info = harness.get_cluster_info(node_id).await.unwrap();
     // Currently returns hardcoded standalone response
     assert_eq!(info.cluster_state, "ok");
     assert_eq!(info.cluster_known_nodes, 1);
@@ -252,7 +252,7 @@ async fn test_add_node_to_cluster() {
 
     // Verify all nodes see 4 members
     for node_id in harness.node_ids() {
-        let info = harness.get_cluster_info(node_id).unwrap();
+        let info = harness.get_cluster_info(node_id).await.unwrap();
         assert_eq!(info.cluster_known_nodes, 4);
     }
 
@@ -312,7 +312,7 @@ async fn test_cluster_with_5_nodes() {
         .unwrap();
 
     for node_id in harness.node_ids() {
-        let info = harness.get_cluster_info(node_id).unwrap();
+        let info = harness.get_cluster_info(node_id).await.unwrap();
         assert_eq!(info.cluster_state, "ok");
         assert_eq!(info.cluster_known_nodes, 5);
     }
@@ -400,7 +400,7 @@ async fn test_node_restart_rejoins_cluster() {
         .await
         .unwrap();
 
-    let info = harness.get_cluster_info(victim).unwrap();
+    let info = harness.get_cluster_info(victim).await.unwrap();
     assert_eq!(info.cluster_state, "ok");
 
     harness.shutdown_all().await;
@@ -459,7 +459,7 @@ async fn test_graceful_shutdown_and_restart() {
 
     // Remaining nodes should still be operational
     for &id in &node_ids[1..] {
-        let info = harness.get_cluster_info(id).unwrap();
+        let info = harness.get_cluster_info(id).await.unwrap();
         assert_eq!(info.cluster_state, "ok");
     }
 
@@ -499,7 +499,7 @@ async fn test_custom_cluster_config() {
 
     // Verify cluster is operational
     for node_id in harness.node_ids() {
-        let info = harness.get_cluster_info(node_id).unwrap();
+        let info = harness.get_cluster_info(node_id).await.unwrap();
         assert_eq!(info.cluster_state, "ok");
     }
 
@@ -1181,7 +1181,7 @@ async fn test_partition_via_shutdown() {
         if let Some(node) = harness.node(node_id)
             && node.is_running()
         {
-            let info = harness.get_cluster_info(node_id).unwrap();
+            let info = harness.get_cluster_info(node_id).await.unwrap();
             assert_eq!(
                 info.cluster_state, "ok",
                 "Node {} should be ok after recovery",
@@ -1347,7 +1347,7 @@ async fn test_seven_node_cluster() {
         .unwrap();
 
     for node_id in harness.node_ids() {
-        let info = harness.get_cluster_info(node_id).unwrap();
+        let info = harness.get_cluster_info(node_id).await.unwrap();
         assert_eq!(info.cluster_state, "ok");
         assert_eq!(info.cluster_known_nodes, 7);
     }
@@ -1554,7 +1554,7 @@ async fn test_split_brain_writes_fail_on_minority() {
 
     // First verify cluster is healthy before partition
     let _pre_partition_node = harness.node(node_ids[3]).unwrap();
-    let info = harness.get_cluster_info(node_ids[3]).unwrap();
+    let info = harness.get_cluster_info(node_ids[3]).await.unwrap();
     eprintln!(
         "Pre-partition cluster state: {} (known_nodes: {})",
         info.cluster_state, info.cluster_known_nodes
@@ -1639,7 +1639,7 @@ async fn test_split_brain_writes_fail_on_minority() {
         if let Some(node) = harness.node(node_id)
             && node.is_running()
         {
-            let info = harness.get_cluster_info(node_id).unwrap();
+            let info = harness.get_cluster_info(node_id).await.unwrap();
             assert_eq!(
                 info.cluster_state, "ok",
                 "Node {} should recover after majority restored",
@@ -1651,7 +1651,7 @@ async fn test_split_brain_writes_fail_on_minority() {
     // Verify cluster is operational after recovery (state=ok means quorum restored)
     // Note: We check cluster state rather than writes because slot assignment
     // may not be fully propagated immediately after recovery
-    let final_info = harness.get_cluster_info(node_ids[3]).unwrap();
+    let final_info = harness.get_cluster_info(node_ids[3]).await.unwrap();
     eprintln!(
         "Post-recovery cluster state: {} (known_nodes: {})",
         final_info.cluster_state, final_info.cluster_known_nodes
@@ -1815,7 +1815,7 @@ async fn test_failover_during_migration_preserves_data() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Final state verification
-    let final_info = harness.get_cluster_info(target_node_id).unwrap();
+    let final_info = harness.get_cluster_info(target_node_id).await.unwrap();
     eprintln!(
         "Final cluster state: {} (known_nodes: {})",
         final_info.cluster_state, final_info.cluster_known_nodes
@@ -1939,7 +1939,7 @@ async fn test_concurrent_failover_attempts() {
             }
 
             // Check cluster info - the node that sees itself as having quorum
-            if let Ok(info) = harness.get_cluster_info(node_id)
+            if let Ok(info) = harness.get_cluster_info(node_id).await
                 && info.cluster_state == "ok"
             {
                 // This node believes it can serve requests
@@ -1968,9 +1968,16 @@ async fn test_concurrent_failover_attempts() {
     // In a correctly functioning Raft cluster, exactly one node should be leader
     assert_eq!(leader_count, 1, "Exactly one node should be the leader");
 
-    // Verify cluster can still make progress
+    // Verify the cluster can still make progress.
+    //
+    // Deliberately *not* `wait_for_cluster_convergence`: that requires
+    // `cluster_state:ok`, and the killed node is a slot-owning primary with no
+    // replica. Once the failure detector latches its FAIL flag those slots are
+    // uncovered and `fail` is the correct, permanent answer — so `ok` here was
+    // only ever a race against the ~5-probe latch. Progress means the four
+    // survivors converge on one topology.
     harness
-        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .wait_for_topology_agreement(Duration::from_secs(10))
         .await
         .unwrap();
 
@@ -2991,7 +2998,7 @@ async fn test_partition_heals_cluster_recovers() {
         if let Some(node) = harness.node(node_id)
             && node.is_running()
         {
-            let info = harness.get_cluster_info(node_id).unwrap();
+            let info = harness.get_cluster_info(node_id).await.unwrap();
             eprintln!("Node {} after heal: state={}", node_id, info.cluster_state);
             assert_eq!(
                 info.cluster_state, "ok",
@@ -3042,7 +3049,7 @@ async fn test_zombie_leader_detection() {
     if let Some(leader_node) = harness.node(leader)
         && leader_node.is_running()
     {
-        let info = harness.get_cluster_info(leader).unwrap();
+        let info = harness.get_cluster_info(leader).await.unwrap();
         eprintln!(
             "Zombie leader state: {} (known_nodes: {})",
             info.cluster_state, info.cluster_known_nodes
@@ -4171,7 +4178,7 @@ async fn test_rolling_restart() {
     // Note: cluster_state may be "fail" without manual slot assignment, but
     // the key property is that all nodes survived restart and rejoined.
     for &node_id in &node_ids {
-        let info = harness.get_cluster_info(node_id).unwrap();
+        let info = harness.get_cluster_info(node_id).await.unwrap();
         eprintln!(
             "Node {}: state={}, known_nodes={}",
             node_id, info.cluster_state, info.cluster_known_nodes
@@ -4327,7 +4334,7 @@ async fn test_large_cluster_10_nodes() {
 
     // Verify all nodes report healthy
     for node_id in harness.node_ids() {
-        let info = harness.get_cluster_info(node_id).unwrap();
+        let info = harness.get_cluster_info(node_id).await.unwrap();
         assert_eq!(info.cluster_state, "ok", "Node {} should be ok", node_id);
         assert_eq!(
             info.cluster_known_nodes, 10,
@@ -4504,7 +4511,7 @@ async fn test_simultaneous_node_restarts() {
         if let Some(node) = harness.node(node_id)
             && node.is_running()
         {
-            let info = harness.get_cluster_info(node_id).unwrap();
+            let info = harness.get_cluster_info(node_id).await.unwrap();
             assert_eq!(info.cluster_state, "ok");
         }
     }
@@ -4538,7 +4545,7 @@ async fn test_node_restart_preserves_raft_state() {
     let follower = *node_ids.iter().find(|&&id| id != leader).unwrap();
 
     // Get current epoch (term) before restart
-    let pre_info = harness.get_cluster_info(follower).unwrap();
+    let pre_info = harness.get_cluster_info(follower).await.unwrap();
     let pre_epoch = pre_info.cluster_current_epoch;
     eprintln!("Pre-restart epoch: {}", pre_epoch);
 
@@ -4555,7 +4562,7 @@ async fn test_node_restart_preserves_raft_state() {
         .unwrap();
 
     // Get epoch after restart
-    let post_info = harness.get_cluster_info(follower).unwrap();
+    let post_info = harness.get_cluster_info(follower).await.unwrap();
     let post_epoch = post_info.cluster_current_epoch;
     eprintln!("Post-restart epoch: {}", post_epoch);
 
@@ -4695,6 +4702,15 @@ async fn test_flapping_node() {
 
     eprintln!("Testing flapping behavior for node {}", flapper);
 
+    // Did the FAIL latch actually engage at least once while the node was down?
+    // Without this the "no fail flags afterwards" assertion below could pass on
+    // a cluster that never flagged anything, which would make the recovery half
+    // of the hysteresis untested. The harness runs the detector at
+    // `heartbeat_interval_ms = 100` with `fail_threshold = 5`, so the latch
+    // engages ~500ms into each 1s down window; polling across five cycles makes
+    // observing it robust to a slow cycle rather than dependent on one.
+    let mut latch_observed = false;
+
     // Flap the node 5 times
     for i in 0..5 {
         eprintln!("Flap cycle {}/5", i + 1);
@@ -4702,8 +4718,22 @@ async fn test_flapping_node() {
         // Kill
         harness.kill_node(flapper).await;
 
-        // Short delay (simulate brief failure)
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // Short delay (simulate brief failure), spent watching for the latch.
+        // Only the flapper is down, so any `fail` flag is necessarily its own.
+        let down_until = tokio::time::Instant::now() + Duration::from_secs(1);
+        while tokio::time::Instant::now() < down_until {
+            if !latch_observed
+                && let Some(node) = harness.node(leader)
+                && let Ok(nodes) = parse_cluster_nodes(&node.send("CLUSTER", &["NODES"]).await)
+                && nodes
+                    .iter()
+                    .any(|n| n.flags.iter().any(|flag| flag == "fail"))
+            {
+                latch_observed = true;
+                eprintln!("FAIL latch engaged for the flapper during cycle {}", i + 1);
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
 
         // Restart
         harness.restart_node(flapper).await.unwrap();
@@ -4717,6 +4747,12 @@ async fn test_flapping_node() {
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
+    assert!(
+        latch_observed,
+        "the flapper must have been FAIL-flagged at least once while it was down; \
+         without that the recovery assertions below prove nothing"
+    );
+
     // Verify cluster is still healthy after flapping
     tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -4729,7 +4765,7 @@ async fn test_flapping_node() {
         if let Some(node) = harness.node(node_id)
             && node.is_running()
         {
-            let info = harness.get_cluster_info(node_id).unwrap();
+            let info = harness.get_cluster_info(node_id).await.unwrap();
             eprintln!(
                 "Node {} after flapping: state={}",
                 node_id, info.cluster_state
@@ -4737,6 +4773,29 @@ async fn test_flapping_node() {
             assert_eq!(
                 info.cluster_state, "ok",
                 "Cluster should remain healthy despite flapping"
+            );
+
+            // `cluster_state` alone would also read `ok` for a FAIL-flagged node
+            // that owns no slots, so check the flags directly: once the flapper
+            // has been up long enough to answer `fail-threshold` consecutive
+            // probes, the leader must have proposed `MarkNodeRecovered` and no
+            // node may still carry the flag.
+            let nodes = parse_cluster_nodes(
+                &harness
+                    .node(node_id)
+                    .unwrap()
+                    .send("CLUSTER", &["NODES"])
+                    .await,
+            )
+            .unwrap();
+            let flagged: Vec<_> = nodes
+                .iter()
+                .filter(|n| n.flags.iter().any(|f| f == "fail"))
+                .map(|n| n.id.clone())
+                .collect();
+            assert!(
+                flagged.is_empty(),
+                "node {node_id} still reports FAIL-flagged nodes after the flapping settled: {flagged:?}"
             );
         }
     }
@@ -4947,6 +5006,14 @@ async fn test_raft_snapshot_during_migration() {
         migration_state_found, slot_ownership_clear
     );
 
+    assert!(
+        migration_state_found || slot_ownership_clear,
+        "slot {test_slot} must be accounted for in the replicated topology after \
+         the leader died mid-migration: either the migration markers survived or \
+         some node owns the slot outright. Neither means the slot fell out of the \
+         topology, which is the inconsistent state this test exists to catch."
+    );
+
     // Try to clean up migration state
     for &node_id in &surviving_ids {
         if let Some(node) = harness.node(node_id)
@@ -4958,20 +5025,31 @@ async fn test_raft_snapshot_during_migration() {
         }
     }
 
-    // Verify cluster is still functional after the disruption
-    let cluster_ok = harness
-        .wait_for_cluster_convergence(Duration::from_secs(10))
-        .await
-        .is_ok();
+    // Verify the survivors still agree with each other after the disruption.
+    //
+    // Deliberately *not* `wait_for_cluster_convergence`: that also requires
+    // `cluster_state:ok`, and the killed node is a slot-owning primary with no
+    // replica, so once the failure detector FAIL-flags it the cluster reports
+    // `fail` for good — correctly. (Before the detector was fixed to reconcile
+    // its local health view on the new leader, the flag was never set and this
+    // scenario reported `ok`, which is what let the stronger helper pass here.)
+    // What this test is actually about is agreement: migration either survived
+    // or was cleanly abandoned, and no two survivors disagree about it.
+    let agreement = harness
+        .wait_for_topology_agreement(Duration::from_secs(10))
+        .await;
 
-    eprintln!("Cluster converged after migration+failover: {}", cluster_ok);
+    eprintln!(
+        "Survivors agreed on topology after migration+failover: {:?}",
+        agreement
+    );
 
     // The key assertion: cluster should be in a consistent state
     // Either migration completed, was aborted, or is still in progress
     // But never in an inconsistent state where nodes disagree
     assert!(
-        cluster_ok,
-        "Cluster should recover to consistent state after failover during migration"
+        agreement.is_ok(),
+        "Survivors should agree on topology after failover during migration: {agreement:?}"
     );
 
     harness.shutdown_all().await;
@@ -6001,7 +6079,7 @@ async fn test_cluster_set_config_epoch_returns_ok() {
     let node = harness.node(leader).unwrap();
 
     // Get current epoch
-    let info_before = harness.get_cluster_info(leader).unwrap();
+    let info_before = harness.get_cluster_info(leader).await.unwrap();
     let epoch_before = info_before.cluster_current_epoch;
 
     // SET-CONFIG-EPOCH should succeed (goes through Raft)
@@ -6016,7 +6094,7 @@ async fn test_cluster_set_config_epoch_returns_ok() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Epoch should have changed
-    let info_after = harness.get_cluster_info(leader).unwrap();
+    let info_after = harness.get_cluster_info(leader).await.unwrap();
     assert!(
         info_after.cluster_current_epoch > epoch_before,
         "Epoch should have increased from {}, got {}",
@@ -6769,9 +6847,29 @@ async fn test_current_epoch_gte_my_epoch_invariant() {
     harness.shutdown_all().await;
 }
 
-/// Tests that the cluster epoch increases after a leader election / failover.
+/// Tests that the cluster epoch increases after a failover, i.e. after the
+/// *topology* actually changes.
 ///
 /// Inspired by Redis `03-failover-loop.tcl` post-conditions.
+///
+/// The event that moves the epoch is the failure detector committing
+/// `MarkNodeFailed` for the killed node (which bumps `config_epoch` inside the
+/// same state-machine transition), **not** the Raft election that precedes it.
+/// Those used to be indistinguishable: `cluster_current_epoch` was reported as
+/// `max(config_epoch, raft_term)`, so the election alone satisfied this
+/// assertion and the test would have passed even if no topology command ever
+/// committed. Since the fold was removed the test measures what its name claims,
+/// which is why the fixed sleep is replaced by a poll: electing a leader is fast,
+/// accumulating `fail_threshold` missed probes and replicating the resulting
+/// entry is not, and the two are no longer the same event.
+///
+/// Rebasing the test onto the real event exposed a genuine detector bug (the
+/// failure latch is one-shot, so a survivor that crossed the threshold while it
+/// was still a follower never propagated the FAIL once it became leader — the
+/// exact shape of every leader-death failover). `FailureDetector` now
+/// reconciles its local health view into the replicated topology each check
+/// interval instead of propagating the transition inline; this test is the
+/// end-to-end regression test for that.
 #[tokio::test]
 async fn test_cluster_epoch_increases_after_failover() {
     let mut harness = ClusterTestHarness::new();
@@ -6797,9 +6895,7 @@ async fn test_cluster_epoch_increases_after_failover() {
         .unwrap()
         .send("CLUSTER", &["INFO"])
         .await;
-    let pre_epoch = parse_cluster_info(&pre_info_resp)
-        .map(|i| i.cluster_current_epoch)
-        .unwrap_or(0);
+    let pre_info = parse_cluster_info(&pre_info_resp).unwrap();
 
     // Kill leader to trigger failover
     harness.kill_node(original_leader).await;
@@ -6809,22 +6905,41 @@ async fn test_cluster_epoch_increases_after_failover() {
         .await
         .unwrap();
 
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
-    // Check epoch after failover
-    let post_info_resp = harness
-        .node(non_leader)
-        .unwrap()
-        .send("CLUSTER", &["INFO"])
-        .await;
-    let post_epoch = parse_cluster_info(&post_info_resp)
-        .map(|i| i.cluster_current_epoch)
-        .unwrap_or(0);
+    // Poll for the replicated epoch bump. The read is taken from the same node
+    // throughout: `cluster_current_epoch` is a replicated value, so any node
+    // that has caught up reports it, but comparing across nodes would conflate
+    // an epoch bump with replication lag.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let post_epoch = loop {
+        let info = parse_cluster_info(
+            &harness
+                .node(non_leader)
+                .unwrap()
+                .send("CLUSTER", &["INFO"])
+                .await,
+        )
+        .unwrap();
+        if info.cluster_current_epoch > pre_info.cluster_current_epoch {
+            break info.cluster_current_epoch;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "cluster_current_epoch never moved after the leader was killed: \
+             pre={}, last seen={} (raft_term {} -> {}). A bumped term with a \
+             flat epoch means the election happened but no topology command \
+             committed.",
+            pre_info.cluster_current_epoch,
+            info.cluster_current_epoch,
+            pre_info.cluster_raft_term,
+            info.cluster_raft_term
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
 
     assert!(
-        post_epoch > pre_epoch,
+        post_epoch > pre_info.cluster_current_epoch,
         "Epoch should increase after failover: pre={}, post={}",
-        pre_epoch,
+        pre_info.cluster_current_epoch,
         post_epoch
     );
 
@@ -6839,23 +6954,27 @@ async fn test_cluster_epoch_increases_after_failover() {
 ///
 /// Issue 47: the original audit proposed asserting
 /// `INFO epoch <= max(NODES config_epoch)` after such a re-election. **That
-/// assertion is wrong and must never be reintroduced.**
-/// `cluster_current_epoch` is `max(replicated config_epoch, local Raft
-/// term)` (`fold_current_epoch` in `commands/cluster/mod.rs`), and every
-/// Raft election bumps the term regardless of whether any topology command
-/// committed -- so a re-election alone can push `cluster_current_epoch`
-/// above every per-node `config_epoch`. Redis has the same shape of
-/// divergence: `currentEpoch` may legitimately exceed every `configEpoch`
-/// after an election that reassigns no slots, and `redis-cli --cluster
-/// check`-style tooling flags epoch *collisions* (two nodes sharing a
-/// `configEpoch`), never epoch drift/exceedance.
+/// assertion is wrong and must never be reintroduced.** The counter
+/// legitimately runs *above* every per-node epoch — `IncrementEpoch` and
+/// `MarkNodeFailed` advance it without assigning it to anybody — so the
+/// bound is upside down. Redis has the same shape of divergence:
+/// `currentEpoch` may exceed every `configEpoch` after an election that
+/// reassigns no slots, and `redis-cli --cluster check`-style tooling flags
+/// epoch *collisions* (two nodes sharing a `configEpoch`), never epoch
+/// drift/exceedance.
 ///
 /// The relationship that DOES hold, and is pinned here instead, is the
 /// reverse bound: `cluster_current_epoch` is structurally `>=` every
-/// per-node `config_epoch` (a node's own `config_epoch` is only ever set to
-/// a value claimed from the very counter `cluster_current_epoch` folds in),
-/// and this test demonstrates the fold pushing it strictly above the
-/// (unchanged) per-node epochs.
+/// per-node `config_epoch`, because a node's own `config_epoch` is only ever
+/// set to a value minted from that very counter.
+///
+/// The contract this test pins for a re-election is now the *sharp* one:
+/// `cluster_current_epoch` reports the replicated counter directly, so a
+/// pure re-election must leave it **unchanged** while `cluster_raft_term`
+/// moves. Before the fold was removed the reported epoch tracked
+/// `max(counter, raft_term)` and rose on any election, which made
+/// `cluster_current_epoch` useless as a topology-change signal — the exact
+/// use an operator reaches for.
 #[tokio::test]
 async fn test_cluster_info_epoch_vs_nodes_epoch_after_reelection_no_topology_change() {
     let mut harness = ClusterTestHarness::new();
@@ -6906,32 +7025,49 @@ async fn test_cluster_info_epoch_vs_nodes_epoch_after_reelection_no_topology_cha
         pre_max_node_epoch
     );
 
-    // Trigger a pure Raft re-election: kill the leader. This is a
-    // Raft-internal event, not a `ClusterCommand` -- no topology command is
-    // proposed by this test at any point.
-    harness.kill_node(original_leader).await;
+    // Trigger a pure Raft re-election by making a follower campaign. Killing
+    // the leader would *also* work as an election trigger, but it is not a
+    // pure one: the failure detector then commits `MarkNodeFailed`, which is a
+    // real topology change that bumps the epoch (see
+    // `test_cluster_epoch_increases_after_failover`). Forcing a campaign leaves
+    // every node alive and healthy, so the only thing that can move is the
+    // term -- which is exactly the case this test exists to pin.
     harness
-        .wait_for_new_leader(original_leader, Duration::from_secs(15))
+        .node(non_leader)
+        .unwrap()
+        .raft()
+        .expect("cluster nodes run Raft")
+        .trigger()
+        .elect()
         .await
-        .unwrap();
-    tokio::time::sleep(Duration::from_secs(2)).await;
+        .expect("triggering an election must not fail");
 
-    let survivor = *harness
-        .node_ids()
-        .iter()
-        .find(|&&id| id != original_leader)
+    // Wait for the term to actually advance on the node being measured.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let post_info = loop {
+        let info = parse_cluster_info(
+            &harness
+                .node(non_leader)
+                .unwrap()
+                .send("CLUSTER", &["INFO"])
+                .await,
+        )
         .unwrap();
-    let post_info = parse_cluster_info(
-        &harness
-            .node(survivor)
-            .unwrap()
-            .send("CLUSTER", &["INFO"])
-            .await,
-    )
-    .unwrap();
+        if info.cluster_raft_term > pre_info.cluster_raft_term {
+            break info;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "forced election never raised cluster_raft_term (pre={}, last={})",
+            pre_info.cluster_raft_term,
+            info.cluster_raft_term
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+
     let post_nodes = parse_cluster_nodes(
         &harness
-            .node(survivor)
+            .node(non_leader)
             .unwrap()
             .send("CLUSTER", &["NODES"])
             .await,
@@ -6957,19 +7093,20 @@ async fn test_cluster_info_epoch_vs_nodes_epoch_after_reelection_no_topology_cha
         post_max_node_epoch
     );
 
-    // ...and it is free to exceed the per-node epochs purely from the Raft
-    // term fold, with zero topology change. Every node starts at
-    // config_epoch 0 (no epoch-bumping command has run), so any elected
-    // term (>= 1) strictly exceeds it -- this is the exact shape the naive
-    // `<=` assertion from the original audit would have rejected as a false
-    // regression.
-    assert!(
-        post_info.cluster_current_epoch > post_max_node_epoch,
-        "the term fold should push INFO's epoch strictly above the \
-         per-node config_epoch bound after a re-election: post INFO={}, \
-         post max NODES={}",
+    // ...and the headline contract: the epoch does NOT move on an election.
+    // `cluster_current_epoch` is the replicated counter, so it changes only
+    // when a topology command commits. This assertion is the inverse of what
+    // this test asserted under the fold, where the term was folded in and the
+    // reported epoch rose on every election with zero topology change.
+    assert_eq!(
         post_info.cluster_current_epoch,
-        post_max_node_epoch
+        pre_info.cluster_current_epoch,
+        "a pure Raft re-election must leave cluster_current_epoch alone \
+         (term {} -> {}): pre={}, post={}",
+        pre_info.cluster_raft_term,
+        post_info.cluster_raft_term,
+        pre_info.cluster_current_epoch,
+        post_info.cluster_current_epoch
     );
 
     harness.shutdown_all().await;
@@ -6985,19 +7122,17 @@ async fn test_cluster_info_epoch_vs_nodes_epoch_after_reelection_no_topology_cha
 /// `CLUSTER FAILOVER`, the only path that assigns a node its own nonzero
 /// `config_epoch`.
 ///
-/// **`cluster_current_epoch` is monotonic but NOT strictly increasing across
-/// a topology event.** Because the reported value is
-/// `max(config_epoch, raft_term)` (`fold_current_epoch`), a `config_epoch`
-/// bump is *invisible* whenever the Raft term already dominates -- and that
-/// is not a corner case: in a freshly bootstrapped cluster the first
-/// election takes `raft_term` to 1 while `config_epoch` is still 0, so the
-/// first failover (`config_epoch` 0 -> 1) leaves `cluster_current_epoch` at
-/// 1 both before and after. Those are the exact values observed here while
-/// this test was written. Anything that needs to *detect* a topology change
-/// must read the raw per-node `config_epoch` from `CLUSTER NODES` (as issue
-/// 16's `test_cluster_epoch_persists` does), not `CLUSTER INFO`'s folded
-/// epoch. The strict `>` bound is therefore deliberately not asserted
-/// below; only non-decrease is.
+/// **`cluster_current_epoch` increases strictly here**, and that is the
+/// point. The reported value used to be `max(config_epoch, raft_term)`, and
+/// the term dominated on a young cluster -- the first election takes
+/// `raft_term` to 1 while `config_epoch` is still 0, so the first failover
+/// (`config_epoch` 0 -> 1) left `cluster_current_epoch` at 1 both before and
+/// after, masking the topology change entirely. Those were the exact values
+/// observed here when this test was written against the fold, and they forced
+/// the weaker non-decrease assertion. Now that `cluster_current_epoch` is the
+/// replicated counter, a `Failover` bumps it and `CLUSTER INFO` shows it --
+/// so `CLUSTER INFO` is finally usable as a topology-change detector, not
+/// just `CLUSTER NODES`.
 #[tokio::test]
 async fn test_cluster_info_epoch_monotonic_across_failover() {
     let mut harness = ClusterTestHarness::new();
@@ -7075,23 +7210,20 @@ async fn test_cluster_info_epoch_monotonic_across_failover() {
         post_max_node_epoch
     );
 
-    // Monotonicity of the folded epoch: non-decreasing, never strictly
-    // increasing-by-construction. Both inputs to `max` are themselves
-    // monotonic (the replicated config_epoch counter and the Raft term), so
-    // the fold can only ever move forward.
+    // The replicated counter moves with the topology event, so the reported
+    // epoch increases strictly. `Failover` bumps `config_epoch` inside the
+    // same state-machine transition that reassigns the slots, so there is no
+    // window in which the promotion is visible but the epoch is not.
     assert!(
-        post_info.cluster_current_epoch >= pre_info.cluster_current_epoch,
-        "INFO's cluster_current_epoch must be monotonic (non-decreasing) \
-         across a failover: pre={}, post={}",
+        post_info.cluster_current_epoch > pre_info.cluster_current_epoch,
+        "INFO's cluster_current_epoch must increase across an epoch-bumping \
+         failover: pre={}, post={}",
         pre_info.cluster_current_epoch,
         post_info.cluster_current_epoch
     );
 
-    // ...but it is explicitly allowed to stay put while a config_epoch bump
-    // happens underneath it (see this test's doc comment). Asserting a
-    // strict `>` here would be asserting a guarantee the fold does not make;
-    // it fails on entirely correct behavior whenever raft_term >= the new
-    // config_epoch, which is the common case on a young cluster.
+    // The `>=` bound against the per-node epochs holds through the transition
+    // too: the promoted node's own epoch was minted from this very counter.
     assert!(
         post_info.cluster_current_epoch >= post_max_node_epoch,
         "deliberate invariant must hold across the epoch-bumping event too: \
@@ -7099,6 +7231,319 @@ async fn test_cluster_info_epoch_monotonic_across_failover() {
         post_info.cluster_current_epoch,
         post_max_node_epoch
     );
+
+    harness.shutdown_all().await;
+}
+
+/// Every node reports the **same** `cluster_current_epoch`.
+///
+/// This test is the headline benefit of reporting the replicated counter
+/// instead of `max(counter, local raft_term)`, and it could not have been
+/// written before: the Raft term is node-local and unreplicated, so a follower
+/// that had not seen the latest election — or a node campaigning on its own —
+/// reported a different `cluster_current_epoch` than the leader for identical
+/// cluster state. Redis's gossip header ratchets `currentEpoch` toward
+/// agreement precisely because tooling and operators compare the value across
+/// nodes; FrogDB gets the same property for free from Raft, but only once the
+/// reported value is the replicated one.
+///
+/// A forced election runs first so the nodes have genuinely had a term change
+/// to disagree about, and the epoch is pushed off zero by a join carrying a
+/// large epoch — an all-zero cluster would agree trivially.
+///
+/// The asserted property is **agreement plus a floor**, not a fixed value: the
+/// joiner is a phantom at an address nobody listens on, so the failure detector
+/// latches it FAIL within a few seconds and `MarkNodeFailed` bumps the counter
+/// past `CLAIMED_EPOCH`. Pinning equality would make the test unsatisfiable the
+/// moment the detector wins the race.
+#[tokio::test]
+async fn test_cluster_current_epoch_agrees_across_all_nodes() {
+    const CLAIMED_EPOCH: u64 = 500;
+    const JOINER_ID: u64 = 0xC0FFEE;
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    let leader = harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // Push the counter off zero through the ratchet path.
+    harness
+        .node(leader)
+        .unwrap()
+        .raft()
+        .unwrap()
+        .client_write(add_node_claiming(JOINER_ID, 7601, CLAIMED_EPOCH))
+        .await
+        .expect("uncontested claim must commit");
+
+    // Make one node campaign, so the cluster has a real term change in flight
+    // rather than a quiescent, trivially-identical state.
+    let follower = *harness.node_ids().iter().find(|&&id| id != leader).unwrap();
+    harness
+        .node(follower)
+        .unwrap()
+        .raft()
+        .unwrap()
+        .trigger()
+        .elect()
+        .await
+        .expect("triggering an election must not fail");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let mut reported = Vec::new();
+        for node_id in harness.node_ids() {
+            let info = parse_cluster_info(
+                &harness
+                    .node(node_id)
+                    .unwrap()
+                    .send("CLUSTER", &["INFO"])
+                    .await,
+            )
+            .unwrap();
+            reported.push((node_id, info.cluster_current_epoch, info.cluster_raft_term));
+        }
+
+        // Terms may legitimately differ across nodes; epochs may not. The
+        // counter must also have ratcheted to at least the claimed epoch — it
+        // may sit above it if the detector flagged the phantom joiner first.
+        let first_epoch = reported[0].1;
+        let agreed = reported.iter().all(|(_, epoch, _)| *epoch == first_epoch);
+        if agreed && first_epoch >= CLAIMED_EPOCH {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "nodes never agreed on a cluster_current_epoch >= {CLAIMED_EPOCH}; \
+             last seen (node, epoch, term): {reported:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// `cluster_current_epoch >= cluster_my_epoch` holds after a node joins
+/// carrying an epoch the cluster-wide counter never minted.
+///
+/// `AddNode` is the only path that introduces an epoch from outside the
+/// counter, so it is the only path that could leave a node reporting a
+/// `cluster_my_epoch` above `cluster_current_epoch`. The state machine ratchets
+/// the counter to any larger uncontested claim (issue 64), which is what keeps
+/// the bound true — and the bound now has to be *earned* there, because
+/// `CLUSTER INFO` no longer folds in the Raft term, which used to paper over a
+/// trailing counter on any cluster whose term happened to be larger.
+#[tokio::test]
+async fn test_join_with_large_epoch_keeps_current_epoch_above_my_epoch() {
+    const CLAIMED_EPOCH: u64 = 900;
+    const JOINER_ID: u64 = 0xDECAF;
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    let leader = harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    harness
+        .node(leader)
+        .unwrap()
+        .raft()
+        .unwrap()
+        .client_write(add_node_claiming(JOINER_ID, 7701, CLAIMED_EPOCH))
+        .await
+        .expect("uncontested claim must commit");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let mut all_ratcheted = true;
+        for node_id in harness.node_ids() {
+            let node = harness.node(node_id).unwrap();
+            // `NODES` first, then `INFO`: the two reads are separate commands
+            // and the `AddNode` entry can apply between them. Reading the
+            // per-node epochs from the older snapshot and the counter from the
+            // newer one can only understate the gap being asserted; the
+            // opposite order manufactures a failure out of read skew.
+            let nodes = parse_cluster_nodes(&node.send("CLUSTER", &["NODES"]).await).unwrap();
+            let info = parse_cluster_info(&node.send("CLUSTER", &["INFO"]).await).unwrap();
+            let max_node_epoch = nodes.iter().map(|n| n.config_epoch).max().unwrap_or(0);
+
+            // The invariant under test holds at every instant, converged or not.
+            assert!(
+                info.cluster_current_epoch >= info.cluster_my_epoch,
+                "node {node_id}: cluster_current_epoch ({}) must never trail \
+                 cluster_my_epoch ({})",
+                info.cluster_current_epoch,
+                info.cluster_my_epoch
+            );
+            assert!(
+                info.cluster_current_epoch >= max_node_epoch,
+                "node {node_id}: cluster_current_epoch ({}) must never trail \
+                 max(NODES config_epoch) ({max_node_epoch})",
+                info.cluster_current_epoch
+            );
+
+            if info.cluster_current_epoch < CLAIMED_EPOCH {
+                all_ratcheted = false;
+            }
+        }
+
+        if all_ratcheted {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the cluster-wide counter never ratcheted up to the joining node's \
+             claimed epoch {CLAIMED_EPOCH}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// The test harness's `get_cluster_info` reports what the server reports.
+///
+/// The harness used to synthesize `ClusterInfo` from the node's in-process
+/// `ClusterState` rather than issuing the command, so ~25 tests asserted
+/// against a struct the server never produced — and the two disagreed on real
+/// fields (`cluster_my_epoch` was the cluster-wide counter, not the node's own
+/// epoch). This test pins the harness to the wire format so the shortcut cannot
+/// come back.
+///
+/// The cluster is deliberately *not* left in the shape where every field
+/// coincides: a joining replica makes `cluster_size` differ from
+/// `cluster_known_nodes`, and a join claiming a large epoch pushes the
+/// cluster-wide counter off both zero and every node's own epoch. Comparing
+/// fields that are all equal to each other would pass against a synthesized
+/// struct — the exact failure mode this test exists to catch.
+#[tokio::test]
+async fn test_harness_cluster_info_matches_resp_reply() {
+    const CLAIMED_EPOCH: u64 = 250;
+    const JOINER_ID: u64 = 0xBEEF;
+    const JOINER_REPLICA_ID: u64 = 0xBEEF1;
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    let leader = harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    let raft = harness.node(leader).unwrap().raft().unwrap().clone();
+    // A primary claiming a large epoch: ratchets the counter above every node's
+    // own `config_epoch`, so `cluster_my_epoch != cluster_current_epoch`.
+    raft.client_write(add_node_claiming(JOINER_ID, 7801, CLAIMED_EPOCH))
+        .await
+        .expect("uncontested claim must commit");
+    // A replica: makes `cluster_size` (primaries) differ from
+    // `cluster_known_nodes` (all nodes).
+    let mut replica = frogdb_core::cluster::NodeInfo::new_replica(
+        JOINER_REPLICA_ID,
+        "127.0.0.1:7802".parse().unwrap(),
+        "127.0.0.1:17802".parse().unwrap(),
+        JOINER_ID,
+    );
+    replica.config_epoch = CLAIMED_EPOCH;
+    raft.client_write(frogdb_core::cluster::ClusterCommand::AddNode { node: replica })
+        .await
+        .expect("adding a replica must commit");
+
+    // Wait for both joins to be visible everywhere before comparing.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let mut seen = Vec::new();
+        for node_id in harness.node_ids() {
+            let info = parse_cluster_info(
+                &harness
+                    .node(node_id)
+                    .unwrap()
+                    .send("CLUSTER", &["INFO"])
+                    .await,
+            )
+            .unwrap();
+            seen.push((node_id, info.cluster_known_nodes, info.cluster_size));
+        }
+        if seen
+            .iter()
+            .all(|(_, known, size)| *known == 5 && *size == 4)
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "joins never converged; last seen (node, known_nodes, size): {seen:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    for node_id in harness.node_ids() {
+        let from_harness = harness.get_cluster_info(node_id).await.unwrap();
+        let from_resp = parse_cluster_info(
+            &harness
+                .node(node_id)
+                .unwrap()
+                .send("CLUSTER", &["INFO"])
+                .await,
+        )
+        .unwrap();
+
+        // Non-vacuity: the fields being compared must actually be able to
+        // disagree with one another on this cluster.
+        assert_ne!(
+            from_resp.cluster_size, from_resp.cluster_known_nodes,
+            "node {node_id}: test setup failed to separate cluster_size from cluster_known_nodes"
+        );
+        assert_ne!(
+            from_resp.cluster_my_epoch, from_resp.cluster_current_epoch,
+            "node {node_id}: test setup failed to separate cluster_my_epoch from the counter"
+        );
+
+        // The epoch fields are the ones that used to differ, and the ones every
+        // epoch test in this file reads.
+        assert_eq!(
+            from_harness.cluster_current_epoch, from_resp.cluster_current_epoch,
+            "node {node_id}: harness cluster_current_epoch must equal the RESP value"
+        );
+        assert_eq!(
+            from_harness.cluster_my_epoch, from_resp.cluster_my_epoch,
+            "node {node_id}: harness cluster_my_epoch must equal the RESP value"
+        );
+        assert_eq!(
+            from_harness.cluster_known_nodes, from_resp.cluster_known_nodes,
+            "node {node_id}: harness cluster_known_nodes must equal the RESP value"
+        );
+        assert_eq!(
+            from_harness.cluster_size, from_resp.cluster_size,
+            "node {node_id}: harness cluster_size must equal the RESP value"
+        );
+        assert_eq!(
+            from_harness.cluster_state, from_resp.cluster_state,
+            "node {node_id}: harness cluster_state must equal the RESP value"
+        );
+        assert_eq!(
+            from_harness.cluster_slots_assigned, from_resp.cluster_slots_assigned,
+            "node {node_id}: harness cluster_slots_assigned must equal the RESP value"
+        );
+        assert_eq!(
+            from_harness.cluster_slots_ok, from_resp.cluster_slots_ok,
+            "node {node_id}: harness cluster_slots_ok must equal the RESP value"
+        );
+    }
 
     harness.shutdown_all().await;
 }
@@ -7799,21 +8244,22 @@ async fn test_auto_failover_selects_most_caught_up_replica() {
         .await
         .unwrap();
 
-    // The new leader should have the highest replication offset
-    // among surviving nodes. Since we can't easily measure per-node
-    // offsets in the current implementation, we just verify a leader
-    // was elected and the cluster recovers.
+    // The new leader should have the highest replication offset among the
+    // survivors. Per-node offsets are not observable yet, so what this test
+    // can pin is the *outcome*: a new Raft leader exists, and the cluster
+    // reports the dead primary's slots as lost.
     //
-    // `wait_for_new_leader` only guarantees a Raft leader exists; the
-    // failover state machine (slot re-ownership, epoch bump, failed-node
-    // reconciliation) that flips CLUSTER INFO back to `cluster_state:ok`
-    // lands a beat later. Poll for it on a bounded deadline instead of
-    // reading once and racing the transition.
+    // This cluster has five primaries and no replicas, so nothing can take
+    // over the killed node's slots. Once the failure detector latches its FAIL
+    // flag those slots are uncovered and `cluster_state:fail` is correct and
+    // permanent — Redis reports `fail` for uncovered slots too. Asserting `ok`
+    // here only ever passed by beating the ~5-probe latch; polling for the
+    // steady state is deterministic, because a killed node never answers again.
     let new_leader_node = harness.node(new_leader).unwrap();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     let info = loop {
         let info = parse_cluster_info(&new_leader_node.send("CLUSTER", &["INFO"]).await).unwrap();
-        if info.cluster_state == "ok" {
+        if info.cluster_state == "fail" {
             break info;
         }
         if tokio::time::Instant::now() >= deadline {
@@ -7822,8 +8268,12 @@ async fn test_auto_failover_selects_most_caught_up_replica() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     };
     assert_eq!(
-        info.cluster_state, "ok",
-        "New leader should report cluster as ok"
+        info.cluster_state, "fail",
+        "with no replica to promote, the killed primary's slots stay uncovered"
+    );
+    assert!(
+        info.cluster_slots_fail > 0,
+        "the uncovered slots must be the reported reason, got {info:?}"
     );
 
     harness.shutdown_all().await;
@@ -8492,7 +8942,7 @@ async fn test_cluster_meet_adds_node() {
 
     // Verify all nodes now see 4 nodes
     for &nid in &harness.node_ids() {
-        let info = harness.get_cluster_info(nid).unwrap();
+        let info = harness.get_cluster_info(nid).await.unwrap();
         assert_eq!(
             info.cluster_known_nodes, 4,
             "Node {} should see 4 known nodes after MEET",
@@ -9503,6 +9953,16 @@ async fn test_cluster_slot_assignment_persists() {
 /// epoch 0 can't distinguish "persisted" from "reset to 0"), the target
 /// node is first promoted via a real `CLUSTER FAILOVER`, which is the only
 /// path that bumps a node's own `config_epoch` to a nonzero value.
+///
+/// Now that `cluster_current_epoch` reports the replicated counter instead of
+/// `max(counter, raft_term)`, the `CLUSTER INFO` side is worth asserting too
+/// and is checked below. It is asserted as non-regression rather than
+/// equality: the restart window is long enough for the surviving peer's
+/// failure detector to commit `MarkNodeFailed` for the node being restarted,
+/// which legitimately advances the counter. What must never happen is the
+/// counter coming back *below* where it was, or below the per-node epoch that
+/// demonstrably survived on disk -- either would mean the state machine lost
+/// replicated state.
 #[tokio::test]
 async fn test_cluster_epoch_persists() {
     let config = ClusterNodeConfig {
@@ -9567,6 +10027,8 @@ async fn test_cluster_epoch_persists() {
          persistence check meaningful"
     );
 
+    let pre_info = parse_cluster_info(&replica.send("CLUSTER", &["INFO"]).await).unwrap();
+
     // Restart the promoted node.
     harness.shutdown_node(replica_id).await;
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -9611,6 +10073,28 @@ async fn test_cluster_epoch_persists() {
         "raw per-node config_epoch must be identical (not merely >=) across \
          a restart: pre={}, post={}",
         pre_epoch, post_epoch
+    );
+
+    // The cluster-wide counter, read from the same restarted node. Under the
+    // old fold this assertion was vacuous -- the restart's own election bumped
+    // `raft_term`, which dominated the reported value whether or not the
+    // counter survived.
+    let post_info = parse_cluster_info(&replica.send("CLUSTER", &["INFO"]).await).unwrap();
+    assert!(
+        post_info.cluster_current_epoch >= pre_info.cluster_current_epoch,
+        "cluster_current_epoch must not regress across a restart: pre={}, \
+         post={} (raft_term {} -> {})",
+        pre_info.cluster_current_epoch,
+        post_info.cluster_current_epoch,
+        pre_info.cluster_raft_term,
+        post_info.cluster_raft_term
+    );
+    assert!(
+        post_info.cluster_current_epoch >= post_epoch,
+        "the restored counter must still dominate the per-node epoch that \
+         survived on disk: counter={}, my epoch={}",
+        post_info.cluster_current_epoch,
+        post_epoch
     );
 
     harness.shutdown_all().await;
@@ -11201,7 +11685,7 @@ async fn test_mark_node_failed_cluster_state_degrades() {
     );
 
     // Verify initial state
-    let info_before = harness.get_cluster_info(leader_id).unwrap();
+    let info_before = harness.get_cluster_info(leader_id).await.unwrap();
     let known_before = info_before.cluster_known_nodes;
     eprintln!("Before kill: known_nodes={}", known_before);
 
@@ -11228,7 +11712,7 @@ async fn test_mark_node_failed_cluster_state_degrades() {
     let mut known_after = known_before;
 
     while tokio::time::Instant::now() < deadline {
-        if let Ok(info) = harness.get_cluster_info(leader_id) {
+        if let Ok(info) = harness.get_cluster_info(leader_id).await {
             known_after = info.cluster_known_nodes;
             if known_after < known_before {
                 break;

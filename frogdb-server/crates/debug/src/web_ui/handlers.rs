@@ -700,6 +700,11 @@ fn render_cluster_tab_html(state: &DebugState) -> String {
         .map(|id| format!("Node {}", id))
         .unwrap_or_else(|| "Unknown".to_string());
     let version_display = overview.active_version.as_deref().unwrap_or("—");
+    // Absent, not zeroed: "no Raft handle" must not read as "term 0".
+    let term_display = overview
+        .raft_term
+        .map(|t| t.to_string())
+        .unwrap_or_else(|| "—".to_string());
 
     let mut html = format!(
         r#"<div class="section-header">
@@ -724,6 +729,10 @@ fn render_cluster_tab_html(state: &DebugState) -> String {
                 <div class="stat-value">{}</div>
             </div>
             <div class="stat-item">
+                <div class="stat-label">Raft Term</div>
+                <div class="stat-value">{}</div>
+            </div>
+            <div class="stat-item">
                 <div class="stat-label">Active Version</div>
                 <div class="stat-value">{}</div>
             </div>
@@ -733,6 +742,7 @@ fn render_cluster_tab_html(state: &DebugState) -> String {
         overview.nodes.len(),
         overview.config_epoch,
         html_escape(&leader_display),
+        html_escape(&term_display),
         html_escape(version_display),
     );
 

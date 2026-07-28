@@ -206,7 +206,7 @@ impl Server {
                 self.role_manager_handle.clone(),
                 self.raft
                     .clone()
-                    .map(|r| r as Arc<dyn crate::debug_providers::LeaderReader>),
+                    .map(|r| r as Arc<dyn crate::debug_providers::RaftMetricsReader>),
             ));
 
             let debug_state = DebugState::new(

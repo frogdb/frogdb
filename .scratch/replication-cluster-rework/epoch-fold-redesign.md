@@ -1,6 +1,6 @@
 # PRD: Cluster epoch fold redesign — make `cluster_current_epoch` mean the config-epoch counter
 
-Status: draft
+Status: implemented (pending review)
 Area: Cluster
 Origin: follow-up to issue 47 (`.scratch/testing-improvements/issues/47-epoch-fold-observability.md`,
 done) — the observability gap was pinned, the fold itself was left in place. Written 2026-07-28.
@@ -447,3 +447,265 @@ Suggested sequencing: T1 → T2 → T3 → T4 → T5 → T6, with T7 in parallel
    live per-node epoch.
 4. **Does T7 belong in this plan or as its own issue?** It is the last open residue of issue 16 and
    is independently valuable; the recommendation is a separate issue referenced from here.
+
+---
+
+## 9. Implementation notes (2026-07-28)
+
+Implemented on branch `worktree-agent-a8eb890ba0f01c596`, six commits:
+
+| Commit | Task | Summary |
+|---|---|---|
+| `41c1727d` | T2, T3 | Fold deleted; `cluster_current_epoch` = counter verbatim; new `cluster_raft_term` |
+| `7805e778` | T4 | Harness `get_cluster_info` issues a real `CLUSTER INFO` |
+| `16340389` | T7 | `ClusterSnapshotStore` — state-machine snapshots persist across restart |
+| `0d25d20a` | T1 | Invariant sweep test for counter-dominates-node-epoch |
+| `b4d69430` | (fallout) | Failure detector reconciles verdicts; harness admin-port routing |
+| `e4959e25` | T6 | Docs |
+
+### T1 — verified, not re-implemented
+
+Issue 64's `ClusterStateInner::reconcile_incoming_epoch` (`crates/cluster/src/state.rs`) landed on
+main and does exactly what §5 assumed: an uncontested nonzero claim raises the cluster-wide counter
+to at least that value, a colliding claim is admitted at a freshly minted epoch above every claimed
+one, and a zero claim is recorded as-is (with an already-known nonzero epoch preserved rather than
+reset). No ratchet code was added. What was added is
+`test_config_epoch_counter_dominates_every_node_epoch_across_command_sequence` — a sweep over a
+mixed command sequence asserting `config_epoch >= max(per-node config_epoch)` after every step,
+because the failure mode is a *future* command forgetting the invariant, which per-command tests
+cannot catch.
+
+### T2/T3 — deviations from the plan
+
+- Open question §8 Q1 resolved as proposed: `cluster_raft_term` in `CLUSTER INFO`, co-located with
+  the value it replaces. It is documented as node-local and unreplicated, so nobody mistakes it for
+  a cluster-wide clock.
+- The `CLUSTER INFO` field list had been duplicated across the cluster and standalone branches. It
+  now lives once in a `ClusterInfoReport` struct that renders the reply and is unit-testable without
+  a `CommandContext`; the standalone branch is the same renderer with zeroed fields. This was not in
+  the plan but the alternative was a third copy of the field list.
+- `LeaderReader` → `RaftMetricsReader` (it reads more than the leader now). Admin API gains
+  `raft_term`, the debug web UI a "Raft Term" tile. All report `None` without Raft, so "no cluster"
+  stays distinguishable from "term 0".
+
+### T4 — what the honest harness revealed
+
+`get_cluster_info` synthesized a `ClusterInfo` from the node's in-process `ClusterState`, so ~25
+tests asserted against data that had never crossed the wire. Making it send the command surfaced
+two real problems:
+
+1. **`-NOADMIN` on every `CLUSTER` call to an admin-enabled node.** `CLUSTER` carries
+   `CommandFlags::ADMIN`, so with an admin port configured the client port refuses it
+   (`connection/guards.rs`). Four harness tests were timing out in convergence loops with no
+   diagnosis. Fixed with `ClusterTestNode::try_send_admin_aware`, which routes to whichever port
+   the node accepts admin commands on. Confirmed pre-existing (stashing the detector fix left the
+   same four failing). See "Risks" below — the underlying gating is a product question, not a test
+   question.
+2. **The failure detector never flagged a dead leader.** See below.
+
+`try_send` was added alongside `send` (which retries then panics) so polling loops against a
+stopped node get an `Err` instead of a panic.
+
+### Fallout — failure detector was edge-triggered (out of plan scope, real bug)
+
+`test_cluster_epoch_increases_after_failover` passed before only because the term fold moved the
+reported epoch on election. Rebased onto the real counter it failed, and the reason was not the
+test: `FailureDetector` proposed `MarkNodeFailed` inline, at the instant a probe crossed
+`fail-threshold`, and only if this node was leader at that instant. The latch is one-shot, so a
+survivor that crossed the threshold *while it was still a follower* never retried after winning the
+election — the shape of every leader-death failover, since the survivors accumulate missed probes
+during the ~1s election. The dead node stayed unflagged indefinitely: no epoch bump, no
+auto-failover.
+
+Fixed by separating probing from propagation. All nodes record probe outcomes locally; the leader
+reconciles its `HealthTable` against the replicated flags once per check interval
+(`FailureDetector::reconcile_topology`), writing `MarkNodeFailed`/`MarkNodeRecovered` only on
+disagreement. Level-triggered convergence does not care who was leader when the threshold was
+crossed; a converged cluster writes nothing, so there is no epoch churn; `LocalVerdict::Unknown`
+(never probed, or last-seen older than `check_interval * (fail_threshold + 2)`) leaves replicated
+flags alone so a fresh leader does not flap peers it has not probed yet.
+
+Second-order test fallout: `test_raft_snapshot_during_migration` killed a slot-owning primary for
+good and then asserted the cluster returned to `cluster_state:ok`. With the FAIL flag now actually
+landing, `ok` is unreachable and the old assertion was asserting the bug. It now asserts what the
+test means — the survivors agree on (known nodes, assigned slots, epoch) — via the new
+`ClusterTestHarness::wait_for_topology_agreement`.
+
+Also fixed: `test_join_with_large_epoch_keeps_current_epoch_above_my_epoch` read `CLUSTER INFO`
+before `CLUSTER NODES`, which manufactures a failure out of read skew when the join commits between
+the two reads. Reversed.
+
+### T7 — snapshot persistence
+
+`ClusterSnapshotStore` (`crates/cluster/src/storage.rs`) stores openraft's `SnapshotMeta` plus the
+serialized `ClusterStateInner` under meta key `state_machine_snapshot` in the same RocksDB as the
+log, so a snapshot and the log it authorizes purging cannot land in different databases.
+`ClusterStateMachine::attach_snapshot_store` restores any persisted snapshot at startup and is
+wired in `server/src/server/cluster_init.rs`; the store is opt-in, so existing in-memory tests keep
+their old behaviour. Regression test:
+`test_state_machine_snapshot_survives_restart_without_log_replay` — build a snapshot, drop the
+state machine, re-attach, and assert `config_epoch` is restored with no log replay available.
+
+Deviation: `read_committed` was **not** overridden. `append` does not fsync, so a restored commit
+index can outrun the surviving log tail, which openraft treats as corruption. Left as-is
+deliberately.
+
+### T8 — deferred, not implemented
+
+`CLUSTER SET-CONFIG-EPOCH` still parses its argument, discards it, and issues a plain
+`IncrementEpoch`. Unchanged by this work.
+
+### Test results
+
+All local, with `RUSTC_WRAPPER=""` and Homebrew RocksDB/Snappy paths:
+
+| Command | Result |
+|---|---|
+| `cargo nextest run -p frogdb-cluster` | 126/126 pass |
+| `cargo nextest run -p frogdb-server -E 'binary(main) and test(/integration_cluster::/)' --test-threads 4` | 169/169 pass |
+| `cargo nextest run -p frogdb-server -E 'test(/failure_detector\|health_table\|epoch_increases_after_failover\|large_epoch/)'` | 18/18 pass |
+| `cargo nextest run -p frogdb-server -E 'test(/integration_pubsub::\|integration_tls_extended::/)' --test-threads 4` | 161/161 pass |
+| `cargo nextest run --manifest-path frogdb-operator/Cargo.toml --test-threads 2` | pass (separate workspace; harness signature change) |
+| Final re-run after `just fmt`, all of the above cluster scope in one invocation (`-p frogdb-cluster -p frogdb-server -E 'test(/failure_detector\|health_table/) or binary(main) and test(/integration_cluster::/) or package(frogdb-cluster)'`) | **311/311 pass**, 189s, zero flakes |
+
+Full suite, `just lint`, and any testbox run were deliberately not executed — the orchestrator gates
+those.
+
+### Risks / known gaps
+
+1. **`CLUSTER` is ADMIN-gated wholesale.** With an admin port configured, read-only discovery
+   subcommands (`INFO`, `NODES`, `SLOTS`, `SHARDS`) are refused on the client port with `-NOADMIN`.
+   Any cluster-aware Redis client bootstraps via `CLUSTER SLOTS`/`SHARDS` on the normal port, so
+   this looks like it breaks client-side clustering whenever an admin port exists. Not touched here
+   (out of scope, and the fix is a policy decision: per-subcommand flags vs. a read-only exemption).
+   Worth its own issue.
+2. **Reconciliation adds a per-interval scan** over `get_all_nodes()` on the leader. O(nodes) with
+   no allocation beyond one `Vec` per tick at `check_interval` (default 100ms in tests, heartbeat
+   interval in production). Fine at current cluster sizes; would want batching at hundreds of nodes.
+3. **`cluster_state:fail` is now reachable where it previously was not** in any deployment that
+   permanently loses a slot-owning primary. That is correct behaviour, but it is a visible change
+   for anyone alerting on the field.
+4. **`cluster_raft_term` is node-local.** Two nodes can legitimately report different values.
+   Documented, but it is a new field an operator could misread as cluster-wide.
+5. The `frogdb-operator` workspace consumes the test harness; its build is verified but its tests
+   were not run under the orchestrator's full gate.
+
+---
+
+## 10. Review-fix round (2026-07-28)
+
+Adversarial review returned **FIX-FIRST** with 18 findings. All 18 addressed in this round (F12
+partially — see disagreements). Files touched: `crates/cluster/src/{storage,state}.rs`,
+`crates/server/src/{failure_detector.rs,commands/cluster/mod.rs}`,
+`crates/test-harness/src/cluster_harness.rs`,
+`crates/server/tests/{integration_cluster,integration_admin_port}.rs`,
+`testing/jepsen/.../leader_election.clj`, both clustering docs, plus a new issue file.
+
+### Blocking
+
+- **F1 — clippy red.** `cluster_harness.rs`: `last_seen` declared without an initializer, so the
+  dead store is gone. `just lint` for both crates is green.
+- **F2 — `save()` did not fsync what it wrote.** `DB::flush()` flushes the *default* CF, which this
+  store never writes. Replaced with a `WriteBatch` + `WriteOptions::set_sync(true)` `write_opt`,
+  so the record is durable before `save` returns and the doc comment is now true.
+- **F3 — last-writer-wins on the snapshot key.** `ClusterSnapshotStore::save` is now monotonic:
+  under a `save_lock` it reads the stored `meta.last_log_id` and no-ops unless the incoming
+  snapshot is strictly newer. The lock is owned by `ClusterStorage` and cloned into every handle,
+  so the read-compare-write cannot interleave across the spawned builder and the inline installer.
+  Pinned by `test_snapshot_save_never_moves_backwards`.
+- **F4 — Raft writes blocked the probe loop.** `reconcile_topology` is sync again: it decides, then
+  `spawn_reconcile`s each `MarkNodeFailed`/`MarkNodeRecovered` onto its own task, guarded by an
+  in-flight `HashSet<NodeId>` so a stuck write is not re-issued every tick. All three
+  `client_write` calls are wrapped in `tokio::time::timeout(raft_write_timeout())`
+  (`check_interval * 5`, floored at 1s).
+- **F5 — unsatisfiable equality in `test_cluster_current_epoch_agrees_across_all_nodes`.** The loop
+  now breaks on *all nodes equal* **and** `>= CLAIMED_EPOCH`; the phantom joiner legitimately gets
+  FAIL-latched and pushes the counter past the claim, which the old `==` could never accept again.
+- **F6 — `cluster_state:fail` for a slotless failed primary.** The predicate is now
+  `count_slot_health(&snapshot).fail > 0`, i.e. slot coverage, matching Redis. A FAIL-flagged
+  primary owning zero slots no longer downs the cluster; covered by
+  `test_count_slot_health_fail_flagged_slotless_primary_leaves_slots_ok`.
+- **F7 — asymmetric hysteresis.** `HealthTable` now requires `fail_threshold` *consecutive
+  successes* to clear a latched FAIL, mirroring the failure side (`success_count`, reset by any
+  failure). Chosen over Redis's time-based `FAIL_UNDO_TIME_MULT` to keep the state machine pure and
+  deterministically unit-testable. Pinned by `test_health_table_threshold_latching_is_symmetric`
+  and `test_health_table_latch_survives_flapping_recovery`.
+
+### Strongly recommended
+
+- **F8 — vacuous harness-vs-RESP test.** `test_harness_cluster_info_matches_resp_reply` now shapes
+  a cluster where the compared fields are all distinguishable (`add_node_claiming` pushes the
+  counter off zero; an added replica makes `cluster_size != cluster_known_nodes`), asserts that
+  non-vacuity explicitly, then compares seven fields instead of four.
+- **F9 — the `-NOADMIN` gap was hidden, not pinned.** Filed
+  `.scratch/replication-cluster-rework/issues/05-cluster-admin-gating-breaks-client-bootstrap.md`
+  (`needs-triage`) and added
+  `test_admin_port_blocks_cluster_discovery_subcommands_on_regular_port`, which pins today's
+  behaviour and says in its doc block that fixing issue 05 must *invert* it.
+
+### Cheap
+
+- **F10** — snapshot meta and payload are now two keys in one `WriteBatch`; the payload is stored
+  raw instead of as a serde_json integer array (~4x smaller). A meta record without its payload is
+  treated as "no snapshot" rather than trusted.
+- **F11** — the T1 sweep asserts `Ok` per step (`unwrap_or_else(panic)`), pins the post-reset
+  membership and cleared slot map, and `assert_invariant` now also enforces issue 64's headline
+  invariant: no two primaries share a nonzero `config_epoch`.
+- **F12** — `wait_for_topology_agreement` compares a full `TopologyView` (every known node's
+  canonicalized `CLUSTER NODES` line — flags, primary, config epoch, owned slots and
+  `[slot->-node]` migration markers — plus the cluster-wide epoch and slots-assigned) instead of
+  three aggregate counters. `test_raft_snapshot_during_migration` now *asserts* the migration
+  outcome it used to only `eprintln!`.
+- **F13** — `test_state_machine_snapshot_survives_restart_without_log_replay` writes the log
+  entries, `purge`s them, asserts the purge survived the restart, and drives
+  `StorageHelper::get_initial_state` over the reopened storage + state machine — the actual path
+  the hazard lives on.
+- **F14** — `SuccessOutcome`/`FailureOutcome` deleted; `record_success`/`record_failure` return
+  `()`. The only enum left is `ReconcileAction`, which has a production consumer.
+- **F15** — standalone `CLUSTER INFO` omits the `cluster_raft_term` line entirely rather than
+  claiming term 0. `ClusterInfoReport::raft_term` is `Option<u64>` and the renderer emits nothing
+  for `None`. **Deviation from §6 of this PRD**, which specified `0` in standalone; the
+  observability-accuracy bar wins.
+- **F16** — `MissedTickBehavior::Delay` on the detector's interval, so a stalled tick cannot
+  produce a catch-up probe storm.
+- **F17** — the `read_committed` comment now states the operative hazard (see disagreement below).
+- **F18** — the jepsen `leader_election.clj` namespace docstring no longer says "per term" or
+  advertises a `:read-term` op that does not exist; no "term" string remains in the file.
+
+### Fallout the fix round found
+
+`test_concurrent_failover_attempts` and `test_auto_failover_selects_most_caught_up_replica` were
+both **latent coin-flips of the same shape as F5**, and F4's non-blocking writes made the latch land
+early enough to expose them (`test_concurrent_failover_attempts` failed 3/3 in the sweep, then
+passed on a fourth attempt in isolation). Both kill a slot-owning primary in a cluster with no
+replica and then assert `cluster_state:ok` — unreachable once the FAIL flag latches, since the
+slots are uncovered. Fixed by asserting the true steady state: survivor topology agreement for the
+first, and a polled `cluster_state:fail` with `cluster_slots_fail > 0` for the second. Both are now
+deterministic (verified 3x back-to-back).
+
+### Test results (all local, `RUSTC_WRAPPER=""`)
+
+| Command | Result |
+|---|---|
+| `cargo nextest run -p frogdb-cluster` | **127/127 pass** |
+| `cargo nextest run -p frogdb-server -E 'test(/cluster/) or test(/failure_detector/) or test(/epoch/) or test(/admin_port/)'` | **266/266 pass** |
+| `just lint frogdb-cluster`, `just lint frogdb-server` | green |
+| `just check`, `just fmt` | clean |
+
+### Disagreements with the review
+
+1. **F17's mechanism.** The review says `get_initial_state` "purges the log to `last_applied` when
+   `last_log_id < last_applied`", making a restored commit index harmless. In openraft 0.9.21 it
+   clamps `committed` **up** to `last_applied` and never down to `last_log_id`; the damage lands
+   later, when it re-applies `(last_applied, committed]` and `read_log_at_index` cannot find the
+   entries. Conclusion (leave `read_committed` unimplemented) is unchanged; the comment now states
+   this mechanism, not the review's.
+2. **F12, partially declined.** The `slots_assigned == CLUSTER_SLOTS` gate in
+   `wait_for_topology_agreement` is kept deliberately: it is the wait condition ("the topology has
+   finished settling"), not the agreement predicate, and every caller today runs a fully-slotted
+   cluster. A scenario that deliberately leaves slots unassigned should get a variant rather than
+   weaken this one.
+3. **F7's live coverage.** Driving the latch through `test_flapping_node` under real timing would
+   be inherently flaky (it depends on probe cadence vs. kill/restart timing), so the hysteresis
+   contract is pinned deterministically in `HealthTable` unit tests, and the integration test only
+   asserts the observable consequence: after the flapping stops, no node carries a `fail` flag.
