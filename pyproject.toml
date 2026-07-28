@@ -2,6 +2,14 @@
 line-length = 100
 target-version = "py311"
 
+# Ruff discovers Markdown by default and rewrites fenced `python`/`py` blocks.
+# Docs here are deliberate fragments (partial tuples, elided bodies), which the
+# formatter rewrites into misleading-but-"valid" code, so keep Markdown out of
+# ruff's file set. `force-exclude` makes the exclusion hold when a caller (editor,
+# hook) passes a .md path explicitly.
+extend-exclude = ["*.md"]
+force-exclude = true
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = [
