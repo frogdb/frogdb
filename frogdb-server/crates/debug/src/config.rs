@@ -39,6 +39,9 @@ pub struct HotShardConfig {
     pub warm_threshold_percent: f64,
     /// Window, in seconds, used when a request does not specify one.
     pub default_period_secs: u64,
+    /// Whether per-shard op-rate accounting runs at all. With this off, shard
+    /// workers skip the windowed counters and reports carry no shards.
+    pub enabled: bool,
 }
 
 impl Default for HotShardConfig {
@@ -47,6 +50,7 @@ impl Default for HotShardConfig {
             hot_threshold_percent: 20.0,
             warm_threshold_percent: 15.0,
             default_period_secs: 10,
+            enabled: true,
         }
     }
 }

@@ -137,10 +137,10 @@ pub use scripting::{
 pub use shard::{
     BigKeyInfo, BigKeysScanResponse, BlockingMsg, ClusterMsg, CoreMsg, DebugIntrospectionMsg,
     Envelope, HotShardStatsResponse, IndexLifecycleManager, InfoShardSnapshot, LifecycleError,
-    ObservabilityMsg, PartialResult, PubSubMsg, REDIS_CLUSTER_SLOTS, REPLICA_INTERNAL_CONN_ID,
-    RecoveryOutcome, RecoveryResult, ScatterOp, ScriptingMsg, SearchMsg, ShardBuilderError,
-    ShardClusterDeps, ShardConfig, ShardCoreDeps, ShardMemoryStats, ShardMessage,
-    ShardPersistenceDeps, ShardReceiver, ShardSender, ShardWaitQueue, ShardWorker,
+    ObservabilityMsg, OperationCounters, PartialResult, PubSubMsg, REDIS_CLUSTER_SLOTS,
+    REPLICA_INTERNAL_CONN_ID, RecoveryOutcome, RecoveryResult, ScatterOp, ScriptingMsg, SearchMsg,
+    ShardBuilderError, ShardClusterDeps, ShardConfig, ShardCoreDeps, ShardMemoryStats,
+    ShardMessage, ShardPersistenceDeps, ShardReceiver, ShardSender, ShardWaitQueue, ShardWorker,
     ShardWorkerBuilder, TieredCounts, TrackingMsg, TransactionResult, UnregisterAck, VllMsg,
     WaitEntry, WalLagStatsResponse, WatchEntry, extract_hash_tag, shard_for_key, slot_for_key,
 };

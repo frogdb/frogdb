@@ -1229,4 +1229,18 @@ impl ScatterOp {
             | ScatterOp::EsAll { .. } => false,
         }
     }
+
+    /// The command-flag view of this scatter op.
+    ///
+    /// Exists so hot-shard op accounting classifies scatter parts through the
+    /// same [`crate::shard::OpClass::from_flags`] rule as single-shard dispatch
+    /// instead of a second, divergent one. Every non-write variant of this enum
+    /// is a genuine read (see [`Self::is_write`]), so the mapping is total.
+    pub fn command_flags(&self) -> crate::command::CommandFlags {
+        if self.is_write() {
+            crate::command::CommandFlags::WRITE
+        } else {
+            crate::command::CommandFlags::READONLY
+        }
+    }
 }

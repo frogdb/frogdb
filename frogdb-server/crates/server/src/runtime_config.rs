@@ -3013,6 +3013,23 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::None,
             }),
+            // The feature's kill switch. One `Arc<AtomicBool>` shared by the
+            // collector and every shard worker, so a SET both silences the
+            // report and stops the per-command accounting behind it.
+            HotshardsEnabled => Box::new(ConfigParam::<bool, ConfigManager> {
+                name: id.name(),
+                parse: |s| parse_yes_no("hotshards-enabled", s),
+                validate: ConfigParam::no_validate,
+                default: || frogdb_config::hotshards::DEFAULT_ENABLED,
+                get: |mgr| mgr.hotshards.enabled(),
+                apply: |mgr, v| {
+                    mgr.hotshards.set_enabled(v);
+                    info!(enabled = v, "Hot-shard op-rate accounting toggled");
+                    Ok(())
+                },
+                render: |v| yes_no(*v),
+                propagation: Propagation::None,
+            }),
         }
     }
 
@@ -4526,6 +4543,33 @@ maxmemory = 0
         assert_eq!(snap.hot_threshold_percent, 40.0);
         assert_eq!(snap.warm_threshold_percent, 30.0);
         assert_eq!(snap.default_period_secs, 5);
+    }
+
+    /// Propagation truth for `hotshards-enabled`: a SET must reach *both* halves
+    /// of the feature — the collector's report and the `Arc<AtomicBool>` each
+    /// shard worker consults per dispatched command, which is the same cell.
+    #[test]
+    fn hotshards_enabled_set_reaches_the_collector_and_the_shard_workers() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+        let shared = manager.hotshard_config();
+        // The flag a shard worker adopts at spawn.
+        let worker_flag = shared.enabled_flag();
+
+        assert_eq!(manager.get("hotshards-enabled")[0].1, "yes");
+        assert!(worker_flag.load(Ordering::Relaxed));
+
+        manager.set("hotshards-enabled", "no").unwrap();
+        assert!(!shared.enabled());
+        assert!(
+            !worker_flag.load(Ordering::Relaxed),
+            "the shard workers' flag must be the cell CONFIG SET writes"
+        );
+        assert!(!shared.snapshot().enabled);
+        assert_eq!(manager.get("hotshards-enabled")[0].1, "no");
+
+        manager.set("hotshards-enabled", "yes").unwrap();
+        assert!(worker_flag.load(Ordering::Relaxed));
     }
 
     #[test]

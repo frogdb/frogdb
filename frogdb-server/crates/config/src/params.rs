@@ -460,9 +460,26 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
         // once. The two `tls-watch-*` rows are immutable: the cert-watcher task's
         // existence and poll cadence are both fixed when it is spawned at
         // startup, so GET reports the honest startup value and SET has no seam. ---
-        rows.extend_from_slice(HotShardsConfig::PARAMS);
+        rows.push(pick(
+            HotShardsConfig::PARAMS,
+            "hotshards-hot-threshold-percent",
+        ));
+        rows.push(pick(
+            HotShardsConfig::PARAMS,
+            "hotshards-warm-threshold-percent",
+        ));
+        rows.push(pick(
+            HotShardsConfig::PARAMS,
+            "hotshards-default-period-secs",
+        ));
         rows.push(pick(TlsConfig::PARAMS, "tls-watch-certs"));
         rows.push(pick(TlsConfig::PARAMS, "tls-watch-debounce-ms"));
+
+        // --- hot-shard hardening round: the feature's kill switch, appended
+        // last so the golden snapshot's first 117 rows stay byte-identical.
+        // Live-mutable: shard workers read the flag per dispatched command, and
+        // the collector reads it per `collect()`. ---
+        rows.push(pick(HotShardsConfig::PARAMS, "hotshards-enabled"));
 
         rows
     });
@@ -1309,6 +1326,13 @@ mod tests {
             mutable: false,
             noop: false,
         },
+        ConfigParamInfo {
+            name: "hotshards-enabled",
+            section: Some("hotshards"),
+            field: Some("enabled"),
+            mutable: true,
+            noop: false,
+        },
     ];
 
     #[test]
@@ -1342,8 +1366,10 @@ mod tests {
         // row (`pubsub-output-buffer-hard-limit`), giving 112. The
         // config-mutability round appended 5 more (hotshards ×3 promote-mutable,
         // tls-watch ×2 promote-immutable), giving 117 — its other 23 promotions
-        // only flipped `mutable` on existing rows and added no new ones.
-        assert_eq!(GOLDEN_SNAPSHOT.len(), 117);
+        // only flipped `mutable` on existing rows and added no new ones. The
+        // hot-shard hardening round appended the feature's mutable kill switch
+        // (`hotshards-enabled`), giving 118.
+        assert_eq!(GOLDEN_SNAPSHOT.len(), 118);
     }
 
     #[test]

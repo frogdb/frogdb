@@ -4,8 +4,8 @@
 //! flags shards receiving a disproportionate share of traffic in FrogDB's
 //! shared-nothing, thread-per-core architecture.
 //
-// All three fields are live-mutable CONFIG params
-// (`hotshards-hot-threshold-percent`, `hotshards-warm-threshold-percent`,
+// All four fields are live-mutable CONFIG params (`hotshards-enabled`,
+// `hotshards-hot-threshold-percent`, `hotshards-warm-threshold-percent`,
 // `hotshards-default-period-secs`). The collector holds them in a shared
 // `SharedHotShardConfig` (atomics) that it re-reads on every `collect()`, so a
 // runtime CONFIG SET retunes every hot-shard surface at once — FROGDB.HOTSHARDS,
@@ -37,11 +37,22 @@ pub struct HotShardsConfig {
     #[serde(default = "default_default_period_secs")]
     #[param(mutable, name = "hotshards-default-period-secs")]
     pub default_period_secs: u64,
+
+    /// Whether per-shard op-rate accounting runs at all.
+    ///
+    /// The kill switch for the feature: with this off, shard workers skip the
+    /// windowed counters entirely (one relaxed atomic load per dispatched
+    /// command) and every hot-shard surface reports no shards rather than a
+    /// stale window. Re-enabling starts a fresh window.
+    #[serde(default = "default_enabled")]
+    #[param(mutable, name = "hotshards-enabled")]
+    pub enabled: bool,
 }
 
 pub const DEFAULT_HOT_THRESHOLD_PERCENT: f64 = 20.0;
 pub const DEFAULT_WARM_THRESHOLD_PERCENT: f64 = 15.0;
 pub const DEFAULT_DEFAULT_PERIOD_SECS: u64 = 10;
+pub const DEFAULT_ENABLED: bool = true;
 
 fn default_hot_threshold_percent() -> f64 {
     DEFAULT_HOT_THRESHOLD_PERCENT
@@ -55,12 +66,17 @@ fn default_default_period_secs() -> u64 {
     DEFAULT_DEFAULT_PERIOD_SECS
 }
 
+fn default_enabled() -> bool {
+    DEFAULT_ENABLED
+}
+
 impl Default for HotShardsConfig {
     fn default() -> Self {
         Self {
             hot_threshold_percent: default_hot_threshold_percent(),
             warm_threshold_percent: default_warm_threshold_percent(),
             default_period_secs: default_default_period_secs(),
+            enabled: default_enabled(),
         }
     }
 }
@@ -98,6 +114,7 @@ mod tests {
         assert_eq!(cfg.hot_threshold_percent, 20.0);
         assert_eq!(cfg.warm_threshold_percent, 15.0);
         assert_eq!(cfg.default_period_secs, 10);
+        assert!(cfg.enabled, "hot-shard accounting is on by default");
     }
 
     #[test]
@@ -106,6 +123,7 @@ mod tests {
             hot_threshold_percent: 10.0,
             warm_threshold_percent: 20.0,
             default_period_secs: 10,
+            enabled: true,
         };
         assert!(cfg.validate().is_err());
     }

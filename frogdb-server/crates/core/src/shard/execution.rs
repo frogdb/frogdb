@@ -158,16 +158,11 @@ impl ShardWorker {
         // Per-shard windowed op-rate accounting for hot-shard detection. Counted
         // once the command is known and its arity accepted — i.e. for every
         // command this shard actually dispatches — so the rates reflect real
-        // per-shard load rather than parse failures. `READONLY` is the spec's
-        // own read declaration, so a command that is neither (e.g. an admin
-        // command) still counts toward `total_ops` without inflating either
-        // side.
-        let is_read = handler
-            .flags()
-            .contains(crate::command::CommandFlags::READONLY);
+        // per-shard load rather than parse failures. Classification goes through
+        // the shared `OpClass`, the same rule the scatter path uses.
         self.observability
             .operation_counters_mut()
-            .record_op(is_read, is_write);
+            .record_op(super::counters::OpClass::from_flags(handler.flags()));
 
         if is_write && let Err(err) = self.check_memory_for_write().await {
             return (err.to_response(), None);
@@ -700,12 +695,12 @@ impl ShardWorker {
     ) -> PartialResult {
         // Per-shard windowed op-rate accounting for hot-shard detection. The
         // scatter path never routes through `execute_command_inner`, so its
-        // parts are counted here — one op per shard slice, classified from the
-        // scatter op itself.
-        let is_write = operation.is_write();
-        self.observability
-            .operation_counters_mut()
-            .record_op(!is_write, is_write);
+        // parts are counted here — one op per shard slice, classified through
+        // the *same* `OpClass` rule as single-shard dispatch (the scatter op
+        // reports its own command flags) rather than a second, divergent one.
+        self.observability.operation_counters_mut().record_op(
+            super::counters::OpClass::from_flags(operation.command_flags()),
+        );
 
         let out = self
             .execute_scatter_part_body(keys, operation, conn_id)

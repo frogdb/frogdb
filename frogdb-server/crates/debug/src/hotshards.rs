@@ -16,13 +16,13 @@
 //! the same [`HotShardSnapshot`].
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use tokio::sync::oneshot;
 
 use frogdb_core::{
     BoxFuture, HotShardDetector, HotShardSnapshot, HotShardStatsResponse, ObservabilityMsg,
-    ShardLoad, ShardLoadClass, ShardSender,
+    OperationCounters, ShardLoad, ShardLoadClass, ShardSender,
 };
 
 pub use crate::config::HotShardConfig;
@@ -40,6 +40,12 @@ pub struct SharedHotShardConfig {
     hot_threshold_percent: AtomicU64,
     warm_threshold_percent: AtomicU64,
     default_period_secs: AtomicU64,
+    /// The feature's kill switch. Held as an `Arc<AtomicBool>` rather than a
+    /// plain atomic because the shard workers need the *same* cell: each one
+    /// reads it per dispatched command to decide whether to touch its op-rate
+    /// ring at all, so `CONFIG SET hotshards-enabled no` stops the accounting
+    /// itself, not merely the reporting.
+    enabled: Arc<AtomicBool>,
 }
 
 impl SharedHotShardConfig {
@@ -49,6 +55,7 @@ impl SharedHotShardConfig {
             hot_threshold_percent: AtomicU64::new(config.hot_threshold_percent.to_bits()),
             warm_threshold_percent: AtomicU64::new(config.warm_threshold_percent.to_bits()),
             default_period_secs: AtomicU64::new(config.default_period_secs),
+            enabled: Arc::new(AtomicBool::new(config.enabled)),
         }
     }
 
@@ -84,12 +91,30 @@ impl SharedHotShardConfig {
         self.default_period_secs.store(secs, Ordering::Relaxed);
     }
 
+    /// Whether hot-shard accounting is switched on.
+    pub fn enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
+    /// Turn hot-shard accounting on or off. Reachable from `ConfigManager` for
+    /// `CONFIG SET hotshards-enabled`; shard workers see it on their next
+    /// dispatched command.
+    pub fn set_enabled(&self, enabled: bool) {
+        self.enabled.store(enabled, Ordering::Relaxed);
+    }
+
+    /// The kill-switch cell itself, for the shard workers' per-command check.
+    pub fn enabled_flag(&self) -> Arc<AtomicBool> {
+        self.enabled.clone()
+    }
+
     /// Read every knob back out as a plain config value.
     pub fn snapshot(&self) -> HotShardConfig {
         HotShardConfig {
             hot_threshold_percent: self.hot_threshold_percent(),
             warm_threshold_percent: self.warm_threshold_percent(),
             default_period_secs: self.default_period_secs(),
+            enabled: self.enabled(),
         }
     }
 }
@@ -146,7 +171,32 @@ impl HotShardCollector {
         // thresholds.
         let hot_threshold = self.config.hot_threshold_percent();
         let warm_threshold = self.config.warm_threshold_percent();
-        let period_secs = period_secs.unwrap_or_else(|| self.config.default_period_secs());
+        // The window a shard can actually answer for is bounded by its ring, so
+        // report the *clamped* value rather than echoing the request back: a
+        // reply that says `period_secs 3600` over 60 seconds of data is a lie
+        // about what was measured.
+        let period_secs = period_secs
+            .unwrap_or_else(|| self.config.default_period_secs())
+            .min(OperationCounters::MAX_WINDOW_SECS);
+
+        // Kill switch: no shard is recording, so report *no shards* rather than
+        // a fleet of fabricated zeros (which would read as a healthy, idle
+        // node), and say why.
+        if !self.config.enabled() {
+            return HotShardSnapshot {
+                period_secs,
+                total_ops_per_sec: 0.0,
+                imbalance_ratio: 1.0,
+                hot_count: 0,
+                warm_count: 0,
+                shards: Vec::new(),
+                recommendations: vec![
+                    "Hot-shard accounting is disabled (hotshards-enabled no); no per-shard \
+                     rates are being recorded"
+                        .to_string(),
+                ],
+            };
+        }
 
         let shard_responses = self.gather_shard_stats(period_secs).await;
 
@@ -350,6 +400,7 @@ mod tests {
         assert_eq!(config.hot_threshold_percent, 20.0);
         assert_eq!(config.warm_threshold_percent, 15.0);
         assert_eq!(config.default_period_secs, 10);
+        assert!(config.enabled);
     }
 
     #[test]
@@ -362,11 +413,61 @@ mod tests {
         shared.set_hot_threshold_percent(42.5);
         shared.set_warm_threshold_percent(11.25);
         shared.set_default_period_secs(30);
+        shared.set_enabled(false);
 
         let snapshot = shared.snapshot();
         assert_eq!(snapshot.hot_threshold_percent, 42.5);
         assert_eq!(snapshot.warm_threshold_percent, 11.25);
         assert_eq!(snapshot.default_period_secs, 30);
+        assert!(!snapshot.enabled);
+    }
+
+    /// The kill switch is one cell shared with the shard workers: the flag the
+    /// workers hold must see a `CONFIG SET hotshards-enabled` through the
+    /// collector's handle, or the two halves of the feature could disagree.
+    #[test]
+    fn enabled_flag_is_shared_with_shard_workers() {
+        let shared = SharedHotShardConfig::new(&HotShardConfig::default());
+        let worker_flag = shared.enabled_flag();
+        assert!(worker_flag.load(Ordering::Relaxed));
+        shared.set_enabled(false);
+        assert!(!worker_flag.load(Ordering::Relaxed));
+        assert!(!shared.enabled());
+    }
+
+    #[tokio::test]
+    async fn disabled_collector_reports_no_shards_and_says_why() {
+        let collector = HotShardCollector::new(Arc::new(Vec::new()), &HotShardConfig::default());
+        collector.shared_config().set_enabled(false);
+        let report = collector.collect(None).await;
+        assert!(report.shards.is_empty());
+        assert_eq!(report.total_ops_per_sec, 0.0);
+        assert!(
+            report
+                .recommendations
+                .iter()
+                .any(|r| r.contains("hotshards-enabled no")),
+            "a disabled report must name the switch that silenced it: {:?}",
+            report.recommendations
+        );
+    }
+
+    /// The reported window is the one the shards can answer for: a request
+    /// beyond the ring is clamped, and the clamped value is what every surface
+    /// renders.
+    #[tokio::test]
+    async fn reported_period_is_the_clamped_window() {
+        let collector = HotShardCollector::new(Arc::new(Vec::new()), &HotShardConfig::default());
+        assert_eq!(
+            collector.collect(Some(86_400)).await.period_secs,
+            OperationCounters::MAX_WINDOW_SECS
+        );
+        // A configured default beyond the ring is clamped the same way.
+        collector.shared_config().set_default_period_secs(3_600);
+        assert_eq!(
+            collector.collect(None).await.period_secs,
+            OperationCounters::MAX_WINDOW_SECS
+        );
     }
 
     #[tokio::test]
