@@ -6,9 +6,9 @@ Area: Transactions / Cluster
 Author: planning pass 2026-07-28
 Originating issues:
 
-- [`issues/55-multi-exec-migration-boundary.md`](../issues/55-multi-exec-migration-boundary.md)
+- [`issues/55-multi-exec-migration-boundary.md`](../testing-improvements/issues/55-multi-exec-migration-boundary.md)
   — pinned the current (broken) contract and escalated the fix per its acceptance criterion 3.
-- [`issues/33-fence-min-replicas-e2e.md`](../issues/33-fence-min-replicas-e2e.md) — documented the
+- [`issues/33-fence-min-replicas-e2e.md`](../testing-improvements/issues/33-fence-min-replicas-e2e.md) — documented the
   sibling divergence: MULTI queue-time rejections do not poison the transaction, so EXEC returns a
   short/empty array instead of `EXECABORT`. This PRD subsumes that fix.
 

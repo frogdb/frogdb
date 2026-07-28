@@ -1,6 +1,7 @@
 # Pin MULTI/EXEC-vs-slot-migration boundary semantics deliberately
 
 Status: done
+PRD: [replication-cluster-rework/exec-slot-revalidation.md](../../replication-cluster-rework/exec-slot-revalidation.md)
 Type: AFK
 Origin: testing-gap audit 2026-07-22 (multi-agent static review + adversarial verification; coverage run on testbox)
 Severity: likelihood 1/3, consequence 2/3 (score 2)

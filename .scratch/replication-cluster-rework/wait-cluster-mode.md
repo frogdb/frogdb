@@ -7,16 +7,16 @@ the divergence was *pinned*, not fixed). Written 2026-07-28.
 
 Related issues:
 
-- [37 — WAIT has zero coverage in cluster mode](../issues/37-wait-in-cluster.md) (done; three pinning
+- [37 — WAIT has zero coverage in cluster mode](../testing-improvements/issues/37-wait-in-cluster.md) (done; three pinning
   tests added to `integration_cluster.rs`, root cause traced, follow-ups deferred here)
-- [34 — Promotion replid asserts](../issues/34-promotion-replid-asserts.md) (done; documented that a
+- [34 — Promotion replid asserts](../testing-improvements/issues/34-promotion-replid-asserts.md) (done; documented that a
   runtime-promoted node never establishes a `PrimaryReplicationHandler` and rejects downstream PSYNC)
-- [61 — Runtime resync staged-not-installed](../issues/61-runtime-resync-staged-not-installed.md)
+- [61 — Runtime resync staged-not-installed](../testing-improvements/issues/61-runtime-resync-staged-not-installed.md)
   (open; a full-sync checkpoint is staged but not installed until reboot — a hard prerequisite here)
-- [48 — Chained-replication rejection contract](../issues/48-chained-replication-contract.md) (done;
+- [48 — Chained-replication rejection contract](../testing-improvements/issues/48-chained-replication-contract.md) (done;
   pins "FrogDB does not implement transitive replication" — Task 5 would flip it, see risk R4b)
-- [23 — Turmoil replication topology](../issues/23-turmoil-replication-topology.md)
-- [11 — Turmoil cluster raft topology](../issues/11-turmoil-cluster-raft-topology.md)
+- [23 — Turmoil replication topology](../testing-improvements/issues/23-turmoil-replication-topology.md)
+- [11 — Turmoil cluster raft topology](../testing-improvements/issues/11-turmoil-cluster-raft-topology.md)
 
 ---
 

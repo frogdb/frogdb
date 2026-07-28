@@ -7,12 +7,12 @@ done) — the observability gap was pinned, the fold itself was left in place. W
 
 Related issues:
 
-- [47 — Pin INFO-vs-NODES cluster epoch relationship deliberately](../issues/47-epoch-fold-observability.md)
+- [47 — Pin INFO-vs-NODES cluster epoch relationship deliberately](../testing-improvements/issues/47-epoch-fold-observability.md)
   (done; added `fold_current_epoch`, five unit tests, two integration tests, docs)
-- [16 — Cluster epoch persistence assertion is masked by raft term folding](../issues/16-cluster-epoch-persistence-assert.md)
+- [16 — Cluster epoch persistence assertion is masked by raft term folding](../testing-improvements/issues/16-cluster-epoch-persistence-assert.md)
   (done; strengthened `test_cluster_epoch_persists`, left the "no persisted state-machine snapshot"
   residue open)
-- [64 — No epoch-collision detection/prevention exists anywhere in FrogDB cluster mode](../issues/64-cluster-epoch-collision-detection-absent.md)
+- [64 — No epoch-collision detection/prevention exists anywhere in FrogDB cluster mode](../testing-improvements/issues/64-cluster-epoch-collision-detection-absent.md)
   (in flight, being implemented in parallel; this PRD assumes its resolution policy lands and mints
   fresh epochs from the cluster-wide counter)
 

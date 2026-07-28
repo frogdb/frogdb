@@ -1,6 +1,7 @@
 # WAIT has zero coverage in cluster mode
 
 Status: done
+PRD: [replication-cluster-rework/wait-cluster-mode.md](../../replication-cluster-rework/wait-cluster-mode.md)
 Type: AFK
 Origin: testing-gap audit 2026-07-22 (multi-agent static review + adversarial verification; coverage run on testbox)
 Severity: likelihood 2/3, consequence 2/3 (score 4)

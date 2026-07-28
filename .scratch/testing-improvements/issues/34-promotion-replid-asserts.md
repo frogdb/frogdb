@@ -1,6 +1,7 @@
 # Promotion replication-ID semantics are unasserted; tests accept any outcome
 
 Status: done
+PRD: [replication-cluster-rework/promotion-replid-psync.md](../../replication-cluster-rework/promotion-replid-psync.md)
 Type: AFK
 Origin: testing-gap audit 2026-07-22 (multi-agent static review + adversarial verification; coverage run on testbox)
 Severity: likelihood 2/3, consequence 2/3 (score 4)

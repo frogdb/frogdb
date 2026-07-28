@@ -1,6 +1,7 @@
 # Pin INFO-vs-NODES cluster epoch relationship deliberately
 
 Status: done
+PRD: [replication-cluster-rework/epoch-fold-redesign.md](../../replication-cluster-rework/epoch-fold-redesign.md)
 Type: AFK
 Origin: testing-gap audit 2026-07-22 (multi-agent static review + adversarial verification; coverage run on testbox)
 Severity: likelihood 2/3, consequence 1/3 (score 2)
