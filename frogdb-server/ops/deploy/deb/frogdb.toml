@@ -14,6 +14,7 @@ scatter-gather-timeout-ms = 5000
 sorted-set-index = "skiplist"
 max-clients = 10000
 enable-debug-command = false
+pubsub-output-buffer-hard-limit = 33554432
 
 [logging]
 level = "info"
@@ -151,6 +152,11 @@ connection-warning-percent = 90
 durability-lag-warning-ms = 5000
 durability-lag-critical-ms = 30000
 
+[hotshards]
+hot-threshold-percent = 20.0
+warm-threshold-percent = 15.0
+default-period-secs = 10
+
 [latency]
 startup-test = false
 startup-test-duration-secs = 5
@@ -187,6 +193,7 @@ channel-capacity = 4096
 enabled = false
 cert-file = ""
 key-file = ""
+additional-certs = []
 tls-port = 6380
 require-client-cert = "none"
 protocols = [

@@ -81,7 +81,7 @@
           "default": false,
           "description": "Enable automatic failover when a primary fails.\nWhen enabled, the leader will automatically promote a replica to primary\nif the primary becomes unreachable.",
           "config_param": "cluster-auto-failover",
-          "mutable": false
+          "mutable": true
         },
         {
           "name": "client-addr",
@@ -153,7 +153,7 @@
           "default": 100,
           "description": "Priority for replica promotion during auto-failover.\nLower values are preferred. 0 means this replica will never be promoted.",
           "config_param": "replica-priority",
-          "mutable": false
+          "mutable": true
         },
         {
           "name": "request-timeout-ms",
@@ -167,7 +167,7 @@
           "default": true,
           "description": "Reject write commands when this node cannot form a quorum with reachable nodes.\nWhen enabled, writes return CLUSTERDOWN if quorum is lost, preventing\nsplit-brain data divergence. Reads remain available.",
           "config_param": "cluster-self-fence-on-quorum-loss",
-          "mutable": false
+          "mutable": true
         }
       ]
     },
@@ -224,19 +224,25 @@
           "name": "default-period-secs",
           "type": "integer",
           "default": 10,
-          "description": "Default window, in seconds, over which per-shard op-rates are computed\nwhen a request does not specify one."
+          "description": "Default window, in seconds, over which per-shard op-rates are computed\nwhen a request does not specify one.",
+          "config_param": "hotshards-default-period-secs",
+          "mutable": true
         },
         {
           "name": "hot-threshold-percent",
           "type": "number",
           "default": 20.0,
-          "description": "Traffic-share percentage (0-100) at or above which a shard is classified\nHOT."
+          "description": "Traffic-share percentage (0-100) at or above which a shard is classified\nHOT.",
+          "config_param": "hotshards-hot-threshold-percent",
+          "mutable": true
         },
         {
           "name": "warm-threshold-percent",
           "type": "number",
           "default": 15.0,
-          "description": "Traffic-share percentage (0-100) at or above which a shard is classified\nWARM (must be below `hot_threshold_percent`)."
+          "description": "Traffic-share percentage (0-100) at or above which a shard is classified\nWARM (must be below `hot_threshold_percent`).",
+          "config_param": "hotshards-warm-threshold-percent",
+          "mutable": true
         }
       ]
     },
@@ -343,7 +349,7 @@
           "default": false,
           "description": "Whether latency band tracking is enabled.",
           "config_param": "latency-bands-enabled",
-          "mutable": false
+          "mutable": true
         }
       ]
     },
@@ -535,7 +541,7 @@
           "default": 4096,
           "description": "Batch size threshold in KB before flushing.",
           "config_param": "batch-size-threshold-kb",
-          "mutable": false
+          "mutable": true
         },
         {
           "name": "batch-timeout-ms",
@@ -724,7 +730,7 @@
           "default": 3000,
           "description": "Freshness timeout for replica ACKs (ms).\nIf no replica ACKs within this window, the primary fences itself.\nShould be >= 3x ack_interval_ms to tolerate missed ACKs.",
           "config_param": "replica-freshness-timeout-ms",
-          "mutable": false
+          "mutable": true
         },
         {
           "name": "replica-write-timeout-ms",
@@ -738,7 +744,7 @@
           "default": 0,
           "description": "Max replication lag in bytes before proactive disconnect. 0 = disabled.",
           "config_param": "replication-lag-threshold-bytes",
-          "mutable": false
+          "mutable": true
         },
         {
           "name": "replication-lag-threshold-secs",
@@ -746,7 +752,7 @@
           "default": 0,
           "description": "Max replication lag in seconds (since last ACK) before proactive disconnect. 0 = disabled.",
           "config_param": "replication-lag-threshold-secs",
-          "mutable": false
+          "mutable": true
         },
         {
           "name": "role",
@@ -760,7 +766,7 @@
           "default": true,
           "description": "Reject writes when primary loses all replica ACK freshness.\nPrevents zombie writes during network partitions.",
           "config_param": "self-fence-on-replica-loss",
-          "mutable": false
+          "mutable": true
         },
         {
           "name": "split-brain-buffer-max-mb",
@@ -932,7 +938,7 @@
           "default": 3600,
           "description": "Interval between automatic snapshots in seconds (0 = disabled).",
           "config_param": "snapshot-interval-secs",
-          "mutable": false
+          "mutable": true
         }
       ]
     },
@@ -945,7 +951,7 @@
           "default": 90,
           "description": "Threshold percentage for connection warning (0-100).",
           "config_param": "status-connection-warning-percent",
-          "mutable": false
+          "mutable": true
         },
         {
           "name": "durability-lag-critical-ms",
@@ -953,7 +959,7 @@
           "default": 30000,
           "description": "Durability lag critical threshold in milliseconds.",
           "config_param": "status-durability-lag-critical-ms",
-          "mutable": false
+          "mutable": true
         },
         {
           "name": "durability-lag-warning-ms",
@@ -961,7 +967,7 @@
           "default": 5000,
           "description": "Durability lag warning threshold in milliseconds.",
           "config_param": "status-durability-lag-warning-ms",
-          "mutable": false
+          "mutable": true
         },
         {
           "name": "memory-warning-percent",
@@ -969,7 +975,7 @@
           "default": 90,
           "description": "Threshold percentage for memory warning (0-100).",
           "config_param": "status-memory-warning-percent",
-          "mutable": false
+          "mutable": true
         }
       ]
     },
@@ -988,12 +994,18 @@
       "description": "TLS configuration section.",
       "fields": [
         {
+          "name": "additional-certs",
+          "type": "array",
+          "default": [],
+          "description": "Extra server identities offered alongside `cert-file`/`key-file`\n(e.g. an ECDSA pair next to an RSA pair for dual-cert deployments).\n\nSee [`AdditionalCert`] for the TOML shape and the selection rule. Every\npair must parse and its key must match its certificate, or TLS setup\nfails loudly at startup / on reload."
+        },
+        {
           "name": "ca-file",
           "type": "string",
           "default": null,
           "description": "Path to the CA certificate file for client certificate verification (PEM format).\nRequired when `require_client_cert` is not `none`.",
           "config_param": "tls-ca-cert-file",
-          "mutable": false
+          "mutable": true
         },
         {
           "name": "cert-file",
@@ -1001,7 +1013,7 @@
           "default": "",
           "description": "Path to the server certificate file (PEM format).",
           "config_param": "tls-cert-file",
-          "mutable": false
+          "mutable": true
         },
         {
           "name": "ciphersuites",
@@ -1009,7 +1021,7 @@
           "default": [],
           "description": "Allowed ciphersuites, by rustls IANA name (case-insensitive), e.g.\n`TLS13_AES_256_GCM_SHA384` or `TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256`.\nEmpty means use rustls defaults. Applied by the server crate when\nbuilding the rustls Server/Client config; an unknown name or a set that\nexcludes every enabled protocol version fails loudly at startup.",
           "config_param": "tls-ciphersuites",
-          "mutable": false
+          "mutable": true
         },
         {
           "name": "client-cert-file",
@@ -1017,7 +1029,7 @@
           "default": null,
           "description": "Path to client certificate for outgoing replication/cluster connections.",
           "config_param": "tls-client-cert-file",
-          "mutable": false
+          "mutable": true
         },
         {
           "name": "client-key-file",
@@ -1025,7 +1037,7 @@
           "default": null,
           "description": "Path to client private key for outgoing replication/cluster connections.",
           "config_param": "tls-client-key-file",
-          "mutable": false
+          "mutable": true
         },
         {
           "name": "enabled",
@@ -1041,7 +1053,7 @@
           "default": 10000,
           "description": "TLS handshake timeout in milliseconds.",
           "config_param": "tls-handshake-timeout-ms",
-          "mutable": false
+          "mutable": true
         },
         {
           "name": "key-file",
@@ -1049,7 +1061,7 @@
           "default": "",
           "description": "Path to the server private key file (PEM format).",
           "config_param": "tls-key-file",
-          "mutable": false
+          "mutable": true
         },
         {
           "name": "no-tls-on-admin-port",
@@ -1101,7 +1113,7 @@
           "default": false,
           "description": "Whether to enable dual-accept mode for rolling TLS cluster migration.",
           "config_param": "tls-cluster-migration",
-          "mutable": false
+          "mutable": true
         },
         {
           "name": "tls-port",
@@ -1123,13 +1135,17 @@
           "name": "watch-certs",
           "type": "boolean",
           "default": true,
-          "description": "Whether to watch certificate files for changes and auto-reload."
+          "description": "Whether to watch certificate files for changes and auto-reload.\n\nWhen enabled, the server polls every file this section references\n(`cert-file`, `key-file`, `ca-file`, the client pair and every\n`[[tls.additional-certs]]` pair) and re-reads them once they stop\nchanging, so rotating certificates in place needs no restart. A reload\nthat fails (mismatched pair, unparseable PEM) is logged and the\npreviously loaded certificates keep serving.",
+          "config_param": "tls-watch-certs",
+          "mutable": false
         },
         {
           "name": "watch-debounce-ms",
           "type": "integer",
           "default": 500,
-          "description": "Debounce interval in milliseconds for certificate file watcher."
+          "description": "Poll/debounce interval in milliseconds for the certificate file watcher.\n\nA rotation writes the certificate and key as two separate files, so the\nwatcher waits for one full quiet interval before reloading; reaction\nlatency is between one and two intervals. Values below 10ms are clamped.",
+          "config_param": "tls-watch-debounce-ms",
+          "mutable": false
         }
       ]
     },
@@ -1170,7 +1186,7 @@
           "default": 1.0,
           "description": "Sampling rate (0.0 to 1.0). 1.0 = sample all, 0.1 = sample 10%.",
           "config_param": "tracing-sampling-rate",
-          "mutable": false
+          "mutable": true
         },
         {
           "name": "scatter-gather-spans",
