@@ -12,6 +12,7 @@ pub mod cluster;
 pub mod compat;
 pub mod debug_bundle;
 pub mod distributed_tracing;
+pub mod hotshards;
 pub mod http;
 pub mod json;
 pub mod latency;
@@ -41,6 +42,7 @@ pub use cluster::ClusterConfigSection;
 pub use compat::CompatConfig;
 pub use debug_bundle::DebugBundleConfig;
 pub use distributed_tracing::TracingConfig;
+pub use hotshards::HotShardsConfig;
 pub use http::HttpConfig;
 pub use json::JsonConfig;
 pub use latency::{LatencyBandsConfig, LatencyConfig};
@@ -169,6 +171,11 @@ pub struct Config {
     #[serde(default)]
     #[section]
     pub status: StatusConfig,
+
+    /// Hot shard detection configuration.
+    #[serde(default)]
+    #[section]
+    pub hotshards: HotShardsConfig,
 
     /// Latency testing configuration.
     #[serde(default)]

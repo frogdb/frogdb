@@ -78,6 +78,66 @@ async fn test_wal_batch_threshold() {
     wal.flush_async().await.unwrap();
     assert!(rocks.get(0, b"bigkey").unwrap().is_some());
 }
+/// Propagation truth: storing a new batch-size threshold on the live handle
+/// retunes the flush thread's batching decision WITHOUT restarting it. A huge
+/// initial threshold (and far-off timeout) leaves the first write staged; after
+/// `set_batch_size_threshold` lowers it, the next write's batch decision
+/// re-reads the atomic and flushes both entries.
+#[tokio::test]
+async fn test_wal_batch_threshold_live_retune() {
+    let tmp = TempDir::new().unwrap();
+    let rocks =
+        Arc::new(crate::rocks::RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
+    let m = Arc::new(NoopMetricsRecorder::new());
+    let wal = RocksWalWriter::new(
+        rocks.clone(),
+        0,
+        WalConfig {
+            mode: DurabilityMode::Async,
+            // Huge threshold + far-off timeout: nothing auto-flushes.
+            batch_size_threshold: 100 * 1024 * 1024,
+            batch_timeout_ms: 600_000,
+            ..Default::default()
+        },
+        m,
+    );
+    let md = KeyMetadata::new(1);
+    wal.write_set(b"k1", &Value::string("v1"), &md)
+        .await
+        .unwrap();
+    // Not durable: staged well under the huge threshold, timeout is 10 minutes.
+    // A brief settle window to let the flush thread process (and NOT flush).
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        rocks.get(0, b"k1").unwrap().is_none(),
+        "entry should still be staged under the huge threshold"
+    );
+    assert_eq!(wal.batch_size_threshold(), 100 * 1024 * 1024);
+
+    // Live retune: drop the threshold to 1 byte. No restart, no flush_async.
+    wal.set_batch_size_threshold(1);
+    assert_eq!(wal.batch_size_threshold(), 1);
+
+    // The next write's batch decision re-reads the atomic and flushes the batch.
+    wal.write_set(b"k2", &Value::string("v2"), &md)
+        .await
+        .unwrap();
+
+    // Poll for durability of the FIRST (previously staged) entry, proving the
+    // new threshold took effect mid-flight.
+    let mut durable = false;
+    for _ in 0..200 {
+        if rocks.get(0, b"k1").unwrap().is_some() {
+            durable = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        durable,
+        "lowered batch-size threshold should have flushed the staged entry without restart"
+    );
+}
 #[tokio::test]
 async fn test_wal_sequence() {
     let tmp = TempDir::new().unwrap();
@@ -273,6 +333,7 @@ impl TestWal {
             Arc::new(NoopMetricsRecorder::new()),
         );
         let (tx, rx) = flume::bounded(64);
+        let batch_size_threshold = Arc::new(AtomicUsize::new(batch_size_threshold));
         let handle = std::thread::spawn(move || {
             flush_thread_loop(rx, engine, batch_size_threshold, batch_timeout);
         });
@@ -849,7 +910,12 @@ impl PageCacheWal {
         // flushes these tests issue, so the fsync boundary is deterministic.
         let (tx, rx) = flume::bounded(256);
         let handle = std::thread::spawn(move || {
-            flush_thread_loop(rx, engine, 1024 * 1024, Duration::from_secs(60));
+            flush_thread_loop(
+                rx,
+                engine,
+                Arc::new(AtomicUsize::new(1024 * 1024)),
+                Duration::from_secs(60),
+            );
         });
         Self {
             tx: Some(tx),
