@@ -302,6 +302,7 @@ impl ShardWorker {
                 false
             }
             ShardMessage::Cluster(m) => self.dispatch_cluster(m).await,
+            ShardMessage::Replication(m) => self.dispatch_replication(m).await,
             ShardMessage::Search(m) => {
                 // `FlushWal` needs to await the WAL flush thread, so it is handled
                 // here in the async event loop rather than in the sync

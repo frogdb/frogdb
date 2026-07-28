@@ -37,6 +37,23 @@ pub type ConnectFactory = Arc<
         + Sync,
 >;
 
+/// Installs a staged full-resync checkpoint into the **live** keyspace.
+///
+/// Called with the staged-checkpoint directory
+/// ([`CheckpointStager::staged_dir`]) after the stage commits and *before* the
+/// replica adopts the snapshot's offset and resumes streaming. The replication
+/// crate owns no store, so the server crate injects the implementation the same
+/// way it injects [`ConnectFactory`]; without it a demoted node would keep
+/// serving its own forked keyspace until the next boot.
+///
+/// An `Err` is fatal to the sync attempt: the caller rewinds its offset to 0 so
+/// the next reconnect asks for a fresh full resync rather than streaming deltas
+/// onto a keyspace that never adopted the base snapshot.
+///
+/// [`CheckpointStager::staged_dir`]: crate::fullsync::CheckpointStager::staged_dir
+pub type CheckpointInstaller =
+    Arc<dyn Fn(PathBuf) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send>> + Send + Sync>;
+
 /// Default connection factory: plain TCP.
 pub fn plain_tcp_connect_factory() -> ConnectFactory {
     Arc::new(|addr| {
@@ -83,6 +100,11 @@ pub struct ReplicaReplicationHandler {
     /// overridden from `replication.ack-interval-ms` via [`Self::set_ack_interval`];
     /// stamped into each [`ReplicaConnection`] built in [`Self::connect_and_sync`].
     ack_interval: Duration,
+    /// Installs a received full-resync checkpoint into the live keyspace before
+    /// streaming resumes (see [`CheckpointInstaller`]). `None` means nothing was
+    /// wired: the checkpoint is staged for the next boot only, which is the
+    /// pre-issue-61 behaviour and is warned about loudly at sync time.
+    checkpoint_installer: Option<CheckpointInstaller>,
 }
 
 /// Default spontaneous-ACK cadence when config supplies nothing (1s, matching
@@ -118,6 +140,7 @@ impl ReplicaReplicationHandler {
             connect_factory: plain_tcp_connect_factory(),
             link_up: Arc::new(AtomicBool::new(false)),
             ack_interval: DEFAULT_ACK_INTERVAL,
+            checkpoint_installer: None,
         };
         (handler, frame_rx)
     }
@@ -165,6 +188,15 @@ impl ReplicaReplicationHandler {
     /// Set a custom connection factory (e.g. for TLS connections).
     pub fn set_connect_factory(&mut self, factory: ConnectFactory) {
         self.connect_factory = factory;
+    }
+
+    /// Wire the live-keyspace installer for received full-resync checkpoints.
+    ///
+    /// Must be called by every construction site that has shards to install into
+    /// (boot-configured replica and runtime `REPLICAOF` demotion alike),
+    /// otherwise a full resync only stages for the next boot.
+    pub fn set_checkpoint_installer(&mut self, installer: CheckpointInstaller) {
+        self.checkpoint_installer = Some(installer);
     }
 
     /// Wire the cluster-bus HealthProbe atomic. The handler adopts `offset` as
@@ -276,6 +308,7 @@ impl ReplicaReplicationHandler {
             offsets,
             link_up: self.link_up.clone(),
             ack_interval: self.ack_interval,
+            checkpoint_installer: self.checkpoint_installer.clone(),
         };
         // Whatever ends this attempt — clean close, a handshake/sync error, or
         // the caller dropping the stream — the link is no longer up. `conn`

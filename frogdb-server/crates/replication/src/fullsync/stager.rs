@@ -5,15 +5,18 @@
 //! rename the received scratch dir onto the staged dir (the *writer's commit
 //! point* in the [`StagedCheckpoint`] contract), and stamp
 //! `replication_metadata.json`. It is pure `tokio::fs` + [`StagedCheckpoint`]
-//! path math: it touches no socket and no `RocksStore`. The actual database
-//! swap is the boot-time **Installer** (`RocksStore::load_staged_checkpoint`),
-//! a different party entirely.
+//! path math: it touches no socket and no `RocksStore`. Installing the staged
+//! snapshot is a different party entirely — either the runtime **Installer**
+//! (`CheckpointInstaller`, which loads it into the live keyspace before
+//! streaming resumes) or, if the process restarts first, the boot-time one
+//! (`RocksStore::load_staged_checkpoint`).
 //!
 //! **Contract: `commit` *stages* the checkpoint — it does NOT install it.** The
-//! returned [`StagedOutcome`] is the caller's licence to adopt the offset and
-//! then proceed to live streaming; the on-disk DB is unchanged until the next
-//! boot. This is the streaming-before-install invariant, expressed as a type
-//! rather than the prose comment it used to be.
+//! returned [`StagedOutcome`] tells the caller which replication identity/offset
+//! the staged snapshot corresponds to; the caller installs it (via its
+//! `CheckpointInstaller`), then adopts the offset and proceeds to live
+//! streaming. The staged dir at [`CheckpointStager::staged_dir`] is left in
+//! place so a crash between stage and install still converges on the next boot.
 //!
 //! The symmetric encoder on the primary side is
 //! `ReplicaSession::stream_checkpoint` (`replica_session.rs`); it lives on the
@@ -69,6 +72,15 @@ impl CheckpointStager {
     /// [`receive_checkpoint_files`]: crate::fullsync::receive_checkpoint_files
     pub fn incoming_dir(&self) -> PathBuf {
         self.parent_dir.join(INCOMING_DIR_NAME)
+    }
+
+    /// The staged-checkpoint dir [`Self::commit`] renames onto — a complete,
+    /// self-contained RocksDB the caller can open read-only to install the
+    /// snapshot into the live keyspace, and which the boot-time Installer
+    /// consumes if the process restarts first.
+    pub fn staged_dir(&self) -> PathBuf {
+        let staged = StagedCheckpoint::in_parent(&self.parent_dir);
+        staged.dir().to_path_buf()
     }
 
     /// Verify the combined checksum against `meta`, remove any stale staged dir,

@@ -138,11 +138,12 @@ pub use shard::{
     BigKeyInfo, BigKeysScanResponse, BlockingMsg, ClusterMsg, CoreMsg, DebugIntrospectionMsg,
     Envelope, HotShardStatsResponse, IndexLifecycleManager, InfoShardSnapshot, LifecycleError,
     ObservabilityMsg, OperationCounters, PartialResult, PubSubMsg, REDIS_CLUSTER_SLOTS,
-    REPLICA_INTERNAL_CONN_ID, RecoveryOutcome, RecoveryResult, ScatterOp, ScriptingMsg, SearchMsg,
-    ShardBuilderError, ShardClusterDeps, ShardConfig, ShardCoreDeps, ShardMemoryStats,
-    ShardMessage, ShardPersistenceDeps, ShardReceiver, ShardSender, ShardWaitQueue, ShardWorker,
-    ShardWorkerBuilder, TieredCounts, TrackingMsg, TransactionResult, UnregisterAck, VllMsg,
-    WaitEntry, WalLagStatsResponse, WatchEntry, extract_hash_tag, shard_for_key, slot_for_key,
+    REPLICA_INTERNAL_CONN_ID, RecoveryOutcome, RecoveryResult, ReplicationMsg, ScatterOp,
+    ScriptingMsg, SearchMsg, ShardBuilderError, ShardClusterDeps, ShardConfig, ShardCoreDeps,
+    ShardMemoryStats, ShardMessage, ShardPersistenceDeps, ShardReceiver, ShardSender,
+    ShardWaitQueue, ShardWorker, ShardWorkerBuilder, SnapshotEntry, TieredCounts, TrackingMsg,
+    TransactionResult, UnregisterAck, VllMsg, WaitEntry, WalLagStatsResponse, WatchEntry,
+    extract_hash_tag, shard_for_key, slot_for_key,
 };
 pub use slowlog::{
     DEFAULT_SLOWLOG_LOG_SLOWER_THAN, DEFAULT_SLOWLOG_MAX_ARG_LEN, DEFAULT_SLOWLOG_MAX_LEN, SlowLog,

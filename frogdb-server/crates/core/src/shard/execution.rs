@@ -944,7 +944,7 @@ impl ShardWorker {
     /// DEL, COPY, …) could not have been dispatched here otherwise — so a miss is
     /// a server-construction bug, surfaced loudly rather than silently dropping
     /// WAL/replication effects.
-    fn scatter_write_handler(&self, name: &str) -> Arc<dyn Command> {
+    pub(super) fn scatter_write_handler(&self, name: &str) -> Arc<dyn Command> {
         self.registry.get(name).unwrap_or_else(|| {
             panic!("scatter effect pipeline requires the `{name}` command to be registered")
         })
@@ -1168,7 +1168,7 @@ impl ShardWorker {
 }
 
 #[cfg(test)]
-mod scatter_effect_tests {
+pub(super) mod scatter_effect_tests {
     //! End-to-end tests that the cross-shard scatter write path now emits the
     //! effects the old hand-rolled inline path silently skipped: keyspace
     //! notifications, replication broadcast, and waiter satisfaction — all via
@@ -1322,7 +1322,12 @@ mod scatter_effect_tests {
     /// Build a single-shard worker (so keyspace notifications deliver into the
     /// local subscription table) with a recording broadcaster and all keyspace
     /// notification classes/channels enabled.
-    fn scatter_worker(bc: SharedBroadcaster) -> ShardWorker {
+    ///
+    /// `pub(super)` because the snapshot-install tests
+    /// (`super::super::dispatch_replication`) drive the same scatter-effect
+    /// pipeline and need the same registry — in particular the mock `FLUSHDB`
+    /// handler the clear routes through.
+    pub(in crate::shard) fn scatter_worker(bc: SharedBroadcaster) -> ShardWorker {
         let (msg_tx, msg_rx) = mpsc::channel(16);
         let (_conn_tx, conn_rx) = mpsc::channel(16);
         let shard_senders = Arc::new(vec![ShardSender::new(msg_tx)]);

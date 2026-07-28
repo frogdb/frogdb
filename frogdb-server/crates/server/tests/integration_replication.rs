@@ -1190,6 +1190,104 @@ async fn test_replicaof_host_port_demotes(#[case] persistence: bool) {
     target.shutdown().await;
 }
 
+/// Read a key's value as a `String`, or `None` for a nil reply.
+fn string_value(response: &Response) -> Option<String> {
+    match response {
+        Response::Bulk(Some(b)) => std::str::from_utf8(b).ok().map(str::to_string),
+        _ => None,
+    }
+}
+
+/// Poll `GET key` on `server` until it reads `want`, or the deadline passes.
+/// Returns the last observed value so a timeout fails with what was really there.
+async fn wait_for_value(
+    server: &TestServer,
+    key: &str,
+    want: Option<&str>,
+    within: Duration,
+) -> Option<String> {
+    let deadline = tokio::time::Instant::now() + within;
+    loop {
+        let seen = string_value(&server.send("GET", &[key]).await);
+        if seen.as_deref() == want || tokio::time::Instant::now() >= deadline {
+            return seen;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Issue 61: a runtime `REPLICAOF <new-master>` full resync must install the
+/// received snapshot into the **live** keyspace, not merely stage it on disk for
+/// the next boot.
+///
+/// The node below is a primary with its own, divergent (`p*`) dataset — exactly
+/// the shape of a demoted old primary after a failover. Once it is told to
+/// replicate a node whose dataset is entirely different (`m*`), Redis semantics
+/// say its old dataset is flushed and the master's snapshot loaded before the
+/// stream is applied. Against the staged-only behaviour every assertion below
+/// fails: `p*` stayed readable and `m*` was absent until a restart.
+#[tokio::test]
+async fn test_runtime_full_resync_installs_snapshot_into_live_store() {
+    // Persistence on both sides: the checkpoint full-sync path (the one that
+    // stages) requires the primary to have a RocksDB to checkpoint.
+    let config = TestServerConfig {
+        persistence: true,
+        ..Default::default()
+    };
+    let master = TestServer::start_primary_with_config(config.clone()).await;
+    let node = TestServer::start_primary_with_config(config).await;
+
+    for i in 0..5 {
+        assert_ok(&master.send("SET", &[&format!("m{i}"), "from-master"]).await);
+        assert_ok(&node.send("SET", &[&format!("p{i}"), "forked"]).await);
+    }
+
+    // Demote: the node full-resyncs from a master with a disjoint keyspace.
+    let master_port = master.port().to_string();
+    assert_ok(&node.send("REPLICAOF", &["127.0.0.1", &master_port]).await);
+
+    // No restart anywhere in this test: the master's keys must become live on
+    // the node, and its own forked keys must be gone.
+    assert_eq!(
+        wait_for_value(&node, "m0", Some("from-master"), Duration::from_secs(20))
+            .await
+            .as_deref(),
+        Some("from-master"),
+        "master's snapshot must be installed into the live keyspace without a restart"
+    );
+
+    for i in 0..5 {
+        assert_eq!(
+            string_value(&node.send("GET", &[&format!("m{i}")]).await).as_deref(),
+            Some("from-master"),
+            "master's key m{i} must be live on the demoted node"
+        );
+        assert_eq!(
+            string_value(&node.send("GET", &[&format!("p{i}")]).await),
+            None,
+            "forked key p{i} must be gone from the demoted node's live keyspace"
+        );
+    }
+    assert_eq!(
+        parse_integer(&node.send("DBSIZE", &[]).await),
+        Some(5),
+        "the install is a replace, not a merge: only the master's keys survive"
+    );
+
+    // The install is not a one-shot: subsequent streamed writes still land.
+    assert_ok(&master.send("SET", &["m-after", "streamed"]).await);
+    assert_eq!(
+        wait_for_value(&node, "m-after", Some("streamed"), Duration::from_secs(10))
+            .await
+            .as_deref(),
+        Some("streamed"),
+        "streaming must resume from the installed snapshot's offset"
+    );
+
+    node.shutdown().await;
+    master.shutdown().await;
+}
+
 /// Extract `(master_host, master_port)` from a `ROLE` slave-arm reply
 /// (`["slave", <host>, <port>, <state>, <offset>]`).
 fn role_master_host_port(response: &Response) -> Option<(String, i64)> {

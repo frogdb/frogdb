@@ -36,6 +36,7 @@ mod dispatch_core;
 mod dispatch_debug_introspection;
 mod dispatch_observability;
 mod dispatch_pubsub;
+mod dispatch_replication;
 mod dispatch_scripting;
 mod dispatch_search;
 mod dispatch_tracking;
@@ -73,8 +74,8 @@ pub use fake_wal_registry::FakeWalRegistry;
 pub use helpers::REPLICA_INTERNAL_CONN_ID;
 pub use message::{
     BlockingMsg, ClusterMsg, CoreMsg, DebugIntrospectionMsg, Envelope, ObservabilityMsg, PubSubMsg,
-    ScatterOp, ScriptingMsg, SearchMsg, ShardMessage, ShardReceiver, ShardSender, TrackingMsg,
-    UnregisterAck, VllMsg, WatchEntry,
+    ReplicationMsg, ScatterOp, ScriptingMsg, SearchMsg, ShardMessage, ShardReceiver, ShardSender,
+    SnapshotEntry, TrackingMsg, UnregisterAck, VllMsg, WatchEntry,
 };
 pub use partition::{REDIS_CLUSTER_SLOTS, extract_hash_tag, shard_for_key, slot_for_key};
 pub use search::lifecycle::{

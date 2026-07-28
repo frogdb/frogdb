@@ -169,6 +169,8 @@ pub enum ShardMessage {
     Cluster(ClusterMsg),
     /// Search index flush + pub/sub limits — see [`SearchMsg`].
     Search(SearchMsg),
+    /// Replication lifecycle (full-resync snapshot install) — see [`ReplicationMsg`].
+    Replication(ReplicationMsg),
 
     /// Shutdown signal.
     ///
@@ -818,6 +820,45 @@ pub enum SearchMsg {
     },
 }
 
+/// One key of a full-resync snapshot, ready to be restored into a shard store.
+///
+/// Carries exactly what [`crate::HashMapStore::restore_entry`] needs, so the
+/// runtime install lands a key with the *same* recovered metadata
+/// (`expires_at` / `last_access` / `lfu_counter`) that a boot-time recovery
+/// would — the two paths must not diverge on what a restored key looks like.
+#[derive(Debug, Clone)]
+pub struct SnapshotEntry {
+    /// The key.
+    pub key: Bytes,
+    /// Its value, already materialized in RAM.
+    pub value: crate::types::Value,
+    /// Its recovered metadata.
+    pub metadata: crate::types::KeyMetadata,
+}
+
+/// Replication lifecycle messages.
+#[derive(Debug)]
+pub enum ReplicationMsg {
+    /// Replace this shard's live keyspace with a full-resync snapshot.
+    ///
+    /// Sent once per shard by the replica's full-sync driver after the primary's
+    /// checkpoint has been staged and read back (see
+    /// `frogdb_replication::replica::CheckpointInstaller`). The handler clears
+    /// the shard and restores `entries` **without yielding**, so no client can
+    /// observe a half-installed keyspace on this shard; the install is atomic
+    /// per shard, not across shards (see `ShardWorker::install_snapshot`).
+    ///
+    /// `response_tx` is a bare completion ack — the driver awaits every shard's
+    /// ack before the replica resumes streaming, so the adopted offset always
+    /// corresponds to a fully-installed keyspace.
+    InstallSnapshot {
+        /// The snapshot's keys for this shard, in iteration order.
+        entries: Vec<SnapshotEntry>,
+        /// Completion ack.
+        response_tx: oneshot::Sender<()>,
+    },
+}
+
 impl From<CoreMsg> for ShardMessage {
     fn from(m: CoreMsg) -> Self {
         ShardMessage::Core(m)
@@ -868,6 +909,11 @@ impl From<SearchMsg> for ShardMessage {
         ShardMessage::Search(m)
     }
 }
+impl From<ReplicationMsg> for ShardMessage {
+    fn from(m: ReplicationMsg) -> Self {
+        ShardMessage::Replication(m)
+    }
+}
 
 impl ShardMessage {
     /// Return a static string identifying the message variant, for USDT probes.
@@ -887,6 +933,7 @@ impl ShardMessage {
             ShardMessage::DebugIntrospection(m) => m.probe_type_str(),
             ShardMessage::Cluster(m) => m.probe_type_str(),
             ShardMessage::Search(m) => m.probe_type_str(),
+            ShardMessage::Replication(m) => m.probe_type_str(),
             ShardMessage::Shutdown => "Shutdown",
         }
     }
@@ -1029,6 +1076,15 @@ impl SearchMsg {
             SearchMsg::FlushSearchIndexes { .. } => "FlushSearchIndexes",
             SearchMsg::FlushWal { .. } => "FlushWal",
             SearchMsg::GetPubSubLimitsInfo { .. } => "GetPubSubLimitsInfo",
+        }
+    }
+}
+
+impl ReplicationMsg {
+    /// USDT probe name for this variant.
+    pub fn probe_type_str(&self) -> &'static str {
+        match self {
+            ReplicationMsg::InstallSnapshot { .. } => "InstallSnapshot",
         }
     }
 }

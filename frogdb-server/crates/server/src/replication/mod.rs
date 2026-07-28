@@ -6,9 +6,11 @@
 //! This module provides the executor, which applies replicated commands to shards.
 
 pub mod executor;
+pub mod install;
 
 pub use crate::commands::replication::*;
 pub use executor::ReplicaCommandExecutor;
+pub use install::LiveCheckpointInstaller;
 // Transaction reconstruction + the consume loop live in the replication crate;
 // the server contributes only the `ReplicaApplier` impl (`ReplicaCommandExecutor`).
 pub use frogdb_replication::{ApplyError, ReplicaApplier, consume_frames};

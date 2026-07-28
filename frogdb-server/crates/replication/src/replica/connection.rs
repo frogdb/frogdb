@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use super::CheckpointInstaller;
 use super::offset::ReplicaOffset;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
@@ -110,6 +111,11 @@ pub struct ReplicaConnection {
     /// `replication.ack-interval-ms` (Redis `repl-ping-replica-period`) and
     /// copied in from the owning handler when the connection is built.
     pub(crate) ack_interval: Duration,
+    /// Installs a received checkpoint into the live keyspace before streaming
+    /// resumes; cloned in from the owning handler. `None` in tests and in any
+    /// wiring that has no shards, which degrades to the staged-for-next-boot
+    /// behaviour (warned about in [`Self::receive_checkpoint`]).
+    pub(crate) checkpoint_installer: Option<CheckpointInstaller>,
 }
 
 impl ReplicaConnection {
@@ -252,20 +258,27 @@ impl ReplicaConnection {
         Ok(())
     }
 
-    /// Receive a full-sync checkpoint and stage it for the next boot.
+    /// Receive a full-sync checkpoint, install it into the live keyspace, and
+    /// resume streaming from the snapshot's offset.
     ///
-    /// This is a thin driver over two seams: [`receive_checkpoint_files`] owns
-    /// the transport loop (socket → scratch dir + combined checksum), and
+    /// This is a thin driver over three seams: [`receive_checkpoint_files`] owns
+    /// the transport loop (socket → scratch dir + combined checksum),
     /// [`CheckpointStager::commit`] owns verify → commit → metadata against the
-    /// staged-checkpoint contract. What stays here is the only step that belongs
-    /// to the connection — adopting the staged offset into live replication
-    /// state, then flipping to `Streaming`.
+    /// staged-checkpoint contract, and the injected [`CheckpointInstaller`] owns
+    /// loading the staged snapshot into the live shards. What stays here is the
+    /// ordering and the only step that belongs to the connection — adopting the
+    /// staged offset into live replication state, then flipping to `Streaming`.
     ///
-    /// Streaming-before-install: the returned [`StagedOutcome`] is the licence
-    /// to adopt the offset and proceed to live WAL streaming (see
-    /// `connect_and_sync`); the checkpoint itself is *staged*, not installed —
-    /// the on-disk DB is unchanged until the next boot loads it. That invariant
-    /// now rides in the `commit` return type instead of a prose comment.
+    /// **Install before adopt.** Redis flushes the replica's dataset and loads
+    /// the master's snapshot before applying the stream; so does this. The
+    /// offset is adopted only after the install succeeds, so the replica never
+    /// advertises (or streams deltas onto) a keyspace that never took the base
+    /// snapshot. An install failure rewinds the offset to 0, which makes the
+    /// next reconnect send `PSYNC ? -1` and retry the whole full resync.
+    ///
+    /// The staged dir is deliberately left on disk after the install: if the
+    /// process dies between install and the next durable write, the boot-time
+    /// installer replays the same snapshot, which is idempotent.
     ///
     /// [`StagedOutcome`]: crate::fullsync::StagedOutcome
     pub(crate) async fn receive_checkpoint(&mut self, file_count: usize) -> io::Result<()> {
@@ -285,15 +298,37 @@ impl ReplicaConnection {
 
         let outcome = stager.commit(incoming, computed, &metadata).await?;
 
+        self.install_staged_checkpoint(stager.staged_dir()).await?;
+
         // Adopt the staged offset into live state — the one step that must stay
         // on the connection, because it mutates `ReplicationState` + the shared
         // replica offset atomic (the cluster-bus / INFO handle).
         self.state.write().await.replication_id = outcome.replication_id.clone();
         self.offsets.reset_to(outcome.replication_offset);
-        // Staged, not installed: the connection now moves straight into live WAL
-        // streaming (see `connect_and_sync`) exactly like the RDB fullsync path —
-        // so the link is up from here, matching `receive_rdb`'s transition.
+        // The live keyspace now matches the snapshot, so the connection moves
+        // into live WAL streaming (see `connect_and_sync`) exactly like the RDB
+        // fullsync path — the link is up from here, matching `receive_rdb`.
         self.set_state(ConnectionState::Streaming);
+        Ok(())
+    }
+
+    /// Hand the staged snapshot to the injected installer, rewinding the offset
+    /// on failure so the next reconnect asks for a fresh full resync instead of
+    /// streaming deltas onto a keyspace that never adopted the base snapshot.
+    async fn install_staged_checkpoint(&mut self, staged_dir: PathBuf) -> io::Result<()> {
+        let Some(installer) = self.checkpoint_installer.clone() else {
+            tracing::warn!(
+                checkpoint_dir = %staged_dir.display(),
+                "No checkpoint installer wired: the snapshot is staged for the next boot only, \
+                 so this node keeps serving its previous keyspace until it restarts"
+            );
+            return Ok(());
+        };
+        if let Err(e) = installer(staged_dir).await {
+            tracing::error!(error = %e, "Failed to install full-resync checkpoint into the live keyspace");
+            self.offsets.reset_to(0);
+            return Err(e);
+        }
         Ok(())
     }
 
@@ -322,6 +357,8 @@ mod tests {
         CheckpointChecksum, CheckpointFileHeader, FullSyncMetadata, calculate_bytes_checksum,
     };
     use crate::replica::offset::ReplicaOffset;
+    use std::future::Future;
+    use std::pin::Pin;
     use std::sync::atomic::AtomicU64;
 
     #[test]
@@ -363,6 +400,7 @@ mod tests {
             offsets,
             link_up: Arc::new(AtomicBool::new(false)),
             ack_interval: Duration::from_secs(1),
+            checkpoint_installer: None,
         };
 
         let mut client = client;
@@ -423,37 +461,43 @@ mod tests {
         buf
     }
 
-    /// The one behavior that must stay on the connection: after a good
-    /// checkpoint, the driver adopts the staged offset + replication id into
-    /// live state and raises `link_up` (Streaming). Drives the real
-    /// `receive_checkpoint` over an in-memory duplex — no socket, no RocksStore.
-    #[tokio::test]
-    async fn receive_checkpoint_adopts_offset_and_streams() {
-        let tmp = tempfile::tempdir().unwrap();
-        // data_dir is `<tmp>/db`; its parent `<tmp>` is where staging lands.
-        let data_dir = tmp.path().join("db");
+    /// A checkpoint fixture: two files whose body is already encoded on the
+    /// wire, plus the connection wired to read it. `data_dir` is `<tmp>/db` so
+    /// its parent `<tmp>` is where staging lands.
+    struct CheckpointFixture {
+        conn: ReplicaConnection,
+        file_count: usize,
+        state: Arc<RwLock<ReplicationState>>,
+        offsets: ReplicaOffset,
+        link_up: Arc<AtomicBool>,
+    }
 
+    async fn checkpoint_fixture(
+        tmp: &std::path::Path,
+        offset: u64,
+        installer: Option<CheckpointInstaller>,
+    ) -> CheckpointFixture {
         let files = vec![
             ("CURRENT".to_string(), b"MANIFEST-000005\n".to_vec()),
             ("000042.sst".to_string(), (0u8..=200).collect()),
         ];
-        let body = encode_checkpoint_body(&files, "primary-replid", 4242).await;
+        let body = encode_checkpoint_body(&files, "primary-replid", offset).await;
 
         let (mut client, server) = tokio::io::duplex(64 * 1024);
-
         let state = Arc::new(RwLock::new(ReplicationState::new()));
         let offsets = ReplicaOffset::new(state.clone(), Arc::new(AtomicU64::new(0)));
         let link_up = Arc::new(AtomicBool::new(false));
 
-        let mut conn = ReplicaConnection {
+        let conn = ReplicaConnection {
             stream: Box::new(server),
             _primary_addr: "127.0.0.1:6379".parse().unwrap(),
             state: state.clone(),
             connection_state: ConnectionState::Syncing,
-            data_dir,
+            data_dir: tmp.join("db"),
             offsets: offsets.clone(),
             link_up: link_up.clone(),
             ack_interval: Duration::from_secs(1),
+            checkpoint_installer: installer,
         };
 
         // Feed the whole checkpoint body, then close so no read blocks.
@@ -461,19 +505,103 @@ mod tests {
         client.shutdown().await.unwrap();
         drop(client);
 
-        conn.receive_checkpoint(files.len()).await.unwrap();
+        CheckpointFixture {
+            conn,
+            file_count: files.len(),
+            state,
+            offsets,
+            link_up,
+        }
+    }
+
+    /// With no installer wired the driver degrades to the pre-issue-61
+    /// behaviour: it still stages the checkpoint, adopts the offset +
+    /// replication id, and raises `link_up` (Streaming). Drives the real
+    /// `receive_checkpoint` over an in-memory duplex — no socket, no RocksStore.
+    #[tokio::test]
+    async fn receive_checkpoint_adopts_offset_and_streams() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut f = checkpoint_fixture(tmp.path(), 4242, None).await;
+
+        f.conn.receive_checkpoint(f.file_count).await.unwrap();
 
         // Offset adopted into the live head + visible through the shared atomic.
-        assert_eq!(offsets.current(), 4242);
+        assert_eq!(f.offsets.current(), 4242);
         // Replication id adopted into live state.
-        assert_eq!(state.read().await.replication_id, "primary-replid");
+        assert_eq!(f.state.read().await.replication_id, "primary-replid");
         // Link up: Streaming, with the derived atomic set in lockstep.
-        assert_eq!(conn.connection_state, ConnectionState::Streaming);
-        assert!(link_up.load(Ordering::Acquire));
+        assert_eq!(f.conn.connection_state, ConnectionState::Streaming);
+        assert!(f.link_up.load(Ordering::Acquire));
 
-        // The checkpoint was staged (writer's commit point), not installed.
+        // The checkpoint was staged (writer's commit point).
         let staged = frogdb_persistence::rocks::staged::StagedCheckpoint::in_parent(tmp.path());
         assert!(staged.exists());
         assert!(staged.dir().join("CURRENT").exists());
+    }
+
+    /// Issue 61: the wired installer is handed the committed staged dir, and it
+    /// runs *before* the offset is adopted — a replica must never advertise an
+    /// offset for a snapshot its keyspace has not taken.
+    #[tokio::test]
+    async fn receive_checkpoint_installs_staged_dir_before_adopting_offset() {
+        let tmp = tempfile::tempdir().unwrap();
+        // (staged dir handed to the installer, live offset at install time).
+        let seen: Arc<std::sync::Mutex<Vec<(PathBuf, u64)>>> = Arc::default();
+
+        let state = Arc::new(RwLock::new(ReplicationState::new()));
+        let offsets = ReplicaOffset::new(state.clone(), Arc::new(AtomicU64::new(0)));
+        let recorder = {
+            let seen = seen.clone();
+            let offsets = offsets.clone();
+            Arc::new(move |dir: PathBuf| {
+                let seen = seen.clone();
+                let offsets = offsets.clone();
+                Box::pin(async move {
+                    seen.lock().unwrap().push((dir, offsets.current()));
+                    Ok(())
+                }) as Pin<Box<dyn Future<Output = io::Result<()>> + Send>>
+            }) as CheckpointInstaller
+        };
+
+        let mut f = checkpoint_fixture(tmp.path(), 4242, Some(recorder)).await;
+        f.conn.receive_checkpoint(f.file_count).await.unwrap();
+
+        let seen = seen.lock().unwrap().clone();
+        let staged = frogdb_persistence::rocks::staged::StagedCheckpoint::in_parent(tmp.path());
+        assert_eq!(
+            seen,
+            vec![(staged.dir().to_path_buf(), 0)],
+            "installer runs exactly once, on the committed staged dir, before the offset is adopted"
+        );
+        assert_eq!(
+            f.offsets.current(),
+            4242,
+            "offset adopted after the install"
+        );
+        assert_eq!(f.conn.connection_state, ConnectionState::Streaming);
+    }
+
+    /// Issue 61: an install failure must not leave the replica streaming deltas
+    /// onto a keyspace that never took the base snapshot. The sync fails and the
+    /// offset rewinds to 0, so the next reconnect sends `PSYNC ? -1`.
+    #[tokio::test]
+    async fn receive_checkpoint_install_failure_rewinds_offset_for_full_resync() {
+        let tmp = tempfile::tempdir().unwrap();
+        let failing = Arc::new(|_dir: PathBuf| {
+            Box::pin(async { Err(io::Error::other("shard install failed")) })
+                as Pin<Box<dyn Future<Output = io::Result<()>> + Send>>
+        }) as CheckpointInstaller;
+
+        let mut f = checkpoint_fixture(tmp.path(), 4242, Some(failing)).await;
+        let err = f.conn.receive_checkpoint(f.file_count).await.unwrap_err();
+
+        assert_eq!(err.to_string(), "shard install failed");
+        assert_eq!(f.offsets.current(), 0, "rewound so PSYNC asks ? -1");
+        assert_ne!(f.conn.connection_state, ConnectionState::Streaming);
+        assert!(!f.link_up.load(Ordering::Acquire));
+        assert_eq!(
+            psync_request_args(&f.state.read().await.replication_id, f.offsets.current()),
+            ("?".to_string(), -1),
+        );
     }
 }

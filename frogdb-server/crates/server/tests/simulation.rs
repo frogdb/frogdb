@@ -5863,8 +5863,11 @@ async fn failover_plain_get(conn: &mut RespConn, key: &[u8]) -> std::io::Result<
 ///    (WAIT 1), and assert the durable (confirmed) data set converges on both
 ///    nodes and that split-brain post-failover writes never reached the original.
 ///    (Failback re-syncs toward the recovered boot-primary because a promoted
-///    replica cannot yet serve sub-replicas; full live-keyspace reconvergence of
-///    the demoted node needs a restart — see issue 23 Resolution / issue 61.)
+///    replica cannot yet serve sub-replicas. These hosts run persistence-disabled,
+///    so the full resync ships a *data-less* minimal RDB and the demoted node's
+///    forked live keys survive — see the boundary note at the assertion. Live
+///    reconvergence of a RocksDB-backed demoted node is issue 61, asserted in
+///    `integration_replication::test_runtime_full_resync_installs_snapshot_into_live_store`.)
 /// 6. Feed the recorded client history to the WGL checker; assert linearizable
 ///    and conclusive.
 fn run_replication_failover(seed: u64) {
@@ -6202,14 +6205,21 @@ fn run_replication_failover(seed: u64) {
             );
         }
 
-        // Boundary observed (filed as issue 61): a runtime REPLICAOF full resync
-        // *stages* the new master's checkpoint to disk but does not install it
-        // into the live store (replica/connection.rs `receive_checkpoint`), so the
-        // deposed node keeps serving its forked live keyspace — the post-failover
-        // writes survive the failback and live state only reconverges on restart.
-        // The durable (confirmed) data converges cleanly, which is the guarantee
-        // under test; full live-keyspace reconvergence of a demoted former-primary
-        // is tracked in issue 61 and deliberately not asserted here.
+        // Boundary of *this* simulation, not of the product: these hosts run with
+        // persistence disabled (see `real_frogdb_primary`), so a full resync ships
+        // the minimal RDB — an envelope with no dataset in it. There is no
+        // snapshot for the failed-back node to adopt, so its forked live keys
+        // survive here no matter what the install path does. Flushing on that
+        // path would delete confirmed data the primary never re-streams, so the
+        // data-less full sync is deliberately left alone.
+        //
+        // A RocksDB-backed node *does* full-resync into its live keyspace (issue
+        // 61): the checkpoint path installs the master's snapshot before adopting
+        // its offset, wiping the demoted node's forked keys with no restart. That
+        // is asserted in
+        // `integration_replication::test_runtime_full_resync_installs_snapshot_into_live_store`,
+        // which cannot live here because RocksDB + `spawn_blocking` would inject
+        // real threads and real I/O into a seeded deterministic run.
 
         Ok(())
     });

@@ -76,6 +76,7 @@ pub(super) fn init_replication(
     config: &Config,
     recovered_replication: &frogdb_core::ReplicationState,
     rocks_store: &Option<Arc<RocksStore>>,
+    shard_senders: &Arc<Vec<frogdb_core::ShardSender>>,
     _metrics_recorder: &Arc<dyn MetricsRecorder>,
     // The process-wide live role flag (minted in phase 1, owned by the
     // `RoleManager` from phase 3 on). Gates broadcasting, so promotion/demotion
@@ -148,6 +149,12 @@ pub(super) fn init_replication(
             config.persistence.data_dir.clone(),
         );
         handler.set_ack_interval(config.replication.ack_interval_ms);
+        // Issue 61: a received full resync must land in the live keyspace, not
+        // just on disk for the next boot.
+        handler.set_checkpoint_installer(crate::replication::LiveCheckpointInstaller::for_config(
+            config,
+            shard_senders.clone(),
+        ));
 
         // Under turmoil simulation the replica must dial its primary through
         // turmoil's simulated network — the default factory's
