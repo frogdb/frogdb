@@ -1124,7 +1124,6 @@ mod eviction_tests {
 #[cfg(test)]
 mod observability_tests {
     use super::*;
-    use std::sync::atomic::AtomicUsize;
 
     fn observability() -> ShardObservability {
         let slowlog = SlowLog::new(
@@ -1132,11 +1131,7 @@ mod observability_tests {
             crate::slowlog::DEFAULT_SLOWLOG_MAX_ARG_LEN,
             Arc::new(AtomicU64::new(0)),
         );
-        ShardObservability::new(
-            Arc::new(crate::noop::NoopMetricsRecorder::new()),
-            slowlog,
-            Arc::new(AtomicUsize::new(0)),
-        )
+        ShardObservability::new(Arc::new(crate::noop::NoopMetricsRecorder::new()), slowlog)
     }
 
     #[test]
