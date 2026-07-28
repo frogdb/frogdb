@@ -565,6 +565,13 @@ impl Command for WaitCommand {
 
         let (_num_replicas, _timeout_ms) = parse_wait_args(args)?;
 
+        // Cluster mode: same pinned divergence as the connection-level path —
+        // the WAIT coordinator is unwired in cluster mode (see the
+        // WAIT-cluster-mode PRD), so the count is always 0.
+        if ctx.cluster_state.is_some() {
+            return Ok(Response::Integer(0));
+        }
+
         // Deny-blocking context (MULTI/EXEC executes queued commands on the
         // shard): return the acked count for the current live offset without
         // blocking, exactly like Redis's CLIENT_DENY_BLOCKING branch.

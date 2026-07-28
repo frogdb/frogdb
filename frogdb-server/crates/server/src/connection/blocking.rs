@@ -223,6 +223,16 @@ impl ConnectionHandler {
             Err(err) => return err.to_response(),
         };
 
+        // Cluster mode: the WAIT coordinator is deliberately unwired — cluster
+        // replicas replicate through the cluster machinery, but their acks are
+        // not yet a per-slot durability signal a keyed WAIT could honestly
+        // count (see the WAIT-cluster-mode PRD). Return 0 immediately, the
+        // pinned divergence, rather than counting full-stream acks that don't
+        // carry that meaning.
+        if self.cluster.cluster_state.is_some() {
+            return Response::Integer(0);
+        }
+
         // Standalone: no primary replication handler means no replica can ever
         // attach, so the quorum is decided now.
         let Some(primary) = self.cluster.primary_replication_handler.clone() else {
