@@ -18,8 +18,16 @@ Resolution — user-approved disposition (wire 7 / delete 11):
   helm-gen configmap (`metrics.bind` would fail deny_unknown_fields on boot; also fixed
   pre-existing snake_case drift in the stale operator copy), replication/vll/concurrency/
   diagnostics docs. `website/docs-spec/` audit records left as historical snapshots.
-- The 20 immutable propagation-wiring candidates: user chose LEAVE IMMUTABLE — list below stays
-  as the tracked backlog for a future mutability round.
+- The 20 immutable propagation-wiring candidates: user chose LEAVE IMMUTABLE that round; the
+  follow-up mutability round (2026-07-28) then wired them: 18 of the 20 promoted live-mutable
+  (+ tls-cert/key/ca-file, tls-ciphersuites, batch-size-threshold-kb, hotshards ×4 → golden
+  118, MutableParamId 73), each behind a shared-atomic/handle seam with a propagation-truth
+  test. Left immutable with reasoning re-confirmed: `compaction-rate-limit-mb` (librocksdb-sys
+  exposes no live rate-limiter retune) and the `latency-bands` thresholds vec (resize
+  invalidates cumulative counters). TLS gained multi-cert (`[[tls.additional-certs]]`,
+  sig-scheme resolver), SET-driven reload, and a content-hash cert watcher consuming the
+  previously-dead `watch-certs`/`watch-debounce-ms` (now honest immutable params). Promotion
+  gap found+fixed en route: see issues/18.
 - Review extras: `refresh_key` cross-source reconcile (delete-first) fixing a stale-doc regression
   + pre-existing hash-into-json-index pollution; UFCS for chokepoint lint in init.rs tests.
 - `metrics.enabled` determined NOT dead: live http-mapped registry param (`metrics-enabled`).

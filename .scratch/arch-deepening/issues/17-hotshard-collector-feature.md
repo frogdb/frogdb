@@ -1,6 +1,22 @@
 # 17 — Hot-shard collector: build the feature or delete the collector
 
-Status: needs-triage
+Status: done (built end-to-end, 2026-07-28, branch workspace-3)
+
+Resolution — feature built (user chose all three surfaces):
+- Real data path: `record_op` (previously zero callers) wired into the shard event loop +
+  scatter path via a shared `OpClass::from_flags` classifier; per-shard 60×1s ring driven by
+  a monotonic `Instant` epoch (bounded catch-up, wall-clock immune); real queue depth from
+  `message_rx.len()` (the old always-0 atomic deleted).
+- Surfaces: `FROGDB.HOTSHARDS [PERIOD n]` (RESP), `/status` JSON `hot_shards` section
+  (omitted, never fabricated, when absent), debug web UI panel — all render one
+  `HotShardSnapshot` from the single collector, honest clamped `period_secs`, rates divided
+  by observed seconds.
+- Config: `[hotshards]` section; CONFIG params `hotshards-hot-threshold-percent` /
+  `warm-threshold-percent` / `default-period-secs` / `enabled` — all live-mutable through
+  `SharedHotShardConfig` atomics (propagation-truth tested); `enabled` kill switch clears
+  the ring on re-enable, disabled collector reports absence + reason.
+- Config-struct duplication resolved; collector installed via `ServerObservability` so
+  `hot_shard_detector()` returns `Some` in production.
 
 ## Context
 

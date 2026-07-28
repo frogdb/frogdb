@@ -43,6 +43,24 @@ PartialResult::ShardError/FatalReply, RocksStore put/get gating, demotion test).
 extras: EsAllMerge error surfacing, no-op SET NX/COPY write_was_noop. Tail smalls:
 issues/16-post-followup-smalls.md.
 
+## Mutability round (issues 14-candidates + 17 + 18) — landed 2026-07-28
+- Config-mutability: 26 params promoted live-mutable (golden 111→118, MutableParamId 46→73)
+  behind shared-atomic/handle seams — cluster flags, status thresholds, tracing sampling,
+  latency-bands toggle, snapshot interval, replication lag/self-fence/freshness, WAL batch
+  threshold, TLS paths/ciphersuites/handshake-timeout/cluster-migration, hotshards ×4.
+  Propagation-truth test per param; REWRITE round-trip suite (SET → REWRITE → reparse →
+  validate).
+- TLS: multi-cert (`[[tls.additional-certs]]` + sig-scheme ResolvesServerCert), SET-driven
+  reload (build-both-then-swap), content-hash cert watcher (watch-certs now honest),
+  accept-loop handshake moved off the accept task (DoS fix), client-identity contract.
+- Hot-shard collector (issue 17): built end-to-end — real shard-loop sampling, monotonic
+  ring, FROGDB.HOTSHARDS + /status + debug UI, kill switch.
+- Promotion gap (issue 18, review finding): primary-side replication seams now constructed
+  for every role, behavior role-gated; SETs made while replica govern the promoted primary.
+- Review: 1 CRITICAL (REWRITE `ca-file=""` boot failure) + 8 MAJOR found, all fixed; plus
+  pre-existing persistence corruption fixed (non-canonical int-string round-trip, `"00"`→`"0"`).
+- todo/ROUND7_FOLLOWUPS.md retired (all items verified done).
+
 ## Backlog round (issues 14 + 16) — landed 2026-07-22
 - issue 16: ssubscribe-parity de-flake (bounded retry); Refresh reindex extended to JSON docs
   (COPY/RESTORE/RENAME) + review fixes: cross-source reconcile-to-empty, hash→json-index
