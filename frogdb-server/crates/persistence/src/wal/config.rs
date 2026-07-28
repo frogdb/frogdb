@@ -75,6 +75,14 @@ pub struct WalConfig {
     pub batch_size_threshold: usize,
     pub batch_timeout_ms: u64,
     pub channel_capacity: usize,
+    /// Shared live handle for the batch-size flush threshold (bytes).
+    ///
+    /// When `Some`, [`super::RocksWalWriter::new`] *adopts* this atomic instead
+    /// of minting its own from `batch_size_threshold`, so every shard's flush
+    /// thread and `CONFIG SET batch-size-threshold-kb` read and write the same
+    /// cell. `None` (tests, and any caller that does not care) keeps the old
+    /// behaviour of seeding a private atomic from `batch_size_threshold`.
+    pub batch_size_threshold_handle: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
 }
 impl Default for WalConfig {
     fn default() -> Self {
@@ -83,6 +91,7 @@ impl Default for WalConfig {
             batch_size_threshold: 4 * 1024 * 1024,
             batch_timeout_ms: 10,
             channel_capacity: 8192,
+            batch_size_threshold_handle: None,
         }
     }
 }

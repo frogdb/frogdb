@@ -83,12 +83,12 @@ pub struct ReplicationConfigSection {
 
     /// Max replication lag in bytes before proactive disconnect. 0 = disabled.
     #[serde(default)]
-    #[param]
+    #[param(mutable)]
     pub replication_lag_threshold_bytes: u64,
 
     /// Max replication lag in seconds (since last ACK) before proactive disconnect. 0 = disabled.
     #[serde(default)]
-    #[param]
+    #[param(mutable)]
     pub replication_lag_threshold_secs: u64,
 
     /// Cooldown seconds after proactive lag disconnect before allowing another.
@@ -123,14 +123,14 @@ pub struct ReplicationConfigSection {
     /// Reject writes when primary loses all replica ACK freshness.
     /// Prevents zombie writes during network partitions.
     #[serde(default = "default_self_fence_on_replica_loss")]
-    #[param]
+    #[param(mutable)]
     pub self_fence_on_replica_loss: bool,
 
     /// Freshness timeout for replica ACKs (ms).
     /// If no replica ACKs within this window, the primary fences itself.
     /// Should be >= 3x ack_interval_ms to tolerate missed ACKs.
     #[serde(default = "default_replica_freshness_timeout_ms")]
-    #[param]
+    #[param(mutable)]
     pub replica_freshness_timeout_ms: u64,
 
     /// Write timeout for streaming to replicas (ms). 0 = disabled.

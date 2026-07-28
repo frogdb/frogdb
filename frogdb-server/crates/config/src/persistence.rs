@@ -66,6 +66,11 @@ pub struct PersistenceConfig {
 
     /// RocksDB compaction rate limit in MB/s. 0 means unlimited.
     #[serde(default = "default_compaction_rate_limit_mb")]
+    // Immutable, and not for lack of a FrogDB seam: `librocksdb-sys` exposes
+    // neither `rocksdb_set_db_options` nor the RateLimiter's
+    // `SetBytesPerSecond`, so the limiter installed at `RocksStore::open` cannot
+    // be retuned without patching the C bindings. GET reports the honest
+    // startup value; revisit if the bindings grow either entry point.
     #[param]
     pub compaction_rate_limit_mb: u64,
 
@@ -79,7 +84,7 @@ pub struct PersistenceConfig {
 
     /// Batch size threshold in KB before flushing.
     #[serde(default = "default_batch_size_threshold_kb")]
-    #[param]
+    #[param(mutable)]
     pub batch_size_threshold_kb: usize,
 
     /// Batch timeout in milliseconds before flushing.
@@ -274,7 +279,7 @@ pub struct SnapshotConfig {
 
     /// Interval between automatic snapshots in seconds (0 = disabled).
     #[serde(default = "default_snapshot_interval_secs")]
-    #[param]
+    #[param(mutable)]
     pub snapshot_interval_secs: u64,
 
     /// Maximum number of snapshots to retain (0 = unlimited).

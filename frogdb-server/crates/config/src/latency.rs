@@ -66,7 +66,7 @@ impl Default for LatencyConfig {
 pub struct LatencyBandsConfig {
     /// Whether latency band tracking is enabled.
     #[serde(default)]
-    #[param(name = "latency-bands-enabled")]
+    #[param(mutable, name = "latency-bands-enabled")]
     pub enabled: bool,
 
     /// Latency band thresholds in milliseconds.

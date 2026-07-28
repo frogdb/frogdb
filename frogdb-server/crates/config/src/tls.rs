@@ -67,12 +67,12 @@ pub struct TlsConfig {
 
     /// Path to the server certificate file (PEM format).
     #[serde(default)]
-    #[param(name = "tls-cert-file")]
+    #[param(mutable, name = "tls-cert-file")]
     pub cert_file: PathBuf,
 
     /// Path to the server private key file (PEM format).
     #[serde(default)]
-    #[param(name = "tls-key-file")]
+    #[param(mutable, name = "tls-key-file")]
     pub key_file: PathBuf,
 
     /// Extra server identities offered alongside `cert-file`/`key-file`
@@ -82,13 +82,20 @@ pub struct TlsConfig {
     /// pair must parse and its key must match its certificate, or TLS setup
     /// fails loudly at startup / on reload.
     #[serde(default)]
-    #[param(skip)] // skip: pending promotion (mutability round)
+    // skip: array-of-tables with no flat CONFIG representation — a single
+    // `tls-additional-certs` string cannot express N (cert, key) pairs without
+    // inventing an encoding CONFIG SET would then have to parse, and CONFIG
+    // REWRITE would have to round-trip back into `[[tls.additional-certs]]`.
+    // The live seam exists regardless (`TlsRuntimeHandle::set_additional_certs`,
+    // used by the cert watcher); it is reachable by editing the file and
+    // reloading, not by CONFIG.
+    #[param(skip)]
     pub additional_certs: Vec<AdditionalCert>,
 
     /// Path to the CA certificate file for client certificate verification (PEM format).
     /// Required when `require_client_cert` is not `none`.
     #[serde(default)]
-    #[param(name = "tls-ca-cert-file")]
+    #[param(mutable, name = "tls-ca-cert-file")]
     pub ca_file: Option<PathBuf>,
 
     /// Port for TLS connections.
@@ -112,9 +119,11 @@ pub struct TlsConfig {
     /// building the rustls Server/Client config; an unknown name or a set that
     /// excludes every enabled protocol version fails loudly at startup.
     #[serde(default)]
-    // issue-14: consumed at TLS manager startup (rustls ciphersuite selection);
-    // immutable CONFIG GET-only. Redis-compat name `tls-ciphersuites`.
-    #[param(name = "tls-ciphersuites")]
+    // Live-mutable: `CONFIG SET tls-ciphersuites` rebuilds the rustls configs
+    // through `TlsRuntimeHandle::set_ciphersuites`, which validates the names
+    // as part of the reload and leaves the previous configs serving if the
+    // reload fails. Redis-compat name `tls-ciphersuites`.
+    #[param(mutable, name = "tls-ciphersuites")]
     pub ciphersuites: Vec<String>,
 
     /// Whether to encrypt replication connections.
@@ -129,7 +138,7 @@ pub struct TlsConfig {
 
     /// Whether to enable dual-accept mode for rolling TLS cluster migration.
     #[serde(default)]
-    #[param]
+    #[param(mutable)]
     pub tls_cluster_migration: bool,
 
     /// Whether to keep the admin port as plaintext even when TLS is enabled.
@@ -146,12 +155,12 @@ pub struct TlsConfig {
 
     /// Path to client certificate for outgoing replication/cluster connections.
     #[serde(default)]
-    #[param(name = "tls-client-cert-file")]
+    #[param(mutable, name = "tls-client-cert-file")]
     pub client_cert_file: Option<PathBuf>,
 
     /// Path to client private key for outgoing replication/cluster connections.
     #[serde(default)]
-    #[param(name = "tls-client-key-file")]
+    #[param(mutable, name = "tls-client-key-file")]
     pub client_key_file: Option<PathBuf>,
 
     /// Whether to watch certificate files for changes and auto-reload.
@@ -163,7 +172,9 @@ pub struct TlsConfig {
     /// that fails (mismatched pair, unparseable PEM) is logged and the
     /// previously loaded certificates keep serving.
     #[serde(default = "default_true")]
-    #[param(skip)] // skip: cert file-watcher task lifetime is fixed at startup
+    // Immutable: the watcher task is spawned (or not) once at startup; there is
+    // no seam to start or stop it live. GET reports the honest startup value.
+    #[param(name = "tls-watch-certs")]
     pub watch_certs: bool,
 
     /// Poll/debounce interval in milliseconds for the certificate file watcher.
@@ -172,12 +183,14 @@ pub struct TlsConfig {
     /// watcher waits for one full quiet interval before reloading; reaction
     /// latency is between one and two intervals. Values below 10ms are clamped.
     #[serde(default = "default_watch_debounce_ms")]
-    #[param(skip)] // skip: read once when the watcher task starts; no operator story
+    // Immutable: read once when the watcher task starts and captured by its
+    // poll loop. GET reports the honest startup value.
+    #[param(name = "tls-watch-debounce-ms")]
     pub watch_debounce_ms: u64,
 
     /// TLS handshake timeout in milliseconds.
     #[serde(default = "default_handshake_timeout_ms")]
-    #[param(name = "tls-handshake-timeout-ms")]
+    #[param(mutable, name = "tls-handshake-timeout-ms")]
     pub handshake_timeout_ms: u64,
 }
 

@@ -312,6 +312,12 @@ pub(super) async fn init_infrastructure(
         (Arc::new(NoopSnapshotCoordinator::new()), None)
     };
 
+    // Publish the coordinator so `CONFIG SET snapshot-interval-secs` reaches the
+    // live scheduler the periodic task reads. Always published (the noop
+    // coordinator is a real coordinator), so the parameter never silently
+    // no-ops on a node without persistence.
+    config_manager.set_snapshot_coordinator(snapshot_coordinator.clone());
+
     // Slot for the primary replication handler, filled after the replication
     // phase (which runs later). The pre-snapshot hook reads it to persist the
     // replication offset alongside each snapshot — coupling offset durability to
@@ -372,7 +378,11 @@ pub(super) async fn init_infrastructure(
     let shard_memory_used: Arc<Vec<AtomicU64>> =
         Arc::new((0..num_shards).map(|_| AtomicU64::new(0)).collect());
 
-    let wal_config = build_wal_config(&config.persistence);
+    let mut wal_config = build_wal_config(&config.persistence);
+    // Hand every WAL writer the ConfigManager's batch-threshold cell so
+    // `CONFIG SET batch-size-threshold-kb` retunes all shards' flush threads at
+    // once, and CONFIG GET reads back exactly what they compare against.
+    wal_config.batch_size_threshold_handle = Some(config_manager.wal_batch_size_threshold_handle());
     let eviction_config = build_eviction_config(&config.memory);
 
     // Create shared slowlog ID counter for global ordering across shards

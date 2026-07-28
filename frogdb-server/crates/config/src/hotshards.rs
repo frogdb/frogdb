@@ -4,11 +4,12 @@
 //! flags shards receiving a disproportionate share of traffic in FrogDB's
 //! shared-nothing, thread-per-core architecture.
 //
-// None of these fields are exposed as CONFIG GET/SET parameters yet; each
-// carries an explicit `#[param(skip)]` to satisfy the per-field coverage
-// guarantee. They are promoted to live-mutable CONFIG params in a later
-// mutability round (the collector already reads them through shared atomic
-// state so a runtime SET can retune it live).
+// All three fields are live-mutable CONFIG params
+// (`hotshards-hot-threshold-percent`, `hotshards-warm-threshold-percent`,
+// `hotshards-default-period-secs`). The collector holds them in a shared
+// `SharedHotShardConfig` (atomics) that it re-reads on every `collect()`, so a
+// runtime CONFIG SET retunes every hot-shard surface at once — FROGDB.HOTSHARDS,
+// the `/status` JSON, and the debug web UI panel.
 
 use frogdb_config_derive::ConfigParams;
 use schemars::JsonSchema;
@@ -22,19 +23,19 @@ pub struct HotShardsConfig {
     /// Traffic-share percentage (0-100) at or above which a shard is classified
     /// HOT.
     #[serde(default = "default_hot_threshold_percent")]
-    #[param(skip)] // skip: pending promotion (mutability round)
+    #[param(mutable, name = "hotshards-hot-threshold-percent")]
     pub hot_threshold_percent: f64,
 
     /// Traffic-share percentage (0-100) at or above which a shard is classified
     /// WARM (must be below `hot_threshold_percent`).
     #[serde(default = "default_warm_threshold_percent")]
-    #[param(skip)] // skip: pending promotion (mutability round)
+    #[param(mutable, name = "hotshards-warm-threshold-percent")]
     pub warm_threshold_percent: f64,
 
     /// Default window, in seconds, over which per-shard op-rates are computed
     /// when a request does not specify one.
     #[serde(default = "default_default_period_secs")]
-    #[param(skip)] // skip: pending promotion (mutability round)
+    #[param(mutable, name = "hotshards-default-period-secs")]
     pub default_period_secs: u64,
 }
 

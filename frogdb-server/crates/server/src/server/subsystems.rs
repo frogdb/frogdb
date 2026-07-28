@@ -16,7 +16,7 @@ use crate::net::{JoinHandle, spawn};
 use crate::observability_server::ObservabilityServer;
 use crate::replication::{ReplicaCommandExecutor, consume_frames};
 
-use crate::config::{HotShardsConfigExt, MemoryConfigExt};
+use crate::config::MemoryConfigExt;
 
 use super::Server;
 
@@ -101,11 +101,12 @@ impl Server {
         // per-shard load: FROGDB.HOTSHARDS (through the core `ObservabilityConfig`
         // seam), the `/status` JSON's `hot_shards` section, and the debug web UI
         // panel. One collector means the three can never disagree, and its
-        // thresholds live in shared atomics so a later CONFIG SET retunes all
-        // three at once.
-        let hot_shard_collector = Arc::new(frogdb_debug::HotShardCollector::new(
+        // thresholds are the ConfigManager's own shared atomics, adopted here,
+        // so `CONFIG SET hotshards-*` retunes all three at once and CONFIG GET
+        // reports what the collector actually classifies with.
+        let hot_shard_collector = Arc::new(frogdb_debug::HotShardCollector::with_shared_config(
             self.shard_senders.clone(),
-            &self.config.hotshards.to_collector_config(),
+            self.config_manager.hotshard_config(),
         ));
         let observability_collectors = Arc::new(
             crate::server_observability::ServerObservability::default()

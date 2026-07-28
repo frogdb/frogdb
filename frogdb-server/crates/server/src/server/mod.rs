@@ -265,6 +265,22 @@ impl Server {
             let _ = infra.repl_state_save_slot.set(handler.clone());
         }
 
+        // Publish the primary-only replication seams to the ConfigManager so
+        // `CONFIG SET replication-lag-threshold-*` / `self-fence-on-replica-loss`
+        // / `replica-freshness-timeout-ms` reach live state instead of stopping
+        // at the manager's own record of the configured value. Both are absent
+        // on a replica, which has no primary-side lag or quorum machinery.
+        if let Some(ref handler) = repl.primary_replication_handler {
+            infra
+                .config_manager
+                .set_replication_lag_thresholds(handler.lag_thresholds());
+        }
+        if let Some(ref checker) = repl.replication_self_fence {
+            infra
+                .config_manager
+                .set_replication_self_fence(checker.clone());
+        }
+
         // Phase 3: Cluster/Raft initialization + background tasks.
         // `init_cluster` may mint the HealthProbe offset atomic (when the node
         // booted primary/standalone in cluster mode) and shares it with the

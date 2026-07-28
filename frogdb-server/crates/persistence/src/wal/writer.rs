@@ -47,7 +47,13 @@ impl RocksWalWriter {
             last_flush_timestamp_ms: AtomicU64::new(now_ms),
         });
         let outcomes = Arc::new(FlushOutcomes::new());
-        let batch_size_threshold = Arc::new(AtomicUsize::new(config.batch_size_threshold));
+        // Adopt the caller's shared handle when one is supplied so every shard's
+        // flush thread and `CONFIG SET batch-size-threshold-kb` observe one
+        // cell; otherwise mint a private one seeded from the static config.
+        let batch_size_threshold = match &config.batch_size_threshold_handle {
+            Some(handle) => Arc::clone(handle),
+            None => Arc::new(AtomicUsize::new(config.batch_size_threshold)),
+        };
         let flush_thread = {
             let engine = FlushEngine::new(
                 RocksSink::new(rocks, shard_id),

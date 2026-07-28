@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use frogdb_core::persistence::WalFailurePolicy;
 use frogdb_core::{
@@ -400,6 +400,14 @@ pub struct StaticConfig {
     /// Hard limit (bytes) on the per-connection pub/sub output buffer for a slow
     /// subscriber before messages are dropped and the connection is torn down.
     pub pubsub_output_buffer_hard_limit: usize,
+
+    // --- config-mutability round: newly-exposed immutable params ---
+    /// Whether the certificate file watcher is running. Immutable: the watcher
+    /// task is spawned (or not) once at startup.
+    pub tls_watch_certs: bool,
+    /// Cert-watcher debounce window in ms. Immutable: consumed when the watcher
+    /// task is spawned.
+    pub tls_watch_debounce_ms: u64,
 }
 
 impl StaticConfig {
@@ -505,6 +513,9 @@ impl StaticConfig {
             repl_ack_interval_ms: config.replication.ack_interval_ms,
             tls_ciphersuites: config.tls.ciphersuites.clone(),
             pubsub_output_buffer_hard_limit: config.server.pubsub_output_buffer_hard_limit,
+            // --- config-mutability round: newly-exposed immutable params ---
+            tls_watch_certs: config.tls.watch_certs,
+            tls_watch_debounce_ms: config.tls.watch_debounce_ms,
         }
     }
 }
@@ -512,6 +523,82 @@ impl StaticConfig {
 /// Render a bool as the Redis-style CONFIG GET display string ("yes"/"no").
 fn yes_no(v: bool) -> String {
     if v { "yes" } else { "no" }.to_string()
+}
+
+/// Parse the Redis-style boolean spellings accepted by `CONFIG SET`.
+fn parse_yes_no(param: &'static str, s: &str) -> Result<bool, ConfigError> {
+    match s.to_lowercase().as_str() {
+        "yes" | "true" | "1" | "on" => Ok(true),
+        "no" | "false" | "0" | "off" => Ok(false),
+        _ => Err(ConfigError::InvalidValue {
+            param: param.to_string(),
+            message: "must be yes/no".to_string(),
+        }),
+    }
+}
+
+/// Enforce the 1-100 bound the `[status]` section validator applies to its
+/// warning percentages, so CONFIG SET and the config file agree on what is legal.
+fn validate_percent(param: &'static str, v: u8) -> Result<(), ConfigError> {
+    if v == 0 || v > 100 {
+        Err(ConfigError::InvalidValue {
+            param: param.to_string(),
+            message: "must be between 1 and 100".to_string(),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+/// Parse a 0-100 percentage for the `[hotshards]` thresholds, applying the same
+/// range check as `HotShardsConfig::validate`.
+fn parse_percent_f64(param: &'static str, s: &str) -> Result<f64, ConfigError> {
+    let v = s.parse::<f64>().map_err(|_| ConfigError::InvalidValue {
+        param: param.to_string(),
+        message: "must be a number between 0 and 100".to_string(),
+    })?;
+    if !(0.0..=100.0).contains(&v) {
+        return Err(ConfigError::InvalidValue {
+            param: param.to_string(),
+            message: "must be between 0 and 100".to_string(),
+        });
+    }
+    Ok(v)
+}
+
+/// Rejection message shared by every TLS parameter when no TLS runtime exists.
+const TLS_NOT_RUNNING: &str =
+    "TLS is not running on this server; enable [tls] in the config file and restart";
+
+/// One live TLS change, as requested by a TLS parameter's `apply`.
+///
+/// See [`ConfigManager::apply_tls`] for why this is a value rather than a
+/// closure over `TlsRuntimeHandle`.
+enum TlsMutation {
+    CertFile(PathBuf),
+    KeyFile(PathBuf),
+    CaFile(Option<PathBuf>),
+    ClientCertFile(Option<PathBuf>),
+    ClientKeyFile(Option<PathBuf>),
+    Ciphersuites(Vec<String>),
+    HandshakeTimeoutMs(u64),
+    ClusterMigration(bool),
+}
+
+/// Interpret a CONFIG SET path value: an empty string clears an optional path.
+fn optional_path(s: &str) -> Option<PathBuf> {
+    if s.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(s))
+    }
+}
+
+/// Render an optional path the way CONFIG GET reports "unset": the empty string.
+fn render_optional_path(p: &Option<PathBuf>) -> String {
+    p.as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default()
 }
 
 /// Read-only metadata for an immutable parameter served by CONFIG GET.
@@ -663,6 +750,51 @@ pub struct ConfigManager {
     /// disabled, so the corresponding CONFIG SET has nothing live to change.
     #[cfg(not(feature = "turmoil"))]
     tls_runtime: std::sync::OnceLock<Arc<crate::tls_runtime::TlsRuntimeHandle>>,
+    /// Live hot-shard classification thresholds.
+    ///
+    /// Owned here from construction and *adopted* by the `HotShardCollector`
+    /// (which is built later, in `start_subsystems`) via
+    /// [`frogdb_debug::HotShardCollector::with_shared_config`], so both sides
+    /// share one cell: `CONFIG SET hotshards-*` retunes the running collector
+    /// and CONFIG GET reads back what the collector actually classifies with.
+    hotshards: Arc<frogdb_debug::SharedHotShardConfig>,
+    /// Live WAL flush batch-size threshold, in **bytes**.
+    ///
+    /// The wire parameter `batch-size-threshold-kb` is in KiB; this cell holds
+    /// the byte value the flush threads compare against. Adopted by every
+    /// `RocksWalWriter` through `WalConfig::batch_size_threshold_handle`, so all
+    /// shards retune together. When persistence is disabled nothing adopts it
+    /// and it simply records the configured value for GET/REWRITE.
+    wal_batch_size_threshold: Arc<AtomicUsize>,
+    /// Configured periodic-snapshot cadence, in seconds.
+    ///
+    /// This is the *authority* for CONFIG GET/REWRITE. The snapshot coordinator
+    /// is built after this manager, so `apply` writes here first and then pushes
+    /// the new cadence into [`Self::snapshot_coordinator`] when it is published.
+    snapshot_interval_secs: Arc<AtomicU64>,
+    /// Live snapshot coordinator, published by server init once persistence is
+    /// up. `None` only before that point (and in unit tests).
+    snapshot_coordinator:
+        std::sync::OnceLock<Arc<dyn frogdb_core::persistence::SnapshotCoordinator>>,
+    /// Configured primary replication lag thresholds (bytes / seconds).
+    ///
+    /// Authority for CONFIG GET/REWRITE on *every* node. The live
+    /// [`frogdb_replication::LagThresholds`] exists only on primaries, so on a
+    /// replica a SET is recorded here and takes effect if the node is later
+    /// re-initialised as a primary.
+    replication_lag_threshold_bytes: Arc<AtomicU64>,
+    replication_lag_threshold_secs: Arc<AtomicU64>,
+    /// Live primary-side lag thresholds; absent on replicas.
+    replication_lag_thresholds: std::sync::OnceLock<Arc<frogdb_replication::LagThresholds>>,
+    /// Configured replica-loss self-fence policy and freshness window.
+    ///
+    /// Same primary-only story as the lag thresholds: authority for GET/REWRITE
+    /// here, pushed into the live quorum checker when one exists.
+    self_fence_on_replica_loss: Arc<AtomicBool>,
+    replica_freshness_timeout_ms: Arc<AtomicU64>,
+    /// Live replication self-fence quorum checker; absent on replicas.
+    replication_self_fence:
+        std::sync::OnceLock<Arc<crate::replication_quorum::ReplicationQuorumChecker>>,
 }
 
 /// Bundle of live collaborators injected into [`ConfigManager`] at construction.
@@ -787,6 +919,91 @@ impl ConfigManager {
             latency_band_tracker,
             #[cfg(not(feature = "turmoil"))]
             tls_runtime: std::sync::OnceLock::new(),
+            hotshards: Arc::new(frogdb_debug::SharedHotShardConfig::new(
+                &crate::config::HotShardsConfigExt::to_collector_config(&config.hotshards),
+            )),
+            wal_batch_size_threshold: Arc::new(AtomicUsize::new(
+                config.persistence.batch_size_threshold_kb * 1024,
+            )),
+            snapshot_interval_secs: Arc::new(AtomicU64::new(
+                config.snapshot.snapshot_interval_secs,
+            )),
+            snapshot_coordinator: std::sync::OnceLock::new(),
+            replication_lag_threshold_bytes: Arc::new(AtomicU64::new(
+                config.replication.replication_lag_threshold_bytes,
+            )),
+            replication_lag_threshold_secs: Arc::new(AtomicU64::new(
+                config.replication.replication_lag_threshold_secs,
+            )),
+            replication_lag_thresholds: std::sync::OnceLock::new(),
+            self_fence_on_replica_loss: Arc::new(AtomicBool::new(
+                config.replication.self_fence_on_replica_loss,
+            )),
+            replica_freshness_timeout_ms: Arc::new(AtomicU64::new(
+                config.replication.replica_freshness_timeout_ms,
+            )),
+            replication_self_fence: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Live hot-shard thresholds, for the collector to adopt at startup.
+    pub fn hotshard_config(&self) -> Arc<frogdb_debug::SharedHotShardConfig> {
+        self.hotshards.clone()
+    }
+
+    /// Live WAL flush batch-size threshold (bytes), for `WalConfig` to adopt.
+    pub fn wal_batch_size_threshold_handle(&self) -> Arc<AtomicUsize> {
+        self.wal_batch_size_threshold.clone()
+    }
+
+    /// Publish the live snapshot coordinator.
+    ///
+    /// Takes `&self` for the same reason as [`Self::set_tls_runtime`]: the
+    /// coordinator is built after this manager is `Arc`-wrapped. Called at most
+    /// once; a second call is ignored. On publish the coordinator is
+    /// immediately synced to the configured cadence, so a CONFIG SET that
+    /// landed before publication is not lost.
+    pub fn set_snapshot_coordinator(
+        &self,
+        coordinator: Arc<dyn frogdb_core::persistence::SnapshotCoordinator>,
+    ) {
+        if self.snapshot_coordinator.set(coordinator).is_ok() {
+            let secs = self.snapshot_interval_secs.load(Ordering::Relaxed);
+            if let Some(c) = self.snapshot_coordinator.get() {
+                c.set_periodic_interval_secs(secs);
+            }
+        }
+    }
+
+    /// Publish the live primary-side replication lag thresholds.
+    ///
+    /// Primary-only: replicas never call this. Syncs the configured values into
+    /// the handle on publish.
+    pub fn set_replication_lag_thresholds(
+        &self,
+        thresholds: Arc<frogdb_replication::LagThresholds>,
+    ) {
+        if self.replication_lag_thresholds.set(thresholds).is_ok()
+            && let Some(t) = self.replication_lag_thresholds.get()
+        {
+            t.set_threshold_bytes(self.replication_lag_threshold_bytes.load(Ordering::Relaxed));
+            t.set_threshold_secs(self.replication_lag_threshold_secs.load(Ordering::Relaxed));
+        }
+    }
+
+    /// Publish the live replication self-fence quorum checker.
+    ///
+    /// Primary-only: replicas never call this. Syncs the configured values into
+    /// the checker on publish.
+    pub fn set_replication_self_fence(
+        &self,
+        checker: Arc<crate::replication_quorum::ReplicationQuorumChecker>,
+    ) {
+        if self.replication_self_fence.set(checker).is_ok()
+            && let Some(c) = self.replication_self_fence.get()
+        {
+            c.set_self_fence_enabled(self.self_fence_on_replica_loss.load(Ordering::Relaxed));
+            c.set_freshness_timeout_ms(self.replica_freshness_timeout_ms.load(Ordering::Relaxed));
         }
     }
 
@@ -841,6 +1058,72 @@ impl ConfigManager {
     #[cfg(not(feature = "turmoil"))]
     pub fn tls_runtime(&self) -> Option<&Arc<crate::tls_runtime::TlsRuntimeHandle>> {
         self.tls_runtime.get()
+    }
+
+    /// The TLS configuration the running server is actually serving, or `None`
+    /// when no TLS runtime exists (TLS disabled, a unit-test manager, or the
+    /// `turmoil` build, which compiles no TLS at all).
+    ///
+    /// Every TLS parameter's CONFIG GET reads through this so a value that was
+    /// changed by `CONFIG SET` is never reported from the startup snapshot.
+    fn live_tls_config(&self) -> Option<frogdb_config::TlsConfig> {
+        #[cfg(not(feature = "turmoil"))]
+        {
+            self.tls_runtime.get().map(|h| h.current_config())
+        }
+        #[cfg(feature = "turmoil")]
+        {
+            None
+        }
+    }
+
+    /// Apply a TLS mutation to the live runtime handle.
+    ///
+    /// A missing handle is an *error*, not a silent no-op: TLS parameters only
+    /// exist as live rustls state, so accepting the set with nothing to change
+    /// would make the next CONFIG GET (which reads the live handle) report the
+    /// old value. Handle errors -- a bad certificate path, an unparsable key, an
+    /// unknown ciphersuite -- are surfaced verbatim; `TlsRuntimeHandle::apply`
+    /// is build-then-commit, so a failed set leaves both the stored config and
+    /// the certificates being served untouched.
+    ///
+    /// The mutation is passed as a [`TlsMutation`] value rather than a closure
+    /// over the handle so that the `turmoil` build -- which compiles no TLS
+    /// module at all -- needs a single `cfg` here instead of one per parameter.
+    fn apply_tls(&self, param: &'static str, mutation: TlsMutation) -> Result<(), ConfigError> {
+        let unavailable = || ConfigError::InvalidValue {
+            param: param.to_string(),
+            message: TLS_NOT_RUNNING.to_string(),
+        };
+        #[cfg(not(feature = "turmoil"))]
+        {
+            let handle = self.tls_runtime.get().ok_or_else(unavailable)?;
+            let result = match mutation {
+                TlsMutation::CertFile(p) => handle.set_cert_file(p),
+                TlsMutation::KeyFile(p) => handle.set_key_file(p),
+                TlsMutation::CaFile(p) => handle.set_ca_file(p),
+                TlsMutation::ClientCertFile(p) => handle.set_client_cert_file(p),
+                TlsMutation::ClientKeyFile(p) => handle.set_client_key_file(p),
+                TlsMutation::Ciphersuites(s) => handle.set_ciphersuites(s),
+                TlsMutation::HandshakeTimeoutMs(ms) => {
+                    handle.set_handshake_timeout_ms(ms);
+                    Ok(())
+                }
+                TlsMutation::ClusterMigration(on) => {
+                    handle.set_cluster_migration(on);
+                    Ok(())
+                }
+            };
+            result.map_err(|e| ConfigError::InvalidValue {
+                param: param.to_string(),
+                message: e.to_string(),
+            })
+        }
+        #[cfg(feature = "turmoil")]
+        {
+            let _ = mutation;
+            Err(unavailable())
+        }
     }
 
     /// Get the config file path.
@@ -1030,21 +1313,6 @@ impl ConfigManager {
                 getter: |mgr| mgr.static_config.tls_port.to_string(),
                 toml_getter: |mgr| mgr.static_config.tls_port.to_toml_value(),
             },
-            TlsCertFile => ParamMeta {
-                name: id.name(),
-                getter: |mgr| mgr.static_config.tls_cert_file.clone(),
-                toml_getter: |mgr| mgr.static_config.tls_cert_file.to_toml_value(),
-            },
-            TlsKeyFile => ParamMeta {
-                name: id.name(),
-                getter: |mgr| mgr.static_config.tls_key_file.clone(),
-                toml_getter: |mgr| mgr.static_config.tls_key_file.to_toml_value(),
-            },
-            TlsCaCertFile => ParamMeta {
-                name: id.name(),
-                getter: |mgr| mgr.static_config.tls_ca_file.clone(),
-                toml_getter: |mgr| mgr.static_config.tls_ca_file.to_toml_value(),
-            },
             TlsAuthClients => ParamMeta {
                 name: id.name(),
                 getter: |mgr| mgr.static_config.tls_auth_clients.clone(),
@@ -1211,149 +1479,6 @@ impl ConfigManager {
                 getter: |mgr| mgr.static_config.compaction_rate_limit_mb.to_string(),
                 toml_getter: |mgr| mgr.static_config.compaction_rate_limit_mb.to_toml_value(),
             },
-            BatchSizeThresholdKb => ParamMeta {
-                name: id.name(),
-                getter: |mgr| mgr.static_config.batch_size_threshold_kb.to_string(),
-                toml_getter: |mgr| mgr.static_config.batch_size_threshold_kb.to_toml_value(),
-            },
-            SnapshotIntervalSecs => ParamMeta {
-                name: id.name(),
-                getter: |mgr| mgr.static_config.snapshot_interval_secs.to_string(),
-                toml_getter: |mgr| mgr.static_config.snapshot_interval_secs.to_toml_value(),
-            },
-            ReplicationLagThresholdBytes => ParamMeta {
-                name: id.name(),
-                getter: |mgr| {
-                    mgr.static_config
-                        .replication_lag_threshold_bytes
-                        .to_string()
-                },
-                toml_getter: |mgr| {
-                    mgr.static_config
-                        .replication_lag_threshold_bytes
-                        .to_toml_value()
-                },
-            },
-            ReplicationLagThresholdSecs => ParamMeta {
-                name: id.name(),
-                getter: |mgr| mgr.static_config.replication_lag_threshold_secs.to_string(),
-                toml_getter: |mgr| {
-                    mgr.static_config
-                        .replication_lag_threshold_secs
-                        .to_toml_value()
-                },
-            },
-            SelfFenceOnReplicaLoss => ParamMeta {
-                name: id.name(),
-                getter: |mgr| yes_no(mgr.static_config.self_fence_on_replica_loss),
-                toml_getter: |mgr| mgr.static_config.self_fence_on_replica_loss.to_toml_value(),
-            },
-            ReplicaFreshnessTimeoutMs => ParamMeta {
-                name: id.name(),
-                getter: |mgr| mgr.static_config.replica_freshness_timeout_ms.to_string(),
-                toml_getter: |mgr| {
-                    mgr.static_config
-                        .replica_freshness_timeout_ms
-                        .to_toml_value()
-                },
-            },
-            ClusterAutoFailover => ParamMeta {
-                name: id.name(),
-                getter: |mgr| yes_no(mgr.cluster_flags.auto_failover()),
-                toml_getter: |mgr| mgr.cluster_flags.auto_failover().to_toml_value(),
-            },
-            ClusterSelfFenceOnQuorumLoss => ParamMeta {
-                name: id.name(),
-                getter: |mgr| yes_no(mgr.cluster_flags.self_fence_on_quorum_loss()),
-                toml_getter: |mgr| {
-                    mgr.cluster_flags
-                        .self_fence_on_quorum_loss()
-                        .to_toml_value()
-                },
-            },
-            ReplicaPriority => ParamMeta {
-                name: id.name(),
-                getter: |mgr| mgr.cluster_flags.replica_priority().to_string(),
-                toml_getter: |mgr| mgr.cluster_flags.replica_priority().to_toml_value(),
-            },
-            TlsClusterMigration => ParamMeta {
-                name: id.name(),
-                getter: |mgr| yes_no(mgr.static_config.tls_cluster_migration),
-                toml_getter: |mgr| mgr.static_config.tls_cluster_migration.to_toml_value(),
-            },
-            TlsClientCertFile => ParamMeta {
-                name: id.name(),
-                getter: |mgr| mgr.static_config.tls_client_cert_file.clone(),
-                toml_getter: |mgr| mgr.static_config.tls_client_cert_file.to_toml_value(),
-            },
-            TlsClientKeyFile => ParamMeta {
-                name: id.name(),
-                getter: |mgr| mgr.static_config.tls_client_key_file.clone(),
-                toml_getter: |mgr| mgr.static_config.tls_client_key_file.to_toml_value(),
-            },
-            TlsHandshakeTimeoutMs => ParamMeta {
-                name: id.name(),
-                getter: |mgr| mgr.static_config.tls_handshake_timeout_ms.to_string(),
-                toml_getter: |mgr| mgr.static_config.tls_handshake_timeout_ms.to_toml_value(),
-            },
-            TracingSamplingRate => ParamMeta {
-                name: id.name(),
-                getter: |mgr| mgr.tracing_sampling_rate.get().to_string(),
-                toml_getter: |mgr| mgr.tracing_sampling_rate.get().to_toml_value(),
-            },
-            StatusMemoryWarningPercent => ParamMeta {
-                name: id.name(),
-                getter: |mgr| mgr.status_thresholds.memory_warning_percent().to_string(),
-                toml_getter: |mgr| {
-                    mgr.status_thresholds
-                        .memory_warning_percent()
-                        .to_toml_value()
-                },
-            },
-            StatusConnectionWarningPercent => ParamMeta {
-                name: id.name(),
-                getter: |mgr| {
-                    mgr.status_thresholds
-                        .connection_warning_percent()
-                        .to_string()
-                },
-                toml_getter: |mgr| {
-                    mgr.status_thresholds
-                        .connection_warning_percent()
-                        .to_toml_value()
-                },
-            },
-            StatusDurabilityLagWarningMs => ParamMeta {
-                name: id.name(),
-                getter: |mgr| {
-                    mgr.status_thresholds
-                        .durability_lag_warning_ms()
-                        .to_string()
-                },
-                toml_getter: |mgr| {
-                    mgr.status_thresholds
-                        .durability_lag_warning_ms()
-                        .to_toml_value()
-                },
-            },
-            StatusDurabilityLagCriticalMs => ParamMeta {
-                name: id.name(),
-                getter: |mgr| {
-                    mgr.status_thresholds
-                        .durability_lag_critical_ms()
-                        .to_string()
-                },
-                toml_getter: |mgr| {
-                    mgr.status_thresholds
-                        .durability_lag_critical_ms()
-                        .to_toml_value()
-                },
-            },
-            LatencyBandsEnabled => ParamMeta {
-                name: id.name(),
-                getter: |mgr| yes_no(mgr.latency_band_tracker.is_enabled()),
-                toml_getter: |mgr| mgr.latency_band_tracker.is_enabled().to_toml_value(),
-            },
             // --- issue-14 wire pass: promote-immutable params (GET-only) ---
             MetricsOtlpEnabled => ParamMeta {
                 name: id.name(),
@@ -1385,14 +1510,6 @@ impl ConfigManager {
                 getter: |mgr| mgr.static_config.repl_ack_interval_ms.to_string(),
                 toml_getter: |mgr| mgr.static_config.repl_ack_interval_ms.to_toml_value(),
             },
-            TlsCiphersuites => ParamMeta {
-                name: id.name(),
-                // CONFIG GET renders the ciphersuite names space-joined (Redis-style,
-                // like `tls-protocols`); CONFIG REWRITE writes the file's own TOML
-                // string array via `Vec<String>::to_toml_value`.
-                getter: |mgr| mgr.static_config.tls_ciphersuites.join(" "),
-                toml_getter: |mgr| mgr.static_config.tls_ciphersuites.to_toml_value(),
-            },
             PubsubOutputBufferHardLimit => ParamMeta {
                 name: id.name(),
                 getter: |mgr| {
@@ -1405,6 +1522,19 @@ impl ConfigManager {
                         .pubsub_output_buffer_hard_limit
                         .to_toml_value()
                 },
+            },
+            // --- config-mutability round: newly-exposed immutable params ---
+            // The cert watcher is a task spawned once at startup from these two
+            // values; there is no live handle to retune, so both stay GET-only.
+            TlsWatchCerts => ParamMeta {
+                name: id.name(),
+                getter: |mgr| yes_no(mgr.static_config.tls_watch_certs),
+                toml_getter: |mgr| mgr.static_config.tls_watch_certs.to_toml_value(),
+            },
+            TlsWatchDebounceMs => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.tls_watch_debounce_ms.to_string(),
+                toml_getter: |mgr| mgr.static_config.tls_watch_debounce_ms.to_toml_value(),
             },
         }
     }
@@ -2255,6 +2385,638 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::None,
             }),
+
+            // === config-mutability round: TLS live-reload family ===
+            // Every getter reads the *running* TLS config (falling back to the
+            // startup snapshot only when no TLS runtime exists), and every
+            // setter goes through `apply_tls`, which is build-then-commit: a
+            // rejected certificate leaves the served identity untouched.
+            TlsCertFile => Box::new(ConfigParam::<String, ConfigManager> {
+                name: id.name(),
+                parse: |s| Ok(s.to_string()),
+                validate: ConfigParam::no_validate,
+                default: String::new,
+                get: |mgr| match mgr.live_tls_config() {
+                    Some(c) => c.cert_file.display().to_string(),
+                    None => mgr.static_config.tls_cert_file.clone(),
+                },
+                apply: |mgr, v| {
+                    mgr.apply_tls("tls-cert-file", TlsMutation::CertFile(PathBuf::from(v)))?;
+                    info!("TLS server certificate reloaded");
+                    Ok(())
+                },
+                render: |v| v.clone(),
+                propagation: Propagation::None,
+            }),
+            TlsKeyFile => Box::new(ConfigParam::<String, ConfigManager> {
+                name: id.name(),
+                parse: |s| Ok(s.to_string()),
+                validate: ConfigParam::no_validate,
+                default: String::new,
+                get: |mgr| match mgr.live_tls_config() {
+                    Some(c) => c.key_file.display().to_string(),
+                    None => mgr.static_config.tls_key_file.clone(),
+                },
+                apply: |mgr, v| {
+                    mgr.apply_tls("tls-key-file", TlsMutation::KeyFile(PathBuf::from(v)))?;
+                    info!("TLS server private key reloaded");
+                    Ok(())
+                },
+                render: |v| v.clone(),
+                propagation: Propagation::None,
+            }),
+            TlsCaCertFile => Box::new(ConfigParam::<String, ConfigManager> {
+                name: id.name(),
+                parse: |s| Ok(s.to_string()),
+                validate: ConfigParam::no_validate,
+                default: String::new,
+                get: |mgr| match mgr.live_tls_config() {
+                    Some(c) => render_optional_path(&c.ca_file),
+                    None => mgr.static_config.tls_ca_file.clone(),
+                },
+                apply: |mgr, v| {
+                    mgr.apply_tls("tls-ca-cert-file", TlsMutation::CaFile(optional_path(&v)))?;
+                    info!("TLS CA bundle reloaded");
+                    Ok(())
+                },
+                render: |v| v.clone(),
+                propagation: Propagation::None,
+            }),
+            TlsClientCertFile => Box::new(ConfigParam::<String, ConfigManager> {
+                name: id.name(),
+                parse: |s| Ok(s.to_string()),
+                validate: ConfigParam::no_validate,
+                default: String::new,
+                get: |mgr| match mgr.live_tls_config() {
+                    Some(c) => render_optional_path(&c.client_cert_file),
+                    None => mgr.static_config.tls_client_cert_file.clone(),
+                },
+                apply: |mgr, v| {
+                    mgr.apply_tls(
+                        "tls-client-cert-file",
+                        TlsMutation::ClientCertFile(optional_path(&v)),
+                    )?;
+                    info!("TLS outgoing client certificate reloaded");
+                    Ok(())
+                },
+                render: |v| v.clone(),
+                propagation: Propagation::None,
+            }),
+            TlsClientKeyFile => Box::new(ConfigParam::<String, ConfigManager> {
+                name: id.name(),
+                parse: |s| Ok(s.to_string()),
+                validate: ConfigParam::no_validate,
+                default: String::new,
+                get: |mgr| match mgr.live_tls_config() {
+                    Some(c) => render_optional_path(&c.client_key_file),
+                    None => mgr.static_config.tls_client_key_file.clone(),
+                },
+                apply: |mgr, v| {
+                    mgr.apply_tls(
+                        "tls-client-key-file",
+                        TlsMutation::ClientKeyFile(optional_path(&v)),
+                    )?;
+                    info!("TLS outgoing client key reloaded");
+                    Ok(())
+                },
+                render: |v| v.clone(),
+                propagation: Propagation::None,
+            }),
+            TlsCiphersuites => Box::new(ConfigParam::<Vec<String>, ConfigManager> {
+                name: id.name(),
+                // Space-separated on the wire (Redis-style, like `tls-protocols`);
+                // the empty string means "rustls defaults". Names are not checked
+                // here -- `set_ciphersuites` rebuilds rustls from them and reports
+                // an unknown name as a set error, so there is one authority.
+                parse: |s| {
+                    Ok(s.split_whitespace()
+                        .map(|c| c.to_string())
+                        .collect::<Vec<_>>())
+                },
+                validate: ConfigParam::no_validate,
+                default: Vec::new,
+                get: |mgr| match mgr.live_tls_config() {
+                    Some(c) => c.ciphersuites.clone(),
+                    None => mgr.static_config.tls_ciphersuites.clone(),
+                },
+                apply: |mgr, v| {
+                    mgr.apply_tls("tls-ciphersuites", TlsMutation::Ciphersuites(v))?;
+                    info!("TLS ciphersuites updated");
+                    Ok(())
+                },
+                render: |v| v.join(" "),
+                propagation: Propagation::None,
+            }),
+            TlsHandshakeTimeoutMs => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "tls-handshake-timeout-ms".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: |v, _ctx| {
+                    if *v == 0 {
+                        Err(ConfigError::InvalidValue {
+                            param: "tls-handshake-timeout-ms".to_string(),
+                            message: "must be > 0".to_string(),
+                        })
+                    } else {
+                        Ok(())
+                    }
+                },
+                default: || 10000,
+                get: |mgr| match mgr.live_tls_config() {
+                    Some(c) => c.handshake_timeout_ms,
+                    None => mgr.static_config.tls_handshake_timeout_ms,
+                },
+                apply: |mgr, v| {
+                    mgr.apply_tls(
+                        "tls-handshake-timeout-ms",
+                        TlsMutation::HandshakeTimeoutMs(v),
+                    )?;
+                    info!(handshake_timeout_ms = v, "TLS handshake timeout updated");
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            TlsClusterMigration => Box::new(ConfigParam::<bool, ConfigManager> {
+                name: id.name(),
+                parse: |s| parse_yes_no("tls-cluster-migration", s),
+                validate: ConfigParam::no_validate,
+                default: || false,
+                get: |mgr| match mgr.live_tls_config() {
+                    Some(c) => c.tls_cluster_migration,
+                    None => mgr.static_config.tls_cluster_migration,
+                },
+                apply: |mgr, v| {
+                    mgr.apply_tls("tls-cluster-migration", TlsMutation::ClusterMigration(v))?;
+                    info!(enabled = v, "TLS cluster-bus dual-accept toggled");
+                    Ok(())
+                },
+                render: |v| yes_no(*v),
+                propagation: Propagation::None,
+            }),
+
+            // === config-mutability round: [cluster] decision flags ===
+            // Read by the failure detector and the self-fence gate at decision
+            // time through the shared `ClusterRuntimeFlags`.
+            ClusterAutoFailover => Box::new(ConfigParam::<bool, ConfigManager> {
+                name: id.name(),
+                parse: |s| parse_yes_no("cluster-auto-failover", s),
+                validate: ConfigParam::no_validate,
+                default: || false,
+                get: |mgr| mgr.cluster_flags.auto_failover(),
+                apply: |mgr, v| {
+                    mgr.cluster_flags.set_auto_failover(v);
+                    info!(enabled = v, "Cluster automatic failover toggled");
+                    Ok(())
+                },
+                render: |v| yes_no(*v),
+                propagation: Propagation::None,
+            }),
+            ClusterSelfFenceOnQuorumLoss => Box::new(ConfigParam::<bool, ConfigManager> {
+                name: id.name(),
+                parse: |s| parse_yes_no("cluster-self-fence-on-quorum-loss", s),
+                validate: ConfigParam::no_validate,
+                default: || true,
+                get: |mgr| mgr.cluster_flags.self_fence_on_quorum_loss(),
+                apply: |mgr, v| {
+                    mgr.cluster_flags.set_self_fence_on_quorum_loss(v);
+                    info!(enabled = v, "Cluster quorum-loss self-fencing toggled");
+                    Ok(())
+                },
+                render: |v| yes_no(*v),
+                propagation: Propagation::None,
+            }),
+            // Partially live: this node's own election scoring picks the new
+            // priority up immediately, but peers only learn it when the node
+            // next advertises itself, so a change is not instantly global.
+            ReplicaPriority => Box::new(ConfigParam::<u32, ConfigManager> {
+                name: id.name(),
+                parse: |s| {
+                    s.parse::<u32>().map_err(|_| ConfigError::InvalidValue {
+                        param: "replica-priority".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || frogdb_config::cluster::DEFAULT_REPLICA_PRIORITY,
+                get: |mgr| mgr.cluster_flags.replica_priority(),
+                apply: |mgr, v| {
+                    mgr.cluster_flags.set_replica_priority(v);
+                    info!(replica_priority = v, "Replica failover priority updated");
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+
+            // === config-mutability round: [status] health thresholds ===
+            // The status collector classifies every `/status` render against
+            // these, so a set changes the next report.
+            StatusMemoryWarningPercent => Box::new(ConfigParam::<u8, ConfigManager> {
+                name: id.name(),
+                parse: |s| {
+                    s.parse::<u8>().map_err(|_| ConfigError::InvalidValue {
+                        param: "status-memory-warning-percent".to_string(),
+                        message: "must be an integer 1-100".to_string(),
+                    })
+                },
+                // Same bound as `StatusConfig::validate`, so a value CONFIG SET
+                // accepts is a value the config file would also accept.
+                validate: |v, _ctx| validate_percent("status-memory-warning-percent", *v),
+                default: || frogdb_config::status::DEFAULT_MEMORY_WARNING_PERCENT,
+                get: |mgr| mgr.status_thresholds.memory_warning_percent(),
+                apply: |mgr, v| {
+                    mgr.status_thresholds.set_memory_warning_percent(v);
+                    info!(percent = v, "Status memory warning threshold updated");
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            StatusConnectionWarningPercent => Box::new(ConfigParam::<u8, ConfigManager> {
+                name: id.name(),
+                parse: |s| {
+                    s.parse::<u8>().map_err(|_| ConfigError::InvalidValue {
+                        param: "status-connection-warning-percent".to_string(),
+                        message: "must be an integer 1-100".to_string(),
+                    })
+                },
+                validate: |v, _ctx| validate_percent("status-connection-warning-percent", *v),
+                default: || frogdb_config::status::DEFAULT_CONNECTION_WARNING_PERCENT,
+                get: |mgr| mgr.status_thresholds.connection_warning_percent(),
+                apply: |mgr, v| {
+                    mgr.status_thresholds.set_connection_warning_percent(v);
+                    info!(percent = v, "Status connection warning threshold updated");
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            StatusDurabilityLagWarningMs => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "status-durability-lag-warning-ms".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                // `StatusConfig::validate` requires warning < critical; enforce it
+                // here against the *live* critical value so the pair can never be
+                // driven into an ordering the config file would reject.
+                validate: |v, mgr| {
+                    let critical = mgr.status_thresholds.durability_lag_critical_ms();
+                    if *v >= critical {
+                        Err(ConfigError::InvalidValue {
+                            param: "status-durability-lag-warning-ms".to_string(),
+                            message: format!(
+                                "must be less than status-durability-lag-critical-ms ({critical})"
+                            ),
+                        })
+                    } else {
+                        Ok(())
+                    }
+                },
+                default: || frogdb_config::status::DEFAULT_DURABILITY_LAG_WARNING_MS,
+                get: |mgr| mgr.status_thresholds.durability_lag_warning_ms(),
+                apply: |mgr, v| {
+                    mgr.status_thresholds.set_durability_lag_warning_ms(v);
+                    info!(ms = v, "Status durability-lag warning threshold updated");
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            StatusDurabilityLagCriticalMs => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "status-durability-lag-critical-ms".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: |v, mgr| {
+                    let warning = mgr.status_thresholds.durability_lag_warning_ms();
+                    if *v <= warning {
+                        Err(ConfigError::InvalidValue {
+                            param: "status-durability-lag-critical-ms".to_string(),
+                            message: format!(
+                                "must be greater than status-durability-lag-warning-ms ({warning})"
+                            ),
+                        })
+                    } else {
+                        Ok(())
+                    }
+                },
+                default: || frogdb_config::status::DEFAULT_DURABILITY_LAG_CRITICAL_MS,
+                get: |mgr| mgr.status_thresholds.durability_lag_critical_ms(),
+                apply: |mgr, v| {
+                    mgr.status_thresholds.set_durability_lag_critical_ms(v);
+                    info!(ms = v, "Status durability-lag critical threshold updated");
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+
+            // === config-mutability round: telemetry ===
+            TracingSamplingRate => Box::new(ConfigParam::<f64, ConfigManager> {
+                name: id.name(),
+                parse: |s| {
+                    s.parse::<f64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "tracing-sampling-rate".to_string(),
+                        message: "must be a number between 0.0 and 1.0".to_string(),
+                    })
+                },
+                // Same bound as `TracingConfig::validate`.
+                validate: |v, _ctx| {
+                    if !(0.0..=1.0).contains(v) {
+                        Err(ConfigError::InvalidValue {
+                            param: "tracing-sampling-rate".to_string(),
+                            message: "must be between 0.0 and 1.0".to_string(),
+                        })
+                    } else {
+                        Ok(())
+                    }
+                },
+                default: || 1.0,
+                get: |mgr| mgr.tracing_sampling_rate.get(),
+                apply: |mgr, v| {
+                    mgr.tracing_sampling_rate.set(v);
+                    info!(sampling_rate = v, "Trace sampling rate updated");
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            LatencyBandsEnabled => Box::new(ConfigParam::<bool, ConfigManager> {
+                name: id.name(),
+                parse: |s| parse_yes_no("latency-bands-enabled", s),
+                validate: ConfigParam::no_validate,
+                default: || false,
+                get: |mgr| mgr.latency_band_tracker.is_enabled(),
+                apply: |mgr, v| {
+                    mgr.latency_band_tracker.set_enabled(v);
+                    info!(enabled = v, "Latency band tracking toggled");
+                    Ok(())
+                },
+                render: |v| yes_no(*v),
+                propagation: Propagation::None,
+            }),
+
+            // === config-mutability round: persistence / replication ===
+            // The periodic-snapshot task re-reads its cadence each iteration, so
+            // a set retimes the next snapshot (0 idles the task rather than
+            // stopping it). `snapshot_interval_secs` is the authority for
+            // GET/REWRITE; the coordinator is pushed to when it exists.
+            SnapshotIntervalSecs => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "snapshot-interval-secs".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || frogdb_config::persistence::DEFAULT_SNAPSHOT_INTERVAL_SECS,
+                get: |mgr| mgr.snapshot_interval_secs.load(Ordering::Relaxed),
+                apply: |mgr, v| {
+                    mgr.snapshot_interval_secs.store(v, Ordering::Relaxed);
+                    if let Some(c) = mgr.snapshot_coordinator.get() {
+                        c.set_periodic_interval_secs(v);
+                    }
+                    info!(interval_secs = v, "Periodic snapshot cadence updated");
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            // KiB on the wire, bytes in the shared cell every shard's WAL flush
+            // thread compares against, so all shards retune together.
+            BatchSizeThresholdKb => Box::new(ConfigParam::<usize, ConfigManager> {
+                name: id.name(),
+                parse: |s| {
+                    s.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+                        param: "batch-size-threshold-kb".to_string(),
+                        message: "must be a positive integer".to_string(),
+                    })
+                },
+                validate: |v, _ctx| {
+                    if *v == 0 {
+                        Err(ConfigError::InvalidValue {
+                            param: "batch-size-threshold-kb".to_string(),
+                            message: "must be > 0".to_string(),
+                        })
+                    } else {
+                        Ok(())
+                    }
+                },
+                default: || frogdb_config::persistence::DEFAULT_BATCH_SIZE_THRESHOLD_KB,
+                get: |mgr| mgr.wal_batch_size_threshold.load(Ordering::Relaxed) / 1024,
+                apply: |mgr, v| {
+                    mgr.wal_batch_size_threshold
+                        .store(v * 1024, Ordering::Relaxed);
+                    info!(
+                        batch_size_threshold_kb = v,
+                        "WAL flush batch threshold updated"
+                    );
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            // Primary-only live seam: the lag thresholds exist inside the primary
+            // replication handler. On a replica the value is still recorded (and
+            // reported by GET/REWRITE) so it takes effect if the node is later
+            // initialised as a primary.
+            ReplicationLagThresholdBytes => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "replication-lag-threshold-bytes".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || 0,
+                get: |mgr| mgr.replication_lag_threshold_bytes.load(Ordering::Relaxed),
+                apply: |mgr, v| {
+                    mgr.replication_lag_threshold_bytes
+                        .store(v, Ordering::Relaxed);
+                    if let Some(t) = mgr.replication_lag_thresholds.get() {
+                        t.set_threshold_bytes(v);
+                    }
+                    info!(
+                        threshold_bytes = v,
+                        "Replication lag byte threshold updated"
+                    );
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            ReplicationLagThresholdSecs => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "replication-lag-threshold-secs".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || 0,
+                get: |mgr| mgr.replication_lag_threshold_secs.load(Ordering::Relaxed),
+                apply: |mgr, v| {
+                    mgr.replication_lag_threshold_secs
+                        .store(v, Ordering::Relaxed);
+                    if let Some(t) = mgr.replication_lag_thresholds.get() {
+                        t.set_threshold_secs(v);
+                    }
+                    info!(threshold_secs = v, "Replication lag time threshold updated");
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            // Primary-only live seam, same story as the lag thresholds: the
+            // quorum checker only exists on a primary.
+            SelfFenceOnReplicaLoss => Box::new(ConfigParam::<bool, ConfigManager> {
+                name: id.name(),
+                parse: |s| parse_yes_no("self-fence-on-replica-loss", s),
+                validate: ConfigParam::no_validate,
+                default: || frogdb_config::replication::DEFAULT_SELF_FENCE_ON_REPLICA_LOSS,
+                get: |mgr| mgr.self_fence_on_replica_loss.load(Ordering::Relaxed),
+                apply: |mgr, v| {
+                    mgr.self_fence_on_replica_loss.store(v, Ordering::Relaxed);
+                    if let Some(c) = mgr.replication_self_fence.get() {
+                        c.set_self_fence_enabled(v);
+                    }
+                    info!(enabled = v, "Replica-loss self-fencing toggled");
+                    Ok(())
+                },
+                render: |v| yes_no(*v),
+                propagation: Propagation::None,
+            }),
+            ReplicaFreshnessTimeoutMs => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "replica-freshness-timeout-ms".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: |v, _ctx| {
+                    if *v == 0 {
+                        Err(ConfigError::InvalidValue {
+                            param: "replica-freshness-timeout-ms".to_string(),
+                            message: "must be > 0".to_string(),
+                        })
+                    } else {
+                        Ok(())
+                    }
+                },
+                default: || frogdb_config::replication::DEFAULT_REPLICA_FRESHNESS_TIMEOUT_MS,
+                get: |mgr| mgr.replica_freshness_timeout_ms.load(Ordering::Relaxed),
+                apply: |mgr, v| {
+                    mgr.replica_freshness_timeout_ms.store(v, Ordering::Relaxed);
+                    if let Some(c) = mgr.replication_self_fence.get() {
+                        c.set_freshness_timeout_ms(v);
+                    }
+                    info!(timeout_ms = v, "Replica freshness window updated");
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+
+            // === config-mutability round: [hotshards] thresholds ===
+            // The collector re-reads all three once per `collect()`, so a set
+            // retunes FROGDB.HOTSHARDS, `/status` and the debug UI at once. The
+            // warm <= hot invariant from `HotShardsConfig::validate` is enforced
+            // against the live sibling value.
+            HotshardsHotThresholdPercent => Box::new(ConfigParam::<f64, ConfigManager> {
+                name: id.name(),
+                parse: |s| parse_percent_f64("hotshards-hot-threshold-percent", s),
+                validate: |v, mgr| {
+                    let warm = mgr.hotshards.warm_threshold_percent();
+                    if *v < warm {
+                        Err(ConfigError::InvalidValue {
+                            param: "hotshards-hot-threshold-percent".to_string(),
+                            message: format!(
+                                "must not be below hotshards-warm-threshold-percent ({warm})"
+                            ),
+                        })
+                    } else {
+                        Ok(())
+                    }
+                },
+                default: || frogdb_config::hotshards::DEFAULT_HOT_THRESHOLD_PERCENT,
+                get: |mgr| mgr.hotshards.hot_threshold_percent(),
+                apply: |mgr, v| {
+                    mgr.hotshards.set_hot_threshold_percent(v);
+                    info!(percent = v, "Hot-shard HOT threshold updated");
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            HotshardsWarmThresholdPercent => Box::new(ConfigParam::<f64, ConfigManager> {
+                name: id.name(),
+                parse: |s| parse_percent_f64("hotshards-warm-threshold-percent", s),
+                validate: |v, mgr| {
+                    let hot = mgr.hotshards.hot_threshold_percent();
+                    if *v > hot {
+                        Err(ConfigError::InvalidValue {
+                            param: "hotshards-warm-threshold-percent".to_string(),
+                            message: format!(
+                                "must not exceed hotshards-hot-threshold-percent ({hot})"
+                            ),
+                        })
+                    } else {
+                        Ok(())
+                    }
+                },
+                default: || frogdb_config::hotshards::DEFAULT_WARM_THRESHOLD_PERCENT,
+                get: |mgr| mgr.hotshards.warm_threshold_percent(),
+                apply: |mgr, v| {
+                    mgr.hotshards.set_warm_threshold_percent(v);
+                    info!(percent = v, "Hot-shard WARM threshold updated");
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            HotshardsDefaultPeriodSecs => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "hotshards-default-period-secs".to_string(),
+                        message: "must be a positive integer".to_string(),
+                    })
+                },
+                validate: |v, _ctx| {
+                    if *v == 0 {
+                        Err(ConfigError::InvalidValue {
+                            param: "hotshards-default-period-secs".to_string(),
+                            message: "must be > 0".to_string(),
+                        })
+                    } else {
+                        Ok(())
+                    }
+                },
+                default: || frogdb_config::hotshards::DEFAULT_DEFAULT_PERIOD_SECS,
+                get: |mgr| mgr.hotshards.default_period_secs(),
+                apply: |mgr, v| {
+                    mgr.hotshards.set_default_period_secs(v);
+                    info!(period_secs = v, "Hot-shard default sampling window updated");
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
         }
     }
 
@@ -2792,34 +3554,33 @@ mod tests {
         }
     }
 
-    /// 13-01 Pass 2b: the 20 startup-consumed params downgraded to
-    /// promote-immutable are CONFIG GET-visible (reporting their honest startup
-    /// value) and reject CONFIG SET. Spot-checks a few known-default values, and
-    /// asserts GET-one-row + SET-rejected + immutable-listing for all 20.
+    /// 13-01 Pass 2b originally downgraded 20 startup-consumed params to
+    /// promote-immutable. The config-mutability round promoted 19 of them once
+    /// each had a live runtime seam; `compaction-rate-limit-mb` is the sole
+    /// survivor, because librocksdb-sys exposes neither `rocksdb_set_db_options`
+    /// nor the rate limiter's `SetBytesPerSecond`, so there is nothing to retune.
     #[test]
     fn test_config_get_promoted_immutable_params_pass2b() {
         let config = test_config(); // Config::default()
         let manager = ConfigManager::new(&config);
 
-        // Exact GET values for params with stable, obvious defaults.
-        let spot: &[(&str, &str)] = &[
-            ("compaction-rate-limit-mb", "0"),  // persistence (0 = unlimited)
-            ("snapshot-interval-secs", "3600"), // snapshot
-            ("cluster-auto-failover", "no"),    // cluster (bool)
-            ("tls-handshake-timeout-ms", "10000"), // tls
-            ("tracing-sampling-rate", "1"),     // tracing (f64 1.0)
-            ("latency-bands-enabled", "no"),    // latency-bands (bool)
-        ];
-        for (name, want) in spot {
-            let got = manager.get(name);
-            assert_eq!(got.len(), 1, "CONFIG GET {name} should return one row");
-            assert_eq!(&got[0].1, want, "CONFIG GET {name} value mismatch");
-        }
+        let name = "compaction-rate-limit-mb";
+        let got = manager.get(name);
+        assert_eq!(got.len(), 1, "CONFIG GET {name} should return one row");
+        assert_eq!(&got[0].0, name, "CONFIG GET returned wrong key for {name}");
+        assert_eq!(&got[0].1, "0", "CONFIG GET {name} value mismatch");
+        let set = manager.set(name, "1");
+        assert!(
+            matches!(set, Err(ConfigError::ImmutableParameter(_))),
+            "CONFIG SET {name} should be rejected as ImmutableParameter, got {set:?}"
+        );
+        assert!(
+            manager.immutable_param_names().contains(&name),
+            "{name} should be listed among immutable params"
+        );
 
-        // All 20 Pass-2b immutable params: exactly one GET row, SET rejected as
-        // ImmutableParameter, and present in the immutable-name list.
-        let all_pass2b: &[&str] = &[
-            "compaction-rate-limit-mb",
+        // The other 19 are now mutable and no longer reported as immutable.
+        let promoted: &[&str] = &[
             "batch-size-threshold-kb",
             "snapshot-interval-secs",
             "replication-lag-threshold-bytes",
@@ -2841,26 +3602,25 @@ mod tests {
             "latency-bands-enabled",
         ];
         let immutable = manager.immutable_param_names();
-        for name in all_pass2b {
-            let got = manager.get(name);
-            assert_eq!(got.len(), 1, "CONFIG GET {name} should return one row");
-            assert_eq!(&got[0].0, name, "CONFIG GET returned wrong key for {name}");
-            let set = manager.set(name, "1");
-            assert!(
-                matches!(set, Err(ConfigError::ImmutableParameter(_))),
-                "CONFIG SET {name} should be rejected as ImmutableParameter, got {set:?}"
+        for name in promoted {
+            assert_eq!(
+                manager.get(name).len(),
+                1,
+                "CONFIG GET {name} should return one row"
             );
             assert!(
-                immutable.contains(name),
-                "{name} should be listed among immutable params"
+                !immutable.contains(name),
+                "{name} was promoted to mutable and must not be listed as immutable"
             );
         }
     }
 
-    /// issue-14 wire pass: the 7 newly-wired config fields promoted to immutable
-    /// are CONFIG GET-visible (reporting their honest startup value) and reject
-    /// CONFIG SET with `ImmutableParameter`. Spans metrics OTLP, json limits,
-    /// replication ACK cadence, and TLS ciphersuites.
+    /// issue-14 wire pass: 6 of the 7 newly-wired config fields promoted to
+    /// immutable are CONFIG GET-visible (reporting their honest startup value)
+    /// and reject CONFIG SET with `ImmutableParameter`. Spans metrics OTLP, json
+    /// limits and replication ACK cadence. (`tls-ciphersuites`, the seventh, is
+    /// mutable as of the config-mutability round -- rustls is rebuilt from the
+    /// new suite list -- and is covered by the TLS propagation-truth tests.)
     #[test]
     fn test_config_get_wired_immutable_params_issue14() {
         let config = test_config(); // Config::default()
@@ -2874,7 +3634,6 @@ mod tests {
             ("json-max-depth", "128"),                          // json
             ("json-max-size", "67108864"),                      // json (64 MiB)
             ("repl-ack-interval-ms", "1000"),                   // replication
-            ("tls-ciphersuites", ""),                           // tls (empty = rustls defaults)
         ];
 
         for (name, want) in expected {

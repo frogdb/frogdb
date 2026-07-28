@@ -4,10 +4,10 @@
 //! by *mutability* — the one fact that decides which server-side lifecycle
 //! serves it:
 //!
-//! - [`MutableParamId`] — the 46 runtime-mutable parameters (32 real
+//! - [`MutableParamId`] — the 72 runtime-mutable parameters (58 real
 //!   `ConfigParam` lifecycles + 14 Redis-compat no-ops). Served by the server's
 //!   `build_typed_params`.
-//! - [`ImmutableParamId`] — the 58 restart-required parameters. Served by the
+//! - [`ImmutableParamId`] — the 45 restart-required parameters. Served by the
 //!   server's `build_param_registry`.
 //!
 //! # Why these are hand-written, not derived
@@ -137,6 +137,49 @@ param_id_enum! {
         // The ACL log length is re-read per append; the apply path reaches it
         // through the already-injected `Arc<AclManager>`.
         AcllogMaxLen => "acllog-max-len",
+        // === config-mutability round: 26 live-seam params ===
+        // Each of these reaches a live runtime handle, so a CONFIG SET changes
+        // observable behavior without a restart. Grouped by the handle they
+        // drive; order mirrors `build_typed_param`'s arms for review locality.
+        //
+        // TLS (`TlsRuntimeHandle`): every file/ciphersuite SET rebuilds the
+        // rustls configs and commits only if the rebuild succeeds, so a bad
+        // value leaves the previous certificates serving.
+        TlsCertFile => "tls-cert-file",
+        TlsKeyFile => "tls-key-file",
+        TlsCaCertFile => "tls-ca-cert-file",
+        TlsClientCertFile => "tls-client-cert-file",
+        TlsClientKeyFile => "tls-client-key-file",
+        TlsCiphersuites => "tls-ciphersuites",
+        TlsHandshakeTimeoutMs => "tls-handshake-timeout-ms",
+        TlsClusterMigration => "tls-cluster-migration",
+        // Cluster decision flags (`ClusterRuntimeFlags`), read by the failure
+        // detector and the self-fence gate at decision time.
+        ClusterAutoFailover => "cluster-auto-failover",
+        ClusterSelfFenceOnQuorumLoss => "cluster-self-fence-on-quorum-loss",
+        ReplicaPriority => "replica-priority",
+        // Status thresholds (`StatusThresholds`), re-read per `/status` report.
+        StatusMemoryWarningPercent => "status-memory-warning-percent",
+        StatusConnectionWarningPercent => "status-connection-warning-percent",
+        StatusDurabilityLagWarningMs => "status-durability-lag-warning-ms",
+        StatusDurabilityLagCriticalMs => "status-durability-lag-critical-ms",
+        // Telemetry handles read per event: the tracer's sampler and the
+        // latency-band tracker.
+        TracingSamplingRate => "tracing-sampling-rate",
+        LatencyBandsEnabled => "latency-bands-enabled",
+        // Persistence / replication handles published onto the manager after
+        // their subsystems are built (snapshot scheduler, WAL flush threshold,
+        // lag thresholds, self-fence quorum checker).
+        SnapshotIntervalSecs => "snapshot-interval-secs",
+        BatchSizeThresholdKb => "batch-size-threshold-kb",
+        ReplicationLagThresholdBytes => "replication-lag-threshold-bytes",
+        ReplicationLagThresholdSecs => "replication-lag-threshold-secs",
+        SelfFenceOnReplicaLoss => "self-fence-on-replica-loss",
+        ReplicaFreshnessTimeoutMs => "replica-freshness-timeout-ms",
+        // Hot-shard collector (`SharedHotShardConfig`), re-read per `collect()`.
+        HotshardsHotThresholdPercent => "hotshards-hot-threshold-percent",
+        HotshardsWarmThresholdPercent => "hotshards-warm-threshold-percent",
+        HotshardsDefaultPeriodSecs => "hotshards-default-period-secs",
     }
 }
 
@@ -156,9 +199,6 @@ param_id_enum! {
         MetricsEnabled => "metrics-enabled",
         MetricsPort => "metrics-port",
         TlsPort => "tls-port",
-        TlsCertFile => "tls-cert-file",
-        TlsKeyFile => "tls-key-file",
-        TlsCaCertFile => "tls-ca-cert-file",
         TlsAuthClients => "tls-auth-clients",
         TlsReplication => "tls-replication",
         TlsCluster => "tls-cluster",
@@ -187,42 +227,31 @@ param_id_enum! {
         LatencyBands => "latency-bands",
         TlsEnabled => "tls-enabled",
         Logfile => "logfile",
-        // === 13-01 Pass 2b: 20 promote-immutable params (CONFIG GET-only) ===
-        // Startup-consumed values whose runtime SET has no propagation seam; the
-        // startup value is honest to report. Order mirrors the registry's
-        // Pass-2b appended block for review locality.
+        // === 13-01 Pass 2b: the one survivor of that block ===
+        // The other 19 Pass-2b immutables were promoted to `MutableParamId` by
+        // the config-mutability round once each grew a live seam. This one has
+        // no seam to grow: `librocksdb-sys` exposes neither
+        // `rocksdb_set_db_options` nor the RateLimiter's `SetBytesPerSecond`, so
+        // the compaction limiter cannot be retuned without patching the C
+        // bindings. GET reports the honest startup value.
         CompactionRateLimitMb => "compaction-rate-limit-mb",
-        BatchSizeThresholdKb => "batch-size-threshold-kb",
-        SnapshotIntervalSecs => "snapshot-interval-secs",
-        ReplicationLagThresholdBytes => "replication-lag-threshold-bytes",
-        ReplicationLagThresholdSecs => "replication-lag-threshold-secs",
-        SelfFenceOnReplicaLoss => "self-fence-on-replica-loss",
-        ReplicaFreshnessTimeoutMs => "replica-freshness-timeout-ms",
-        ClusterAutoFailover => "cluster-auto-failover",
-        ClusterSelfFenceOnQuorumLoss => "cluster-self-fence-on-quorum-loss",
-        ReplicaPriority => "replica-priority",
-        TlsClusterMigration => "tls-cluster-migration",
-        TlsClientCertFile => "tls-client-cert-file",
-        TlsClientKeyFile => "tls-client-key-file",
-        TlsHandshakeTimeoutMs => "tls-handshake-timeout-ms",
-        TracingSamplingRate => "tracing-sampling-rate",
-        StatusMemoryWarningPercent => "status-memory-warning-percent",
-        StatusConnectionWarningPercent => "status-connection-warning-percent",
-        StatusDurabilityLagWarningMs => "status-durability-lag-warning-ms",
-        StatusDurabilityLagCriticalMs => "status-durability-lag-critical-ms",
-        LatencyBandsEnabled => "latency-bands-enabled",
-        // === issue-14 wire pass: 7 promote-immutable params (CONFIG GET-only) ===
+        // === issue-14 wire pass: 6 of its 7 promote-immutable params ===
         // Newly-wired startup-consumed fields; GET reports the honest startup
-        // value, SET has no seam. Order mirrors the registry's issue-14 block.
+        // value, SET has no seam. (`tls-ciphersuites`, the seventh, became
+        // mutable in the config-mutability round.)
         MetricsOtlpEnabled => "metrics-otlp-enabled",
         MetricsOtlpEndpoint => "metrics-otlp-endpoint",
         MetricsOtlpIntervalSecs => "metrics-otlp-interval-secs",
         JsonMaxDepth => "json-max-depth",
         JsonMaxSize => "json-max-size",
         ReplAckIntervalMs => "repl-ack-interval-ms",
-        TlsCiphersuites => "tls-ciphersuites",
         // === issue-29: pub/sub slow-subscriber output-buffer bound (immutable) ===
         PubsubOutputBufferHardLimit => "pubsub-output-buffer-hard-limit",
+        // === config-mutability round: 2 newly-exposed immutable params ===
+        // The cert watcher's existence and poll cadence are both fixed when the
+        // task is spawned at startup, so both are GET-only.
+        TlsWatchCerts => "tls-watch-certs",
+        TlsWatchDebounceMs => "tls-watch-debounce-ms",
     }
 }
 
@@ -294,16 +323,19 @@ mod tests {
     #[test]
     fn id_counts_are_stable() {
         // 45 pre-existing mutable ids + 1 promote-mutable param (`acllog-max-len`)
-        // added by 13-01 Pass 2b (the sole survivor of the 35 Pass-1
-        // promote-mutable candidates after the propagation-truth audit).
-        assert_eq!(MutableParamId::ALL.len(), 46);
+        // added by 13-01 Pass 2b + 26 added by the config-mutability round (23
+        // promoted from `ImmutableParamId` once their live seams landed, plus
+        // the 3 new `hotshards-*` rows).
+        assert_eq!(MutableParamId::ALL.len(), 72);
         // 16 original immutable ids + 22 promote-immutable params added by 13-01
         // Pass 2a (26 classified, minus 4 metrics OTLP/bind rows downgraded to
         // justify as dead config) + 20 promote-immutable startup-consumed params
         // added by 13-01 Pass 2b + 7 promote-immutable params added by the
         // issue-14 wire pass (metrics OTLP ×3, json limits ×2, replica ACK
         // cadence, TLS ciphersuites) + 1 promote-immutable param added by
-        // issue-29 (`pubsub-output-buffer-hard-limit`).
-        assert_eq!(ImmutableParamId::ALL.len(), 66);
+        // issue-29 (`pubsub-output-buffer-hard-limit`) + 2 added by the
+        // config-mutability round (`tls-watch-*`), minus the 23 that same round
+        // promoted to `MutableParamId`.
+        assert_eq!(ImmutableParamId::ALL.len(), 45);
     }
 }

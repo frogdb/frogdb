@@ -81,7 +81,7 @@ pub struct ClusterConfigSection {
     // Live seam: the failure detector reads this through `ClusterRuntimeFlags`
     // at failover-decision time, not at construction.
     #[serde(default)]
-    #[param(name = "cluster-auto-failover")]
+    #[param(mutable, name = "cluster-auto-failover")]
     pub auto_failover: bool,
 
     /// Number of consecutive failures before marking a node as FAIL.
@@ -97,7 +97,7 @@ pub struct ClusterConfigSection {
     // Live seam: `SelfFenceGate` consults this through `ClusterRuntimeFlags` on
     // every write pre-check, so the fence can be lifted or armed at runtime.
     #[serde(default = "default_self_fence_on_quorum_loss")]
-    #[param(name = "cluster-self-fence-on-quorum-loss")]
+    #[param(mutable, name = "cluster-self-fence-on-quorum-loss")]
     pub self_fence_on_quorum_loss: bool,
 
     /// Priority for replica promotion during auto-failover.
@@ -108,7 +108,7 @@ pub struct ClusterConfigSection {
     // still score it from the Raft-replicated `NodeInfo.replica_priority`, which
     // only refreshes on an `AddNode` re-registration.
     #[serde(default = "default_replica_priority")]
-    #[param]
+    #[param(mutable)]
     pub replica_priority: u32,
 }
 

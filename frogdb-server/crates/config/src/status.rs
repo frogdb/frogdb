@@ -16,22 +16,22 @@ use serde::{Deserialize, Serialize};
 pub struct StatusConfig {
     /// Threshold percentage for memory warning (0-100).
     #[serde(default = "default_memory_warning_percent")]
-    #[param(name = "status-memory-warning-percent")]
+    #[param(mutable, name = "status-memory-warning-percent")]
     pub memory_warning_percent: u8,
 
     /// Threshold percentage for connection warning (0-100).
     #[serde(default = "default_connection_warning_percent")]
-    #[param(name = "status-connection-warning-percent")]
+    #[param(mutable, name = "status-connection-warning-percent")]
     pub connection_warning_percent: u8,
 
     /// Durability lag warning threshold in milliseconds.
     #[serde(default = "default_durability_lag_warning_ms")]
-    #[param(name = "status-durability-lag-warning-ms")]
+    #[param(mutable, name = "status-durability-lag-warning-ms")]
     pub durability_lag_warning_ms: u64,
 
     /// Durability lag critical threshold in milliseconds.
     #[serde(default = "default_durability_lag_critical_ms")]
-    #[param(name = "status-durability-lag-critical-ms")]
+    #[param(mutable, name = "status-durability-lag-critical-ms")]
     pub durability_lag_critical_ms: u64,
 }
 

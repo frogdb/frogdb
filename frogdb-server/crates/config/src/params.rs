@@ -264,6 +264,7 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
         use crate::admin::AdminConfig;
         use crate::cluster::ClusterConfigSection;
         use crate::distributed_tracing::TracingConfig;
+        use crate::hotshards::HotShardsConfig;
         use crate::http::HttpConfig;
         use crate::json::JsonConfig;
         use crate::latency::LatencyBandsConfig;
@@ -446,6 +447,22 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
             ServerConfig::PARAMS,
             "pubsub-output-buffer-hard-limit",
         ));
+
+        // --- config-mutability round: 5 newly-exposed rows, appended after the
+        // issue-29 row so the golden snapshot's first 112 rows stay
+        // byte-identical. (This round also *promoted* 23 already-registered rows
+        // from immutable to mutable — those flip in place, keeping their
+        // positions; only genuinely new names are appended here.)
+        //
+        // The three `hotshards-*` rows are live-mutable: the hot-shard collector
+        // re-reads `SharedHotShardConfig`'s atomics on every `collect()`, so a
+        // SET retunes FROGDB.HOTSHARDS, the `/status` JSON and the debug UI at
+        // once. The two `tls-watch-*` rows are immutable: the cert-watcher task's
+        // existence and poll cadence are both fixed when it is spawned at
+        // startup, so GET reports the honest startup value and SET has no seam. ---
+        rows.extend_from_slice(HotShardsConfig::PARAMS);
+        rows.push(pick(TlsConfig::PARAMS, "tls-watch-certs"));
+        rows.push(pick(TlsConfig::PARAMS, "tls-watch-debounce-ms"));
 
         rows
     });
@@ -846,21 +863,21 @@ mod tests {
             name: "tls-cert-file",
             section: Some("tls"),
             field: Some("cert-file"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         ConfigParamInfo {
             name: "tls-key-file",
             section: Some("tls"),
             field: Some("key-file"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         ConfigParamInfo {
             name: "tls-ca-cert-file",
             section: Some("tls"),
             field: Some("ca-file"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         ConfigParamInfo {
@@ -1061,133 +1078,133 @@ mod tests {
             name: "batch-size-threshold-kb",
             section: Some("persistence"),
             field: Some("batch-size-threshold-kb"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         ConfigParamInfo {
             name: "snapshot-interval-secs",
             section: Some("snapshot"),
             field: Some("snapshot-interval-secs"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         ConfigParamInfo {
             name: "replication-lag-threshold-bytes",
             section: Some("replication"),
             field: Some("replication-lag-threshold-bytes"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         ConfigParamInfo {
             name: "replication-lag-threshold-secs",
             section: Some("replication"),
             field: Some("replication-lag-threshold-secs"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         ConfigParamInfo {
             name: "self-fence-on-replica-loss",
             section: Some("replication"),
             field: Some("self-fence-on-replica-loss"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         ConfigParamInfo {
             name: "replica-freshness-timeout-ms",
             section: Some("replication"),
             field: Some("replica-freshness-timeout-ms"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         ConfigParamInfo {
             name: "cluster-auto-failover",
             section: Some("cluster"),
             field: Some("auto-failover"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         ConfigParamInfo {
             name: "cluster-self-fence-on-quorum-loss",
             section: Some("cluster"),
             field: Some("self-fence-on-quorum-loss"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         ConfigParamInfo {
             name: "replica-priority",
             section: Some("cluster"),
             field: Some("replica-priority"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         ConfigParamInfo {
             name: "tls-cluster-migration",
             section: Some("tls"),
             field: Some("tls-cluster-migration"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         ConfigParamInfo {
             name: "tls-client-cert-file",
             section: Some("tls"),
             field: Some("client-cert-file"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         ConfigParamInfo {
             name: "tls-client-key-file",
             section: Some("tls"),
             field: Some("client-key-file"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         ConfigParamInfo {
             name: "tls-handshake-timeout-ms",
             section: Some("tls"),
             field: Some("handshake-timeout-ms"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         ConfigParamInfo {
             name: "tracing-sampling-rate",
             section: Some("tracing"),
             field: Some("sampling-rate"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         ConfigParamInfo {
             name: "status-memory-warning-percent",
             section: Some("status"),
             field: Some("memory-warning-percent"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         ConfigParamInfo {
             name: "status-connection-warning-percent",
             section: Some("status"),
             field: Some("connection-warning-percent"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         ConfigParamInfo {
             name: "status-durability-lag-warning-ms",
             section: Some("status"),
             field: Some("durability-lag-warning-ms"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         ConfigParamInfo {
             name: "status-durability-lag-critical-ms",
             section: Some("status"),
             field: Some("durability-lag-critical-ms"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         ConfigParamInfo {
             name: "latency-bands-enabled",
             section: Some("latency-bands"),
             field: Some("enabled"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         ConfigParamInfo {
@@ -1246,7 +1263,7 @@ mod tests {
             name: "tls-ciphersuites",
             section: Some("tls"),
             field: Some("ciphersuites"),
-            mutable: false,
+            mutable: true,
             noop: false,
         },
         // issue-29: pub/sub slow-subscriber output-buffer bound (immutable).
@@ -1254,6 +1271,41 @@ mod tests {
             name: "pubsub-output-buffer-hard-limit",
             section: Some("server"),
             field: Some("pubsub-output-buffer-hard-limit"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "hotshards-hot-threshold-percent",
+            section: Some("hotshards"),
+            field: Some("hot-threshold-percent"),
+            mutable: true,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "hotshards-warm-threshold-percent",
+            section: Some("hotshards"),
+            field: Some("warm-threshold-percent"),
+            mutable: true,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "hotshards-default-period-secs",
+            section: Some("hotshards"),
+            field: Some("default-period-secs"),
+            mutable: true,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "tls-watch-certs",
+            section: Some("tls"),
+            field: Some("watch-certs"),
+            mutable: false,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "tls-watch-debounce-ms",
+            section: Some("tls"),
+            field: Some("watch-debounce-ms"),
             mutable: false,
             noop: false,
         },
@@ -1287,8 +1339,11 @@ mod tests {
         // giving 104. The issue-14 wire pass appended 7 more promote-immutable
         // rows (metrics OTLP ×3, json limits ×2, replica ACK cadence, TLS
         // ciphersuites), giving 111. Issue-29 appended 1 more promote-immutable
-        // row (`pubsub-output-buffer-hard-limit`), giving 112.
-        assert_eq!(GOLDEN_SNAPSHOT.len(), 112);
+        // row (`pubsub-output-buffer-hard-limit`), giving 112. The
+        // config-mutability round appended 5 more (hotshards ×3 promote-mutable,
+        // tls-watch ×2 promote-immutable), giving 117 — its other 23 promotions
+        // only flipped `mutable` on existing rows and added no new ones.
+        assert_eq!(GOLDEN_SNAPSHOT.len(), 117);
     }
 
     #[test]

@@ -29,9 +29,9 @@ pub use crate::config::HotShardConfig;
 
 /// Live-tunable hot-shard thresholds.
 ///
-/// The collector reads every threshold through this on each `collect`, so a
-/// runtime CONFIG SET (once the `[hotshards]` params are promoted to mutable)
-/// retunes a running collector without rebuilding it. `f64` fields are stored
+/// The collector reads every threshold through this on each `collect`, so
+/// `CONFIG SET hotshards-hot-threshold-percent` (and its siblings) retunes a
+/// running collector without rebuilding it. `f64` fields are stored
 /// as their IEEE-754 bit patterns in an [`AtomicU64`]; all accesses are
 /// `Relaxed` because the values are independent tuning knobs, not a
 /// consistency-coupled group.
@@ -112,6 +112,23 @@ impl HotShardCollector {
         Self {
             shard_senders,
             config: Arc::new(SharedHotShardConfig::new(config)),
+        }
+    }
+
+    /// Create a collector that *adopts* an existing shared threshold handle
+    /// rather than minting its own.
+    ///
+    /// Used at startup so the collector and `ConfigManager` (which owns the
+    /// handle from construction, before the collector exists) share one cell:
+    /// `CONFIG SET hotshards-*` then retunes the live collector, and CONFIG
+    /// GET/REWRITE read back the same values the collector classifies with.
+    pub fn with_shared_config(
+        shard_senders: Arc<Vec<ShardSender>>,
+        config: Arc<SharedHotShardConfig>,
+    ) -> Self {
+        Self {
+            shard_senders,
+            config,
         }
     }
 
