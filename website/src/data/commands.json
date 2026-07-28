@@ -4,7 +4,7 @@
     "source": "frogdb-server/crates/commands/src/lib.rs, frogdb-server/crates/server/src/server/register.rs",
     "regenerate": "just docs-gen"
   },
-  "count": 390,
+  "count": 391,
   "commands": [
     {
       "name": "ACL",
@@ -1216,6 +1216,24 @@
       "family": "FROGDB",
       "execution_strategy": "standard",
       "full": true,
+      "is_stub": false
+    },
+    {
+      "name": "FROGDB.HOTSHARDS",
+      "arity": {
+        "kind": "at_least",
+        "min": 0
+      },
+      "flags": [
+        "READONLY",
+        "LOADING",
+        "STALE",
+        "SKIP_SLOWLOG",
+        "ADMIN"
+      ],
+      "family": "FROGDB",
+      "execution_strategy": "connection_level",
+      "full": false,
       "is_stub": false
     },
     {
@@ -3912,7 +3930,9 @@
       },
       "flags": [
         "WRITE",
-        "FAST"
+        "FAST",
+        "RANDOM",
+        "NONDETERMINISTIC"
       ],
       "execution_strategy": "standard",
       "full": true,

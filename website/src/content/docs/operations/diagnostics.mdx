@@ -1,13 +1,14 @@
 ---
 title: Diagnostics
-description: Slowlog, LATENCY tooling, hot-key detection, server status, and the debug web UI
+description: Slowlog, LATENCY tooling, hot-key and hot-shard detection, server status, and the debug web UI
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
 FrogDB includes built-in tools for finding out what a running server is doing: the slowlog,
-the `LATENCY` command suite and latency bands, `HOTKEYS` for hot-key detection, the `STATUS`
-command, an authenticated debug web UI with a JSON API, and downloadable diagnostic bundles.
+the `LATENCY` command suite and latency bands, `HOTKEYS` for hot-key detection,
+`FROGDB.HOTSHARDS` for hot-shard detection, the `STATUS` command, an authenticated debug web UI
+with a JSON API, and downloadable diagnostic bundles.
 For the metrics/tracing/logging pipeline, see [Observability](/operations/observability/).
 
 ## Slowlog
@@ -141,15 +142,47 @@ with the session's configured metrics/count/duration/sample-ratio.
 Implemented in `frogdb-server/crates/server/src/connection/hotkeys.rs`.
 
 <Aside type="caution">
-Earlier drafts of this page documented `DEBUG HOTSHARDS [PERIOD <seconds>]` for per-shard
-traffic analysis. It is not a runnable command — the `DEBUG` dispatch table has no `HOTSHARDS`
-arm, so it returns an unknown-subcommand error. The underlying report machinery
-(`frogdb-server/crates/debug/src/hotshards.rs`) still exists but is unused — nothing currently
-invokes it, and there is no `[hotshards]` configuration section. Do not rely on
-`DEBUG HOTSHARDS`.
+Earlier drafts of this page documented `DEBUG HOTSHARDS [PERIOD <seconds>]`. That spelling was
+never runnable — the `DEBUG` dispatch table has no `HOTSHARDS` arm. Use
+[`FROGDB.HOTSHARDS`](#hot-shard-detection) instead.
 </Aside>
 
-For per-shard (rather than per-key) imbalance, watch the Prometheus ratio of the busiest shard
+## Hot-shard detection
+
+Where `HOTKEYS` finds the hottest *keys*, `FROGDB.HOTSHARDS` finds the hottest *shards*: it
+scatter-gathers each shard's op-rate ring buffer and reports the per-shard traffic split.
+
+```redis
+FROGDB.HOTSHARDS [PERIOD <seconds>]
+```
+
+`PERIOD` selects the averaging window (default `10`, capped at the 60-second ring buffer). The
+reply carries `period_secs`, `num_shards`, `total_ops_per_sec`, `imbalance_ratio` (busiest shard
+over the fleet average), `hot_count`, `warm_count`, `recommendations`, and a `shards` array
+sorted hottest-first with per-shard `ops_per_sec`, `reads_per_sec`, `writes_per_sec`,
+`percentage`, `queue_depth`, and `status` (`HOT` / `WARM` / `OK`).
+
+A shard is `HOT` when it carries more than `hot-threshold-percent` of fleet traffic and `WARM`
+above `warm-threshold-percent`:
+
+```toml
+[hotshards]
+hot-threshold-percent = 20.0    # Share of fleet ops/sec that marks a shard hot
+warm-threshold-percent = 15.0   # Share that marks a shard warm
+default-period-secs = 10        # Averaging window when PERIOD is omitted
+```
+
+With an even key distribution every shard sits near `100 / num_shards` percent, so the
+thresholds are meaningful only above a handful of shards — tune them to your shard count.
+
+The same report is rendered by the `hot_shards` section of [`STATUS JSON`](#server-status) and
+by the debug UI's Shard Load panel (`GET /debug/api/hot-shards`). All three read one collector
+instance, so their numbers always agree.
+
+Implemented in `frogdb-server/crates/debug/src/hotshards.rs`, sampled by the shard event loop
+in `frogdb-server/crates/core/src/shard/execution.rs`.
+
+For key-count (rather than traffic) imbalance, watch the Prometheus ratio of the busiest shard
 to the average:
 
 ```
@@ -239,10 +272,11 @@ curl -H "Authorization: Bearer my-secret-token" http://localhost:9090/debug/api/
 | `GET /debug/api/slowlog` | Slowlog entries |
 | `GET /debug/api/latency` | Latency statistics |
 | `GET /debug/api/shard-stats` | Per-shard key count, memory, hot/warm key counts |
+| `GET /debug/api/hot-shards` | Per-shard traffic report — the JSON form of [`FROGDB.HOTSHARDS`](#hot-shard-detection); `{"available": false}` when no collector is installed |
 
 `shard-stats` is the same per-shard data the debug UI's shard view renders — it's a live,
-scatter-gathered snapshot (`ShardStats`), unrelated to the dead `DEBUG HOTSHARDS`
-machinery described above.
+scatter-gathered snapshot (`ShardStats`) of *stored data* per shard. For *traffic* per shard,
+use `hot-shards`.
 
 Routes are defined in `frogdb-server/crates/debug/src/web_ui/routes.rs`.
 

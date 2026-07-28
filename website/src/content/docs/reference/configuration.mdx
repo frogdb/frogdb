@@ -319,6 +319,18 @@ Health endpoint thresholds used by the status API.
 
 <ConfigTable section="status" />
 
+## Hot Shards
+
+Classification thresholds for the per-shard traffic report served by `FROGDB.HOTSHARDS`, the
+status JSON's `hot_shards` section, and the debug UI's Shard Load panel. See
+[Diagnostics → Hot-shard detection](/operations/diagnostics/#hot-shard-detection).
+
+```toml
+[hotshards]
+```
+
+<ConfigTable section="hotshards" />
+
 ## Latency Testing
 
 Startup latency testing and monitoring.
