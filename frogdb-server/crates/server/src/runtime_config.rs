@@ -653,6 +653,16 @@ pub struct ConfigManager {
     /// construction (the metrics recorder is built before this manager) so the
     /// toggle always reaches the live tracker.
     latency_band_tracker: Arc<frogdb_telemetry::LatencyBandTracker>,
+    /// Live TLS runtime handle, published by server init once the TLS manager
+    /// exists (which is after this manager is constructed and `Arc`-wrapped).
+    ///
+    /// This is the entry point for TLS CONFIG SET support: a param's `apply`
+    /// closure calls [`ConfigManager::tls_runtime`] and, when it is present,
+    /// invokes the matching `set_*` method on the handle
+    /// (`set_cert_file`, `set_ciphersuites`, ...). `None` means TLS is
+    /// disabled, so the corresponding CONFIG SET has nothing live to change.
+    #[cfg(not(feature = "turmoil"))]
+    tls_runtime: std::sync::OnceLock<Arc<crate::tls_runtime::TlsRuntimeHandle>>,
 }
 
 /// Bundle of live collaborators injected into [`ConfigManager`] at construction.
@@ -775,6 +785,8 @@ impl ConfigManager {
                 config.tracing.sampling_rate,
             )),
             latency_band_tracker,
+            #[cfg(not(feature = "turmoil"))]
+            tls_runtime: std::sync::OnceLock::new(),
         }
     }
 
@@ -812,6 +824,23 @@ impl ConfigManager {
     /// Set the log reload handle for dynamic log level changes.
     pub fn set_log_reload_handle(&mut self, handle: LogReloadHandle) {
         self.log_reload_handle = Some(handle);
+    }
+
+    /// Publish the live TLS runtime handle.
+    ///
+    /// Takes `&self` (not `&mut self`) because the TLS manager is built later in
+    /// server init than the `ConfigManager`, by which point the manager is
+    /// already behind an `Arc`. Called at most once; a second call is ignored.
+    #[cfg(not(feature = "turmoil"))]
+    pub fn set_tls_runtime(&self, handle: Arc<crate::tls_runtime::TlsRuntimeHandle>) {
+        let _ = self.tls_runtime.set(handle);
+    }
+
+    /// The live TLS runtime handle, or `None` when TLS is disabled (or the
+    /// manager was built without server init, as in unit tests).
+    #[cfg(not(feature = "turmoil"))]
+    pub fn tls_runtime(&self) -> Option<&Arc<crate::tls_runtime::TlsRuntimeHandle>> {
+        self.tls_runtime.get()
     }
 
     /// Get the config file path.

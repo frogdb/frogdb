@@ -60,7 +60,7 @@ pub use server::ServerConfig;
 pub use slowlog::SlowlogConfig;
 pub use status::StatusConfig;
 pub use tiered::TieredStorageConfig;
-pub use tls::{ClientCertMode, TlsConfig, TlsProtocol};
+pub use tls::{AdditionalCert, ClientCertMode, TlsConfig, TlsProtocol};
 
 use anyhow::Result;
 use frogdb_config_derive::ConfigSections;

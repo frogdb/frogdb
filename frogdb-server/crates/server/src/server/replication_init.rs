@@ -47,7 +47,9 @@ pub(super) fn init_replication(
     recovered_replication: &frogdb_core::ReplicationState,
     rocks_store: &Option<Arc<RocksStore>>,
     _metrics_recorder: &Arc<dyn MetricsRecorder>,
-    #[cfg(not(feature = "turmoil"))] tls_manager: &Option<Arc<crate::tls::TlsManager>>,
+    #[cfg(not(feature = "turmoil"))] tls_runtime: &Option<
+        Arc<crate::tls_runtime::TlsRuntimeHandle>,
+    >,
 ) -> Result<ReplicationInitResult> {
     let mut replica_handler: Option<Arc<ReplicaReplicationHandler>> = None;
     let mut replica_frame_rx: Option<mpsc::Receiver<frogdb_core::ReplicationFrame>> = None;
@@ -166,14 +168,15 @@ pub(super) fn init_replication(
         #[cfg(not(feature = "turmoil"))]
         if config.tls.enabled
             && config.tls.tls_replication
-            && let Some(mgr) = tls_manager
+            && let Some(handle) = tls_runtime
         {
-            let mgr = mgr.clone();
-            let handshake_timeout =
-                std::time::Duration::from_millis(config.tls.handshake_timeout_ms);
+            let mgr = handle.manager().clone();
+            let handshake_timeout = handle.handshake_timeout();
             let factory: frogdb_replication::replica::ConnectFactory =
                 Arc::new(move |addr: std::net::SocketAddr| {
                     let mgr = mgr.clone();
+                    // Timeout read per dial so a change applies without a restart.
+                    let handshake_timeout = handshake_timeout.get();
                     Box::pin(async move {
                         let connector = mgr.connector().ok_or_else(|| {
                             std::io::Error::other("TLS client connector not configured")

@@ -55,9 +55,9 @@ pub struct ObservabilityServer {
     /// TLS manager for HTTPS support.
     #[cfg(not(feature = "turmoil"))]
     tls_manager: Option<Arc<crate::tls::TlsManager>>,
-    /// TLS handshake timeout.
+    /// Live TLS handshake timeout, read per inbound HTTPS connection.
     #[cfg(not(feature = "turmoil"))]
-    tls_handshake_timeout: std::time::Duration,
+    tls_handshake_timeout: crate::tls_runtime::HandshakeTimeout,
 }
 
 impl ObservabilityServer {
@@ -81,7 +81,7 @@ impl ObservabilityServer {
             #[cfg(not(feature = "turmoil"))]
             tls_manager: None,
             #[cfg(not(feature = "turmoil"))]
-            tls_handshake_timeout: std::time::Duration::from_secs(10),
+            tls_handshake_timeout: crate::tls_runtime::HandshakeTimeout::new(10_000),
         }
     }
 
@@ -114,7 +114,7 @@ impl ObservabilityServer {
     pub fn with_tls(
         mut self,
         tls_manager: Arc<crate::tls::TlsManager>,
-        handshake_timeout: std::time::Duration,
+        handshake_timeout: crate::tls_runtime::HandshakeTimeout,
     ) -> Self {
         self.tls_manager = Some(tls_manager);
         self.tls_handshake_timeout = handshake_timeout;
@@ -171,14 +171,17 @@ async fn run_tls_accept_loop(
     listener: TcpListener,
     app: Router,
     tls_manager: Arc<crate::tls::TlsManager>,
-    handshake_timeout: std::time::Duration,
+    handshake_timeout: crate::tls_runtime::HandshakeTimeout,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use hyper_util::rt::TokioIo;
     use tower::Service;
 
     loop {
         let (tcp_stream, _peer) = listener.accept().await?;
+        // Both the acceptor and the timeout are taken per connection so a
+        // certificate reload or a timeout change applies to the next client.
         let acceptor = tls_manager.acceptor();
+        let handshake_timeout = handshake_timeout.get();
         let app = app.clone();
 
         tokio::spawn(async move {

@@ -83,8 +83,11 @@ pub(super) struct InitResult {
     pub shard_monitor: tokio_metrics::TaskMonitor,
     pub conn_monitor: tokio_metrics::TaskMonitor,
     pub task_registry: TaskMonitorRegistry,
+    /// Live TLS runtime handle (manager + effective `TlsConfig` + reload seam).
+    /// `None` when TLS is disabled. This is the single object every TLS
+    /// consumer and every future CONFIG SET path goes through.
     #[cfg(not(feature = "turmoil"))]
-    pub tls_manager: Option<Arc<crate::tls::TlsManager>>,
+    pub tls_runtime: Option<Arc<crate::tls_runtime::TlsRuntimeHandle>>,
     pub tls_listener: Option<TcpListener>,
 }
 
@@ -402,12 +405,18 @@ pub(super) async fn init_infrastructure(
         info!("Persisted functions loaded");
     }
 
-    // Initialize TLS manager if TLS is enabled
+    // Initialize the TLS runtime handle if TLS is enabled.
+    //
+    // The handle owns the `TlsManager` *and* the effective `TlsConfig`, so
+    // later CONFIG SETs of TLS parameters can rebuild the rustls configs from a
+    // single mutated source of truth. It is published on the `ConfigManager`
+    // below, which is how the CONFIG SET machinery reaches it.
     #[cfg(not(feature = "turmoil"))]
-    let tls_manager = if config.tls.enabled {
-        let mgr = crate::tls::TlsManager::new(&config.tls)?;
+    let tls_runtime = if config.tls.enabled {
+        let handle = Arc::new(crate::tls_runtime::TlsRuntimeHandle::new(&config.tls)?);
+        config_manager.set_tls_runtime(handle.clone());
         info!("TLS manager initialized");
-        Some(Arc::new(mgr))
+        Some(handle)
     } else {
         None
     };
@@ -449,7 +458,7 @@ pub(super) async fn init_infrastructure(
         conn_monitor,
         task_registry,
         #[cfg(not(feature = "turmoil"))]
-        tls_manager,
+        tls_runtime,
         tls_listener,
     })
 }

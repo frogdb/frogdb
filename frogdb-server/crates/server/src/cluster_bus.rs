@@ -5,6 +5,8 @@
 //! in frogdb_core::cluster::network.
 
 use std::sync::Arc;
+#[cfg(not(feature = "turmoil"))]
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
@@ -39,11 +41,14 @@ pub struct ClusterBusContext {
     #[cfg(not(feature = "turmoil"))]
     pub tls_manager: Option<Arc<crate::tls::TlsManager>>,
     /// Whether to accept both plain and TLS connections during migration.
+    ///
+    /// Read per inbound connection so a rolling migration can be turned on and
+    /// off without a restart.
     #[cfg(not(feature = "turmoil"))]
-    pub tls_cluster_migration: bool,
-    /// TLS handshake timeout.
+    pub tls_cluster_migration: Arc<AtomicBool>,
+    /// Live TLS handshake timeout, read per inbound connection.
     #[cfg(not(feature = "turmoil"))]
-    pub tls_handshake_timeout: std::time::Duration,
+    pub tls_handshake_timeout: crate::tls_runtime::HandshakeTimeout,
 }
 
 /// Run the cluster bus TCP server.
@@ -76,6 +81,35 @@ pub async fn run(listener: TcpListener, ctx: Arc<ClusterBusContext>) -> std::io:
     }
 }
 
+/// Transport chosen for one inbound cluster-bus connection.
+#[cfg(not(feature = "turmoil"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BusTransport {
+    Plaintext,
+    Tls,
+}
+
+/// Decide how to read an inbound connection.
+///
+/// Strict mode (the steady state) requires TLS from every peer. Dual-accept
+/// mode, used while rolling a cluster onto TLS, sniffs the first byte:
+/// `0x16` is the TLS `ContentType::Handshake` that opens a ClientHello, so
+/// anything else is a peer that has not been restarted yet and is still
+/// speaking plaintext. A connection that sent nothing yet (`None`) cannot be
+/// a ClientHello in flight — `peek` returning 0 bytes means EOF — so it is
+/// treated as plaintext and fails downstream on its own.
+#[cfg(not(feature = "turmoil"))]
+fn choose_transport(migration: bool, first_byte: Option<u8>) -> BusTransport {
+    const TLS_HANDSHAKE_CONTENT_TYPE: u8 = 0x16;
+    if !migration {
+        return BusTransport::Tls;
+    }
+    match first_byte {
+        Some(TLS_HANDSHAKE_CONTENT_TYPE) => BusTransport::Tls,
+        _ => BusTransport::Plaintext,
+    }
+}
+
 /// Handle a single cluster bus connection.
 ///
 /// Reads RPC requests in a loop, processes them, and sends responses.
@@ -86,45 +120,39 @@ async fn handle_connection(
     stream: tokio::net::TcpStream,
     ctx: &ClusterBusContext,
 ) -> std::io::Result<()> {
-    let framed = if let Some(ref mgr) = ctx.tls_manager {
-        if ctx.tls_cluster_migration {
-            // Migration mode: peek first byte to determine TLS vs plaintext.
-            // 0x16 = TLS ContentType::Handshake (ClientHello).
-            let mut peek_buf = [0u8; 1];
-            let n = stream.peek(&mut peek_buf).await?;
-            if n > 0 && peek_buf[0] == 0x16 {
-                let acceptor = mgr.acceptor();
-                let tls_stream =
-                    tokio::time::timeout(ctx.tls_handshake_timeout, acceptor.accept(stream))
-                        .await
-                        .map_err(|_| {
-                            std::io::Error::new(
-                                std::io::ErrorKind::TimedOut,
-                                "TLS handshake timeout",
-                            )
-                        })?
-                        .map_err(|e| {
-                            std::io::Error::new(std::io::ErrorKind::ConnectionRefused, e)
-                        })?;
-                frogdb_core::cluster::new_framed(Box::new(tls_stream))
+    let framed =
+        if let Some(ref mgr) = ctx.tls_manager {
+            // Both the dual-accept flag and the handshake timeout are read here,
+            // per connection, so a runtime change applies to the next peer that
+            // dials in without disturbing established bus connections.
+            let migration = ctx.tls_cluster_migration.load(Ordering::Relaxed);
+            let first_byte = if migration {
+                let mut peek_buf = [0u8; 1];
+                let n = stream.peek(&mut peek_buf).await?;
+                (n > 0).then_some(peek_buf[0])
             } else {
-                new_framed_tcp(stream)
-            }
-        } else {
-            // Strict TLS mode: all connections must be TLS.
-            let acceptor = mgr.acceptor();
-            let tls_stream =
-                tokio::time::timeout(ctx.tls_handshake_timeout, acceptor.accept(stream))
+                None
+            };
+
+            match choose_transport(migration, first_byte) {
+                BusTransport::Plaintext => new_framed_tcp(stream),
+                BusTransport::Tls => {
+                    let acceptor = mgr.acceptor();
+                    let tls_stream = tokio::time::timeout(
+                        ctx.tls_handshake_timeout.get(),
+                        acceptor.accept(stream),
+                    )
                     .await
                     .map_err(|_| {
                         std::io::Error::new(std::io::ErrorKind::TimedOut, "TLS handshake timeout")
                     })?
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::ConnectionRefused, e))?;
-            frogdb_core::cluster::new_framed(Box::new(tls_stream))
-        }
-    } else {
-        new_framed_tcp(stream)
-    };
+                    frogdb_core::cluster::new_framed(Box::new(tls_stream))
+                }
+            }
+        } else {
+            new_framed_tcp(stream)
+        };
     let mut framed = framed;
 
     loop {
@@ -287,8 +315,52 @@ async fn handle_pubsub_forward(
 // (scoped-tls) outside a running sim. Excluded from the turmoil build.
 #[cfg(all(test, not(feature = "turmoil")))]
 mod tests {
+    use super::{AtomicBool, BusTransport, Ordering, choose_transport};
     use crate::net::tcp_listener_reusable;
     use std::net::SocketAddr;
+
+    #[test]
+    fn strict_mode_always_requires_tls() {
+        assert_eq!(choose_transport(false, Some(0x16)), BusTransport::Tls);
+        assert_eq!(choose_transport(false, Some(b'*')), BusTransport::Tls);
+        assert_eq!(choose_transport(false, None), BusTransport::Tls);
+    }
+
+    #[test]
+    fn dual_accept_sniffs_the_client_hello() {
+        assert_eq!(choose_transport(true, Some(0x16)), BusTransport::Tls);
+        // A not-yet-migrated peer speaking the plaintext bus protocol.
+        assert_eq!(choose_transport(true, Some(b'*')), BusTransport::Plaintext);
+        assert_eq!(choose_transport(true, None), BusTransport::Plaintext);
+    }
+
+    /// The bus reads the dual-accept flag per connection, so flipping it on the
+    /// TLS runtime handle changes what the *next* connection does.
+    #[test]
+    fn flipping_the_runtime_flag_changes_the_next_connection() {
+        let flag = std::sync::Arc::new(AtomicBool::new(false));
+        let plaintext_peer = Some(b'*');
+
+        // Strict: a plaintext peer is (correctly) fed to the TLS acceptor.
+        assert_eq!(
+            choose_transport(flag.load(Ordering::Relaxed), plaintext_peer),
+            BusTransport::Tls
+        );
+
+        // Operator starts a rolling migration.
+        flag.store(true, Ordering::Relaxed);
+        assert_eq!(
+            choose_transport(flag.load(Ordering::Relaxed), plaintext_peer),
+            BusTransport::Plaintext
+        );
+
+        // ...and closes it again once every peer speaks TLS.
+        flag.store(false, Ordering::Relaxed);
+        assert_eq!(
+            choose_transport(flag.load(Ordering::Relaxed), plaintext_peer),
+            BusTransport::Tls
+        );
+    }
 
     #[tokio::test]
     async fn test_cluster_bus_bind_fails_on_invalid_addr() {

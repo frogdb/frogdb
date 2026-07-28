@@ -34,6 +34,9 @@ pub(super) struct SubsystemHandles {
     pub admin_acceptor: Option<JoinHandle<()>>,
     #[cfg(not(feature = "turmoil"))]
     pub tls_acceptor: Option<JoinHandle<()>>,
+    /// Certificate file watcher; `None` when TLS or `tls.watch-certs` is off.
+    #[cfg(not(feature = "turmoil"))]
+    pub cert_watcher: Option<JoinHandle<()>>,
     pub failure_detector: Option<JoinHandle<()>>,
     /// Handle to the shard-worker supervisor. Completes once every shard worker
     /// has terminated, so shutdown awaits it in place of the per-worker handles.
@@ -43,6 +46,34 @@ pub(super) struct SubsystemHandles {
 }
 
 impl Server {
+    /// The live handshake timeout to hand to accept loops and connect
+    /// factories.
+    ///
+    /// When TLS is enabled this is the [`crate::tls_runtime::TlsRuntimeHandle`]'s
+    /// shared handle, so a runtime change reaches every TLS path. When TLS is
+    /// off there is no handshake path to read it, but the acceptor context
+    /// still needs a value, so a detached one carrying the configured default
+    /// is used.
+    #[cfg(not(feature = "turmoil"))]
+    fn tls_handshake_timeout(&self) -> crate::tls_runtime::HandshakeTimeout {
+        match self.tls_runtime {
+            Some(ref tls_rt) => tls_rt.handshake_timeout(),
+            None => crate::tls_runtime::HandshakeTimeout::new(self.config.tls.handshake_timeout_ms),
+        }
+    }
+
+    /// The live dual-accept flag for the cluster bus; same fallback rationale
+    /// as [`Self::tls_handshake_timeout`].
+    #[cfg(not(feature = "turmoil"))]
+    fn tls_cluster_migration_flag(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        match self.tls_runtime {
+            Some(ref tls_rt) => tls_rt.cluster_migration_flag(),
+            None => Arc::new(std::sync::atomic::AtomicBool::new(
+                self.config.tls.tls_cluster_migration,
+            )),
+        }
+    }
+
     /// Start all subsystems and return handles for later shutdown.
     pub(super) fn start_subsystems(&mut self) -> Result<SubsystemHandles> {
         // Capture server start time
@@ -189,12 +220,9 @@ impl Server {
             #[cfg(not(feature = "turmoil"))]
             if self.config.tls.enabled
                 && !self.config.tls.no_tls_on_http
-                && let Some(ref mgr) = self.tls_manager
+                && let Some(ref tls_rt) = self.tls_runtime
             {
-                server = server.with_tls(
-                    mgr.clone(),
-                    std::time::Duration::from_millis(self.config.tls.handshake_timeout_ms),
-                );
+                server = server.with_tls(tls_rt.manager().clone(), tls_rt.handshake_timeout());
             }
 
             let scheme = {
@@ -273,16 +301,14 @@ impl Server {
                     .unwrap_or_else(|| Arc::new(AtomicU64::new(0))),
                 #[cfg(not(feature = "turmoil"))]
                 tls_manager: if self.config.tls.enabled && self.config.tls.tls_cluster {
-                    self.tls_manager.clone()
+                    self.tls_runtime.as_ref().map(|h| h.manager().clone())
                 } else {
                     None
                 },
                 #[cfg(not(feature = "turmoil"))]
-                tls_cluster_migration: self.config.tls.tls_cluster_migration,
+                tls_cluster_migration: self.tls_cluster_migration_flag(),
                 #[cfg(not(feature = "turmoil"))]
-                tls_handshake_timeout: std::time::Duration::from_millis(
-                    self.config.tls.handshake_timeout_ms,
-                ),
+                tls_handshake_timeout: self.tls_handshake_timeout(),
             });
             Some(spawn(async move {
                 if let Err(e) = crate::cluster_bus::run(cluster_bus_listener, ctx).await {
@@ -461,9 +487,7 @@ impl Server {
             #[cfg(feature = "turmoil")]
             chaos_config: std::sync::Arc::new(self.config.chaos.clone()),
             #[cfg(not(feature = "turmoil"))]
-            tls_handshake_timeout: std::time::Duration::from_millis(
-                self.config.tls.handshake_timeout_ms,
-            ),
+            tls_handshake_timeout: self.tls_handshake_timeout(),
         };
 
         // Create main acceptor (regular client connections)
@@ -499,7 +523,7 @@ impl Server {
                     // Admin port gets TLS only if no_tls_on_admin_port is false
                     #[cfg(not(feature = "turmoil"))]
                     tls_manager: if !self.config.tls.no_tls_on_admin_port {
-                        self.tls_manager.clone()
+                        self.tls_runtime.as_ref().map(|h| h.manager().clone())
                     } else {
                         None
                     },
@@ -518,13 +542,13 @@ impl Server {
         // Spawn TLS acceptor if TLS is enabled and a TLS listener exists
         #[cfg(not(feature = "turmoil"))]
         let tls_acceptor_handle = if let Some(tls_listener) = self.tls_listener.take() {
-            if let Some(ref tls_manager) = self.tls_manager {
+            if let Some(ref tls_rt) = self.tls_runtime {
                 let tls_acceptor = Acceptor::bind(
                     acceptor_ctx,
                     PortSpec {
                         listener: tls_listener,
                         is_admin: false, // TLS port
-                        tls_manager: Some(tls_manager.clone()),
+                        tls_manager: Some(tls_rt.manager().clone()),
                     },
                 );
 
@@ -539,6 +563,17 @@ impl Server {
         } else {
             None
         };
+
+        // Spawn the certificate watcher. Deliberately not tied to the TLS
+        // listener above: the cluster bus, replication links and the admin port
+        // can all use TLS without a TLS client port being configured, and their
+        // certificates need reloading just the same. Returns `None` when
+        // `tls.watch-certs` is off.
+        #[cfg(not(feature = "turmoil"))]
+        let cert_watcher_handle = self
+            .tls_runtime
+            .as_ref()
+            .and_then(|tls_rt| crate::tls_watch::spawn_cert_watcher(tls_rt.clone()));
 
         // Record initial max_clients gauge
         {
@@ -569,6 +604,8 @@ impl Server {
             admin_acceptor: admin_acceptor_handle,
             #[cfg(not(feature = "turmoil"))]
             tls_acceptor: tls_acceptor_handle,
+            #[cfg(not(feature = "turmoil"))]
+            cert_watcher: cert_watcher_handle,
             failure_detector: failure_detector_handle,
             shard_supervisor,
             periodic_sync_handle,
@@ -677,6 +714,12 @@ impl Server {
         }
         #[cfg(not(feature = "turmoil"))]
         if let Some(handle) = handles.tls_acceptor {
+            handle.abort();
+        }
+
+        // Stop the certificate watcher
+        #[cfg(not(feature = "turmoil"))]
+        if let Some(handle) = handles.cert_watcher {
             handle.abort();
         }
     }

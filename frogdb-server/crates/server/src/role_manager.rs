@@ -301,7 +301,8 @@ pub struct RealReplicaStreamer {
 #[cfg(not(feature = "turmoil"))]
 struct ReplicaTlsConfig {
     manager: Arc<crate::tls::TlsManager>,
-    handshake_timeout: std::time::Duration,
+    /// Live timeout, read when a replica connection is dialled.
+    handshake_timeout: crate::tls_runtime::HandshakeTimeout,
 }
 
 impl RealReplicaStreamer {
@@ -312,7 +313,9 @@ impl RealReplicaStreamer {
         num_shards: usize,
         is_replica_flag: Arc<AtomicBool>,
         shared_offset: Option<Arc<std::sync::atomic::AtomicU64>>,
-        #[cfg(not(feature = "turmoil"))] tls_manager: &Option<Arc<crate::tls::TlsManager>>,
+        #[cfg(not(feature = "turmoil"))] tls_runtime: &Option<
+            Arc<crate::tls_runtime::TlsRuntimeHandle>,
+        >,
     ) -> Self {
         let data_dir = config.persistence.data_dir.clone();
         let state_path = data_dir.join(&config.replication.state_file);
@@ -320,13 +323,11 @@ impl RealReplicaStreamer {
         #[cfg(not(feature = "turmoil"))]
         let tls = if config.tls.enabled
             && config.tls.tls_replication
-            && let Some(mgr) = tls_manager
+            && let Some(handle) = tls_runtime
         {
             Some(ReplicaTlsConfig {
-                manager: mgr.clone(),
-                handshake_timeout: std::time::Duration::from_millis(
-                    config.tls.handshake_timeout_ms,
-                ),
+                manager: handle.manager().clone(),
+                handshake_timeout: handle.handshake_timeout(),
             })
         } else {
             None
@@ -408,10 +409,12 @@ impl RealReplicaStreamer {
         #[cfg(not(feature = "turmoil"))]
         if let Some(tls) = &self.tls {
             let mgr = tls.manager.clone();
-            let handshake_timeout = tls.handshake_timeout;
+            let handshake_timeout = tls.handshake_timeout.clone();
             let factory: frogdb_replication::replica::ConnectFactory =
                 Arc::new(move |addr: SocketAddr| {
                     let mgr = mgr.clone();
+                    // Timeout read per dial, not captured as a `Duration`.
+                    let handshake_timeout = handshake_timeout.get();
                     Box::pin(async move {
                         let connector = mgr.connector().ok_or_else(|| {
                             std::io::Error::other("TLS client connector not configured")

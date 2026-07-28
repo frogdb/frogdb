@@ -72,7 +72,9 @@ pub(super) async fn init_cluster(
     // priority), owned by the ConfigManager. The failure detector reads them at
     // decision time rather than copying them at construction.
     cluster_flags: Arc<crate::cluster_flags::ClusterRuntimeFlags>,
-    #[cfg(not(feature = "turmoil"))] tls_manager: &Option<Arc<crate::tls::TlsManager>>,
+    #[cfg(not(feature = "turmoil"))] tls_runtime: &Option<
+        Arc<crate::tls_runtime::TlsRuntimeHandle>,
+    >,
 ) -> Result<ClusterInitResult> {
     // Create the shared is_replica flag and the RoleManager that owns it. This
     // single AtomicBool is shared by all shard workers, the acceptor, and all
@@ -105,7 +107,7 @@ pub(super) async fn init_cluster(
             is_replica_flag.clone(),
             shared_replication_offset.clone(),
             #[cfg(not(feature = "turmoil"))]
-            tls_manager,
+            tls_runtime,
         ));
     let role_manager =
         crate::role_manager::RoleManager::new(is_replica_flag.clone(), streamer, boot_primary_addr);
@@ -219,17 +221,18 @@ pub(super) async fn init_cluster(
         #[cfg(not(feature = "turmoil"))]
         if config.tls.enabled
             && config.tls.tls_cluster
-            && let Some(mgr) = tls_manager
+            && let Some(handle) = tls_runtime
         {
-            let mgr = mgr.clone();
-            let handshake_timeout =
-                std::time::Duration::from_millis(config.tls.handshake_timeout_ms);
+            let mgr = handle.manager().clone();
+            let handshake_timeout = handle.handshake_timeout();
             use frogdb_core::cluster::network::{
                 BoxedStream as ClusterBoxedStream, ConnectFactory as ClusterConnectFactory,
             };
             let factory: ClusterConnectFactory =
                 std::sync::Arc::new(move |addr: std::net::SocketAddr| {
                     let mgr = mgr.clone();
+                    // Timeout read per dial so a change applies without a restart.
+                    let handshake_timeout = handshake_timeout.get();
                     Box::pin(async move {
                         let connector = mgr.connector().ok_or_else(|| {
                             std::io::Error::other("TLS client connector not configured")
