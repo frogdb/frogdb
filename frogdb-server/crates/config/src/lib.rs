@@ -327,6 +327,7 @@ impl Config {
         self.tls.validate()?;
         self.json.validate()?;
         self.status.validate()?;
+        self.hotshards.validate()?;
         self.tiered_storage.validate()?;
         if self.tiered_storage.enabled && !self.persistence.enabled {
             anyhow::bail!("tiered_storage.enabled=true requires persistence.enabled=true");
@@ -442,5 +443,29 @@ mod tests {
         assert_eq!(config.server.port, 6380);
         assert_eq!(config.server.bind, "0.0.0.0");
         assert_eq!(config.logging.level, "debug");
+    }
+
+    /// `[hotshards]` must be reached by the top-level `Config::validate`, like
+    /// every sibling section — a section whose `validate` is never called is a
+    /// silently-unenforced config surface.
+    #[test]
+    fn test_validate_rejects_invalid_hotshards_section() {
+        let toml = r#"
+            [hotshards]
+            hot-threshold-percent = 10.0
+            warm-threshold-percent = 40.0
+        "#;
+        let config: Config = toml::from_str(toml).expect("section parses");
+        let err = config.validate().expect_err("inverted thresholds rejected");
+        assert!(
+            err.to_string().contains("warm_threshold_percent"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_accepts_default_hotshards_section() {
+        let config = Config::default();
+        assert!(config.hotshards.validate().is_ok());
     }
 }
