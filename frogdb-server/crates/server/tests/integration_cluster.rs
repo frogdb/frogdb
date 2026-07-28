@@ -8118,6 +8118,66 @@ async fn test_cluster_info_slots_assigned_matches_addslots() {
     harness.shutdown_all().await;
 }
 
+/// CLUSTER INFO's slot-health breakdown is derived, not hardcoded (issue 36).
+///
+/// `cluster_slots_{ok,pfail,fail}` used to be literals (`slots_ok` was set to
+/// `slots_assigned` unconditionally, `pfail`/`fail` to `0`); they are now
+/// computed per slot from the owning node's FAIL/PFAIL flags
+/// (`commands/cluster/mod.rs::count_slot_health`). This pins the healthy-cluster
+/// end of that contract at the wire level:
+///
+/// - every assigned slot is bucketed exactly once, so
+///   `ok + pfail + fail == slots_assigned` (the invariant that makes the
+///   breakdown non-misleading);
+/// - with no node flagged, all slots are `ok` and both failure buckets are 0.
+///
+/// The FAIL-flagged and recovery ends are covered deterministically by
+/// `test_cluster_asymmetric_partition_false_failover` in `tests/simulation.rs`
+/// (assertions 5 and 6), which is the only place a real `MarkNodeFailed` is
+/// reachable — the leader-only failure detector is the sole producer of the
+/// flag, there is no client/admin command for it. PFAIL has no producer at all
+/// in FrogDB today, so it is pinned by unit tests on `count_slot_health`.
+#[tokio::test]
+async fn test_cluster_info_slot_health_breakdown_healthy_cluster() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    for &nid in &harness.node_ids() {
+        let node = harness.node(nid).unwrap();
+        let info_resp = node.send("CLUSTER", &["INFO"]).await;
+        let info = parse_cluster_info(&info_resp).unwrap();
+
+        assert_eq!(
+            info.cluster_slots_ok + info.cluster_slots_pfail + info.cluster_slots_fail,
+            info.cluster_slots_assigned,
+            "node {nid}: slots_ok + slots_pfail + slots_fail must account for every \
+             assigned slot exactly once"
+        );
+        assert_eq!(
+            info.cluster_slots_ok, info.cluster_slots_assigned,
+            "node {nid}: every slot is ok while no node is FAIL/PFAIL flagged"
+        );
+        assert_eq!(
+            info.cluster_slots_fail, 0,
+            "node {nid}: no node is FAIL flagged"
+        );
+        assert_eq!(
+            info.cluster_slots_pfail, 0,
+            "node {nid}: no node is PFAIL flagged"
+        );
+    }
+
+    harness.shutdown_all().await;
+}
+
 /// CLUSTER INFO cluster_size matches primary count.
 #[tokio::test]
 async fn test_cluster_info_cluster_size() {
@@ -11329,21 +11389,45 @@ async fn test_wait_in_cluster_does_not_hang_across_failover() {
 /// Slot ranges each harness node owns, per `CLUSTER NODES`.
 ///
 /// Returned in `harness.node_ids()` order; nodes owning no slots are omitted.
+///
+/// Polls until the reported ranges cover the whole ring. `wait_for_cluster_convergence`
+/// only establishes that the nodes agree on membership — the bootstrap's slot
+/// assignment can still be mid-propagation, so a single read of `CLUSTER NODES`
+/// can show a partial ring (e.g. `[0,5460]` and `[10922,16383]` with the middle
+/// third missing). Callers resolve arbitrary slots through `owner_of_slot`, so a
+/// partial ring makes them fail on whichever slot lands in the hole.
 async fn slot_ownership(harness: &ClusterTestHarness) -> Vec<(u64, Vec<(u16, u16)>)> {
     let node_ids = harness.node_ids();
-    let first = harness.node(node_ids[0]).expect("node 0 must exist");
-    let nodes = parse_cluster_nodes(&first.send("CLUSTER", &["NODES"]).await)
-        .expect("CLUSTER NODES should parse");
-    let mut ownership = Vec::new();
-    for &id in &node_ids {
-        let addr = harness.node(id).expect("node must exist").client_addr();
-        if let Some(info) = nodes.iter().find(|n| n.addr == addr)
-            && !info.slots.is_empty()
-        {
-            ownership.push((id, info.slots.clone()));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+
+    loop {
+        let first = harness.node(node_ids[0]).expect("node 0 must exist");
+        let nodes = parse_cluster_nodes(&first.send("CLUSTER", &["NODES"]).await)
+            .expect("CLUSTER NODES should parse");
+        let mut ownership = Vec::new();
+        for &id in &node_ids {
+            let addr = harness.node(id).expect("node must exist").client_addr();
+            if let Some(info) = nodes.iter().find(|n| n.addr == addr)
+                && !info.slots.is_empty()
+            {
+                ownership.push((id, info.slots.clone()));
+            }
         }
+
+        let covered: u32 = ownership
+            .iter()
+            .flat_map(|(_, ranges)| ranges.iter())
+            .map(|(s, e)| u32::from(*e) - u32::from(*s) + 1)
+            .sum();
+        if covered == 16384 {
+            return ownership;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "slot assignment never covered the full ring; got {covered}/16384 in {ownership:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    ownership
 }
 
 /// The harness node id owning `slot`, if any.

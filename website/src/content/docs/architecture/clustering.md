@@ -333,6 +333,28 @@ replica-topology concern. The replica-less false-positive contract above is regr
 `test_cluster_asymmetric_partition_false_failover`
 (`frogdb-server/crates/server/tests/simulation.rs`, deterministic turmoil).
 
+### Slot health accounting in `CLUSTER INFO`
+
+`CLUSTER INFO`'s `cluster_slots_ok`, `cluster_slots_pfail` and `cluster_slots_fail` are derived per
+slot from the `FAIL`/`PFAIL` flags of the node that currently owns it
+(`commands/cluster/mod.rs`, `count_slot_health`). Every assigned slot lands in exactly one bucket,
+with `FAIL` taking precedence over `PFAIL`, so `slots_ok + slots_pfail + slots_fail` always equals
+`cluster_slots_assigned`. A slot owned by a `FAIL`-flagged primary is reported as failed, not ok.
+
+This matters because those three fields are the standard health signal that cluster-aware clients
+and monitoring read; if `slots_ok` always equalled `slots_assigned`, an operator watching them would
+see a healthy cluster while a primary was flagged failed. They now agree with the coarser
+`cluster_state` field, which reports `fail` whenever any primary carries the `FAIL` flag or the
+local node has lost quorum.
+
+`cluster_slots_pfail` reports 0 in practice today, because nothing sets `PFAIL`. `PFAIL` in Redis
+means "one node suspects this peer, but the cluster has not agreed yet" — a distinction that only
+exists because detection is gossiped among peers. FrogDB's detection is leader-only and its result
+goes through Raft, so a probe failure either has not yet crossed `fail_threshold` (nothing is
+reported) or has been committed as `MarkNodeFailed` (`FAIL`); there is no intermediate
+single-observer state to report. The bucket is still computed rather than hardcoded, so it would
+begin reporting real counts if a suspicion phase were ever introduced.
+
 ---
 
 ## Node-to-Node Communication
