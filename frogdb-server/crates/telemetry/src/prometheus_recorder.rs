@@ -12,6 +12,7 @@ use prometheus::{
 };
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Labels key type for DashMap lookups.
 type LabelsKey = Vec<(String, String)>;
@@ -102,8 +103,9 @@ pub struct PrometheusRecorder {
     counter_cache: DashMap<(String, LabelsKey), Counter>,
     gauge_cache: DashMap<(String, LabelsKey), Gauge>,
     histogram_cache: DashMap<(String, LabelsKey), Histogram>,
-    // Optional latency band tracker for SLO monitoring
-    band_tracker: Option<LatencyBandTracker>,
+    // Optional latency band tracker for SLO monitoring. Shared so a config
+    // manager can flip `latency-bands-enabled` at runtime.
+    band_tracker: Option<Arc<LatencyBandTracker>>,
 }
 
 impl Default for PrometheusRecorder {
@@ -162,9 +164,33 @@ impl PrometheusRecorder {
     }
 
     /// Enable latency band tracking with the given thresholds (in milliseconds).
-    pub fn with_latency_bands(mut self, bands: Vec<u64>) -> Self {
-        self.band_tracker = Some(LatencyBandTracker::new(bands));
+    ///
+    /// The tracker is owned privately and starts enabled; use
+    /// [`PrometheusRecorder::with_shared_latency_bands`] to attach a tracker
+    /// whose enabled flag can be flipped at runtime.
+    pub fn with_latency_bands(self, bands: Vec<u64>) -> Self {
+        self.with_shared_latency_bands(Arc::new(LatencyBandTracker::new(bands, true)))
+    }
+
+    /// Attach a shared latency band tracker.
+    ///
+    /// Whether bands are actually collected and reported is decided by the
+    /// tracker's own live enabled flag, re-read on every record and read, so
+    /// `CONFIG SET latency-bands-enabled` applies without rebuilding the
+    /// recorder.
+    pub fn with_shared_latency_bands(mut self, tracker: Arc<LatencyBandTracker>) -> Self {
+        self.band_tracker = Some(tracker);
         self
+    }
+
+    /// The attached latency band tracker, if any.
+    pub fn latency_band_tracker(&self) -> Option<&Arc<LatencyBandTracker>> {
+        self.band_tracker.as_ref()
+    }
+
+    /// The tracker to record into: `Some` only while band collection is enabled.
+    fn active_band_tracker(&self) -> Option<&Arc<LatencyBandTracker>> {
+        self.band_tracker.as_ref().filter(|t| t.is_enabled())
     }
 
     /// Encode all metrics to Prometheus text format.
@@ -173,7 +199,7 @@ impl PrometheusRecorder {
     /// in the registry before encoding.
     pub fn encode(&self) -> String {
         // Flush latency band data into gauges before encoding
-        if let Some(tracker) = &self.band_tracker {
+        if let Some(tracker) = self.active_band_tracker() {
             for (label, count) in tracker.get_counts() {
                 definitions::LatencyBandRequests::set(self, count as f64, &label);
             }
@@ -563,26 +589,26 @@ impl MetricsRecorder for PrometheusRecorder {
 
     fn record_command_latency_ms(&self, latency_ms: u64) {
         if let Some(tracker) = &self.band_tracker {
+            // `record` re-reads the live enabled flag itself.
             tracker.record(latency_ms);
         }
     }
 
     fn latency_bands_enabled(&self) -> bool {
-        self.band_tracker.is_some()
+        self.active_band_tracker().is_some()
     }
 
     fn latency_band_total(&self) -> u64 {
-        self.band_tracker.as_ref().map_or(0, |t| t.total())
+        self.active_band_tracker().map_or(0, |t| t.total())
     }
 
     fn latency_band_percentages(&self) -> Vec<(String, u64, f64)> {
-        self.band_tracker
-            .as_ref()
+        self.active_band_tracker()
             .map_or_else(Vec::new, |t| t.get_percentages())
     }
 
     fn reset_latency_bands(&self) {
-        if let Some(tracker) = &self.band_tracker {
+        if let Some(tracker) = self.active_band_tracker() {
             tracker.reset();
         }
     }
@@ -744,7 +770,6 @@ mod tests {
 
     #[test]
     fn test_concurrent_access() {
-        use std::sync::Arc;
         use std::thread;
 
         let recorder = Arc::new(PrometheusRecorder::new());

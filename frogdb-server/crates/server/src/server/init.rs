@@ -111,16 +111,24 @@ pub(super) async fn init_infrastructure(
     // Prometheus recorder: built only when the HTTP observability server is
     // enabled, and kept as the concrete type so the `/metrics` scrape endpoint
     // can read counters back.
+    // Latency band tracker: always constructed so `latency-bands-enabled` can be
+    // flipped at runtime; the tracker's own live flag decides whether latencies
+    // are recorded and reported. Shared with the ConfigManager below.
+    let latency_band_tracker = Arc::new(frogdb_telemetry::LatencyBandTracker::new(
+        config.latency_bands.bands.clone(),
+        config.latency_bands.enabled,
+    ));
+    if config.latency_bands.enabled {
+        tracing::info!(
+            bands = ?config.latency_bands.bands,
+            "Latency band tracking enabled"
+        );
+    }
+
     let prometheus_recorder: Option<Arc<PrometheusRecorder>> = if config.http.enabled {
-        let mut recorder = PrometheusRecorder::new();
-        if config.latency_bands.enabled {
-            recorder = recorder.with_latency_bands(config.latency_bands.bands.clone());
-            tracing::info!(
-                bands = ?config.latency_bands.bands,
-                "Latency band tracking enabled"
-            );
-        }
-        Some(Arc::new(recorder))
+        Some(Arc::new(
+            PrometheusRecorder::new().with_shared_latency_bands(latency_band_tracker.clone()),
+        ))
     } else {
         None
     };
@@ -229,6 +237,7 @@ pub(super) async fn init_infrastructure(
         latency_histograms: latency_histograms.clone(),
         client_eviction_registry: client_registry.clone(),
         shard_notifier,
+        latency_band_tracker,
     };
     let mut config_manager = ConfigManager::with_collaborators(config, runtime, collaborators);
     if let Some(handle) = log_reload_handle {

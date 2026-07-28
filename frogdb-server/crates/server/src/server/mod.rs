@@ -278,6 +278,7 @@ impl Server {
             &infra.metrics_recorder,
             repl.primary_addr,
             repl.shared_replication_offset,
+            infra.config_manager.cluster_flags(),
             #[cfg(not(feature = "turmoil"))]
             &infra.tls_manager,
         )
@@ -338,7 +339,13 @@ impl Server {
         // Initialize distributed tracer if enabled
         let shared_tracer = if config.tracing.enabled {
             let tracing_config = config.tracing.to_metrics_config();
-            match frogdb_telemetry::create_tracer(&tracing_config) {
+            // The sampler reads the ConfigManager's live rate handle on every
+            // decision, so `CONFIG SET tracing-sampling-rate` retunes sampling
+            // without rebuilding the tracer provider.
+            match frogdb_telemetry::create_tracer(
+                &tracing_config,
+                infra.config_manager.tracing_sampling_rate_handle(),
+            ) {
                 Ok(tracer) => {
                     info!(
                         endpoint = %config.tracing.otlp_endpoint,

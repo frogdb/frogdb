@@ -68,6 +68,10 @@ pub(super) async fn init_cluster(
     // single source `ROLE`/INFO read, live, for the whole process lifetime.
     boot_primary_addr: Option<std::net::SocketAddr>,
     shared_replication_offset: Option<Arc<frogdb_core::sync::AtomicU64>>,
+    // Live `[cluster]` decision flags (auto-failover, self-fence, replica
+    // priority), owned by the ConfigManager. The failure detector reads them at
+    // decision time rather than copying them at construction.
+    cluster_flags: Arc<crate::cluster_flags::ClusterRuntimeFlags>,
     #[cfg(not(feature = "turmoil"))] tls_manager: &Option<Arc<crate::tls::TlsManager>>,
 ) -> Result<ClusterInitResult> {
     // Create the shared is_replica flag and the RoleManager that owns it. This
@@ -386,7 +390,7 @@ pub(super) async fn init_cluster(
         };
         let mut this_node =
             frogdb_core::cluster::NodeInfo::new_primary(node_id, client_addr, cluster_bus_addr);
-        this_node.replica_priority = config.cluster.replica_priority;
+        this_node.replica_priority = cluster_flags.replica_priority();
         if let Err(e) =
             cluster.apply_local(frogdb_core::cluster::ClusterCommand::AddNode { node: this_node })
         {
@@ -435,7 +439,7 @@ pub(super) async fn init_cluster(
             );
             let mut self_node =
                 frogdb_core::cluster::NodeInfo::new_primary(node_id, client_addr, cluster_bus_addr);
-            self_node.replica_priority = config.cluster.replica_priority;
+            self_node.replica_priority = cluster_flags.replica_priority();
             tokio::spawn(async move {
                 for attempt in 0..30 {
                     let cmd = frogdb_core::cluster::ClusterCommand::AddNode {
@@ -589,7 +593,6 @@ pub(super) async fn init_cluster(
                 check_interval_ms: config.cluster.heartbeat_interval_ms,
                 connect_timeout_ms: config.cluster.heartbeat_interval_ms / 2,
                 fail_threshold: config.cluster.fail_threshold,
-                auto_failover: config.cluster.auto_failover,
             };
 
             let nf = network_factory
@@ -598,6 +601,7 @@ pub(super) async fn init_cluster(
             let detector = Arc::new(FailureDetector::new(
                 nid,
                 detector_config,
+                cluster_flags.clone(),
                 state_arc.clone(),
                 raft_arc.clone(),
                 nf.clone(),
@@ -605,7 +609,7 @@ pub(super) async fn init_cluster(
 
             info!(
                 node_id = nid,
-                auto_failover = config.cluster.auto_failover,
+                auto_failover = cluster_flags.auto_failover(),
                 fail_threshold = config.cluster.fail_threshold,
                 "Failure detector initialized"
             );

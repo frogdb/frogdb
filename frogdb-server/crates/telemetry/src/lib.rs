@@ -53,12 +53,12 @@ pub use node_state::{NodeStateSnapshot, ShardScatterError, ShardState};
 pub use prometheus_recorder::{
     CommandSnapshot, DashboardMetrics, PrometheusRecorder, ShardSnapshot,
 };
-pub use status::{LiveMode, ServerStatus, StatusCollector, StatusCollectorConfig};
+pub use status::{LiveMode, ServerStatus, StatusCollector, StatusThresholds};
 pub use system::SystemMetricsCollector;
 pub use task_monitors::TaskMonitorRegistry;
 pub use tracing::{
-    OtelTracer, RecentTraceEntry, RequestSpan, ScatterGatherSpan, SharedTracer, TracingStatus,
-    create_tracer,
+    OtelTracer, RecentTraceEntry, RequestSpan, SamplingRate, ScatterGatherSpan, SharedTracer,
+    TracingStatus, create_tracer,
 };
 
 // Re-export the typed metric registry from its home in frogdb-types so

@@ -21,7 +21,14 @@ use frogdb_core::cluster::{
 use frogdb_core::command::QuorumChecker;
 use openraft::ServerState;
 
-/// Configuration for failure detection.
+use crate::cluster_flags::ClusterRuntimeFlags;
+
+/// Startup-fixed timing configuration for failure detection.
+///
+/// Runtime-mutable cluster decisions (`cluster-auto-failover`,
+/// `cluster-replica-priority`) deliberately do **not** live here — they are read
+/// from the shared [`ClusterRuntimeFlags`] at decision time so `CONFIG SET`
+/// applies without a restart.
 #[derive(Debug, Clone)]
 pub struct FailureDetectorConfig {
     /// How often to check node health (default: 1000ms).
@@ -30,8 +37,6 @@ pub struct FailureDetectorConfig {
     pub connect_timeout_ms: u64,
     /// Number of consecutive failures before marking FAIL (default: 5).
     pub fail_threshold: u32,
-    /// Enable automatic failover when primary fails (default: false).
-    pub auto_failover: bool,
 }
 
 impl Default for FailureDetectorConfig {
@@ -40,7 +45,6 @@ impl Default for FailureDetectorConfig {
             check_interval_ms: 1000,
             connect_timeout_ms: 500,
             fail_threshold: 5,
-            auto_failover: false,
         }
     }
 }
@@ -197,8 +201,11 @@ impl HealthTable {
 pub struct FailureDetector {
     /// This node's ID.
     self_node_id: NodeId,
-    /// Configuration for failure detection.
+    /// Startup-fixed timing configuration for failure detection.
     config: FailureDetectorConfig,
+    /// Runtime-mutable cluster decision flags (auto-failover, replica priority).
+    /// Read at decision time, never snapshotted.
+    flags: Arc<ClusterRuntimeFlags>,
     /// Pure per-node health state machine (thresholds, latching, staleness).
     health: RwLock<HealthTable>,
     /// Cluster state for reading node information.
@@ -214,6 +221,7 @@ impl FailureDetector {
     pub fn new(
         self_node_id: NodeId,
         config: FailureDetectorConfig,
+        flags: Arc<ClusterRuntimeFlags>,
         cluster_state: Arc<ClusterState>,
         raft: Arc<ClusterRaft>,
         network_factory: Arc<ClusterNetworkFactory>,
@@ -225,6 +233,7 @@ impl FailureDetector {
         Self {
             self_node_id,
             config,
+            flags,
             health: RwLock::new(health),
             cluster_state,
             raft,
@@ -300,8 +309,10 @@ impl FailureDetector {
                 }
                 tracing::warn!(node_id, "Marked node as FAIL via Raft");
 
-                // Trigger automatic failover if enabled
-                if self.config.auto_failover {
+                // Trigger automatic failover if enabled. Read live at the
+                // decision point so `CONFIG SET cluster-auto-failover` arms or
+                // disarms promotion for the very next node-FAIL latch.
+                if self.flags.auto_failover() {
                     self.trigger_auto_failover(node_id).await;
                 }
             }
@@ -373,17 +384,13 @@ impl FailureDetector {
 
         let max_offset = replica_offsets.iter().map(|(_, o)| *o).max().unwrap_or(0);
 
-        // Score and select best replica (lowest score wins)
-        let best = replicas
-            .iter()
-            .filter(|r| r.replica_priority != 0) // Exclude never-promote
-            .min_by(|a, b| {
-                let score_a = compute_replica_score(a, max_offset, &replica_offsets);
-                let score_b = compute_replica_score(b, max_offset, &replica_offsets);
-                score_a.cmp(&score_b).then_with(|| a.id.cmp(&b.id)) // Deterministic tiebreaker
-            });
-
-        let new_primary = match best {
+        // Score and select best replica (lowest score wins). Priorities are
+        // resolved through `effective_priority`, so this node's own candidacy
+        // follows the live `cluster-replica-priority` atomic rather than the
+        // value it published at boot.
+        let new_primary = match select_failover_target(&replicas, &replica_offsets, &|n| {
+            self.effective_priority(n)
+        }) {
             Some(node) => node,
             None => {
                 tracing::warn!(
@@ -394,18 +401,18 @@ impl FailureDetector {
             }
         };
 
-        let replica_offset = replica_offsets
-            .iter()
-            .find(|(id, _)| *id == new_primary.id)
-            .map(|(_, o)| *o)
-            .unwrap_or(0);
+        let replica_offset = offset_of(new_primary.id, &replica_offsets);
 
         tracing::info!(
             failed_primary = failed_node_id,
             new_primary = new_primary.id,
             replica_offset = replica_offset,
             max_offset = max_offset,
-            score = compute_replica_score(new_primary, max_offset, &replica_offsets),
+            score = compute_replica_score(
+                self.effective_priority(new_primary),
+                replica_offset,
+                max_offset
+            ),
             "Triggering automatic failover with lag-based scoring"
         );
 
@@ -468,10 +475,38 @@ impl FailureDetector {
         }
     }
 
-    /// Get the configuration.
+    /// Get the startup timing configuration.
     pub fn config(&self) -> &FailureDetectorConfig {
         &self.config
     }
+
+    /// Shared runtime cluster flags this detector reads its decisions from.
+    pub fn flags(&self) -> &Arc<ClusterRuntimeFlags> {
+        &self.flags
+    }
+
+    /// Effective promotion priority for `node`, resolved at selection time.
+    ///
+    /// This node's entry follows the live `cluster-replica-priority` atomic so a
+    /// runtime `CONFIG SET` steers the very next promotion decision made here.
+    /// Peers are scored with the value they published through Raft — the only
+    /// value this node can know for them.
+    fn effective_priority(&self, node: &NodeInfo) -> u32 {
+        if node.id == self.self_node_id {
+            self.flags.replica_priority()
+        } else {
+            node.replica_priority
+        }
+    }
+}
+
+/// Replication offset recorded for `node_id`; unqueried nodes score as 0 (worst).
+fn offset_of(node_id: NodeId, offsets: &[(NodeId, u64)]) -> u64 {
+    offsets
+        .iter()
+        .find(|(id, _)| *id == node_id)
+        .map(|(_, o)| *o)
+        .unwrap_or(0)
 }
 
 /// Compute a failover score for a replica. Lower score = better candidate.
@@ -482,18 +517,40 @@ impl FailureDetector {
 ///       + (max_offset - replica_offset) * 1_000
 /// ```
 ///
-/// Priority 0 means never promote (returns u64::MAX).
-fn compute_replica_score(node: &NodeInfo, max_offset: u64, offsets: &[(NodeId, u64)]) -> u64 {
-    let priority = node.replica_priority;
+/// Priority 0 means never promote (returns u64::MAX). The priority is passed in
+/// rather than read off `NodeInfo` so the caller can substitute this node's live
+/// `cluster-replica-priority` for its own stale published copy.
+fn compute_replica_score(priority: u32, replica_offset: u64, max_offset: u64) -> u64 {
     if priority == 0 {
         return u64::MAX;
     }
-    let replica_offset = offsets
-        .iter()
-        .find(|(id, _)| *id == node.id)
-        .map(|(_, o)| *o)
-        .unwrap_or(0);
     (priority as u64) * 100_000 + max_offset.saturating_sub(replica_offset) * 1_000
+}
+
+/// Pick the promotion target among `replicas`: lowest score wins, ties broken by
+/// node id for determinism. Never-promote candidates (effective priority 0) are
+/// excluded outright.
+///
+/// `priority_of` resolves each candidate's *effective* priority, so a caller can
+/// override its own entry with a live config value. Pure: no Raft, no clock, no
+/// sockets — the whole selection policy is unit-testable.
+fn select_failover_target<'a>(
+    replicas: &[&'a NodeInfo],
+    offsets: &[(NodeId, u64)],
+    priority_of: &dyn Fn(&NodeInfo) -> u32,
+) -> Option<&'a NodeInfo> {
+    let max_offset = offsets.iter().map(|(_, o)| *o).max().unwrap_or(0);
+    replicas
+        .iter()
+        .copied()
+        .filter(|r| priority_of(r) != 0)
+        .min_by(|a, b| {
+            let score_a =
+                compute_replica_score(priority_of(a), offset_of(a.id, offsets), max_offset);
+            let score_b =
+                compute_replica_score(priority_of(b), offset_of(b.id, offsets), max_offset);
+            score_a.cmp(&score_b).then_with(|| a.id.cmp(&b.id))
+        })
 }
 
 impl QuorumChecker for FailureDetector {
@@ -578,7 +635,6 @@ mod tests {
         assert_eq!(config.check_interval_ms, 1000);
         assert_eq!(config.connect_timeout_ms, 500);
         assert_eq!(config.fail_threshold, 5);
-        assert!(!config.auto_failover);
     }
 
     #[test]
@@ -765,11 +821,21 @@ mod tests {
         node
     }
 
+    /// Score a node by its published priority — the pre-seam behavior these
+    /// formula tests pin.
+    fn score_of(node: &NodeInfo, max_offset: u64, offsets: &[(NodeId, u64)]) -> u64 {
+        compute_replica_score(
+            node.replica_priority,
+            offset_of(node.id, offsets),
+            max_offset,
+        )
+    }
+
     #[test]
     fn test_compute_replica_score_priority_zero_excluded() {
         let node = make_node(10, 0);
         let offsets = vec![(10, 1000u64)];
-        assert_eq!(compute_replica_score(&node, 1000, &offsets), u64::MAX);
+        assert_eq!(score_of(&node, 1000, &offsets), u64::MAX);
     }
 
     #[test]
@@ -777,8 +843,8 @@ mod tests {
         let node_a = make_node(10, 50);
         let node_b = make_node(11, 100);
         let offsets = vec![(10, 1000u64), (11, 1000)];
-        let score_a = compute_replica_score(&node_a, 1000, &offsets);
-        let score_b = compute_replica_score(&node_b, 1000, &offsets);
+        let score_a = score_of(&node_a, 1000, &offsets);
+        let score_b = score_of(&node_b, 1000, &offsets);
         assert!(score_a < score_b, "Lower priority should give lower score");
     }
 
@@ -788,8 +854,8 @@ mod tests {
         let node_b = make_node(11, 100);
         let offsets = vec![(10, 900u64), (11, 500)];
         let max_offset = 1000;
-        let score_a = compute_replica_score(&node_a, max_offset, &offsets);
-        let score_b = compute_replica_score(&node_b, max_offset, &offsets);
+        let score_a = score_of(&node_a, max_offset, &offsets);
+        let score_b = score_of(&node_b, max_offset, &offsets);
         assert!(
             score_a < score_b,
             "Higher offset (less lag) should give lower score"
@@ -801,8 +867,8 @@ mod tests {
         let node_a = make_node(10, 100);
         let node_b = make_node(11, 100);
         let offsets = vec![(10, 1000u64), (11, 1000)];
-        let score_a = compute_replica_score(&node_a, 1000, &offsets);
-        let score_b = compute_replica_score(&node_b, 1000, &offsets);
+        let score_a = score_of(&node_a, 1000, &offsets);
+        let score_b = score_of(&node_b, 1000, &offsets);
         assert_eq!(score_a, score_b, "Same priority and offset = same score");
         // Tiebreaker is handled in the min_by comparator, not in compute_replica_score
     }
@@ -812,7 +878,7 @@ mod tests {
         let node = make_node(10, 100);
         let offsets = vec![(10, 800u64)];
         let max_offset = 1000;
-        let score = compute_replica_score(&node, max_offset, &offsets);
+        let score = score_of(&node, max_offset, &offsets);
         // priority * 100_000 + lag * 1_000
         // 100 * 100_000 + (1000 - 800) * 1_000 = 10_000_000 + 200_000 = 10_200_000
         assert_eq!(score, 10_200_000);
@@ -823,9 +889,70 @@ mod tests {
         let node = make_node(10, 100);
         let offsets: Vec<(NodeId, u64)> = vec![]; // Node not in offsets list
         let max_offset = 1000;
-        let score = compute_replica_score(&node, max_offset, &offsets);
+        let score = score_of(&node, max_offset, &offsets);
         // offset defaults to 0, so lag = 1000
         // 100 * 100_000 + 1000 * 1_000 = 10_000_000 + 1_000_000 = 11_000_000
         assert_eq!(score, 11_000_000);
+    }
+
+    // ---- Live-config seams -------------------------------------------------
+
+    /// `cluster-replica-priority` is read at *selection* time through
+    /// `priority_of`, so storing a new value re-decides the promotion target
+    /// with no restart and no re-published `NodeInfo`.
+    #[test]
+    fn test_replica_priority_store_changes_failover_target() {
+        let self_id: NodeId = 10;
+        let peer = make_node(11, 100);
+        let me = make_node(self_id, 100);
+        let replicas = vec![&me, &peer];
+        // Identical offsets, so priority alone decides; id 10 wins the tiebreak.
+        let offsets = vec![(10, 1000u64), (11, 1000)];
+
+        let flags = ClusterRuntimeFlags::new(true, true, 100);
+        let priority_of = |n: &NodeInfo| {
+            if n.id == self_id {
+                flags.replica_priority()
+            } else {
+                n.replica_priority
+            }
+        };
+
+        // Equal priorities: deterministic tiebreak picks the lower id (self).
+        assert_eq!(
+            select_failover_target(&replicas, &offsets, &priority_of).map(|n| n.id),
+            Some(self_id)
+        );
+
+        // Demote self at runtime: the peer now wins without anything restarting.
+        flags.set_replica_priority(200);
+        assert_eq!(
+            select_failover_target(&replicas, &offsets, &priority_of).map(|n| n.id),
+            Some(11)
+        );
+
+        // Never-promote at runtime: self drops out of the candidate set entirely.
+        flags.set_replica_priority(0);
+        assert_eq!(
+            select_failover_target(&replicas, &offsets, &priority_of).map(|n| n.id),
+            Some(11)
+        );
+
+        // Promote self back: it wins outright.
+        flags.set_replica_priority(1);
+        assert_eq!(
+            select_failover_target(&replicas, &offsets, &priority_of).map(|n| n.id),
+            Some(self_id)
+        );
+    }
+
+    /// Every candidate at effective priority 0 => no promotion target at all.
+    #[test]
+    fn test_select_failover_target_all_never_promote() {
+        let a = make_node(10, 0);
+        let b = make_node(11, 0);
+        let replicas = vec![&a, &b];
+        let offsets = vec![(10, 1u64), (11, 2)];
+        assert!(select_failover_target(&replicas, &offsets, &|n| n.replica_priority).is_none());
     }
 }

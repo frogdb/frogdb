@@ -56,8 +56,10 @@ impl Default for LatencyConfig {
 /// Tracks cumulative request counts in configurable latency buckets,
 /// enabling direct SLO monitoring without external aggregation.
 //
-// No fields are exposed as CONFIG GET/SET parameters; each carries an explicit
-// `#[param(skip)]` to satisfy the per-field coverage guarantee.
+// `enabled` has a live seam: the shared `LatencyBandTracker` re-reads its own
+// enabled flag on every recorded latency, so a runtime SET starts/stops
+// collection immediately. `bands` stays startup-only — resizing the bucket set
+// would invalidate the cumulative counters already collected against it.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
 #[params(section = "latency-bands")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]

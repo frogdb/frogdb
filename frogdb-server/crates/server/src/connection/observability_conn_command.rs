@@ -890,7 +890,7 @@ mod tests {
         ClientRegistry, CommandLatencyHistograms, KeyspaceStats, NoopMetricsRecorder,
         SharedHotkeySession, new_shared_hotkey_session,
     };
-    use frogdb_telemetry::{HealthChecker, LiveMode, StatusCollector, StatusCollectorConfig};
+    use frogdb_telemetry::{HealthChecker, LiveMode, StatusCollector, StatusThresholds};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64};
 
@@ -920,7 +920,7 @@ mod tests {
     /// that don't exercise STATUS JSON's field values.
     fn default_status_collector() -> Arc<StatusCollector> {
         Arc::new(StatusCollector::new(
-            StatusCollectorConfig::default(),
+            Arc::new(StatusThresholds::default()),
             HealthChecker::new(),
             Arc::new(vec![]),
             Arc::new(ClientRegistry::new()),
@@ -1268,7 +1268,7 @@ mod tests {
         CommandsTotal::inc_by(&*recorder, 2, "SET");
 
         let collector = Arc::new(StatusCollector::new(
-            StatusCollectorConfig::default(),
+            Arc::new(StatusThresholds::default()),
             HealthChecker::new(),
             Arc::new(vec![]),
             Arc::new(ClientRegistry::new()),

@@ -3,13 +3,17 @@
 //! Tracks cumulative request counts in configurable latency buckets,
 //! inspired by FoundationDB's approach to SLO monitoring.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Tracks request latencies across configurable bands for SLO monitoring.
 ///
 /// Each band represents a cumulative bucket (e.g., "<=5ms"). When a request
 /// completes, it's counted in all bands whose threshold is >= the request latency.
 /// This enables direct SLO monitoring (e.g., "99% of requests under 10ms").
+///
+/// Recording is gated by a live [`AtomicBool`] re-read on every `record` call, so
+/// `CONFIG SET latency-bands-enabled` starts and stops collection immediately
+/// instead of only at startup.
 pub struct LatencyBandTracker {
     /// Sorted thresholds in milliseconds.
     bands: Vec<u64>,
@@ -17,26 +21,52 @@ pub struct LatencyBandTracker {
     /// counters[i] = requests with latency <= bands[i]
     /// counters[bands.len()] = total requests (including overflow)
     counters: Vec<AtomicU64>,
+    /// Whether recording is currently active.
+    enabled: AtomicBool,
 }
 
 impl LatencyBandTracker {
     /// Create a new tracker with the given band thresholds (in milliseconds).
     ///
-    /// Bands are automatically sorted. Duplicates are removed.
-    pub fn new(mut bands: Vec<u64>) -> Self {
+    /// Bands are automatically sorted. Duplicates are removed. `enabled` seeds
+    /// the live recording flag; see [`LatencyBandTracker::set_enabled`].
+    pub fn new(mut bands: Vec<u64>, enabled: bool) -> Self {
         bands.sort();
         bands.dedup();
 
         // One counter per band + one for total
         let counters = (0..=bands.len()).map(|_| AtomicU64::new(0)).collect();
 
-        Self { bands, counters }
+        Self {
+            bands,
+            counters,
+            enabled: AtomicBool::new(enabled),
+        }
+    }
+
+    /// Whether latency band recording is currently active.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
+    /// Turn recording on or off; takes effect on the next recorded latency.
+    ///
+    /// Counters are retained across a disable/enable cycle so a temporary
+    /// disable does not discard already-collected SLO data; call
+    /// [`LatencyBandTracker::reset`] to clear.
+    pub fn set_enabled(&self, enabled: bool) {
+        self.enabled.store(enabled, Ordering::Relaxed);
     }
 
     /// Record a request latency in milliseconds.
     ///
     /// The latency is counted in all bands whose threshold is >= the latency.
+    /// No-op while recording is disabled.
     pub fn record(&self, latency_ms: u64) {
+        if !self.is_enabled() {
+            return;
+        }
+
         // Increment total counter
         self.counters[self.bands.len()].fetch_add(1, Ordering::Relaxed);
 
@@ -173,23 +203,40 @@ impl LatencyBandTracker {
     }
 }
 
-// Safety: AtomicU64 is Send + Sync
-unsafe impl Send for LatencyBandTracker {}
-unsafe impl Sync for LatencyBandTracker {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    fn enabled_flag_gates_recording_live() {
+        // Startup-disabled: recording is a no-op.
+        let tracker = LatencyBandTracker::new(vec![10, 50], false);
+        assert!(!tracker.is_enabled());
+        tracker.record(5);
+        assert_eq!(tracker.total(), 0);
+
+        // A live store starts collection with no reconstruction.
+        tracker.set_enabled(true);
+        tracker.record(5);
+        tracker.record(100);
+        assert_eq!(tracker.total(), 2);
+
+        // ...and stops it again, retaining already-collected counts.
+        tracker.set_enabled(false);
+        tracker.record(5);
+        assert_eq!(tracker.total(), 2);
+        assert_eq!(tracker.get_counts()[0], ("<=10ms".to_string(), 1));
+    }
+
+    #[test]
     fn test_new_sorts_and_dedupes_bands() {
-        let tracker = LatencyBandTracker::new(vec![100, 10, 50, 10, 5]);
+        let tracker = LatencyBandTracker::new(vec![100, 10, 50, 10, 5], true);
         assert_eq!(tracker.bands(), &[5, 10, 50, 100]);
     }
 
     #[test]
     fn test_record_increments_correct_bands() {
-        let tracker = LatencyBandTracker::new(vec![1, 5, 10, 50]);
+        let tracker = LatencyBandTracker::new(vec![1, 5, 10, 50], true);
 
         // Record 3ms latency - should increment <=5ms, <=10ms, <=50ms, and total
         tracker.record(3);
@@ -205,7 +252,7 @@ mod tests {
 
     #[test]
     fn test_overflow_bucket() {
-        let tracker = LatencyBandTracker::new(vec![10, 50]);
+        let tracker = LatencyBandTracker::new(vec![10, 50], true);
 
         tracker.record(100); // Should only go to overflow
 
@@ -218,7 +265,7 @@ mod tests {
 
     #[test]
     fn test_get_band_counts_not_cumulative() {
-        let tracker = LatencyBandTracker::new(vec![1, 5, 10]);
+        let tracker = LatencyBandTracker::new(vec![1, 5, 10], true);
 
         tracker.record(0); // <=1ms
         tracker.record(3); // <=5ms
@@ -235,7 +282,7 @@ mod tests {
 
     #[test]
     fn test_get_percentages() {
-        let tracker = LatencyBandTracker::new(vec![10, 50]);
+        let tracker = LatencyBandTracker::new(vec![10, 50], true);
 
         for _ in 0..50 {
             tracker.record(5); // <=10ms
@@ -263,7 +310,7 @@ mod tests {
 
     #[test]
     fn test_reset() {
-        let tracker = LatencyBandTracker::new(vec![10, 50]);
+        let tracker = LatencyBandTracker::new(vec![10, 50], true);
 
         tracker.record(5);
         tracker.record(25);
@@ -280,7 +327,7 @@ mod tests {
 
     #[test]
     fn test_empty_bands() {
-        let tracker = LatencyBandTracker::new(vec![]);
+        let tracker = LatencyBandTracker::new(vec![], true);
 
         tracker.record(100);
 
@@ -292,7 +339,7 @@ mod tests {
 
     #[test]
     fn test_exact_threshold_match() {
-        let tracker = LatencyBandTracker::new(vec![5, 10]);
+        let tracker = LatencyBandTracker::new(vec![5, 10], true);
 
         tracker.record(5); // Exactly on threshold
 
@@ -303,7 +350,7 @@ mod tests {
 
     #[test]
     fn test_zero_latency() {
-        let tracker = LatencyBandTracker::new(vec![1, 5]);
+        let tracker = LatencyBandTracker::new(vec![1, 5], true);
 
         tracker.record(0);
 
@@ -317,7 +364,7 @@ mod tests {
         use std::sync::Arc;
         use std::thread;
 
-        let tracker = Arc::new(LatencyBandTracker::new(vec![10, 50, 100]));
+        let tracker = Arc::new(LatencyBandTracker::new(vec![10, 50, 100], true));
         let mut handles = vec![];
 
         for _ in 0..10 {
