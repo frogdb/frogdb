@@ -17,6 +17,8 @@ pub mod response_helpers;
 pub mod sim_harness;
 #[cfg(feature = "turmoil")]
 pub mod sim_helpers;
+#[cfg(feature = "turmoil")]
+pub mod sweep_summary;
 pub mod test_server;
 #[cfg(feature = "turmoil")]
 pub mod workload_runner;

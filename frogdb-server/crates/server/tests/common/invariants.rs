@@ -25,8 +25,13 @@ use super::sim_harness::hash_slot;
 
 /// Per-key op cap before WGL is skipped (conservation still covers the key).
 pub const MAX_OPS_PER_KEY: usize = 200;
-/// State-search bound for the bounded WGL checker.
+/// State-search bound for the bounded WGL checker (per-PR tier).
 pub const MAX_WGL_STATES: u64 = 200_000;
+/// State-search bound for the nightly tier. Nightly can afford far more
+/// compute per run than a per-PR sweep, so the budget is raised substantially
+/// to make state-bound downgrades rarer (see issue 41: an all-keys-downgraded
+/// run must not silently "pass" having linearizability-checked nothing).
+pub const MAX_WGL_STATES_NIGHTLY: u64 = 2_000_000;
 
 /// Structured verdict from the pipeline. `passed()` iff `violations` is empty.
 #[derive(Debug, Default)]
@@ -35,6 +40,9 @@ pub struct InvariantReport {
     pub violations: Vec<String>,
     /// Keys WGL bailed on (inconclusive or over the op cap) → conservation-only.
     pub downgraded_keys: Vec<String>,
+    /// Total WGL-eligible keys evaluated in stage 2 (both fully checked and
+    /// downgraded). The denominator for `downgrade_ratio`.
+    pub keys_checked: usize,
     /// True once the tier-4 quiescence stage ran (snapshots were supplied).
     pub quiescence_checked: bool,
 }
@@ -42,6 +50,18 @@ pub struct InvariantReport {
 impl InvariantReport {
     pub fn passed(&self) -> bool {
         self.violations.is_empty()
+    }
+
+    /// Fraction of WGL-eligible keys that were downgraded to conservation-only
+    /// checking (state-bound bail or over the op cap) instead of being fully
+    /// linearizability-checked. `0.0` when no keys were WGL-eligible (nothing
+    /// to downgrade), never NaN.
+    pub fn downgrade_ratio(&self) -> f64 {
+        if self.keys_checked == 0 {
+            0.0
+        } else {
+            self.downgraded_keys.len() as f64 / self.keys_checked as f64
+        }
     }
 }
 
@@ -130,6 +150,7 @@ pub fn check_all_with(
         let Some(family) = model_for(sub) else {
             continue; // no routable/completed op for this key
         };
+        report.keys_checked += 1;
         if sub.completed_operations().len() > max_ops_per_key {
             // Over the scaling cap: skip WGL, conservation still covers it.
             eprintln!(
@@ -336,6 +357,49 @@ mod tests {
             "expected {{t}}k in downgraded_keys, got {:?}",
             report.downgraded_keys
         );
+        assert_eq!(
+            report.keys_checked, 1,
+            "the single downgraded key must still count toward keys_checked"
+        );
+        assert_eq!(
+            report.downgrade_ratio(),
+            1.0,
+            "one of one WGL-eligible keys downgraded -> ratio 1.0"
+        );
+    }
+
+    #[test]
+    fn downgrade_ratio_is_zero_with_no_wgl_eligible_keys() {
+        // A history with no routable/completed ops never touches stage 2, so
+        // keys_checked stays 0 and the ratio must be 0.0, never NaN.
+        let h = History::new();
+        let report = check_all(&h, &Default::default(), None, None, 2);
+        assert_eq!(report.keys_checked, 0);
+        assert_eq!(report.downgraded_keys.len(), 0);
+        assert_eq!(report.downgrade_ratio(), 0.0);
+    }
+
+    #[test]
+    fn downgrade_ratio_reflects_partial_downgrade() {
+        // Two keys: {t}a gets a tiny per-key op cap (forces the over-cap
+        // downgrade path) while {t}b stays small enough to fully check ->
+        // exactly one of two keys downgraded.
+        let mut h = History::new();
+        for i in 0..5 {
+            let id = h.invoke(
+                (i % 2) as u64,
+                "set",
+                vec![Bytes::from("{t}a"), Bytes::from(i.to_string())],
+            );
+            h.respond(id, Some(Bytes::from("OK")));
+        }
+        let id = h.invoke(1, "set", vec![Bytes::from("{t}b"), Bytes::from("1")]);
+        h.respond(id, Some(Bytes::from("OK")));
+
+        let report = check_all_with(&h, &Default::default(), None, None, 2, 2, MAX_WGL_STATES);
+        assert_eq!(report.keys_checked, 2);
+        assert_eq!(report.downgraded_keys, vec!["{t}a".to_string()]);
+        assert_eq!(report.downgrade_ratio(), 0.5);
     }
 
     #[test]

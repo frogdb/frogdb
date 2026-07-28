@@ -104,6 +104,13 @@ concurrency-turmoil PATTERN='seed_sweep':
 # FROGDB_CONCURRENCY_SHARDS env vars (see frogdb-server/crates/server/tests/concurrency_workload.rs).
 # Failing seeds each get a repro file under target/concurrency-repros/, replayable via
 # `just concurrency-repro`.
+#
+# The nightly tier also raises the WGL bounded-search budget from MAX_WGL_STATES to
+# MAX_WGL_STATES_NIGHTLY by default (override via FROGDB_CONCURRENCY_MAX_STATES) so state-bound
+# downgrades to conservation-only checking are rarer than under the per-PR budget, and reports +
+# thresholds the sweep-wide WGL downgrade ratio (FROGDB_WGL_DOWNGRADE_WARN_RATIO /
+# FROGDB_WGL_DOWNGRADE_FAIL_RATIO; see `common::sweep_summary`) — a run where too many keys never
+# got a real linearizability check now fails loudly instead of reporting a silent clean pass.
 concurrency-nightly SEEDS='250' OPS='75':
     {{dyld-env}} {{rocksdb-env}} FROGDB_CONCURRENCY_SEEDS={{SEEDS}} FROGDB_CONCURRENCY_OPS_PER_CLIENT={{OPS}} cargo nextest run -p frogdb-server --features turmoil --run-ignored all -E 'test(/seed_sweep_nightly/)'
 

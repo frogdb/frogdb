@@ -10,26 +10,36 @@ use std::path::PathBuf;
 
 use frogdb_testing::{Profile, Workload};
 
-use crate::common::invariants::{InvariantReport, check_all};
+use crate::common::invariants::{
+    InvariantReport, MAX_OPS_PER_KEY, MAX_WGL_STATES, MAX_WGL_STATES_NIGHTLY, check_all_with,
+};
 use crate::common::repro::{ReproFile, read_repro, repro_path, write_repro};
+use crate::common::sweep_summary::{SweepSummary, fail_ratio_override, warn_ratio_override};
 use crate::common::workload_runner::run_workload_capturing;
 
 /// Generate → run against the real server (fake persistence) → check invariants.
+///
+/// `max_states` is the WGL bounded-search budget (see `invariants::MAX_WGL_STATES` /
+/// `MAX_WGL_STATES_NIGHTLY`): per-PR tiers use the smaller default budget, while the
+/// nightly tier raises it to make state-bound downgrades rarer (issue 41).
 fn run_and_check(
     seed: u64,
     profile: Profile,
     num_clients: usize,
     ops_per_client: usize,
     num_shards: usize,
+    max_states: u64,
 ) -> InvariantReport {
     let workload = Workload::generate(seed, profile, num_clients, ops_per_client);
     let run = run_workload_capturing(&workload, num_shards, true);
-    let report = check_all(
+    let report = check_all_with(
         &run.history,
         &run.final_elements,
         Some(&run.quiescence),
         Some(&run.registration_order),
         num_shards,
+        MAX_OPS_PER_KEY,
+        max_states,
     );
     if !report.passed() {
         eprintln!("seed {seed} ({profile:?}) FAILED: {:?}", report.violations);
@@ -78,13 +88,15 @@ fn write_repro_for(
 fn seed_sweep_short_workloads() {
     // ~20 seeds x short workloads (CI per-PR tier), alternating the two
     // fully-supported profiles.
+    let mut summary = SweepSummary::default();
     for seed in 0..20u64 {
         let profile = if seed % 2 == 0 {
             Profile::Mixed
         } else {
             Profile::BlockingHeavy
         };
-        let report = run_and_check(seed, profile, 4, 30, 2);
+        let report = run_and_check(seed, profile, 4, 30, 2, MAX_WGL_STATES);
+        summary.record(&report);
         if !report.passed() {
             let path = write_repro_for(seed, profile, 4, 30, 2);
             panic!(
@@ -94,6 +106,12 @@ fn seed_sweep_short_workloads() {
             );
         }
     }
+    // Surface the WGL downgrade ratio in the sweep's own output (issue 41):
+    // previously this was only visible per-key via an `eprintln!` buried in
+    // `invariants.rs`, so a sweep where every key downgraded to
+    // conservation-only checking still reported a silent clean pass.
+    eprintln!("{}", summary.report_line("seed_sweep_short_workloads"));
+    summary.warn_if_over("seed_sweep_short_workloads", warn_ratio_override());
 }
 
 // The tier-4 quiescence stage: run one small workload and assert the DEBUG
@@ -104,7 +122,7 @@ fn seed_sweep_short_workloads() {
 // adapter; the full sweep above exercises it every seed.
 #[test]
 fn quiescence_stage_runs_and_is_clean() {
-    let report = run_and_check(0, Profile::Mixed, 2, 8, 2);
+    let report = run_and_check(0, Profile::Mixed, 2, 8, 2, MAX_WGL_STATES);
     assert!(
         report.quiescence_checked,
         "quiescence stage must run (DEBUG snapshots supplied)"
@@ -148,12 +166,14 @@ fn multi_waiter_exact_fifo_is_clean() {
         "prober + CLIENT ID join produced no registration ordinals — the exact \
          FIFO checker is silently disabled (join mismatch or key-encoding drift)"
     );
-    let report = check_all(
+    let report = check_all_with(
         &run.history,
         &run.final_elements,
         Some(&run.quiescence),
         Some(&run.registration_order),
         2,
+        MAX_OPS_PER_KEY,
+        MAX_WGL_STATES,
     );
     assert!(
         report.passed(),
@@ -183,8 +203,10 @@ fn multi_waiter_exact_fifo_is_clean() {
 // `regressions::regression_crossshard_watch_false_negative_seed_8`.
 #[test]
 fn seed_sweep_txheavy() {
+    let mut summary = SweepSummary::default();
     for seed in 0..20u64 {
-        let report = run_and_check(seed, Profile::TxHeavy, 4, 30, 2);
+        let report = run_and_check(seed, Profile::TxHeavy, 4, 30, 2, MAX_WGL_STATES);
+        summary.record(&report);
         if !report.passed() {
             let path = write_repro_for(seed, Profile::TxHeavy, 4, 30, 2);
             panic!(
@@ -194,6 +216,8 @@ fn seed_sweep_txheavy() {
             );
         }
     }
+    eprintln!("{}", summary.report_line("seed_sweep_txheavy"));
+    summary.warn_if_over("seed_sweep_txheavy", warn_ratio_override());
 }
 
 // Nightly generated-workload seed sweep (CI nightly tier, see the "CI" section
@@ -222,6 +246,12 @@ fn seed_sweep_nightly() {
     let ops_per_client = env_override("FROGDB_CONCURRENCY_OPS_PER_CLIENT", 75usize);
     let num_clients = env_override("FROGDB_CONCURRENCY_CLIENTS", 4usize);
     let num_shards = env_override("FROGDB_CONCURRENCY_SHARDS", 2usize);
+    // Nightly can afford a far larger WGL state-search budget than a per-PR
+    // sweep, so the default is raised from MAX_WGL_STATES to
+    // MAX_WGL_STATES_NIGHTLY (issue 41: a bigger budget makes state-bound
+    // downgrades to conservation-only checking rarer). Still overridable for
+    // ad hoc tuning.
+    let max_states = env_override("FROGDB_CONCURRENCY_MAX_STATES", MAX_WGL_STATES_NIGHTLY);
 
     let profiles = [
         Profile::Mixed,
@@ -231,9 +261,18 @@ fn seed_sweep_nightly() {
     ];
 
     let mut failures = Vec::new();
+    let mut summary = SweepSummary::default();
     for profile in profiles {
         for seed in 0..seeds_per_profile {
-            let report = run_and_check(seed, profile, num_clients, ops_per_client, num_shards);
+            let report = run_and_check(
+                seed,
+                profile,
+                num_clients,
+                ops_per_client,
+                num_shards,
+                max_states,
+            );
+            summary.record(&report);
             if !report.passed() {
                 let path = write_repro_for(seed, profile, num_clients, ops_per_client, num_shards);
                 eprintln!(
@@ -246,6 +285,16 @@ fn seed_sweep_nightly() {
         }
     }
 
+    // Surface + threshold the WGL downgrade ratio at the sweep-summary level
+    // (issue 41): the nightly tier is where this must be a hard CI-failing
+    // signal, since it's the tier without a human reviewing every run — a
+    // sweep where every key downgraded to conservation-only checking must not
+    // be allowed to report a silent, technically-clean pass.
+    eprintln!("{}", summary.report_line("seed_sweep_nightly"));
+    summary.warn_if_over("seed_sweep_nightly", warn_ratio_override());
+    let downgrade_threshold_result =
+        summary.check_threshold("seed_sweep_nightly", fail_ratio_override());
+
     assert!(
         failures.is_empty(),
         "{} of {} seed(s) violated invariants: {:#?}",
@@ -253,6 +302,9 @@ fn seed_sweep_nightly() {
         seeds_per_profile * profiles.len() as u64,
         failures
     );
+    if let Err(e) = downgrade_threshold_result {
+        panic!("{e}");
+    }
 }
 
 /// Read an env var override, falling back to `default` when unset. Panics naming the env var
@@ -283,6 +335,7 @@ fn replay_repro() {
         r.num_clients,
         r.ops_per_client,
         r.num_shards,
+        MAX_WGL_STATES,
     );
     assert!(
         report.passed(),
@@ -307,7 +360,7 @@ mod regressions {
     /// EXEC-abort encoding defects are fixed (see `seed_sweep_short_workloads`).
     #[test]
     fn regression_template_seed_0() {
-        let report = run_and_check(0, Profile::Mixed, 4, 30, 2);
+        let report = run_and_check(0, Profile::Mixed, 4, 30, 2, MAX_WGL_STATES);
         assert!(
             report.passed(),
             "pinned seed regressed: {:?}",
@@ -331,7 +384,7 @@ mod regressions {
     /// after.
     #[test]
     fn regression_crossshard_watch_false_negative_seed_8() {
-        let report = run_and_check(8, Profile::TxHeavy, 4, 30, 2);
+        let report = run_and_check(8, Profile::TxHeavy, 4, 30, 2, MAX_WGL_STATES);
         assert!(
             report.passed(),
             "cross-shard WATCH false-negative regressed: {:?}",
