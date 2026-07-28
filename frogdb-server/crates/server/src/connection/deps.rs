@@ -260,6 +260,12 @@ pub struct ObservabilityDeps {
     /// second hand-assembled scatter). `None` only for the test-default deps,
     /// where STATUS JSON has no collector to render.
     pub status_collector: Option<Arc<frogdb_telemetry::StatusCollector>>,
+
+    /// The node's installed observability collectors (currently the hot-shard
+    /// detector). Reached through the core `ObservabilityConfig` seam, so a
+    /// connection command asks "is a collector installed?" rather than naming
+    /// the concrete `frogdb_debug` type. Empty for the test-default deps.
+    pub collectors: Arc<crate::server_observability::ServerObservability>,
 }
 
 impl Default for ObservabilityDeps {
@@ -273,6 +279,7 @@ impl Default for ObservabilityDeps {
             hotkey_session: new_shared_hotkey_session(),
             keyspace_stats: Arc::new(frogdb_core::KeyspaceStats::new()),
             status_collector: None,
+            collectors: Arc::new(crate::server_observability::ServerObservability::default()),
         }
     }
 }

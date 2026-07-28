@@ -29,6 +29,7 @@ pub mod role_manager;
 pub mod runtime_config;
 pub mod scatter;
 pub mod server;
+pub mod server_observability;
 pub mod slot_migration;
 #[cfg(not(feature = "turmoil"))]
 pub mod tls;

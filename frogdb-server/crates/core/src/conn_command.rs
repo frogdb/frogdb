@@ -650,6 +650,12 @@ pub struct ConnCtx<'a> {
     pub metrics_recorder: &'a dyn crate::MetricsRecorder,
     /// Memory-diagnostics report generator (MEMORY DOCTOR).
     pub memory_diag: &'a dyn MemoryDiagProvider,
+    /// Installed hot-shard detector (FROGDB.HOTSHARDS). Already an object-safe
+    /// `core` trait, so it is named directly rather than behind a bespoke
+    /// provider. `None` when no collector is installed — the executor reports
+    /// the absence rather than an all-zero report. The read-only dispatch path
+    /// layers the live one via [`with_hot_shards`](Self::with_hot_shards).
+    pub hot_shards: Option<&'a dyn crate::metrics::HotShardDetector>,
     /// Total shard count for machine-readable status reporting (STATUS JSON).
     pub num_shards: usize,
     /// Configured maximum client connections (STATUS JSON).
@@ -776,6 +782,7 @@ impl<'a> ConnCtx<'a> {
             info: NOOP_INFO,
             status: NOOP_STATUS,
             scripting: NOOP_SCRIPTING,
+            hot_shards: None,
             conn_state: None,
             tracking: None,
             pubsub: None,
@@ -824,6 +831,18 @@ impl<'a> ConnCtx<'a> {
     /// collector-backed provider.
     pub fn with_status(mut self, status: &'a dyn StatusProvider) -> Self {
         self.status = status;
+        self
+    }
+
+    /// Layer the installed hot-shard detector (FROGDB.HOTSHARDS) onto the
+    /// ambient view. The read-only dispatch path calls this so the command
+    /// reports from the same collector as `/status` and the debug UI; passing
+    /// `None` (no collector installed) leaves the executor to say so.
+    pub fn with_hot_shards(
+        mut self,
+        hot_shards: Option<&'a dyn crate::metrics::HotShardDetector>,
+    ) -> Self {
+        self.hot_shards = hot_shards;
         self
     }
 

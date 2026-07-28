@@ -31,7 +31,7 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, BoxFuture, CommandFlags, CommandSpec, ConfigProvider, ConnMutation,
     ConnectionLevelOp, CursorReadBatch, CursorStoreProvider, EventSpec, ExecutionStrategy, KeySpec,
-    LookupSpec, ObservabilityMsg, WaiterWake, WalStrategy,
+    LookupSpec, ObservabilityConfig, ObservabilityMsg, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -186,7 +186,10 @@ impl ConnectionHandler {
                     self.state.username(),
                 )
                 // STATUS JSON renders from the shared status collector via `self`.
-                .with_status(self),
+                .with_status(self)
+                // FROGDB.HOTSHARDS reports from the installed hot-shard
+                // detector — the same collector `/status` and the debug UI use.
+                .with_hot_shards(self.observability.collectors.hot_shard_detector()),
             ConnMutation::Auth => base.with_conn_state(&mut self.state),
             ConnMutation::Client => base
                 .with_conn_state(&mut self.state)

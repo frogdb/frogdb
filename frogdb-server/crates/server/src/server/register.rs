@@ -110,6 +110,12 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry
         .register_connection(&crate::connection::observability_conn_command::SLOWLOG_CONN_COMMAND);
 
+    // FROGDB.HOTSHARDS: renders the installed hot-shard detector's snapshot.
+    // Connection-level because the collector is a node-wide handle, not shard
+    // state — the collector itself does the per-shard scatter.
+    registry
+        .register_connection(&crate::connection::hotshards_conn_command::HOTSHARDS_CONN_COMMAND);
+
     // ACL migrated behind the ConnCtx seam: registered as a
     // CommandImpl::Connection executor, dispatched through the registry union
     // rather than the legacy router→connection-handler path.

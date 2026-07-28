@@ -39,6 +39,8 @@ mod integration_hashes;
 #[cfg(not(feature = "turmoil"))]
 mod integration_hotkeys;
 #[cfg(not(feature = "turmoil"))]
+mod integration_hotshards;
+#[cfg(not(feature = "turmoil"))]
 mod integration_info;
 #[cfg(not(feature = "turmoil"))]
 mod integration_json;

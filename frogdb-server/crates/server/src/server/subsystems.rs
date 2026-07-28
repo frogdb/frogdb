@@ -16,7 +16,7 @@ use crate::net::{JoinHandle, spawn};
 use crate::observability_server::ObservabilityServer;
 use crate::replication::{ReplicaCommandExecutor, consume_frames};
 
-use crate::config::{MemoryConfigExt, StatusConfigExt};
+use crate::config::{HotShardsConfigExt, MemoryConfigExt, StatusConfigExt};
 
 use super::Server;
 
@@ -64,6 +64,21 @@ impl Server {
             self.config.cluster.enabled,
             self.is_replica_flag.clone(),
             non_replica_label,
+        );
+
+        // Single hot-shard collector, shared by every surface that reports
+        // per-shard load: FROGDB.HOTSHARDS (through the core `ObservabilityConfig`
+        // seam), the `/status` JSON's `hot_shards` section, and the debug web UI
+        // panel. One collector means the three can never disagree, and its
+        // thresholds live in shared atomics so a later CONFIG SET retunes all
+        // three at once.
+        let hot_shard_collector = Arc::new(frogdb_debug::HotShardCollector::new(
+            self.shard_senders.clone(),
+            &self.config.hotshards.to_collector_config(),
+        ));
+        let observability_collectors = Arc::new(
+            crate::server_observability::ServerObservability::default()
+                .with_hot_shards(hot_shard_collector.clone()),
         );
 
         // Single status collector shared by the HTTP `/status` endpoint and the
@@ -444,6 +459,7 @@ impl Server {
                 hotkey_session: hotkey_session.clone(),
                 keyspace_stats: self.keyspace_stats.clone(),
                 status_collector: Some(status_collector.clone()),
+                collectors: observability_collectors.clone(),
             },
             new_conn_senders: std::mem::take(&mut self.new_conn_senders),
             allow_cross_slot: self.config.server.allow_cross_slot_standalone,

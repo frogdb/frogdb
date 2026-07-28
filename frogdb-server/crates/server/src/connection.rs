@@ -31,6 +31,7 @@ pub(crate) mod dispatch;
 mod frame_io;
 pub(crate) mod guards;
 pub(crate) mod hotkeys;
+pub(crate) mod hotshards_conn_command;
 pub(crate) mod info_conn_command;
 mod info_handler;
 mod lifecycle;
