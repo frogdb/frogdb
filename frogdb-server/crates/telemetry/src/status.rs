@@ -770,28 +770,20 @@ fn is_leap_year(year: i32) -> bool {
 }
 
 /// Get the process RSS (Resident Set Size) in bytes.
+///
+/// Reads it through `sysinfo`, the same source the `frogdb_memory_rss_bytes`
+/// Prometheus gauge samples, so `/status` and `/metrics` cannot disagree — and
+/// so the field is populated on every platform (the previous `/proc/self/statm`
+/// reader silently reported `None` off Linux).
 fn get_process_rss() -> Option<u64> {
-    #[cfg(target_os = "linux")]
-    {
-        // Read from /proc/self/statm
-        if let Ok(contents) = std::fs::read_to_string("/proc/self/statm") {
-            let fields: Vec<&str> = contents.split_whitespace().collect();
-            if fields.len() >= 2
-                && let Ok(pages) = fields[1].parse::<u64>()
-            {
-                // Page size is typically 4096 bytes
-                return Some(pages * 4096);
-            }
-        }
-        None
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        // For non-Linux platforms, RSS is not easily available without libc
-        // Return None to indicate it's not available
-        None
-    }
+    let pid = sysinfo::Pid::from_u32(std::process::id());
+    let mut system = sysinfo::System::new();
+    system.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::Some(&[pid]),
+        true,
+        sysinfo::ProcessRefreshKind::nothing().with_memory(),
+    );
+    system.process(pid).map(|process| process.memory())
 }
 
 #[cfg(test)]
@@ -805,6 +797,17 @@ mod tests {
         let time = UNIX_EPOCH + Duration::from_secs(1706270400);
         let iso = format_iso8601(time);
         assert_eq!(iso, "2024-01-26T12:00:00Z");
+    }
+
+    /// `memory.rss_bytes` must be populated everywhere FrogDB runs. The old
+    /// `/proc/self/statm` reader returned `None` off Linux, silently dropping
+    /// the field from `/status` on macOS.
+    #[test]
+    fn process_rss_is_reported_on_every_platform() {
+        assert!(
+            get_process_rss().is_some_and(|rss| rss > 0),
+            "RSS must be readable on this platform"
+        );
     }
 
     #[test]
