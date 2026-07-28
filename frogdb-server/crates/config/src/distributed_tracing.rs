@@ -97,8 +97,15 @@ impl TracingConfig {
             anyhow::bail!("OTLP endpoint must be specified when tracing is enabled");
         }
 
-        if self.sampling_rate < 0.0 || self.sampling_rate > 1.0 {
-            anyhow::bail!("sampling_rate must be between 0.0 and 1.0");
+        // Range check by containment, not by two comparisons: every comparison
+        // against NaN is false, so `< 0.0 || > 1.0` waves `sampling_rate = nan`
+        // through and the sampler then drops (or keeps) every span for reasons
+        // no operator can see.
+        if !(0.0..=1.0).contains(&self.sampling_rate) {
+            anyhow::bail!(
+                "sampling_rate must be between 0.0 and 1.0 (got {})",
+                self.sampling_rate
+            );
         }
 
         Ok(())
@@ -108,6 +115,31 @@ impl TracingConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nan_sampling_rate_is_rejected() {
+        let config = TracingConfig {
+            sampling_rate: f64::NAN,
+            ..Default::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("sampling_rate"), "{err}");
+
+        for bad in [-0.1, 1.1, f64::INFINITY, f64::NEG_INFINITY] {
+            let config = TracingConfig {
+                sampling_rate: bad,
+                ..Default::default()
+            };
+            assert!(config.validate().is_err(), "{bad} was accepted");
+        }
+        for good in [0.0, 0.5, 1.0] {
+            let config = TracingConfig {
+                sampling_rate: good,
+                ..Default::default()
+            };
+            assert!(config.validate().is_ok(), "{good} was rejected");
+        }
+    }
 
     #[test]
     fn test_tracing_config_defaults() {

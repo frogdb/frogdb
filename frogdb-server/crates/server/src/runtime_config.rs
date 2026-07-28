@@ -8,6 +8,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
@@ -822,6 +823,8 @@ pub struct ConfigManager {
     /// Live replication self-fence quorum checker; absent on replicas.
     replication_self_fence:
         std::sync::OnceLock<Arc<crate::replication_quorum::ReplicationQuorumChecker>>,
+    /// Serializes the whole CONFIG SET lifecycle (see [`Self::set`]).
+    set_lock: Mutex<()>,
 }
 
 /// Bundle of live collaborators injected into [`ConfigManager`] at construction.
@@ -950,7 +953,10 @@ impl ConfigManager {
                 &crate::config::HotShardsConfigExt::to_collector_config(&config.hotshards),
             )),
             wal_batch_size_threshold: Arc::new(AtomicUsize::new(
-                config.persistence.batch_size_threshold_kb * 1024,
+                config
+                    .persistence
+                    .batch_size_threshold_kb
+                    .saturating_mul(1024),
             )),
             snapshot_interval_secs: Arc::new(AtomicU64::new(
                 config.snapshot.snapshot_interval_secs,
@@ -970,6 +976,7 @@ impl ConfigManager {
                 config.replication.replica_freshness_timeout_ms,
             )),
             replication_self_fence: std::sync::OnceLock::new(),
+            set_lock: Mutex::new(()),
         }
     }
 
@@ -2589,7 +2596,28 @@ impl ConfigManager {
             TlsClusterMigration => Box::new(ConfigParam::<bool, ConfigManager> {
                 name: id.name(),
                 parse: |s| parse_yes_no("tls-cluster-migration", s),
-                validate: ConfigParam::no_validate,
+                // Dual-accept only means anything on a TLS cluster bus. With
+                // `tls-cluster` off the bus is plaintext-only, so accepting the
+                // flag would store a value that changes nothing *and* have
+                // CONFIG REWRITE emit `tls-cluster-migration = true` without
+                // `tls-cluster = true` — a combination boot validation rejects.
+                // `tls-cluster` is immutable, so this cannot go stale.
+                // With no TLS runtime there is nothing to couple to, and `apply`
+                // already refuses every TLS set with the actionable
+                // "TLS is not running" error; pre-empting it here would only
+                // report the wrong reason.
+                validate: |v, ctx| {
+                    let Some(live) = ctx.live_tls_config() else {
+                        return Ok(());
+                    };
+                    if *v && !live.tls_cluster {
+                        return Err(ConfigError::InvalidValue {
+                            param: "tls-cluster-migration".to_string(),
+                            message: "requires tls-cluster to be enabled".to_string(),
+                        });
+                    }
+                    Ok(())
+                },
                 default: || false,
                 get: |mgr| match mgr.live_tls_config() {
                     Some(c) => c.tls_cluster_migration,
@@ -2849,11 +2877,23 @@ impl ConfigManager {
                         message: "must be a positive integer".to_string(),
                     })
                 },
+                // Bounded above as well as below: the value is scaled by 1024
+                // into bytes, so an unbounded KiB count overflows (a debug-build
+                // panic, a wrapped nonsense threshold in release). The same
+                // bound applies at boot.
                 validate: |v, _ctx| {
                     if *v == 0 {
                         Err(ConfigError::InvalidValue {
                             param: "batch-size-threshold-kb".to_string(),
                             message: "must be > 0".to_string(),
+                        })
+                    } else if *v > frogdb_config::persistence::MAX_BATCH_SIZE_THRESHOLD_KB {
+                        Err(ConfigError::InvalidValue {
+                            param: "batch-size-threshold-kb".to_string(),
+                            message: format!(
+                                "must be <= {} KiB",
+                                frogdb_config::persistence::MAX_BATCH_SIZE_THRESHOLD_KB
+                            ),
                         })
                     } else {
                         Ok(())
@@ -2863,7 +2903,7 @@ impl ConfigManager {
                 get: |mgr| mgr.wal_batch_size_threshold.load(Ordering::Relaxed) / 1024,
                 apply: |mgr, v| {
                     mgr.wal_batch_size_threshold
-                        .store(v * 1024, Ordering::Relaxed);
+                        .store(v.saturating_mul(1024), Ordering::Relaxed);
                     info!(
                         batch_size_threshold_kb = v,
                         "WAL flush batch threshold updated"
@@ -3123,7 +3163,25 @@ impl ConfigManager {
     /// Returns Ok(()) on success, or an error if the parameter is immutable,
     /// unknown, or the value is invalid.
     /// When `strict_config` is enabled, no-op compatibility params are rejected.
+    ///
+    /// The whole lifecycle — read the old value, parse, validate, apply, read the
+    /// new value — is serialized against other `set` calls. Several parameters
+    /// validate against a *sibling's* live value (`hotshards-hot-threshold`
+    /// against the warm one, `status-durability-warning-lag` against the critical
+    /// one, `tls-cluster-migration` against `tls-cluster`), and each validates by
+    /// reading that sibling rather than by locking it. Two concurrent SETs to
+    /// the two halves of such a pair can therefore both validate against the
+    /// pre-change state and both apply, landing on a combination neither
+    /// validator would have accepted — and which boot validation rejects, so
+    /// CONFIG REWRITE afterwards produces an unbootable file. One lock across
+    /// the lifecycle closes that window; there is no re-entrancy risk because no
+    /// `apply` closure calls back into `set`, and nothing here awaits.
     pub fn set(&self, name: &str, value: &str) -> Result<(), ConfigError> {
+        // Poison-tolerant: the guarded value is `()`, so a panicking `apply`
+        // leaves nothing inconsistent behind, and refusing every later CONFIG
+        // SET for the process lifetime would be far worse.
+        let _lifecycle = self.set_lock.lock().unwrap_or_else(|e| e.into_inner());
+
         // Normalize name (lowercase, allow underscores as dashes)
         let normalized = name.to_lowercase().replace('_', "-");
 
@@ -4911,7 +4969,18 @@ maxmemory = 0
 
         let dir = tempfile::tempdir().unwrap();
         let (cert, key) = write_identity(dir.path(), "server");
-        let (manager, handle) = manager_with_tls(&test_config(), cert, key);
+        // Dual-accept is only settable on a TLS cluster bus, so the runtime this
+        // test drives has to have one.
+        let tls_config = frogdb_config::TlsConfig {
+            enabled: true,
+            cert_file: cert,
+            key_file: key,
+            tls_cluster: true,
+            ..Default::default()
+        };
+        let handle = Arc::new(crate::tls_runtime::TlsRuntimeHandle::new(&tls_config).unwrap());
+        let manager = ConfigManager::new(&test_config());
+        manager.set_tls_runtime(handle.clone());
 
         manager.set("tls-handshake-timeout-ms", "2500").unwrap();
         assert_eq!(
@@ -5105,6 +5174,249 @@ maxmemory = 0
                 "missing `{needle}` after rewrite; file:\n{contents}"
             );
         }
+    }
+
+    // === CONFIG SET -> REWRITE -> boot round trip ===
+    //
+    // CONFIG REWRITE exists so a running server's configuration survives a
+    // restart, which makes "the file it writes boots" the one property the whole
+    // feature rests on. Every promoted parameter is a chance to break it: a
+    // renderer that emits an unset optional as `""`, a SET that banks a value
+    // its own boot validator rejects, or a pair of siblings left in a
+    // combination only one side checked. These tests close the loop rather than
+    // asserting on substrings: rewrite, re-parse into `Config`, and run boot
+    // validation exactly as startup would.
+
+    /// Rewrite, re-parse, and boot-validate. Returns the parsed config and the
+    /// file text for further assertions.
+    fn rewrite_and_reparse(manager: &ConfigManager, path: &std::path::Path) -> (Config, String) {
+        manager.rewrite_config().expect("rewrite failed");
+        let contents = std::fs::read_to_string(path).unwrap();
+        let parsed: Config = toml::from_str(&contents)
+            .unwrap_or_else(|e| panic!("rewritten config does not parse: {e}\n---\n{contents}"));
+        parsed.validate().unwrap_or_else(|e| {
+            panic!("rewritten config fails boot validation: {e}\n---\n{contents}")
+        });
+        (parsed, contents)
+    }
+
+    /// A config file on disk plus a manager wired to it.
+    fn manager_with_config_file(
+        config: &Config,
+        dir: &std::path::Path,
+        initial: &str,
+    ) -> (ConfigManager, std::path::PathBuf) {
+        let path = dir.join("frogdb.toml");
+        std::fs::write(&path, initial).unwrap();
+        let mut config = config.clone();
+        config.config_source_path = Some(path.clone());
+        let manager = ConfigManager::new(&config);
+        manager.set_snapshot_coordinator(Arc::new(
+            frogdb_core::persistence::NoopSnapshotCoordinator::new(),
+        ));
+        (manager, path)
+    }
+
+    /// Promoted parameters spanning every section REWRITE writes, chosen to
+    /// include the ones whose SET and boot validators are easiest to drift apart.
+    const ROUNDTRIP_SETS: &[(&str, &str)] = &[
+        ("maxmemory", "1048576"),
+        ("maxmemory-policy", "allkeys-lru"),
+        ("durability-mode", "sync"),
+        ("wal-failure-policy", "rollback"),
+        ("cluster-auto-failover", "yes"),
+        ("replica-priority", "7"),
+        ("tracing-sampling-rate", "0.25"),
+        ("latency-bands-enabled", "yes"),
+        ("snapshot-interval-secs", "1234"),
+        ("batch-size-threshold-kb", "256"),
+        ("replication-lag-threshold-secs", "17"),
+        ("replica-freshness-timeout-ms", "8000"),
+    ];
+
+    #[test]
+    fn rewrite_after_config_set_still_boots_on_a_default_server() {
+        let dir = tempfile::tempdir().unwrap();
+        let (manager, path) = manager_with_config_file(
+            &test_config(),
+            dir.path(),
+            "[server]\nbind = \"127.0.0.1\"\nport = 6379\n",
+        );
+
+        for (param, value) in ROUNDTRIP_SETS {
+            manager
+                .set(param, value)
+                .unwrap_or_else(|e| panic!("{param}: {e:?}"));
+        }
+
+        let (parsed, _) = rewrite_and_reparse(&manager, &path);
+        assert_eq!(parsed.memory.maxmemory, 1048576);
+        assert_eq!(parsed.persistence.batch_size_threshold_kb, 256);
+        assert_eq!(parsed.replication.replica_freshness_timeout_ms, 8000);
+
+        // And the file is stable: rewriting what we just wrote still boots.
+        let (_, again) = rewrite_and_reparse(&manager, &path);
+        let (_, third) = rewrite_and_reparse(&manager, &path);
+        assert_eq!(again, third, "rewrite is not idempotent");
+    }
+
+    /// The C1 case: TLS on with no CA bundle configured. Rewriting *any*
+    /// parameter used to emit `ca-file = ""` for the untouched optional path,
+    /// which serde reads back as `Some("")` and boot validation rejects as a
+    /// missing file — one CONFIG REWRITE made the server unbootable.
+    #[cfg(not(feature = "turmoil"))]
+    #[test]
+    fn rewrite_with_tls_enabled_and_no_optional_paths_still_boots() {
+        use crate::tls_runtime::test_support::write_identity;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_identity(dir.path(), "server");
+
+        let mut config = test_config();
+        config.tls = frogdb_config::TlsConfig {
+            enabled: true,
+            cert_file: cert.clone(),
+            key_file: key.clone(),
+            ..Default::default()
+        };
+        let (manager, path) =
+            manager_with_config_file(&config, dir.path(), "[server]\nport = 6379\n");
+        let handle = Arc::new(crate::tls_runtime::TlsRuntimeHandle::new(&config.tls).unwrap());
+        manager.set_tls_runtime(handle);
+
+        // Touch something entirely unrelated to TLS.
+        manager.set("maxmemory", "1048576").unwrap();
+
+        let (parsed, contents) = rewrite_and_reparse(&manager, &path);
+        assert!(parsed.tls.enabled);
+        assert_eq!(parsed.tls.cert_file, cert);
+        assert_eq!(parsed.tls.ca_file, None);
+        assert_eq!(parsed.tls.client_cert_file, None);
+        assert_eq!(parsed.tls.client_key_file, None);
+        for absent in ["ca-file", "client-cert-file", "client-key-file"] {
+            assert!(
+                !contents.contains(absent),
+                "unset `{absent}` must be omitted, not written empty; file:\n{contents}"
+            );
+        }
+
+        // Setting one and clearing it again must also leave no key behind.
+        let (ca, _) = write_identity(dir.path(), "ca");
+        manager
+            .set("tls-ca-cert-file", ca.to_str().unwrap())
+            .unwrap();
+        let (parsed, contents) = rewrite_and_reparse(&manager, &path);
+        assert_eq!(parsed.tls.ca_file, Some(ca));
+        assert!(contents.contains("ca-file"));
+
+        manager.set("tls-ca-cert-file", "").unwrap();
+        let (parsed, contents) = rewrite_and_reparse(&manager, &path);
+        assert_eq!(parsed.tls.ca_file, None);
+        assert!(
+            !contents.contains("ca-file"),
+            "clearing must remove the key; file:\n{contents}"
+        );
+    }
+
+    /// The M3 combination: `tls-cluster-migration` is only meaningful with
+    /// `tls-cluster` on. Accepting it otherwise stored an inert value *and* made
+    /// REWRITE emit a pair boot validation rejects.
+    #[cfg(not(feature = "turmoil"))]
+    #[test]
+    fn tls_cluster_migration_set_requires_tls_cluster() {
+        use crate::tls_runtime::test_support::write_identity;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_identity(dir.path(), "server");
+
+        for tls_cluster in [false, true] {
+            let sub = dir.path().join(format!("cluster-{tls_cluster}"));
+            std::fs::create_dir_all(&sub).unwrap();
+
+            let mut config = test_config();
+            config.tls = frogdb_config::TlsConfig {
+                enabled: true,
+                cert_file: cert.clone(),
+                key_file: key.clone(),
+                tls_cluster,
+                ..Default::default()
+            };
+            let (manager, path) =
+                manager_with_config_file(&config, &sub, "[server]\nport = 6379\n");
+            let handle = Arc::new(crate::tls_runtime::TlsRuntimeHandle::new(&config.tls).unwrap());
+            manager.set_tls_runtime(handle.clone());
+
+            let result = manager.set("tls-cluster-migration", "yes");
+            if tls_cluster {
+                result.expect("dual-accept is settable on a TLS cluster bus");
+                assert!(handle.cluster_migration());
+            } else {
+                let err = result.unwrap_err();
+                assert!(
+                    format!("{err:?}").contains("requires tls-cluster"),
+                    "unexpected error: {err:?}"
+                );
+                assert!(
+                    !handle.cluster_migration(),
+                    "a rejected set must not flip the live flag"
+                );
+            }
+
+            // Either way the rewritten file boots.
+            let (parsed, _) = rewrite_and_reparse(&manager, &path);
+            assert_eq!(parsed.tls.tls_cluster_migration, tls_cluster);
+        }
+    }
+
+    /// M4-shaped: sibling-coupled parameters validate against each other, so the
+    /// *end state* left by a sequence of SETs has to be boot-valid too — the
+    /// per-SET validators only ever see one side.
+    #[test]
+    fn sibling_coupled_sets_leave_a_boot_valid_end_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let (manager, path) =
+            manager_with_config_file(&test_config(), dir.path(), "[server]\nport = 6379\n");
+
+        // Widening a band takes two SETs, and only the order that keeps every
+        // intermediate state legal is accepted: raise the ceiling first, then the
+        // floor. The reverse order is refused mid-sequence rather than banked.
+        assert!(
+            manager
+                .set("hotshards-warm-threshold-percent", "30")
+                .is_err(),
+            "the floor must not cross the current ceiling"
+        );
+        manager
+            .set("hotshards-hot-threshold-percent", "60")
+            .unwrap();
+        manager
+            .set("hotshards-warm-threshold-percent", "30")
+            .unwrap();
+        manager
+            .set("status-durability-lag-critical-ms", "9000")
+            .unwrap();
+        manager
+            .set("status-durability-lag-warning-ms", "4000")
+            .unwrap();
+
+        let (parsed, _) = rewrite_and_reparse(&manager, &path);
+        assert_eq!(parsed.hotshards.hot_threshold_percent, 60.0);
+        assert_eq!(parsed.hotshards.warm_threshold_percent, 30.0);
+        assert_eq!(parsed.status.durability_lag_warning_ms, 4000);
+        assert_eq!(parsed.status.durability_lag_critical_ms, 9000);
+
+        // The crossing combinations are refused, so no ordering can persist one.
+        assert!(
+            manager
+                .set("hotshards-warm-threshold-percent", "70")
+                .is_err()
+        );
+        assert!(
+            manager
+                .set("status-durability-lag-warning-ms", "9000")
+                .is_err()
+        );
+        rewrite_and_reparse(&manager, &path);
     }
 
     #[test]
