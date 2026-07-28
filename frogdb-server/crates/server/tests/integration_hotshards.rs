@@ -197,6 +197,50 @@ async fn test_hotshards_period_argument_widens_the_window() {
     );
 }
 
+/// The `/status` JSON renders the *same* collector as `FROGDB.HOTSHARDS`, so
+/// the section must be present and carry the same live numbers. `ops_per_sec`
+/// is now a real windowed rate sourced from that snapshot.
+#[tokio::test]
+async fn test_status_json_carries_the_hot_shard_section() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    for i in 0..200 {
+        let value = i.to_string();
+        client.command(&["SET", "status:key", &value]).await;
+    }
+
+    let reply = client.command(&["STATUS", "JSON"]).await;
+    let Response::Bulk(Some(body)) = reply else {
+        panic!("STATUS JSON must reply with a bulk string, got {reply:?}");
+    };
+    let status: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+
+    let hot = &status["hot_shards"];
+    assert!(!hot.is_null(), "hot_shards section missing from {status:#}");
+    assert_eq!(hot["shards"].as_array().expect("shard rows").len(), 4);
+    assert!(
+        hot["total_ops_per_sec"].as_f64().unwrap_or(0.0) > 0.0,
+        "the section must carry live numbers, not zeros: {hot:#}"
+    );
+    assert_eq!(hot["hot_count"].as_u64(), Some(1));
+
+    // The node-wide rate is the collector's total, never a second estimate.
+    assert_eq!(
+        status["commands"]["ops_per_sec"].as_f64(),
+        hot["total_ops_per_sec"].as_f64(),
+    );
+
+    // Classes serialize lowercase for JSON consumers.
+    let classes: Vec<&str> = hot["shards"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["class"].as_str().expect("class"))
+        .collect();
+    assert!(classes.contains(&"hot"), "got {classes:?}");
+}
+
 #[tokio::test]
 async fn test_hotshards_rejects_bad_arguments() {
     let server = TestServer::start_standalone().await;

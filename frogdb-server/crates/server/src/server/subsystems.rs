@@ -86,19 +86,22 @@ impl Server {
         // Built unconditionally over the object-safe metrics recorder so STATUS
         // JSON works even when the HTTP server is disabled (the no-op recorder
         // reports absent counters as 0, never faked).
-        let status_collector = Arc::new(StatusCollector::new(
-            self.config.status.to_collector_config(),
-            self.health_checker.clone(),
-            self.shard_senders.clone(),
-            self.client_registry.clone(),
-            self.metrics_recorder.clone(),
-            start_time,
-            self.config_manager.max_clients_flag(),
-            self.config.memory.maxmemory,
-            self.config.persistence.enabled,
-            self.config.persistence.durability_mode.clone(),
-            mode.clone(),
-        ));
+        let status_collector = Arc::new(
+            StatusCollector::new(
+                self.config.status.to_collector_config(),
+                self.health_checker.clone(),
+                self.shard_senders.clone(),
+                self.client_registry.clone(),
+                self.metrics_recorder.clone(),
+                start_time,
+                self.config_manager.max_clients_flag(),
+                self.config.memory.maxmemory,
+                self.config.persistence.enabled,
+                self.config.persistence.durability_mode.clone(),
+                mode.clone(),
+            )
+            .with_hot_shards(hot_shard_collector.clone()),
+        );
 
         // Start HTTP server if enabled (metrics, health, debug, admin REST)
         let http_server_handle = if let Some(ref prometheus) = self.prometheus_recorder {
