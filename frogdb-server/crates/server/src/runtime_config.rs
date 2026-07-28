@@ -373,12 +373,6 @@ pub struct StaticConfig {
     pub self_fence_on_replica_loss: bool,
     /// Replica freshness window in ms used by self-fencing.
     pub replica_freshness_timeout_ms: u64,
-    /// Whether cluster auto-failover is enabled.
-    pub cluster_auto_failover: bool,
-    /// Whether a node self-fences on Raft quorum loss.
-    pub cluster_self_fence_on_quorum_loss: bool,
-    /// Cluster replica failover priority (lower = preferred; 0 = never).
-    pub cluster_replica_priority: u32,
     /// Whether dual-accept TLS cluster migration mode is enabled.
     pub tls_cluster_migration: bool,
     /// Outgoing (replication/cluster) client certificate path (empty when unset).
@@ -387,18 +381,6 @@ pub struct StaticConfig {
     pub tls_client_key_file: String,
     /// TLS handshake timeout in ms.
     pub tls_handshake_timeout_ms: u64,
-    /// Distributed-tracing sample rate (0.0-1.0).
-    pub tracing_sampling_rate: f64,
-    /// Status endpoint memory-warning threshold percent.
-    pub status_memory_warning_percent: u8,
-    /// Status endpoint connection-warning threshold percent.
-    pub status_connection_warning_percent: u8,
-    /// Status endpoint durability-lag warning threshold in ms.
-    pub status_durability_lag_warning_ms: u64,
-    /// Status endpoint durability-lag critical threshold in ms.
-    pub status_durability_lag_critical_ms: u64,
-    /// Whether SLO latency-band tracking is enabled.
-    pub latency_bands_enabled: bool,
 
     // --- issue-14 wire pass: immutable (CONFIG GET-only) startup-consumed params ---
     /// Whether metrics OTLP export is enabled.
@@ -500,9 +482,6 @@ impl StaticConfig {
             replication_lag_threshold_secs: config.replication.replication_lag_threshold_secs,
             self_fence_on_replica_loss: config.replication.self_fence_on_replica_loss,
             replica_freshness_timeout_ms: config.replication.replica_freshness_timeout_ms,
-            cluster_auto_failover: config.cluster.auto_failover,
-            cluster_self_fence_on_quorum_loss: config.cluster.self_fence_on_quorum_loss,
-            cluster_replica_priority: config.cluster.replica_priority,
             tls_cluster_migration: config.tls.tls_cluster_migration,
             tls_client_cert_file: config
                 .tls
@@ -517,12 +496,6 @@ impl StaticConfig {
                 .map(|p| p.display().to_string())
                 .unwrap_or_default(),
             tls_handshake_timeout_ms: config.tls.handshake_timeout_ms,
-            tracing_sampling_rate: config.tracing.sampling_rate,
-            status_memory_warning_percent: config.status.memory_warning_percent,
-            status_connection_warning_percent: config.status.connection_warning_percent,
-            status_durability_lag_warning_ms: config.status.durability_lag_warning_ms,
-            status_durability_lag_critical_ms: config.status.durability_lag_critical_ms,
-            latency_bands_enabled: config.latency_bands.enabled,
             // --- issue-14 wire pass: immutable startup-consumed params ---
             metrics_otlp_enabled: config.metrics.otlp_enabled,
             metrics_otlp_endpoint: config.metrics.otlp_endpoint.clone(),
@@ -1257,22 +1230,22 @@ impl ConfigManager {
             },
             ClusterAutoFailover => ParamMeta {
                 name: id.name(),
-                getter: |mgr| yes_no(mgr.static_config.cluster_auto_failover),
-                toml_getter: |mgr| mgr.static_config.cluster_auto_failover.to_toml_value(),
+                getter: |mgr| yes_no(mgr.cluster_flags.auto_failover()),
+                toml_getter: |mgr| mgr.cluster_flags.auto_failover().to_toml_value(),
             },
             ClusterSelfFenceOnQuorumLoss => ParamMeta {
                 name: id.name(),
-                getter: |mgr| yes_no(mgr.static_config.cluster_self_fence_on_quorum_loss),
+                getter: |mgr| yes_no(mgr.cluster_flags.self_fence_on_quorum_loss()),
                 toml_getter: |mgr| {
-                    mgr.static_config
-                        .cluster_self_fence_on_quorum_loss
+                    mgr.cluster_flags
+                        .self_fence_on_quorum_loss()
                         .to_toml_value()
                 },
             },
             ReplicaPriority => ParamMeta {
                 name: id.name(),
-                getter: |mgr| mgr.static_config.cluster_replica_priority.to_string(),
-                toml_getter: |mgr| mgr.static_config.cluster_replica_priority.to_toml_value(),
+                getter: |mgr| mgr.cluster_flags.replica_priority().to_string(),
+                toml_getter: |mgr| mgr.cluster_flags.replica_priority().to_toml_value(),
             },
             TlsClusterMigration => ParamMeta {
                 name: id.name(),
@@ -1296,61 +1269,61 @@ impl ConfigManager {
             },
             TracingSamplingRate => ParamMeta {
                 name: id.name(),
-                getter: |mgr| mgr.static_config.tracing_sampling_rate.to_string(),
-                toml_getter: |mgr| mgr.static_config.tracing_sampling_rate.to_toml_value(),
+                getter: |mgr| mgr.tracing_sampling_rate.get().to_string(),
+                toml_getter: |mgr| mgr.tracing_sampling_rate.get().to_toml_value(),
             },
             StatusMemoryWarningPercent => ParamMeta {
                 name: id.name(),
-                getter: |mgr| mgr.static_config.status_memory_warning_percent.to_string(),
+                getter: |mgr| mgr.status_thresholds.memory_warning_percent().to_string(),
                 toml_getter: |mgr| {
-                    mgr.static_config
-                        .status_memory_warning_percent
+                    mgr.status_thresholds
+                        .memory_warning_percent()
                         .to_toml_value()
                 },
             },
             StatusConnectionWarningPercent => ParamMeta {
                 name: id.name(),
                 getter: |mgr| {
-                    mgr.static_config
-                        .status_connection_warning_percent
+                    mgr.status_thresholds
+                        .connection_warning_percent()
                         .to_string()
                 },
                 toml_getter: |mgr| {
-                    mgr.static_config
-                        .status_connection_warning_percent
+                    mgr.status_thresholds
+                        .connection_warning_percent()
                         .to_toml_value()
                 },
             },
             StatusDurabilityLagWarningMs => ParamMeta {
                 name: id.name(),
                 getter: |mgr| {
-                    mgr.static_config
-                        .status_durability_lag_warning_ms
+                    mgr.status_thresholds
+                        .durability_lag_warning_ms()
                         .to_string()
                 },
                 toml_getter: |mgr| {
-                    mgr.static_config
-                        .status_durability_lag_warning_ms
+                    mgr.status_thresholds
+                        .durability_lag_warning_ms()
                         .to_toml_value()
                 },
             },
             StatusDurabilityLagCriticalMs => ParamMeta {
                 name: id.name(),
                 getter: |mgr| {
-                    mgr.static_config
-                        .status_durability_lag_critical_ms
+                    mgr.status_thresholds
+                        .durability_lag_critical_ms()
                         .to_string()
                 },
                 toml_getter: |mgr| {
-                    mgr.static_config
-                        .status_durability_lag_critical_ms
+                    mgr.status_thresholds
+                        .durability_lag_critical_ms()
                         .to_toml_value()
                 },
             },
             LatencyBandsEnabled => ParamMeta {
                 name: id.name(),
-                getter: |mgr| yes_no(mgr.static_config.latency_bands_enabled),
-                toml_getter: |mgr| mgr.static_config.latency_bands_enabled.to_toml_value(),
+                getter: |mgr| yes_no(mgr.latency_band_tracker.is_enabled()),
+                toml_getter: |mgr| mgr.latency_band_tracker.is_enabled().to_toml_value(),
             },
             // --- issue-14 wire pass: promote-immutable params (GET-only) ---
             MetricsOtlpEnabled => ParamMeta {
