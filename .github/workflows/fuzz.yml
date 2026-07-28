@@ -9,12 +9,10 @@ name: Fuzz
 env:
   CARGO_TERM_COLOR: always
 'on':
-  schedule:
-  - cron: '41 2 * * *'
   workflow_dispatch:
     inputs:
       duration:
-        description: Per-target fuzzing budget in seconds for the scheduled campaign (default 180).
+        description: Per-target fuzzing budget in seconds for the campaign (default 180).
         required: false
         default: '180'
         type: string
@@ -25,24 +23,14 @@ jobs:
   fuzz-campaign:
     if: github.event_name != 'pull_request'
     name: Fuzz Campaign
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-    - name: Configure self-hosted build environment
-      if: runner.environment == 'self-hosted'
-      run: |
-        {
-          echo "CC=clang-18"
-          echo "CXX=clang++-18"
-          echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
-          echo "CARGO_BUILD_JOBS=4"
-        } >> "$GITHUB_ENV"
     - name: Install Rust nightly toolchain
       uses: dtolnay/rust-toolchain@nightly
     - name: Install libclang
-      if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Install cargo-fuzz
       run: cargo install cargo-fuzz
@@ -86,24 +74,14 @@ jobs:
   corpus-replay:
     if: github.event_name == 'pull_request'
     name: Corpus Replay
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-    - name: Configure self-hosted build environment
-      if: runner.environment == 'self-hosted'
-      run: |
-        {
-          echo "CC=clang-18"
-          echo "CXX=clang++-18"
-          echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
-          echo "CARGO_BUILD_JOBS=4"
-        } >> "$GITHUB_ENV"
     - name: Install Rust nightly toolchain
       uses: dtolnay/rust-toolchain@nightly
     - name: Install libclang
-      if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Install cargo-fuzz
       run: cargo install cargo-fuzz

@@ -18,21 +18,15 @@ from workflow_gen.helpers import (
     run_step,
     rust_toolchain_step,
     script,
-    self_hosted_env_step,
 )
 from workflow_gen.schema import Job, PullRequestTrigger, PushTrigger, Step, Trigger, Workflow
 
-# Runner label — route to self-hosted only when triggered by a trusted actor.
-# For PRs, key on the immutable PR author (survives re-runs); for push/dispatch,
-# key on github.actor. Untrusted actors fall back to GitHub-hosted ubuntu-latest.
-TRUSTED_ACTOR = "nathanjordan"
-RUNS_ON = (
-    "${{ (("
-    f"github.event_name != 'pull_request' && github.actor == '{TRUSTED_ACTOR}'"
-    ") || ("
-    f"github.event_name == 'pull_request' && github.event.pull_request.user.login == '{TRUSTED_ACTOR}'"
-    ")) && 'self-hosted' || 'ubuntu-latest' }}"
-)
+# Runner label — GitHub-hosted standard runners, which are free and unmetered on
+# public repositories. This previously routed trusted actors to a `self-hosted`
+# ARM64 box; that runner is retired, and jobs pinned to it queued until the 48h
+# GitHub timeout instead of running. Blacksmith runners are reserved for the
+# testbox workflow (test-unit-tests-testbox.yml).
+RUNS_ON = "ubuntu-latest"
 
 # mise install_args per job — only install tools each job actually needs.
 # Rust is installed via dtolnay/rust-toolchain (see helpers.RUST_TOOLCHAIN);
@@ -140,7 +134,6 @@ def test_workflow() -> Workflow:
             if_="needs.changes.outputs.rust == 'true'",
             steps=[
                 checkout_step(),
-                self_hosted_env_step(),
                 mise_setup_step(install_args=MISE_JUST_DENY),
                 rust_toolchain_step(components="rustfmt, clippy"),
                 libclang_step(),
@@ -171,7 +164,6 @@ def test_workflow() -> Workflow:
             if_="needs.changes.outputs.rust == 'true'",
             steps=[
                 checkout_step(),
-                self_hosted_env_step(),
                 mise_setup_step(install_args=MISE_JUST_NEXTEST),
                 rust_toolchain_step(),
                 libclang_step(),
@@ -195,7 +187,6 @@ def test_workflow() -> Workflow:
             if_="needs.changes.outputs.rust == 'true'",
             steps=[
                 checkout_step(),
-                self_hosted_env_step(),
                 mise_setup_step(install_args=MISE_JUST_NEXTEST),
                 rust_toolchain_step(),
                 libclang_step(),
@@ -225,7 +216,6 @@ def test_workflow() -> Workflow:
             if_="needs.changes.outputs.rust == 'true'",
             steps=[
                 checkout_step(),
-                self_hosted_env_step(),
                 mise_setup_step(install_args=MISE_JUST_NEXTEST),
                 rust_toolchain_step(),
                 libclang_step(),
@@ -261,7 +251,6 @@ def test_workflow() -> Workflow:
             if_="needs.changes.outputs.rust == 'true' || needs.changes.outputs.operator == 'true'",
             steps=[
                 checkout_step(),
-                self_hosted_env_step(),
                 mise_setup_step(install_args=MISE_JUST_NEXTEST),
                 rust_toolchain_step(),
                 libclang_step(),
@@ -280,7 +269,6 @@ def test_workflow() -> Workflow:
             if_="needs.changes.outputs.rust == 'true'",
             steps=[
                 checkout_step(),
-                self_hosted_env_step(),
                 mise_setup_step(install_args=MISE_JUST),
                 rust_toolchain_step(),
                 libclang_step(),
@@ -302,7 +290,6 @@ def test_workflow() -> Workflow:
             if_="needs.changes.outputs.rust == 'true'",
             steps=[
                 checkout_step(),
-                self_hosted_env_step(),
                 mise_setup_step(install_args=MISE_JUST),
                 rust_toolchain_step(),
                 libclang_step(),
@@ -360,7 +347,6 @@ def test_workflow() -> Workflow:
             if_="needs.changes.outputs.rust == 'true' || needs.changes.outputs.website == 'true'",
             steps=[
                 checkout_step(),
-                self_hosted_env_step(),
                 mise_setup_step(install_args=MISE_JUST),
                 rust_toolchain_step(),
                 libclang_step(),
@@ -407,7 +393,6 @@ def test_workflow() -> Workflow:
             if_="needs.changes.outputs.rust == 'true' || needs.changes.outputs.website == 'true'",
             steps=[
                 checkout_step(),
-                self_hosted_env_step(),
                 mise_setup_step(install_args=MISE_PYTHON_WORKFLOW_GEN),
                 rust_toolchain_step(),
                 libclang_step(),

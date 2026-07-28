@@ -23,7 +23,6 @@ def build_workflow() -> Workflow:
 
     w.jobs["docker"] = Job(
         name="Docker Build",
-        runs_on="blacksmith-4vcpu-ubuntu-2404",
         permissions=Permissions(contents="read", packages="write"),
         steps=[
             checkout_step(),

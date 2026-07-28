@@ -12,9 +12,10 @@ no seed corpus barely clears the parser's front door; the targets were effective
 meaningfully fuzzed.
 
 Design (mirrors the repo's other long-running tiers, `concurrency_nightly.py` /
-`jepsen_nightly.py`, single Blacksmith job, cron + `workflow_dispatch`):
+`jepsen_nightly.py`, single GitHub-hosted job on `workflow_dispatch`):
 
-* **Scheduled campaign** (`fuzz-campaign`, cron + manual): runs every target for a
+* **Campaign** (`fuzz-campaign`, manual dispatch — the nightly cron was removed):
+  runs every target for a
   multi-minute budget (`FUZZ_SECONDS`, default 180s, overridable via dispatch input) and
   accumulates the libFuzzer corpus so each run builds on the last.
 * **Corpus persistence via `actions/cache`** rather than committing the corpus to git
@@ -22,7 +23,7 @@ Design (mirrors the repo's other long-running tiers, `concurrency_nightly.py` /
   `github.run_id` (always unique → the post-job save always writes a fresh entry) with a
   `fuzz-corpus-` `restore-keys` prefix (restores the newest prior corpus). Caches created
   on the default branch are readable by PR branches, which is what lets the PR job below
-  replay the corpus the nightly campaign grew.
+  replay the corpus the campaign grew.
 * **PR corpus-replay** (`corpus-replay`, `pull_request`): a fast regression gate that
   *restores* the persisted corpus (restore-only — no per-PR cache writes) and replays every
   entry against each target with libFuzzer `-runs=0` (execute the corpus once, no
@@ -50,23 +51,19 @@ from workflow_gen.helpers import (
     omap,
     rust_nightly_toolchain_step,
     script,
-    self_hosted_env_step,
     upload_artifact_step,
 )
 from workflow_gen.schema import (
     Job,
     PullRequestTrigger,
-    ScheduleTrigger,
     Step,
     Trigger,
     Workflow,
 )
 
-RUNS_ON = "blacksmith-4vcpu-ubuntu-2404"
-
-# Off-the-hour and overnight-US, distinct from the other nightly crons (jepsen 37 5 /
-# 37 6, concurrency 14 3) so the campaigns don't contend for Blacksmith minutes.
-NIGHTLY_CRON = "41 2 * * *"
+# GitHub-hosted standard runner: free and unmetered on public repos. Blacksmith is
+# reserved for the testbox workflow (test-unit-tests-testbox.yml).
+RUNS_ON = "ubuntu-latest"
 
 # Default per-target fuzzing budget in seconds for the scheduled campaign. 180s x 34
 # targets ~= 100min of pure fuzzing; with the instrumented build (amortised by the
@@ -87,8 +84,7 @@ CORPUS_RESTORE_PREFIX = "fuzz-corpus-"
 def _duration_input() -> CommentedMap:
     inp = CommentedMap()
     inp["description"] = (
-        "Per-target fuzzing budget in seconds for the scheduled campaign "
-        f"(default {DEFAULT_FUZZ_SECONDS})."
+        f"Per-target fuzzing budget in seconds for the campaign (default {DEFAULT_FUZZ_SECONDS})."
     )
     inp["required"] = False
     inp["default"] = SQ(DEFAULT_FUZZ_SECONDS)
@@ -184,8 +180,11 @@ def _crash_artifact_step() -> Step:
 def fuzz_workflow() -> Workflow:
     w = Workflow(
         name="Fuzz",
+        # The campaign's nightly cron is deliberately off — a 34-target,
+        # 180s-per-target run is ~100min of pure fuzzing every night. It stays
+        # available via workflow_dispatch. The cheap `corpus-replay` PR gate below
+        # still runs automatically on every pull request.
         on=Trigger(
-            schedule=ScheduleTrigger(cron=[NIGHTLY_CRON]),
             pull_request=PullRequestTrigger(branches=["main"]),
             workflow_dispatch_inputs=CommentedMap(duration=_duration_input()),
         ),
@@ -202,7 +201,6 @@ def fuzz_workflow() -> Workflow:
             timeout_minutes=360,
             steps=[
                 checkout_step(),
-                self_hosted_env_step(),
                 rust_nightly_toolchain_step(),
                 libclang_step(),
                 Step(name="Install cargo-fuzz", run="cargo install cargo-fuzz"),
@@ -229,7 +227,6 @@ def fuzz_workflow() -> Workflow:
             timeout_minutes=60,
             steps=[
                 checkout_step(),
-                self_hosted_env_step(),
                 rust_nightly_toolchain_step(),
                 libclang_step(),
                 Step(name="Install cargo-fuzz", run="cargo install cargo-fuzz"),

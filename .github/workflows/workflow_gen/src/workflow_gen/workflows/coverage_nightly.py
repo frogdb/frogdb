@@ -15,9 +15,9 @@ work, not fixed here) — `server/src/commands/info.rs` (0.8%),
 `server/src/connection/builder.rs` (0.0%), `server/src/config/loader.rs` (29.8%),
 `core/src/store/mod.rs` (34.7%), among others.
 
-Design, mirroring the repo's other single-job nightly tiers (`concurrency_nightly.py`
-/ `jepsen_nightly.py` / `fuzz.py`): a dedicated cron-triggered (+ `workflow_dispatch`)
-workflow rather than reviving the `test.yml`-embedded job, so a red/slow coverage run
+Design, mirroring the repo's other single-job on-demand tiers (`concurrency_nightly.py`
+/ `jepsen_nightly.py` / `fuzz.py`): a dedicated `workflow_dispatch` workflow rather than
+reviving the `test.yml`-embedded job, so a red/slow coverage run
 can never gate a PR merge (it isn't a dependency of `test.yml`'s `ci-pass`, and it
 lives in an entirely separate workflow file) and never pages anyone. `just
 coverage-lcov` (the same recipe a developer runs locally) generates the lcov report;
@@ -26,7 +26,11 @@ line-coverage percentage, prints it against this doc's 84.0% baseline in the job
 summary (so future drift is visible at a glance without opening the artifact), and
 uploads the lcov file itself as a CI artifact for deeper per-file inspection.
 
-Runner: same `blacksmith-4vcpu-ubuntu-2404` (x86) class as the other three nightly
+Cadence: dispatch-only. The nightly cron was removed along with the repo's other
+scheduled tiers — an instrumented build plus a full test run is the single most
+expensive job here, and it gates nothing, so it runs when someone wants the number.
+
+Runner: same GitHub-hosted `ubuntu-latest` (x86) class as the other three on-demand
 workflows. The audit ran coverage on aarch64 only because that happened to be the
 testbox on hand that day; unlike Jepsen/fuzz/concurrency (where architecture affects
 which races and timing bugs reproduce), coverage is a build-instrumentation/line-count
@@ -44,20 +48,15 @@ from workflow_gen.helpers import (
     run_step,
     rust_toolchain_step,
     script,
-    self_hosted_env_step,
     upload_artifact_step,
 )
-from workflow_gen.schema import Job, ScheduleTrigger, Step, Trigger, Workflow
+from workflow_gen.schema import Job, Step, Trigger, Workflow
 
 MISE_TOOLS = "just cargo:cargo-nextest"
 
-# Same runner class as the other long-running single-job nightlies (fuzz/concurrency/
-# jepsen) — see module docstring for why aarch64 isn't required here.
-RUNS_ON = "blacksmith-4vcpu-ubuntu-2404"
-
-# Off-the-hour, and distinct from the other nightly crons (jepsen 37 5 / 37 6,
-# concurrency 14 3, fuzz 41 2) so the campaigns don't contend for Blacksmith minutes.
-NIGHTLY_CRON = "50 4 * * *"
+# GitHub-hosted standard runner: free and unmetered on public repos. See the module
+# docstring for why aarch64 isn't required here.
+RUNS_ON = "ubuntu-latest"
 
 # This audit's baseline (2026-07-22, aarch64 Blacksmith testbox) — the documented
 # starting reference point so the job summary shows drift, not just an absolute
@@ -113,7 +112,10 @@ def _coverage_summary_step() -> Step:
 def coverage_nightly_workflow() -> Workflow:
     w = Workflow(
         name="Coverage Nightly",
-        on=Trigger(schedule=ScheduleTrigger(cron=[NIGHTLY_CRON])),
+        # Manual dispatch only: the nightly cron is deliberately off. Instrumented
+        # builds are the most expensive job in the repo and this one never gates a
+        # merge, so it runs on demand rather than every night.
+        on=Trigger(),
     )
 
     w.job(
@@ -127,7 +129,6 @@ def coverage_nightly_workflow() -> Workflow:
             timeout_minutes=180,
             steps=[
                 checkout_step(),
-                self_hosted_env_step(),
                 mise_setup_step(install_args=MISE_TOOLS),
                 rust_toolchain_step(components="llvm-tools-preview"),
                 libclang_step(),

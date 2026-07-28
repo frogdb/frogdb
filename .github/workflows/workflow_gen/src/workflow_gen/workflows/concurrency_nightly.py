@@ -25,23 +25,16 @@ from workflow_gen.helpers import (
     run_step,
     rust_toolchain_step,
     script,
-    self_hosted_env_step,
     upload_artifact_step,
 )
-from workflow_gen.schema import Job, ScheduleTrigger, Trigger, Workflow
+from workflow_gen.schema import Job, Trigger, Workflow
 
 MISE_JUST_NEXTEST = "just cargo:cargo-nextest"
 
-# Same runner class as the other long-running single-job workflow (fuzz.yml):
-# the sweep is one sequential test loop, not parallelized across cores, so a
-# bigger box buys nothing here — keep the cheapest box that's not starved for
-# memory building the workspace.
-RUNS_ON = "blacksmith-4vcpu-ubuntu-2404"
-
-# 03:14 UTC has no significance beyond "not on the hour" (avoids the
-# GitHub Actions cron traffic spike at :00) and lands overnight for US time
-# zones, where this repo's activity concentrates.
-NIGHTLY_CRON = "14 3 * * *"
+# GitHub-hosted standard runner: free and unmetered on public repos. The sweep is
+# one sequential test loop, not parallelized across cores, so a bigger (paid) box
+# buys nothing here. Blacksmith is reserved for the testbox workflow.
+RUNS_ON = "ubuntu-latest"
 
 # Unique seeds swept, each replayed once per profile (overridable per-dispatch); NOT the total
 # run count. Default 250 unique seeds x 4 profiles (Mixed, BlockingHeavy, TxHeavy, MultiWaiter)
@@ -69,10 +62,10 @@ def _seeds_input() -> CommentedMap:
 def concurrency_nightly_workflow() -> Workflow:
     w = Workflow(
         name="Concurrency Nightly",
-        on=Trigger(
-            schedule=ScheduleTrigger(cron=[NIGHTLY_CRON]),
-            workflow_dispatch_inputs=CommentedMap(seeds=_seeds_input()),
-        ),
+        # Manual dispatch only: the nightly cron is deliberately off. A 250-seed
+        # sweep is hours of runner time every night for a repo with no on-call
+        # rotation reading the results; run it on demand instead.
+        on=Trigger(workflow_dispatch_inputs=CommentedMap(seeds=_seeds_input())),
     )
 
     w.job(
@@ -92,7 +85,6 @@ def concurrency_nightly_workflow() -> Workflow:
             timeout_minutes=360,
             steps=[
                 checkout_step(),
-                self_hosted_env_step(),
                 mise_setup_step(install_args=MISE_JUST_NEXTEST),
                 rust_toolchain_step(),
                 libclang_step(),

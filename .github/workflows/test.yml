@@ -19,7 +19,7 @@ env:
 jobs:
   changes:
     name: Detect Changes
-    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       operator: ${{ steps.filter.outputs.operator }}
@@ -72,7 +72,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.workflows == 'true'
     name: Actionlint
-    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -82,19 +82,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     name: Lint
-    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-    - name: Configure self-hosted build environment
-      if: runner.environment == 'self-hosted'
-      run: |
-        {
-          echo "CC=clang-18"
-          echo "CXX=clang++-18"
-          echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
-          echo "CARGO_BUILD_JOBS=4"
-        } >> "$GITHUB_ENV"
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
@@ -107,7 +98,6 @@ jobs:
       with:
         components: rustfmt, clippy
     - name: Install libclang
-      if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
@@ -125,19 +115,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     name: Unit Tests
-    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-    - name: Configure self-hosted build environment
-      if: runner.environment == 'self-hosted'
-      run: |
-        {
-          echo "CC=clang-18"
-          echo "CXX=clang++-18"
-          echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
-          echo "CARGO_BUILD_JOBS=4"
-        } >> "$GITHUB_ENV"
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
@@ -148,7 +129,6 @@ jobs:
     - name: Install Rust 1.92.0
       uses: dtolnay/rust-toolchain@1.92.0
     - name: Install libclang
-      if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
@@ -160,19 +140,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     name: Shuttle Concurrency Tests
-    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-    - name: Configure self-hosted build environment
-      if: runner.environment == 'self-hosted'
-      run: |
-        {
-          echo "CC=clang-18"
-          echo "CXX=clang++-18"
-          echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
-          echo "CARGO_BUILD_JOBS=4"
-        } >> "$GITHUB_ENV"
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
@@ -183,7 +154,6 @@ jobs:
     - name: Install Rust 1.92.0
       uses: dtolnay/rust-toolchain@1.92.0
     - name: Install libclang
-      if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
@@ -195,19 +165,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     name: Turmoil Simulation + Generated-Workload Tests
-    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-    - name: Configure self-hosted build environment
-      if: runner.environment == 'self-hosted'
-      run: |
-        {
-          echo "CC=clang-18"
-          echo "CXX=clang++-18"
-          echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
-          echo "CARGO_BUILD_JOBS=4"
-        } >> "$GITHUB_ENV"
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
@@ -218,7 +179,6 @@ jobs:
     - name: Install Rust 1.92.0
       uses: dtolnay/rust-toolchain@1.92.0
     - name: Install libclang
-      if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
@@ -234,19 +194,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.operator == 'true'
     name: Operator Tests
-    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-    - name: Configure self-hosted build environment
-      if: runner.environment == 'self-hosted'
-      run: |
-        {
-          echo "CC=clang-18"
-          echo "CXX=clang++-18"
-          echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
-          echo "CARGO_BUILD_JOBS=4"
-        } >> "$GITHUB_ENV"
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
@@ -257,7 +208,6 @@ jobs:
     - name: Install Rust 1.92.0
       uses: dtolnay/rust-toolchain@1.92.0
     - name: Install libclang
-      if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
@@ -269,19 +219,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     name: Helm Generation Check
-    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-    - name: Configure self-hosted build environment
-      if: runner.environment == 'self-hosted'
-      run: |
-        {
-          echo "CC=clang-18"
-          echo "CXX=clang++-18"
-          echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
-          echo "CARGO_BUILD_JOBS=4"
-        } >> "$GITHUB_ENV"
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
@@ -292,7 +233,6 @@ jobs:
     - name: Install Rust 1.92.0
       uses: dtolnay/rust-toolchain@1.92.0
     - name: Install libclang
-      if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
@@ -304,19 +244,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     name: Dashboard Generation Check
-    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-    - name: Configure self-hosted build environment
-      if: runner.environment == 'self-hosted'
-      run: |
-        {
-          echo "CC=clang-18"
-          echo "CXX=clang++-18"
-          echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
-          echo "CARGO_BUILD_JOBS=4"
-        } >> "$GITHUB_ENV"
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
@@ -327,7 +258,6 @@ jobs:
     - name: Install Rust 1.92.0
       uses: dtolnay/rust-toolchain@1.92.0
     - name: Install libclang
-      if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
@@ -339,7 +269,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.grafana == 'true'
     name: Grafana Dashboard Lint
-    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -361,19 +291,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.website == 'true'
     name: Docs Generation Check
-    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-    - name: Configure self-hosted build environment
-      if: runner.environment == 'self-hosted'
-      run: |
-        {
-          echo "CC=clang-18"
-          echo "CXX=clang++-18"
-          echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
-          echo "CARGO_BUILD_JOBS=4"
-        } >> "$GITHUB_ENV"
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
@@ -384,7 +305,6 @@ jobs:
     - name: Install Rust 1.92.0
       uses: dtolnay/rust-toolchain@1.92.0
     - name: Install libclang
-      if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
@@ -396,7 +316,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.website == 'true'
     name: Compat Generation Check
-    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -413,19 +333,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.website == 'true'
     name: Command Matrix Generation Check
-    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-    - name: Configure self-hosted build environment
-      if: runner.environment == 'self-hosted'
-      run: |
-        {
-          echo "CC=clang-18"
-          echo "CXX=clang++-18"
-          echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
-          echo "CARGO_BUILD_JOBS=4"
-        } >> "$GITHUB_ENV"
     - name: Set up mise toolchain
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
@@ -436,7 +347,6 @@ jobs:
     - name: Install Rust 1.92.0
       uses: dtolnay/rust-toolchain@1.92.0
     - name: Install libclang
-      if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
@@ -448,7 +358,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.operator == 'true' || needs.changes.outputs.testing == 'true' || needs.changes.outputs.website == 'true'
     name: Docs Path Check
-    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -465,7 +375,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.workflow_gen == 'true'
     name: Workflow Generation Check
-    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -482,7 +392,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.python == 'true'
     name: Python Lint & Format
-    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -501,7 +411,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.helm == 'true'
     name: Helm Lint
-    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -538,7 +448,7 @@ jobs:
     - helm-lint
     if: always()
     name: CI Pass
-    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
     - name: Check results
       if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')

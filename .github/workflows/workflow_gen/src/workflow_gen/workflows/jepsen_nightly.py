@@ -11,10 +11,11 @@ slot-migration + raft-chaos + key-routing checkers now assert data, orphaned
 cluster/failover workloads wired) had landed, so the signal is real rather than
 false-green.
 
-Design, mirroring `concurrency_nightly.py` (the repo's other long-running nightly
+Design, mirroring `concurrency_nightly.py` (the repo's other long-running on-demand
 tier):
 
-* Single Blacksmith job, cron-triggered plus `workflow_dispatch`.
+* Single GitHub-hosted job, `workflow_dispatch` only — the nightly and weekly crons
+  were removed; a core run is ~1.5-2h of runner time and nothing gates on it.
 * Build the debug Docker image **once** via `just docker-build-debug`
   (Dockerfile.builder, in-Docker Rust build — needs no host Rust/zig toolchain).
   We deliberately do NOT go through `just jepsen-suite`, which forces
@@ -24,10 +25,9 @@ tier):
 * The Jepsen *control* node (Leiningen/JVM) runs on the host and talks to the
   dockerised DB nodes via `--docker`, so the runner needs `lein` on PATH (it is
   not a mise tool — see Brewfile/shell.nix) plus the mise-managed `java`.
-* Two cadences in one workflow, selected by which cron fired
-  (`github.event.schedule`): the core topologies nightly, and the full set
-  including the heavier extended/fault suites weekly. A `suites`
-  `workflow_dispatch` input overrides the selection for manual runs.
+* Two suite tiers in one workflow, selected by the `suites` dispatch input: empty
+  runs the core topologies, the literal `full` adds the heavier extended/fault
+  suites, and any other value is passed through as an explicit suite list.
 * `store/` (histories, logs, results.edn, analysis) uploaded as an artifact on
   failure for offline triage; `just jepsen-summary` written to the job summary.
 """
@@ -42,33 +42,29 @@ from workflow_gen.helpers import (
     script,
     upload_artifact_step,
 )
-from workflow_gen.schema import Job, ScheduleTrigger, Step, Trigger, Workflow
+from workflow_gen.schema import Job, Step, Trigger, Workflow
 
 # Only the tools the harness needs on the host: `just` (recipes), `uv` (run.py is a
 # uv script), and `java` (Leiningen's runtime). No Rust toolchain — the server is
 # compiled inside Docker by Dockerfile.builder — so this stays a lean install.
 MISE_TOOLS = "just uv java"
 
-# Same x86 runner class as concurrency-nightly/fuzz. x86 (not the arm 8vcpu label)
-# keeps the tested architecture aligned with production and with the other CI jobs;
-# the whole run is one sequential build-then-suite loop, so extra cores buy little.
-RUNS_ON = "blacksmith-4vcpu-ubuntu-2404"
-
-# Off-the-hour + overnight-US, and distinct from the other nightly crons
-# (concurrency = 14 3). Core topologies every night; the full set (adding the
-# slower extended/fault suites) weekly on Sunday.
-NIGHTLY_CRON = "37 5 * * *"
-WEEKLY_CRON = "37 6 * * 0"
+# GitHub-hosted standard runner: free and unmetered on public repos, x86 (matching
+# production and the rest of CI). The whole run is one sequential build-then-suite
+# loop, so extra cores buy little.
+RUNS_ON = "ubuntu-latest"
 
 # Core suites: cover every `all`-suite test (single ∪ crash ∪ replication ∪ raft
 # == the `all` suite) including the issue's required `raft` + `replication`.
 CORE_SUITES = "single crash replication raft"
-# Weekly adds the topology-specific extended/fault-only suites that are intentionally
-# kept out of the per-PR/`all` tiers for runtime: raft-extended (clock/disk/slow-net/
-# memory nemeses on elle-rw-register), replication-extended (clock-skew/slow-network
-# on the replication topology), register-fault (Knossos register under pause/all +
-# the pinned replication register-partition).
-WEEKLY_SUITES = f"{CORE_SUITES} raft-extended replication-extended register-fault"
+# The `full` keyword adds the topology-specific extended/fault-only suites that are
+# intentionally kept out of the per-PR/`all` tiers for runtime: raft-extended
+# (clock/disk/slow-net/memory nemeses on elle-rw-register), replication-extended
+# (clock-skew/slow-network on the replication topology), register-fault (Knossos
+# register under pause/all + the pinned replication register-partition).
+FULL_SUITES = f"{CORE_SUITES} raft-extended replication-extended register-fault"
+# Sentinel accepted in the `suites` input as shorthand for FULL_SUITES.
+FULL_KEYWORD = "full"
 
 STORE_DIR = "testing/jepsen/frogdb/store"
 
@@ -76,8 +72,8 @@ STORE_DIR = "testing/jepsen/frogdb/store"
 def _suites_input() -> CommentedMap:
     inp = CommentedMap()
     inp["description"] = (
-        "Space-separated run.py suites to run (e.g. 'raft replication'). "
-        "Empty = core suites on manual dispatch."
+        "Space-separated run.py suites to run (e.g. 'raft replication'), or "
+        f"'{FULL_KEYWORD}' for core plus the extended/fault suites. Empty = core suites."
     )
     inp["required"] = False
     inp["default"] = SQ("")
@@ -90,7 +86,7 @@ def _install_lein_step() -> Step:
 
     Jepsen's control node runs `lein` on the host (run.py shells out to it), but
     Leiningen has no mise plugin (it lives in Brewfile/shell.nix for local dev) and
-    is not guaranteed to be baked into the Blacksmith image. The `stable` bootstrap
+    is not guaranteed to be baked into the runner image. The `stable` bootstrap
     script is JDK-version-agnostic and self-installs its uberjar on first `version`;
     `java` is already on PATH from the mise step. Guarded so a pre-baked lein is a
     no-op. `$HOME/.local/bin` is exported to `$GITHUB_PATH` for later steps.
@@ -123,24 +119,23 @@ def _run_suites_step() -> Step:
     point of a nightly signal. run.py exits nonzero on any FAIL/UNKNOWN verdict; we
     accumulate that and fail the step at the end so the job goes red while every suite
     still executes. Suite selection comes from env vars (not inline `${{ }}`) to keep
-    the untrusted dispatch input / schedule out of the command text.
+    the untrusted dispatch input out of the command text.
     """
     return Step(
         name="Run Jepsen suites",
         env=omap(
             SUITES_INPUT="${{ github.event.inputs.suites }}",
-            SCHEDULE="${{ github.event.schedule }}",
-            WEEKLY_CRON=WEEKLY_CRON,
+            FULL_KEYWORD=FULL_KEYWORD,
             CORE_SUITES=CORE_SUITES,
-            WEEKLY_SUITES=WEEKLY_SUITES,
+            FULL_SUITES=FULL_SUITES,
         ),
         run=script(
             """\
             set -uo pipefail
-            if [ -n "${SUITES_INPUT}" ]; then
+            if [ "${SUITES_INPUT}" = "${FULL_KEYWORD}" ]; then
+              suites="${FULL_SUITES}"
+            elif [ -n "${SUITES_INPUT}" ]; then
               suites="${SUITES_INPUT}"
-            elif [ "${SCHEDULE}" = "${WEEKLY_CRON}" ]; then
-              suites="${WEEKLY_SUITES}"
             else
               suites="${CORE_SUITES}"
             fi
@@ -189,10 +184,10 @@ def _summary_step() -> Step:
 def jepsen_nightly_workflow() -> Workflow:
     w = Workflow(
         name="Jepsen Nightly",
-        on=Trigger(
-            schedule=ScheduleTrigger(cron=[NIGHTLY_CRON, WEEKLY_CRON]),
-            workflow_dispatch_inputs=CommentedMap(suites=_suites_input()),
-        ),
+        # Manual dispatch only: the nightly and weekly crons are deliberately off.
+        # A core run is ~1.5-2h of runner time; dispatch it when the distributed
+        # layer actually changes.
+        on=Trigger(workflow_dispatch_inputs=CommentedMap(suites=_suites_input())),
     )
 
     w.job(
@@ -200,10 +195,10 @@ def jepsen_nightly_workflow() -> Workflow:
         Job(
             name="Nightly Jepsen Distributed-Correctness Suites",
             runs_on=RUNS_ON,
-            # Core nightly (single+crash+replication+raft) runs ~1.5-2h wall:
+            # A core run (single+crash+replication+raft) takes ~1.5-2h wall:
             # the in-Docker debug build (~20-30m on this box) + the sum of suite
             # time-limits (run.py `TESTS`) plus per-topology bring-up and checker
-            # time. The weekly full set adds ~20-30m of extended/fault suites. 360m
+            # time. The `full` suite set adds ~20-30m of extended/fault suites. 360m
             # matches concurrency-nightly and leaves generous margin for CI variance.
             timeout_minutes=360,
             steps=[
