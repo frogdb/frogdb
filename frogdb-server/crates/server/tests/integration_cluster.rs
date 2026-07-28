@@ -6829,6 +6829,278 @@ async fn test_cluster_epoch_increases_after_failover() {
     harness.shutdown_all().await;
 }
 
+/// Pins the deliberate `CLUSTER INFO` `cluster_current_epoch` vs. `CLUSTER
+/// NODES` per-node `config_epoch` relationship after a pure Raft
+/// re-election with **no** cluster topology change (no `CLUSTER FAILOVER`,
+/// no `MarkNodeFailed`, no `IncrementEpoch` -- this test issues none of
+/// them; only a leader kill, which is a Raft-internal event).
+///
+/// Issue 47: the original audit proposed asserting
+/// `INFO epoch <= max(NODES config_epoch)` after such a re-election. **That
+/// assertion is wrong and must never be reintroduced.**
+/// `cluster_current_epoch` is `max(replicated config_epoch, local Raft
+/// term)` (`fold_current_epoch` in `commands/cluster/mod.rs`), and every
+/// Raft election bumps the term regardless of whether any topology command
+/// committed -- so a re-election alone can push `cluster_current_epoch`
+/// above every per-node `config_epoch`. Redis has the same shape of
+/// divergence: `currentEpoch` may legitimately exceed every `configEpoch`
+/// after an election that reassigns no slots, and `redis-cli --cluster
+/// check`-style tooling flags epoch *collisions* (two nodes sharing a
+/// `configEpoch`), never epoch drift/exceedance.
+///
+/// The relationship that DOES hold, and is pinned here instead, is the
+/// reverse bound: `cluster_current_epoch` is structurally `>=` every
+/// per-node `config_epoch` (a node's own `config_epoch` is only ever set to
+/// a value claimed from the very counter `cluster_current_epoch` folds in),
+/// and this test demonstrates the fold pushing it strictly above the
+/// (unchanged) per-node epochs.
+#[tokio::test]
+async fn test_cluster_info_epoch_vs_nodes_epoch_after_reelection_no_topology_change() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+
+    let original_leader = harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let non_leader = *harness
+        .node_ids()
+        .iter()
+        .find(|&&id| id != original_leader)
+        .unwrap();
+
+    // Capture both endpoints from the same node before the re-election. No
+    // topology command (CLUSTER FAILOVER / MEET / ADDSLOTS / SET-CONFIG-EPOCH
+    // / ...) runs anywhere in this test, so no per-node config_epoch and no
+    // cluster-wide config_epoch can change here -- only the Raft term does.
+    let pre_info = parse_cluster_info(
+        &harness
+            .node(non_leader)
+            .unwrap()
+            .send("CLUSTER", &["INFO"])
+            .await,
+    )
+    .unwrap();
+    let pre_nodes = parse_cluster_nodes(
+        &harness
+            .node(non_leader)
+            .unwrap()
+            .send("CLUSTER", &["NODES"])
+            .await,
+    )
+    .unwrap();
+    let pre_max_node_epoch = pre_nodes.iter().map(|n| n.config_epoch).max().unwrap_or(0);
+
+    assert!(
+        pre_info.cluster_current_epoch >= pre_max_node_epoch,
+        "deliberate invariant: INFO's cluster_current_epoch must never be \
+         less than max(NODES config_epoch); pre INFO={}, pre max NODES={}",
+        pre_info.cluster_current_epoch,
+        pre_max_node_epoch
+    );
+
+    // Trigger a pure Raft re-election: kill the leader. This is a
+    // Raft-internal event, not a `ClusterCommand` -- no topology command is
+    // proposed by this test at any point.
+    harness.kill_node(original_leader).await;
+    harness
+        .wait_for_new_leader(original_leader, Duration::from_secs(15))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let survivor = *harness
+        .node_ids()
+        .iter()
+        .find(|&&id| id != original_leader)
+        .unwrap();
+    let post_info = parse_cluster_info(
+        &harness
+            .node(survivor)
+            .unwrap()
+            .send("CLUSTER", &["INFO"])
+            .await,
+    )
+    .unwrap();
+    let post_nodes = parse_cluster_nodes(
+        &harness
+            .node(survivor)
+            .unwrap()
+            .send("CLUSTER", &["NODES"])
+            .await,
+    )
+    .unwrap();
+    let post_max_node_epoch = post_nodes.iter().map(|n| n.config_epoch).max().unwrap_or(0);
+
+    // No topology change occurred: the raw per-node config_epoch bound must
+    // be unchanged by the re-election alone.
+    assert_eq!(
+        post_max_node_epoch, pre_max_node_epoch,
+        "a pure Raft re-election with no topology command must not change \
+         any per-node config_epoch: pre max={}, post max={}",
+        pre_max_node_epoch, post_max_node_epoch
+    );
+
+    // The deliberate bound still holds post-election...
+    assert!(
+        post_info.cluster_current_epoch >= post_max_node_epoch,
+        "deliberate invariant: INFO's cluster_current_epoch must never be \
+         less than max(NODES config_epoch); post INFO={}, post max NODES={}",
+        post_info.cluster_current_epoch,
+        post_max_node_epoch
+    );
+
+    // ...and it is free to exceed the per-node epochs purely from the Raft
+    // term fold, with zero topology change. Every node starts at
+    // config_epoch 0 (no epoch-bumping command has run), so any elected
+    // term (>= 1) strictly exceeds it -- this is the exact shape the naive
+    // `<=` assertion from the original audit would have rejected as a false
+    // regression.
+    assert!(
+        post_info.cluster_current_epoch > post_max_node_epoch,
+        "the term fold should push INFO's epoch strictly above the \
+         per-node config_epoch bound after a re-election: post INFO={}, \
+         post max NODES={}",
+        post_info.cluster_current_epoch,
+        post_max_node_epoch
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Monotonicity of `CLUSTER INFO`'s `cluster_current_epoch` across a real
+/// epoch-bumping topology event (`CLUSTER FAILOVER`), with the `>=`
+/// per-node-epoch bound (see the re-election test above) holding through
+/// the transition too.
+///
+/// Reuses the harness pattern from issue 16's `test_cluster_epoch_persists`:
+/// a real primary/replica pair so the replica can run a graceful (non-FORCE)
+/// `CLUSTER FAILOVER`, the only path that assigns a node its own nonzero
+/// `config_epoch`.
+///
+/// **`cluster_current_epoch` is monotonic but NOT strictly increasing across
+/// a topology event.** Because the reported value is
+/// `max(config_epoch, raft_term)` (`fold_current_epoch`), a `config_epoch`
+/// bump is *invisible* whenever the Raft term already dominates -- and that
+/// is not a corner case: in a freshly bootstrapped cluster the first
+/// election takes `raft_term` to 1 while `config_epoch` is still 0, so the
+/// first failover (`config_epoch` 0 -> 1) leaves `cluster_current_epoch` at
+/// 1 both before and after. Those are the exact values observed here while
+/// this test was written. Anything that needs to *detect* a topology change
+/// must read the raw per-node `config_epoch` from `CLUSTER NODES` (as issue
+/// 16's `test_cluster_epoch_persists` does), not `CLUSTER INFO`'s folded
+/// epoch. The strict `>` bound is therefore deliberately not asserted
+/// below; only non-decrease is.
+#[tokio::test]
+async fn test_cluster_info_epoch_monotonic_across_failover() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(2).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let primary_id = harness.node_ids()[0];
+    let replica_id = harness.add_replica(primary_id).await.unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    let replica = harness.node(replica_id).unwrap();
+    let pre_info = parse_cluster_info(&replica.send("CLUSTER", &["INFO"]).await).unwrap();
+    let pre_nodes = parse_cluster_nodes(&replica.send("CLUSTER", &["NODES"]).await).unwrap();
+    let pre_max_node_epoch = pre_nodes.iter().map(|n| n.config_epoch).max().unwrap_or(0);
+
+    assert!(
+        pre_info.cluster_current_epoch >= pre_max_node_epoch,
+        "deliberate invariant must hold before the failover too: \
+         pre INFO={}, pre max NODES={}",
+        pre_info.cluster_current_epoch,
+        pre_max_node_epoch
+    );
+
+    // Promote the replica: this is the only path (Failover, commands.rs)
+    // that sets a node's *own* config_epoch to a nonzero value.
+    let failover_resp = replica.send("CLUSTER", &["FAILOVER"]).await;
+    assert!(
+        !is_error(&failover_resp),
+        "CLUSTER FAILOVER on a healthy replica should succeed, got: {:?}",
+        failover_resp
+    );
+
+    // Wait for the promotion to commit and this node's own config_epoch to
+    // reflect it (mirrors test_cluster_epoch_persists's poll).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let nodes = parse_cluster_nodes(&replica.send("CLUSTER", &["NODES"]).await).unwrap();
+        let myself = nodes.iter().find(|n| n.is_myself()).unwrap();
+        if myself.is_master() && myself.config_epoch > 0 {
+            break;
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!(
+                "Promoted replica never reported a nonzero config_epoch \
+                 (last seen: master={}, config_epoch={})",
+                myself.is_master(),
+                myself.config_epoch
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let post_info = parse_cluster_info(&replica.send("CLUSTER", &["INFO"]).await).unwrap();
+    let post_nodes = parse_cluster_nodes(&replica.send("CLUSTER", &["NODES"]).await).unwrap();
+    let post_max_node_epoch = post_nodes.iter().map(|n| n.config_epoch).max().unwrap_or(0);
+
+    // The raw per-node epoch is the signal that actually moves: the failover
+    // bumped the promoted node's own config_epoch. This is what an operator
+    // (or `redis-cli --cluster check`-style tooling) must read.
+    assert!(
+        post_max_node_epoch > pre_max_node_epoch,
+        "a graceful CLUSTER FAILOVER must bump the promoted node's raw \
+         config_epoch: pre max={}, post max={}",
+        pre_max_node_epoch,
+        post_max_node_epoch
+    );
+
+    // Monotonicity of the folded epoch: non-decreasing, never strictly
+    // increasing-by-construction. Both inputs to `max` are themselves
+    // monotonic (the replicated config_epoch counter and the Raft term), so
+    // the fold can only ever move forward.
+    assert!(
+        post_info.cluster_current_epoch >= pre_info.cluster_current_epoch,
+        "INFO's cluster_current_epoch must be monotonic (non-decreasing) \
+         across a failover: pre={}, post={}",
+        pre_info.cluster_current_epoch,
+        post_info.cluster_current_epoch
+    );
+
+    // ...but it is explicitly allowed to stay put while a config_epoch bump
+    // happens underneath it (see this test's doc comment). Asserting a
+    // strict `>` here would be asserting a guarantee the fold does not make;
+    // it fails on entirely correct behavior whenever raft_term >= the new
+    // config_epoch, which is the common case on a young cluster.
+    assert!(
+        post_info.cluster_current_epoch >= post_max_node_epoch,
+        "deliberate invariant must hold across the epoch-bumping event too: \
+         post INFO={}, post max NODES={}",
+        post_info.cluster_current_epoch,
+        post_max_node_epoch
+    );
+
+    harness.shutdown_all().await;
+}
+
 // ============================================================================
 // Tier 18: Writable Cluster Under Failover Stress
 // ============================================================================

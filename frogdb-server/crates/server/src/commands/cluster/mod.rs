@@ -178,6 +178,45 @@ impl Command for ClusterCommand {
     }
 }
 
+/// Fold the cluster-wide replicated config epoch with the local Raft term
+/// into the single value `CLUSTER INFO` reports as `cluster_current_epoch`.
+///
+/// `config_epoch` is `ClusterState`'s own monotonic counter (bumped by
+/// `IncrementEpoch`, `Failover`, and `MarkNodeFailed`); `raft_term` is the
+/// local Raft leadership term (bumped by every election, with or without a
+/// cluster topology change).
+///
+/// This fold is a deliberate **divergence from Redis**, whose `currentEpoch`
+/// is agreed by gossip and bumped only by epoch-owning commands; Redis
+/// Cluster has no leader-election term to fold in. Two consequences follow,
+/// and both are intentional:
+///
+/// 1. A Raft re-election alone -- with no `Failover`/`MarkNodeFailed`/
+///    `IncrementEpoch` committed -- can push `cluster_current_epoch` above
+///    every per-node `config_epoch` reported by `CLUSTER NODES`. (Redis's
+///    `currentEpoch` can likewise exceed every `configEpoch` after an
+///    election that reassigns no slots, so the *shape* of the exceedance is
+///    familiar even though the mechanism differs.) Because `config_epoch` is
+///    itself always `>=` every per-node `config_epoch` -- a node's own
+///    `config_epoch` is only ever set to a value it claims from this counter
+///    at the moment it is bumped -- the fold guarantees
+///    `cluster_current_epoch >= max(per-node config_epoch)` always, never
+///    the reverse `<=` bound. Do NOT assert
+///    `cluster_current_epoch <= max(NODES config_epoch)`: that bound does not
+///    hold, and it failing is not a bug.
+/// 2. Conversely, a real topology event can be **invisible** here: bumping
+///    `config_epoch` from 0 to 1 while `raft_term` is already 1 leaves the
+///    reported value unchanged. `cluster_current_epoch` is therefore
+///    monotonic but not a reliable change-detector -- read the raw per-node
+///    `config_epoch` from `CLUSTER NODES` for that.
+///
+/// See `.scratch/testing-improvements/issues/47-epoch-fold-observability.md`
+/// and the "current epoch folds in the Raft term" section of
+/// `website/src/content/docs/architecture/clustering.md`.
+fn fold_current_epoch(config_epoch: frogdb_cluster::ConfigEpoch, raft_term: u64) -> u64 {
+    config_epoch.max(raft_term)
+}
+
 /// CLUSTER INFO - Returns cluster state information.
 fn cluster_info(ctx: &mut CommandContext) -> Result<Response, CommandError> {
     // Use ClusterState if available, otherwise return standalone mode info
@@ -241,10 +280,10 @@ fn cluster_info(ctx: &mut CommandContext) -> Result<Response, CommandError> {
             "ok" // No Raft = standalone mode, always ok
         };
 
-        // Effective epoch: max of config epoch and Raft term.  Raft leader
-        // elections bump the term, which represents a cluster topology event
-        // (new coordinator), matching Redis's epoch-on-failover semantics.
-        let effective_epoch = snapshot.config_epoch.max(raft_term);
+        // Effective epoch: fold of config epoch and Raft term. See
+        // `fold_current_epoch` for the invariants this deliberately does and
+        // does not provide.
+        let effective_epoch = fold_current_epoch(snapshot.config_epoch, raft_term);
 
         let info = format!(
             "\
@@ -691,5 +730,50 @@ mod tests {
         assert!(as_arr(field(shard1, "slots")).is_empty());
         let p2 = as_arr(&as_arr(field(shard1, "nodes"))[0]);
         assert_eq!(as_int(field(p2, "replication-offset")), 0);
+    }
+
+    // Pins `fold_current_epoch`'s `max(config_epoch, raft_term)` output for
+    // issue 47 -- see the doc comment on the function for why the original
+    // audit's `INFO epoch <= max(NODES config_epoch)` proposal was refuted
+    // and replaced with this deliberate-fold pinning instead.
+
+    #[test]
+    fn test_fold_current_epoch_raft_term_exceeds_config_epoch() {
+        // A Raft re-election with no topology change: term outruns the
+        // replicated config epoch. This is the exact scenario the original
+        // (refuted) audit claim got wrong -- the fold legitimately reports
+        // the higher term, not the config epoch.
+        assert_eq!(fold_current_epoch(3, 7), 7);
+    }
+
+    #[test]
+    fn test_fold_current_epoch_config_epoch_exceeds_raft_term() {
+        // A stable Raft leader (low term) with several topology events
+        // (failovers/epoch bumps) already committed.
+        assert_eq!(fold_current_epoch(9, 2), 9);
+    }
+
+    #[test]
+    fn test_fold_current_epoch_equal_values() {
+        assert_eq!(fold_current_epoch(5, 5), 5);
+    }
+
+    #[test]
+    fn test_fold_current_epoch_both_zero() {
+        // Fresh, unbootstrapped cluster: no epoch bumps, no elections yet.
+        assert_eq!(fold_current_epoch(0, 0), 0);
+    }
+
+    #[test]
+    fn test_fold_current_epoch_masks_config_epoch_bump_under_higher_term() {
+        // The lossy direction of the fold, pinned deliberately: on a young
+        // cluster the first election takes raft_term to 1 while config_epoch
+        // is still 0, so the first real topology event (config_epoch 0 -> 1)
+        // produces *no* change in the reported cluster_current_epoch. This is
+        // exactly what `test_cluster_info_epoch_monotonic_across_failover`
+        // observes end-to-end, and it is why that test asserts non-decrease
+        // rather than a strict increase.
+        assert_eq!(fold_current_epoch(0, 1), 1);
+        assert_eq!(fold_current_epoch(1, 1), 1);
     }
 }
