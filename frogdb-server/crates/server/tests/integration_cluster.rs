@@ -10754,3 +10754,273 @@ async fn test_rapid_writes_across_all_nodes() {
 
     harness.shutdown_all().await;
 }
+
+// ============================================================================
+// WAIT in cluster mode (testing-gap issue 37)
+// ============================================================================
+//
+// Pinned contract (see the issue's `## Resolution` for the full write-up):
+//
+// FrogDB's `WAIT numreplicas timeout` is served by the connection-level
+// `WaitCoordinator`, which lives on the node's `PrimaryReplicationHandler`
+// (`server/src/connection/blocking.rs::handle_wait_command`). That handler is
+// constructed *only* when the node's replication role is the literal string
+// `"primary"` (`server/src/server/replication_init.rs:57`,
+// `config/src/replication.rs::is_primary`). A cluster node started by the test
+// harness keeps the default replication role `"standalone"` — cluster
+// membership and the *cluster* master/replica role are tracked separately, in
+// Raft-backed cluster state, and never set `replication.role = "primary"`.
+//
+// Consequences, all pinned below:
+//   * `handle_wait_command` finds `primary_replication_handler == None` and
+//     takes the standalone early-return, replying `Integer(0)` immediately for
+//     ANY `numreplicas`/`timeout` — it never blocks, never solicits acks, and
+//     never counts a shard's cluster replicas. Cluster-mode WAIT is, in effect,
+//     unwired: no replica ever counts toward the quorum.
+//   * A cluster *replica* node carries the data-path `is_replica` flag, so WAIT
+//     is rejected there with the standard replica error (before arg parsing).
+//   * Across a failover, WAIT still never hangs. A promoted node's data-path
+//     role is not re-installed (known findings 34/61: promoted nodes can't
+//     serve PSYNC / runtime resync staged-not-installed), so a replica promoted
+//     in *cluster state* keeps its `is_replica` data-path flag and continues to
+//     reject WAIT — while surviving cluster primaries keep returning 0.
+//
+// This is a deliberate, documented divergence from standalone WAIT (where the
+// coordinator blocks up to `timeout` and returns the real acked count) and from
+// Redis cluster WAIT (which counts the shard-local replica set). The tests pin
+// the *actual* behavior so a future wiring of cluster WAIT trips them loudly.
+
+/// Extract the integer from a `WAIT` reply, or panic with the actual response.
+fn wait_reply_count(resp: &frogdb_protocol::Response) -> i64 {
+    match resp {
+        frogdb_protocol::Response::Integer(n) => *n,
+        other => panic!("expected WAIT to reply with an integer, got {other:?}"),
+    }
+}
+
+/// WAIT on a cluster primary returns 0 immediately for every `numreplicas`,
+/// even with a live cluster replica attached to the shard being written.
+///
+/// Acceptance criteria (issue 37):
+///   * ack count matches the *actual counted* replica set — which in cluster
+///     mode is always 0 (no replica is wired into the WAIT coordinator), not
+///     the cluster-wide or shard-local replica count;
+///   * `WAIT 0` returns immediately;
+///   * `numreplicas` exceeding the counted replica set does not hang past the
+///     timeout — here it does not even reach the timeout, returning 0 at once.
+///
+/// The assertions bound each call *well under its own timeout* so a regression
+/// that actually engaged a blocking coordinator (returning the same 0 only
+/// after idling out the timeout) would be caught, not masked.
+#[tokio::test]
+async fn test_wait_in_cluster_returns_zero_immediately() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(2).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // Attach a real cluster replica to the first primary's shard.
+    let primary_id = harness.node_ids()[0];
+    let _replica_id = harness.add_replica(primary_id).await.unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // Write a key into a slot this primary owns (no MOVED), then let any
+    // replication settle so a *working* coordinator would have acks to count.
+    let primary = harness.node(primary_id).unwrap();
+    let nodes = parse_cluster_nodes(&primary.send("CLUSTER", &["NODES"]).await).unwrap();
+    let myself = nodes.iter().find(|n| n.is_myself()).unwrap();
+    assert!(
+        myself.is_master() && !myself.slots.is_empty(),
+        "test setup: node_ids()[0] must be a slot-owning primary, got {:?}",
+        myself.flags
+    );
+    let key = key_for_slot(myself.slots[0].0);
+    assert!(
+        !is_error(&primary.send("SET", &[&key, "wait-cluster"]).await),
+        "SET on the owning primary should succeed"
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Each case: (numreplicas, timeout_ms). A blocking implementation with 0
+    // counted replicas would idle for `timeout_ms` on the >0 cases; assert we
+    // return in well under half of it. Timeouts are kept generous enough that
+    // the half-timeout bound stays far above a debug-build round-trip, so the
+    // assertion measures "did not block", not scheduler noise.
+    for (num, timeout_ms) in [("0", 1000u64), ("1", 2000), ("2", 1500)] {
+        let start = std::time::Instant::now();
+        let resp = primary.send("WAIT", &[num, &timeout_ms.to_string()]).await;
+        let elapsed = start.elapsed();
+        assert_eq!(
+            wait_reply_count(&resp),
+            0,
+            "cluster WAIT {num} {timeout_ms}: no replica is wired into the WAIT \
+             coordinator, so the count is always 0"
+        );
+        assert!(
+            elapsed < Duration::from_millis(timeout_ms / 2),
+            "cluster WAIT {num} {timeout_ms} must return immediately (unwired \
+             fast-path), not block toward its timeout; took {elapsed:?}"
+        );
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// WAIT on a cluster *replica* node is rejected with the replica error, before
+/// argument parsing — the data-path `is_replica` flag gates it exactly as in
+/// standalone replica mode.
+#[tokio::test]
+async fn test_wait_rejected_on_cluster_replica() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(2).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let primary_id = harness.node_ids()[0];
+    let replica_id = harness.add_replica(primary_id).await.unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    let replica = harness.node(replica_id).unwrap();
+    // Even with obviously-invalid args, the replica rejection wins first.
+    let resp = replica.send("WAIT", &["0", "100"]).await;
+    assert!(
+        is_error(&resp),
+        "WAIT on a cluster replica must be rejected, got {resp:?}"
+    );
+    let msg = get_error_message(&resp).unwrap_or("");
+    assert!(
+        msg.contains("replica"),
+        "WAIT-on-replica error should mention 'replica', got: {msg}"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// WAIT never hangs across a failover of the shard being written to.
+///
+/// The owning primary is killed; the cluster promotes its replica in *cluster
+/// state* (CLUSTER NODES reports the replica as master). Pinned semantics:
+///   * WAIT on the promoted node still returns *immediately* — and, because a
+///     promotion is staged in cluster state but not re-installed on the data
+///     path (known findings 34/61), the node keeps its `is_replica` flag and so
+///     WAIT is still rejected there rather than served;
+///   * WAIT on the surviving sibling primary keeps returning 0 immediately.
+///
+/// Either way WAIT resolves in milliseconds, never hanging past the requested
+/// timeout — the core failover-safety property this test guards.
+#[tokio::test]
+async fn test_wait_in_cluster_does_not_hang_across_failover() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(2).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let primary_id = harness.node_ids()[0];
+    let replica_id = harness.add_replica(primary_id).await.unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // Write into a slot the doomed primary owns.
+    let primary = harness.node(primary_id).unwrap();
+    let nodes = parse_cluster_nodes(&primary.send("CLUSTER", &["NODES"]).await).unwrap();
+    let myself = nodes.iter().find(|n| n.is_myself()).unwrap();
+    let key = key_for_slot(myself.slots[0].0);
+    let _ = primary.send("SET", &[&key, "pre-failover"]).await;
+
+    // Kill the owning primary → the cluster reacts (leader election + the
+    // replica's cluster-state promotion).
+    harness.kill_node(primary_id).await;
+    let _ = harness
+        .wait_for_new_leader(primary_id, Duration::from_secs(20))
+        .await;
+
+    // Poll until the replica reports itself master in cluster state (bounded),
+    // so we exercise WAIT *after* the promotion is visible.
+    let replica = harness.node(replica_id).unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let nodes = parse_cluster_nodes(&replica.send("CLUSTER", &["NODES"]).await).unwrap();
+        let m = nodes.iter().find(|n| n.is_myself()).unwrap();
+        if m.is_master() || tokio::time::Instant::now() > deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // WAIT on the promoted node resolves immediately (does not hang), and is
+    // *still* the replica rejection: promotion is staged in cluster state but
+    // the data-path role is never re-installed (findings 34/61), so the node
+    // keeps `is_replica = true`. Pinning the rejection (rather than accepting
+    // either answer) is what makes this test notice a promotion that starts
+    // installing the data-path role — at which point this assertion should be
+    // updated to the served-WAIT contract.
+    let start = std::time::Instant::now();
+    let resp = replica.send("WAIT", &["1", "1500"]).await;
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(750),
+        "WAIT on the promoted node must not hang across failover; took {elapsed:?}"
+    );
+    assert!(
+        is_error(&resp),
+        "the promoted node keeps its data-path replica role, so WAIT is still \
+         rejected there; got {resp:?}"
+    );
+    assert!(
+        get_error_message(&resp).unwrap_or("").contains("replica"),
+        "post-failover WAIT rejection should still be the replica error, got: {:?}",
+        get_error_message(&resp)
+    );
+
+    // A surviving sibling primary keeps answering WAIT with 0, immediately.
+    let sibling = harness
+        .node_ids()
+        .into_iter()
+        .find(|&id| id != primary_id && id != replica_id)
+        .expect("2-primary cluster + 1 replica must leave a surviving sibling primary");
+    let start = std::time::Instant::now();
+    let resp = harness
+        .node(sibling)
+        .unwrap()
+        .send("WAIT", &["1", "1500"])
+        .await;
+    let elapsed = start.elapsed();
+    // The sibling is a cluster primary (standalone replication role) → 0.
+    assert_eq!(
+        wait_reply_count(&resp),
+        0,
+        "surviving cluster primary still serves WAIT from the unwired fast path"
+    );
+    assert!(
+        elapsed < Duration::from_millis(750),
+        "WAIT on the surviving primary must not hang; took {elapsed:?}"
+    );
+
+    harness.shutdown_all().await;
+}
