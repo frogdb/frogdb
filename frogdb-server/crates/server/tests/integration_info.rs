@@ -5,7 +5,7 @@
 //! keyspace hit/miss counters, and the Persistence section's real WAL fields
 //! (present and live when persistence is enabled, honestly absent when not).
 
-use crate::common::response_helpers::{assert_ok, unwrap_bulk};
+use crate::common::response_helpers::{assert_error_prefix, assert_ok, unwrap_bulk};
 use crate::common::test_server::{TestServer, TestServerConfig};
 use frogdb_protocol::Response;
 
@@ -39,6 +39,16 @@ fn field_u64(info: &str, name: &str) -> u64 {
         .unwrap_or_else(|| panic!("field {name} missing from INFO:\n{info}"))
         .parse()
         .unwrap_or_else(|v| panic!("field {name} not numeric: {v:?}"))
+}
+
+/// `errorstat_<PREFIX>:count=N`, panicking if the prefix is absent.
+fn errorstat_count(info: &str, prefix: &str) -> u64 {
+    let line_prefix = format!("errorstat_{prefix}:count=");
+    info.lines()
+        .find_map(|l| l.strip_prefix(line_prefix.as_str()))
+        .unwrap_or_else(|| panic!("errorstat_{prefix} missing from INFO:\n{info}"))
+        .parse()
+        .unwrap_or_else(|v| panic!("errorstat_{prefix} count not numeric: {v:?}"))
 }
 
 // ============================================================================
@@ -277,5 +287,100 @@ async fn info_memory_reports_fleet_wide_usage() {
     assert!(
         used >= 20 * 2048,
         "used_memory must cover every shard's data ({used} bytes):\n{info}"
+    );
+}
+
+// ============================================================================
+// Errorstats / commandstats: rejected vs. failed call accounting (task 44)
+//
+// TCL-style ports of the individual upstream scenarios (WRONGTYPE, arity,
+// NOGROUP, NOPERM, OOM, AUTH, MULTI/EXEC, EVALSHA/NOSCRIPT) live in
+// `redis-regression/tests/info_tcl.rs`, alongside the prior-art
+// `tcl_errors_stats_for_geoadd` test in `introspection2_tcl.rs`. The tests
+// below are the plain e2e integration-level pins the issue asked for,
+// requesting the combined `INFO all` render exactly once per test.
+// ============================================================================
+
+/// `errorstat_<PREFIX>:count` increments per error prefix, and a WRONGTYPE
+/// error is recorded as a failed call (not rejected).
+#[tokio::test]
+async fn info_errorstats_wrongtype_increments_failed_calls() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    assert_ok(&client.command(&["SET", "wrongtype:key", "bar"]).await);
+    let resp = client.command(&["LPUSH", "wrongtype:key", "x"]).await;
+    assert_error_prefix(&resp, "WRONGTYPE");
+
+    let info = info_text(&mut client, &["all"]).await;
+    assert_eq!(
+        errorstat_count(&info, "WRONGTYPE"),
+        1,
+        "errorstat_WRONGTYPE:count=1:\n{info}"
+    );
+    let cmdstat_lpush_line = info
+        .lines()
+        .find(|l| l.starts_with("cmdstat_lpush:"))
+        .unwrap_or_else(|| panic!("cmdstat_lpush missing:\n{info}"));
+    assert!(
+        cmdstat_lpush_line.contains("failed_calls=1"),
+        "{cmdstat_lpush_line}"
+    );
+    assert!(
+        cmdstat_lpush_line.contains("rejected_calls=0"),
+        "{cmdstat_lpush_line}"
+    );
+}
+
+/// A wrong-arity error on a known command is a rejected call, not a failed
+/// one: `rejected_calls` increments, `failed_calls` stays 0.
+#[tokio::test]
+async fn info_errorstats_arity_error_increments_rejected_calls() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let resp = client.command(&["SET", "onlyonearg"]).await;
+    assert_error_prefix(&resp, "ERR");
+
+    let info = info_text(&mut client, &["all"]).await;
+    let cmdstat_set_line = info
+        .lines()
+        .find(|l| l.starts_with("cmdstat_set:"))
+        .unwrap_or_else(|| panic!("cmdstat_set missing:\n{info}"));
+    assert!(
+        cmdstat_set_line.contains("rejected_calls=1"),
+        "{cmdstat_set_line}"
+    );
+    assert!(
+        cmdstat_set_line.contains("failed_calls=0"),
+        "{cmdstat_set_line}"
+    );
+}
+
+/// `total_error_replies` reflects the sum of call counts across every error
+/// type, not the number of distinct types.
+#[tokio::test]
+async fn info_errorstats_total_error_replies_sums_across_types() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    assert_ok(&client.command(&["SET", "sum:key", "bar"]).await);
+    assert_error_prefix(
+        &client.command(&["LPUSH", "sum:key", "x"]).await,
+        "WRONGTYPE",
+    );
+    assert_error_prefix(
+        &client.command(&["LPUSH", "sum:key", "y"]).await,
+        "WRONGTYPE",
+    );
+    assert_error_prefix(&client.command(&["SET", "onlyonearg"]).await, "ERR");
+
+    let info = info_text(&mut client, &["all"]).await;
+    assert_eq!(errorstat_count(&info, "WRONGTYPE"), 2, "{info}");
+    assert_eq!(errorstat_count(&info, "ERR"), 1, "{info}");
+    assert_eq!(
+        field_u64(&info, "total_error_replies"),
+        3,
+        "total_error_replies must be the sum across all error types, not the type count:\n{info}"
     );
 }

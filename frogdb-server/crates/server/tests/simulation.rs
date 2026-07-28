@@ -5422,6 +5422,26 @@ async fn cluster_node_flags(
     Ok(None)
 }
 
+/// Read `CLUSTER INFO` from `observer_host` and return the parsed `u64` value of
+/// `field` (e.g. `"cluster_slots_fail"`), or `None` if the field is missing.
+/// Format is `key:value\r\n` lines (see `commands/cluster/mod.rs::cluster_info`).
+async fn cluster_info_field(observer_host: &str, field: &str) -> std::io::Result<Option<u64>> {
+    let ip = turmoil::lookup(observer_host);
+    let mut conn = RespConn::connect((ip, SERVER_PORT)).await?;
+    let text = match conn.cmd(&[b"CLUSTER", b"INFO"]).await? {
+        RespValue::Bulk(Some(b)) => String::from_utf8_lossy(&b).into_owned(),
+        other => return Err(std::io::Error::other(format!("CLUSTER INFO: {other:?}"))),
+    };
+    for line in text.lines() {
+        if let Some((key, value)) = line.split_once(':')
+            && key == field
+        {
+            return Ok(value.trim().parse().ok());
+        }
+    }
+    Ok(None)
+}
+
 /// One seeded run of the asymmetric-partition false-failover scenario (issue 18).
 ///
 /// The gap under test: failure detection is *leader-only* — only the Raft leader
@@ -5453,6 +5473,11 @@ async fn cluster_node_flags(
 ///    replica-less topology; the write-loss/split-brain bound is *zero* here).
 /// 4. On heal the leader re-probes `victim`, commits `MarkNodeRecovered`, and the
 ///    `FAIL` flag clears.
+/// 5. (issue 36) While `victim` is FAIL-flagged, `CLUSTER INFO`'s granular slot
+///    accounting reflects it: `cluster_slots_fail > 0` and `cluster_slots_ok <
+///    cluster_slots_assigned`, observed from `third`.
+/// 6. (issue 36) After heal/recovery, `cluster_slots_ok` returns to the full
+///    assigned count and `cluster_slots_fail` returns to 0.
 fn run_cluster_asymmetric_partition_false_failover(seed: u64) {
     use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
@@ -5551,6 +5576,30 @@ fn run_cluster_asymmetric_partition_false_failover(seed: u64) {
              (leader-only FD false positive did not fire)"
         );
 
+        // Assertion 5 (issue 36): CLUSTER INFO's granular slot-health fields
+        // reflect the FAIL-flagged victim's ownership — `cluster_slots_fail`
+        // must be > 0 and `cluster_slots_ok` must drop below
+        // `cluster_slots_assigned` while the victim still owns its slot.
+        let slots_assigned = cluster_info_field(CLUSTER_HOSTS[third], "cluster_slots_assigned")
+            .await?
+            .unwrap_or(0);
+        let slots_fail_during = cluster_info_field(CLUSTER_HOSTS[third], "cluster_slots_fail")
+            .await?
+            .unwrap_or(0);
+        let slots_ok_during = cluster_info_field(CLUSTER_HOSTS[third], "cluster_slots_ok")
+            .await?
+            .unwrap_or(0);
+        assert!(
+            slots_fail_during > 0,
+            "seed {seed}: cluster_slots_fail should be > 0 while the victim (a slot owner) \
+             is FAIL-flagged, got {slots_fail_during}"
+        );
+        assert!(
+            slots_ok_during < slots_assigned,
+            "seed {seed}: cluster_slots_ok ({slots_ok_during}) should be less than \
+             cluster_slots_assigned ({slots_assigned}) while a slot-owning primary is FAIL"
+        );
+
         // Assertion 3 (write half): the FAIL-flagged victim is still client-reachable
         // and accepts a write — it keeps quorum via `third`, so the self-fence never
         // arms. Talk to the victim directly (client path is unaffected by the
@@ -5598,6 +5647,26 @@ fn run_cluster_asymmetric_partition_false_failover(seed: u64) {
         assert!(
             recovered,
             "seed {seed}: FAIL flag never cleared after heal (no MarkNodeRecovered)"
+        );
+
+        // Assertion 6 (issue 36 recovery): once the FAIL flag clears,
+        // cluster_slots_ok returns to the full assigned count and
+        // cluster_slots_fail returns to 0.
+        let slots_ok_after = cluster_info_field(CLUSTER_HOSTS[third], "cluster_slots_ok")
+            .await?
+            .unwrap_or(0);
+        let slots_fail_after = cluster_info_field(CLUSTER_HOSTS[third], "cluster_slots_fail")
+            .await?
+            .unwrap_or(0);
+        assert_eq!(
+            slots_ok_after, slots_assigned,
+            "seed {seed}: cluster_slots_ok should return to the full assigned count \
+             ({slots_assigned}) after recovery, got {slots_ok_after}"
+        );
+        assert_eq!(
+            slots_fail_after, 0,
+            "seed {seed}: cluster_slots_fail should return to 0 after recovery, got \
+             {slots_fail_after}"
         );
 
         // Assertion 3 (durability half): the in-partition write survived the whole

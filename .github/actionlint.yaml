@@ -3,10 +3,11 @@
 #
 # Register Blacksmith runner labels so actionlint does not flag them as unknown
 # `runs-on:` values. See https://docs.blacksmith.sh/blacksmith-runners/overview#runner-tags
+#
+# Blacksmith is used ONLY by the testbox workflow. Every other workflow runs on
+# GitHub-hosted `ubuntu-latest`, which is free and unmetered on public repos.
 self-hosted-runner:
   labels:
-    - blacksmith-2vcpu-ubuntu-2404
-    - blacksmith-4vcpu-ubuntu-2404
     # Testbox runners (.github/workflows/test-unit-tests-testbox.yml)
     - blacksmith-8vcpu-ubuntu-2404-arm
     - blacksmith-16vcpu-ubuntu-2404-arm

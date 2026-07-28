@@ -25,6 +25,41 @@ use frogdb_protocol::Response;
 // CLUSTER - Cluster management command
 // ============================================================================
 
+/// Per-slot health breakdown for `CLUSTER INFO`'s `cluster_slots_{ok,pfail,fail}`
+/// fields, mirroring Redis semantics: every assigned slot is counted exactly
+/// once, bucketed by the FAIL/PFAIL state of the node that currently owns it
+/// (`fail` takes precedence over `pfail`, matching `wire::node_health`).
+/// Slots owned by a node absent from `snapshot.nodes` (should not happen in
+/// practice) are conservatively treated as ok rather than silently dropped.
+///
+/// **PFAIL is structurally supported but never produced today.** FrogDB has no
+/// gossip-based suspicion phase: failure detection is the Raft leader's
+/// single-observer TCP probe, which commits `MarkNodeFailed` (setting
+/// `flags.fail`) directly -- no production path ever sets `flags.pfail` to
+/// `true` (`commands.rs` only ever clears it, in `MarkNodeRecovered`).
+/// `cluster_slots_pfail` therefore reports a *derived* 0 rather than a
+/// hardcoded one: it is accurate because no node is ever PFAIL, and it will
+/// start reporting real counts for free if a suspicion phase is ever added.
+/// See `.scratch/testing-improvements/issues/36-cluster-slots-fail-accounting.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct SlotHealthCounts {
+    ok: u16,
+    pfail: u16,
+    fail: u16,
+}
+
+fn count_slot_health(snapshot: &frogdb_cluster::ClusterSnapshot) -> SlotHealthCounts {
+    let mut counts = SlotHealthCounts::default();
+    for owner in snapshot.slot_assignment.values() {
+        match snapshot.nodes.get(owner) {
+            Some(node) if node.flags.fail => counts.fail += 1,
+            Some(node) if node.flags.pfail => counts.pfail += 1,
+            _ => counts.ok += 1,
+        }
+    }
+    counts
+}
+
 /// Get the local node's replication offset from Raft metrics or replication tracker.
 fn local_replication_offset(ctx: &CommandContext) -> i64 {
     if let Some(raft) = ctx.raft {
@@ -178,6 +213,45 @@ impl Command for ClusterCommand {
     }
 }
 
+/// Fold the cluster-wide replicated config epoch with the local Raft term
+/// into the single value `CLUSTER INFO` reports as `cluster_current_epoch`.
+///
+/// `config_epoch` is `ClusterState`'s own monotonic counter (bumped by
+/// `IncrementEpoch`, `Failover`, and `MarkNodeFailed`); `raft_term` is the
+/// local Raft leadership term (bumped by every election, with or without a
+/// cluster topology change).
+///
+/// This fold is a deliberate **divergence from Redis**, whose `currentEpoch`
+/// is agreed by gossip and bumped only by epoch-owning commands; Redis
+/// Cluster has no leader-election term to fold in. Two consequences follow,
+/// and both are intentional:
+///
+/// 1. A Raft re-election alone -- with no `Failover`/`MarkNodeFailed`/
+///    `IncrementEpoch` committed -- can push `cluster_current_epoch` above
+///    every per-node `config_epoch` reported by `CLUSTER NODES`. (Redis's
+///    `currentEpoch` can likewise exceed every `configEpoch` after an
+///    election that reassigns no slots, so the *shape* of the exceedance is
+///    familiar even though the mechanism differs.) Because `config_epoch` is
+///    itself always `>=` every per-node `config_epoch` -- a node's own
+///    `config_epoch` is only ever set to a value it claims from this counter
+///    at the moment it is bumped -- the fold guarantees
+///    `cluster_current_epoch >= max(per-node config_epoch)` always, never
+///    the reverse `<=` bound. Do NOT assert
+///    `cluster_current_epoch <= max(NODES config_epoch)`: that bound does not
+///    hold, and it failing is not a bug.
+/// 2. Conversely, a real topology event can be **invisible** here: bumping
+///    `config_epoch` from 0 to 1 while `raft_term` is already 1 leaves the
+///    reported value unchanged. `cluster_current_epoch` is therefore
+///    monotonic but not a reliable change-detector -- read the raw per-node
+///    `config_epoch` from `CLUSTER NODES` for that.
+///
+/// See `.scratch/testing-improvements/issues/47-epoch-fold-observability.md`
+/// and the "current epoch folds in the Raft term" section of
+/// `website/src/content/docs/architecture/clustering.md`.
+fn fold_current_epoch(config_epoch: frogdb_cluster::ConfigEpoch, raft_term: u64) -> u64 {
+    config_epoch.max(raft_term)
+}
+
 /// CLUSTER INFO - Returns cluster state information.
 fn cluster_info(ctx: &mut CommandContext) -> Result<Response, CommandError> {
     // Use ClusterState if available, otherwise return standalone mode info
@@ -241,18 +315,24 @@ fn cluster_info(ctx: &mut CommandContext) -> Result<Response, CommandError> {
             "ok" // No Raft = standalone mode, always ok
         };
 
-        // Effective epoch: max of config epoch and Raft term.  Raft leader
-        // elections bump the term, which represents a cluster topology event
-        // (new coordinator), matching Redis's epoch-on-failover semantics.
-        let effective_epoch = snapshot.config_epoch.max(raft_term);
+        // Effective epoch: fold of config epoch and Raft term. See
+        // `fold_current_epoch` for the invariants this deliberately does and
+        // does not provide.
+        let effective_epoch = fold_current_epoch(snapshot.config_epoch, raft_term);
+
+        // Real per-slot FAIL/PFAIL accounting: a slot only counts as `ok` when
+        // its owning node is neither FAIL- nor PFAIL-flagged. This keeps the
+        // granular breakdown honest even though `cluster_state` above already
+        // detects FAIL-flagged primaries at the coarser cluster-wide level.
+        let health = count_slot_health(&snapshot);
 
         let info = format!(
             "\
 cluster_state:{}\r\n\
 cluster_slots_assigned:{}\r\n\
 cluster_slots_ok:{}\r\n\
-cluster_slots_pfail:0\r\n\
-cluster_slots_fail:0\r\n\
+cluster_slots_pfail:{}\r\n\
+cluster_slots_fail:{}\r\n\
 cluster_known_nodes:{}\r\n\
 cluster_size:{}\r\n\
 cluster_current_epoch:{}\r\n\
@@ -266,7 +346,9 @@ cluster_stats_messages_received:0\r\n\
 total_cluster_links_buffer_limit_exceeded:0\r\n",
             cluster_state_str,
             slots_assigned,
-            slots_assigned, // slots_ok = slots_assigned for now
+            health.ok,
+            health.pfail,
+            health.fail,
             known_nodes,
             cluster_size,
             effective_epoch,
@@ -691,5 +773,164 @@ mod tests {
         assert!(as_arr(field(shard1, "slots")).is_empty());
         let p2 = as_arr(&as_arr(field(shard1, "nodes"))[0]);
         assert_eq!(as_int(field(p2, "replication-offset")), 0);
+    }
+
+    // Pins `fold_current_epoch`'s `max(config_epoch, raft_term)` output for
+    // issue 47 -- see the doc comment on the function for why the original
+    // audit's `INFO epoch <= max(NODES config_epoch)` proposal was refuted
+    // and replaced with this deliberate-fold pinning instead.
+
+    #[test]
+    fn test_fold_current_epoch_raft_term_exceeds_config_epoch() {
+        // A Raft re-election with no topology change: term outruns the
+        // replicated config epoch. This is the exact scenario the original
+        // (refuted) audit claim got wrong -- the fold legitimately reports
+        // the higher term, not the config epoch.
+        assert_eq!(fold_current_epoch(3, 7), 7);
+    }
+
+    #[test]
+    fn test_fold_current_epoch_config_epoch_exceeds_raft_term() {
+        // A stable Raft leader (low term) with several topology events
+        // (failovers/epoch bumps) already committed.
+        assert_eq!(fold_current_epoch(9, 2), 9);
+    }
+
+    #[test]
+    fn test_fold_current_epoch_equal_values() {
+        assert_eq!(fold_current_epoch(5, 5), 5);
+    }
+
+    #[test]
+    fn test_fold_current_epoch_both_zero() {
+        // Fresh, unbootstrapped cluster: no epoch bumps, no elections yet.
+        assert_eq!(fold_current_epoch(0, 0), 0);
+    }
+
+    #[test]
+    fn test_fold_current_epoch_masks_config_epoch_bump_under_higher_term() {
+        // The lossy direction of the fold, pinned deliberately: on a young
+        // cluster the first election takes raft_term to 1 while config_epoch
+        // is still 0, so the first real topology event (config_epoch 0 -> 1)
+        // produces *no* change in the reported cluster_current_epoch. This is
+        // exactly what `test_cluster_info_epoch_monotonic_across_failover`
+        // observes end-to-end, and it is why that test asserts non-decrease
+        // rather than a strict increase.
+        assert_eq!(fold_current_epoch(0, 1), 1);
+        assert_eq!(fold_current_epoch(1, 1), 1);
+    }
+
+    // ------------------------------------------------------------------
+    // count_slot_health: the CLUSTER INFO `cluster_slots_{ok,pfail,fail}`
+    // accounting (issue 36). These exercise the exact helper `cluster_info`
+    // calls, so they pin the INFO rendering without needing a full
+    // CommandContext (store/raft/quorum-checker plumbing).
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_count_slot_health_all_ok_when_no_node_flagged() {
+        let snap = fixture();
+        let health = count_slot_health(&snap);
+        assert_eq!(health.ok, 10);
+        assert_eq!(health.pfail, 0);
+        assert_eq!(health.fail, 0);
+    }
+
+    #[test]
+    fn test_count_slot_health_fail_flagged_owner_counts_as_fail_not_ok() {
+        let mut snap = fixture();
+        // Primary 1 owns slots 0-9 in the fixture; flag it FAIL.
+        snap.nodes.get_mut(&1).unwrap().flags.fail = true;
+        let health = count_slot_health(&snap);
+        assert_eq!(health.fail, 10, "all 10 slots owned by the FAIL primary");
+        assert_eq!(health.ok, 0, "slots_ok must exclude FAIL-owned slots");
+        assert_eq!(health.pfail, 0);
+    }
+
+    #[test]
+    fn test_count_slot_health_pfail_flagged_owner_counts_distinct_from_fail() {
+        // PFAIL has no producer in FrogDB today (see `SlotHealthCounts`), so
+        // this can only be pinned at the unit level -- but the bucketing must
+        // be correct so the field stays honest if a suspicion phase lands.
+        let mut snap = fixture();
+        snap.nodes.get_mut(&1).unwrap().flags.pfail = true;
+        let health = count_slot_health(&snap);
+        assert_eq!(health.pfail, 10, "PFAIL is tracked separately from FAIL");
+        assert_eq!(health.fail, 0);
+        assert_eq!(health.ok, 0);
+    }
+
+    #[test]
+    fn test_count_slot_health_fail_takes_precedence_over_pfail() {
+        let mut snap = fixture();
+        snap.nodes.get_mut(&1).unwrap().flags.fail = true;
+        snap.nodes.get_mut(&1).unwrap().flags.pfail = true;
+        let health = count_slot_health(&snap);
+        assert_eq!(
+            health.fail, 10,
+            "a node latched FAIL is never double counted as pfail"
+        );
+        assert_eq!(health.pfail, 0);
+    }
+
+    #[test]
+    fn test_count_slot_health_recovery_restores_full_ok() {
+        let mut snap = fixture();
+        snap.nodes.get_mut(&1).unwrap().flags.fail = true;
+        assert_eq!(count_slot_health(&snap).ok, 0);
+
+        // MarkNodeRecovered clears the flag; slots_ok must return to the full
+        // assigned count.
+        snap.nodes.get_mut(&1).unwrap().flags.fail = false;
+        let health = count_slot_health(&snap);
+        assert_eq!(health.ok, 10);
+        assert_eq!(health.fail, 0);
+        assert_eq!(health.pfail, 0);
+    }
+
+    #[test]
+    fn test_count_slot_health_only_counts_flagged_owners_slots_others_unaffected() {
+        let mut snap = fixture();
+        // Give primary 2 a couple of slots alongside primary 1's 0-9, then fail
+        // only primary 1: primary 2's slots must stay ok.
+        snap.slot_assignment.insert(10, 2);
+        snap.slot_assignment.insert(11, 2);
+        snap.nodes.get_mut(&1).unwrap().flags.fail = true;
+        let health = count_slot_health(&snap);
+        assert_eq!(health.fail, 10, "only primary 1's slots are fail");
+        assert_eq!(health.ok, 2, "primary 2's slots remain ok");
+        assert_eq!(health.pfail, 0);
+    }
+
+    #[test]
+    fn test_count_slot_health_totals_always_equal_slots_assigned() {
+        // The invariant `slots_ok + slots_pfail + slots_fail == slots_assigned`
+        // is what makes the breakdown non-misleading; nothing may be dropped.
+        let mut snap = fixture();
+        snap.slot_assignment.insert(10, 2);
+        snap.nodes.get_mut(&1).unwrap().flags.fail = true;
+        snap.nodes.get_mut(&2).unwrap().flags.pfail = true;
+        let health = count_slot_health(&snap);
+        assert_eq!(
+            health.ok + health.pfail + health.fail,
+            snap.slot_assignment.len() as u16
+        );
+        assert_eq!(health.fail, 10);
+        assert_eq!(health.pfail, 1);
+        assert_eq!(health.ok, 0);
+    }
+
+    #[test]
+    fn test_count_slot_health_unknown_owner_counted_ok_not_dropped() {
+        // Defensive: a slot pointing at a node missing from `nodes` must still
+        // be counted, or the three fields would not sum to slots_assigned.
+        let mut snap = fixture();
+        snap.slot_assignment.insert(10, 99);
+        let health = count_slot_health(&snap);
+        assert_eq!(health.ok, 11);
+        assert_eq!(
+            health.ok + health.pfail + health.fail,
+            snap.slot_assignment.len() as u16
+        );
     }
 }

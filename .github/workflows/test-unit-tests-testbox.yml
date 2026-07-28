@@ -8,8 +8,8 @@ on:
         required: true
 env:
   CARGO_TERM_COLOR: always
-  # Incremental artifacts are large and useless across testbox lifetimes; keep
-  # target/ lean so builds and cache save/restore stay fast.
+  # Incremental artifacts are large and mostly useless across testbox sessions;
+  # keeping them off keeps the sticky disks (billed per GB stored) lean.
   CARGO_INCREMENTAL: "0"
 jobs:
   unit-tests:
@@ -22,6 +22,27 @@ jobs:
           testbox_id: ${{ inputs.testbox_id }}
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          # restore-mtime needs history: with a shallow clone every file resolves
+          # to the single fetched commit and gets stamped "today", dirtying all
+          # cargo fingerprints against the sticky-disk target/.
+          fetch-depth: 0
+      # Sticky disks replace Swatinem/rust-cache here: the last committed snapshot
+      # mounts in seconds regardless of size, and the commit happens at VM teardown
+      # even though testbox jobs always end by cancellation (stop or idle-timeout).
+      # Caveat: freshly committed snapshots take ~10-15 min to become the clone
+      # base, so a re-warm shortly after a stop sees the previous snapshot (mild
+      # staleness; the prebuild step below recompiles the delta).
+      - name: Mount target sticky disk
+        uses: useblacksmith/stickydisk@v1
+        with:
+          key: ${{ github.repository }}-testbox-arm-target
+          path: ./target
+      - name: Mount cargo registry sticky disk
+        uses: useblacksmith/stickydisk@v1
+        with:
+          key: ${{ github.repository }}-testbox-arm-cargo-registry
+          path: /home/runner/.cargo/registry
       - name: Set up mise toolchain
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
         with:
@@ -33,13 +54,18 @@ jobs:
         uses: dtolnay/rust-toolchain@1.92.0
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libclang-dev pkg-config libssl-dev
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
-        with:
-          shared-key: testbox-arm
-          # Post-step save normally runs only on job success; testbox jobs end by
-          # cancellation (explicit stop) or idle-timeout, so save on those too.
-          cache-on-failure: 'true'
+      # Fresh checkouts stamp every source file with a new mtime, which dirties
+      # cargo's fingerprints and forces a full workspace recompile even when the
+      # sticky-disk target/ already holds artifacts for this exact commit.
+      # Restoring commit mtimes keeps unchanged crates fresh. The vendored script
+      # replaces the git-restore-mtime package, which git 2.51's removal of
+      # `git whatchanged` broke into a silent no-op. Unshallow first: the
+      # runner's git cache serves a shallow clone even with fetch-depth: 0, and
+      # per-file history is required.
+      - name: Restore source mtimes
+        run: |
+          git fetch --unshallow --quiet || git fetch --quiet
+          python3 scripts/testbox-restore-mtime.py
       - name: Prebuild workspace test binaries
         run: cargo nextest run --no-run --workspace
       - name: Run Testbox
