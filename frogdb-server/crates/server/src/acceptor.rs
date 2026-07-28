@@ -246,67 +246,14 @@ impl Acceptor {
                     // Get local address before wrapping in MaybeTlsStream
                     let local_addr = socket.local_addr().ok();
 
-                    // Wrap the raw TCP socket in ConnectionStream.
-                    // If a TLS manager is configured, perform TLS handshake.
-                    // Otherwise, wrap as plain TCP.
+                    // The TLS manager and the live handshake timeout travel with
+                    // the connection; both are still read *per connection*, just
+                    // inside the spawned task rather than in this loop.
                     #[cfg(not(feature = "turmoil"))]
-                    let socket: crate::net::ConnectionStream =
-                        if let Some(ref tls_mgr) = self.tls_manager {
-                            let acceptor = tls_mgr.acceptor();
-                            match tokio::time::timeout(
-                                self.tls_handshake_timeout.get(),
-                                acceptor.accept(socket),
-                            )
-                            .await
-                            {
-                                Ok(Ok(tls_stream)) => {
-                                    crate::tls::MaybeTlsStream::Tls { inner: tls_stream }
-                                }
-                                Ok(Err(e)) => {
-                                    debug!(addr = %addr, error = %e, "TLS handshake failed");
-                                    TlsHandshakeErrors::inc(
-                                        &*self.deps.observability.metrics_recorder,
-                                        TlsHandshakeError::HandshakeError,
-                                    );
-                                    continue;
-                                }
-                                Err(_) => {
-                                    debug!(addr = %addr, "TLS handshake timed out");
-                                    TlsHandshakeErrors::inc(
-                                        &*self.deps.observability.metrics_recorder,
-                                        TlsHandshakeError::Timeout,
-                                    );
-                                    continue;
-                                }
-                            }
-                        } else {
-                            crate::tls::MaybeTlsStream::Plain { inner: socket }
-                        };
-
-                    // Register connection with client registry
-                    let client_handle = self
-                        .deps
-                        .admin
-                        .client_registry
-                        .register(conn_id, addr, local_addr);
-
-                    // Record connection metrics
-                    ConnectionsTotal::inc(&*self.deps.observability.metrics_recorder);
-                    let current = self.current_connections.fetch_add(1, Ordering::SeqCst) + 1;
-                    ConnectionsCurrent::set(
-                        &*self.deps.observability.metrics_recorder,
-                        current as f64,
-                    );
-
-                    // Fire USDT probe: connection-accept
-                    frogdb_core::probes::fire_connection_accept(conn_id, &addr.to_string());
-
-                    debug!(
-                        conn_id,
-                        shard_id,
-                        addr = %addr,
-                        "Accepted connection"
-                    );
+                    let tls = self
+                        .tls_manager
+                        .clone()
+                        .map(|mgr| (mgr, self.tls_handshake_timeout.clone()));
 
                     // Clone the pre-assembled dep bundle for this connection.
                     // Every member is an `Arc`/`Copy`/small owned value, so this
@@ -324,6 +271,67 @@ impl Acceptor {
                     let current_connections = self.current_connections.clone();
 
                     let conn_future = async move {
+                        // The TLS handshake is awaited *here*, not in the accept
+                        // loop. Awaiting it there stalls the listener for as long
+                        // as one peer takes to complete (up to the full handshake
+                        // timeout), so a client that connects and sends nothing —
+                        // repeated a few times a second — blocks every other
+                        // connection on the port. Handshaking per task also means
+                        // a rejected handshake never touches the registry or the
+                        // connection gauge, exactly as before.
+                        #[cfg(not(feature = "turmoil"))]
+                        let socket: crate::net::ConnectionStream = match tls {
+                            Some((tls_mgr, handshake_timeout)) => {
+                                let acceptor = tls_mgr.acceptor();
+                                match tokio::time::timeout(
+                                    handshake_timeout.get(),
+                                    acceptor.accept(socket),
+                                )
+                                .await
+                                {
+                                    Ok(Ok(tls_stream)) => {
+                                        crate::tls::MaybeTlsStream::Tls { inner: tls_stream }
+                                    }
+                                    Ok(Err(e)) => {
+                                        debug!(addr = %addr, error = %e, "TLS handshake failed");
+                                        TlsHandshakeErrors::inc(
+                                            &*metrics_recorder,
+                                            TlsHandshakeError::HandshakeError,
+                                        );
+                                        return;
+                                    }
+                                    Err(_) => {
+                                        debug!(addr = %addr, "TLS handshake timed out");
+                                        TlsHandshakeErrors::inc(
+                                            &*metrics_recorder,
+                                            TlsHandshakeError::Timeout,
+                                        );
+                                        return;
+                                    }
+                                }
+                            }
+                            None => crate::tls::MaybeTlsStream::Plain { inner: socket },
+                        };
+
+                        // Register connection with client registry
+                        let client_handle =
+                            admin.client_registry.register(conn_id, addr, local_addr);
+
+                        // Record connection metrics
+                        ConnectionsTotal::inc(&*metrics_recorder);
+                        let current = current_connections.fetch_add(1, Ordering::SeqCst) + 1;
+                        ConnectionsCurrent::set(&*metrics_recorder, current as f64);
+
+                        // Fire USDT probe: connection-accept
+                        frogdb_core::probes::fire_connection_accept(conn_id, &addr.to_string());
+
+                        debug!(
+                            conn_id,
+                            shard_id,
+                            addr = %addr,
+                            "Accepted connection"
+                        );
+
                         let handler = ConnectionHandler::from_deps(
                             socket,
                             addr,

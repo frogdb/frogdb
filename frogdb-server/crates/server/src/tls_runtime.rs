@@ -14,6 +14,32 @@
 //! path, an unparseable PEM or an unknown ciphersuite therefore leaves the old
 //! certificates serving, and the caller gets the error.
 //!
+//! # The client-identity pair contract
+//!
+//! `tls-client-cert-file` and `tls-client-key-file` are logically one value (an
+//! outgoing identity) spread over two parameters, so every rule about them has
+//! to survive being applied *one parameter at a time*. Redis has the same shape
+//! (`tls-cert-file`/`tls-key-file`) and solves it by letting a single CONFIG SET
+//! carry several parameters and deferring `applyTLS` to the end of the command,
+//! so an operator can rotate a pair atomically. FrogDB's CONFIG SET applies each
+//! parameter as it is parsed, with no staging, so an atomic pair update is not
+//! available and a "both or neither" rule would make the pair permanently
+//! unsettable: the first half of any rotation would be rejected.
+//!
+//! The contract is therefore:
+//!
+//! - A half-set pair is **legal and boot-valid**, and means *the client identity
+//!   is incomplete*: outgoing connections reuse the server identity, exactly as
+//!   when neither is set. `build_client_config` logs a warning each time it
+//!   builds from that state, so it is never silent.
+//! - Both paths are validated whenever they are set, at boot and at CONFIG SET,
+//!   whether or not a client config is currently built — a value that is
+//!   accepted must be a file the server can actually read.
+//! - Consequently every transition is reachable — `(none, none)` →
+//!   `(cert, none)` → `(cert, key)` and back — CONFIG GET always reports what is
+//!   stored, and CONFIG REWRITE can never emit a file that fails boot
+//!   validation.
+//!
 //! This module is only compiled in non-turmoil builds (see [`crate::tls`]).
 
 use std::path::PathBuf;
@@ -109,9 +135,20 @@ impl TlsRuntimeHandle {
         &self.manager
     }
 
+    /// The stored config, tolerating a poisoned mutex.
+    ///
+    /// The guarded value is a plain `TlsConfig` that `apply` only ever replaces
+    /// wholesale with an already-validated candidate, so a panic mid-mutation
+    /// cannot leave it half-written. Propagating the poison instead would turn
+    /// one unrelated panic into a permanently unreadable TLS config: CONFIG GET,
+    /// every reload and the watcher would all fail forever.
+    fn config(&self) -> std::sync::MutexGuard<'_, TlsConfig> {
+        self.config.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// A snapshot of the currently-effective TLS configuration.
     pub fn current_config(&self) -> TlsConfig {
-        self.config.lock().unwrap().clone()
+        self.config().clone()
     }
 
     /// Apply `mutate` to a clone of the effective config, rebuild the rustls
@@ -120,7 +157,7 @@ impl TlsRuntimeHandle {
     /// On error nothing is committed: the manager keeps serving the previous
     /// certificates and the stored config is unchanged.
     fn apply(&self, mutate: impl FnOnce(&mut TlsConfig)) -> anyhow::Result<()> {
-        let mut guard = self.config.lock().unwrap();
+        let mut guard = self.config();
         let mut candidate = guard.clone();
         mutate(&mut candidate);
         // `TlsManager::reload` is itself build-then-swap: it only stores the new
@@ -182,7 +219,7 @@ impl TlsRuntimeHandle {
     ///
     /// No rustls rebuild is involved, so this cannot fail.
     pub fn set_handshake_timeout_ms(&self, ms: u64) {
-        self.config.lock().unwrap().handshake_timeout_ms = ms;
+        self.config().handshake_timeout_ms = ms;
         self.handshake_timeout.set_millis(ms);
     }
 
@@ -203,7 +240,7 @@ impl TlsRuntimeHandle {
     /// migration story: flip it on, restart peers into TLS one at a time, flip
     /// it off to become strict.
     pub fn set_cluster_migration(&self, enabled: bool) {
-        self.config.lock().unwrap().tls_cluster_migration = enabled;
+        self.config().tls_cluster_migration = enabled;
         self.cluster_migration.store(enabled, Ordering::Relaxed);
     }
 
@@ -512,40 +549,101 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn client_identity_setters_rebuild_the_connector() {
-        let dir = tempfile::tempdir().unwrap();
-        let (cert, key) = write_identity(dir.path(), "server");
-        let (client_cert, client_key) = write_identity(dir.path(), "client");
-        let config = TlsConfig {
+    /// A handle with outgoing TLS on, so a client config exists to rebuild.
+    fn handle_with_client_tls(dir: &std::path::Path) -> TlsRuntimeHandle {
+        let (cert, key) = write_identity(dir, "server");
+        TlsRuntimeHandle::new(&TlsConfig {
             enabled: true,
             cert_file: cert,
             key_file: key,
             tls_replication: true,
             ..Default::default()
-        };
-        let handle = TlsRuntimeHandle::new(&config).unwrap();
+        })
+        .unwrap()
+    }
+
+    /// The client pair is settable one parameter at a time — which is the only
+    /// way CONFIG SET can set it — and every intermediate state is accepted.
+    #[tokio::test]
+    async fn client_identity_pair_is_settable_one_parameter_at_a_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let (client_cert, client_key) = write_identity(dir.path(), "client");
+        let handle = handle_with_client_tls(dir.path());
         assert!(handle.manager().connector().is_some());
 
-        // A client cert without its matching key must not silently fall back to
-        // the server identity.
-        let err = handle
+        // Half-set: accepted, stored, and the connector still works (it presents
+        // the server identity until the pair is complete).
+        handle
             .set_client_cert_file(Some(client_cert.clone()))
+            .unwrap();
+        assert_eq!(
+            handle.current_config().client_cert_file,
+            Some(client_cert.clone())
+        );
+        assert!(handle.manager().connector().is_some());
+
+        // Completed pair.
+        handle
+            .set_client_key_file(Some(client_key.clone()))
+            .unwrap();
+        assert_eq!(handle.current_config().client_key_file, Some(client_key));
+        assert!(handle.manager().connector().is_some());
+
+        // And back to unset, again one parameter at a time.
+        handle.set_client_cert_file(None).unwrap();
+        handle.set_client_key_file(None).unwrap();
+        assert!(handle.current_config().client_cert_file.is_none());
+        assert!(handle.current_config().client_key_file.is_none());
+        assert!(handle.manager().connector().is_some());
+    }
+
+    /// A half-set pair is legal, but the path it names must still be real —
+    /// otherwise CONFIG SET banks a value that only fails much later, and CONFIG
+    /// REWRITE writes a file the next boot rejects.
+    #[tokio::test]
+    async fn client_identity_paths_are_validated_even_when_the_pair_is_incomplete() {
+        let dir = tempfile::tempdir().unwrap();
+        let handle = handle_with_client_tls(dir.path());
+
+        let err = handle
+            .set_client_cert_file(Some(dir.path().join("nope.crt")))
             .unwrap_err();
         assert!(
-            err.to_string().contains("must be set together"),
-            "unexpected error: {err}"
+            err.to_string().contains("failed to open cert file"),
+            "{err}"
         );
         assert!(handle.current_config().client_cert_file.is_none());
 
+        let err = handle
+            .set_client_key_file(Some(dir.path().join("nope.key")))
+            .unwrap_err();
+        assert!(err.to_string().contains("failed to open key file"), "{err}");
+        assert!(handle.current_config().client_key_file.is_none());
+    }
+
+    /// The same validation applies with no outgoing TLS configured at all, where
+    /// no client config is built and nothing would otherwise read the files.
+    #[tokio::test]
+    async fn client_identity_paths_are_validated_without_outgoing_tls() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_identity(dir.path(), "server");
+        let handle = handle_with(cert, key);
+        assert!(handle.manager().connector().is_none());
+
+        let err = handle
+            .set_client_cert_file(Some(dir.path().join("nope.crt")))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("failed to open cert file"),
+            "{err}"
+        );
+
+        // A real file is accepted and stored even with no connector to rebuild.
+        let (client_cert, _) = write_identity(dir.path(), "client");
         handle
-            .apply(|c| {
-                c.client_cert_file = Some(client_cert.clone());
-                c.client_key_file = Some(client_key.clone());
-            })
+            .set_client_cert_file(Some(client_cert.clone()))
             .unwrap();
         assert_eq!(handle.current_config().client_cert_file, Some(client_cert));
-        assert!(handle.manager().connector().is_some());
     }
 
     /// Accept-loop shape used by production code: the timeout is read from the

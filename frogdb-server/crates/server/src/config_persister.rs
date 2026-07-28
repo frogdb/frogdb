@@ -33,8 +33,14 @@ pub struct ConfigUpdate {
     pub section: &'static str,
     /// Field name within the section, e.g. `"maxmemory"`.
     pub field: &'static str,
-    /// The correctly-typed value to write.
-    pub value: Value,
+    /// The correctly-typed value to write, or `None` to *remove* the key.
+    ///
+    /// `None` is how a parameter whose config-file field is an `Option<...>`
+    /// says "unset". Writing the empty string instead would round-trip through
+    /// serde as `Some("")` — for a path field that means a file named `""`, and
+    /// the next boot fails validation ("does not exist"). Absence is the only
+    /// faithful encoding of `None`.
+    pub value: Option<Value>,
 }
 
 /// Stateless TOML config-file persister.
@@ -48,6 +54,10 @@ impl ConfigPersister {
     /// Parse `doc_text`, apply `updates` in order (creating missing sections
     /// as needed), and return the re-rendered document text.
     ///
+    /// An update carrying `None` *removes* the key instead of writing it, and
+    /// never creates the section: an unset optional field must be absent from
+    /// the file, not present as `""`.
+    ///
     /// Preserves comments, formatting, and key ordering for everything not
     /// touched by `updates` (this is exactly what `toml_edit::DocumentMut`
     /// buys us over the plain `toml` crate).
@@ -60,10 +70,21 @@ impl ConfigPersister {
             .map_err(|e: toml_edit::TomlError| e.to_string())?;
 
         for update in updates {
+            let Some(value) = update.value else {
+                // Removal: only meaningful if the section exists, and it must
+                // delete a key the previous file already carried.
+                if let Some(table) = doc
+                    .get_mut(update.section)
+                    .and_then(Item::as_table_like_mut)
+                {
+                    table.remove(update.field);
+                }
+                continue;
+            };
             if !doc.contains_table(update.section) {
                 doc[update.section] = Item::Table(Table::new());
             }
-            doc[update.section][update.field] = Item::Value(update.value);
+            doc[update.section][update.field] = Item::Value(value);
         }
 
         Ok(doc.to_string())
@@ -115,7 +136,16 @@ mod tests {
         ConfigUpdate {
             section,
             field,
-            value: value.into(),
+            value: Some(value.into()),
+        }
+    }
+
+    /// An update that removes `section.field` (the `Option::None` rendering).
+    fn remove(section: &'static str, field: &'static str) -> ConfigUpdate {
+        ConfigUpdate {
+            section,
+            field,
+            value: None,
         }
     }
 
@@ -170,6 +200,30 @@ level = "info"  # trailing comment
         assert_eq!(reparsed["section"]["a_bool"].as_bool(), Some(true));
         assert_eq!(reparsed["section"]["an_int"].as_integer(), Some(42));
         assert_eq!(reparsed["section"]["a_numeric_string"].as_str(), Some("42"));
+    }
+
+    #[test]
+    fn merge_removes_a_previously_present_key() {
+        // The C1 case: an optional field that is now unset must leave *no* key
+        // behind — `ca-file = ""` would be read back as `Some("")` and fail
+        // boot validation.
+        let doc = "[tls]\nenabled = true\nca-file = \"/etc/frogdb/ca.pem\"\n";
+        let merged = ConfigPersister::merge(doc, vec![remove("tls", "ca-file")]).unwrap();
+        assert!(!merged.contains("ca-file"), "got: {merged}");
+        assert!(merged.contains("enabled = true"), "got: {merged}");
+    }
+
+    #[test]
+    fn merge_removal_of_an_absent_key_creates_nothing() {
+        let doc = "[server]\nbind = \"127.0.0.1\"\n";
+        let merged = ConfigPersister::merge(
+            doc,
+            vec![remove("tls", "ca-file"), remove("server", "unixsocket")],
+        )
+        .unwrap();
+        assert!(!merged.contains("[tls]"), "got: {merged}");
+        assert!(!merged.contains("ca-file"), "got: {merged}");
+        assert_eq!(merged, doc);
     }
 
     #[test]

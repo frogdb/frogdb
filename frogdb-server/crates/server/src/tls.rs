@@ -18,6 +18,7 @@ use rustls::sign::CertifiedKey;
 use rustls::{ClientConfig, RootCertStore, ServerConfig};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
+use tracing::warn;
 
 use frogdb_config::{ClientCertMode, TlsConfig, TlsProtocol};
 use frogdb_replication::BoxedStream;
@@ -142,6 +143,7 @@ impl TlsManager {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
         let server_config = build_server_config(config)?;
+        validate_client_identity(config)?;
 
         let client_config = if config.tls_cluster || config.tls_replication {
             Some(ArcSwap::from_pointee(build_client_config(config)?))
@@ -173,17 +175,45 @@ impl TlsManager {
     }
 
     /// Reload certificates from disk, updating both server and client configs.
+    ///
+    /// Both configs are built *before* either is published, so a failure leaves
+    /// the manager entirely on the previous generation. Publishing the server
+    /// config first and then failing to build the client config would leave
+    /// incoming connections on the new certificates while outgoing ones kept
+    /// presenting the old identity — a divergence no later reload undoes,
+    /// because the next attempt fails at the same place.
     pub fn reload(&self, config: &TlsConfig) -> anyhow::Result<()> {
-        let new_server = build_server_config(config)?;
-        self.server_config.store(Arc::new(new_server));
+        let new_server = Arc::new(build_server_config(config)?);
+        validate_client_identity(config)?;
+        let new_client = match self.client_config {
+            Some(_) => Some(Arc::new(build_client_config(config)?)),
+            None => None,
+        };
 
-        if let Some(ref client_swap) = self.client_config {
-            let new_client = build_client_config(config)?;
-            client_swap.store(Arc::new(new_client));
+        self.server_config.store(new_server);
+        if let (Some(client_swap), Some(new_client)) = (&self.client_config, new_client) {
+            client_swap.store(new_client);
         }
 
         Ok(())
     }
+}
+
+/// Check that whatever half of the client identity is configured is loadable.
+///
+/// Runs even when no client config is built: the pair is settable while
+/// `tls_cluster`/`tls_replication` are off, and a value CONFIG SET accepted must
+/// not turn out to be unreadable on the day TLS peering is switched on. It also
+/// covers the half-set pair, which `build_client_config` deliberately does not
+/// read (see [`crate::tls_runtime`] for the contract).
+fn validate_client_identity(config: &TlsConfig) -> anyhow::Result<()> {
+    if let Some(path) = &config.client_cert_file {
+        load_certs(path)?;
+    }
+    if let Some(path) = &config.client_key_file {
+        load_private_key(path)?;
+    }
+    Ok(())
 }
 
 /// Load PEM-encoded certificates from a file.
@@ -221,6 +251,12 @@ fn load_ca_certs(path: &Path) -> anyhow::Result<RootCertStore> {
         .map_err(|e| {
             anyhow::anyhow!("failed to parse CA certs from '{}': {}", path.display(), e)
         })?;
+    if certs.is_empty() {
+        // A truncated or wrong-format CA bundle parses cleanly as zero certs.
+        // Accepting it would build an empty root store, i.e. silently verify
+        // nothing — refuse it exactly like `load_certs` does.
+        anyhow::bail!("no CA certificates found in '{}'", path.display());
+    }
     let mut store = RootCertStore::empty();
     for cert in certs {
         store.add(cert)?;
@@ -474,9 +510,11 @@ fn build_server_config(config: &TlsConfig) -> anyhow::Result<ServerConfig> {
 /// Build a rustls ClientConfig for outgoing TLS connections (cluster bus, replication).
 ///
 /// Uses `client_cert_file`/`client_key_file` for client identity when *both* are
-/// set, otherwise falls back to the server `cert_file`/`key_file`. Setting only
-/// one of the two is an error rather than a silent fallback — that fallback
-/// would quietly present the wrong identity to peers.
+/// set, and the server `cert_file`/`key_file` otherwise — including when only
+/// one half of the pair is set, which is warned about loudly. See
+/// [`crate::tls_runtime`] for why a half-set pair must remain a legal,
+/// boot-valid state rather than a hard error.
+///
 /// Uses `ca_file` for server verification if set, otherwise uses system/webpki roots.
 fn build_client_config(config: &TlsConfig) -> anyhow::Result<ClientConfig> {
     let versions: Vec<&'static rustls::SupportedProtocolVersion> = config
@@ -508,12 +546,20 @@ fn build_client_config(config: &TlsConfig) -> anyhow::Result<ClientConfig> {
     // Use client cert/key if available (for mTLS to peers), fall back to server cert/key
     let (cert_path, key_path) = match (&config.client_cert_file, &config.client_key_file) {
         (Some(cert), Some(key)) => (cert.as_path(), key.as_path()),
-        (None, None) => (config.cert_file.as_path(), config.key_file.as_path()),
-        (Some(_), None) | (None, Some(_)) => anyhow::bail!(
-            "tls.client_cert_file and tls.client_key_file must be set together \
-             (set both to use a distinct client identity, or neither to reuse \
-             the server certificate)"
-        ),
+        // Half-set: the pair is *mid-rotation*, not misconfigured. CONFIG SET
+        // applies one parameter at a time, so every complete pair is reached
+        // through this state; failing here would make the pair unsettable.
+        (client_cert, client_key) => {
+            if let Some(configured) = client_cert.as_ref().or(client_key.as_ref()) {
+                warn!(
+                    path = %configured.display(),
+                    "TLS client identity is incomplete (only one of \
+                     tls-client-cert-file/tls-client-key-file is set); outgoing \
+                     connections present the server certificate until both are set"
+                );
+            }
+            (config.cert_file.as_path(), config.key_file.as_path())
+        }
     };
 
     let certs = load_certs(cert_path)?;

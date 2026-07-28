@@ -280,13 +280,20 @@ impl ReplicationConfigSection {
             );
         }
 
+        // Matches the CONFIG SET rule: 0 would mean every replica is instantly
+        // stale, fencing writes permanently.
+        if self.replica_freshness_timeout_ms == 0 {
+            anyhow::bail!("replication.replica_freshness_timeout_ms must be > 0");
+        }
+
+        let recommended_minimum = self.ack_interval_ms.saturating_mul(3);
         if self.self_fence_on_replica_loss
-            && self.replica_freshness_timeout_ms < self.ack_interval_ms * 3
+            && self.replica_freshness_timeout_ms < recommended_minimum
         {
             tracing::warn!(
                 replica_freshness_timeout_ms = self.replica_freshness_timeout_ms,
                 ack_interval_ms = self.ack_interval_ms,
-                recommended_minimum = self.ack_interval_ms * 3,
+                recommended_minimum,
                 "replica_freshness_timeout_ms is less than 3x ack_interval_ms; \
                  this may cause spurious write rejections"
             );
@@ -322,6 +329,33 @@ mod tests {
         assert!(config.primary_host.is_empty());
         assert_eq!(config.primary_port, DEFAULT_PRIMARY_PORT);
         assert_eq!(config.min_replicas_to_write, 0);
+    }
+
+    #[test]
+    fn zero_replica_freshness_timeout_is_rejected() {
+        // CONFIG SET rejects 0; boot accepting it meant a config file could set
+        // a value the running server would refuse to be talked into.
+        let config = ReplicationConfigSection {
+            replica_freshness_timeout_ms: 0,
+            ..Default::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("replica_freshness_timeout_ms"),
+            "{err}"
+        );
+    }
+
+    /// The freshness/ack-interval advisory must not panic on absurd input.
+    #[test]
+    fn freshness_advisory_does_not_overflow() {
+        let config = ReplicationConfigSection {
+            self_fence_on_replica_loss: true,
+            ack_interval_ms: u64::MAX,
+            replica_freshness_timeout_ms: 1,
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
     }
 
     #[test]

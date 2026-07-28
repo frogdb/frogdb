@@ -8,6 +8,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
@@ -53,7 +54,9 @@ type Param = Box<dyn TomlRenderable>;
 /// string and would e.g. coerce a `String`-typed value like `maxmemory-clients = "0"`
 /// into a TOML integer.
 trait ToTomlValue {
-    fn to_toml_value(&self) -> TomlValue;
+    /// The value as TOML, or `None` when the parameter is *unset* and its
+    /// config-file key must therefore be absent (see [`OptionalPathValue`]).
+    fn to_toml_value(&self) -> Option<TomlValue>;
 }
 
 /// Implements [`ToTomlValue`] for integer types by widening to `i64`, the only
@@ -62,8 +65,8 @@ macro_rules! impl_to_toml_value_via_i64 {
     ($($t:ty),+ $(,)?) => {
         $(
             impl ToTomlValue for $t {
-                fn to_toml_value(&self) -> TomlValue {
-                    TomlValue::from(*self as i64)
+                fn to_toml_value(&self) -> Option<TomlValue> {
+                    Some(TomlValue::from(*self as i64))
                 }
             }
         )+
@@ -72,26 +75,26 @@ macro_rules! impl_to_toml_value_via_i64 {
 impl_to_toml_value_via_i64!(u8, u16, u32, u64, usize, i32, i64);
 
 impl ToTomlValue for f64 {
-    fn to_toml_value(&self) -> TomlValue {
-        TomlValue::from(*self)
+    fn to_toml_value(&self) -> Option<TomlValue> {
+        Some(TomlValue::from(*self))
     }
 }
 
 impl ToTomlValue for bool {
-    fn to_toml_value(&self) -> TomlValue {
-        TomlValue::from(*self)
+    fn to_toml_value(&self) -> Option<TomlValue> {
+        Some(TomlValue::from(*self))
     }
 }
 
 impl ToTomlValue for String {
-    fn to_toml_value(&self) -> TomlValue {
-        TomlValue::from(self.as_str())
+    fn to_toml_value(&self) -> Option<TomlValue> {
+        Some(TomlValue::from(self.as_str()))
     }
 }
 
 impl ToTomlValue for EvictionPolicy {
-    fn to_toml_value(&self) -> TomlValue {
-        TomlValue::from(self.as_str())
+    fn to_toml_value(&self) -> Option<TomlValue> {
+        Some(TomlValue::from(self.as_str()))
     }
 }
 
@@ -100,24 +103,26 @@ impl ToTomlValue for ClientCertMode {
     /// `"none"`/`"optional"`/`"required"`), which differs from the Redis-style
     /// CONFIG GET display value (`"no"`/`"optional"`/`"yes"`, see
     /// [`StaticConfig::from_config`]) -- they serve different protocols.
-    fn to_toml_value(&self) -> TomlValue {
+    fn to_toml_value(&self) -> Option<TomlValue> {
         let s = match self {
             ClientCertMode::None => "none",
             ClientCertMode::Optional => "optional",
             ClientCertMode::Required => "required",
         };
-        TomlValue::from(s)
+        Some(TomlValue::from(s))
     }
 }
 
 impl ToTomlValue for Vec<TlsProtocol> {
-    fn to_toml_value(&self) -> TomlValue {
-        self.iter()
-            .map(|p| match p {
-                TlsProtocol::Tls12 => "1.2",
-                TlsProtocol::Tls13 => "1.3",
-            })
-            .collect()
+    fn to_toml_value(&self) -> Option<TomlValue> {
+        Some(
+            self.iter()
+                .map(|p| match p {
+                    TlsProtocol::Tls12 => "1.2",
+                    TlsProtocol::Tls13 => "1.3",
+                })
+                .collect(),
+        )
     }
 }
 
@@ -126,16 +131,16 @@ impl ToTomlValue for Vec<f64> {
     /// has this type; it carries no file mapping (`section`/`field` are `None`),
     /// so this is never reached by CONFIG REWRITE -- it exists solely to satisfy
     /// the `TomlRenderable` bound shared by every entry in `typed_params`.
-    fn to_toml_value(&self) -> TomlValue {
-        self.iter().copied().collect()
+    fn to_toml_value(&self) -> Option<TomlValue> {
+        Some(self.iter().copied().collect())
     }
 }
 
 impl ToTomlValue for Vec<u64> {
     /// Renders a TOML array of integers. Backs the immutable `latency-bands`
     /// param (13-01), whose file field `latency-bands.bands` is a TOML int array.
-    fn to_toml_value(&self) -> TomlValue {
-        self.iter().map(|&v| v as i64).collect()
+    fn to_toml_value(&self) -> Option<TomlValue> {
+        Some(self.iter().map(|&v| v as i64).collect())
     }
 }
 
@@ -143,8 +148,8 @@ impl ToTomlValue for Vec<String> {
     /// Renders a TOML array of strings. Backs the immutable `tls-ciphersuites`
     /// param (issue-14), whose file field `tls.ciphersuites` is a TOML string
     /// array of rustls IANA ciphersuite names.
-    fn to_toml_value(&self) -> TomlValue {
-        self.iter().map(|s| s.as_str()).collect()
+    fn to_toml_value(&self) -> Option<TomlValue> {
+        Some(self.iter().map(|s| s.as_str()).collect())
     }
 }
 
@@ -155,16 +160,36 @@ impl ToTomlValue for Vec<String> {
 /// [`ToTomlValue`], so this is never a re-guess from a rendered string: a bool
 /// param renders a TOML bool, an int param a TOML int, and so on.
 trait TomlRenderable: DynParam<ConfigManager> {
-    /// Render the live value as a properly-typed TOML value.
-    fn toml_value(&self, ctx: &ConfigManager) -> TomlValue;
+    /// Render the live value as a properly-typed TOML value, or `None` when
+    /// the parameter is unset and its config-file key must be absent.
+    fn toml_value(&self, ctx: &ConfigManager) -> Option<TomlValue>;
 }
 
 impl<T> TomlRenderable for ConfigParam<T, ConfigManager>
 where
     T: ToTomlValue + 'static,
 {
-    fn toml_value(&self, ctx: &ConfigManager) -> TomlValue {
+    fn toml_value(&self, ctx: &ConfigManager) -> Option<TomlValue> {
         (self.get)(ctx).to_toml_value()
+    }
+}
+
+/// A path-valued parameter whose *config-file* field is an `Option<PathBuf>`
+/// (`tls.ca-file`, the TLS client pair, `logging.file-path`).
+///
+/// CONFIG GET/SET represent "unset" as the empty string, which is the only
+/// choice the Redis protocol offers. The file cannot use the same encoding:
+/// serde reads `ca-file = ""` back as `Some("")`, i.e. a file literally named
+/// `""`, and boot validation then rejects the config the server itself wrote.
+/// Wrapping the wire string in this type moves that knowledge into the
+/// parameter's own type, so [`ToTomlValue`] can answer `None` and CONFIG
+/// REWRITE removes the key instead of writing an empty one.
+#[derive(Debug, Clone)]
+struct OptionalPathValue(String);
+
+impl ToTomlValue for OptionalPathValue {
+    fn to_toml_value(&self) -> Option<TomlValue> {
+        (!self.0.is_empty()).then(|| TomlValue::from(self.0.as_str()))
     }
 }
 
@@ -181,7 +206,7 @@ where
 struct MinReplicasMaxLagSecs(u64);
 
 impl ToTomlValue for MinReplicasMaxLagSecs {
-    fn to_toml_value(&self) -> TomlValue {
+    fn to_toml_value(&self) -> Option<TomlValue> {
         self.0.saturating_mul(1000).to_toml_value()
     }
 }
@@ -620,7 +645,7 @@ pub struct ParamMeta {
     /// REWRITE). Distinct from `getter` because the two protocols sometimes
     /// disagree on representation (e.g. `tls-auth-clients` reports Redis-style
     /// "no"/"yes" via `getter` but the TOML field needs "none"/"required").
-    pub toml_getter: fn(&ConfigManager) -> TomlValue,
+    pub toml_getter: fn(&ConfigManager) -> Option<TomlValue>,
 }
 
 /// A Redis-compatibility no-op parameter.
@@ -666,8 +691,8 @@ impl TomlRenderable for NoopParam {
     /// them out before any renderer would be called. Implemented anyway (as a
     /// string, matching `get` above) so `NoopParam` satisfies the same trait
     /// object bound as every other entry in `typed_params`.
-    fn toml_value(&self, _ctx: &ConfigManager) -> TomlValue {
-        TomlValue::from(self.value)
+    fn toml_value(&self, _ctx: &ConfigManager) -> Option<TomlValue> {
+        Some(TomlValue::from(self.value))
     }
 }
 
@@ -798,6 +823,8 @@ pub struct ConfigManager {
     /// Live replication self-fence quorum checker; absent on replicas.
     replication_self_fence:
         std::sync::OnceLock<Arc<crate::replication_quorum::ReplicationQuorumChecker>>,
+    /// Serializes the whole CONFIG SET lifecycle (see [`Self::set`]).
+    set_lock: Mutex<()>,
 }
 
 /// Bundle of live collaborators injected into [`ConfigManager`] at construction.
@@ -926,7 +953,10 @@ impl ConfigManager {
                 &crate::config::HotShardsConfigExt::to_collector_config(&config.hotshards),
             )),
             wal_batch_size_threshold: Arc::new(AtomicUsize::new(
-                config.persistence.batch_size_threshold_kb * 1024,
+                config
+                    .persistence
+                    .batch_size_threshold_kb
+                    .saturating_mul(1024),
             )),
             snapshot_interval_secs: Arc::new(AtomicU64::new(
                 config.snapshot.snapshot_interval_secs,
@@ -946,6 +976,7 @@ impl ConfigManager {
                 config.replication.replica_freshness_timeout_ms,
             )),
             replication_self_fence: std::sync::OnceLock::new(),
+            set_lock: Mutex::new(()),
         }
     }
 
@@ -1157,6 +1188,10 @@ impl ConfigManager {
                     (Some(s), Some(f)) => (s, f),
                     _ => return None,
                 };
+                // `None` here is not "skip this parameter": it is the value
+                // *unset*, which `ConfigPersister::merge` renders by removing
+                // the key (a previously-set path that has since been cleared
+                // must not survive in the file).
                 let value = if let Some(typed) = self.typed_param_toml(param.name) {
                     typed.toml_value(self)
                 } else {
@@ -1474,7 +1509,12 @@ impl ConfigManager {
             Logfile => ParamMeta {
                 name: id.name(),
                 getter: |mgr| mgr.static_config.logfile.clone(),
-                toml_getter: |mgr| mgr.static_config.logfile.to_toml_value(),
+                // `logging.file-path` is `Option<PathBuf>`: no logfile means the
+                // key is absent, not `file-path = ""` (which would ask the next
+                // boot to log to a file named `""`).
+                toml_getter: |mgr| {
+                    OptionalPathValue(mgr.static_config.logfile.clone()).to_toml_value()
+                },
             },
             // --- 13-01 Pass 2b: immutable startup-consumed params (GET-only) ---
             CompactionRateLimitMb => ParamMeta {
@@ -2428,61 +2468,70 @@ impl ConfigManager {
                 render: |v| v.clone(),
                 propagation: Propagation::None,
             }),
-            TlsCaCertFile => Box::new(ConfigParam::<String, ConfigManager> {
+            // `OptionalPathValue`, not `String`: the file field is
+            // `Option<PathBuf>`, so "unset" must be rendered by CONFIG REWRITE
+            // as an *absent* key rather than `ca-file = ""`.
+            TlsCaCertFile => Box::new(ConfigParam::<OptionalPathValue, ConfigManager> {
                 name: id.name(),
-                parse: |s| Ok(s.to_string()),
+                parse: |s| Ok(OptionalPathValue(s.to_string())),
                 validate: ConfigParam::no_validate,
-                default: String::new,
-                get: |mgr| match mgr.live_tls_config() {
-                    Some(c) => render_optional_path(&c.ca_file),
-                    None => mgr.static_config.tls_ca_file.clone(),
+                default: || OptionalPathValue(String::new()),
+                get: |mgr| {
+                    OptionalPathValue(match mgr.live_tls_config() {
+                        Some(c) => render_optional_path(&c.ca_file),
+                        None => mgr.static_config.tls_ca_file.clone(),
+                    })
                 },
                 apply: |mgr, v| {
-                    mgr.apply_tls("tls-ca-cert-file", TlsMutation::CaFile(optional_path(&v)))?;
+                    mgr.apply_tls("tls-ca-cert-file", TlsMutation::CaFile(optional_path(&v.0)))?;
                     info!("TLS CA bundle reloaded");
                     Ok(())
                 },
-                render: |v| v.clone(),
+                render: |v| v.0.clone(),
                 propagation: Propagation::None,
             }),
-            TlsClientCertFile => Box::new(ConfigParam::<String, ConfigManager> {
+            TlsClientCertFile => Box::new(ConfigParam::<OptionalPathValue, ConfigManager> {
                 name: id.name(),
-                parse: |s| Ok(s.to_string()),
+                parse: |s| Ok(OptionalPathValue(s.to_string())),
                 validate: ConfigParam::no_validate,
-                default: String::new,
-                get: |mgr| match mgr.live_tls_config() {
-                    Some(c) => render_optional_path(&c.client_cert_file),
-                    None => mgr.static_config.tls_client_cert_file.clone(),
+                default: || OptionalPathValue(String::new()),
+                get: |mgr| {
+                    OptionalPathValue(match mgr.live_tls_config() {
+                        Some(c) => render_optional_path(&c.client_cert_file),
+                        None => mgr.static_config.tls_client_cert_file.clone(),
+                    })
                 },
                 apply: |mgr, v| {
                     mgr.apply_tls(
                         "tls-client-cert-file",
-                        TlsMutation::ClientCertFile(optional_path(&v)),
+                        TlsMutation::ClientCertFile(optional_path(&v.0)),
                     )?;
                     info!("TLS outgoing client certificate reloaded");
                     Ok(())
                 },
-                render: |v| v.clone(),
+                render: |v| v.0.clone(),
                 propagation: Propagation::None,
             }),
-            TlsClientKeyFile => Box::new(ConfigParam::<String, ConfigManager> {
+            TlsClientKeyFile => Box::new(ConfigParam::<OptionalPathValue, ConfigManager> {
                 name: id.name(),
-                parse: |s| Ok(s.to_string()),
+                parse: |s| Ok(OptionalPathValue(s.to_string())),
                 validate: ConfigParam::no_validate,
-                default: String::new,
-                get: |mgr| match mgr.live_tls_config() {
-                    Some(c) => render_optional_path(&c.client_key_file),
-                    None => mgr.static_config.tls_client_key_file.clone(),
+                default: || OptionalPathValue(String::new()),
+                get: |mgr| {
+                    OptionalPathValue(match mgr.live_tls_config() {
+                        Some(c) => render_optional_path(&c.client_key_file),
+                        None => mgr.static_config.tls_client_key_file.clone(),
+                    })
                 },
                 apply: |mgr, v| {
                     mgr.apply_tls(
                         "tls-client-key-file",
-                        TlsMutation::ClientKeyFile(optional_path(&v)),
+                        TlsMutation::ClientKeyFile(optional_path(&v.0)),
                     )?;
                     info!("TLS outgoing client key reloaded");
                     Ok(())
                 },
-                render: |v| v.clone(),
+                render: |v| v.0.clone(),
                 propagation: Propagation::None,
             }),
             TlsCiphersuites => Box::new(ConfigParam::<Vec<String>, ConfigManager> {
@@ -2547,7 +2596,28 @@ impl ConfigManager {
             TlsClusterMigration => Box::new(ConfigParam::<bool, ConfigManager> {
                 name: id.name(),
                 parse: |s| parse_yes_no("tls-cluster-migration", s),
-                validate: ConfigParam::no_validate,
+                // Dual-accept only means anything on a TLS cluster bus. With
+                // `tls-cluster` off the bus is plaintext-only, so accepting the
+                // flag would store a value that changes nothing *and* have
+                // CONFIG REWRITE emit `tls-cluster-migration = true` without
+                // `tls-cluster = true` — a combination boot validation rejects.
+                // `tls-cluster` is immutable, so this cannot go stale.
+                // With no TLS runtime there is nothing to couple to, and `apply`
+                // already refuses every TLS set with the actionable
+                // "TLS is not running" error; pre-empting it here would only
+                // report the wrong reason.
+                validate: |v, ctx| {
+                    let Some(live) = ctx.live_tls_config() else {
+                        return Ok(());
+                    };
+                    if *v && !live.tls_cluster {
+                        return Err(ConfigError::InvalidValue {
+                            param: "tls-cluster-migration".to_string(),
+                            message: "requires tls-cluster to be enabled".to_string(),
+                        });
+                    }
+                    Ok(())
+                },
                 default: || false,
                 get: |mgr| match mgr.live_tls_config() {
                     Some(c) => c.tls_cluster_migration,
@@ -2807,11 +2877,23 @@ impl ConfigManager {
                         message: "must be a positive integer".to_string(),
                     })
                 },
+                // Bounded above as well as below: the value is scaled by 1024
+                // into bytes, so an unbounded KiB count overflows (a debug-build
+                // panic, a wrapped nonsense threshold in release). The same
+                // bound applies at boot.
                 validate: |v, _ctx| {
                     if *v == 0 {
                         Err(ConfigError::InvalidValue {
                             param: "batch-size-threshold-kb".to_string(),
                             message: "must be > 0".to_string(),
+                        })
+                    } else if *v > frogdb_config::persistence::MAX_BATCH_SIZE_THRESHOLD_KB {
+                        Err(ConfigError::InvalidValue {
+                            param: "batch-size-threshold-kb".to_string(),
+                            message: format!(
+                                "must be <= {} KiB",
+                                frogdb_config::persistence::MAX_BATCH_SIZE_THRESHOLD_KB
+                            ),
                         })
                     } else {
                         Ok(())
@@ -2821,7 +2903,7 @@ impl ConfigManager {
                 get: |mgr| mgr.wal_batch_size_threshold.load(Ordering::Relaxed) / 1024,
                 apply: |mgr, v| {
                     mgr.wal_batch_size_threshold
-                        .store(v * 1024, Ordering::Relaxed);
+                        .store(v.saturating_mul(1024), Ordering::Relaxed);
                     info!(
                         batch_size_threshold_kb = v,
                         "WAL flush batch threshold updated"
@@ -3081,7 +3163,25 @@ impl ConfigManager {
     /// Returns Ok(()) on success, or an error if the parameter is immutable,
     /// unknown, or the value is invalid.
     /// When `strict_config` is enabled, no-op compatibility params are rejected.
+    ///
+    /// The whole lifecycle — read the old value, parse, validate, apply, read the
+    /// new value — is serialized against other `set` calls. Several parameters
+    /// validate against a *sibling's* live value (`hotshards-hot-threshold`
+    /// against the warm one, `status-durability-warning-lag` against the critical
+    /// one, `tls-cluster-migration` against `tls-cluster`), and each validates by
+    /// reading that sibling rather than by locking it. Two concurrent SETs to
+    /// the two halves of such a pair can therefore both validate against the
+    /// pre-change state and both apply, landing on a combination neither
+    /// validator would have accepted — and which boot validation rejects, so
+    /// CONFIG REWRITE afterwards produces an unbootable file. One lock across
+    /// the lifecycle closes that window; there is no re-entrancy risk because no
+    /// `apply` closure calls back into `set`, and nothing here awaits.
     pub fn set(&self, name: &str, value: &str) -> Result<(), ConfigError> {
+        // Poison-tolerant: the guarded value is `()`, so a panicking `apply`
+        // leaves nothing inconsistent behind, and refusing every later CONFIG
+        // SET for the process lifetime would be far worse.
+        let _lifecycle = self.set_lock.lock().unwrap_or_else(|e| e.into_inner());
+
         // Normalize name (lowercase, allow underscores as dashes)
         let normalized = name.to_lowercase().replace('_', "-");
 
@@ -4103,17 +4203,24 @@ min-replicas-timeout-ms = 5000
     // so a numeric-looking `String` value never gets coerced to a TOML
     // integer, and so on.
 
+    /// A set value's TOML rendering. Panics on `None`, which every type
+    /// exercised below is expected never to produce (only
+    /// [`OptionalPathValue`] can be unset).
+    fn toml(v: impl ToTomlValue) -> TomlValue {
+        v.to_toml_value().expect("value is set")
+    }
+
     #[test]
     fn to_toml_value_bool_renders_as_toml_bool() {
-        assert_eq!(true.to_toml_value().as_bool(), Some(true));
-        assert_eq!(false.to_toml_value().as_bool(), Some(false));
+        assert_eq!(toml(true).as_bool(), Some(true));
+        assert_eq!(toml(false).as_bool(), Some(false));
     }
 
     #[test]
     fn to_toml_value_integer_types_render_as_toml_integer() {
-        assert_eq!(42u64.to_toml_value().as_integer(), Some(42));
-        assert_eq!(7u8.to_toml_value().as_integer(), Some(7));
-        assert_eq!((-1i64).to_toml_value().as_integer(), Some(-1));
+        assert_eq!(toml(42u64).as_integer(), Some(42));
+        assert_eq!(toml(7u8).as_integer(), Some(7));
+        assert_eq!(toml(-1i64).as_integer(), Some(-1));
     }
 
     #[test]
@@ -4122,20 +4229,18 @@ min-replicas-timeout-ms = 5000
         // `String`-typed parameter (accepts "50%" as well as a byte count),
         // so a value that merely *looks* like an integer or a boolean must
         // still render as a TOML string, not get re-guessed into another type.
-        let numeric_looking = "42".to_string();
-        let v = numeric_looking.to_toml_value();
+        let v = toml("42".to_string());
         assert!(v.is_str(), "expected TOML string, got: {v:?}");
         assert_eq!(v.as_str(), Some("42"));
 
-        let bool_looking = "yes".to_string();
-        let v = bool_looking.to_toml_value();
+        let v = toml("yes".to_string());
         assert!(v.is_str(), "expected TOML string, got: {v:?}");
         assert_eq!(v.as_str(), Some("yes"));
     }
 
     #[test]
     fn to_toml_value_eviction_policy_renders_as_toml_string() {
-        let v = EvictionPolicy::AllkeysLru.to_toml_value();
+        let v = toml(EvictionPolicy::AllkeysLru);
         assert!(v.is_str());
         assert_eq!(v.as_str(), Some("allkeys-lru"));
     }
@@ -4144,33 +4249,38 @@ min-replicas-timeout-ms = 5000
     fn to_toml_value_min_replicas_max_lag_converts_seconds_to_ms() {
         // The unit conversion now lives on `MinReplicasMaxLagSecs` itself,
         // rather than as a name check in the file writer.
-        let v = MinReplicasMaxLagSecs(10).to_toml_value();
-        assert_eq!(v.as_integer(), Some(10_000));
+        assert_eq!(toml(MinReplicasMaxLagSecs(10)).as_integer(), Some(10_000));
     }
 
     #[test]
     fn to_toml_value_client_cert_mode_renders_file_encoding() {
         // Distinct from the CONFIG GET display value ("no"/"optional"/"yes"):
         // the TOML file encodes this as "none"/"optional"/"required".
-        assert_eq!(ClientCertMode::None.to_toml_value().as_str(), Some("none"));
-        assert_eq!(
-            ClientCertMode::Optional.to_toml_value().as_str(),
-            Some("optional")
-        );
-        assert_eq!(
-            ClientCertMode::Required.to_toml_value().as_str(),
-            Some("required")
-        );
+        assert_eq!(toml(ClientCertMode::None).as_str(), Some("none"));
+        assert_eq!(toml(ClientCertMode::Optional).as_str(), Some("optional"));
+        assert_eq!(toml(ClientCertMode::Required).as_str(), Some("required"));
     }
 
     #[test]
     fn to_toml_value_tls_protocols_renders_toml_array_in_file_encoding() {
         // Distinct from the CONFIG GET display value ("TLSv1.2 TLSv1.3"): the
         // TOML file encodes this as an array of "1.2"/"1.3".
-        let v = vec![TlsProtocol::Tls12, TlsProtocol::Tls13].to_toml_value();
+        let v = toml(vec![TlsProtocol::Tls12, TlsProtocol::Tls13]);
         let arr = v.as_array().expect("expected a TOML array");
         let rendered: Vec<&str> = arr.iter().map(|v| v.as_str().unwrap()).collect();
         assert_eq!(rendered, vec!["1.2", "1.3"]);
+    }
+
+    #[test]
+    fn to_toml_value_optional_path_renders_unset_as_absent() {
+        // C1: the empty wire value means "unset", which REWRITE must express by
+        // *removing* the key. Rendering `""` would round-trip as `Some("")` and
+        // fail the next boot with "does not exist".
+        assert!(OptionalPathValue(String::new()).to_toml_value().is_none());
+        assert_eq!(
+            toml(OptionalPathValue("/etc/frogdb/ca.pem".to_string())).as_str(),
+            Some("/etc/frogdb/ca.pem")
+        );
     }
 
     #[test]
@@ -4859,7 +4969,18 @@ maxmemory = 0
 
         let dir = tempfile::tempdir().unwrap();
         let (cert, key) = write_identity(dir.path(), "server");
-        let (manager, handle) = manager_with_tls(&test_config(), cert, key);
+        // Dual-accept is only settable on a TLS cluster bus, so the runtime this
+        // test drives has to have one.
+        let tls_config = frogdb_config::TlsConfig {
+            enabled: true,
+            cert_file: cert,
+            key_file: key,
+            tls_cluster: true,
+            ..Default::default()
+        };
+        let handle = Arc::new(crate::tls_runtime::TlsRuntimeHandle::new(&tls_config).unwrap());
+        let manager = ConfigManager::new(&test_config());
+        manager.set_tls_runtime(handle.clone());
 
         manager.set("tls-handshake-timeout-ms", "2500").unwrap();
         assert_eq!(
@@ -5053,6 +5174,249 @@ maxmemory = 0
                 "missing `{needle}` after rewrite; file:\n{contents}"
             );
         }
+    }
+
+    // === CONFIG SET -> REWRITE -> boot round trip ===
+    //
+    // CONFIG REWRITE exists so a running server's configuration survives a
+    // restart, which makes "the file it writes boots" the one property the whole
+    // feature rests on. Every promoted parameter is a chance to break it: a
+    // renderer that emits an unset optional as `""`, a SET that banks a value
+    // its own boot validator rejects, or a pair of siblings left in a
+    // combination only one side checked. These tests close the loop rather than
+    // asserting on substrings: rewrite, re-parse into `Config`, and run boot
+    // validation exactly as startup would.
+
+    /// Rewrite, re-parse, and boot-validate. Returns the parsed config and the
+    /// file text for further assertions.
+    fn rewrite_and_reparse(manager: &ConfigManager, path: &std::path::Path) -> (Config, String) {
+        manager.rewrite_config().expect("rewrite failed");
+        let contents = std::fs::read_to_string(path).unwrap();
+        let parsed: Config = toml::from_str(&contents)
+            .unwrap_or_else(|e| panic!("rewritten config does not parse: {e}\n---\n{contents}"));
+        parsed.validate().unwrap_or_else(|e| {
+            panic!("rewritten config fails boot validation: {e}\n---\n{contents}")
+        });
+        (parsed, contents)
+    }
+
+    /// A config file on disk plus a manager wired to it.
+    fn manager_with_config_file(
+        config: &Config,
+        dir: &std::path::Path,
+        initial: &str,
+    ) -> (ConfigManager, std::path::PathBuf) {
+        let path = dir.join("frogdb.toml");
+        std::fs::write(&path, initial).unwrap();
+        let mut config = config.clone();
+        config.config_source_path = Some(path.clone());
+        let manager = ConfigManager::new(&config);
+        manager.set_snapshot_coordinator(Arc::new(
+            frogdb_core::persistence::NoopSnapshotCoordinator::new(),
+        ));
+        (manager, path)
+    }
+
+    /// Promoted parameters spanning every section REWRITE writes, chosen to
+    /// include the ones whose SET and boot validators are easiest to drift apart.
+    const ROUNDTRIP_SETS: &[(&str, &str)] = &[
+        ("maxmemory", "1048576"),
+        ("maxmemory-policy", "allkeys-lru"),
+        ("durability-mode", "sync"),
+        ("wal-failure-policy", "rollback"),
+        ("cluster-auto-failover", "yes"),
+        ("replica-priority", "7"),
+        ("tracing-sampling-rate", "0.25"),
+        ("latency-bands-enabled", "yes"),
+        ("snapshot-interval-secs", "1234"),
+        ("batch-size-threshold-kb", "256"),
+        ("replication-lag-threshold-secs", "17"),
+        ("replica-freshness-timeout-ms", "8000"),
+    ];
+
+    #[test]
+    fn rewrite_after_config_set_still_boots_on_a_default_server() {
+        let dir = tempfile::tempdir().unwrap();
+        let (manager, path) = manager_with_config_file(
+            &test_config(),
+            dir.path(),
+            "[server]\nbind = \"127.0.0.1\"\nport = 6379\n",
+        );
+
+        for (param, value) in ROUNDTRIP_SETS {
+            manager
+                .set(param, value)
+                .unwrap_or_else(|e| panic!("{param}: {e:?}"));
+        }
+
+        let (parsed, _) = rewrite_and_reparse(&manager, &path);
+        assert_eq!(parsed.memory.maxmemory, 1048576);
+        assert_eq!(parsed.persistence.batch_size_threshold_kb, 256);
+        assert_eq!(parsed.replication.replica_freshness_timeout_ms, 8000);
+
+        // And the file is stable: rewriting what we just wrote still boots.
+        let (_, again) = rewrite_and_reparse(&manager, &path);
+        let (_, third) = rewrite_and_reparse(&manager, &path);
+        assert_eq!(again, third, "rewrite is not idempotent");
+    }
+
+    /// The C1 case: TLS on with no CA bundle configured. Rewriting *any*
+    /// parameter used to emit `ca-file = ""` for the untouched optional path,
+    /// which serde reads back as `Some("")` and boot validation rejects as a
+    /// missing file — one CONFIG REWRITE made the server unbootable.
+    #[cfg(not(feature = "turmoil"))]
+    #[test]
+    fn rewrite_with_tls_enabled_and_no_optional_paths_still_boots() {
+        use crate::tls_runtime::test_support::write_identity;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_identity(dir.path(), "server");
+
+        let mut config = test_config();
+        config.tls = frogdb_config::TlsConfig {
+            enabled: true,
+            cert_file: cert.clone(),
+            key_file: key.clone(),
+            ..Default::default()
+        };
+        let (manager, path) =
+            manager_with_config_file(&config, dir.path(), "[server]\nport = 6379\n");
+        let handle = Arc::new(crate::tls_runtime::TlsRuntimeHandle::new(&config.tls).unwrap());
+        manager.set_tls_runtime(handle);
+
+        // Touch something entirely unrelated to TLS.
+        manager.set("maxmemory", "1048576").unwrap();
+
+        let (parsed, contents) = rewrite_and_reparse(&manager, &path);
+        assert!(parsed.tls.enabled);
+        assert_eq!(parsed.tls.cert_file, cert);
+        assert_eq!(parsed.tls.ca_file, None);
+        assert_eq!(parsed.tls.client_cert_file, None);
+        assert_eq!(parsed.tls.client_key_file, None);
+        for absent in ["ca-file", "client-cert-file", "client-key-file"] {
+            assert!(
+                !contents.contains(absent),
+                "unset `{absent}` must be omitted, not written empty; file:\n{contents}"
+            );
+        }
+
+        // Setting one and clearing it again must also leave no key behind.
+        let (ca, _) = write_identity(dir.path(), "ca");
+        manager
+            .set("tls-ca-cert-file", ca.to_str().unwrap())
+            .unwrap();
+        let (parsed, contents) = rewrite_and_reparse(&manager, &path);
+        assert_eq!(parsed.tls.ca_file, Some(ca));
+        assert!(contents.contains("ca-file"));
+
+        manager.set("tls-ca-cert-file", "").unwrap();
+        let (parsed, contents) = rewrite_and_reparse(&manager, &path);
+        assert_eq!(parsed.tls.ca_file, None);
+        assert!(
+            !contents.contains("ca-file"),
+            "clearing must remove the key; file:\n{contents}"
+        );
+    }
+
+    /// The M3 combination: `tls-cluster-migration` is only meaningful with
+    /// `tls-cluster` on. Accepting it otherwise stored an inert value *and* made
+    /// REWRITE emit a pair boot validation rejects.
+    #[cfg(not(feature = "turmoil"))]
+    #[test]
+    fn tls_cluster_migration_set_requires_tls_cluster() {
+        use crate::tls_runtime::test_support::write_identity;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_identity(dir.path(), "server");
+
+        for tls_cluster in [false, true] {
+            let sub = dir.path().join(format!("cluster-{tls_cluster}"));
+            std::fs::create_dir_all(&sub).unwrap();
+
+            let mut config = test_config();
+            config.tls = frogdb_config::TlsConfig {
+                enabled: true,
+                cert_file: cert.clone(),
+                key_file: key.clone(),
+                tls_cluster,
+                ..Default::default()
+            };
+            let (manager, path) =
+                manager_with_config_file(&config, &sub, "[server]\nport = 6379\n");
+            let handle = Arc::new(crate::tls_runtime::TlsRuntimeHandle::new(&config.tls).unwrap());
+            manager.set_tls_runtime(handle.clone());
+
+            let result = manager.set("tls-cluster-migration", "yes");
+            if tls_cluster {
+                result.expect("dual-accept is settable on a TLS cluster bus");
+                assert!(handle.cluster_migration());
+            } else {
+                let err = result.unwrap_err();
+                assert!(
+                    format!("{err:?}").contains("requires tls-cluster"),
+                    "unexpected error: {err:?}"
+                );
+                assert!(
+                    !handle.cluster_migration(),
+                    "a rejected set must not flip the live flag"
+                );
+            }
+
+            // Either way the rewritten file boots.
+            let (parsed, _) = rewrite_and_reparse(&manager, &path);
+            assert_eq!(parsed.tls.tls_cluster_migration, tls_cluster);
+        }
+    }
+
+    /// M4-shaped: sibling-coupled parameters validate against each other, so the
+    /// *end state* left by a sequence of SETs has to be boot-valid too — the
+    /// per-SET validators only ever see one side.
+    #[test]
+    fn sibling_coupled_sets_leave_a_boot_valid_end_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let (manager, path) =
+            manager_with_config_file(&test_config(), dir.path(), "[server]\nport = 6379\n");
+
+        // Widening a band takes two SETs, and only the order that keeps every
+        // intermediate state legal is accepted: raise the ceiling first, then the
+        // floor. The reverse order is refused mid-sequence rather than banked.
+        assert!(
+            manager
+                .set("hotshards-warm-threshold-percent", "30")
+                .is_err(),
+            "the floor must not cross the current ceiling"
+        );
+        manager
+            .set("hotshards-hot-threshold-percent", "60")
+            .unwrap();
+        manager
+            .set("hotshards-warm-threshold-percent", "30")
+            .unwrap();
+        manager
+            .set("status-durability-lag-critical-ms", "9000")
+            .unwrap();
+        manager
+            .set("status-durability-lag-warning-ms", "4000")
+            .unwrap();
+
+        let (parsed, _) = rewrite_and_reparse(&manager, &path);
+        assert_eq!(parsed.hotshards.hot_threshold_percent, 60.0);
+        assert_eq!(parsed.hotshards.warm_threshold_percent, 30.0);
+        assert_eq!(parsed.status.durability_lag_warning_ms, 4000);
+        assert_eq!(parsed.status.durability_lag_critical_ms, 9000);
+
+        // The crossing combinations are refused, so no ordering can persist one.
+        assert!(
+            manager
+                .set("hotshards-warm-threshold-percent", "70")
+                .is_err()
+        );
+        assert!(
+            manager
+                .set("status-durability-lag-warning-ms", "9000")
+                .is_err()
+        );
+        rewrite_and_reparse(&manager, &path);
     }
 
     #[test]

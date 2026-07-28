@@ -138,6 +138,20 @@ pub const DEFAULT_BLOCK_CACHE_SIZE_MB: usize = 256;
 pub const DEFAULT_BLOOM_FILTER_BITS: i32 = 10;
 pub const DEFAULT_MAX_WRITE_BUFFER_NUMBER: i32 = 4;
 pub const DEFAULT_BATCH_SIZE_THRESHOLD_KB: usize = 4096;
+
+/// Upper bound on `batch_size_threshold_kb`, in KiB (1 TiB, or whatever a KiB
+/// count can address on a 32-bit target).
+///
+/// The wire value is multiplied by 1024 into the byte threshold the WAL flush
+/// threads compare against, so an unbounded KiB value overflows on the way in.
+/// A bound also has to exist for its own sake: any threshold past a terabyte is
+/// indistinguishable from "never flush by size", so accepting it would only hide
+/// a typo.
+pub const MAX_BATCH_SIZE_THRESHOLD_KB: usize = if usize::MAX / 1024 < 1024 * 1024 * 1024 {
+    usize::MAX / 1024
+} else {
+    1024 * 1024 * 1024
+};
 pub const DEFAULT_BATCH_TIMEOUT_MS: u64 = 10;
 pub const DEFAULT_SNAPSHOT_INTERVAL_SECS: u64 = 3600;
 pub const DEFAULT_MAX_SNAPSHOTS: usize = 5;
@@ -211,6 +225,22 @@ impl Default for PersistenceConfig {
 impl PersistenceConfig {
     /// Validate the persistence configuration.
     pub fn validate(&self) -> Result<()> {
+        // Checked before the `enabled` shortcut, and to the same rules CONFIG
+        // SET applies: the value is recorded and reported whether or not the WAL
+        // is running, so `0` (flush on every write) and an overflowing KiB count
+        // must not be bootable just because persistence happens to be off. Boot
+        // accepting what CONFIG SET rejects also breaks CONFIG REWRITE round
+        // trips in the other direction.
+        if self.batch_size_threshold_kb == 0 {
+            anyhow::bail!("persistence.batch_size_threshold_kb must be > 0");
+        }
+        if self.batch_size_threshold_kb > MAX_BATCH_SIZE_THRESHOLD_KB {
+            anyhow::bail!(
+                "persistence.batch_size_threshold_kb must be <= {} KiB",
+                MAX_BATCH_SIZE_THRESHOLD_KB
+            );
+        }
+
         if !self.enabled {
             return Ok(());
         }
@@ -425,6 +455,41 @@ mod tests {
     fn test_default_wal_failure_policy() {
         let config = PersistenceConfig::default();
         assert_eq!(config.wal_failure_policy, "continue");
+    }
+
+    #[test]
+    fn batch_size_threshold_kb_matches_the_config_set_rules() {
+        // 0 is what CONFIG SET rejects, so boot must reject it too — including
+        // with persistence disabled, where the old validator returned early.
+        for enabled in [true, false] {
+            let zero = PersistenceConfig {
+                enabled,
+                batch_size_threshold_kb: 0,
+                ..Default::default()
+            };
+            let err = zero.validate().unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("batch_size_threshold_kb must be > 0"),
+                "enabled={enabled}: {err}"
+            );
+
+            let huge = PersistenceConfig {
+                enabled,
+                batch_size_threshold_kb: MAX_BATCH_SIZE_THRESHOLD_KB + 1,
+                ..Default::default()
+            };
+            let err = huge.validate().unwrap_err();
+            assert!(err.to_string().contains("must be <="), "{err}");
+        }
+
+        // The bound itself is accepted, and scaling it to bytes cannot overflow.
+        let at_bound = PersistenceConfig {
+            batch_size_threshold_kb: MAX_BATCH_SIZE_THRESHOLD_KB,
+            ..Default::default()
+        };
+        assert!(at_bound.validate().is_ok());
+        assert!(MAX_BATCH_SIZE_THRESHOLD_KB.checked_mul(1024).is_some());
     }
 
     #[test]
