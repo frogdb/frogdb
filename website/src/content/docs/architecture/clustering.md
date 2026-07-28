@@ -352,6 +352,51 @@ peer's gossip or an external control plane.
 
 ---
 
+## Node-Local Surfaces: Keyspace Notifications and SCAN
+
+Two client-visible surfaces are scoped to a single node in cluster mode. Both match Redis Cluster,
+and both mean a client that wants a cluster-wide view has to fan out across the primaries itself.
+
+### Keyspace notifications are emitted only by the slot-owning primary
+
+A write executes on the primary that owns the key's slot, and that node's shard worker publishes
+the `__keyspace@0__:<key>` and `__keyevent@0__:<event>` messages directly into its own subscription
+table (`emit_keyspace_notification` in
+`frogdb-server/crates/core/src/shard/keyspace_notify.rs`, routed by the
+`KeyspaceNotificationCoordinator`). That path never reaches `ClusterPubSubForwarder`, so the event
+does not cross the cluster bus.
+
+The distinction matters because ordinary `PUBLISH` *does* cross it: `PUBLISH` broadcasts to every
+node so a broadcast-channel subscriber can attach anywhere. A keyspace notification is not routed
+that way — it is delivered only to clients subscribed **on the owning primary**. This is Redis's
+behavior too, where event emission publishes locally while only the `PUBLISH` command propagates
+across the cluster.
+
+Consequences for clients:
+
+- To observe every mutation in the cluster, hold one subscription **per primary**. A single
+  connection sees only the slots that node owns.
+- After a slot migration or a failover, the emitting node for those slots changes with ownership,
+  so a long-lived consumer must re-fan-out on topology change.
+- Replicas apply the primary's write stream through the ordinary execution path
+  (`ReplicaCommandExecutor` sends each replicated command as a normal shard execute), so a replica
+  with notifications enabled emits its own copy locally as it applies the write. Events never cross
+  nodes in either direction — each node's subscribers see only what that node executed.
+
+### SCAN iterates one node's keyspace
+
+`SCAN` is a scatter across the node's own [internal shards](#two-level-sharding) with no cluster
+fan-out (`handle_scan` in `frogdb-server/crates/server/src/connection/scatter.rs`). It needs no slot
+filtering: a node only ever holds keys for the slots it owns, so the keys it can return are already
+exactly its own. The cursor encodes an internal shard index plus a position, so a cursor from one
+node is meaningless on another and must not be replayed there.
+
+A full-keyspace scan is therefore a client-side fan-out: run `SCAN` to completion against every
+primary and union the results. Because slot ownership is exclusive, that union is free of duplicates
+and no key ever appears via a non-owning node. `DBSIZE` and `KEYS` are per-node for the same reason.
+
+---
+
 ## Rolling Upgrades: Version Gating
 
 A mixed-version cluster must not let a newly upgraded node emit a behavior that older peers cannot

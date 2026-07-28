@@ -11296,3 +11296,388 @@ async fn test_wait_in_cluster_does_not_hang_across_failover() {
 
     harness.shutdown_all().await;
 }
+
+// ============================================================================
+// Issue 58: keyspace notifications + SCAN in cluster mode
+// ============================================================================
+//
+// Pinned contract (also documented in the architecture "Node-Local Surfaces"
+// section of website/src/content/docs/architecture/clustering.md):
+//
+//   * **Keyspace notifications are node-local.** A write is executed by the
+//     slot-owning primary, and that node's shard worker publishes the
+//     `__keyspace@0__:<key>` / `__keyevent@0__:<event>` messages straight into
+//     its own subscription table
+//     (`core/src/shard/keyspace_notify.rs::emit_keyspace_notification` ->
+//     `KeyspaceNotificationCoordinator::publish`). That path never touches
+//     `ClusterPubSubForwarder`, so the event does not cross the cluster bus:
+//     only clients subscribed *on the owning primary* observe it. This matches
+//     Redis, where `notifyKeyspaceEvent` calls `pubsubPublishMessage` directly
+//     while only the `PUBLISH` command calls `clusterPropagatePublish`.
+//     Consequence for clients: a cluster-wide keyspace-notification consumer
+//     must hold one subscription per primary.
+//
+//   * **SCAN is per-node.** `SCAN` is a server-wide scatter over the node's own
+//     internal shards (`server/src/connection/scatter.rs::handle_scan`) with no
+//     cluster fan-out and no slot filtering — a node simply has no keys outside
+//     the slots it owns. A full-keyspace scan therefore requires client-side
+//     fan-out across every primary plus a union of the results. The union is
+//     duplicate-free because slot ownership is exclusive, which also means no
+//     key ever "bleeds" into a non-owning node's scan.
+
+/// Slot ranges each harness node owns, per `CLUSTER NODES`.
+///
+/// Returned in `harness.node_ids()` order; nodes owning no slots are omitted.
+async fn slot_ownership(harness: &ClusterTestHarness) -> Vec<(u64, Vec<(u16, u16)>)> {
+    let node_ids = harness.node_ids();
+    let first = harness.node(node_ids[0]).expect("node 0 must exist");
+    let nodes = parse_cluster_nodes(&first.send("CLUSTER", &["NODES"]).await)
+        .expect("CLUSTER NODES should parse");
+    let mut ownership = Vec::new();
+    for &id in &node_ids {
+        let addr = harness.node(id).expect("node must exist").client_addr();
+        if let Some(info) = nodes.iter().find(|n| n.addr == addr)
+            && !info.slots.is_empty()
+        {
+            ownership.push((id, info.slots.clone()));
+        }
+    }
+    ownership
+}
+
+/// The harness node id owning `slot`, if any.
+fn owner_of_slot(ownership: &[(u64, Vec<(u16, u16)>)], slot: u16) -> Option<u64> {
+    ownership
+        .iter()
+        .find(|(_, ranges)| ranges.iter().any(|(s, e)| slot >= *s && slot <= *e))
+        .map(|(id, _)| *id)
+}
+
+/// Drive `SCAN` to completion on one connection.
+///
+/// Returns every key yielded, in yield order and with duplicates preserved, so
+/// callers can assert on duplicates rather than have them silently folded away.
+async fn scan_to_completion(client: &mut frogdb_test_harness::server::TestClient) -> Vec<String> {
+    let mut cursor = "0".to_string();
+    let mut keys = Vec::new();
+    // Bounded so a cursor that never returns to 0 fails loudly rather than
+    // hanging the test. 48 keys at COUNT 64 needs a handful of round trips.
+    for _ in 0..1000 {
+        let resp = client.command(&["SCAN", &cursor, "COUNT", "64"]).await;
+        let frogdb_protocol::Response::Array(parts) = &resp else {
+            panic!("SCAN should reply with a 2-element array, got {resp:?}");
+        };
+        assert_eq!(parts.len(), 2, "SCAN reply shape: {resp:?}");
+        let frogdb_protocol::Response::Bulk(Some(next)) = &parts[0] else {
+            panic!("SCAN cursor should be a bulk string, got {:?}", parts[0]);
+        };
+        let frogdb_protocol::Response::Array(batch) = &parts[1] else {
+            panic!("SCAN keys should be an array, got {:?}", parts[1]);
+        };
+        for entry in batch {
+            match entry {
+                frogdb_protocol::Response::Bulk(Some(k)) => {
+                    keys.push(String::from_utf8_lossy(k).to_string())
+                }
+                other => panic!("SCAN key should be a bulk string, got {other:?}"),
+            }
+        }
+        cursor = String::from_utf8_lossy(next).to_string();
+        if cursor == "0" {
+            return keys;
+        }
+    }
+    panic!("SCAN never returned to cursor 0");
+}
+
+/// Read one pub/sub `message` frame as `(channel, payload)`.
+fn expect_pubsub_message(msg: Option<frogdb_protocol::Response>) -> (String, String) {
+    let Some(frogdb_protocol::Response::Array(arr)) = msg else {
+        panic!("expected a pub/sub message array, got {msg:?}");
+    };
+    assert_eq!(arr.len(), 3, "pub/sub message shape: {arr:?}");
+    assert_eq!(
+        arr[0],
+        frogdb_protocol::Response::Bulk(Some(bytes::Bytes::from_static(b"message"))),
+        "expected a `message` push, got {arr:?}"
+    );
+    let field = |r: &frogdb_protocol::Response| match r {
+        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
+        other => panic!("expected a bulk string, got {other:?}"),
+    };
+    (field(&arr[1]), field(&arr[2]))
+}
+
+/// A keyspace notification for a key write fires only on the slot-owning
+/// primary: subscribers attached to the other primaries never see it, even
+/// though ordinary `PUBLISH` on the same channel does reach them.
+///
+/// Acceptance criteria (issue 58): the event is observed exactly once, only via
+/// the owning primary's subscription, and not via any other primary's.
+///
+/// The trailing `PUBLISH` is the control that makes the negative assertion
+/// meaningful — it proves each non-owner subscription was live and that
+/// cross-node broadcast delivery works on this cluster, so the silence above it
+/// is genuinely "keyspace notifications do not cross the bus" and not a
+/// mis-registered subscriber.
+#[tokio::test]
+async fn test_cluster_keyspace_notification_fires_only_on_owning_primary() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    let ownership = slot_ownership(&harness).await;
+    assert!(
+        ownership.len() >= 2,
+        "test needs at least two slot-owning primaries, got {ownership:?}"
+    );
+
+    // A key whose slot is owned by a known node; every other node is a
+    // non-owner for it by construction (slot ownership is exclusive).
+    let owner_id = ownership[0].0;
+    let slot = ownership[0].1[0].0;
+    let key = key_for_slot(slot);
+    assert_eq!(slot_for_key(key.as_bytes()), slot);
+
+    // Notifications are configured per node (there is no cluster-wide CONFIG
+    // propagation), so enable them everywhere: a node that stayed silent purely
+    // because its own flags were unset would not prove anything.
+    for &id in &harness.node_ids() {
+        let resp = harness
+            .node(id)
+            .unwrap()
+            .send("CONFIG", &["SET", "notify-keyspace-events", "KEA"])
+            .await;
+        assert!(
+            !is_error(&resp),
+            "CONFIG SET notify-keyspace-events on node {id}: {resp:?}"
+        );
+    }
+
+    // One long-lived subscriber per node, on both the keyspace and the keyevent
+    // channel for this write.
+    let keyspace_channel = format!("__keyspace@0__:{key}");
+    let keyevent_channel = "__keyevent@0__:set".to_string();
+    let mut subscribers = Vec::new();
+    for &id in &harness.node_ids() {
+        let mut client = harness.node(id).unwrap().connect().await;
+        for channel in [keyspace_channel.as_str(), keyevent_channel.as_str()] {
+            let resp = client.command(&["SUBSCRIBE", channel]).await;
+            assert!(
+                matches!(&resp, frogdb_protocol::Response::Array(a) if a.len() == 3),
+                "SUBSCRIBE {channel} on node {id}: {resp:?}"
+            );
+        }
+        subscribers.push((id, client));
+    }
+    // Subscriptions register on the broadcast coordinator shard asynchronously.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // Write on the owning primary — no MOVED, this node owns the slot.
+    let resp = harness
+        .node(owner_id)
+        .unwrap()
+        .send("SET", &[&key, "notify-me"])
+        .await;
+    assert!(
+        !is_error(&resp),
+        "SET {key} on its owning primary {owner_id} should succeed, got {resp:?}"
+    );
+
+    // The owner's subscriber sees exactly the two events for this write.
+    let owner_index = subscribers
+        .iter()
+        .position(|(id, _)| *id == owner_id)
+        .expect("owner must have a subscriber");
+    let mut observed = Vec::new();
+    for _ in 0..2 {
+        let msg = subscribers[owner_index]
+            .1
+            .read_message(Duration::from_secs(2))
+            .await;
+        observed.push(expect_pubsub_message(msg));
+    }
+    observed.sort();
+    let mut want = vec![
+        (keyspace_channel.clone(), "set".to_string()),
+        (keyevent_channel.clone(), key.clone()),
+    ];
+    want.sort();
+    assert_eq!(
+        observed, want,
+        "the owning primary must emit exactly the keyspace + keyevent pair for its own write"
+    );
+    // Exactly once: nothing further arrives for this single SET.
+    let extra = subscribers[owner_index]
+        .1
+        .read_message(Duration::from_millis(400))
+        .await;
+    assert!(
+        extra.is_none(),
+        "one SET must produce one keyspace + one keyevent message, got extra {extra:?}"
+    );
+
+    // No other primary observes the event: emission never crosses the bus.
+    for (id, client) in subscribers.iter_mut() {
+        if *id == owner_id {
+            continue;
+        }
+        let msg = client.read_message(Duration::from_millis(600)).await;
+        assert!(
+            msg.is_none(),
+            "node {id} does not own slot {slot}; it must not deliver a keyspace \
+             notification for {key}, got {msg:?}"
+        );
+    }
+
+    // Control: ordinary PUBLISH on the same channel *does* reach every node,
+    // proving the subscriptions above were live.
+    let publisher = harness.node_ids()[0];
+    let resp = harness
+        .node(publisher)
+        .unwrap()
+        .send("PUBLISH", &[&keyevent_channel, "control"])
+        .await;
+    assert!(!is_error(&resp), "PUBLISH control message: {resp:?}");
+    for (id, client) in subscribers.iter_mut() {
+        let msg = client.read_message(Duration::from_secs(2)).await;
+        let (channel, payload) = expect_pubsub_message(msg);
+        assert_eq!(
+            (channel.as_str(), payload.as_str()),
+            (keyevent_channel.as_str(), "control"),
+            "node {id} must receive the cross-node PUBLISH control message"
+        );
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// `SCAN` on a cluster node iterates only that node's own keys; the union
+/// across every primary reconstructs the full keyspace exactly once.
+///
+/// Acceptance criteria (issue 58): scan each primary to completion, then assert
+/// the union equals everything written, with no duplicates (within a node or
+/// across nodes) and no cross-node bleed (every key a node yields hashes into a
+/// slot that node owns).
+#[tokio::test]
+async fn test_cluster_scan_is_per_node_and_unions_to_full_keyspace() {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    let ownership = slot_ownership(&harness).await;
+    assert!(
+        ownership.len() >= 2,
+        "test needs at least two slot-owning primaries, got {ownership:?}"
+    );
+
+    // Spread one key per slot across the whole ring so every primary receives
+    // some. Each key is written *directly* to its owning primary (never through
+    // a redirect) so the test pins ownership instead of tolerating it.
+    let mut expected: BTreeMap<String, u64> = BTreeMap::new();
+    for i in 0..48u16 {
+        let slot = i * 341;
+        let key = key_for_slot(slot);
+        assert_eq!(slot_for_key(key.as_bytes()), slot);
+        let owner = owner_of_slot(&ownership, slot)
+            .unwrap_or_else(|| panic!("slot {slot} has no owner in {ownership:?}"));
+        let resp = harness
+            .node(owner)
+            .unwrap()
+            .send("SET", &[&key, "scan-value"])
+            .await;
+        assert!(
+            !is_error(&resp),
+            "SET {key} (slot {slot}) on owning primary {owner}: {resp:?}"
+        );
+        assert!(
+            expected.insert(key.clone(), owner).is_none(),
+            "test bug: {key} written twice"
+        );
+    }
+
+    // Fan out SCAN across every node, to completion.
+    let mut per_node: Vec<(u64, Vec<String>)> = Vec::new();
+    for &id in &harness.node_ids() {
+        let mut client = harness.node(id).unwrap().connect().await;
+        per_node.push((id, scan_to_completion(&mut client).await));
+    }
+
+    let mut union: BTreeSet<String> = BTreeSet::new();
+    for (id, keys) in &per_node {
+        // No cross-node bleed: every key a node yields hashes into a slot that
+        // node owns.
+        for key in keys {
+            let slot = slot_for_key(key.as_bytes());
+            let owner = owner_of_slot(&ownership, slot);
+            assert_eq!(
+                owner,
+                Some(*id),
+                "SCAN on node {id} returned {key} (slot {slot}), which is owned by {owner:?}"
+            );
+        }
+        // No duplicates within a node: the keyspace is static for this scan.
+        let distinct: BTreeSet<&String> = keys.iter().collect();
+        assert_eq!(
+            distinct.len(),
+            keys.len(),
+            "SCAN on node {id} returned duplicate keys: {keys:?}"
+        );
+        // No duplicates across nodes: slot ownership is exclusive.
+        for key in keys {
+            assert!(
+                union.insert(key.clone()),
+                "{key} was returned by more than one node's SCAN"
+            );
+        }
+        // Per-node, not cluster-wide: a single node can never see the whole
+        // keyspace of a multi-primary cluster.
+        assert!(
+            keys.len() < expected.len(),
+            "SCAN on node {id} returned {} of {} keys — a node must iterate only \
+             its own slots, never the whole cluster",
+            keys.len(),
+            expected.len()
+        );
+    }
+
+    // Every slot-owning primary contributed something (otherwise "union equals
+    // the keyspace" could hold with a single node doing all the work).
+    for (id, _) in &ownership {
+        let scanned = &per_node
+            .iter()
+            .find(|(n, _)| n == id)
+            .expect("every node was scanned")
+            .1;
+        assert!(
+            !scanned.is_empty(),
+            "slot-owning primary {id} returned no keys; the write spread should \
+             have reached every primary"
+        );
+    }
+
+    // The union is the full keyspace.
+    let want: BTreeSet<String> = expected.keys().cloned().collect();
+    assert_eq!(
+        union, want,
+        "the union of per-node SCANs must equal the full written keyspace"
+    );
+
+    harness.shutdown_all().await;
+}
