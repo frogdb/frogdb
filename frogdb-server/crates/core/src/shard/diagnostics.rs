@@ -156,7 +156,9 @@ impl ShardWorker {
             ops_per_sec,
             reads_per_sec,
             writes_per_sec,
-            queue_depth: self.observability.queue_depth(),
+            // Live backlog on this shard's inbox — the same source the
+            // `ShardQueueDepth` gauge reports (see `collect_shard_metrics`).
+            queue_depth: self.message_rx.len(),
         }
     }
 

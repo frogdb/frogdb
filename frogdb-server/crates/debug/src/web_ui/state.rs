@@ -25,7 +25,8 @@ use tokio::sync::oneshot;
 
 use crate::bundle::{BundleConfig, BundleGenerator, BundleInfo, BundleStore, DiagnosticCollector};
 use frogdb_core::{
-    ClientRegistry, LatencyEvent, LatencySample, ObservabilityMsg, ShardSender, SlowLogEntry,
+    ClientRegistry, HotShardDetector, HotShardSnapshot, LatencyEvent, LatencySample,
+    ObservabilityMsg, ShardSender, SlowLogEntry,
 };
 use frogdb_telemetry::{NodeStateSnapshot, ShardState, SharedTracer};
 
@@ -339,6 +340,11 @@ pub struct DebugState {
     pub config_entries: Vec<ConfigEntry>,
     /// Unified node-state provider (replication, clients, cluster topology).
     node_state: Option<Arc<dyn NodeStateProvider>>,
+    /// The node's hot-shard collector. The *same* handle `FROGDB.HOTSHARDS` and
+    /// the `/status` JSON render, so the panel can never disagree with them.
+    /// `None` until wired, which renders the panel as "not available" rather
+    /// than as an idle fleet.
+    hot_shards: Option<Arc<dyn HotShardDetector>>,
 }
 
 impl DebugState {
@@ -352,6 +358,7 @@ impl DebugState {
             shared_tracer: None,
             config_entries,
             node_state: None,
+            hot_shards: None,
         }
     }
 
@@ -365,6 +372,20 @@ impl DebugState {
     pub fn with_shard_senders(mut self, senders: Arc<Vec<ShardSender>>) -> Self {
         self.shard_senders = Some(senders);
         self
+    }
+
+    /// Install the node's hot-shard collector, enabling the load panel.
+    pub fn with_hot_shards(mut self, detector: Arc<dyn HotShardDetector>) -> Self {
+        self.hot_shards = Some(detector);
+        self
+    }
+
+    /// Per-shard load report, or `None` when no collector is installed.
+    ///
+    /// `period_secs` overrides the collector's configured default window.
+    pub async fn get_hot_shards(&self, period_secs: Option<u64>) -> Option<HotShardSnapshot> {
+        let detector = self.hot_shards.as_ref()?;
+        Some(detector.collect_snapshot(period_secs).await)
     }
 
     /// This node's replication identity (defaults to standalone when unwired).
@@ -834,7 +855,88 @@ mod tests {
         assert!(state.get_shard_stats().await.is_empty());
         assert!(state.get_latency().await.is_empty());
         assert!(state.get_slowlog(10).await.is_empty());
+        assert!(state.get_hot_shards(None).await.is_none());
         assert_eq!(state.role(), "standalone");
+    }
+
+    /// A stub collector, so the panel test pins the rendering rather than the
+    /// shard scatter (covered by the collector's own tests).
+    struct StubHotShards(HotShardSnapshot);
+
+    impl HotShardDetector for StubHotShards {
+        fn collect_snapshot(
+            &self,
+            _period_secs: Option<u64>,
+        ) -> frogdb_core::BoxFuture<'_, HotShardSnapshot> {
+            Box::pin(async move { self.0.clone() })
+        }
+    }
+
+    fn skewed_snapshot() -> HotShardSnapshot {
+        HotShardSnapshot {
+            period_secs: 10,
+            total_ops_per_sec: 500.0,
+            imbalance_ratio: 2.0,
+            hot_count: 1,
+            warm_count: 0,
+            shards: vec![
+                frogdb_core::ShardLoad {
+                    shard_id: 1,
+                    ops_per_sec: 450.0,
+                    reads_per_sec: 400.0,
+                    writes_per_sec: 50.0,
+                    percentage: 90.0,
+                    queue_depth: 7,
+                    class: frogdb_core::ShardLoadClass::Hot,
+                },
+                frogdb_core::ShardLoad {
+                    shard_id: 0,
+                    ops_per_sec: 50.0,
+                    reads_per_sec: 50.0,
+                    writes_per_sec: 0.0,
+                    percentage: 10.0,
+                    queue_depth: 0,
+                    class: frogdb_core::ShardLoadClass::Ok,
+                },
+            ],
+            recommendations: vec!["Shard 1 is hot".to_string()],
+        }
+    }
+
+    /// The panel renders one row per shard with its load and classification.
+    #[tokio::test]
+    async fn hot_shards_partial_renders_a_row_per_shard() {
+        use http_body_util::BodyExt;
+
+        let state = DebugState::new(ServerInfo::default(), Vec::new())
+            .with_hot_shards(Arc::new(StubHotShards(skewed_snapshot())));
+        let response = crate::web_ui::handlers::handle_partial_hot_shards(&state).await;
+        assert_eq!(response.status(), hyper::StatusCode::OK);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let html = String::from_utf8_lossy(&body);
+
+        assert!(html.contains("Shard Load"), "panel header present");
+        assert!(html.contains("HOT"), "the hot shard is flagged");
+        assert!(html.contains("90.0%"), "load share rendered");
+        assert!(html.contains("450.0"), "ops/sec rendered");
+        assert!(html.contains("Shard 1 is hot"), "recommendation rendered");
+        assert!(html.contains("10s window"), "period rendered");
+    }
+
+    /// With no collector the panel says so — it must not draw a zeroed table
+    /// that reads as a measured, idle fleet.
+    #[tokio::test]
+    async fn hot_shards_partial_reports_absence_not_zeros() {
+        use http_body_util::BodyExt;
+
+        let state = DebugState::new(ServerInfo::default(), Vec::new());
+        let response = crate::web_ui::handlers::handle_partial_hot_shards(&state).await;
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let html = String::from_utf8_lossy(&body);
+
+        assert!(html.contains("No hot-shard collector installed"));
+        assert!(!html.contains("<table"), "no zeroed table: {html}");
     }
 
     /// End-to-end panel render: the shard-stats partial handler must produce a

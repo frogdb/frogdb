@@ -137,6 +137,22 @@ impl MemoryConfigExt for MemoryConfig {
     }
 }
 
+/// Extension trait for HotShardsConfig conversion methods.
+pub trait HotShardsConfigExt {
+    /// Convert to the debug crate's canonical hot-shard collector config.
+    fn to_collector_config(&self) -> frogdb_debug::HotShardConfig;
+}
+
+impl HotShardsConfigExt for frogdb_config::HotShardsConfig {
+    fn to_collector_config(&self) -> frogdb_debug::HotShardConfig {
+        frogdb_debug::HotShardConfig {
+            hot_threshold_percent: self.hot_threshold_percent,
+            warm_threshold_percent: self.warm_threshold_percent,
+            default_period_secs: self.default_period_secs,
+        }
+    }
+}
+
 /// Extension trait for StatusConfig conversion methods.
 pub trait StatusConfigExt {
     /// Seed a shared, runtime-mutable threshold handle from static config.
@@ -590,5 +606,41 @@ mod tests {
         assert!(metrics_config.enabled);
         assert_eq!(metrics_config.otlp_endpoint, "http://example.com:4317");
         assert_eq!(metrics_config.sampling_rate, 0.1);
+    }
+
+    /// The `[hotshards]` TOML section and the collector's canonical config are
+    /// two structs in two crates (`frogdb-config` may not depend on
+    /// `frogdb-debug`). This is the one place they can be checked against each
+    /// other, so drift in either default is caught here.
+    #[test]
+    fn test_hotshards_config_defaults_match_collector() {
+        let toml_defaults = frogdb_config::HotShardsConfig::default().to_collector_config();
+        let collector_defaults = frogdb_debug::HotShardConfig::default();
+
+        assert_eq!(
+            toml_defaults.hot_threshold_percent,
+            collector_defaults.hot_threshold_percent
+        );
+        assert_eq!(
+            toml_defaults.warm_threshold_percent,
+            collector_defaults.warm_threshold_percent
+        );
+        assert_eq!(
+            toml_defaults.default_period_secs,
+            collector_defaults.default_period_secs
+        );
+    }
+
+    #[test]
+    fn test_hotshards_config_conversion_carries_overrides() {
+        let config = frogdb_config::HotShardsConfig {
+            hot_threshold_percent: 33.0,
+            warm_threshold_percent: 22.0,
+            default_period_secs: 5,
+        };
+        let collector = config.to_collector_config();
+        assert_eq!(collector.hot_threshold_percent, 33.0);
+        assert_eq!(collector.warm_threshold_percent, 22.0);
+        assert_eq!(collector.default_period_secs, 5);
     }
 }

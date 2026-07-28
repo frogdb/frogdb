@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64};
 
 use tokio::sync::mpsc;
 
@@ -114,7 +114,6 @@ pub struct ShardWorkerBuilder {
     raft: Option<Arc<ClusterRaft>>,
     network_factory: Option<Arc<ClusterNetworkFactory>>,
     quorum_checker: Option<Arc<dyn QuorumChecker>>,
-    queue_depth: Option<Arc<AtomicUsize>>,
     per_request_spans: Option<Arc<AtomicBool>>,
     wal_failure_policy: Option<Arc<AtomicU8>>,
     #[cfg(any(test, feature = "fake-wal"))]
@@ -148,7 +147,6 @@ impl ShardWorkerBuilder {
             raft: None,
             network_factory: None,
             quorum_checker: None,
-            queue_depth: None,
             per_request_spans: None,
             wal_failure_policy: None,
             #[cfg(any(test, feature = "fake-wal"))]
@@ -260,12 +258,6 @@ impl ShardWorkerBuilder {
     /// Set the quorum checker for cluster health detection.
     pub fn with_quorum_checker(mut self, checker: Arc<dyn QuorumChecker>) -> Self {
         self.quorum_checker = Some(checker);
-        self
-    }
-
-    /// Set the shared queue depth counter.
-    pub fn with_queue_depth(mut self, depth: Arc<AtomicUsize>) -> Self {
-        self.queue_depth = Some(depth);
         self
     }
 
@@ -418,9 +410,6 @@ impl ShardWorkerBuilder {
             metrics_recorder.clone(),
         );
 
-        let queue_depth = self
-            .queue_depth
-            .unwrap_or_else(|| Arc::new(AtomicUsize::new(0)));
         let per_request_spans = self
             .per_request_spans
             .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
@@ -441,7 +430,6 @@ impl ShardWorkerBuilder {
                     crate::slowlog::DEFAULT_SLOWLOG_MAX_ARG_LEN,
                     slowlog_next_id,
                 ),
-                queue_depth,
             ),
             eviction: ShardEviction::new(self.eviction_config, num_shards),
             vll: ShardVll::default(),

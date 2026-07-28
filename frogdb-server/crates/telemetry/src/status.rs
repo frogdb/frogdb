@@ -12,7 +12,8 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use frogdb_core::{
-    ClientFlags, ClientRegistry, MetricsRecorder, ShardSender, ShardWalLag, WalLagAggregate,
+    ClientFlags, ClientRegistry, HotShardDetector, HotShardSnapshot, MetricsRecorder, ShardSender,
+    ShardWalLag, WalLagAggregate,
 };
 
 use crate::definitions::{
@@ -145,6 +146,12 @@ pub struct ServerStatus {
     pub keyspace: KeyspaceStatus,
     /// Command statistics.
     pub commands: CommandsStatus,
+    /// Per-shard load report from the node's hot-shard collector.
+    ///
+    /// Omitted entirely when no collector is installed — an absent section says
+    /// "not measured", where an all-zero one would read as "measured, idle".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hot_shards: Option<HotShardSnapshot>,
 }
 
 /// FrogDB server information.
@@ -386,15 +393,15 @@ pub struct CommandsStatus {
     /// Total commands processed since startup, from the same
     /// `frogdb_commands_total` counter Prometheus scrapes.
     pub total_processed: u64,
-    /// Instantaneous operations per second.
+    /// Windowed operations per second across the whole node.
     ///
-    /// Omitted (`None`) rather than faked: FrogDB has no server-wide
-    /// instantaneous-rate sampler on the status path (per-shard windowed rates
-    /// exist only in the debug hot-shard report), so there is no accurate value
-    /// to report here. Consumers derive a rate from `total_processed` deltas or
-    /// scrape the Prometheus counter. Reporting a lifetime average under an
-    /// "instantaneous" name would be misleading. See INFO's
-    /// `instantaneous_ops_per_sec`, which is stubbed for the same reason.
+    /// Sourced from the hot-shard collector's per-shard op-rate ring buffers
+    /// (the sum of `hot_shards.total_ops_per_sec`), so this field and the
+    /// `hot_shards` section can never disagree. Omitted (`None`) rather than
+    /// faked when no collector is installed: a lifetime average derived from
+    /// `total_processed` would be misleading under a rate name. Consumers
+    /// without a collector derive a rate from `total_processed` deltas or
+    /// scrape the Prometheus counter.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ops_per_sec: Option<f64>,
 }
@@ -472,6 +479,11 @@ pub struct StatusCollector {
     persistence_enabled: bool,
     durability_mode: String,
     mode: LiveMode,
+    /// Optional hot-shard collector. The *same* handle `FROGDB.HOTSHARDS` and
+    /// the debug web UI render, so all three surfaces agree. `None` when no
+    /// collector is installed, which omits the status section rather than
+    /// reporting zeros.
+    hot_shards: Option<Arc<dyn HotShardDetector>>,
 }
 
 impl StatusCollector {
@@ -502,6 +514,7 @@ impl StatusCollector {
             persistence_enabled,
             durability_mode,
             mode,
+            hot_shards: None,
         }
     }
 
@@ -511,6 +524,16 @@ impl StatusCollector {
     /// second copy to keep in sync.
     pub fn thresholds(&self) -> &Arc<StatusThresholds> {
         &self.thresholds
+    }
+
+    /// Install the node's hot-shard collector, adding the `hot_shards` section
+    /// (and the node-wide op rate) to the report.
+    ///
+    /// A builder rather than another constructor argument: the collector is
+    /// optional, and `new` is already at the argument limit.
+    pub fn with_hot_shards(mut self, detector: Arc<dyn HotShardDetector>) -> Self {
+        self.hot_shards = Some(detector);
+        self
     }
 
     /// Collect the current server status.
@@ -570,6 +593,14 @@ impl StatusCollector {
             .filter(|v| *v > 0.0)
             .map(|v| v as u64);
 
+        // Per-shard load, when a collector is installed. This is its own scatter
+        // (the shards answer op-rate queries over a configurable window, which
+        // the node-state snapshot does not carry).
+        let hot_shards = match &self.hot_shards {
+            Some(detector) => Some(detector.collect_snapshot(None).await),
+            None => None,
+        };
+
         // Get timestamp
         let now = SystemTime::now();
         let timestamp = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
@@ -623,9 +654,11 @@ impl StatusCollector {
             },
             commands: CommandsStatus {
                 total_processed: commands_total_processed,
-                // No accurate instantaneous-rate source on the status path.
-                ops_per_sec: None,
+                // Real windowed rate when a collector is installed; absent
+                // otherwise, never a faked lifetime average.
+                ops_per_sec: hot_shards.as_ref().map(|s| s.total_ops_per_sec),
             },
+            hot_shards,
         }
     }
 
@@ -823,6 +856,11 @@ fn is_leap_year(year: i32) -> bool {
 }
 
 /// Get the process RSS (Resident Set Size) in bytes.
+///
+/// Reads it through `sysinfo`, the same source the `frogdb_memory_rss_bytes`
+/// Prometheus gauge samples, so `/status` and `/metrics` cannot disagree — and
+/// so the field is populated on every platform (the previous `/proc/self/statm`
+/// reader silently reported `None` off Linux).
 fn get_process_rss() -> Option<u64> {
     #[cfg(target_os = "linux")]
     {
@@ -868,6 +906,17 @@ mod tests {
         let time = UNIX_EPOCH + Duration::from_secs(1706270400);
         let iso = format_iso8601(time);
         assert_eq!(iso, "2024-01-26T12:00:00Z");
+    }
+
+    /// `memory.rss_bytes` must be populated everywhere FrogDB runs. The old
+    /// `/proc/self/statm` reader returned `None` off Linux, silently dropping
+    /// the field from `/status` on macOS.
+    #[test]
+    fn process_rss_is_reported_on_every_platform() {
+        assert!(
+            get_process_rss().is_some_and(|rss| rss > 0),
+            "RSS must be readable on this platform"
+        );
     }
 
     #[test]
@@ -1178,17 +1227,72 @@ mod tests {
 
     #[tokio::test]
     async fn test_ops_per_sec_omitted_not_faked() {
-        // No instantaneous-rate source exists; the field is omitted rather than
+        // With no hot-shard collector installed there is no rate source, so both
+        // the rate and the whole hot_shards section are omitted rather than
         // reported as a misleading zero/average.
         let recorder = Arc::new(PrometheusRecorder::new());
         let collector = test_collector(recorder, vec![], true);
         let status = collector.collect().await;
         assert_eq!(status.commands.ops_per_sec, None);
+        assert!(status.hot_shards.is_none());
         let json = collector.to_json(&status);
         assert!(
             !json.contains("ops_per_sec"),
             "ops_per_sec must be absent, got:\n{json}"
         );
+        assert!(
+            !json.contains("hot_shards"),
+            "hot_shards must be absent, got:\n{json}"
+        );
+    }
+
+    /// A stub detector, standing in for the `frogdb_debug` collector (which
+    /// telemetry cannot depend on — the dependency runs debug → telemetry).
+    struct StubHotShards(HotShardSnapshot);
+
+    impl HotShardDetector for StubHotShards {
+        fn collect_snapshot(
+            &self,
+            _period_secs: Option<u64>,
+        ) -> frogdb_core::BoxFuture<'_, HotShardSnapshot> {
+            Box::pin(async move { self.0.clone() })
+        }
+    }
+
+    #[tokio::test]
+    async fn status_renders_the_installed_hot_shard_report() {
+        let recorder = Arc::new(PrometheusRecorder::new());
+        let snapshot = HotShardSnapshot {
+            period_secs: 10,
+            total_ops_per_sec: 250.0,
+            imbalance_ratio: 2.0,
+            hot_count: 1,
+            warm_count: 0,
+            shards: vec![frogdb_core::ShardLoad {
+                shard_id: 3,
+                ops_per_sec: 250.0,
+                reads_per_sec: 200.0,
+                writes_per_sec: 50.0,
+                percentage: 100.0,
+                queue_depth: 2,
+                class: frogdb_core::ShardLoadClass::Hot,
+            }],
+            recommendations: vec!["Shard 3 is hot".to_string()],
+        };
+        let collector = test_collector(recorder, vec![], false)
+            .with_hot_shards(Arc::new(StubHotShards(snapshot)));
+
+        let status = collector.collect().await;
+        let hot = status.hot_shards.clone().expect("section must be present");
+        assert_eq!(hot.hot_count, 1);
+        assert_eq!(hot.shards[0].shard_id, 3);
+
+        // The node-wide rate is the collector's total, not a second estimate.
+        assert_eq!(status.commands.ops_per_sec, Some(250.0));
+
+        let json = collector.to_json(&status);
+        assert!(json.contains("\"hot_shards\""), "got:\n{json}");
+        assert!(json.contains("\"hot\""), "class renders lowercase: {json}");
     }
 
     #[tokio::test]

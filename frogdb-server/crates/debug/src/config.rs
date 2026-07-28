@@ -22,3 +22,31 @@ impl Default for MemoryDiagConfig {
         }
     }
 }
+
+/// Configuration for hot shard detection (`FROGDB.HOTSHARDS`).
+///
+/// The single hot-shard config struct: the server's `[hotshards]` TOML section
+/// (`frogdb_config::HotShardsConfig`) converts into this, and
+/// [`crate::HotShardCollector`] holds it behind live-tunable shared state (see
+/// [`crate::SharedHotShardConfig`]) so a runtime CONFIG SET can retune a running
+/// collector. Defaults here are the source of truth the TOML section's defaults
+/// are asserted against.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HotShardConfig {
+    /// Traffic-share percentage at or above which a shard is classified HOT.
+    pub hot_threshold_percent: f64,
+    /// Traffic-share percentage at or above which a shard is classified WARM.
+    pub warm_threshold_percent: f64,
+    /// Window, in seconds, used when a request does not specify one.
+    pub default_period_secs: u64,
+}
+
+impl Default for HotShardConfig {
+    fn default() -> Self {
+        Self {
+            hot_threshold_percent: 20.0,
+            warm_threshold_percent: 15.0,
+            default_period_secs: 10,
+        }
+    }
+}

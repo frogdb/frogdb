@@ -16,7 +16,7 @@ use crate::net::{JoinHandle, spawn};
 use crate::observability_server::ObservabilityServer;
 use crate::replication::{ReplicaCommandExecutor, consume_frames};
 
-use crate::config::MemoryConfigExt;
+use crate::config::{HotShardsConfigExt, MemoryConfigExt};
 
 use super::Server;
 
@@ -97,24 +97,42 @@ impl Server {
             non_replica_label,
         );
 
+        // Single hot-shard collector, shared by every surface that reports
+        // per-shard load: FROGDB.HOTSHARDS (through the core `ObservabilityConfig`
+        // seam), the `/status` JSON's `hot_shards` section, and the debug web UI
+        // panel. One collector means the three can never disagree, and its
+        // thresholds live in shared atomics so a later CONFIG SET retunes all
+        // three at once.
+        let hot_shard_collector = Arc::new(frogdb_debug::HotShardCollector::new(
+            self.shard_senders.clone(),
+            &self.config.hotshards.to_collector_config(),
+        ));
+        let observability_collectors = Arc::new(
+            crate::server_observability::ServerObservability::default()
+                .with_hot_shards(hot_shard_collector.clone()),
+        );
+
         // Single status collector shared by the HTTP `/status` endpoint and the
         // STATUS JSON connection command, so the two surfaces can never disagree.
         // Built unconditionally over the object-safe metrics recorder so STATUS
         // JSON works even when the HTTP server is disabled (the no-op recorder
         // reports absent counters as 0, never faked).
-        let status_collector = Arc::new(StatusCollector::new(
-            self.config_manager.status_thresholds(),
-            self.health_checker.clone(),
-            self.shard_senders.clone(),
-            self.client_registry.clone(),
-            self.metrics_recorder.clone(),
-            start_time,
-            self.config_manager.max_clients_flag(),
-            self.config.memory.maxmemory,
-            self.config.persistence.enabled,
-            self.config.persistence.durability_mode.clone(),
-            mode.clone(),
-        ));
+        let status_collector = Arc::new(
+            StatusCollector::new(
+                self.config_manager.status_thresholds(),
+                self.health_checker.clone(),
+                self.shard_senders.clone(),
+                self.client_registry.clone(),
+                self.metrics_recorder.clone(),
+                start_time,
+                self.config_manager.max_clients_flag(),
+                self.config.memory.maxmemory,
+                self.config.persistence.enabled,
+                self.config.persistence.durability_mode.clone(),
+                mode.clone(),
+            )
+            .with_hot_shards(hot_shard_collector.clone()),
+        );
 
         // Start HTTP server if enabled (metrics, health, debug, admin REST)
         let http_server_handle = if let Some(ref prometheus) = self.prometheus_recorder {
@@ -167,7 +185,8 @@ impl Server {
                 config_entries,
             )
             .with_node_state(node_state_provider)
-            .with_shard_senders(self.shard_senders.clone());
+            .with_shard_senders(self.shard_senders.clone())
+            .with_hot_shards(hot_shard_collector.clone());
 
             // SAFETY: http_listener is Some when prometheus_recorder is Some
             // (both are gated on config.http.enabled in Server::new()).
@@ -474,6 +493,7 @@ impl Server {
                 hotkey_session: hotkey_session.clone(),
                 keyspace_stats: self.keyspace_stats.clone(),
                 status_collector: Some(status_collector.clone()),
+                collectors: observability_collectors.clone(),
             },
             new_conn_senders: std::mem::take(&mut self.new_conn_senders),
             allow_cross_slot: self.config.server.allow_cross_slot_standalone,

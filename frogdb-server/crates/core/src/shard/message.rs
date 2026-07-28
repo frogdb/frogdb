@@ -1174,3 +1174,59 @@ pub enum ScatterOp {
         after_id: Option<StreamId>,
     },
 }
+
+impl ScatterOp {
+    /// Whether this scatter part mutates shard state.
+    ///
+    /// Used for the per-shard read/write op-rate accounting behind hot-shard
+    /// detection: the scatter path never routes through the single-shard
+    /// command seam, so it classifies its own parts here. Exhaustive on
+    /// purpose — a new scatter op must state which side it falls on rather than
+    /// silently defaulting to "read".
+    pub fn is_write(&self) -> bool {
+        match self {
+            // Keyspace mutations.
+            ScatterOp::MSet { .. }
+            | ScatterOp::Del
+            | ScatterOp::Unlink
+            | ScatterOp::FlushDb
+            | ScatterOp::CopySet { .. } => true,
+            // Search/dictionary/index mutations.
+            ScatterOp::FtCreate { .. }
+            | ScatterOp::FtDropIndex { .. }
+            | ScatterOp::FtAlter { .. }
+            | ScatterOp::FtSynupdate { .. }
+            | ScatterOp::FtAliasadd { .. }
+            | ScatterOp::FtAliasdel { .. }
+            | ScatterOp::FtAliasupdate { .. }
+            | ScatterOp::FtDictadd { .. }
+            | ScatterOp::FtDictdel { .. } => true,
+            // Reads. TOUCH only refreshes LRU metadata, and FT.CONFIG is a
+            // read-only introspection surface in FrogDB, so both count as reads.
+            ScatterOp::MGet
+            | ScatterOp::Exists
+            | ScatterOp::Touch
+            | ScatterOp::Keys { .. }
+            | ScatterOp::DbSize
+            | ScatterOp::Scan { .. }
+            | ScatterOp::Copy { .. }
+            | ScatterOp::RandomKey
+            | ScatterOp::Dump
+            | ScatterOp::TsQueryIndex { .. }
+            | ScatterOp::TsMget { .. }
+            | ScatterOp::TsMrange { .. }
+            | ScatterOp::FtSearch { .. }
+            | ScatterOp::FtInfo { .. }
+            | ScatterOp::FtList
+            | ScatterOp::FtSyndump { .. }
+            | ScatterOp::FtAggregate { .. }
+            | ScatterOp::FtHybrid { .. }
+            | ScatterOp::FtTagvals { .. }
+            | ScatterOp::FtDictdump { .. }
+            | ScatterOp::FtConfig { .. }
+            | ScatterOp::FtSpellcheck { .. }
+            | ScatterOp::FtExplain { .. }
+            | ScatterOp::EsAll { .. } => false,
+        }
+    }
+}

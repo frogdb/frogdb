@@ -4,7 +4,7 @@
     "source": "frogdb-server/crates/telemetry/src/definitions.rs",
     "regenerate": "just docs-gen"
   },
-  "count": 91,
+  "count": 92,
   "metrics": [
     {
       "name": "frogdb_active_version",
@@ -542,6 +542,13 @@
           "type": "string"
         }
       ]
+    },
+    {
+      "name": "frogdb_pubsub_output_buffer_disconnects_total",
+      "type": "counter",
+      "help": "output-buffer hard limit (slow / non-reading subscribers).",
+      "group": "pubsub",
+      "labels": []
     },
     {
       "name": "frogdb_pubsub_patterns",
