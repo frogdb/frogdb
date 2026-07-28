@@ -21,17 +21,25 @@
 //! Reaction latency is consequently between one and two `watch-debounce-ms`
 //! intervals.
 //!
-//! A failed reload is logged and dropped: the manager keeps serving the
-//! previous certificates (see [`crate::tls_runtime`]), and the next change to
-//! any watched file retries.
+//! A failed reload leaves the manager serving the previous certificates (see
+//! [`crate::tls_runtime`]) and is **retried every interval until it succeeds**.
+//! Retrying matters because the usual failure is a torn rotation: the reload
+//! that raced the second file's write fails, and if the watcher then waited for
+//! another change it would serve the stale certificate until the *next*
+//! rotation, potentially past expiry.
+//!
+//! All file IO happens on the blocking pool: stat-ing, reading and PEM-parsing
+//! certificates are synchronous, and doing them on a runtime worker would stall
+//! every other task sharing that thread.
 
 use std::collections::BTreeMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use frogdb_config::TlsConfig;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::net::{JoinHandle, spawn};
 use crate::tls_runtime::TlsRuntimeHandle;
@@ -42,12 +50,21 @@ use crate::tls_runtime::TlsRuntimeHandle;
 /// would turn the watcher into a busy loop stat-ing files.
 const MIN_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
-/// What a single watched file looked like at the last poll.
+/// What a single watched file looked like at the last poll: its length and a
+/// hash of its contents.
 ///
 /// `None` means "absent or unreadable", which is a legitimate state to observe:
 /// a rotation that replaces a file via rename briefly exposes it, and an
 /// optional path (`ca-file`, the client pair) may simply not exist.
-type Fingerprint = Option<(SystemTime, u64)>;
+///
+/// Metadata alone is not enough. `(mtime, len)` misses a rotation that preserves
+/// the modification time (`cp -p`, `rsync --times`, a restored backup, a
+/// mount-time-quantised filesystem) and writes a same-length certificate — two
+/// PEM files from the same issuer and key type are routinely byte-identical in
+/// length. That rotation would then never be picked up. The watched set is a
+/// handful of small PEM files polled every few hundred milliseconds, so reading
+/// them is cheaper than the risk of missing a rotation.
+type Fingerprint = Option<(u64, u64)>;
 
 /// Every file the TLS configuration reads, deduplicated and ordered so two
 /// snapshots are directly comparable.
@@ -65,19 +82,20 @@ fn watched_paths(config: &TlsConfig) -> Vec<PathBuf> {
     paths
 }
 
-/// Stat every watched file.
+/// Fingerprint every watched file by content.
 ///
 /// The path set is recomputed from the handle's *current* config on each poll,
 /// so a CONFIG SET that repoints `tls-cert-file` moves the watcher with it.
+///
+/// Synchronous: callers run it on the blocking pool.
 fn snapshot(config: &TlsConfig) -> BTreeMap<PathBuf, Fingerprint> {
     watched_paths(config)
         .into_iter()
         .map(|path| {
-            let fingerprint = std::fs::metadata(&path).ok().map(|meta| {
-                (
-                    meta.modified().unwrap_or(SystemTime::UNIX_EPOCH),
-                    meta.len(),
-                )
+            let fingerprint = std::fs::read(&path).ok().map(|bytes| {
+                let mut hasher = DefaultHasher::new();
+                bytes.hash(&mut hasher);
+                (bytes.len() as u64, hasher.finish())
             });
             (path, fingerprint)
         })
@@ -102,33 +120,101 @@ pub fn spawn_cert_watcher(handle: Arc<TlsRuntimeHandle>) -> Option<JoinHandle<()
     Some(spawn(watch_loop(handle, interval)))
 }
 
+/// Whether a poll that observed no change should still attempt a reload.
+///
+/// `pending` is the debounced "something changed" edge. `failures` keeps the
+/// retry alive after a failed attempt even with nothing changing on disk: a
+/// reload can fail for reasons outside the watched set (a transient IO error, a
+/// descriptor limit), and without this the watcher would sit on stale
+/// certificates until the next rotation.
+fn should_attempt_reload(pending: bool, failures: u64) -> bool {
+    pending || failures > 0
+}
+
+/// Run `f` on the blocking pool, or return `None` if it panicked.
+///
+/// A panicked poll or reload must not kill the watcher: the next interval tries
+/// again.
+async fn on_blocking_pool<T, F>(f: F) -> Option<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(value) => Some(value),
+        Err(e) => {
+            warn!(error = %e, "TLS certificate watcher: blocking task failed");
+            None
+        }
+    }
+}
+
 /// Poll the watched set forever, reloading once it goes quiet after a change.
 async fn watch_loop(handle: Arc<TlsRuntimeHandle>, interval: Duration) {
-    let mut previous = snapshot(&handle.current_config());
+    let poll = {
+        let handle = handle.clone();
+        move || snapshot(&handle.current_config())
+    };
+    let mut previous = on_blocking_pool(poll.clone()).await.unwrap_or_default();
     // Set when a poll observes a difference; cleared by the reload that the
     // following quiet poll triggers.
     let mut pending = false;
+    // How many consecutive reload attempts have failed. Non-zero keeps the
+    // retry going without waiting for another on-disk change, and keeps the log
+    // to one warning per failure episode rather than one per interval.
+    let mut failures: u64 = 0;
 
     loop {
         tokio::time::sleep(interval).await;
-        let current = snapshot(&handle.current_config());
+        let Some(current) = on_blocking_pool(poll.clone()).await else {
+            continue;
+        };
 
         if current != previous {
             previous = current;
             pending = true;
             continue;
         }
-        if !pending {
+        if !should_attempt_reload(pending, failures) {
             continue;
         }
         pending = false;
 
-        match handle.reload_current() {
-            Ok(()) => info!("Reloaded TLS certificates after on-disk change"),
-            Err(e) => warn!(
-                error = %e,
-                "TLS certificate reload failed; continuing with the previously loaded certificates"
-            ),
+        let handle_for_reload = handle.clone();
+        let Some(result) = on_blocking_pool(move || {
+            handle_for_reload
+                .reload_current()
+                .map_err(|e| e.to_string())
+        })
+        .await
+        else {
+            continue;
+        };
+
+        match result {
+            Ok(()) => {
+                if failures > 0 {
+                    info!(
+                        attempts = failures + 1,
+                        "Reloaded TLS certificates after earlier failures"
+                    );
+                } else {
+                    info!("Reloaded TLS certificates after on-disk change");
+                }
+                failures = 0;
+            }
+            Err(e) => {
+                failures += 1;
+                if failures == 1 {
+                    warn!(
+                        error = %e,
+                        "TLS certificate reload failed; continuing with the previously loaded \
+                         certificates and retrying every poll interval"
+                    );
+                } else {
+                    debug!(error = %e, attempts = failures, "TLS certificate reload still failing");
+                }
+            }
         }
     }
 }
@@ -205,6 +291,61 @@ mod tests {
         }
         // `ca_file` aliases `cert_file` here, so the set must be deduplicated.
         assert_eq!(watched.len(), 6);
+    }
+
+    #[test]
+    fn a_failed_attempt_keeps_retrying_without_a_new_change() {
+        // Nothing changed and nothing failed: idle.
+        assert!(!should_attempt_reload(false, 0));
+        // Debounced change.
+        assert!(should_attempt_reload(true, 0));
+        // Still failing, no new change: retry anyway.
+        assert!(should_attempt_reload(false, 1));
+        assert!(should_attempt_reload(false, 42));
+    }
+
+    #[test]
+    fn fingerprint_catches_a_same_length_mtime_preserving_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cert.pem");
+        std::fs::write(&path, b"first-generation").unwrap();
+        let before_meta = std::fs::metadata(&path).unwrap();
+        let times = std::fs::FileTimes::new()
+            .set_accessed(before_meta.accessed().unwrap())
+            .set_modified(before_meta.modified().unwrap());
+
+        let config = TlsConfig {
+            enabled: true,
+            cert_file: path.clone(),
+            key_file: path.clone(),
+            ..Default::default()
+        };
+        let before = snapshot(&config);
+
+        // Same byte length, different content, original mtime restored — what
+        // `cp -p`, `rsync --times` or a restored backup produces.
+        std::fs::write(&path, b"secnd-generation").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(times)
+            .unwrap();
+
+        // The premise: metadata alone is now indistinguishable.
+        let after_meta = std::fs::metadata(&path).unwrap();
+        assert_eq!(after_meta.len(), before_meta.len());
+        assert_eq!(
+            after_meta.modified().unwrap(),
+            before_meta.modified().unwrap(),
+            "test could not preserve mtime, so it proves nothing"
+        );
+
+        assert_ne!(
+            before,
+            snapshot(&config),
+            "a content-preserving fingerprint would miss this rotation"
+        );
     }
 
     #[tokio::test]

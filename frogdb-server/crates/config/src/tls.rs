@@ -169,11 +169,17 @@ pub struct TlsConfig {
     pub no_tls_on_http: bool,
 
     /// Path to client certificate for outgoing replication/cluster connections.
+    ///
+    /// Only takes effect together with [`Self::client_key_file`]; while only one
+    /// of the two is set the client identity is incomplete and outgoing
+    /// connections reuse the server identity (with a warning).
     #[serde(default, deserialize_with = "deserialize_optional_path")]
     #[param(mutable, name = "tls-client-cert-file")]
     pub client_cert_file: Option<PathBuf>,
 
     /// Path to client private key for outgoing replication/cluster connections.
+    ///
+    /// See [`Self::client_cert_file`] for the half-set-pair behaviour.
     #[serde(default, deserialize_with = "deserialize_optional_path")]
     #[param(mutable, name = "tls-client-key-file")]
     pub client_key_file: Option<PathBuf>,
@@ -295,17 +301,13 @@ impl TlsConfig {
             // Already checked enabled above
         }
 
-        // A half-configured client identity would silently fall back to the
-        // server certificate, presenting the wrong identity to peers.
-        match (&self.client_cert_file, &self.client_key_file) {
-            (Some(_), None) => {
-                anyhow::bail!("tls.client_cert_file set without tls.client_key_file")
-            }
-            (None, Some(_)) => {
-                anyhow::bail!("tls.client_key_file set without tls.client_cert_file")
-            }
-            _ => {}
-        }
+        // NOTE: a half-configured client identity is deliberately *not* an
+        // error. CONFIG SET applies one parameter at a time, so rejecting it
+        // would make the pair permanently unsettable, and CONFIG REWRITE could
+        // emit a file the next boot refuses. A half-set pair means "client
+        // identity incomplete: reuse the server identity", and is warned about
+        // when the client config is built (see `server::tls_runtime` for the
+        // full contract). The paths themselves are still validated below.
 
         // tls_cluster_migration requires tls_cluster
         if self.tls_cluster_migration && !self.tls_cluster {
@@ -339,6 +341,21 @@ impl TlsConfig {
             && !ca_file.exists()
         {
             anyhow::bail!("tls.ca_file '{}' does not exist", ca_file.display());
+        }
+
+        // The client identity's paths are checked whenever they are set, even
+        // though the pair may be incomplete and even when no outgoing TLS is
+        // configured: a value that is accepted must name a readable file, or
+        // the error surfaces much later as a failed peer connection.
+        if let Some(ref path) = self.client_cert_file
+            && !path.exists()
+        {
+            anyhow::bail!("tls.client_cert_file '{}' does not exist", path.display());
+        }
+        if let Some(ref path) = self.client_key_file
+            && !path.exists()
+        {
+            anyhow::bail!("tls.client_key_file '{}' does not exist", path.display());
         }
 
         // Every additional identity must be a complete, existing pair. A

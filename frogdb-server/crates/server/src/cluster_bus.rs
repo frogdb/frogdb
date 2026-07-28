@@ -120,39 +120,46 @@ async fn handle_connection(
     stream: tokio::net::TcpStream,
     ctx: &ClusterBusContext,
 ) -> std::io::Result<()> {
-    let framed =
-        if let Some(ref mgr) = ctx.tls_manager {
-            // Both the dual-accept flag and the handshake timeout are read here,
-            // per connection, so a runtime change applies to the next peer that
-            // dials in without disturbing established bus connections.
-            let migration = ctx.tls_cluster_migration.load(Ordering::Relaxed);
-            let first_byte = if migration {
-                let mut peek_buf = [0u8; 1];
-                let n = stream.peek(&mut peek_buf).await?;
-                (n > 0).then_some(peek_buf[0])
-            } else {
-                None
-            };
-
-            match choose_transport(migration, first_byte) {
-                BusTransport::Plaintext => new_framed_tcp(stream),
-                BusTransport::Tls => {
-                    let acceptor = mgr.acceptor();
-                    let tls_stream = tokio::time::timeout(
-                        ctx.tls_handshake_timeout.get(),
-                        acceptor.accept(stream),
+    let framed = if let Some(ref mgr) = ctx.tls_manager {
+        // Both the dual-accept flag and the handshake timeout are read here,
+        // per connection, so a runtime change applies to the next peer that
+        // dials in without disturbing established bus connections.
+        let migration = ctx.tls_cluster_migration.load(Ordering::Relaxed);
+        let handshake_timeout = ctx.tls_handshake_timeout.get();
+        let first_byte = if migration {
+            let mut peek_buf = [0u8; 1];
+            // Bounded by the same budget as the handshake itself: a peer
+            // that connects and sends nothing must not hold the task (and
+            // the socket) open forever. `peek` has no timeout of its own.
+            let n = tokio::time::timeout(handshake_timeout, stream.peek(&mut peek_buf))
+                .await
+                .map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "cluster bus transport sniff timeout",
                     )
+                })??;
+            (n > 0).then_some(peek_buf[0])
+        } else {
+            None
+        };
+
+        match choose_transport(migration, first_byte) {
+            BusTransport::Plaintext => new_framed_tcp(stream),
+            BusTransport::Tls => {
+                let acceptor = mgr.acceptor();
+                let tls_stream = tokio::time::timeout(handshake_timeout, acceptor.accept(stream))
                     .await
                     .map_err(|_| {
                         std::io::Error::new(std::io::ErrorKind::TimedOut, "TLS handshake timeout")
                     })?
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::ConnectionRefused, e))?;
-                    frogdb_core::cluster::new_framed(Box::new(tls_stream))
-                }
+                frogdb_core::cluster::new_framed(Box::new(tls_stream))
             }
-        } else {
-            new_framed_tcp(stream)
-        };
+        }
+    } else {
+        new_framed_tcp(stream)
+    };
     let mut framed = framed;
 
     loop {
