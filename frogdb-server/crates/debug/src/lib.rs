@@ -2,19 +2,26 @@
 //!
 //! This crate provides:
 //! - Memory diagnostics (MEMORY DOCTOR)
+//! - Hot shard detection (FROGDB.HOTSHARDS)
 //! - Diagnostic bundle generation and storage
 //! - Debug web UI with real-time metrics
 
 pub mod bundle;
 pub mod config;
+pub mod hotshards;
 pub mod memory;
 pub mod web_ui;
 
 // Config re-exports
-pub use config::MemoryDiagConfig;
+pub use config::{HotShardConfig, MemoryDiagConfig};
 
 // Memory diagnostics re-exports
 pub use memory::{MemoryDiagCollector, format_memory_report};
+
+// Hot shard detection re-exports
+pub use hotshards::{
+    HotShardCollector, SharedHotShardConfig, format_hotshards_info, format_hotshards_report,
+};
 
 // Bundle re-exports
 pub use bundle::store::BundleInfo;

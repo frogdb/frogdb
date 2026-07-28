@@ -105,8 +105,8 @@ pub use latency::{
 };
 pub use latency_histogram::{CommandLatencyHistograms, LatencyHistogram};
 pub use metrics::{
-    HotShardDetector, HotShardReport, MemoryDiagnosticsCollector, MemoryReport, NoopObservability,
-    ObservabilityConfig,
+    HotShardDetector, HotShardSnapshot, MemoryDiagnosticsCollector, MemoryReport,
+    NoopObservability, ObservabilityConfig, ShardLoad, ShardLoadClass,
 };
 pub use noop::ExpiryIndex;
 pub use observability::{ShardWalLag, WalLagAggregate};

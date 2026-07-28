@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU64};
 
 use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::command::QuorumChecker;
@@ -149,7 +149,6 @@ pub(crate) struct ShardObservability {
     slowlog: SlowLog,
     latency_monitor: LatencyMonitor,
     operation_counters: OperationCounters,
-    queue_depth: Arc<AtomicUsize>,
     peak_memory: u64,
     evicted_keys: u64,
     /// Total number of objects freed via lazyfree operations (UNLINK, FLUSHALL ASYNC, etc.).
@@ -164,7 +163,6 @@ impl ShardObservability {
     pub(crate) fn new(
         metrics_recorder: Arc<dyn crate::noop::MetricsRecorder>,
         slowlog: SlowLog,
-        queue_depth: Arc<AtomicUsize>,
     ) -> Self {
         Self {
             metrics_recorder,
@@ -172,7 +170,6 @@ impl ShardObservability {
             slowlog,
             latency_monitor: LatencyMonitor::default_monitor(),
             operation_counters: OperationCounters::new(),
-            queue_depth,
             peak_memory: 0,
             evicted_keys: 0,
             lazyfreed_objects: 0,
@@ -227,11 +224,6 @@ impl ShardObservability {
 
     pub(crate) fn operation_counters_mut(&mut self) -> &mut OperationCounters {
         &mut self.operation_counters
-    }
-
-    /// Current shard queue depth (shared with the connection layer).
-    pub(crate) fn queue_depth(&self) -> usize {
-        self.queue_depth.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// High-water mark of memory used by this shard.

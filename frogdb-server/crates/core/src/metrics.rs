@@ -22,6 +22,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
+use crate::conn_command::BoxFuture;
+
 /// A memory diagnostic report.
 ///
 /// This is an abstract representation of memory analysis results.
@@ -41,22 +45,86 @@ pub trait MemoryDiagnosticsCollector: Send + Sync {
     fn collect(&self) -> Pin<Box<dyn Future<Output = Arc<dyn MemoryReport>> + Send + '_>>;
 }
 
-/// A hot shard detector report.
-///
-/// Contains information about shard traffic patterns.
-pub trait HotShardReport: Send + Sync + fmt::Display {
-    /// Format the report for display.
-    fn format(&self) -> String {
-        self.to_string()
+/// How a shard's share of the fleet's traffic classifies against the
+/// configured hot/warm thresholds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShardLoadClass {
+    /// Shard is receiving a disproportionately high share of traffic.
+    Hot,
+    /// Shard is receiving an elevated but not critical share of traffic.
+    Warm,
+    /// Shard traffic is within normal bounds.
+    Ok,
+}
+
+impl ShardLoadClass {
+    /// The operator-facing label (`HOT`/`WARM`/`OK`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ShardLoadClass::Hot => "HOT",
+            ShardLoadClass::Warm => "WARM",
+            ShardLoadClass::Ok => "OK",
+        }
     }
+}
+
+impl fmt::Display for ShardLoadClass {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// One shard's windowed load, as measured over the report's period.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShardLoad {
+    /// Shard id.
+    pub shard_id: usize,
+    /// Total operations per second over the window.
+    pub ops_per_sec: f64,
+    /// Read operations per second over the window.
+    pub reads_per_sec: f64,
+    /// Write operations per second over the window.
+    pub writes_per_sec: f64,
+    /// This shard's share of fleet traffic, as a percentage (0-100).
+    pub percentage: f64,
+    /// Shard message-queue depth at sampling time.
+    pub queue_depth: usize,
+    /// Classification of `percentage` against the configured thresholds.
+    pub class: ShardLoadClass,
+}
+
+/// A point-in-time hot-shard report: per-shard windowed load plus the derived
+/// fleet-level imbalance summary.
+///
+/// Plain data (no formatting, no server types) so every surface renders the
+/// same numbers: the `FROGDB.HOTSHARDS` command, the `/status` JSON, and the
+/// debug web UI panel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HotShardSnapshot {
+    /// Window, in seconds, the per-shard rates were computed over.
+    pub period_secs: u64,
+    /// Sum of every shard's `ops_per_sec`.
+    pub total_ops_per_sec: f64,
+    /// `max_ops_per_sec / mean_ops_per_sec` (1.0 when perfectly balanced or idle).
+    pub imbalance_ratio: f64,
+    /// Number of shards classified [`ShardLoadClass::Hot`].
+    pub hot_count: usize,
+    /// Number of shards classified [`ShardLoadClass::Warm`].
+    pub warm_count: usize,
+    /// Per-shard load, sorted by `ops_per_sec` descending.
+    pub shards: Vec<ShardLoad>,
+    /// Human-readable operator hints derived from the numbers above.
+    pub recommendations: Vec<String>,
 }
 
 /// A collector for hot shard detection.
 ///
 /// Implementations analyze shard traffic to identify hot spots.
 pub trait HotShardDetector: Send + Sync {
-    /// Collect hot shard statistics and return a report.
-    fn collect(&self) -> Pin<Box<dyn Future<Output = Arc<dyn HotShardReport>> + Send + '_>>;
+    /// Collect per-shard load over `period_secs` (the implementation's
+    /// configured default window when `None`).
+    fn collect_snapshot(&self, period_secs: Option<u64>) -> BoxFuture<'_, HotShardSnapshot>;
 }
 
 /// Configuration for observability features.
