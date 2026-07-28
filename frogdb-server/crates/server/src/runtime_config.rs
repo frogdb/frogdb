@@ -53,7 +53,9 @@ type Param = Box<dyn TomlRenderable>;
 /// string and would e.g. coerce a `String`-typed value like `maxmemory-clients = "0"`
 /// into a TOML integer.
 trait ToTomlValue {
-    fn to_toml_value(&self) -> TomlValue;
+    /// The value as TOML, or `None` when the parameter is *unset* and its
+    /// config-file key must therefore be absent (see [`OptionalPathValue`]).
+    fn to_toml_value(&self) -> Option<TomlValue>;
 }
 
 /// Implements [`ToTomlValue`] for integer types by widening to `i64`, the only
@@ -62,8 +64,8 @@ macro_rules! impl_to_toml_value_via_i64 {
     ($($t:ty),+ $(,)?) => {
         $(
             impl ToTomlValue for $t {
-                fn to_toml_value(&self) -> TomlValue {
-                    TomlValue::from(*self as i64)
+                fn to_toml_value(&self) -> Option<TomlValue> {
+                    Some(TomlValue::from(*self as i64))
                 }
             }
         )+
@@ -72,26 +74,26 @@ macro_rules! impl_to_toml_value_via_i64 {
 impl_to_toml_value_via_i64!(u8, u16, u32, u64, usize, i32, i64);
 
 impl ToTomlValue for f64 {
-    fn to_toml_value(&self) -> TomlValue {
-        TomlValue::from(*self)
+    fn to_toml_value(&self) -> Option<TomlValue> {
+        Some(TomlValue::from(*self))
     }
 }
 
 impl ToTomlValue for bool {
-    fn to_toml_value(&self) -> TomlValue {
-        TomlValue::from(*self)
+    fn to_toml_value(&self) -> Option<TomlValue> {
+        Some(TomlValue::from(*self))
     }
 }
 
 impl ToTomlValue for String {
-    fn to_toml_value(&self) -> TomlValue {
-        TomlValue::from(self.as_str())
+    fn to_toml_value(&self) -> Option<TomlValue> {
+        Some(TomlValue::from(self.as_str()))
     }
 }
 
 impl ToTomlValue for EvictionPolicy {
-    fn to_toml_value(&self) -> TomlValue {
-        TomlValue::from(self.as_str())
+    fn to_toml_value(&self) -> Option<TomlValue> {
+        Some(TomlValue::from(self.as_str()))
     }
 }
 
@@ -100,24 +102,26 @@ impl ToTomlValue for ClientCertMode {
     /// `"none"`/`"optional"`/`"required"`), which differs from the Redis-style
     /// CONFIG GET display value (`"no"`/`"optional"`/`"yes"`, see
     /// [`StaticConfig::from_config`]) -- they serve different protocols.
-    fn to_toml_value(&self) -> TomlValue {
+    fn to_toml_value(&self) -> Option<TomlValue> {
         let s = match self {
             ClientCertMode::None => "none",
             ClientCertMode::Optional => "optional",
             ClientCertMode::Required => "required",
         };
-        TomlValue::from(s)
+        Some(TomlValue::from(s))
     }
 }
 
 impl ToTomlValue for Vec<TlsProtocol> {
-    fn to_toml_value(&self) -> TomlValue {
-        self.iter()
-            .map(|p| match p {
-                TlsProtocol::Tls12 => "1.2",
-                TlsProtocol::Tls13 => "1.3",
-            })
-            .collect()
+    fn to_toml_value(&self) -> Option<TomlValue> {
+        Some(
+            self.iter()
+                .map(|p| match p {
+                    TlsProtocol::Tls12 => "1.2",
+                    TlsProtocol::Tls13 => "1.3",
+                })
+                .collect(),
+        )
     }
 }
 
@@ -126,16 +130,16 @@ impl ToTomlValue for Vec<f64> {
     /// has this type; it carries no file mapping (`section`/`field` are `None`),
     /// so this is never reached by CONFIG REWRITE -- it exists solely to satisfy
     /// the `TomlRenderable` bound shared by every entry in `typed_params`.
-    fn to_toml_value(&self) -> TomlValue {
-        self.iter().copied().collect()
+    fn to_toml_value(&self) -> Option<TomlValue> {
+        Some(self.iter().copied().collect())
     }
 }
 
 impl ToTomlValue for Vec<u64> {
     /// Renders a TOML array of integers. Backs the immutable `latency-bands`
     /// param (13-01), whose file field `latency-bands.bands` is a TOML int array.
-    fn to_toml_value(&self) -> TomlValue {
-        self.iter().map(|&v| v as i64).collect()
+    fn to_toml_value(&self) -> Option<TomlValue> {
+        Some(self.iter().map(|&v| v as i64).collect())
     }
 }
 
@@ -143,8 +147,8 @@ impl ToTomlValue for Vec<String> {
     /// Renders a TOML array of strings. Backs the immutable `tls-ciphersuites`
     /// param (issue-14), whose file field `tls.ciphersuites` is a TOML string
     /// array of rustls IANA ciphersuite names.
-    fn to_toml_value(&self) -> TomlValue {
-        self.iter().map(|s| s.as_str()).collect()
+    fn to_toml_value(&self) -> Option<TomlValue> {
+        Some(self.iter().map(|s| s.as_str()).collect())
     }
 }
 
@@ -155,16 +159,36 @@ impl ToTomlValue for Vec<String> {
 /// [`ToTomlValue`], so this is never a re-guess from a rendered string: a bool
 /// param renders a TOML bool, an int param a TOML int, and so on.
 trait TomlRenderable: DynParam<ConfigManager> {
-    /// Render the live value as a properly-typed TOML value.
-    fn toml_value(&self, ctx: &ConfigManager) -> TomlValue;
+    /// Render the live value as a properly-typed TOML value, or `None` when
+    /// the parameter is unset and its config-file key must be absent.
+    fn toml_value(&self, ctx: &ConfigManager) -> Option<TomlValue>;
 }
 
 impl<T> TomlRenderable for ConfigParam<T, ConfigManager>
 where
     T: ToTomlValue + 'static,
 {
-    fn toml_value(&self, ctx: &ConfigManager) -> TomlValue {
+    fn toml_value(&self, ctx: &ConfigManager) -> Option<TomlValue> {
         (self.get)(ctx).to_toml_value()
+    }
+}
+
+/// A path-valued parameter whose *config-file* field is an `Option<PathBuf>`
+/// (`tls.ca-file`, the TLS client pair, `logging.file-path`).
+///
+/// CONFIG GET/SET represent "unset" as the empty string, which is the only
+/// choice the Redis protocol offers. The file cannot use the same encoding:
+/// serde reads `ca-file = ""` back as `Some("")`, i.e. a file literally named
+/// `""`, and boot validation then rejects the config the server itself wrote.
+/// Wrapping the wire string in this type moves that knowledge into the
+/// parameter's own type, so [`ToTomlValue`] can answer `None` and CONFIG
+/// REWRITE removes the key instead of writing an empty one.
+#[derive(Debug, Clone)]
+struct OptionalPathValue(String);
+
+impl ToTomlValue for OptionalPathValue {
+    fn to_toml_value(&self) -> Option<TomlValue> {
+        (!self.0.is_empty()).then(|| TomlValue::from(self.0.as_str()))
     }
 }
 
@@ -181,7 +205,7 @@ where
 struct MinReplicasMaxLagSecs(u64);
 
 impl ToTomlValue for MinReplicasMaxLagSecs {
-    fn to_toml_value(&self) -> TomlValue {
+    fn to_toml_value(&self) -> Option<TomlValue> {
         self.0.saturating_mul(1000).to_toml_value()
     }
 }
@@ -620,7 +644,7 @@ pub struct ParamMeta {
     /// REWRITE). Distinct from `getter` because the two protocols sometimes
     /// disagree on representation (e.g. `tls-auth-clients` reports Redis-style
     /// "no"/"yes" via `getter` but the TOML field needs "none"/"required").
-    pub toml_getter: fn(&ConfigManager) -> TomlValue,
+    pub toml_getter: fn(&ConfigManager) -> Option<TomlValue>,
 }
 
 /// A Redis-compatibility no-op parameter.
@@ -666,8 +690,8 @@ impl TomlRenderable for NoopParam {
     /// them out before any renderer would be called. Implemented anyway (as a
     /// string, matching `get` above) so `NoopParam` satisfies the same trait
     /// object bound as every other entry in `typed_params`.
-    fn toml_value(&self, _ctx: &ConfigManager) -> TomlValue {
-        TomlValue::from(self.value)
+    fn toml_value(&self, _ctx: &ConfigManager) -> Option<TomlValue> {
+        Some(TomlValue::from(self.value))
     }
 }
 
@@ -1157,6 +1181,10 @@ impl ConfigManager {
                     (Some(s), Some(f)) => (s, f),
                     _ => return None,
                 };
+                // `None` here is not "skip this parameter": it is the value
+                // *unset*, which `ConfigPersister::merge` renders by removing
+                // the key (a previously-set path that has since been cleared
+                // must not survive in the file).
                 let value = if let Some(typed) = self.typed_param_toml(param.name) {
                     typed.toml_value(self)
                 } else {
@@ -1474,7 +1502,12 @@ impl ConfigManager {
             Logfile => ParamMeta {
                 name: id.name(),
                 getter: |mgr| mgr.static_config.logfile.clone(),
-                toml_getter: |mgr| mgr.static_config.logfile.to_toml_value(),
+                // `logging.file-path` is `Option<PathBuf>`: no logfile means the
+                // key is absent, not `file-path = ""` (which would ask the next
+                // boot to log to a file named `""`).
+                toml_getter: |mgr| {
+                    OptionalPathValue(mgr.static_config.logfile.clone()).to_toml_value()
+                },
             },
             // --- 13-01 Pass 2b: immutable startup-consumed params (GET-only) ---
             CompactionRateLimitMb => ParamMeta {
@@ -2428,61 +2461,70 @@ impl ConfigManager {
                 render: |v| v.clone(),
                 propagation: Propagation::None,
             }),
-            TlsCaCertFile => Box::new(ConfigParam::<String, ConfigManager> {
+            // `OptionalPathValue`, not `String`: the file field is
+            // `Option<PathBuf>`, so "unset" must be rendered by CONFIG REWRITE
+            // as an *absent* key rather than `ca-file = ""`.
+            TlsCaCertFile => Box::new(ConfigParam::<OptionalPathValue, ConfigManager> {
                 name: id.name(),
-                parse: |s| Ok(s.to_string()),
+                parse: |s| Ok(OptionalPathValue(s.to_string())),
                 validate: ConfigParam::no_validate,
-                default: String::new,
-                get: |mgr| match mgr.live_tls_config() {
-                    Some(c) => render_optional_path(&c.ca_file),
-                    None => mgr.static_config.tls_ca_file.clone(),
+                default: || OptionalPathValue(String::new()),
+                get: |mgr| {
+                    OptionalPathValue(match mgr.live_tls_config() {
+                        Some(c) => render_optional_path(&c.ca_file),
+                        None => mgr.static_config.tls_ca_file.clone(),
+                    })
                 },
                 apply: |mgr, v| {
-                    mgr.apply_tls("tls-ca-cert-file", TlsMutation::CaFile(optional_path(&v)))?;
+                    mgr.apply_tls("tls-ca-cert-file", TlsMutation::CaFile(optional_path(&v.0)))?;
                     info!("TLS CA bundle reloaded");
                     Ok(())
                 },
-                render: |v| v.clone(),
+                render: |v| v.0.clone(),
                 propagation: Propagation::None,
             }),
-            TlsClientCertFile => Box::new(ConfigParam::<String, ConfigManager> {
+            TlsClientCertFile => Box::new(ConfigParam::<OptionalPathValue, ConfigManager> {
                 name: id.name(),
-                parse: |s| Ok(s.to_string()),
+                parse: |s| Ok(OptionalPathValue(s.to_string())),
                 validate: ConfigParam::no_validate,
-                default: String::new,
-                get: |mgr| match mgr.live_tls_config() {
-                    Some(c) => render_optional_path(&c.client_cert_file),
-                    None => mgr.static_config.tls_client_cert_file.clone(),
+                default: || OptionalPathValue(String::new()),
+                get: |mgr| {
+                    OptionalPathValue(match mgr.live_tls_config() {
+                        Some(c) => render_optional_path(&c.client_cert_file),
+                        None => mgr.static_config.tls_client_cert_file.clone(),
+                    })
                 },
                 apply: |mgr, v| {
                     mgr.apply_tls(
                         "tls-client-cert-file",
-                        TlsMutation::ClientCertFile(optional_path(&v)),
+                        TlsMutation::ClientCertFile(optional_path(&v.0)),
                     )?;
                     info!("TLS outgoing client certificate reloaded");
                     Ok(())
                 },
-                render: |v| v.clone(),
+                render: |v| v.0.clone(),
                 propagation: Propagation::None,
             }),
-            TlsClientKeyFile => Box::new(ConfigParam::<String, ConfigManager> {
+            TlsClientKeyFile => Box::new(ConfigParam::<OptionalPathValue, ConfigManager> {
                 name: id.name(),
-                parse: |s| Ok(s.to_string()),
+                parse: |s| Ok(OptionalPathValue(s.to_string())),
                 validate: ConfigParam::no_validate,
-                default: String::new,
-                get: |mgr| match mgr.live_tls_config() {
-                    Some(c) => render_optional_path(&c.client_key_file),
-                    None => mgr.static_config.tls_client_key_file.clone(),
+                default: || OptionalPathValue(String::new()),
+                get: |mgr| {
+                    OptionalPathValue(match mgr.live_tls_config() {
+                        Some(c) => render_optional_path(&c.client_key_file),
+                        None => mgr.static_config.tls_client_key_file.clone(),
+                    })
                 },
                 apply: |mgr, v| {
                     mgr.apply_tls(
                         "tls-client-key-file",
-                        TlsMutation::ClientKeyFile(optional_path(&v)),
+                        TlsMutation::ClientKeyFile(optional_path(&v.0)),
                     )?;
                     info!("TLS outgoing client key reloaded");
                     Ok(())
                 },
-                render: |v| v.clone(),
+                render: |v| v.0.clone(),
                 propagation: Propagation::None,
             }),
             TlsCiphersuites => Box::new(ConfigParam::<Vec<String>, ConfigManager> {
@@ -4103,17 +4145,24 @@ min-replicas-timeout-ms = 5000
     // so a numeric-looking `String` value never gets coerced to a TOML
     // integer, and so on.
 
+    /// A set value's TOML rendering. Panics on `None`, which every type
+    /// exercised below is expected never to produce (only
+    /// [`OptionalPathValue`] can be unset).
+    fn toml(v: impl ToTomlValue) -> TomlValue {
+        v.to_toml_value().expect("value is set")
+    }
+
     #[test]
     fn to_toml_value_bool_renders_as_toml_bool() {
-        assert_eq!(true.to_toml_value().as_bool(), Some(true));
-        assert_eq!(false.to_toml_value().as_bool(), Some(false));
+        assert_eq!(toml(true).as_bool(), Some(true));
+        assert_eq!(toml(false).as_bool(), Some(false));
     }
 
     #[test]
     fn to_toml_value_integer_types_render_as_toml_integer() {
-        assert_eq!(42u64.to_toml_value().as_integer(), Some(42));
-        assert_eq!(7u8.to_toml_value().as_integer(), Some(7));
-        assert_eq!((-1i64).to_toml_value().as_integer(), Some(-1));
+        assert_eq!(toml(42u64).as_integer(), Some(42));
+        assert_eq!(toml(7u8).as_integer(), Some(7));
+        assert_eq!(toml(-1i64).as_integer(), Some(-1));
     }
 
     #[test]
@@ -4122,20 +4171,18 @@ min-replicas-timeout-ms = 5000
         // `String`-typed parameter (accepts "50%" as well as a byte count),
         // so a value that merely *looks* like an integer or a boolean must
         // still render as a TOML string, not get re-guessed into another type.
-        let numeric_looking = "42".to_string();
-        let v = numeric_looking.to_toml_value();
+        let v = toml("42".to_string());
         assert!(v.is_str(), "expected TOML string, got: {v:?}");
         assert_eq!(v.as_str(), Some("42"));
 
-        let bool_looking = "yes".to_string();
-        let v = bool_looking.to_toml_value();
+        let v = toml("yes".to_string());
         assert!(v.is_str(), "expected TOML string, got: {v:?}");
         assert_eq!(v.as_str(), Some("yes"));
     }
 
     #[test]
     fn to_toml_value_eviction_policy_renders_as_toml_string() {
-        let v = EvictionPolicy::AllkeysLru.to_toml_value();
+        let v = toml(EvictionPolicy::AllkeysLru);
         assert!(v.is_str());
         assert_eq!(v.as_str(), Some("allkeys-lru"));
     }
@@ -4144,33 +4191,38 @@ min-replicas-timeout-ms = 5000
     fn to_toml_value_min_replicas_max_lag_converts_seconds_to_ms() {
         // The unit conversion now lives on `MinReplicasMaxLagSecs` itself,
         // rather than as a name check in the file writer.
-        let v = MinReplicasMaxLagSecs(10).to_toml_value();
-        assert_eq!(v.as_integer(), Some(10_000));
+        assert_eq!(toml(MinReplicasMaxLagSecs(10)).as_integer(), Some(10_000));
     }
 
     #[test]
     fn to_toml_value_client_cert_mode_renders_file_encoding() {
         // Distinct from the CONFIG GET display value ("no"/"optional"/"yes"):
         // the TOML file encodes this as "none"/"optional"/"required".
-        assert_eq!(ClientCertMode::None.to_toml_value().as_str(), Some("none"));
-        assert_eq!(
-            ClientCertMode::Optional.to_toml_value().as_str(),
-            Some("optional")
-        );
-        assert_eq!(
-            ClientCertMode::Required.to_toml_value().as_str(),
-            Some("required")
-        );
+        assert_eq!(toml(ClientCertMode::None).as_str(), Some("none"));
+        assert_eq!(toml(ClientCertMode::Optional).as_str(), Some("optional"));
+        assert_eq!(toml(ClientCertMode::Required).as_str(), Some("required"));
     }
 
     #[test]
     fn to_toml_value_tls_protocols_renders_toml_array_in_file_encoding() {
         // Distinct from the CONFIG GET display value ("TLSv1.2 TLSv1.3"): the
         // TOML file encodes this as an array of "1.2"/"1.3".
-        let v = vec![TlsProtocol::Tls12, TlsProtocol::Tls13].to_toml_value();
+        let v = toml(vec![TlsProtocol::Tls12, TlsProtocol::Tls13]);
         let arr = v.as_array().expect("expected a TOML array");
         let rendered: Vec<&str> = arr.iter().map(|v| v.as_str().unwrap()).collect();
         assert_eq!(rendered, vec!["1.2", "1.3"]);
+    }
+
+    #[test]
+    fn to_toml_value_optional_path_renders_unset_as_absent() {
+        // C1: the empty wire value means "unset", which REWRITE must express by
+        // *removing* the key. Rendering `""` would round-trip as `Some("")` and
+        // fail the next boot with "does not exist".
+        assert!(OptionalPathValue(String::new()).to_toml_value().is_none());
+        assert_eq!(
+            toml(OptionalPathValue("/etc/frogdb/ca.pem".to_string())).as_str(),
+            Some("/etc/frogdb/ca.pem")
+        );
     }
 
     #[test]

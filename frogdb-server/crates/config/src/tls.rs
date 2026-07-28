@@ -6,6 +6,21 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Deserialize an optional path, mapping the empty string to `None`.
+///
+/// CONFIG GET/SET can only spell "unset" as the empty string, and CONFIG
+/// REWRITE removes the key rather than writing `""` for exactly that reason.
+/// This is the belt-and-braces other end: a hand-edited (or older) file
+/// carrying `ca-file = ""` is read as *unset* instead of as a file named `""`,
+/// which would otherwise fail validation with a baffling "does not exist".
+fn deserialize_optional_path<'de, D>(deserializer: D) -> Result<Option<PathBuf>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Option<PathBuf> = Option::deserialize(deserializer)?;
+    Ok(raw.filter(|p| !p.as_os_str().is_empty()))
+}
+
 /// TLS protocol version.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub enum TlsProtocol {
@@ -94,7 +109,7 @@ pub struct TlsConfig {
 
     /// Path to the CA certificate file for client certificate verification (PEM format).
     /// Required when `require_client_cert` is not `none`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_path")]
     #[param(mutable, name = "tls-ca-cert-file")]
     pub ca_file: Option<PathBuf>,
 
@@ -154,12 +169,12 @@ pub struct TlsConfig {
     pub no_tls_on_http: bool,
 
     /// Path to client certificate for outgoing replication/cluster connections.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_path")]
     #[param(mutable, name = "tls-client-cert-file")]
     pub client_cert_file: Option<PathBuf>,
 
     /// Path to client private key for outgoing replication/cluster connections.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_path")]
     #[param(mutable, name = "tls-client-key-file")]
     pub client_key_file: Option<PathBuf>,
 
