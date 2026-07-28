@@ -144,3 +144,9 @@ Five canonical roles, default strings (`needs-triage`, `needs-info`, `ready-for-
 
 Multi-context: `CONTEXT-MAP.md` at root points to a per-context `CONTEXT.md`
 (server / operator / cli). See `docs/agents/domain.md`.
+
+### Coverage depth
+
+`just coverage-depth` adds per-line exec counts and per-function test diversity on top of
+plain line coverage (which function is reached by how many *distinct* tests). See
+`docs/agents/coverage-depth.md`.

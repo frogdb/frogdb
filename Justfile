@@ -77,6 +77,17 @@ coverage crate="" pattern="":
 coverage-lcov:
     {{dyld-env}} {{rocksdb-env}} cargo llvm-cov nextest --all --lcov --output-path target/llvm-cov/lcov.info
 
+# Coverage *depth*: per-line exec counts + per-function test diversity
+# (see docs/agents/coverage-depth.md). Local-only; uses its own target dir.
+coverage-depth crate="" pattern="":
+    ./scripts/coverage-depth.py run {{ if crate != "" { "--crate " + crate } else { "" } }} {{ if pattern != "" { "--pattern " + pattern } else { "" } }}
+    ./scripts/coverage-depth.py report
+    @echo "Report: target/llvm-cov/depth/index.html"
+
+# Measure the coverage-depth pipeline on one crate before a full-suite run
+coverage-calibrate crate:
+    ./scripts/coverage-depth.py calibrate {{crate}}
+
 # Run concurrency tests (Shuttle + Turmoil + generated workload sweep)
 concurrency:
     {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-core --features shuttle -E 'test(/concurrency/)'
