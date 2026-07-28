@@ -522,11 +522,19 @@ pub struct LocalClientStats {
 
 impl LocalClientStats {
     /// Record a command execution.
-    pub fn record_command(&mut self, cmd_name: &str, latency_us: u64) {
+    ///
+    /// `cmd_name` is `None` when the client sent a name the command registry
+    /// does not know: the totals still count the round trip, but no per-command
+    /// sample is produced, so client-supplied garbage cannot grow the
+    /// `cmdstat_*` map without bound (Redis likewise has nowhere to count a
+    /// command that isn't in its command table).
+    pub fn record_command(&mut self, cmd_name: Option<&str>, latency_us: u64) {
         self.commands_total += 1;
         self.latency_total_us += latency_us;
-        self.command_latencies
-            .push((cmd_name.to_string(), latency_us));
+        if let Some(cmd_name) = cmd_name {
+            self.command_latencies
+                .push((cmd_name.to_string(), latency_us));
+        }
     }
 
     /// Add bytes received.

@@ -371,17 +371,11 @@ impl ConnectionHandler {
 
         // Rate limit check (after QUIT handled above, before dispatch)
         if let Some(err_resp) = self.check_rate_limit(&cmd_name, cmd_bytes as u64) {
-            // Record as rejected (pre-execution)
-            if let Response::Error(ref bytes) = err_resp {
-                let prefix = frogdb_core::extract_error_prefix(bytes);
-                self.admin
-                    .client_registry
-                    .error_stats
-                    .record_rejected(prefix);
-                self.admin
-                    .client_registry
-                    .record_command_rejected(&cmd_name);
-            }
+            // Rate limiting refuses the command outright, so it is recorded as
+            // a rejection — through the same accounting seam the pre-dispatch
+            // gauntlet uses, so the cmdstat rules (registered names only) hold
+            // here too.
+            self.record_error_response(&err_resp, true, &cmd_name);
             let _ = self.feed_response(Self::narrow_to_wire(err_resp)).await;
             return FrameAction::Continue;
         }
@@ -462,13 +456,22 @@ impl ConnectionHandler {
             if has_error { "error" } else { "ok" },
         );
 
-        // Record per-client command statistics
-        self.state.local_stats.record_command(&cmd_name, elapsed_us);
+        // Record per-client command statistics. Only *registered* command names
+        // may key a per-command map (`cmdstat_<name>`, the latency histograms):
+        // an unrecognized name is raw client input, and keying stats by it is an
+        // unbounded-cardinality growth vector. The connection's own totals still
+        // count the round trip.
+        let known_command = self.records_command_stats(&cmd_name);
+        self.state
+            .local_stats
+            .record_command(known_command.then_some(cmd_name.as_str()), elapsed_us);
 
         // Record into server-wide latency histograms (for INFO latencystats)
-        self.observability
-            .latency_histograms
-            .record(&cmd_name, elapsed_us);
+        if known_command {
+            self.observability
+                .latency_histograms
+                .record(&cmd_name, elapsed_us);
+        }
 
         // Blocking commands should immediately surface in INFO commandstats
         // without waiting for the periodic sync threshold (every 100 commands

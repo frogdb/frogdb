@@ -45,67 +45,68 @@
 //! prior-art `tcl_errors_stats_for_geoadd` test in `introspection2_tcl.rs`
 //! (asserts `cmdstat_geoadd` `failed_calls` e2e; not duplicated here).
 //!
-//! Empirically probing every upstream scenario against the current dispatch
-//! pipeline (`server/src/connection/dispatch.rs`'s `DispatchStage` gauntlet)
-//! shows the split is real but **narrower** than a naive port would assume:
-//! `record_error_response` (the only place that increments error/commandstats)
-//! is called from exactly three stages — `PreChecks` and `Arity` (both
-//! `is_rejected = true`) and the terminal `Execute` stage (always
-//! `is_rejected = false`, since by definition it observed a real command
-//! execution). Errors surfaced by any *other* stage (`PreAuthIntercept`,
-//! `TransactionControl`, `TransactionQueue`, `ConnectionCommand`, and others)
-//! are never recorded at all. See
-//! `.scratch/testing-improvements/issues/63-errorstats-dispatch-stage-coverage-gap.md`
-//! for the follow-up filed against the gaps found here.
+//! Error accounting is driven by the dispatch gauntlet
+//! (`server/src/connection/dispatch.rs`): the driver records every
+//! short-circuiting stage's error replies exactly once, classifying them from
+//! the stage that produced them — *guard* stages reject before anything runs
+//! (`rejected_calls`), *dispatch* stages terminate into an executor that ran
+//! and errored (`failed_calls`). This is the same line Redis draws between
+//! `processCommand`'s pre-`call()` refusals and errors raised inside `call()`.
 //!
-//! Below, each upstream scenario is re-ported with an assertion of FrogDB's
-//! *actual* behavior — never a faked Redis-parity assertion:
+//! Task 44 originally found that `record_error_response` was wired into only
+//! three stages (`PreChecks`, `Arity`, `Execute`), leaving AUTH, MULTI/EXEC and
+//! EVALSHA errors invisible, and that unknown-command/OOM errors landed on the
+//! wrong side of the rejected/failed split; the tests below pinned those gaps
+//! until issue 63 closed them. See
+//! `.scratch/testing-improvements/issues/63-errorstats-dispatch-stage-coverage-gap.md`.
+//!
+//! Each upstream scenario, and how it maps onto FrogDB:
 //!
 //! - `errorstats: failed call NOGROUP error` → ported as
 //!   [`errorstats_nogroup_is_failed_call`]: matches Redis (XGROUP is a
 //!   `Standard` shard command; its error surfaces via the `Execute` stage).
 //! - `errorstats: rejected call due to wrong arity` → ported as
-//!   [`errorstats_wrong_arity_is_rejected_call`]: matches Redis (`Arity` is a
-//!   shared pre-dispatch stage for every registered command).
+//!   [`errorstats_wrong_arity_is_rejected_call`]: matches Redis
+//!   (`CommandLookup` is a shared pre-dispatch guard for every command).
 //! - `errorstats: rejected call by authorization error` → ported as
 //!   [`errorstats_nopermission_is_rejected_call`]: matches Redis (ACL checks
 //!   run in the shared `PreChecks` stage).
 //! - `errorstats: rejected call unknown command` → ported as
-//!   [`errorstats_unknown_command_counts_as_err_but_not_rejected`]: the
-//!   `errorstat_ERR` count and `total_error_replies` DO increment (matching
-//!   Redis), but **diverges** from Redis: `route_and_execute`'s own
-//!   unknown-command check runs inside the terminal `Execute` stage, so it is
-//!   recorded as `is_rejected = false` (a failed call), not `rejected_calls`.
-//!   A second, independent divergence found while writing this test: an
-//!   unknown command also creates a `cmdstat_<garbage-name>` entry keyed
-//!   directly off client-supplied input, with no cap analogous to
-//!   errorstats' `MAX_ERROR_TYPES` — an unbounded-cardinality growth vector.
+//!   [`errorstats_unknown_command_is_rejected_call`]: matches Redis. The
+//!   unknown-command check is the `CommandLookup` guard, so it is a rejection;
+//!   and, like Redis (whose per-command counters live on the command-table
+//!   entry an unknown command doesn't have), no `cmdstat_<garbage-name>` entry
+//!   is created — the unbounded-cardinality vector task 44 found. The bound is
+//!   pinned by
+//!   [`commandstats_unknown_command_names_do_not_grow_cmdstat_entries`].
 //! - `errorstats: rejected call by OOM error` → ported as
-//!   [`errorstats_oom_is_failed_not_rejected_call_divergence`]: **diverges**
-//!   from Redis. Real Redis checks `maxmemory` before dispatch (a rejection);
-//!   FrogDB's OOM check (`core/src/shard/eviction.rs`) runs during shard-side
-//!   write execution, downstream of the `Execute` stage's routing, so it is
-//!   recorded as a failed call, not a rejected one. `errorstat_OOM` and
-//!   `total_error_replies` are still correct.
-//! - `errorstats: failed call authentication error`,
-//!   `errorstats: failed call within MULTI/EXEC`,
-//!   `errorstats: rejected call within MULTI/EXEC`,
-//!   `errorstats: failed call NOSCRIPT error`,
-//!   `errorstats: failed call within LUA` → all five pin a genuine
-//!   **observability gap**, not a divergence in classification: AUTH
-//!   (`PreAuthIntercept`), MULTI/EXEC/queued-command errors
-//!   (`TransactionControl`/`TransactionQueue`), and EVALSHA/NOSCRIPT (EVAL and
-//!   EVALSHA dispatch via `ConnectionCommand`, not `Execute`) are none of them
-//!   recorded at all — no errorstat increment, no cmdstat increment. Ported as
-//!   [`errorstats_auth_failure_is_untracked_gap`],
-//!   [`errorstats_multi_exec_errors_are_untracked_gap`], and
-//!   [`errorstats_evalsha_noscript_is_untracked_gap`]. Redis-invoked nested
-//!   commands (`redis.call`/`redis.pcall` inside EVAL) go through a separate,
-//!   lower-level executor path entirely (`core/src/scripting/executor.rs`)
-//!   that never touches `ClientRegistry`, so they can never be tracked with
-//!   the current architecture; documented inline in
-//!   [`errorstats_evalsha_noscript_is_untracked_gap`] rather than given its
-//!   own test, since it's the same root cause as the EVAL/EVALSHA gap.
+//!   [`errorstats_oom_is_rejected_call`]: matches Redis on the observable
+//!   split. FrogDB's `maxmemory` gate is shard-side
+//!   (`core/src/shard/eviction.rs`) rather than pre-dispatch, but it refuses
+//!   the write before executing it, so the `OOM` prefix is classified as a
+//!   pre-execution rejection at the recording seam.
+//! - `errorstats: failed call authentication error` → ported as
+//!   [`errorstats_auth_failure_is_failed_call`]: AUTH runs its executor in the
+//!   `PreAuthIntercept` dispatch stage, so an auth failure is a failed call,
+//!   matching Redis.
+//! - `errorstats: failed call within MULTI/EXEC` and
+//!   `errorstats: rejected call within MULTI/EXEC` → ported together as
+//!   [`errorstats_multi_exec_errors_are_recorded`]: a queue-time error is
+//!   attributed to the *queued* command as a rejection (the `TransactionQueue`
+//!   guard), and the resulting `EXECABORT` is attributed to `exec` as a failed
+//!   call (the `TransactionControl` dispatch stage) — both matching Redis.
+//! - `errorstats: failed call NOSCRIPT error` → ported as
+//!   [`errorstats_evalsha_noscript_is_failed_call`]: EVALSHA dispatches through
+//!   the `ConnectionCommand` stage, so `NOSCRIPT` is a failed call on
+//!   `cmdstat_evalsha`, matching Redis.
+//! - `errorstats: failed call within LUA` → **still an open gap**, carved out
+//!   of issue 63 as a follow-up: a command invoked from inside a script via
+//!   `redis.call`/`redis.pcall` runs through a separate, lower-level executor
+//!   (`core/src/scripting/executor.rs`) that calls `CommandRegistry` directly
+//!   and never touches `ClientRegistry`, so there is no cmdstat/errorstat
+//!   plumbing to record through even for *successful* script-invoked calls.
+//!   Documented inline in [`errorstats_evalsha_noscript_is_failed_call`]
+//!   rather than given its own test.
 //!
 //! ### Observability gap: client stats
 //!
@@ -149,6 +150,11 @@ fn parse_cmdstat(info: &str, cmd_name: &str) -> Option<CmdStat> {
         }
     }
     None
+}
+
+/// Number of distinct `cmdstat_<name>` entries in `INFO commandstats`.
+fn cmdstat_entry_count(info: &str) -> usize {
+    info.lines().filter(|l| l.starts_with("cmdstat_")).count()
 }
 
 /// Extract `errorstat_<PREFIX>:count=N` for a given prefix, if present.
@@ -337,19 +343,24 @@ async fn errorstats_nopermission_is_rejected_call() {
 }
 
 // ============================================================================
-// Re-ported upstream scenarios that reveal genuine divergences
+// Re-ported upstream scenarios that were divergences until issue 63
 // ============================================================================
 
-/// `errorstats: rejected call unknown command` (upstream), re-ported: FrogDB
-/// DOES increment `errorstat_ERR` and `total_error_replies` for an unknown
-/// command (matching Redis), but **diverges** on the rejected/failed split:
-/// `route_and_execute`'s unknown-command check runs inside the terminal
-/// `Execute` stage, so it is recorded `is_rejected = false` (a failed call),
-/// not `rejected_calls`, unlike Redis. It also creates a
-/// `cmdstat_<garbage-name>` entry keyed directly off client input with no
-/// cardinality cap — see the follow-up issue for both findings.
+/// `errorstats: rejected call unknown command` (upstream), re-ported: an
+/// unknown command increments `errorstat_ERR` and `total_error_replies` and is
+/// counted as a **rejection** — the `CommandLookup` guard rejects it before any
+/// executor runs, exactly like Redis's `processCommand`.
+///
+/// Prior behavior (issue 63): the unknown-command check lived in
+/// `route_and_execute`, inside the terminal `Execute` stage, so it recorded a
+/// *failed* call, and it created a `cmdstat_<garbage-name>` entry keyed
+/// directly off client input — an unbounded-cardinality vector. Both are fixed:
+/// no per-name entry is created for an unrecognized command (see
+/// [`commandstats_unknown_command_names_do_not_grow_cmdstat_entries`]), so the
+/// rejection is observable only in `errorstat_ERR`/`total_error_replies`, which
+/// is what Redis reports too.
 #[tokio::test]
-async fn errorstats_unknown_command_counts_as_err_but_not_rejected() {
+async fn errorstats_unknown_command_is_rejected_call() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
     assert_ok(&client.command(&["CONFIG", "RESETSTAT"]).await);
@@ -362,26 +373,68 @@ async fn errorstats_unknown_command_counts_as_err_but_not_rejected() {
     let stats = info_section(&mut client, "stats").await;
     assert_eq!(total_error_replies(&stats), 1, "{stats}");
 
-    // Divergence: classified as failed, not rejected, and cmdstat is keyed by
-    // the raw unrecognized command name.
+    // No cmdstat entry may be keyed by the unrecognized name.
     let cmdstats = info_section(&mut client, "commandstats").await;
-    let stat =
-        parse_cmdstat(&cmdstats, "asdfnotacommand").expect("cmdstat_asdfnotacommand missing");
-    assert_eq!(
-        stat.failed_calls, 1,
-        "divergence: FrogDB records unknown-command errors as failed, not rejected:\n{cmdstats}"
+    assert!(
+        parse_cmdstat(&cmdstats, "asdfnotacommand").is_none(),
+        "an unknown command must not create a cmdstat entry:\n{cmdstats}"
     );
-    assert_eq!(stat.rejected_calls, 0, "{cmdstats}");
 }
 
-/// `errorstats: rejected call by OOM error` (upstream), re-ported:
-/// **diverges** from Redis. Real Redis checks `maxmemory` before dispatch
-/// (a rejected call); FrogDB's OOM check (`core/src/shard/eviction.rs`) runs
-/// during shard-side write execution, downstream of the `Execute` stage's
-/// routing, so it is recorded as a failed call. `errorstat_OOM` and
-/// `total_error_replies` are still correct.
+/// Unrecognized command names must not grow the `cmdstat_*` map: they are raw
+/// client input, and `errorstat_*` has capped its own cardinality at
+/// `MAX_ERROR_TYPES` since day one for exactly this reason. N distinct garbage
+/// names produce N error replies but zero new `cmdstat_*` entries.
 #[tokio::test]
-async fn errorstats_oom_is_failed_not_rejected_call_divergence() {
+async fn commandstats_unknown_command_names_do_not_grow_cmdstat_entries() {
+    const GARBAGE_NAMES: usize = 200;
+    /// The test's own INFO/CONFIG traffic is the only legitimate growth.
+    const HARNESS_ENTRY_ALLOWANCE: usize = 4;
+
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+    assert_ok(&client.command(&["CONFIG", "RESETSTAT"]).await);
+
+    let baseline = cmdstat_entry_count(&info_section(&mut client, "commandstats").await);
+
+    for i in 0..GARBAGE_NAMES {
+        let name = format!("NOTACOMMAND{i}");
+        assert_error_prefix(&client.command(&[name.as_str()]).await, "ERR");
+    }
+
+    let cmdstats = info_section(&mut client, "commandstats").await;
+    for i in 0..GARBAGE_NAMES {
+        assert!(
+            parse_cmdstat(&cmdstats, &format!("notacommand{i}")).is_none(),
+            "cmdstat_notacommand{i} must not exist:\n{cmdstats}"
+        );
+    }
+    let after = cmdstat_entry_count(&cmdstats);
+    assert!(
+        after <= baseline + HARNESS_ENTRY_ALLOWANCE,
+        "{GARBAGE_NAMES} distinct unknown command names grew cmdstat entries \
+         from {baseline} to {after}:\n{cmdstats}"
+    );
+
+    // The errors themselves are still fully accounted for.
+    let errorstats = info_section(&mut client, "errorstats").await;
+    assert_eq!(
+        errorstat_count(&errorstats, "ERR"),
+        Some(GARBAGE_NAMES as u64),
+        "{errorstats}"
+    );
+}
+
+/// `errorstats: rejected call by OOM error` (upstream), re-ported: an OOM
+/// error is a **rejected** call, matching Redis.
+///
+/// Prior behavior (issue 63): it was recorded as a *failed* call. FrogDB's
+/// `maxmemory` gate is still shard-side (`core/src/shard/eviction.rs`) rather
+/// than pre-dispatch — the memory accounting it reads is the shard's own — but
+/// it refuses the write before executing it, so nothing ran and the recording
+/// seam classifies the `OOM` prefix as a pre-execution rejection.
+#[tokio::test]
+async fn errorstats_oom_is_rejected_call() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
     assert_ok(&client.command(&["CONFIG", "RESETSTAT"]).await);
@@ -427,18 +480,21 @@ async fn errorstats_oom_is_failed_not_rejected_call_divergence() {
     let cmdstats = info_section(&mut client, "commandstats").await;
     let stat = parse_cmdstat(&cmdstats, "set").expect("cmdstat_set missing");
     assert_eq!(
-        stat.failed_calls, 1,
-        "divergence: FrogDB records OOM as failed, Redis records it as rejected:\n{cmdstats}"
+        stat.rejected_calls, 1,
+        "an OOM error refuses the write before it runs, so it is a rejection:\n{cmdstats}"
     );
-    assert_eq!(stat.rejected_calls, 0, "{cmdstats}");
+    assert_eq!(stat.failed_calls, 0, "{cmdstats}");
 }
 
-/// `errorstats: failed call authentication error` (upstream), re-ported:
-/// pins a genuine gap. AUTH is dispatched via the `PreAuthIntercept` stage,
-/// which never calls `record_error_response` — the error reaches the client
-/// correctly, but no errorstat or cmdstat entry is created for it at all.
+/// `errorstats: failed call authentication error` (upstream), re-ported: an
+/// AUTH failure is recorded as a **failed** call on `cmdstat_auth`, matching
+/// Redis (the AUTH executor ran and replied with an error).
+///
+/// Prior behavior (issue 63): AUTH dispatches via the `PreAuthIntercept` stage,
+/// which never called `record_error_response`, so the error reached the client
+/// but created no errorstat or cmdstat entry at all.
 #[tokio::test]
-async fn errorstats_auth_failure_is_untracked_gap() {
+async fn errorstats_auth_failure_is_failed_call() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
     assert_ok(&client.command(&["CONFIG", "RESETSTAT"]).await);
@@ -449,33 +505,28 @@ async fn errorstats_auth_failure_is_untracked_gap() {
     assert_error_prefix(&resp, "ERR");
 
     let errorstats = info_section(&mut client, "errorstats").await;
-    assert_eq!(
-        errorstat_count(&errorstats, "ERR"),
-        None,
-        "gap: AUTH errors are not recorded in errorstats yet:\n{errorstats}"
-    );
+    assert_eq!(errorstat_count(&errorstats, "ERR"), Some(1), "{errorstats}");
     let stats = info_section(&mut client, "stats").await;
-    assert_eq!(
-        total_error_replies(&stats),
-        0,
-        "gap: AUTH errors don't increment total_error_replies yet:\n{stats}"
-    );
+    assert_eq!(total_error_replies(&stats), 1, "{stats}");
     let cmdstats = info_section(&mut client, "commandstats").await;
-    let stat = parse_cmdstat(&cmdstats, "auth");
-    assert!(
-        stat.is_none_or(|s| s.failed_calls == 0 && s.rejected_calls == 0),
-        "gap: cmdstat_auth should show no failed/rejected accounting yet:\n{cmdstats}"
-    );
+    let stat = parse_cmdstat(&cmdstats, "auth").expect("cmdstat_auth missing");
+    assert_eq!(stat.calls, 1, "{cmdstats}");
+    assert_eq!(stat.failed_calls, 1, "{cmdstats}");
+    assert_eq!(stat.rejected_calls, 0, "{cmdstats}");
 }
 
 /// `errorstats: failed call within MULTI/EXEC` and
 /// `errorstats: rejected call within MULTI/EXEC` (upstream), re-ported
-/// together: pins a genuine gap. Both an arity error queued inside MULTI
-/// (dispatched via `TransactionQueue`) and the resulting EXECABORT from EXEC
-/// (dispatched via `TransactionControl`) reach the client correctly but
-/// neither stage calls `record_error_response`.
+/// together: both the queue-time arity error and the resulting EXECABORT are
+/// recorded, each attributed the way Redis attributes it — the queue-time error
+/// is a **rejection** of the queued command (`cmdstat_set`, from the
+/// `TransactionQueue` guard), and EXECABORT is a **failure** of `exec` itself
+/// (`cmdstat_exec`, from the `TransactionControl` dispatch stage).
+///
+/// Prior behavior (issue 63): neither stage called `record_error_response`, so
+/// both errors reached the client entirely unaccounted for.
 #[tokio::test]
-async fn errorstats_multi_exec_errors_are_untracked_gap() {
+async fn errorstats_multi_exec_errors_are_recorded() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
     assert_ok(&client.command(&["CONFIG", "RESETSTAT"]).await);
@@ -487,42 +538,49 @@ async fn errorstats_multi_exec_errors_are_untracked_gap() {
     assert_error_prefix(&exec_resp, "EXECABORT");
 
     let errorstats = info_section(&mut client, "errorstats").await;
-    assert_eq!(
-        errorstat_count(&errorstats, "ERR"),
-        None,
-        "gap: queue-time arity error inside MULTI isn't recorded yet:\n{errorstats}"
-    );
+    assert_eq!(errorstat_count(&errorstats, "ERR"), Some(1), "{errorstats}");
     assert_eq!(
         errorstat_count(&errorstats, "EXECABORT"),
-        None,
-        "gap: EXECABORT from EXEC isn't recorded yet:\n{errorstats}"
+        Some(1),
+        "{errorstats}"
     );
     let stats = info_section(&mut client, "stats").await;
+    assert_eq!(total_error_replies(&stats), 2, "{stats}");
+
+    let cmdstats = info_section(&mut client, "commandstats").await;
+    let set_stat = parse_cmdstat(&cmdstats, "set").expect("cmdstat_set missing");
     assert_eq!(
-        total_error_replies(&stats),
-        0,
-        "gap: neither MULTI-queue nor EXEC errors increment total_error_replies yet:\n{stats}"
+        set_stat.rejected_calls, 1,
+        "a queue-time error rejects the queued command:\n{cmdstats}"
     );
+    assert_eq!(set_stat.failed_calls, 0, "{cmdstats}");
+    let exec_stat = parse_cmdstat(&cmdstats, "exec").expect("cmdstat_exec missing");
+    assert_eq!(
+        exec_stat.failed_calls, 1,
+        "EXECABORT is a failure of EXEC itself:\n{cmdstats}"
+    );
+    assert_eq!(exec_stat.rejected_calls, 0, "{cmdstats}");
 }
 
-/// `errorstats: failed call NOSCRIPT error` and
-/// `errorstats: failed call within LUA` (upstream), re-ported together:
-/// pins a genuine gap with a single root cause. EVAL/EVALSHA dispatch via
-/// the `ConnectionCommand` stage (scripting is a `ConnectionLevel`
-/// execution strategy), which never calls `record_error_response`, so
-/// EVALSHA's NOSCRIPT is untracked. A command invoked from inside a Lua
-/// script via `redis.call`/`redis.pcall` is untracked for a different,
-/// deeper reason: script-internal command calls run through a separate,
-/// lower-level executor (`core/src/scripting/executor.rs`) that calls
-/// `CommandRegistry` directly and never touches `ClientRegistry` at all, so
-/// there is no cmdstat/errorstat plumbing to record through even for
-/// successful calls, let alone failing ones — unlike Redis, which tracks
-/// stats for script-invoked commands. EVAL's own arity error, by contrast,
-/// IS caught (and correctly recorded as rejected) by the universal `Arity`
-/// pre-dispatch stage, since that stage runs ahead of the
-/// `ConnectionCommand` dispatch for every registered command name.
+/// `errorstats: failed call NOSCRIPT error` (upstream), re-ported: EVALSHA's
+/// `NOSCRIPT` is recorded as a **failed** call on `cmdstat_evalsha`, matching
+/// Redis — EVAL/EVALSHA dispatch through the `ConnectionCommand` stage
+/// (scripting is a `ConnectionLevel` execution strategy), which runs the
+/// command's executor.
+///
+/// Prior behavior (issue 63): the `ConnectionCommand` stage never called
+/// `record_error_response`, so NOSCRIPT was untracked.
+///
+/// `errorstats: failed call within LUA` remains an **open follow-up**, carved
+/// out of issue 63: a command invoked from inside a script via
+/// `redis.call`/`redis.pcall` runs through a separate, lower-level executor
+/// (`core/src/scripting/executor.rs`) that calls `CommandRegistry` directly and
+/// never touches `ClientRegistry` at all, so there is no cmdstat/errorstat
+/// plumbing to record through even for successful calls, let alone failing
+/// ones — unlike Redis, which tracks stats for script-invoked commands. Closing
+/// it means threading a `ClientRegistry` handle into the script executor.
 #[tokio::test]
-async fn errorstats_evalsha_noscript_is_untracked_gap() {
+async fn errorstats_evalsha_noscript_is_failed_call() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
     assert_ok(&client.command(&["CONFIG", "RESETSTAT"]).await);
@@ -535,18 +593,16 @@ async fn errorstats_evalsha_noscript_is_untracked_gap() {
     let errorstats = info_section(&mut client, "errorstats").await;
     assert_eq!(
         errorstat_count(&errorstats, "NOSCRIPT"),
-        None,
-        "gap: EVALSHA NOSCRIPT isn't recorded yet (ConnectionCommand stage skips record_error_response):\n{errorstats}"
+        Some(1),
+        "{errorstats}"
     );
     let cmdstats = info_section(&mut client, "commandstats").await;
-    let stat = parse_cmdstat(&cmdstats, "evalsha");
-    assert!(
-        stat.is_none_or(|s| s.failed_calls == 0 && s.rejected_calls == 0),
-        "gap: cmdstat_evalsha should show no failed/rejected accounting yet:\n{cmdstats}"
-    );
+    let stat = parse_cmdstat(&cmdstats, "evalsha").expect("cmdstat_evalsha missing");
+    assert_eq!(stat.failed_calls, 1, "{cmdstats}");
+    assert_eq!(stat.rejected_calls, 0, "{cmdstats}");
 
-    // By contrast: EVAL's own arity error IS caught by the universal Arity
-    // pre-dispatch stage, correctly recorded as rejected.
+    // By contrast: EVAL's own arity error is caught by the universal
+    // `CommandLookup` pre-dispatch guard, correctly recorded as rejected.
     assert_ok(&client.command(&["CONFIG", "RESETSTAT"]).await);
     let arity_resp = client.command(&["EVAL", "return 1"]).await;
     assert_error_prefix(&arity_resp, "ERR");
