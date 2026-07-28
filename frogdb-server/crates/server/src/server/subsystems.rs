@@ -154,7 +154,8 @@ impl Server {
                 config_entries,
             )
             .with_node_state(node_state_provider)
-            .with_shard_senders(self.shard_senders.clone());
+            .with_shard_senders(self.shard_senders.clone())
+            .with_hot_shards(hot_shard_collector.clone());
 
             // SAFETY: http_listener is Some when prometheus_recorder is Some
             // (both are gated on config.http.enabled in Server::new()).

@@ -241,6 +241,60 @@ async fn test_status_json_carries_the_hot_shard_section() {
     assert!(classes.contains(&"hot"), "got {classes:?}");
 }
 
+/// The debug web UI panel renders the same installed collector, so the HTML
+/// must show the live skew rather than the "no collector" placeholder.
+#[tokio::test]
+async fn test_debug_ui_hot_shard_panel_renders_live_load() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    for i in 0..200 {
+        let value = i.to_string();
+        client.command(&["SET", "ui:key", &value]).await;
+    }
+
+    let http = reqwest::Client::builder().no_proxy().build().unwrap();
+
+    let html = http
+        .get(server.metrics_url("/debug/partials/hot-shards"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(html.contains("Shard Load"), "panel header: {html}");
+    assert!(
+        !html.contains("No hot-shard collector installed"),
+        "the collector must be installed on a real server: {html}"
+    );
+    assert!(html.contains("HOT"), "the loaded shard is flagged: {html}");
+
+    // The same panel is part of the combined performance view.
+    let performance = http
+        .get(server.metrics_url("/debug/partials/performance"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(performance.contains("Shard Load"), "got {performance}");
+
+    let json: serde_json::Value = http
+        .get(server.metrics_url("/debug/api/hot-shards"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(json["hot_count"].as_u64(), Some(1), "got {json:#}");
+    assert!(json["total_ops_per_sec"].as_f64().unwrap_or(0.0) > 0.0);
+
+    server.shutdown().await;
+}
+
 #[tokio::test]
 async fn test_hotshards_rejects_bad_arguments() {
     let server = TestServer::start_standalone().await;

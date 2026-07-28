@@ -78,6 +78,7 @@ pub async fn handle_debug_request(
         "/api/slowlog" => handlers::handle_api_slowlog(state).await,
         "/api/latency" => handlers::handle_api_latency(state).await,
         "/api/shard-stats" => handlers::handle_api_shard_stats(state).await,
+        "/api/hot-shards" => handlers::handle_api_hot_shards(state).await,
 
         // Node badge (header)
         "/partials/node-badge" => handlers::handle_partial_node_badge(state),
@@ -102,6 +103,7 @@ pub async fn handle_debug_request(
         "/partials/slowlog" => handlers::handle_partial_slowlog(state).await,
         "/partials/latency" => handlers::handle_partial_latency(state).await,
         "/partials/shard-stats" => handlers::handle_partial_shard_stats(state).await,
+        "/partials/hot-shards" => handlers::handle_partial_hot_shards(state).await,
         "/partials/bundles" => handlers::handle_partial_bundles(state),
 
         // Not found

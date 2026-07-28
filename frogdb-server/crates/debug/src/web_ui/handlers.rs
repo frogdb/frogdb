@@ -4,6 +4,7 @@
 
 use super::state::DebugState;
 use bytes::Bytes;
+use frogdb_core::ShardLoadClass;
 use frogdb_telemetry::PrometheusRecorder;
 use http_body_util::Full;
 use hyper::{Response, StatusCode};
@@ -508,6 +509,113 @@ async fn render_shard_stats_html(state: &DebugState) -> String {
     )
 }
 
+/// Render the hot-shard load panel (no card wrapper).
+///
+/// Renders the same [`frogdb_core::HotShardSnapshot`] as `FROGDB.HOTSHARDS` and
+/// the `/status` JSON. With no collector installed the panel says so rather
+/// than drawing an all-zero table that would read as an idle fleet.
+async fn render_hot_shards_html(state: &DebugState) -> String {
+    let Some(report) = state.get_hot_shards(None).await else {
+        return r#"<div class="section-header">
+            <h3>Shard Load</h3>
+        </div>
+        <p style="color: var(--text-light);">No hot-shard collector installed.</p>"#
+            .to_string();
+    };
+
+    let rows: String = if report.shards.is_empty() {
+        r#"<tr><td colspan="7" style="text-align: center; color: var(--text-light);">No shards</td></tr>"#.to_string()
+    } else {
+        report
+            .shards
+            .iter()
+            .map(|s| {
+                // HOT/WARM get a colour cue; OK stays neutral so a healthy
+                // fleet does not look alarming.
+                let color = match s.class {
+                    ShardLoadClass::Hot => "var(--color-error)",
+                    ShardLoadClass::Warm => "var(--color-warning)",
+                    ShardLoadClass::Ok => "inherit",
+                };
+                format!(
+                    r#"<tr>
+                        <td>{}</td>
+                        <td>{:.1}</td>
+                        <td>{:.1}%</td>
+                        <td>{:.1}</td>
+                        <td>{:.1}</td>
+                        <td>{}</td>
+                        <td style="color: {color};">{}</td>
+                    </tr>"#,
+                    s.shard_id,
+                    s.ops_per_sec,
+                    s.percentage,
+                    s.reads_per_sec,
+                    s.writes_per_sec,
+                    format_number(s.queue_depth as u64),
+                    s.class.as_str(),
+                )
+            })
+            .collect()
+    };
+
+    let recommendations: String = if report.recommendations.is_empty() {
+        String::new()
+    } else {
+        let items: String = report
+            .recommendations
+            .iter()
+            .map(|r| format!("<li>{}</li>", html_escape(r)))
+            .collect();
+        format!(r#"<ul style="color: var(--text-light);">{items}</ul>"#)
+    };
+
+    format!(
+        r#"<div class="section-header">
+            <h3>Shard Load</h3>
+            <span style="color: var(--text-light);">{period}s window &middot; {total:.1} ops/sec &middot; imbalance {imbalance:.2}x &middot; {hot} hot / {warm} warm</span>
+        </div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Shard</th>
+                        <th>Ops/sec</th>
+                        <th>Load</th>
+                        <th>Reads/sec</th>
+                        <th>Writes/sec</th>
+                        <th>Queue</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows}
+                </tbody>
+            </table>
+        </div>
+        {recommendations}"#,
+        period = report.period_secs,
+        total = report.total_ops_per_sec,
+        imbalance = report.imbalance_ratio,
+        hot = report.hot_count,
+        warm = report.warm_count,
+    )
+}
+
+/// Handle GET /debug/api/hot-shards
+pub async fn handle_api_hot_shards(state: &DebugState) -> Response<Full<Bytes>> {
+    match state.get_hot_shards(None).await {
+        Some(report) => json_response(&report),
+        // Absent, not zeroed: the client can tell "not measured" from "idle".
+        None => json_response(&serde_json::json!({ "available": false })),
+    }
+}
+
+/// Handle GET /debug/partials/hot-shards
+pub async fn handle_partial_hot_shards(state: &DebugState) -> Response<Full<Bytes>> {
+    html_response(render_hot_shards_html(state).await)
+}
+
 // ============================================================================
 // Cluster API Handlers
 // ============================================================================
@@ -982,12 +1090,14 @@ pub fn handle_partial_overview(
     html_response(format!("{cluster}\n{metrics}\n{endpoints}"))
 }
 
-/// Handle GET /debug/partials/performance - combined shard stats + latency + slowlog.
+/// Handle GET /debug/partials/performance - combined shard stats + shard load +
+/// latency + slowlog.
 pub async fn handle_partial_performance(state: &DebugState) -> Response<Full<Bytes>> {
     let shard_stats = render_shard_stats_html(state).await;
+    let hot_shards = render_hot_shards_html(state).await;
     let latency = render_latency_html(state).await;
     let slowlog = render_slowlog_html(state).await;
-    html_response(format!("{shard_stats}\n{latency}\n{slowlog}"))
+    html_response(format!("{shard_stats}\n{hot_shards}\n{latency}\n{slowlog}"))
 }
 
 // ============================================================================
