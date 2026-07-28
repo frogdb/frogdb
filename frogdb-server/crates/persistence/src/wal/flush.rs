@@ -596,7 +596,7 @@ impl<S: WriteSink> FlushEngine<S> {
 pub(super) fn flush_thread_loop<S: WriteSink>(
     rx: flume::Receiver<WalCommand>,
     mut engine: FlushEngine<S>,
-    batch_size_threshold: usize,
+    batch_size_threshold: Arc<AtomicUsize>,
     batch_timeout: Duration,
 ) {
     loop {
@@ -604,6 +604,9 @@ pub(super) fn flush_thread_loop<S: WriteSink>(
             Ok(cmd) => match cmd {
                 WalCommand::Write(entry) => {
                     engine.apply(entry);
+                    // Re-read the live threshold once per batch decision so a
+                    // `CONFIG SET` store retunes batching without restart.
+                    let batch_size_threshold = batch_size_threshold.load(Ordering::Relaxed);
                     // Opportunistically drain queued commands into this batch.
                     while engine.staged_size() < batch_size_threshold {
                         match rx.try_recv() {
