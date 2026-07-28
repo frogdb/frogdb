@@ -379,11 +379,20 @@ impl Server {
         // adopts the primary's id on FULLRESYNC). Must be read before the
         // replica handler is `take()`n below. `None` in standalone/cluster mode,
         // where there is no PSYNC replication identity.
+        // The replica handler wins when this node booted as a replica: it is the
+        // state that adopts the primary's replication id on FULLRESYNC, whereas
+        // the (now always-constructed) primary handler holds this node's own
+        // boot-recovered copy. A promoted node keeps reporting the adopted id —
+        // FrogDB does not rotate the replid on promotion (documented divergence).
         let info_replication_state = self
-            .primary_replication_handler
+            .replica_handler
             .as_ref()
             .map(|h| h.shared_state())
-            .or_else(|| self.replica_handler.as_ref().map(|h| h.shared_state()));
+            .or_else(|| {
+                self.primary_replication_handler
+                    .as_ref()
+                    .map(|h| h.shared_state())
+            });
 
         // Start replica replication if running as replica
         let replica_handle = if let (Some(handler), Some(frame_rx)) =
@@ -720,7 +729,16 @@ impl Server {
         // Persist replication offset so it survives restart (never rewinds to a
         // stale boot value). Done before the RocksDB flush so the durable offset
         // is bounded by the data that is about to be flushed.
-        if let Some(ref handler) = self.primary_replication_handler {
+        // Skipped while this node is a replica: the primary handler exists on
+        // every role (so a promotion has live seams) but shares one state file
+        // with the replica handler, and saving this node's boot-time copy would
+        // overwrite the replica's adopted replication id/offset — forcing a full
+        // resync on the next start. Read live, so a promoted node does persist.
+        if !self
+            .is_replica_flag
+            .load(std::sync::atomic::Ordering::Relaxed)
+            && let Some(ref handler) = self.primary_replication_handler
+        {
             match handler.save_state().await {
                 Ok(()) => info!("Replication state persisted on shutdown"),
                 Err(e) => error!(error = %e, "Failed to persist replication state on shutdown"),

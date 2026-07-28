@@ -129,6 +129,8 @@ Both knobs are live: the toggle and `replica-freshness-timeout-ms` are atomics r
 
 Demoting a primary (`REPLICAOF host port`) un-latches arming, so a later re-promotion does not inherit a fence from replica sessions that are no longer this node's.
 
+**Seams exist on every role.** The replica tracker, the primary-side replication handler, and the quorum checker are constructed at boot regardless of the configured role; behavior is gated at the point of use on the live role flag (`RoleManager`'s single process-wide atomic), not on whether an object exists. A node promoted at runtime therefore enforces `min-replicas-to-write`, `self-fence-on-replica-loss`, `replica-freshness-timeout-ms`, and the lag thresholds — including values `CONFIG SET` while it was still a replica — and serves `PSYNC` to downstream replicas, with nothing rebuilt and no publication that has to reach already-open connections. While a node is a replica the same seams are inert: its tracker is empty (so the fence is permissive), `PSYNC` is refused, `INFO replication` renders from the replica handler, and the primary handler never writes the shared replication state file.
+
 ---
 
 ## Split-Brain Handling

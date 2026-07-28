@@ -1309,6 +1309,22 @@ async fn http_status_mode(server: &TestServer) -> String {
         .to_string()
 }
 
+/// Fetch `cluster.write_fence` from the HTTP `/status/json` endpoint. Absent
+/// while no fence is engaged (the field is skipped, never reported as a
+/// placeholder), so the return is an `Option`.
+async fn http_status_write_fence(server: &TestServer) -> Option<String> {
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let body: serde_json::Value = client
+        .get(format!("http://{}/status/json", server.metrics_addr()))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    body["cluster"]["write_fence"].as_str().map(String::from)
+}
+
 /// Issue 12: the `cluster.mode` field on both status surfaces must track a
 /// runtime `REPLICAOF` demotion/promotion instead of freezing at the boot role,
 /// so it agrees with INFO/ROLE (issue 05) after a role change. The `STATUS
@@ -1739,28 +1755,26 @@ async fn test_secondary_replication_id_failover(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
-/// A node promoted via manual `REPLICAOF NO ONE` becomes *writable* but does NOT
-/// become a replication *source*: it rejects downstream `PSYNC` outright.
+/// A node promoted via manual `REPLICAOF NO ONE` becomes both *writable* and a
+/// replication *source*: it serves downstream `PSYNC`.
 ///
-/// This pins a second FrogDB divergence from Redis PSYNC2. In Redis a promoted
-/// replica serves PSYNC to surviving replicas (partial-resync via replid2, or a
-/// full resync). In FrogDB the primary-side replication handler
-/// (`primary_replication_handler`) is wired ONLY at boot for a node started as a
-/// primary; the runtime `REPLICAOF NO ONE` path (`RoleManager::promote`) only
-/// clears the read-only flag and tears down the inbound stream — it never spins
-/// up a `PrimaryReplicationHandler`. So PSYNC stays gated off and a downstream
-/// replica gets neither `+CONTINUE` nor `+FULLRESYNC`.
+/// The primary-side seams (tracker, `PrimaryReplicationHandler`, quorum checker)
+/// are built for every role at boot and gate their behavior on the live role
+/// flag, so `RoleManager::promote` acquires them by clearing that flag alone.
+/// This test used to pin the opposite contract — a promoted node rejected PSYNC
+/// with `-ERR ... not running as primary`, because the handler was constructed
+/// only for a boot-configured primary.
 ///
-/// NOTE: this makes the manual-promotion path unable to head a replication chain
-/// (candidate follow-up: wire promotion to establish the primary handler). It
-/// does not affect boot-configured primaries, whose partial/full resync is
-/// covered by `test_partial_resync_after_brief_disconnect_grants_continue` and
-/// `test_partial_resync_unknown_replid_falls_back_to_full`.
+/// What is still divergent from Redis PSYNC2: the promoted node does not rotate
+/// its replication id and establishes no `replid2` window, so a surviving
+/// replica cannot *partial*-resync from it — it gets a full resync
+/// (`+FULLRESYNC`), which is safe but not free. That part is pinned by
+/// `test_psync2_failover_partial_sync`.
 #[rstest]
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
 #[tokio::test]
-async fn test_promoted_node_via_replicaof_no_one_rejects_downstream_psync(
+async fn test_promoted_node_via_replicaof_no_one_serves_downstream_psync(
     #[case] persistence: bool,
 ) {
     let config = TestServerConfig {
@@ -1793,8 +1807,9 @@ async fn test_promoted_node_via_replicaof_no_one_rejects_downstream_psync(
         "promoted node must report role:master"
     );
 
-    // PSYNC to the promoted node is rejected — not a partial resync, not a full
-    // resync, but an outright "not running as primary" error.
+    // PSYNC to the promoted node is served: the promotion acquired the
+    // primary-side handler, so a surviving replica gets a resync offer instead
+    // of "not running as primary".
     let resp = replica
         .send_raw(&encode_resp_command(&[
             "PSYNC",
@@ -1804,12 +1819,121 @@ async fn test_promoted_node_via_replicaof_no_one_rejects_downstream_psync(
         .await;
     let head = String::from_utf8_lossy(&resp);
     assert!(
-        head.starts_with("-ERR") && head.contains("not running as primary"),
-        "manual-promoted node must reject downstream PSYNC (not running as primary), got: {head:?}"
+        !head.contains("not running as primary"),
+        "promoted node must serve downstream PSYNC, got: {head:?}"
     );
     assert!(
-        !head.contains("CONTINUE") && !head.contains("FULLRESYNC"),
-        "promoted node must not offer any resync via PSYNC, got: {head:?}"
+        head.contains("FULLRESYNC") || head.contains("CONTINUE"),
+        "promoted node must offer a resync via PSYNC, got: {head:?}"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// Propagation truth for the primary-side write gates across a promotion:
+/// `CONFIG SET` values applied while a node is a *replica* govern it once it is
+/// promoted.
+///
+/// The three knobs under test all live behind seams that used to be built only
+/// for a boot-configured primary, so on a promoted node they answered
+/// `CONFIG GET` with the operator's value while governing nothing:
+/// `min-replicas-to-write` (needs the replica tracker),
+/// `self-fence-on-replica-loss` + `replica-freshness-timeout-ms` (need the
+/// quorum checker in the write gate). This walks the full lifecycle on one node:
+/// configure as a replica → promote → gate closed with no replicas → gate opens
+/// when a real downstream replica streams (which also proves the promoted node
+/// broadcasts) → self-fence engages when that replica goes away.
+#[tokio::test]
+async fn test_promoted_replica_enforces_write_gates_set_before_promotion() {
+    let (primary, replica) = start_primary_replica_pair(TestServerConfig::default()).await;
+    let downstream = TestServer::start_standalone().await;
+
+    // Arm the primary-side write gates while this node is still a replica.
+    assert_ok(
+        &replica
+            .send("CONFIG", &["SET", "min-replicas-to-write", "1"])
+            .await,
+    );
+    assert_ok(
+        &replica
+            .send("CONFIG", &["SET", "self-fence-on-replica-loss", "yes"])
+            .await,
+    );
+    assert_ok(
+        &replica
+            // Above the replica ACK interval (1s) so a *live* downstream stays
+            // fresh, but far below the default so the fence engages promptly
+            // once it is gone.
+            .send("CONFIG", &["SET", "replica-freshness-timeout-ms", "2500"])
+            .await,
+    );
+
+    assert_ok(&replica.send("REPLICAOF", &["NO", "ONE"]).await);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // `min-replicas-to-write 1` governs the promoted primary: it has no replicas
+    // of its own yet, so the write is refused rather than silently accepted.
+    let resp = replica.send("SET", &["promoted-gate", "1"]).await;
+    assert!(
+        is_error(&resp)
+            && get_error_message(&resp)
+                .unwrap_or_default()
+                .contains("NOREPLICAS"),
+        "promoted node must enforce min-replicas-to-write set before promotion, got: {resp:?}"
+    );
+
+    // Attach a real downstream replica to the promoted node. PSYNC is served by
+    // the promoted node's primary handler, and its ACKs land in the tracker the
+    // write gate counts.
+    assert_ok(
+        &downstream
+            .send("REPLICAOF", &["127.0.0.1", &replica.port().to_string()])
+            .await,
+    );
+    let acked = parse_integer(&replica.send("WAIT", &["1", "10000"]).await).unwrap_or(0);
+    assert_eq!(
+        acked, 1,
+        "promoted node must see its downstream replica ACK (WAIT on a promoted primary)"
+    );
+
+    // Gate now satisfied by a live replica, and the write actually replicates —
+    // the promoted node broadcasts, it does not merely accept.
+    assert_ok(&replica.send("SET", &["promoted-gate", "2"]).await);
+    let _ = replica.send("WAIT", &["1", "5000"]).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let mirrored = downstream.send("GET", &["promoted-gate"]).await;
+    assert!(
+        matches!(&mirrored, Response::Bulk(Some(v)) if v.as_ref() == b"2"),
+        "write on the promoted primary must reach its downstream replica, got: {mirrored:?}"
+    );
+
+    // Lose the replica. Self-fencing armed the moment that replica streamed, so
+    // once the freshness window lapses the promoted node fences writes with
+    // CLUSTERDOWN. Relax min-replicas-to-write first so the error under test is
+    // unambiguously the fence.
+    assert_ok(
+        &replica
+            .send("CONFIG", &["SET", "min-replicas-to-write", "0"])
+            .await,
+    );
+    downstream.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(3000)).await;
+    let fenced = replica.send("SET", &["promoted-gate", "3"]).await;
+    assert!(
+        is_error(&fenced)
+            && get_error_message(&fenced)
+                .unwrap_or_default()
+                .contains("CLUSTERDOWN"),
+        "promoted node must self-fence after losing its only replica, got: {fenced:?}"
+    );
+
+    // The fence is attributable in `/status`, from the same checker the gate
+    // consulted.
+    assert_eq!(
+        http_status_write_fence(&replica).await.as_deref(),
+        Some("replica quorum lost"),
+        "an engaged fence must be reported as cluster.write_fence"
     );
 
     replica.shutdown().await;
@@ -1826,12 +1950,11 @@ async fn test_promoted_node_via_replicaof_no_one_rejects_downstream_psync(
 /// returns `+OK` synchronously (matching Redis's async REPLICAOF semantics —
 /// REPLICAOF cannot know the target's role without a round trip). But the
 /// background connection then performs a `PSYNC` handshake against that
-/// target, and — same mechanism as
-/// `test_promoted_node_via_replicaof_no_one_rejects_downstream_psync` — a
-/// node without a live `primary_replication_handler` (every replica; it's
-/// wired only for a booted-or-promoted primary, see `replication_init.rs`)
-/// answers PSYNC with an outright `-ERR ... not running as primary`
-/// (`connection/dispatch.rs`'s `PsyncIntercept` presence gate). The
+/// target, and a node that is *currently a replica* answers PSYNC with an
+/// outright `-ERR ... not running as primary` — `connection/dispatch.rs`'s
+/// `PsyncIntercept` role gate, read live from the role flag (the primary-side
+/// handler itself exists on every role, so a *promoted* node does serve PSYNC;
+/// see `test_promoted_node_via_replicaof_no_one_serves_downstream_psync`). The
 /// sub-replica's link never comes up and no primary-origin write ever
 /// reaches it — a *reject*, not a silent black hole, just one that is only
 /// visible through the link status and logs rather than the `REPLICAOF`
@@ -4407,10 +4530,10 @@ async fn test_role_changes_after_replicaof(#[case] persistence: bool) {
 
 /// Cross-failover behavior after `REPLICAOF NO ONE`, pinning FrogDB's actual
 /// (PSYNC2-divergent) semantics. In Redis a promoted replica hands surviving
-/// replicas a partial resync via `master_replid2`; FrogDB neither sets replid2
-/// nor serves PSYNC from a manually-promoted node (see
-/// `test_secondary_replication_id_failover` and
-/// `test_promoted_node_via_replicaof_no_one_rejects_downstream_psync` for the
+/// replicas a *partial* resync via `master_replid2`; FrogDB serves PSYNC from a
+/// promoted node but rotates no replication id and sets no replid2, so the only
+/// offer is a full resync (see `test_secondary_replication_id_failover` and
+/// `test_promoted_node_via_replicaof_no_one_serves_downstream_psync` for the
 /// primitives). This test pins that whole shape end-to-end from a two-replica
 /// topology, and confirms the promoted node still holds the pre-promotion data.
 #[rstest]
@@ -4467,9 +4590,9 @@ async fn test_psync2_failover_partial_sync(#[case] persistence: bool) {
         "no secondary replication id is established on REPLICAOF NO ONE promotion"
     );
 
-    // DIVERGENCE (pinned): a surviving replica cannot partial-sync (or even
-    // full-sync) from the promoted node — PSYNC is rejected outright, so the
-    // PSYNC2 failover chain does not exist on the manual-promotion path.
+    // The promoted node serves PSYNC (its primary-side handler is live), but
+    // DIVERGENCE (pinned): with no replid rotation and no `replid2` window there
+    // is no *partial* resync path — a surviving replica full-resyncs instead.
     let psync = replica1
         .send_raw(&encode_resp_command(&[
             "PSYNC",
@@ -4479,12 +4602,8 @@ async fn test_psync2_failover_partial_sync(#[case] persistence: bool) {
         .await;
     let psync_head = String::from_utf8_lossy(&psync);
     assert!(
-        psync_head.contains("not running as primary"),
-        "promoted node rejects downstream PSYNC, got: {psync_head:?}"
-    );
-    assert!(
-        !psync_head.contains("CONTINUE") && !psync_head.contains("FULLRESYNC"),
-        "no partial/full resync is offered by a manually-promoted node, got: {psync_head:?}"
+        !psync_head.contains("not running as primary"),
+        "promoted node serves downstream PSYNC, got: {psync_head:?}"
     );
 
     // The promoted node remains writable and still holds all pre-promotion data.

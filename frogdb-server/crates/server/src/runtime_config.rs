@@ -766,21 +766,25 @@ pub struct ConfigManager {
         std::sync::OnceLock<Arc<dyn frogdb_core::persistence::SnapshotCoordinator>>,
     /// Configured primary replication lag thresholds (bytes / seconds).
     ///
-    /// Authority for CONFIG GET/REWRITE on *every* node. The live
-    /// [`frogdb_replication::LagThresholds`] exists only on primaries, so on a
-    /// replica a SET is recorded here and takes effect if the node is later
-    /// re-initialised as a primary.
+    /// Authority for CONFIG GET/REWRITE, and the value pushed into the live
+    /// [`frogdb_replication::LagThresholds`] below.
     replication_lag_threshold_bytes: Arc<AtomicU64>,
     replication_lag_threshold_secs: Arc<AtomicU64>,
-    /// Live primary-side lag thresholds; absent on replicas.
+    /// Live primary-side lag thresholds.
+    ///
+    /// Published once at boot on *every* role, because the primary handler that
+    /// owns them is constructed on every role so a runtime promotion has live
+    /// seams (see `server::replication_init`). A SET therefore governs this node
+    /// the moment it becomes a primary, instead of being recorded and forgotten.
     replication_lag_thresholds: std::sync::OnceLock<Arc<frogdb_replication::LagThresholds>>,
     /// Configured replica-loss self-fence policy and freshness window.
     ///
-    /// Same primary-only story as the lag thresholds: authority for GET/REWRITE
-    /// here, pushed into the live quorum checker when one exists.
+    /// Authority for GET/REWRITE here, pushed into the live quorum checker.
     self_fence_on_replica_loss: Arc<AtomicBool>,
     replica_freshness_timeout_ms: Arc<AtomicU64>,
-    /// Live replication self-fence quorum checker; absent on replicas.
+    /// Live replication self-fence quorum checker. Published on every role, same
+    /// reason as the lag thresholds above; it never fences until a replica has
+    /// actually streamed from this node.
     replication_self_fence:
         std::sync::OnceLock<Arc<crate::replication_quorum::ReplicationQuorumChecker>>,
 }
@@ -965,8 +969,8 @@ impl ConfigManager {
 
     /// Publish the live primary-side replication lag thresholds.
     ///
-    /// Primary-only: replicas never call this. Syncs the configured values into
-    /// the handle on publish.
+    /// Called on every role (the owning handler exists on every role). Syncs the
+    /// configured values into the handle on publish.
     pub fn set_replication_lag_thresholds(
         &self,
         thresholds: Arc<frogdb_replication::LagThresholds>,
@@ -981,8 +985,8 @@ impl ConfigManager {
 
     /// Publish the live replication self-fence quorum checker.
     ///
-    /// Primary-only: replicas never call this. Syncs the configured values into
-    /// the checker on publish.
+    /// Called on every role (the checker exists on every role). Syncs the
+    /// configured values into the checker on publish.
     pub fn set_replication_self_fence(
         &self,
         checker: Arc<crate::replication_quorum::ReplicationQuorumChecker>,
@@ -2816,10 +2820,12 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::None,
             }),
-            // Primary-only live seam: the lag thresholds exist inside the primary
-            // replication handler. On a replica the value is still recorded (and
-            // reported by GET/REWRITE) so it takes effect if the node is later
-            // initialised as a primary.
+            // Live seam on every role: the lag thresholds live inside the
+            // primary replication handler, which is constructed on every role so
+            // a runtime promotion inherits them (see
+            // `server::replication_init`). A SET applies to the handler
+            // immediately and governs this node's replicas as soon as it is a
+            // primary.
             ReplicationLagThresholdBytes => Box::new(ConfigParam::<u64, ConfigManager> {
                 name: id.name(),
                 parse: |s| {
@@ -2869,8 +2875,10 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::None,
             }),
-            // Primary-only live seam, same story as the lag thresholds: the
-            // quorum checker only exists on a primary.
+            // Live seam on every role, same story as the lag thresholds: the
+            // quorum checker is built on every role and arms only once a replica
+            // has streamed from this node, so a SET here governs the write gate
+            // from the moment this node is a primary.
             SelfFenceOnReplicaLoss => Box::new(ConfigParam::<bool, ConfigManager> {
                 name: id.name(),
                 parse: |s| parse_yes_no("self-fence-on-replica-loss", s),
