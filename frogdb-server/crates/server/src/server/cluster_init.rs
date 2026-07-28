@@ -68,7 +68,9 @@ pub(super) async fn init_cluster(
     // single source `ROLE`/INFO read, live, for the whole process lifetime.
     boot_primary_addr: Option<std::net::SocketAddr>,
     shared_replication_offset: Option<Arc<frogdb_core::sync::AtomicU64>>,
-    #[cfg(not(feature = "turmoil"))] tls_manager: &Option<Arc<crate::tls::TlsManager>>,
+    #[cfg(not(feature = "turmoil"))] tls_runtime: &Option<
+        Arc<crate::tls_runtime::TlsRuntimeHandle>,
+    >,
 ) -> Result<ClusterInitResult> {
     // Create the shared is_replica flag and the RoleManager that owns it. This
     // single AtomicBool is shared by all shard workers, the acceptor, and all
@@ -101,7 +103,7 @@ pub(super) async fn init_cluster(
             is_replica_flag.clone(),
             shared_replication_offset.clone(),
             #[cfg(not(feature = "turmoil"))]
-            tls_manager,
+            tls_runtime,
         ));
     let role_manager =
         crate::role_manager::RoleManager::new(is_replica_flag.clone(), streamer, boot_primary_addr);
@@ -215,9 +217,9 @@ pub(super) async fn init_cluster(
         #[cfg(not(feature = "turmoil"))]
         if config.tls.enabled
             && config.tls.tls_cluster
-            && let Some(mgr) = tls_manager
+            && let Some(handle) = tls_runtime
         {
-            let mgr = mgr.clone();
+            let mgr = handle.manager().clone();
             let handshake_timeout =
                 std::time::Duration::from_millis(config.tls.handshake_timeout_ms);
             use frogdb_core::cluster::network::{

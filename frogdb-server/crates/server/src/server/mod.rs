@@ -207,9 +207,11 @@ pub struct Server {
     /// Per-shard memory usage atomics for SystemMetricsCollector fragmentation ratio.
     shard_memory_used: Arc<Vec<AtomicU64>>,
 
-    /// Optional TLS manager (only when TLS is enabled).
+    /// Optional TLS runtime handle (only when TLS is enabled): owns the
+    /// `TlsManager` plus the live TLS config, and is the reload seam for
+    /// certificate rotation and TLS CONFIG SETs.
     #[cfg(not(feature = "turmoil"))]
-    tls_manager: Option<Arc<crate::tls::TlsManager>>,
+    tls_runtime: Option<Arc<crate::tls_runtime::TlsRuntimeHandle>>,
 
     /// Optional TLS listener (only when TLS is enabled).
     tls_listener: Option<TcpListener>,
@@ -248,7 +250,7 @@ impl Server {
             &infra.rocks_store,
             &infra.metrics_recorder,
             #[cfg(not(feature = "turmoil"))]
-            &infra.tls_manager,
+            &infra.tls_runtime,
         )?;
 
         // Make the primary replication handler available to the pre-snapshot
@@ -273,7 +275,7 @@ impl Server {
             repl.primary_addr,
             repl.shared_replication_offset,
             #[cfg(not(feature = "turmoil"))]
-            &infra.tls_manager,
+            &infra.tls_runtime,
         )
         .await?;
         let shared_replication_offset = cluster.shared_replication_offset.clone();
@@ -400,7 +402,7 @@ impl Server {
             shared_maxmemory: infra.shared_maxmemory,
             shard_memory_used: infra.shard_memory_used,
             #[cfg(not(feature = "turmoil"))]
-            tls_manager: infra.tls_manager,
+            tls_runtime: infra.tls_runtime,
             tls_listener: infra.tls_listener,
         })
     }

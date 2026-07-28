@@ -256,6 +256,18 @@ impl TlsConfig {
             // Already checked enabled above
         }
 
+        // A half-configured client identity would silently fall back to the
+        // server certificate, presenting the wrong identity to peers.
+        match (&self.client_cert_file, &self.client_key_file) {
+            (Some(_), None) => {
+                anyhow::bail!("tls.client_cert_file set without tls.client_key_file")
+            }
+            (None, Some(_)) => {
+                anyhow::bail!("tls.client_key_file set without tls.client_cert_file")
+            }
+            _ => {}
+        }
+
         // tls_cluster_migration requires tls_cluster
         if self.tls_cluster_migration && !self.tls_cluster {
             anyhow::bail!("tls.tls_cluster_migration = true requires tls.tls_cluster = true");

@@ -473,8 +473,10 @@ fn build_server_config(config: &TlsConfig) -> anyhow::Result<ServerConfig> {
 
 /// Build a rustls ClientConfig for outgoing TLS connections (cluster bus, replication).
 ///
-/// Uses `client_cert_file`/`client_key_file` for client identity if set,
-/// otherwise falls back to the server `cert_file`/`key_file`.
+/// Uses `client_cert_file`/`client_key_file` for client identity when *both* are
+/// set, otherwise falls back to the server `cert_file`/`key_file`. Setting only
+/// one of the two is an error rather than a silent fallback — that fallback
+/// would quietly present the wrong identity to peers.
 /// Uses `ca_file` for server verification if set, otherwise uses system/webpki roots.
 fn build_client_config(config: &TlsConfig) -> anyhow::Result<ClientConfig> {
     let versions: Vec<&'static rustls::SupportedProtocolVersion> = config
@@ -506,7 +508,12 @@ fn build_client_config(config: &TlsConfig) -> anyhow::Result<ClientConfig> {
     // Use client cert/key if available (for mTLS to peers), fall back to server cert/key
     let (cert_path, key_path) = match (&config.client_cert_file, &config.client_key_file) {
         (Some(cert), Some(key)) => (cert.as_path(), key.as_path()),
-        _ => (config.cert_file.as_path(), config.key_file.as_path()),
+        (None, None) => (config.cert_file.as_path(), config.key_file.as_path()),
+        (Some(_), None) | (None, Some(_)) => anyhow::bail!(
+            "tls.client_cert_file and tls.client_key_file must be set together \
+             (set both to use a distinct client identity, or neither to reuse \
+             the server certificate)"
+        ),
     };
 
     let certs = load_certs(cert_path)?;

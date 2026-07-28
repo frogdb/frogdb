@@ -32,6 +32,8 @@ pub mod server;
 pub mod slot_migration;
 #[cfg(not(feature = "turmoil"))]
 pub mod tls;
+#[cfg(not(feature = "turmoil"))]
+pub mod tls_runtime;
 pub(crate) mod vll_adapter;
 
 pub use config::Config;

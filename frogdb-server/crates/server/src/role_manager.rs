@@ -312,7 +312,9 @@ impl RealReplicaStreamer {
         num_shards: usize,
         is_replica_flag: Arc<AtomicBool>,
         shared_offset: Option<Arc<std::sync::atomic::AtomicU64>>,
-        #[cfg(not(feature = "turmoil"))] tls_manager: &Option<Arc<crate::tls::TlsManager>>,
+        #[cfg(not(feature = "turmoil"))] tls_runtime: &Option<
+            Arc<crate::tls_runtime::TlsRuntimeHandle>,
+        >,
     ) -> Self {
         let data_dir = config.persistence.data_dir.clone();
         let state_path = data_dir.join(&config.replication.state_file);
@@ -320,10 +322,10 @@ impl RealReplicaStreamer {
         #[cfg(not(feature = "turmoil"))]
         let tls = if config.tls.enabled
             && config.tls.tls_replication
-            && let Some(mgr) = tls_manager
+            && let Some(handle) = tls_runtime
         {
             Some(ReplicaTlsConfig {
-                manager: mgr.clone(),
+                manager: handle.manager().clone(),
                 handshake_timeout: std::time::Duration::from_millis(
                     config.tls.handshake_timeout_ms,
                 ),

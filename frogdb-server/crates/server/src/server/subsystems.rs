@@ -189,10 +189,10 @@ impl Server {
             #[cfg(not(feature = "turmoil"))]
             if self.config.tls.enabled
                 && !self.config.tls.no_tls_on_http
-                && let Some(ref mgr) = self.tls_manager
+                && let Some(ref tls_rt) = self.tls_runtime
             {
                 server = server.with_tls(
-                    mgr.clone(),
+                    tls_rt.manager().clone(),
                     std::time::Duration::from_millis(self.config.tls.handshake_timeout_ms),
                 );
             }
@@ -273,7 +273,7 @@ impl Server {
                     .unwrap_or_else(|| Arc::new(AtomicU64::new(0))),
                 #[cfg(not(feature = "turmoil"))]
                 tls_manager: if self.config.tls.enabled && self.config.tls.tls_cluster {
-                    self.tls_manager.clone()
+                    self.tls_runtime.as_ref().map(|h| h.manager().clone())
                 } else {
                     None
                 },
@@ -495,7 +495,7 @@ impl Server {
                     // Admin port gets TLS only if no_tls_on_admin_port is false
                     #[cfg(not(feature = "turmoil"))]
                     tls_manager: if !self.config.tls.no_tls_on_admin_port {
-                        self.tls_manager.clone()
+                        self.tls_runtime.as_ref().map(|h| h.manager().clone())
                     } else {
                         None
                     },
@@ -514,13 +514,13 @@ impl Server {
         // Spawn TLS acceptor if TLS is enabled and a TLS listener exists
         #[cfg(not(feature = "turmoil"))]
         let tls_acceptor_handle = if let Some(tls_listener) = self.tls_listener.take() {
-            if let Some(ref tls_manager) = self.tls_manager {
+            if let Some(ref tls_rt) = self.tls_runtime {
                 let tls_acceptor = Acceptor::bind(
                     acceptor_ctx,
                     PortSpec {
                         listener: tls_listener,
                         is_admin: false, // TLS port
-                        tls_manager: Some(tls_manager.clone()),
+                        tls_manager: Some(tls_rt.manager().clone()),
                     },
                 );
 
