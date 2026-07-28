@@ -13,7 +13,8 @@ use std::task::{Context, Poll};
 use arc_swap::ArcSwap;
 use pin_project_lite::pin_project;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
-use rustls::server::WebPkiClientVerifier;
+use rustls::server::{ClientHello, ResolvesServerCert, WebPkiClientVerifier};
+use rustls::sign::CertifiedKey;
 use rustls::{ClientConfig, RootCertStore, ServerConfig};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
@@ -302,11 +303,115 @@ fn valid_ciphersuite_names(provider: &rustls::crypto::CryptoProvider) -> Vec<&'s
         .collect()
 }
 
+// ---------------------------------------------------------------------------
+// Multi-certificate resolver
+// ---------------------------------------------------------------------------
+
+/// Serves one of several configured server identities, chosen per ClientHello.
+///
+/// Holds every configured `CertifiedKey` with the primary
+/// (`tls.cert-file`/`tls.key-file`) pair first, followed by
+/// `tls.additional-certs` in configuration order. On each handshake the first
+/// identity whose signing key can produce a signature in one of the schemes the
+/// client advertised wins; if none can, the primary identity is served anyway so
+/// the client sees a normal handshake failure (or succeeds, for a client whose
+/// advertised list was merely incomplete) rather than a `no certificate`
+/// alert — this matches rustls' single-cert behaviour, which never consults the
+/// client's scheme list at all.
+///
+/// This is what makes RSA + ECDSA dual-cert deployments work: an ECDSA-only
+/// client gets the ECDSA identity, an RSA-only client gets the RSA one.
+#[derive(Debug)]
+pub struct MultiCertResolver {
+    /// Configured identities, primary first. Never empty.
+    keys: Vec<Arc<CertifiedKey>>,
+}
+
+impl MultiCertResolver {
+    /// Build a resolver over `keys`, which must be non-empty and ordered with
+    /// the primary identity first.
+    fn new(keys: Vec<Arc<CertifiedKey>>) -> anyhow::Result<Self> {
+        if keys.is_empty() {
+            anyhow::bail!("TLS certificate resolver requires at least one certificate/key pair");
+        }
+        Ok(Self { keys })
+    }
+
+    /// Number of configured identities (primary + additional).
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    /// Always false — a resolver is never built without a primary identity.
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+
+    /// The selection rule, factored out of [`ResolvesServerCert::resolve`] so it
+    /// is directly testable: `rustls::server::ClientHello` has no public
+    /// constructor, so tests drive the scheme list instead.
+    fn select(&self, offered: &[rustls::SignatureScheme]) -> Option<Arc<CertifiedKey>> {
+        self.keys
+            .iter()
+            .find(|ck| ck.key.choose_scheme(offered).is_some())
+            .or_else(|| self.keys.first())
+            .cloned()
+    }
+}
+
+impl ResolvesServerCert for MultiCertResolver {
+    fn resolve(&self, client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        self.select(client_hello.signature_schemes())
+    }
+}
+
+/// Load one certificate/key pair into a rustls `CertifiedKey`.
+///
+/// `CertifiedKey::from_der` verifies that the key matches the leaf certificate
+/// when the key's public key is recoverable, so a mismatched pair fails here
+/// rather than at handshake time.
+fn load_certified_key(
+    cert_path: &Path,
+    key_path: &Path,
+    provider: &rustls::crypto::CryptoProvider,
+) -> anyhow::Result<Arc<CertifiedKey>> {
+    let certs = load_certs(cert_path)?;
+    let key = load_private_key(key_path)?;
+    let certified = CertifiedKey::from_der(certs, key, provider).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to load TLS identity from cert '{}' + key '{}': {}",
+            cert_path.display(),
+            key_path.display(),
+            e
+        )
+    })?;
+    Ok(Arc::new(certified))
+}
+
+/// Build the [`MultiCertResolver`] for `config`: the primary pair first, then
+/// every `additional_certs` entry in order.
+fn build_cert_resolver(
+    config: &TlsConfig,
+    provider: &rustls::crypto::CryptoProvider,
+) -> anyhow::Result<Arc<MultiCertResolver>> {
+    let mut keys = Vec::with_capacity(1 + config.additional_certs.len());
+    keys.push(load_certified_key(
+        &config.cert_file,
+        &config.key_file,
+        provider,
+    )?);
+    for extra in &config.additional_certs {
+        keys.push(load_certified_key(
+            &extra.cert_file,
+            &extra.key_file,
+            provider,
+        )?);
+    }
+    Ok(Arc::new(MultiCertResolver::new(keys)?))
+}
+
 /// Build a rustls ServerConfig from the TLS configuration.
 fn build_server_config(config: &TlsConfig) -> anyhow::Result<ServerConfig> {
-    let certs = load_certs(&config.cert_file)?;
-    let key = load_private_key(&config.key_file)?;
-
     // Determine protocol versions
     let versions: Vec<&'static rustls::SupportedProtocolVersion> = config
         .protocols
@@ -320,15 +425,23 @@ fn build_server_config(config: &TlsConfig) -> anyhow::Result<ServerConfig> {
     // Build the server config with appropriate client cert verification.
     // A non-empty `ciphersuites` list restricts the crypto provider's suites;
     // an empty list keeps rustls' default full suite list.
-    let builder = match ciphersuite_provider(&config.ciphersuites, &versions)? {
-        Some(provider) => {
-            ServerConfig::builder_with_provider(provider).with_protocol_versions(&versions)?
-        }
-        None => ServerConfig::builder_with_protocol_versions(&versions),
-    };
+    let restricted = ciphersuite_provider(&config.ciphersuites, &versions)?;
+
+    // Private keys are loaded through the same provider the config is built
+    // with, so a restricted suite list and the key provider stay consistent.
+    // Naming the provider explicitly (rather than letting rustls reach for the
+    // process-global default) keeps key loading, suite selection and client-cert
+    // verification on one provider, and makes config building independent of
+    // whether `install_default` has run yet.
+    let provider =
+        restricted.unwrap_or_else(|| Arc::new(rustls::crypto::aws_lc_rs::default_provider()));
+    let resolver = build_cert_resolver(config, &provider)?;
+
+    let builder =
+        ServerConfig::builder_with_provider(provider.clone()).with_protocol_versions(&versions)?;
 
     let server_config = match config.require_client_cert {
-        ClientCertMode::None => builder.with_no_client_auth().with_single_cert(certs, key)?,
+        ClientCertMode::None => builder.with_no_client_auth().with_cert_resolver(resolver),
         ClientCertMode::Optional | ClientCertMode::Required => {
             let ca_file = config
                 .ca_file
@@ -336,17 +449,22 @@ fn build_server_config(config: &TlsConfig) -> anyhow::Result<ServerConfig> {
                 .ok_or_else(|| anyhow::anyhow!("ca_file required for client cert verification"))?;
             let ca_store = load_ca_certs(ca_file)?;
 
+            // Build the verifier against the *same* provider the rest of the
+            // config uses, rather than the process-global default: the
+            // ciphersuite-restricted provider must apply to client-cert
+            // verification too, and a config built before any global provider
+            // is installed must not panic.
+            let verifier_builder =
+                WebPkiClientVerifier::builder_with_provider(Arc::new(ca_store), provider);
             let verifier = if config.require_client_cert == ClientCertMode::Required {
-                WebPkiClientVerifier::builder(Arc::new(ca_store)).build()?
+                verifier_builder.build()?
             } else {
-                WebPkiClientVerifier::builder(Arc::new(ca_store))
-                    .allow_unauthenticated()
-                    .build()?
+                verifier_builder.allow_unauthenticated().build()?
             };
 
             builder
                 .with_client_cert_verifier(verifier)
-                .with_single_cert(certs, key)?
+                .with_cert_resolver(resolver)
         }
     };
 
@@ -377,14 +495,13 @@ fn build_client_config(config: &TlsConfig) -> anyhow::Result<ClientConfig> {
         store
     };
 
-    // Mirror the server path: restrict the provider's suites when named.
-    let builder = match ciphersuite_provider(&config.ciphersuites, &versions)? {
-        Some(provider) => {
-            ClientConfig::builder_with_provider(provider).with_protocol_versions(&versions)?
-        }
-        None => ClientConfig::builder_with_protocol_versions(&versions),
-    }
-    .with_root_certificates(root_store);
+    // Mirror the server path: restrict the provider's suites when named, and
+    // always name the provider explicitly.
+    let provider = ciphersuite_provider(&config.ciphersuites, &versions)?
+        .unwrap_or_else(|| Arc::new(rustls::crypto::aws_lc_rs::default_provider()));
+    let builder = ClientConfig::builder_with_provider(provider)
+        .with_protocol_versions(&versions)?
+        .with_root_certificates(root_store);
 
     // Use client cert/key if available (for mTLS to peers), fall back to server cert/key
     let (cert_path, key_path) = match (&config.client_cert_file, &config.client_key_file) {
@@ -522,5 +639,191 @@ mod tests {
             suite_names(&provider),
             vec!["TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256".to_string()]
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Multi-cert resolver
+    // -----------------------------------------------------------------------
+
+    use rustls::SignatureScheme;
+
+    /// Self-signed identity written to `dir` as `<stem>.crt` / `<stem>.key`.
+    fn write_identity(
+        dir: &Path,
+        stem: &str,
+        key: rcgen::KeyPair,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        let params = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
+        let cert = params.self_signed(&key).unwrap();
+        let cert_path = dir.join(format!("{stem}.crt"));
+        let key_path = dir.join(format!("{stem}.key"));
+        std::fs::write(&cert_path, cert.pem()).unwrap();
+        std::fs::write(&key_path, key.serialize_pem()).unwrap();
+        (cert_path, key_path)
+    }
+
+    fn ecdsa_key() -> rcgen::KeyPair {
+        rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap()
+    }
+
+    fn rsa_key() -> rcgen::KeyPair {
+        rcgen::KeyPair::generate_rsa_for(&rcgen::PKCS_RSA_SHA256, rcgen::RsaKeySize::_2048).unwrap()
+    }
+
+    fn provider() -> Arc<rustls::crypto::CryptoProvider> {
+        Arc::new(rustls::crypto::aws_lc_rs::default_provider())
+    }
+
+    /// A resolver whose primary identity is RSA and whose additional identity
+    /// is ECDSA, plus the DER of each leaf cert for identity assertions.
+    struct DualCertFixture {
+        _dir: tempfile::TempDir,
+        resolver: Arc<MultiCertResolver>,
+        rsa_leaf: Vec<u8>,
+        ecdsa_leaf: Vec<u8>,
+    }
+
+    fn dual_cert_fixture() -> DualCertFixture {
+        let dir = tempfile::tempdir().unwrap();
+        let (rsa_cert, rsa_key_path) = write_identity(dir.path(), "rsa", rsa_key());
+        let (ec_cert, ec_key_path) = write_identity(dir.path(), "ecdsa", ecdsa_key());
+
+        let config = TlsConfig {
+            enabled: true,
+            cert_file: rsa_cert,
+            key_file: rsa_key_path,
+            additional_certs: vec![frogdb_config::AdditionalCert {
+                cert_file: ec_cert,
+                key_file: ec_key_path,
+            }],
+            ..Default::default()
+        };
+        let p = provider();
+        let resolver = build_cert_resolver(&config, &p).unwrap();
+        let rsa_leaf = resolver.keys[0].cert[0].to_vec();
+        let ecdsa_leaf = resolver.keys[1].cert[0].to_vec();
+        DualCertFixture {
+            _dir: dir,
+            resolver,
+            rsa_leaf,
+            ecdsa_leaf,
+        }
+    }
+
+    #[test]
+    fn resolver_holds_primary_first_then_additional() {
+        let fx = dual_cert_fixture();
+        assert_eq!(fx.resolver.len(), 2);
+        assert!(!fx.resolver.is_empty());
+        // Primary (tls.cert-file) is index 0, additional-certs follow in order.
+        assert_eq!(fx.resolver.keys[0].cert[0].to_vec(), fx.rsa_leaf);
+        assert_eq!(fx.resolver.keys[1].cert[0].to_vec(), fx.ecdsa_leaf);
+    }
+
+    #[test]
+    fn resolver_picks_ecdsa_for_ecdsa_only_client_hello() {
+        let fx = dual_cert_fixture();
+        let chosen = fx
+            .resolver
+            .select(&[SignatureScheme::ECDSA_NISTP256_SHA256])
+            .expect("an identity is always chosen");
+        assert_eq!(
+            chosen.cert[0].to_vec(),
+            fx.ecdsa_leaf,
+            "ECDSA-only client must be served the ECDSA identity, not the RSA primary"
+        );
+    }
+
+    #[test]
+    fn resolver_picks_rsa_primary_for_rsa_only_client_hello() {
+        let fx = dual_cert_fixture();
+        let chosen = fx
+            .resolver
+            .select(&[SignatureScheme::RSA_PSS_SHA256])
+            .expect("an identity is always chosen");
+        assert_eq!(chosen.cert[0].to_vec(), fx.rsa_leaf);
+    }
+
+    #[test]
+    fn resolver_falls_back_to_primary_when_nothing_matches() {
+        let fx = dual_cert_fixture();
+        // ED25519 matches neither the RSA nor the ECDSA key: the primary is
+        // served so the client sees an ordinary handshake failure rather than a
+        // `no certificate` alert.
+        let chosen = fx
+            .resolver
+            .select(&[SignatureScheme::ED25519])
+            .expect("primary is always the fallback");
+        assert_eq!(chosen.cert[0].to_vec(), fx.rsa_leaf);
+    }
+
+    #[test]
+    fn resolver_with_only_primary_always_serves_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_identity(dir.path(), "only", ecdsa_key());
+        let config = TlsConfig {
+            enabled: true,
+            cert_file: cert,
+            key_file: key,
+            ..Default::default()
+        };
+        let resolver = build_cert_resolver(&config, &provider()).unwrap();
+        assert_eq!(resolver.len(), 1);
+        let leaf = resolver.keys[0].cert[0].to_vec();
+        for schemes in [
+            vec![SignatureScheme::ECDSA_NISTP256_SHA256],
+            vec![SignatureScheme::RSA_PSS_SHA256],
+            vec![],
+        ] {
+            assert_eq!(resolver.select(&schemes).unwrap().cert[0].to_vec(), leaf);
+        }
+    }
+
+    #[test]
+    fn mismatched_additional_pair_fails_to_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_identity(dir.path(), "primary", ecdsa_key());
+        // Point the additional identity at cert A but key B.
+        let (extra_cert, _) = write_identity(dir.path(), "extra", ecdsa_key());
+        let (_, other_key) = write_identity(dir.path(), "other", ecdsa_key());
+
+        let config = TlsConfig {
+            enabled: true,
+            cert_file: cert,
+            key_file: key,
+            additional_certs: vec![frogdb_config::AdditionalCert {
+                cert_file: extra_cert,
+                key_file: other_key,
+            }],
+            ..Default::default()
+        };
+        let err = build_cert_resolver(&config, &provider()).unwrap_err();
+        assert!(
+            err.to_string().contains("failed to load TLS identity"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn server_config_builds_with_additional_certs_under_mtls() {
+        // The client-cert-verifier branch must also route through the resolver.
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_identity(dir.path(), "primary", rsa_key());
+        let (ec_cert, ec_key) = write_identity(dir.path(), "ecdsa", ecdsa_key());
+        // Reuse the primary self-signed cert as the client CA: it only has to
+        // parse into the root store for the verifier to build.
+        let config = TlsConfig {
+            enabled: true,
+            cert_file: cert.clone(),
+            key_file: key,
+            ca_file: Some(cert),
+            require_client_cert: ClientCertMode::Required,
+            additional_certs: vec![frogdb_config::AdditionalCert {
+                cert_file: ec_cert,
+                key_file: ec_key,
+            }],
+            ..Default::default()
+        };
+        build_server_config(&config).expect("mTLS server config builds with a multi-cert resolver");
     }
 }

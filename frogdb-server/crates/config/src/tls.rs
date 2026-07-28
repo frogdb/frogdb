@@ -30,6 +30,31 @@ pub enum ClientCertMode {
     Required,
 }
 
+/// An extra server identity (certificate + key) offered alongside the primary
+/// `cert-file`/`key-file` pair.
+///
+/// Configured as a TOML array-of-tables:
+///
+/// ```toml
+/// [[tls.additional-certs]]
+/// cert-file = "/etc/frogdb/tls/ecdsa.crt"
+/// key-file  = "/etc/frogdb/tls/ecdsa.key"
+/// ```
+///
+/// The server builds one rustls `CertifiedKey` per pair and picks, per
+/// ClientHello, the first identity whose key can sign one of the signature
+/// schemes the client advertised. The primary pair is always tried first and is
+/// also the fallback when no identity matches, so a single-cert deployment
+/// behaves exactly as before.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub struct AdditionalCert {
+    /// Path to the certificate file (PEM format).
+    pub cert_file: PathBuf,
+    /// Path to the matching private key file (PEM format).
+    pub key_file: PathBuf,
+}
+
 /// TLS configuration section.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
 #[params(section = "tls")]
@@ -49,6 +74,16 @@ pub struct TlsConfig {
     #[serde(default)]
     #[param(name = "tls-key-file")]
     pub key_file: PathBuf,
+
+    /// Extra server identities offered alongside `cert-file`/`key-file`
+    /// (e.g. an ECDSA pair next to an RSA pair for dual-cert deployments).
+    ///
+    /// See [`AdditionalCert`] for the TOML shape and the selection rule. Every
+    /// pair must parse and its key must match its certificate, or TLS setup
+    /// fails loudly at startup / on reload.
+    #[serde(default)]
+    #[param(skip)] // skip: pending promotion (mutability round)
+    pub additional_certs: Vec<AdditionalCert>,
 
     /// Path to the CA certificate file for client certificate verification (PEM format).
     /// Required when `require_client_cert` is not `none`.
@@ -163,6 +198,7 @@ impl Default for TlsConfig {
             enabled: false,
             cert_file: PathBuf::new(),
             key_file: PathBuf::new(),
+            additional_certs: Vec::new(),
             ca_file: None,
             tls_port: default_tls_port(),
             require_client_cert: ClientCertMode::default(),
@@ -252,6 +288,30 @@ impl TlsConfig {
             && !ca_file.exists()
         {
             anyhow::bail!("tls.ca_file '{}' does not exist", ca_file.display());
+        }
+
+        // Every additional identity must be a complete, existing pair. A
+        // half-configured extra cert is an operator error, not a reason to
+        // silently serve only the primary identity.
+        for (i, extra) in self.additional_certs.iter().enumerate() {
+            if extra.cert_file.as_os_str().is_empty() {
+                anyhow::bail!("tls.additional_certs[{i}].cert_file is required");
+            }
+            if extra.key_file.as_os_str().is_empty() {
+                anyhow::bail!("tls.additional_certs[{i}].key_file is required");
+            }
+            if !extra.cert_file.exists() {
+                anyhow::bail!(
+                    "tls.additional_certs[{i}].cert_file '{}' does not exist",
+                    extra.cert_file.display()
+                );
+            }
+            if !extra.key_file.exists() {
+                anyhow::bail!(
+                    "tls.additional_certs[{i}].key_file '{}' does not exist",
+                    extra.key_file.display()
+                );
+            }
         }
 
         Ok(())
@@ -353,6 +413,92 @@ mod tests {
         assert!(config.no_tls_on_admin_port);
         assert!(config.watch_certs);
         assert_eq!(config.handshake_timeout_ms, 10000);
+    }
+
+    #[test]
+    fn test_additional_certs_toml_array_of_tables() {
+        let toml_src = r#"
+enabled = false
+cert-file = "/tmp/a.crt"
+key-file = "/tmp/a.key"
+
+[[additional-certs]]
+cert-file = "/tmp/ec.crt"
+key-file = "/tmp/ec.key"
+
+[[additional-certs]]
+cert-file = "/tmp/rsa.crt"
+key-file = "/tmp/rsa.key"
+"#;
+        let config: TlsConfig = toml::from_str(toml_src).unwrap();
+        assert_eq!(config.additional_certs.len(), 2);
+        assert_eq!(
+            config.additional_certs[0].cert_file,
+            PathBuf::from("/tmp/ec.crt")
+        );
+        assert_eq!(
+            config.additional_certs[1].key_file,
+            PathBuf::from("/tmp/rsa.key")
+        );
+    }
+
+    #[test]
+    fn test_additional_certs_default_empty() {
+        let json = r#"{"enabled": false}"#;
+        let config: TlsConfig = serde_json::from_str(json).unwrap();
+        assert!(config.additional_certs.is_empty());
+    }
+
+    #[test]
+    fn test_additional_cert_missing_file_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let cert = dir.path().join("primary.crt");
+        let key = dir.path().join("primary.key");
+        std::fs::write(&cert, b"x").unwrap();
+        std::fs::write(&key, b"x").unwrap();
+
+        let config = TlsConfig {
+            enabled: true,
+            cert_file: cert,
+            key_file: key,
+            additional_certs: vec![AdditionalCert {
+                cert_file: dir.path().join("nope.crt"),
+                key_file: dir.path().join("nope.key"),
+            }],
+            ..Default::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("additional_certs[0].cert_file"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_additional_cert_empty_key_path_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let cert = dir.path().join("primary.crt");
+        let key = dir.path().join("primary.key");
+        std::fs::write(&cert, b"x").unwrap();
+        std::fs::write(&key, b"x").unwrap();
+        let extra = dir.path().join("extra.crt");
+        std::fs::write(&extra, b"x").unwrap();
+
+        let config = TlsConfig {
+            enabled: true,
+            cert_file: cert,
+            key_file: key,
+            additional_certs: vec![AdditionalCert {
+                cert_file: extra,
+                key_file: PathBuf::new(),
+            }],
+            ..Default::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("additional_certs[0].key_file"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
