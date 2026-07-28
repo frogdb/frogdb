@@ -180,6 +180,30 @@ impl PubSubState {
     pub fn sub_count(&self) -> usize {
         self.subscriptions.len() + self.patterns.len()
     }
+
+    /// The subscription set backing `kind`.
+    pub fn set(&self, kind: SubKind) -> &HashSet<Bytes> {
+        match kind {
+            SubKind::Channel => &self.subscriptions,
+            SubKind::Pattern => &self.patterns,
+            SubKind::Sharded => &self.sharded_subscriptions,
+        }
+    }
+
+    /// How many of `names` would genuinely grow the `kind` set: names that are
+    /// not already subscribed, counting a name repeated within the batch once.
+    ///
+    /// This is the real cost of a subscribe batch, since the sets are
+    /// [`HashSet`]s — the raw argument count over-charges duplicates and
+    /// re-subscribes.
+    pub fn new_name_count(&self, kind: SubKind, names: &[Bytes]) -> usize {
+        let held = self.set(kind);
+        let mut seen: HashSet<&Bytes> = HashSet::new();
+        names
+            .iter()
+            .filter(|name| !held.contains(*name) && seen.insert(name))
+            .count()
+    }
 }
 
 /// Authentication state for a connection.
@@ -658,11 +682,7 @@ impl ConnectionState {
     /// Owned snapshot of all subscription names of `kind` (for unsubscribe-all
     /// fan-out, where the caller mutates the set while iterating).
     pub fn subscriptions(&self, kind: SubKind) -> Vec<Bytes> {
-        match kind {
-            SubKind::Channel => self.pubsub.subscriptions.iter().cloned().collect(),
-            SubKind::Pattern => self.pubsub.patterns.iter().cloned().collect(),
-            SubKind::Sharded => self.pubsub.sharded_subscriptions.iter().cloned().collect(),
-        }
+        self.pubsub.set(kind).iter().cloned().collect()
     }
 
     /// Read-only iterator over every subscription name (channels, patterns, and
@@ -675,33 +695,27 @@ impl ConnectionState {
             .chain(self.pubsub.sharded_subscriptions.iter())
     }
 
-    /// Admit `additional` subscriptions of `kind`, enforcing the per-connection
-    /// limit and updating the one-shot 80% warning latch (emitting the warning
-    /// internally when it first crosses the threshold).
+    /// Admit a batch of `names` as subscriptions of `kind`, enforcing the
+    /// per-connection limit and updating the one-shot 80% warning latch
+    /// (emitting the warning internally when it first crosses the threshold).
+    ///
+    /// Only the genuine growth of the subscription set is charged against the
+    /// limit: names already held, and names repeated within the batch, cost no
+    /// headroom because the set is a [`HashSet`]. Admission stays
+    /// all-or-nothing — a batch whose *unique new* names do not fit is rejected
+    /// in full.
     ///
     /// This does not insert — callers add names one at a time via
     /// [`add_subscription`](Self::add_subscription) so they can interleave shard
     /// fan-out between insertions.
-    pub fn admit_subscriptions(&mut self, kind: SubKind, additional: usize) -> SubscribeOutcome {
-        let (current, max, label) = match kind {
-            SubKind::Channel => (
-                self.pubsub.subscriptions.len(),
-                MAX_SUBSCRIPTIONS_PER_CONNECTION,
-                "channel",
-            ),
-            SubKind::Pattern => (
-                self.pubsub.patterns.len(),
-                MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
-                "pattern",
-            ),
-            SubKind::Sharded => (
-                self.pubsub.sharded_subscriptions.len(),
-                MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
-                "sharded",
-            ),
+    pub fn admit_subscriptions(&mut self, kind: SubKind, names: &[Bytes]) -> SubscribeOutcome {
+        let (max, label) = match kind {
+            SubKind::Channel => (MAX_SUBSCRIPTIONS_PER_CONNECTION, "channel"),
+            SubKind::Pattern => (MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, "pattern"),
+            SubKind::Sharded => (MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, "sharded"),
         };
 
-        let new_count = current + additional;
+        let new_count = self.pubsub.set(kind).len() + self.pubsub.new_name_count(kind, names);
         if new_count > max {
             return SubscribeOutcome::LimitReached;
         }
@@ -1308,25 +1322,30 @@ mod tests {
         assert_eq!(s.subscription_counts(), SubCounts::default());
     }
 
+    /// `n` distinct brand-new names for an admission batch.
+    fn names(n: usize) -> Vec<Bytes> {
+        (0..n).map(|i| Bytes::from(format!("n{i}"))).collect()
+    }
+
     #[test]
     fn subscribe_limit_and_80pct_latch() {
         let mut s = state();
-        let threshold = MAX_SUBSCRIPTIONS_PER_CONNECTION * 4 / 5;
+        let batch = names(MAX_SUBSCRIPTIONS_PER_CONNECTION * 4 / 5);
 
         // First crossing of 80% fires the latch.
         assert_eq!(
-            s.admit_subscriptions(SubKind::Channel, threshold),
+            s.admit_subscriptions(SubKind::Channel, &batch),
             SubscribeOutcome::Admitted { crossed_80: true }
         );
         // Latch is one-shot: a second crossing does not re-fire.
         assert_eq!(
-            s.admit_subscriptions(SubKind::Channel, threshold),
+            s.admit_subscriptions(SubKind::Channel, &batch),
             SubscribeOutcome::Admitted { crossed_80: false }
         );
         // Dropping below threshold re-arms the latch.
         s.rearm_subscription_warning(SubKind::Channel);
         assert_eq!(
-            s.admit_subscriptions(SubKind::Channel, threshold),
+            s.admit_subscriptions(SubKind::Channel, &batch),
             SubscribeOutcome::Admitted { crossed_80: true }
         );
     }
@@ -1342,9 +1361,78 @@ mod tests {
             MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION
         );
         assert_eq!(
-            s.admit_subscriptions(SubKind::Pattern, 1),
+            s.admit_subscriptions(SubKind::Pattern, &[Bytes::from_static(b"fresh")]),
             SubscribeOutcome::LimitReached
         );
+    }
+
+    #[test]
+    fn subscribe_charges_only_genuine_set_growth() {
+        let mut s = state();
+        // Fill to one below the cap.
+        for i in 0..MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION - 1 {
+            s.add_subscription(SubKind::Pattern, Bytes::from(format!("p{i}")));
+        }
+
+        // A brand-new name repeated within one batch grows the set by 1, so it
+        // fits the single remaining slot (previously charged as 2, which was
+        // spuriously rejected).
+        let dup = Bytes::from_static(b"dup");
+        assert!(
+            matches!(
+                s.admit_subscriptions(SubKind::Pattern, &[dup.clone(), dup.clone()]),
+                SubscribeOutcome::Admitted { .. }
+            ),
+            "a duplicated new name costs one slot, not two"
+        );
+        // Two *distinct* new names still do not fit the single slot.
+        assert_eq!(
+            s.admit_subscriptions(
+                SubKind::Pattern,
+                &[dup.clone(), Bytes::from_static(b"other")]
+            ),
+            SubscribeOutcome::LimitReached
+        );
+
+        // Now genuinely full.
+        s.add_subscription(SubKind::Pattern, dup);
+        assert_eq!(
+            s.subscription_counts().patterns,
+            MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION
+        );
+
+        // Re-subscribing to already-held names is a no-op for the set, so it is
+        // admitted even at a full cap (previously charged +1 and rejected).
+        assert!(
+            matches!(
+                s.admit_subscriptions(
+                    SubKind::Pattern,
+                    &[Bytes::from_static(b"p0"), Bytes::from_static(b"p0")]
+                ),
+                SubscribeOutcome::Admitted { .. }
+            ),
+            "re-subscribing to a held name must not consume headroom"
+        );
+        // ...but a single genuinely new name at a full cap still rejects.
+        assert_eq!(
+            s.admit_subscriptions(SubKind::Pattern, &[Bytes::from_static(b"brand-new")]),
+            SubscribeOutcome::LimitReached
+        );
+    }
+
+    #[test]
+    fn new_name_count_dedupes_batch_and_skips_held() {
+        let mut s = state();
+        s.add_subscription(SubKind::Channel, Bytes::from_static(b"held"));
+        let batch = [
+            Bytes::from_static(b"held"),
+            Bytes::from_static(b"a"),
+            Bytes::from_static(b"a"),
+            Bytes::from_static(b"b"),
+        ];
+        assert_eq!(s.pubsub.new_name_count(SubKind::Channel, &batch), 2);
+        // Kinds are independent: the channel set does not shadow patterns.
+        assert_eq!(s.pubsub.new_name_count(SubKind::Pattern, &batch), 3);
     }
 
     // ---- Transaction lifecycle -------------------------------------------

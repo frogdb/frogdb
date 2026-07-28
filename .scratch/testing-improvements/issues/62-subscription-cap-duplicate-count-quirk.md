@@ -1,6 +1,6 @@
 # Subscription cap admits by `args.len()`, not real HashSet growth: spurious rejections at the boundary
 
-Status: needs-triage
+Status: done
 Type: bug (behavior)
 Origin: testing-gap issue 50 (integration-level subscription-cap coverage), pinned by
 `test_subscribe_cap_channel_kind_integration` / `_pattern_kind_integration` / `_sharded_kind_integration`
@@ -46,16 +46,16 @@ Keep the same fail-fast, all-or-nothing contract (a batch that doesn't fit is st
 
 ## Acceptance criteria
 
-- [ ] `SUBSCRIBE <held> <held>` (both already-held, or a duplicate of the same already-held name) at a
+- [x] `SUBSCRIBE <held> <held>` (both already-held, or a duplicate of the same already-held name) at a
       full cap succeeds as a no-op (returns the normal confirmation(s), does not consume headroom).
-- [ ] `SUBSCRIBE new new` with exactly one real slot free succeeds (charges `+1`, not `+2`).
-- [ ] A genuinely over-cap batch (more *unique new* names than remaining headroom) still rejects in
+- [x] `SUBSCRIBE new new` with exactly one real slot free succeeds (charges `+1`, not `+2`).
+- [x] A genuinely over-cap batch (more *unique new* names than remaining headroom) still rejects in
       full — no regression to the all-or-nothing contract.
-- [ ] Update the three cap-quirk assertions in `integration_pubsub.rs`
+- [x] Update the three cap-quirk assertions in `integration_pubsub.rs`
       (`test_subscribe_cap_{channel,pattern,sharded}_kind_integration`) to match the corrected
       behavior (they currently assert the *quirky* rejection as an explicit pin — flip them to assert
       success once fixed, keeping a comment noting the prior surprising behavior for history).
-- [ ] Same fix applies uniformly to all three subscription kinds (channel/pattern/sharded), since all
+- [x] Same fix applies uniformly to all three subscription kinds (channel/pattern/sharded), since all
       three share `admit_subscriptions`.
 
 ## Blocked by
@@ -71,3 +71,56 @@ acceptance criterion explicitly allows).
 - frogdb-server/crates/server/src/connection/pubsub_conn_command.rs:316-327 (`subscribe_kind`)
 - frogdb-server/crates/server/tests/integration_pubsub.rs (`run_subscription_cap_scenario` and its
   three per-kind callers)
+
+## Resolution
+
+The cap is now charged the genuine `HashSet` delta of a subscribe batch instead of its raw argument
+count. Because the counting is the only thing that changed, the all-or-nothing contract, the error
+texts, and the 80% warning latch are all untouched.
+
+**Signature change.** `ConnectionState::admit_subscriptions` takes the batch itself rather than a
+bare count:
+
+```rust
+pub fn admit_subscriptions(&mut self, kind: SubKind, names: &[Bytes]) -> SubscribeOutcome
+```
+
+It computes `current + new_name_count(kind, names)` and rejects only when that would exceed the
+kind's max, so a name already held (case 2) or repeated within the batch (case 1) costs no headroom.
+The 80% latch is evaluated against the same corrected `new_count`.
+
+**New helpers on `PubSubState`** (`frogdb-server/crates/server/src/connection/state.rs`), keeping the
+per-kind `match` in one place instead of spreading field access:
+
+- `set(&self, kind: SubKind) -> &HashSet<Bytes>` — the set backing a kind.
+- `new_name_count(&self, kind: SubKind, names: &[Bytes]) -> usize` — unique names not already held
+  (dedupes within the batch and skips held names).
+
+`ConnectionState::subscriptions` was collapsed onto `set()` (it was the identical three-arm match).
+
+**Caller.** `PubSubConnCommand::subscribe_kind`
+(`frogdb-server/crates/server/src/connection/pubsub_conn_command.rs:316`) passes `args` instead of
+`args.len()`. All three kinds share this path, so channel/pattern/sharded are fixed uniformly.
+
+**Test flips.**
+
+- `frogdb-server/crates/server/tests/integration_pubsub.rs`: `run_subscription_cap_scenario`'s
+  section **(c)** — shared by `test_subscribe_cap_{channel,pattern,sharded}_kind_integration` —
+  now asserts that `SUBSCRIBE <new> <new>` at `max - 1` headroom *succeeds* with both confirmations
+  reporting `max`, and that a re-subscribe to an already-held channel at a full cap succeeds as a
+  no-op (plus a repeated already-held name in one command). A comment above each records the prior
+  spurious-rejection behavior. A new assertion keeps the cap honest: a genuinely new name at a full
+  cap still returns the per-kind limit error. The file-header comment block and the helper doc
+  comment were reworded from "quirk" to the corrected contract; issue 50's resolution notes the
+  supersession.
+- `frogdb-server/crates/server/src/connection/state.rs` unit tests: `subscribe_limit_and_80pct_latch`
+  and `subscribe_rejects_over_limit` were adapted to the new signature (name slices instead of
+  counts). Two new unit tests were added — `subscribe_charges_only_genuine_set_growth` (dup-in-batch
+  fits the last slot, two distinct names do not, re-subscribe at a full cap is admitted, a new name
+  at a full cap still rejects) and `new_name_count_dedupes_batch_and_skips_held` (counting is
+  per-kind and dedupes correctly).
+
+**Verification** (all local, `frogdb-server`): `just check frogdb-server` clean;
+`cargo clippy -p frogdb-server --all-targets -- -D warnings` clean; `just fmt-check` clean;
+`just test frogdb-server 'subscribe_cap|subscribe_limit|subscribe_rejects|subscribe_charges|new_name_count'`
+→ 7/7 passed; `just test frogdb-server pubsub` → 175/175 passed (no regressions).

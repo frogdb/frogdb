@@ -101,3 +101,9 @@ warnings), `just test frogdb-server integration_pubsub` (149 passed / 149, no re
 three new tests run individually plus 3x together
 (`just test frogdb-server test_subscribe_cap_`) — 3/3 passed every run
 (`3 tests run: 3 passed, 1917 skipped`, ~0.09-0.10s each run).
+
+**Superseded (issue 62)**: the **(c)** assertions in all three tests have since been flipped from the
+quirky rejection to the corrected behavior — `admit_subscriptions` now charges the real `HashSet`
+delta, so duplicates and re-subscribes cost no headroom. The comments in
+`run_subscription_cap_scenario` record the prior behavior for history. Parts (a) and (b) are
+unchanged.

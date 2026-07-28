@@ -318,9 +318,12 @@ impl<'a> PubSubIo<'a> {
             return vec![Response::error(spec.arity_error)];
         }
 
-        // Enforce the per-connection limit and 80% warning latch.
+        // Enforce the per-connection limit and 80% warning latch. Only the
+        // names that would genuinely grow the subscription set are charged, so
+        // duplicates within the batch and re-subscribes to already-held names
+        // cost no headroom.
         if matches!(
-            self.state.admit_subscriptions(spec.kind, args.len()),
+            self.state.admit_subscriptions(spec.kind, args),
             SubscribeOutcome::LimitReached
         ) {
             return vec![Response::error(spec.limit_error)];
