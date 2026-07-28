@@ -70,7 +70,7 @@ test crate="" pattern="":
 
 # Generate code coverage report (unit tests only)
 coverage crate="" pattern="":
-    {{dyld-env}} {{rocksdb-env}} cargo llvm-cov nextest --all {{ if crate != "" { "-p " + crate } else { "" } }} {{ if pattern != "" { "-E 'test(/" + pattern + "/)'" } else { "" } }} --html
+    {{dyld-env}} {{rocksdb-env}} cargo llvm-cov nextest {{ if crate != "" { "-p " + crate } else { "--all" } }} {{ if pattern != "" { "-E 'test(/" + pattern + "/)'" } else { "" } }} --html
     @echo "Report: target/llvm-cov/html/index.html"
 
 # Generate lcov coverage data (for CI upload)
