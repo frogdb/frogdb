@@ -5,6 +5,19 @@
     }
   },
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/build-mode-session-start.sh",
+            "timeout": 10,
+            "statusMessage": "Checking build/test execution mode"
+          }
+        ]
+      }
+    ],
     "SessionEnd": [
       {
         "hooks": [

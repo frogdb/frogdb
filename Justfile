@@ -978,11 +978,23 @@ lint-metrics-chokepoint:
     echo "OK: metric emission goes through the typed handles"
 
 # =============================================================================
+# Build/test execution mode
+# =============================================================================
+
+# Show the current mode, or set it: just build-mode testbox
+build-mode *mode="":
+    ./scripts/build-mode.sh {{mode}}
+
+# =============================================================================
 # Blacksmith Testboxes (remote Linux build/test VMs)
 # =============================================================================
+#
+# The tb-* recipes require testbox mode (`just build-mode testbox`). For a
+# one-off without switching the worktree, set BUILD_MODE=testbox.
 
 # Warm up a testbox and record its ID for session-end cleanup
 tb-warmup workflow="test-unit-tests-testbox.yml" *args="":
+    @./scripts/require-testbox-mode.sh
     ./scripts/testbox-warmup.sh {{workflow}} {{args}}
 
 # Run a command on the most recently warmed testbox: just tb-run "just test frogdb-server"
@@ -990,6 +1002,7 @@ tb-run cmd:
     #!/usr/bin/env bash
     set -euo pipefail
     export PATH="$HOME/.local/bin:$PATH"
+    ./scripts/require-testbox-mode.sh
     id=$(tail -1 "$(git rev-parse --git-dir)/blacksmith-testboxes" 2>/dev/null || true)
     [ -n "$id" ] || { echo "no testbox recorded; run 'just tb-warmup' first" >&2; exit 1; }
     # The testbox SSH session does not inherit the workflow's PATH; mise-managed
