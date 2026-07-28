@@ -411,8 +411,24 @@ impl ConnectionHandler {
             // through the registry union (`dispatch_connection_command`) like
             // CONFIG, rather than being intercepted early here.
             DispatchStage::PreChecks => {
-                let error_response = self.pre_dispatch_view().run_pre_checks(cmd_name, &cmd.args);
+                let view = self.pre_dispatch_view();
+                let error_response = view.run_pre_checks(cmd_name, &cmd.args);
                 if let Some(error_response) = error_response {
+                    // A rejection while a MULTI is open poisons the transaction,
+                    // so EXEC answers `-EXECABORT` rather than a short (or
+                    // empty) array. Redis does this for every pre-`call()`
+                    // refusal: `rejectCommand` calls `flagTransaction`, setting
+                    // `CLIENT_DIRTY_EXEC`. Without it, a NOAUTH / READONLY /
+                    // CLUSTERDOWN / NOREPLICAS / NOADMIN / NOPERM / pubsub-mode
+                    // rejection at queue time silently shortens the batch —
+                    // the divergence recorded in testing-gap issue 33.
+                    if view.state.in_transaction() {
+                        let msg = match &error_response {
+                            Response::Error(e) => Some(String::from_utf8_lossy(e).to_string()),
+                            _ => None,
+                        };
+                        view.state.abort_transaction(msg);
+                    }
                     return StageOutcome::ShortCircuit(vec![error_response]);
                 }
                 StageOutcome::Continue
@@ -827,6 +843,11 @@ mod tests {
             (TransactionQueue, PauseGate),
             // Queued commands slot-validate at queue time; the standalone
             // slot-validation stage runs later on the non-transaction path.
+            // EXEC re-validates the *whole* queue against one cluster snapshot,
+            // but that lives in `transaction.rs`
+            // (`PreDispatchView::validate_queued_batch`), not as a gauntlet
+            // stage — it is a batch decision, not a per-command pre-dispatch
+            // concern, and adding a 17th stage for it would be wrong.
             (TransactionQueue, ClusterSlotValidation),
             // Slot routing (MOVED/ASK/CROSSSLOT) precedes the multi-key
             // TRYAGAIN check, which precedes the terminal execute stage.

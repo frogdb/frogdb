@@ -7624,16 +7624,87 @@ async fn test_multi_exec_write_inside_readonly_session_returns_moved() {
     let multi_resp = client.command(&["MULTI"]).await;
     assert!(!is_error(&multi_resp));
 
-    // Queue a write
-    let _queued_resp = client.command(&["SET", &key, "should_fail"]).await;
-    // Should still queue (error surfaces at EXEC time)
+    // READONLY only rescues reads. A queued write on a slot this node does not
+    // own is MOVED at queue time, which flags the transaction dirty.
+    let queued_resp = client.command(&["SET", &key, "should_fail"]).await;
+    assert!(
+        is_moved_redirect(&queued_resp).is_some(),
+        "a write on a foreign slot must be MOVED even in READONLY mode, got: {:?}",
+        queued_resp
+    );
 
     let exec_resp = client.command(&["EXEC"]).await;
-    // EXEC should fail with MOVED or EXECABORT for write commands on READONLY node
+    assert_execabort(&exec_resp, "EXEC after a READONLY-mode write was rejected");
+
+    harness.shutdown_all().await;
+}
+
+/// READONLY eligibility is folded across the *whole* batch, not per command: a
+/// transaction of reads on a foreign slot serves locally, but adding a single
+/// write to the same batch makes the whole thing MOVED. Anything else would let
+/// a write land on a node that does not own the slot.
+#[tokio::test]
+async fn test_multi_exec_readonly_batch_eligibility_is_all_or_nothing() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 452u16;
+    let (owner_id, non_owner_id) = match find_owner_of_slot(&harness, test_slot).await {
+        Some(pair) => pair,
+        None => {
+            harness.shutdown_all().await;
+            return;
+        }
+    };
+
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let (key_a, key_b) = (format!("{tag}_a"), format!("{tag}_b"));
+    let owner = harness.node(owner_id).unwrap();
+    for k in [&key_a, &key_b] {
+        assert!(!is_error(&owner.send("SET", &[k, "v0"]).await));
+    }
+
+    let non_owner = harness.node(non_owner_id).unwrap();
+    let mut client = non_owner.connect().await;
+    assert!(!is_error(&client.command(&["READONLY"]).await));
+
+    // All-reads batch on a slot we do not own: served locally.
+    assert!(!is_error(&client.command(&["MULTI"]).await));
+    for k in [&key_a, &key_b] {
+        assert_eq!(
+            client.command(&["GET", k]).await,
+            frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED"))
+        );
+    }
+    let exec = client.command(&["EXEC"]).await;
     assert!(
-        is_error(&exec_resp),
-        "EXEC with write on READONLY node should fail, got: {:?}",
-        exec_resp
+        matches!(&exec, frogdb_protocol::Response::Array(items) if items.len() == 2),
+        "a READONLY all-reads batch must be served locally, got {exec:?}"
+    );
+
+    // Same batch plus one write: no longer read-only, so the whole batch is
+    // redirected. The write must never be the thing that runs locally.
+    assert!(!is_error(&client.command(&["MULTI"]).await));
+    assert_eq!(
+        client.command(&["GET", &key_a]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED"))
+    );
+    let queued_write = client.command(&["SET", &key_b, "v1"]).await;
+    assert!(
+        is_moved_redirect(&queued_write).is_some(),
+        "the queued write must be MOVED, got {queued_write:?}"
+    );
+    assert_execabort(
+        &client.command(&["EXEC"]).await,
+        "EXEC for a READONLY batch containing a write",
     );
 
     harness.shutdown_all().await;
@@ -11961,67 +12032,157 @@ async fn test_cluster_scan_is_per_node_and_unions_to_full_keyspace() {
 // MULTI/EXEC across a slot-migration boundary (testing-gap issue 55)
 // ============================================================================
 //
-// PINNED CONTRACT — slot ownership is validated at *queue* time only; EXEC
-// never re-validates.
+// PINNED CONTRACT — EXEC re-validates slot ownership for the whole queued
+// batch, against one cluster snapshot, before a single queued command runs.
 //
-// FrogDB checks cluster slot ownership when a command is queued into an open
-// MULTI (`server/src/connection/guards.rs::try_queue_in_transaction` calls
-// `validate_cluster_slots`, and a MOVED/ASK/CROSSSLOT there aborts the
-// transaction so EXEC replies EXECABORT). EXEC itself
-// (`server/src/connection/transaction.rs::execute_transaction`) only folds the
-// queued keys into a *shard* target (`TransactionTarget::resolve`, which knows
-// about intra-node shards and CROSSSLOT, not about node ownership) and sends
-// the batch to that local shard. No MOVED / ASK / TRYAGAIN check runs between
-// `MULTI` and the shard round-trip. Consequently a slot that leaves this node
-// after queue time and before EXEC is *not* noticed: the queued commands
-// execute locally, against the node that no longer owns the slot.
+// FrogDB validates cluster slot ownership twice. At *queue* time
+// (`server/src/connection/guards.rs::try_queue_in_transaction` →
+// `validate_cluster_slots`) a MOVED/ASK/CROSSSLOT marks the transaction dirty,
+// so EXEC replies EXECABORT. At *EXEC* time
+// (`server/src/connection/transaction.rs::execute_transaction` →
+// `PreDispatchView::validate_queued_batch`) the queued commands' keys are
+// folded to a slot set and routed as a unit through the same
+// `route_with_snapshot` seam the per-command path uses. On refusal EXEC answers
+// the bare `-MOVED` / `-ASK` / `-TRYAGAIN` / `-CROSSSLOT` / `-CLUSTERDOWN` and
+// the queue is gone — no array, no EXECABORT.
 //
-// DIVERGENCE FROM REDIS — deliberate and currently accepted, not parity.
-// Redis (verified against `redis/unstable` sources, Redis 8.x) routes EXEC
-// through the exact same `getNodeByQuery` path as any other command, and
-// explicitly re-runs it over the whole queued transaction:
+// This is Redis parity, verified against `redis/unstable` (Redis 8.x). Redis
+// routes EXEC through `getNodeByQuery` over the whole transaction:
 //
 //     if (cmd->proc == execCommand) { ... ms = &c->mstate; }   /* cluster.c */
 //
-// so at EXEC time it recomputes slot/owner/migrating/importing/missing-keys for
-// every queued command. If the resolved node is no longer `myself`,
-// `processCommand` (server.c) does:
+// and, when the resolved node is no longer `myself`, `processCommand`
+// (server.c) does:
 //
 //     if (c->cmd->proc == execCommand) discardTransaction(c);
 //     clusterRedirectClient(c, n, c->slot, error_code);
 //
-// i.e. EXEC replies `-MOVED` (slot handed over), `-ASK` (slot MIGRATING and the
-// keys are already gone), `-TRYAGAIN` (keys split across the boundary) or
-// `-CROSSSLOT`, and *discards* the queue. FrogDB does none of that. The two
-// tests below pin FrogDB's actual behavior, including the observable damage:
+// Two ordering properties this suite exists to protect:
 //
-//   1. Migration COMPLETED before EXEC -> EXEC succeeds on the former owner and
-//      the write is invisible to the cluster (the slot's real owner never sees
-//      it; the former owner keeps an orphan copy that its own routing now
-//      answers with MOVED). Redis would answer the EXEC with `-MOVED`.
-//   2. Migration IN FLIGHT (slot MIGRATING, key already MIGRATE'd away) at EXEC
-//      -> EXEC succeeds on the source and *resurrects* the key there, so the
-//      same key now exists on both sides of an open slot. Redis would answer
-//      the EXEC with `-ASK`.
+//   1. Validation completes *before* any shard round-trip. A mid-batch redirect
+//      would not stop the shard's execution loop, and the surviving subset ships
+//      to replicas as a single MULTI…EXEC frame — i.e. a partial transaction
+//      would be replicated. The whole batch is therefore accepted or refused.
+//   2. Exactly one `ClusterState::snapshot()` backs the decision, so a batch can
+//      never be judged against two different views of slot ownership.
 //
-// Why this is accepted rather than fixed here: the window is narrow (a slot has
-// to change hands between two commands on one connection), cluster-only, and
-// closing it means re-running the full redirect seam over the queued batch
-// inside `execute_transaction` — a behavior change, not a test. Issue 55's
-// acceptance criteria say to escalate that as a separate design task rather
-// than silently changing semantics from a test-only change. If EXEC is ever
-// taught to re-validate, these two tests are the ones that must be rewritten,
-// and the rewrite is the signal that the contract moved on purpose.
+// The two tests that previously pinned the *absence* of this check
+// (`..._commits_on_former_owner`, `..._commits_on_source`) were rewritten here;
+// their rewrite is the deliberate signal that the contract moved. See
+// `.scratch/replication-cluster-rework/exec-slot-revalidation.md`.
+//
+// Ordering against CLIENT PAUSE: a write batch is validated *before* the pause
+// wait (so an already-doomed EXEC fails fast without occupying a pause slot) and
+// re-validated afterwards, but only when the wait actually blocked — an EXEC
+// parked across a migration finalization must not resume on a stale verdict.
+// The unpaused path therefore still pays exactly one snapshot. The re-validation
+// arm has no integration coverage: driving it needs a CLIENT PAUSE WRITE on the
+// source that outlives a slot handover, and the handover itself runs MIGRATE
+// through a client connection on that same paused node. See
+// `.scratch/replication-cluster-rework/issues/02-migration-finalization-pause-barrier.md`.
+//
+// The CROSSSLOT arm of the same batch decision is pinned separately by
+// `test_multi_exec_two_single_key_commands_different_slots_defers_crossslot_to_exec`
+// (two individually-valid queued commands on different slots) and is not
+// duplicated here.
 // ---------------------------------------------------------------------------
+
+/// The error message prefix of a response, or `None` if it is not an error.
+fn error_prefix(response: &frogdb_protocol::Response) -> Option<String> {
+    let msg = get_error_message(response)?;
+    Some(msg.split_whitespace().next()?.to_string())
+}
+
+/// `DBSIZE` on one node, as an integer. Keyless, so it is never slot-redirected
+/// and reports what this node *physically* holds — the only way to see an
+/// orphan write that normal routing would hide behind a MOVED.
+async fn node_dbsize(harness: &ClusterTestHarness, node_id: u64) -> i64 {
+    match harness.node(node_id).unwrap().send("DBSIZE", &[]).await {
+        frogdb_protocol::Response::Integer(n) => n,
+        other => panic!("DBSIZE must return an integer, got {other:?}"),
+    }
+}
+
+/// Put a slot into the open MIGRATING/IMPORTING window without transferring
+/// ownership. Returns once both sides have observed the state.
+async fn open_slot_migration_window(
+    harness: &ClusterTestHarness,
+    source_id: u64,
+    target_id: u64,
+    slot: u16,
+) {
+    let slot_str = slot.to_string();
+    let source_cluster_id = harness
+        .get_node_id_str(source_id)
+        .expect("source cluster id");
+    let target_cluster_id = harness
+        .get_node_id_str(target_id)
+        .expect("target cluster id");
+
+    let resp = send_cluster_cmd(
+        harness,
+        target_id,
+        &[
+            "SETSLOT",
+            &slot_str,
+            "IMPORTING",
+            &source_cluster_id,
+            &target_cluster_id,
+        ],
+    )
+    .await;
+    assert!(!is_error(&resp), "SETSLOT IMPORTING failed: {resp:?}");
+
+    let resp = send_cluster_cmd(
+        harness,
+        source_id,
+        &[
+            "SETSLOT",
+            &slot_str,
+            "MIGRATING",
+            &target_cluster_id,
+            &source_cluster_id,
+        ],
+    )
+    .await;
+    assert!(!is_error(&resp), "SETSLOT MIGRATING failed: {resp:?}");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let source_state = harness.node(source_id).unwrap().cluster_state().unwrap();
+    assert!(
+        source_state.is_slot_migrating(slot),
+        "the slot must actually be in MIGRATING state"
+    );
+    assert_eq!(
+        source_state.get_slot_owner(slot),
+        Some(source_id),
+        "an in-flight migration must not have transferred ownership yet"
+    );
+}
+
+/// Hand the named keys to the importing node with `MIGRATE`.
+async fn migrate_keys(harness: &ClusterTestHarness, source_id: u64, target_id: u64, keys: &[&str]) {
+    let target_addr = harness.node(target_id).unwrap().client_addr();
+    let (host, port) = split_addr(&target_addr);
+    let mut args = vec![host, port, "", "0", "5000", "REPLACE", "KEYS"];
+    args.extend_from_slice(keys);
+    let resp = harness
+        .node(source_id)
+        .unwrap()
+        .send("MIGRATE", &args)
+        .await;
+    assert!(!is_error(&resp), "MIGRATE failed: {resp:?}");
+}
 
 /// A slot migration that *completes* between queue time and EXEC time.
 ///
-/// Pins: EXEC does not re-check slot ownership, so the transaction commits on
-/// the node that has just lost the slot, and the committed value is not visible
-/// anywhere the cluster would route a client to. Redis would reply `-MOVED` to
-/// the EXEC and discard the queue (see the contract comment above).
+/// EXEC re-validates and answers `-MOVED <slot> <new owner>` with the queue
+/// discarded. The no-orphan-writes half is the load-bearing part: the former
+/// owner must take **zero** writes from the doomed transaction, which is checked
+/// against its physical `DBSIZE` (normal routing would hide an orphan behind the
+/// very MOVED the node now emits).
 #[tokio::test]
-async fn test_multi_exec_after_completed_slot_migration_commits_on_former_owner() {
+async fn test_multi_exec_after_completed_slot_migration_redirects_with_moved() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();
     harness
@@ -12045,8 +12206,8 @@ async fn test_multi_exec_after_completed_slot_migration_commits_on_former_owner(
         "the hash-tagged transaction key must land in the migrated slot"
     );
 
-    // Seed a pre-migration value so the post-EXEC divergence is unambiguous:
-    // "v0" is what migrates, "v1" is what the doomed transaction writes.
+    // Seed a pre-migration value so a lost write would be unambiguous: "v0" is
+    // what migrates, "v1" is what the doomed transaction tries to write.
     let source = harness.node(source_id).unwrap();
     assert_eq!(
         source.send("SET", &[&key, "v0"]).await,
@@ -12090,48 +12251,48 @@ async fn test_multi_exec_after_completed_slot_migration_commits_on_former_owner(
              before EXEC runs"
         );
     }
-
-    // THE PIN: EXEC commits anyway, on the node that no longer owns the slot.
-    // Both queued commands run locally; the GET even observes the SET, so this
-    // is a genuine local commit and not a partially-applied batch.
+    let source_keys_before_exec = node_dbsize(&harness, source_id).await;
     assert_eq!(
-        client.command(&["EXEC"]).await,
-        frogdb_protocol::Response::Array(vec![
-            frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
-            frogdb_protocol::Response::Bulk(Some(bytes::Bytes::from_static(b"v1"))),
-        ]),
-        "EXEC does not re-validate slot ownership: the queued batch commits on \
-         the former owner (Redis would reply -MOVED and discard the queue)"
+        source_keys_before_exec, 0,
+        "a completed migration must leave no keys behind on the source"
     );
 
-    // The damage this contract accepts: the committed write is unreachable.
-    // The very next non-transactional command on the *same* connection is
-    // redirected away, which is exactly the check EXEC skipped.
+    // THE CONTRACT: EXEC is redirected, not executed.
     let target_addr = harness.node(target_id).unwrap().client_addr();
-    let resp = client.command(&["GET", &key]).await;
+    let exec = client.command(&["EXEC"]).await;
     assert_eq!(
-        is_moved_redirect(&resp),
+        is_moved_redirect(&exec),
         Some((test_slot, target_addr.clone())),
-        "post-EXEC, an ordinary command on the same connection is MOVED to the \
-         new owner — proving the redirect check exists and EXEC simply skipped it"
+        "EXEC must re-validate and reply MOVED to the slot's new owner, got {exec:?}"
     );
-    let resp = harness.node(source_id).unwrap().send("GET", &[&key]).await;
+
+    // NO ORPHAN WRITES: the former owner physically holds nothing. Reading the
+    // key back through normal routing cannot prove this — the source answers
+    // MOVED for the slot either way — so the check is its raw key count.
     assert_eq!(
-        is_moved_redirect(&resp),
-        Some((test_slot, target_addr)),
-        "the former owner redirects reads for the slot it no longer owns, so the \
-         value EXEC just wrote there is unreachable through normal routing"
+        node_dbsize(&harness, source_id).await,
+        0,
+        "the former slot owner must take ZERO writes from the redirected EXEC"
     );
     assert_eq!(
         harness.node(target_id).unwrap().send("GET", &[&key]).await,
         frogdb_protocol::Response::Bulk(Some(bytes::Bytes::from_static(b"v0"))),
-        "the new owner still holds the pre-migration value: the transaction's \
-         write is lost from the cluster's point of view"
+        "the new owner keeps the migrated value, untouched by the refused EXEC"
     );
 
-    // Control, pinning the asymmetry: queue-time validation *does* fire. The
-    // same write, queued after the migration, is rejected with MOVED and aborts
-    // the transaction — so the gap really is EXEC-time-only.
+    // The queue was discarded with the redirect (Redis's `discardTransaction`),
+    // so the connection is out of MULTI and a bare EXEC is an error.
+    let exec_again = client.command(&["EXEC"]).await;
+    assert!(
+        is_error(&exec_again),
+        "the redirect must discard the queue, leaving no transaction to re-EXEC: \
+         {exec_again:?}"
+    );
+
+    // Queue-time validation still fires independently: the same write queued
+    // *after* the migration is MOVED at queue time and aborts with EXECABORT.
+    // The two gates report differently on purpose — EXECABORT means "you sent a
+    // bad command", the bare redirect means "ask another node".
     assert_eq!(
         client.command(&["MULTI"]).await,
         frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
@@ -12151,15 +12312,14 @@ async fn test_multi_exec_after_completed_slot_migration_commits_on_former_owner(
     harness.shutdown_all().await;
 }
 
-/// A slot migration that is still *in flight* (slot MIGRATING, key already
-/// handed to the target) at EXEC time.
+/// A slot migration still *in flight* (slot MIGRATING, key already handed to the
+/// target) at EXEC time.
 ///
-/// Pins: EXEC does not consult the MIGRATING state either, so the queued write
-/// recreates the key on the source and the same key exists on both sides of an
-/// open slot. Redis would reply `-ASK` to the EXEC (migrating slot + all keys
-/// missing locally) and discard the queue.
+/// EXEC probes key presence for the batch's slot, finds every key gone, and
+/// answers `-ASK <slot> <importing node>` — it must not resurrect the key on the
+/// source, which would leave the same key live on both sides of an open slot.
 #[tokio::test]
-async fn test_multi_exec_during_in_flight_slot_migration_commits_on_source() {
+async fn test_multi_exec_during_in_flight_slot_migration_asks_when_keys_migrated() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();
     harness
@@ -12181,13 +12341,6 @@ async fn test_multi_exec_during_in_flight_slot_migration_commits_on_source() {
 
     let source = harness.node(source_id).unwrap();
     let target = harness.node(target_id).unwrap();
-    let source_cluster_id = harness
-        .get_node_id_str(source_id)
-        .expect("source cluster id");
-    let target_cluster_id = harness
-        .get_node_id_str(target_id)
-        .expect("target cluster id");
-
     assert_eq!(
         source.send("SET", &[&key, "v0"]).await,
         frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
@@ -12206,80 +12359,34 @@ async fn test_multi_exec_during_in_flight_slot_migration_commits_on_source() {
         "queue-time slot validation passes: the slot is still stable and local"
     );
 
-    // Open the slot but stop short of handing it over — this is the
-    // MIGRATING/IMPORTING window, held open for the duration of the EXEC.
-    let resp = send_cluster_cmd(
-        &harness,
-        target_id,
-        &[
-            "SETSLOT",
-            &slot_str,
-            "IMPORTING",
-            &source_cluster_id,
-            &target_cluster_id,
-        ],
-    )
-    .await;
-    assert!(!is_error(&resp), "SETSLOT IMPORTING failed: {resp:?}");
-    let resp = send_cluster_cmd(
-        &harness,
-        source_id,
-        &[
-            "SETSLOT",
-            &slot_str,
-            "MIGRATING",
-            &target_cluster_id,
-            &source_cluster_id,
-        ],
-    )
-    .await;
-    assert!(!is_error(&resp), "SETSLOT MIGRATING failed: {resp:?}");
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Open the slot but stop short of handing it over, then move the single key
+    // across: at EXEC time the slot is ours but the key is not here — the state
+    // in which Redis answers a keyed command on a MIGRATING slot with ASK.
+    open_slot_migration_window(&harness, source_id, target_id, test_slot).await;
+    migrate_keys(&harness, source_id, target_id, &[&key]).await;
 
-    let source_state = harness.node(source_id).unwrap().cluster_state().unwrap();
-    assert!(
-        source_state.is_slot_migrating(test_slot),
-        "the slot must actually be in MIGRATING state at EXEC time"
-    );
-    assert_eq!(
-        source_state.get_slot_owner(test_slot),
-        Some(source_id),
-        "an in-flight migration must not have transferred ownership yet"
-    );
-
-    // Move the single key across, so at EXEC time it is absent locally — the
-    // state in which Redis answers a keyed command on a MIGRATING slot with ASK.
     let target_addr = target.client_addr();
-    let (host, port) = split_addr(&target_addr);
-    let resp = source
-        .send(
-            "MIGRATE",
-            &[host, port, "", "0", "5000", "REPLACE", "KEYS", &key],
-        )
-        .await;
-    assert!(!is_error(&resp), "MIGRATE failed: {resp:?}");
+    let resp = harness.node(source_id).unwrap().send("GET", &[&key]).await;
+    assert_eq!(
+        is_ask_redirect(&resp),
+        Some((test_slot, target_addr.clone())),
+        "a plain read of the already-migrated key must ASK-redirect; got: {resp:?}"
+    );
+
+    // THE CONTRACT: EXEC answers with the same ASK the per-command path would.
+    let exec = client.command(&["EXEC"]).await;
+    assert_eq!(
+        is_ask_redirect(&exec),
+        Some((test_slot, target_addr)),
+        "EXEC must consult the MIGRATING state and reply ASK, got {exec:?}"
+    );
+
+    // The key must NOT come back to life on the source: an orphan copy there
+    // would make the two sides of the open slot disagree.
     let resp = harness.node(source_id).unwrap().send("GET", &[&key]).await;
     assert!(
         is_ask_redirect(&resp).is_some(),
-        "a plain read of the already-migrated key must ASK-redirect — this is \
-         precisely the check EXEC is about to skip; got: {resp:?}"
-    );
-
-    // THE PIN: EXEC commits on the source anyway, recreating the key there.
-    assert_eq!(
-        client.command(&["EXEC"]).await,
-        frogdb_protocol::Response::Array(vec![frogdb_protocol::Response::Simple(
-            bytes::Bytes::from_static(b"OK")
-        )]),
-        "EXEC does not consult the MIGRATING state: the queued write commits on \
-         the source (Redis would reply -ASK and discard the queue)"
-    );
-
-    assert_eq!(
-        harness.node(source_id).unwrap().send("GET", &[&key]).await,
-        frogdb_protocol::Response::Bulk(Some(bytes::Bytes::from_static(b"v1"))),
-        "the key is resurrected on the source: it now exists on both sides of \
-         the open slot, and the source no longer ASK-redirects for it"
+        "the refused EXEC must not resurrect the key on the source; got: {resp:?}"
     );
     let mut target_client = target.connect().await;
     assert!(
@@ -12289,12 +12396,513 @@ async fn test_multi_exec_during_in_flight_slot_migration_commits_on_source() {
     assert_eq!(
         target_client.command(&["GET", &key]).await,
         frogdb_protocol::Response::Bulk(Some(bytes::Bytes::from_static(b"v0"))),
-        "the importing node still holds the migrated pre-EXEC value, so the two \
-         sides of the open slot now disagree about this key"
+        "the importing node holds the migrated value, untouched by the refused EXEC"
     );
 
     // Leave the slot stable for teardown.
     let _ = send_cluster_cmd(&harness, source_id, &["SETSLOT", &slot_str, "STABLE"]).await;
+
+    harness.shutdown_all().await;
+}
+
+/// A batch whose keys straddle an open slot — one already migrated, one still
+/// on the source. Neither node can serve the transaction atomically, so EXEC
+/// answers `-TRYAGAIN` and touches nothing.
+#[tokio::test]
+async fn test_multi_exec_during_migration_with_split_keys_returns_tryagain() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 1220u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find an owner for the test slot");
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let (key_gone, key_here) = (format!("{tag}_gone"), format!("{tag}_here"));
+    let slot_str = test_slot.to_string();
+
+    let source = harness.node(source_id).unwrap();
+    for k in [&key_gone, &key_here] {
+        assert!(
+            !is_error(&source.send("SET", &[k, "v0"]).await),
+            "seeding {k} must succeed"
+        );
+    }
+
+    let mut client = source.connect().await;
+    assert_eq!(
+        client.command(&["MULTI"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        "MULTI should succeed"
+    );
+    for k in [&key_gone, &key_here] {
+        assert_eq!(
+            client.command(&["SET", k, "v1"]).await,
+            frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+            "both keys hash to the same, still-stable slot at queue time"
+        );
+    }
+
+    // Split the batch across the boundary: only one of the two keys moves.
+    open_slot_migration_window(&harness, source_id, target_id, test_slot).await;
+    migrate_keys(&harness, source_id, target_id, &[&key_gone]).await;
+
+    let exec = client.command(&["EXEC"]).await;
+    assert_eq!(
+        error_prefix(&exec).as_deref(),
+        Some("TRYAGAIN"),
+        "a batch with keys on both sides of an open slot must be TRYAGAIN, got {exec:?}"
+    );
+
+    // Nothing ran: the key still on the source keeps its pre-EXEC value.
+    assert_eq!(
+        harness
+            .node(source_id)
+            .unwrap()
+            .send("GET", &[&key_here])
+            .await,
+        frogdb_protocol::Response::Bulk(Some(bytes::Bytes::from_static(b"v0"))),
+        "TRYAGAIN must leave the batch entirely unapplied"
+    );
+
+    let _ = send_cluster_cmd(&harness, source_id, &["SETSLOT", &slot_str, "STABLE"]).await;
+    harness.shutdown_all().await;
+}
+
+/// An open migration alone is not a refusal. While the slot is MIGRATING but
+/// every key is still on the source, EXEC serves the batch normally — the
+/// presence probe, not the migration flag, is what decides.
+#[tokio::test]
+async fn test_multi_exec_during_migration_serves_when_keys_still_local() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 1230u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find an owner for the test slot");
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key = format!("{tag}_tx");
+    let slot_str = test_slot.to_string();
+
+    let source = harness.node(source_id).unwrap();
+    assert!(!is_error(&source.send("SET", &[&key, "v0"]).await));
+
+    let mut client = source.connect().await;
+    assert_eq!(
+        client.command(&["MULTI"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK"))
+    );
+    assert_eq!(
+        client.command(&["SET", &key, "v1"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED"))
+    );
+    assert_eq!(
+        client.command(&["GET", &key]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED"))
+    );
+
+    // Slot opened, but nothing migrated yet.
+    open_slot_migration_window(&harness, source_id, target_id, test_slot).await;
+
+    assert_eq!(
+        client.command(&["EXEC"]).await,
+        frogdb_protocol::Response::Array(vec![
+            frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+            frogdb_protocol::Response::Bulk(Some(bytes::Bytes::from_static(b"v1"))),
+        ]),
+        "an open migration whose keys are all still local must serve the batch"
+    );
+
+    let _ = send_cluster_cmd(&harness, source_id, &["SETSLOT", &slot_str, "STABLE"]).await;
+    harness.shutdown_all().await;
+}
+
+/// `ASKING` must survive the whole MULTI block, not just the next command.
+///
+/// On the importing node the flag is read once per queued command *and* again by
+/// EXEC's batch validation; if it were still one-shot the first queued command
+/// would consume it and EXEC would answer MOVED, bouncing the client back to a
+/// source that no longer has the key.
+#[tokio::test]
+async fn test_multi_exec_on_import_target_with_asking_serves_the_batch() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 1240u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find an owner for the test slot");
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key = format!("{tag}_tx");
+    let slot_str = test_slot.to_string();
+
+    let source = harness.node(source_id).unwrap();
+    assert!(!is_error(&source.send("SET", &[&key, "v0"]).await));
+
+    open_slot_migration_window(&harness, source_id, target_id, test_slot).await;
+    migrate_keys(&harness, source_id, target_id, &[&key]).await;
+
+    // The client follows the ASK to the importing node and runs a transaction
+    // there, exactly as a redirect-aware client would.
+    let mut client = harness.node(target_id).unwrap().connect().await;
+    assert!(!is_error(&client.command(&["ASKING"]).await));
+    assert_eq!(
+        client.command(&["MULTI"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK"))
+    );
+    assert_eq!(
+        client.command(&["SET", &key, "v1"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        "ASKING lets the import target queue for a slot it does not own yet"
+    );
+    assert_eq!(
+        client.command(&["GET", &key]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        "ASKING is sticky: the second queued command must not find it consumed"
+    );
+
+    assert_eq!(
+        client.command(&["EXEC"]).await,
+        frogdb_protocol::Response::Array(vec![
+            frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+            frogdb_protocol::Response::Bulk(Some(bytes::Bytes::from_static(b"v1"))),
+        ]),
+        "EXEC on the import target must still see ASKING and serve the batch"
+    );
+
+    // EXEC consumed the flag, so a fresh keyed command is redirected again —
+    // stickiness is scoped to the block, it does not leak past it.
+    let source_addr = harness.node(source_id).unwrap().client_addr();
+    let resp = client.command(&["GET", &key]).await;
+    assert_eq!(
+        is_moved_redirect(&resp),
+        Some((test_slot, source_addr)),
+        "ASKING must be consumed by EXEC, not persist after it; got {resp:?}"
+    );
+
+    let _ = send_cluster_cmd(&harness, source_id, &["SETSLOT", &slot_str, "STABLE"]).await;
+    harness.shutdown_all().await;
+}
+
+/// A transaction that touches no key is never redirected, even on a node that
+/// owns nothing relevant. Redis's `getNodeByQuery` returns `myself` when no slot
+/// resolves; folding a keyless batch to "slot 0" would break every
+/// `MULTI; PING; EXEC`.
+///
+/// This is the permissive half of the fold contract. The restrictive half —
+/// commands that are *keyed* but were once lumped in with these node-scoped ones
+/// — is pinned by
+/// [`test_multi_exec_scatter_gather_batch_is_slot_validated`] and
+/// [`test_multi_exec_eval_with_declared_keys_is_slot_validated`].
+#[tokio::test]
+async fn test_keyless_multi_exec_is_never_redirected() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let node_id = harness.node_ids()[0];
+    let mut client = harness.node(node_id).unwrap().connect().await;
+    assert_eq!(
+        client.command(&["MULTI"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK"))
+    );
+    // A spread of the shapes the fold must keep exempt: the hard-coded name
+    // list (PING/TIME), a connection-level command (ECHO), and a server-wide one
+    // (DBSIZE). None of them declares a key, so none may pull the batch into a
+    // slot.
+    let queued: [&[&str]; 4] = [&["PING"], &["ECHO", "hi"], &["TIME"], &["DBSIZE"]];
+    for args in queued {
+        assert_eq!(
+            client.command(args).await,
+            frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+            "{args:?} must queue without a slot verdict"
+        );
+    }
+
+    let exec = client.command(&["EXEC"]).await;
+    match exec {
+        frogdb_protocol::Response::Array(items) => assert_eq!(
+            items.len(),
+            queued.len(),
+            "a keyless transaction must run every command, got {items:?}"
+        ),
+        other => panic!("keyless MULTI/EXEC must not be redirected, got {other:?}"),
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// Scatter-gather commands (`MSET`/`MGET`/`DEL`/`EXISTS`/…) are *keyed*: a
+/// queued batch built only from them must be slot-validated at EXEC exactly like
+/// a batch of `SET`s.
+///
+/// Regression test. These commands were once treated as "cluster exempt"
+/// alongside genuinely node-scoped ones like `PING`, on the theory that anything
+/// not dispatched as a plain single-shard command needs no slot verdict. The
+/// fold then produced an *empty* key set, EXEC took the keyless fast path, and
+/// the transaction committed on the former slot owner — replicating an orphan
+/// `MULTI…EXEC` frame for keys the node no longer owns.
+#[tokio::test]
+async fn test_multi_exec_scatter_gather_batch_is_slot_validated() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 1230u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find an owner for the test slot");
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let (key_a, key_b) = (format!("{tag}_a"), format!("{tag}_b"));
+
+    let source = harness.node(source_id).unwrap();
+    for k in [&key_a, &key_b] {
+        assert_eq!(
+            source.send("SET", &[k, "v0"]).await,
+            frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+            "seeding {k} on its owner must succeed"
+        );
+    }
+
+    let mut client = source.connect().await;
+    assert_eq!(
+        client.command(&["MULTI"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK"))
+    );
+    let queued: [&[&str]; 3] = [
+        &["MSET", &key_a, "v1", &key_b, "v1"],
+        &["DEL", &key_a],
+        &["MGET", &key_a, &key_b],
+    ];
+    for args in queued {
+        assert_eq!(
+            client.command(args).await,
+            frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+            "{args:?} must queue: this node still owns the slot"
+        );
+    }
+
+    run_full_slot_migration(&harness, source_id, target_id, test_slot, 100)
+        .await
+        .expect("slot migration failed");
+    assert_eq!(
+        node_dbsize(&harness, source_id).await,
+        0,
+        "a completed migration must leave no keys behind on the source"
+    );
+
+    let target_addr = harness.node(target_id).unwrap().client_addr();
+    let exec = client.command(&["EXEC"]).await;
+    assert_eq!(
+        is_moved_redirect(&exec),
+        Some((test_slot, target_addr)),
+        "a scatter-gather batch must be folded to its slot and redirected, \
+         got {exec:?}"
+    );
+    assert_eq!(
+        node_dbsize(&harness, source_id).await,
+        0,
+        "the former slot owner must take ZERO writes from the redirected EXEC"
+    );
+    let new_owner = harness.node(target_id).unwrap();
+    for k in [&key_a, &key_b] {
+        assert_eq!(
+            new_owner.send("GET", &[k]).await,
+            frogdb_protocol::Response::Bulk(Some(bytes::Bytes::from_static(b"v0"))),
+            "{k} must keep its migrated value: the refused EXEC never ran"
+        );
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// The scripting family declares its keys dynamically (`EVAL <script> <numkeys>
+/// <key>…`), so a queued `EVAL` must be folded into the batch's slot set.
+///
+/// Same regression as [`test_multi_exec_scatter_gather_batch_is_slot_validated`]:
+/// scripting is a connection-level strategy, and blanket-exempting
+/// connection-level commands let a script's declared `KEYS` vanish from the
+/// fold. A script that writes would then commit on the former slot owner.
+#[tokio::test]
+async fn test_multi_exec_eval_with_declared_keys_is_slot_validated() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 1240u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find an owner for the test slot");
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key = format!("{tag}_lua");
+
+    let source = harness.node(source_id).unwrap();
+    assert_eq!(
+        source.send("SET", &[&key, "v0"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK"))
+    );
+
+    let mut client = source.connect().await;
+    assert_eq!(
+        client.command(&["MULTI"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK"))
+    );
+    let script = "return redis.call('SET', KEYS[1], 'v1')";
+    assert_eq!(
+        client.command(&["EVAL", script, "1", &key]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        "the script queues: this node still owns the declared key's slot"
+    );
+
+    run_full_slot_migration(&harness, source_id, target_id, test_slot, 100)
+        .await
+        .expect("slot migration failed");
+
+    let target_addr = harness.node(target_id).unwrap().client_addr();
+    let exec = client.command(&["EXEC"]).await;
+    assert_eq!(
+        is_moved_redirect(&exec),
+        Some((test_slot, target_addr)),
+        "a script's declared KEYS must fold into the batch slot, got {exec:?}"
+    );
+    assert_eq!(
+        node_dbsize(&harness, source_id).await,
+        0,
+        "the script must not run on the former slot owner"
+    );
+    assert_eq!(
+        harness.node(target_id).unwrap().send("GET", &[&key]).await,
+        frogdb_protocol::Response::Bulk(Some(bytes::Bytes::from_static(b"v0"))),
+        "the new owner keeps the migrated value, untouched by the refused EXEC"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// A `READONLY` connection never rescues a batch that contains a write, even
+/// when the write is issued by a scatter-gather command.
+///
+/// The read-only eligibility flag is what lets a replica serve an all-reads
+/// batch for a slot its master owns. It is computed by folding every queued
+/// command's flags — and that fold must consider the `WRITE` flag *before* it
+/// decides a command is node-scoped, or an exemption bug degrades into "the
+/// write was rescued onto a node that does not own the slot".
+#[tokio::test]
+async fn test_multi_exec_readonly_does_not_rescue_a_scatter_write() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 1250u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find an owner for the test slot");
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let (key_a, key_b) = (format!("{tag}_a"), format!("{tag}_b"));
+
+    let source = harness.node(source_id).unwrap();
+    for k in [&key_a, &key_b] {
+        assert_eq!(
+            source.send("SET", &[k, "v0"]).await,
+            frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK"))
+        );
+    }
+
+    let mut client = source.connect().await;
+    assert!(!is_error(&client.command(&["READONLY"]).await));
+    assert_eq!(
+        client.command(&["MULTI"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK"))
+    );
+    assert_eq!(
+        client.command(&["GET", &key_b]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED"))
+    );
+    assert_eq!(
+        client.command(&["MSET", &key_a, "v1"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        "the write queues: this node still owns the slot"
+    );
+
+    run_full_slot_migration(&harness, source_id, target_id, test_slot, 100)
+        .await
+        .expect("slot migration failed");
+
+    let target_addr = harness.node(target_id).unwrap().client_addr();
+    let exec = client.command(&["EXEC"]).await;
+    assert_eq!(
+        is_moved_redirect(&exec),
+        Some((test_slot, target_addr)),
+        "a batch containing a write is not read-only eligible, so READONLY must \
+         not turn the MOVED into a local serve; got {exec:?}"
+    );
+    assert_eq!(
+        node_dbsize(&harness, source_id).await,
+        0,
+        "the former slot owner must take ZERO writes from the redirected EXEC"
+    );
+    assert_eq!(
+        harness
+            .node(target_id)
+            .unwrap()
+            .send("GET", &[&key_a])
+            .await,
+        frogdb_protocol::Response::Bulk(Some(bytes::Bytes::from_static(b"v0"))),
+        "the new owner keeps the migrated value"
+    );
 
     harness.shutdown_all().await;
 }

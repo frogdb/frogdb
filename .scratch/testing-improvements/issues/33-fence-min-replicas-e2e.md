@@ -135,3 +135,34 @@ None - can start immediately
 - `replication/src/primary/tests.rs` / `replication_quorum.rs:85-157`
 - `.scratch/testing-improvements/audit/E-replication.md` (`self-fence-and-min-replicas-write-rejection-untested-e2e`, E#4)
 - `.scratch/testing-improvements/audit/verdicts-E.md`
+
+## Resolution addendum — 2026-07-28: the EXECABORT divergence is fixed
+
+This issue documented a sibling divergence it did not fix: a command rejected while *queuing* in a
+MULTI (self-fence `CLUSTERDOWN`, `NOREPLICAS`, ACL `NOPERM`, …) did not poison the transaction, so a
+later `EXEC` returned a short or empty array instead of `-EXECABORT`. The tests pinned the
+divergence (`test_self_fence_multi_rejected_at_queue_time`,
+`test_min_replicas_to_write_multi_and_lua_paths` both asserted `*0`).
+
+[`exec-slot-revalidation.md`](../../replication-cluster-rework/exec-slot-revalidation.md) subsumed
+and fixed it. The cause was that only two queue-time rejection paths called `abort_transaction`; the
+`PreChecks` stage and the ACL-denial path returned their error without flagging the transaction.
+Both now call `abort_transaction` when `in_transaction()`, which is Redis's `rejectCommand` →
+`flagTransaction` → `CLIENT_DIRTY_EXEC` shape: the flag poisons the transaction but leaves the MULTI
+block open, so subsequent commands keep being rejected individually and `DISCARD` still works.
+
+Tests updated / added in `integration_replication.rs`:
+
+- `test_self_fence_multi_rejected_at_queue_time` — `*0` → `-EXECABORT`.
+- `test_min_replicas_to_write_multi_and_lua_paths` — `*0` → `-EXECABORT`.
+- `test_self_fence_multi_partial_queue_aborts_whole_transaction` (new) — one accepted command
+  (`ECHO`) followed by one fenced write; `EXEC` must be `-EXECABORT`, **not** a 1-element array, and
+  the pre-existing key value must be untouched. This is the no-partial-array case.
+
+`integration_acl.rs::test_acl_log_entry_for_each_denial_path_in_multi` still passes unchanged, which
+confirms the flag-only semantics: three sequential denials inside one MULTI, then `DISCARD`.
+
+Still open from this issue's own findings: Lua writes bypass the self-fence and
+`min-replicas-to-write` gates (`test_self_fence_does_not_gate_lua_writes` pins the permissive
+behavior). That is the same "validated once, executed later" shape and is now tracked as
+[replication-cluster-rework/issues/03](../../replication-cluster-rework/issues/03-lua-internal-write-validation.md).

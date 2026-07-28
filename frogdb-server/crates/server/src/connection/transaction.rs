@@ -41,6 +41,10 @@ enum TransactionOutcome {
     CommittedEmpty,
     /// Queued keys spanned multiple slots/shards (CROSSSLOT reply).
     CrossSlot,
+    /// EXEC-time slot re-validation refused the batch on this node: the reply
+    /// is a bare `-MOVED` / `-ASK` / `-TRYAGAIN` / `-CROSSSLOT` /
+    /// `-CLUSTERDOWN` and the queue was discarded.
+    Redirected,
     /// The shard round-trip failed or the shard reported an execution error.
     Error,
     /// A watched key was modified; the transaction was not run (nil reply).
@@ -76,6 +80,7 @@ impl TransactionOutcome {
             TransactionOutcome::ExecAbort => "execabort",
             TransactionOutcome::RateLimited => "ratelimited",
             TransactionOutcome::CrossSlot => "crossslot",
+            TransactionOutcome::Redirected => "redirected",
             TransactionOutcome::Error => "error",
             TransactionOutcome::WatchAborted => "watch_aborted",
             TransactionOutcome::CommittedEmpty | TransactionOutcome::Committed => "committed",
@@ -144,6 +149,7 @@ impl ConnectionHandler {
             watches,
             target,
             exec_abort,
+            asking,
             start_time,
         } = summary;
         let queued_count = queue.len();
@@ -184,11 +190,59 @@ impl ConnectionHandler {
             );
         }
 
+        // EXEC-time slot re-validation (cluster mode only).
+        //
+        // Placed here deliberately — after the empty-queue return and *before*
+        // the pause wait and the shard round-trip:
+        //
+        // - Before the pause wait, so an EXEC destined for a redirect does not
+        //   first block on `CLIENT PAUSE`.
+        // - Before the shard round-trip, because that round-trip is
+        //   all-or-nothing only with respect to *observers*, not to command
+        //   failure: a command that errors mid-batch contributes no write meta
+        //   and the loop continues, so the surviving subset would ship to
+        //   replicas as one MULTI…EXEC frame. Any "abort mid-batch on MOVED"
+        //   design would therefore replicate an orphan partial transaction.
+        //   Validation has to be complete before a single command runs.
+        //
+        // The whole queue is validated against exactly one cluster snapshot; on
+        // refusal the reply is the bare redirect (not an array, not EXECABORT)
+        // and the queue is already gone, because `take_transaction` consumed it
+        // — matching Redis's `discardTransaction` + `clusterRedirectClient`.
+        //
+        // If the pause below actually blocks, the verdict is re-taken after it
+        // (see there): a pause is unbounded, and the topology may move while
+        // EXEC sits in it.
+        if let Some(redirect) = self
+            .pre_dispatch_view()
+            .validate_queued_batch(&queue, asking)
+            .await
+        {
+            return (TransactionOutcome::Redirected, vec![redirect]);
+        }
+
         // Wait if server is paused and this transaction contains write commands.
         // CLIENT PAUSE takes effect at the end of the current transaction, so
         // EXEC blocks until the pause ends if the queued commands include writes.
-        if self.transaction_has_writes(&queue) {
-            self.wait_if_paused_for_transaction().await;
+        let paused = if self.transaction_has_writes(&queue) {
+            self.wait_if_paused_for_transaction().await
+        } else {
+            false
+        };
+
+        // A pause is the one place EXEC can sit for unbounded wall-clock time,
+        // and a slot can change hands while it sits — including because the
+        // pause *is* a migration barrier. Re-validate against a fresh snapshot
+        // before running anything. The check above is not redundant: it
+        // fail-fasts a doomed EXEC instead of parking it behind the pause, and
+        // it is what keeps the common (unpaused) path at exactly one snapshot.
+        if paused
+            && let Some(redirect) = self
+                .pre_dispatch_view()
+                .validate_queued_batch(&queue, asking)
+                .await
+        {
+            return (TransactionOutcome::Redirected, vec![redirect]);
         }
 
         // Partition commands into shard-executable and deferred. Two strategy
@@ -451,6 +505,7 @@ mod tests {
             (TransactionOutcome::RateLimited, "ratelimited"),
             (TransactionOutcome::CommittedEmpty, "committed"),
             (TransactionOutcome::CrossSlot, "crossslot"),
+            (TransactionOutcome::Redirected, "redirected"),
             (TransactionOutcome::Error, "error"),
             (TransactionOutcome::WatchAborted, "watch_aborted"),
             (TransactionOutcome::Committed, "committed"),

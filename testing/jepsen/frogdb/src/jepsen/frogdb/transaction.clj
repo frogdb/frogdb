@@ -8,9 +8,12 @@
    - Total balance conservation: sum of all accounts remains constant
 
    Scenarios tested:
-   1. Multi-key writes in MULTI/EXEC
-   2. Transfer operations (DECRBY/INCRBY)
-   3. WATCH-based conditional transactions"
+   1. Transfer operations (DECRBY/INCRBY) inside MULTI/EXEC
+   2. WATCH-based conditional transactions
+
+   This workload runs single-node (see run.py). MULTI/EXEC *under a slot
+   migration* is a cluster concern and lives in exactly one place — the
+   `:queued-txn` op of jepsen.frogdb.slot-migration."
   (:require [clojure.tools.logging :refer [info warn]]
             [jepsen.client :as client]
             [jepsen.checker :as checker]
@@ -95,17 +98,7 @@
                          2 from-key to-key (str amount)))]
           (if (= 1 result)
             (assoc op :type :ok)
-            (assoc op :type :fail :error :insufficient-funds)))
-
-        ;; Multi-key write: set multiple accounts atomically
-        :multi-write
-        (let [writes (:value op)]
-          (wcar conn
-            (car/multi)
-            (doseq [[account-id value] writes]
-              (car/set (account-key account-id) (str value)))
-            (car/exec))
-          (assoc op :type :ok)))))
+            (assoc op :type :fail :error :insufficient-funds))))))
 
   (teardown! [this test]
     nil)

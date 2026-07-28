@@ -10,7 +10,9 @@ use std::net::SocketAddr;
 
 use frogdb_cluster::types::{ClusterSnapshot, NodeInfo, SlotMigration};
 
-use super::routing::{RouteDecision, RouteOutcome, route_with_snapshot};
+use super::routing::{
+    BatchKeys, BatchRoute, RouteDecision, RouteOutcome, route_queued_batch, route_with_snapshot,
+};
 
 const SELF_NODE: u64 = 1;
 const OTHER_NODE: u64 = 2;
@@ -274,5 +276,217 @@ fn to_response_moved_ipv6_is_bracketed() {
     assert_eq!(
         reply_text(decision.to_response(false)),
         format!("MOVED {} [2001:db8::1]:6379", SLOT)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// route_queued_batch — the EXEC-time whole-transaction decision.
+//
+// The batch decision is what closes the MULTI/EXEC slot-migration window: a
+// transaction validated at queue time is re-routed as a unit against one
+// snapshot before any command runs. See
+// `.scratch/replication-cluster-rework/exec-slot-revalidation.md`.
+// ---------------------------------------------------------------------------
+
+/// Two keys sharing a hash tag, so the batch lands in exactly one slot; the
+/// slot is derived (not hard-coded) so the test cannot drift from the hasher.
+fn tagged_batch() -> (BatchKeys, u16) {
+    let mut batch = BatchKeys::default();
+    batch.add_key(b"{tx}:a");
+    batch.add_key(b"{tx}:b");
+    let slot = frogdb_core::slot_for_key(b"{tx}:a");
+    assert_eq!(frogdb_core::slot_for_key(b"{tx}:b"), slot);
+    (batch, slot)
+}
+
+/// Snapshot in which `slot` is owned by `owner`, with no migration.
+fn owned_by(slot: u16, owner: u64) -> ClusterSnapshot {
+    let mut snap = empty_snapshot();
+    snap.slot_assignment.insert(slot, owner);
+    snap
+}
+
+fn batch_reply_text(route: BatchRoute) -> String {
+    match route {
+        BatchRoute::Redirect(frogdb_protocol::Response::Error(bytes)) => {
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
+        other => panic!("expected BatchRoute::Redirect(Error(_)), got {other:?}"),
+    }
+}
+
+#[test]
+fn batch_with_no_keyed_command_serves_locally() {
+    // A MULTI of PING/INFO/… touches no slot. Redis's `getNodeByQuery` returns
+    // `myself` when nothing resolves; redirecting here would be a regression.
+    let batch = BatchKeys::default();
+    let snap = empty_snapshot();
+    assert_eq!(
+        route_queued_batch(&snap, &batch, false, SELF_NODE, false),
+        BatchRoute::ServeLocal
+    );
+}
+
+#[test]
+fn batch_on_owned_stable_slot_serves_locally() {
+    let (batch, slot) = tagged_batch();
+    let snap = owned_by(slot, SELF_NODE);
+    assert_eq!(
+        route_queued_batch(&snap, &batch, false, SELF_NODE, false),
+        BatchRoute::ServeLocal
+    );
+}
+
+#[test]
+fn batch_spanning_two_slots_is_crossslot() {
+    // Individually valid commands whose slots diverged (one slot migrated)
+    // must fail as CROSSSLOT, never commit partially.
+    let mut batch = BatchKeys::default();
+    batch.add_key(b"alpha");
+    batch.add_key(b"{different}beta");
+    assert_ne!(
+        frogdb_core::slot_for_key(b"alpha"),
+        frogdb_core::slot_for_key(b"{different}beta"),
+        "test fixture must use two genuinely different slots"
+    );
+    let snap = empty_snapshot();
+    assert_eq!(
+        batch_reply_text(route_queued_batch(&snap, &batch, false, SELF_NODE, false)),
+        super::redirect::CROSSSLOT_MSG
+    );
+}
+
+#[test]
+fn batch_on_foreign_slot_is_moved_to_the_owner() {
+    let (batch, slot) = tagged_batch();
+    let snap = owned_by(slot, OTHER_NODE);
+    assert_eq!(
+        batch_reply_text(route_queued_batch(&snap, &batch, false, SELF_NODE, false)),
+        format!("MOVED {slot} 127.0.0.1:6380")
+    );
+}
+
+#[test]
+fn batch_on_import_target_with_asking_probes_importing() {
+    let (batch, slot) = tagged_batch();
+    let mut snap = owned_by(slot, OTHER_NODE);
+    snap.migrations.insert(
+        slot,
+        SlotMigration {
+            slot,
+            source_node: OTHER_NODE,
+            target_node: SELF_NODE,
+        },
+    );
+    assert_eq!(
+        route_queued_batch(&snap, &batch, true, SELF_NODE, false),
+        BatchRoute::ProbeImporting { slot }
+    );
+}
+
+#[test]
+fn batch_on_import_target_without_asking_is_moved() {
+    // Sticky ASKING is what makes the arm above reachable at EXEC; without it
+    // the batch must still be redirected to the slot's current owner.
+    let (batch, slot) = tagged_batch();
+    let mut snap = owned_by(slot, OTHER_NODE);
+    snap.migrations.insert(
+        slot,
+        SlotMigration {
+            slot,
+            source_node: OTHER_NODE,
+            target_node: SELF_NODE,
+        },
+    );
+    assert_eq!(
+        batch_reply_text(route_queued_batch(&snap, &batch, false, SELF_NODE, false)),
+        format!("MOVED {slot} 127.0.0.1:6380")
+    );
+}
+
+#[test]
+fn batch_on_migrating_source_probes_with_the_ask_target() {
+    let (batch, slot) = tagged_batch();
+    let mut snap = owned_by(slot, SELF_NODE);
+    snap.migrations.insert(
+        slot,
+        SlotMigration {
+            slot,
+            source_node: SELF_NODE,
+            target_node: OTHER_NODE,
+        },
+    );
+    assert_eq!(
+        route_queued_batch(&snap, &batch, false, SELF_NODE, false),
+        BatchRoute::ProbeMigratingSource {
+            slot,
+            target: test_addr(6380),
+        }
+    );
+}
+
+#[test]
+fn batch_on_migrating_source_with_unknown_target_serves_locally() {
+    // No renderable ASK address — the per-command path bails the same way
+    // rather than inventing a redirect.
+    let (batch, slot) = tagged_batch();
+    let mut snap = owned_by(slot, SELF_NODE);
+    snap.nodes.remove(&OTHER_NODE);
+    snap.migrations.insert(
+        slot,
+        SlotMigration {
+            slot,
+            source_node: SELF_NODE,
+            target_node: OTHER_NODE,
+        },
+    );
+    assert_eq!(
+        route_queued_batch(&snap, &batch, false, SELF_NODE, false),
+        BatchRoute::ServeLocal
+    );
+}
+
+#[test]
+fn batch_on_unassigned_slot_is_clusterdown() {
+    let (batch, slot) = tagged_batch();
+    let snap = empty_snapshot();
+    assert_eq!(
+        batch_reply_text(route_queued_batch(&snap, &batch, false, SELF_NODE, false)),
+        format!("CLUSTERDOWN Hash slot {slot} not served")
+    );
+}
+
+#[test]
+fn batch_readonly_eligible_serves_a_foreign_slot_locally() {
+    // READONLY connection + an all-reads batch on a slot this replica's master
+    // owns: served locally, exactly as the per-command path does.
+    let (batch, slot) = tagged_batch();
+    let snap = owned_by(slot, OTHER_NODE);
+    assert_eq!(
+        route_queued_batch(&snap, &batch, false, SELF_NODE, true),
+        BatchRoute::ServeLocal
+    );
+}
+
+#[test]
+fn batch_readonly_ineligible_when_it_contains_a_write() {
+    // The caller folds write-ness across the whole batch, so one queued write
+    // makes `readonly_eligible` false and the batch is MOVED. This is the
+    // difference between a replica-safe read batch and a lost write.
+    let (batch, slot) = tagged_batch();
+    let snap = owned_by(slot, OTHER_NODE);
+    assert_eq!(
+        batch_reply_text(route_queued_batch(&snap, &batch, false, SELF_NODE, false)),
+        format!("MOVED {slot} 127.0.0.1:6380")
+    );
+}
+
+#[test]
+fn batch_readonly_never_rescues_an_unassigned_slot() {
+    let (batch, slot) = tagged_batch();
+    let snap = empty_snapshot();
+    assert_eq!(
+        batch_reply_text(route_queued_batch(&snap, &batch, false, SELF_NODE, true)),
+        format!("CLUSTERDOWN Hash slot {slot} not served")
     );
 }

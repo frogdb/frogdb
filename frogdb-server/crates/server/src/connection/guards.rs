@@ -14,6 +14,9 @@
 //!   / admin-port / ACL / pub-sub-mode gate
 //! - [`PreDispatchView::validate_cluster_slots`] — MOVED/ASK/CROSSSLOT routing
 //! - [`PreDispatchView::check_migrating_multikey`] — TRYAGAIN during slot rehash
+//! - [`PreDispatchView::validate_queued_batch`] — the EXEC-time twin of the two
+//!   above: whole-queue MOVED/ASK/TRYAGAIN/CROSSSLOT re-validation against one
+//!   cluster snapshot (called from `transaction.rs`, not from the gauntlet)
 //! - [`PreDispatchView::pubsub_mode_ping`] — RESP2 `["pong", msg]` framing
 //! - [`PreDispatchView::command_lookup_check`] — unknown-command and
 //!   wrong-arg-count rejection
@@ -40,7 +43,9 @@ use crate::connection::next_txid;
 use crate::connection::permission_guard::{PermissionGuard, build_permission_guard};
 use crate::connection::state::ConnectionState;
 use crate::connection::util::{extract_subcommand, key_access_type_for_flags};
-use crate::slot_migration::{RouteDecision, RouteOutcome, SlotValidator, redirect};
+use crate::slot_migration::{
+    BatchKeys, BatchRoute, RouteDecision, RouteOutcome, SlotValidator, redirect, route_queued_batch,
+};
 
 /// Everything the pre-dispatch gauntlet's *guard* stages read or mutate —
 /// connection-mode state, the registry, cluster/admin dep handles, per-command
@@ -404,8 +409,10 @@ impl PreDispatchView<'_> {
         if self.cluster.slot_migration.is_none() {
             return false;
         }
-        // Connection-level / scatter-gather / server-wide (and CLUSTER/PING/…)
-        // commands are not slot-routed, so they are never redirected.
+        // Node-scoped commands (server-wide, non-scripting connection-level,
+        // and CLUSTER/PING/…) are not slot-routed, so they are never
+        // redirected. Scatter-gather and scripting commands fold their keys
+        // and are slot-validated like any other keyed command.
         if self.is_cluster_exempt(cmd_name) {
             return false;
         }
@@ -554,33 +561,47 @@ impl PreDispatchView<'_> {
         // Check key + channel permissions through the unified enforcement seam, so
         // queue-time denials are logged to ACL LOG exactly like the live paths.
         // (The command itself is already validated upstream by run_pre_checks.)
-        if let Some(guard) = self.permission_guard() {
-            if !keys.is_empty() {
-                // Per-key access (STORE-family: write dest, read sources), so a
-                // MULTI-queued command's denial matches direct dispatch exactly.
-                let keyed_flags = entry.keys_with_flags(&cmd.args);
-                let fallback = key_access_type_for_flags(entry.flags());
-                if let Err(err) = guard.check_keys_with_flags(&keyed_flags, fallback) {
-                    return err;
-                }
-            }
-            match cmd_name_str.as_ref() {
-                // First arg is the channel.
-                "PUBLISH" | "SPUBLISH" => {
-                    if let Some(channel) = cmd.args.first()
-                        && let Err(err) = guard.check_channels(std::slice::from_ref(channel))
-                    {
-                        return err;
+        //
+        // A denial here poisons the transaction, exactly like the unknown-command
+        // and arity rejections above and like the `PreChecks` command-level
+        // denial: Redis's `rejectCommand` flags *every* queue-time refusal with
+        // `CLIENT_DIRTY_EXEC`, so EXEC answers `-EXECABORT` rather than
+        // returning a short array (testing-gap issue 33).
+        // (Scoped so the `PermissionGuard`'s borrow of `self` ends before the
+        // abort below re-borrows it mutably.)
+        let denial = match self.permission_guard() {
+            None => None,
+            Some(guard) => {
+                let key_denial = if keys.is_empty() {
+                    None
+                } else {
+                    // Per-key access (STORE-family: write dest, read sources), so
+                    // a MULTI-queued command's denial matches direct dispatch
+                    // exactly.
+                    let keyed_flags = entry.keys_with_flags(&cmd.args);
+                    let fallback = key_access_type_for_flags(entry.flags());
+                    guard.check_keys_with_flags(&keyed_flags, fallback).err()
+                };
+                key_denial.or_else(|| match cmd_name_str.as_ref() {
+                    // First arg is the channel.
+                    "PUBLISH" | "SPUBLISH" => cmd.args.first().and_then(|channel| {
+                        guard.check_channels(std::slice::from_ref(channel)).err()
+                    }),
+                    // All args are channels.
+                    "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE" => {
+                        guard.check_channels(&cmd.args).err()
                     }
-                }
-                // All args are channels.
-                "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE" => {
-                    if let Err(err) = guard.check_channels(&cmd.args) {
-                        return err;
-                    }
-                }
-                _ => {}
+                    _ => None,
+                })
             }
+        };
+        if let Some(err) = denial {
+            let msg = match &err {
+                Response::Error(e) => Some(String::from_utf8_lossy(e).to_string()),
+                _ => None,
+            };
+            self.state.abort_transaction(msg);
+            return err;
         }
 
         // Fold this command's keys into the transaction target. In cluster mode
@@ -597,21 +618,40 @@ impl PreDispatchView<'_> {
     }
 
     /// Check if a command is exempt from slot validation in cluster mode.
-    /// Connection-level and admin commands that don't operate on specific keys are exempt.
+    ///
+    /// Exempt means **node-scoped**: the command's effect is not addressed by
+    /// key, so no slot owns it and no redirect could name a node to send the
+    /// client to. That is strictly narrower than "does not route to a single
+    /// shard":
+    ///
+    /// - **Scatter-gather** commands (`MSET`/`MGET`/`DEL`/`EXISTS`/`TOUCH`/
+    ///   `UNLINK`) *are* keyed. Every key hashes to a slot some node owns; the
+    ///   fan-out is how they are served once they are ours to serve, not a
+    ///   reason to serve them. Exempting them let a former slot owner answer
+    ///   `MSET {t}a 1 {t}b 2` locally instead of `-MOVED`, which is the same
+    ///   orphan-write shape the EXEC batch re-validation exists to prevent.
+    /// - The **scripting** family (`EVAL`/`EVALSHA`/`EVAL_RO`/`FCALL`/…)
+    ///   declares its keys through `numkeys`, surfaced by the registry's
+    ///   `dynamic_keys` hook. A script with declared `KEYS` is slot-routed;
+    ///   `SCRIPT LOAD` and friends declare none and fall out on the empty-key
+    ///   check instead.
+    ///
+    /// What remains genuinely node-scoped: server-wide fan-outs (`SCAN`,
+    /// `KEYS`, `DBSIZE`, `FLUSHDB`, `FT.*`, `MIGRATE`, …), the non-scripting
+    /// connection-level families (pub/sub, transactions, admin, auth,
+    /// connection state, replication, persistence), and the explicit name list.
     pub(crate) fn is_cluster_exempt(&self, cmd_name: &str) -> bool {
         // Certain commands are always exempt
         if matches!(cmd_name, "CLUSTER" | "PING" | "COMMAND" | "TIME" | "DEBUG") {
             return true;
         }
-        // Connection-level, scatter-gather, and server-wide commands are exempt
-        self.registry.get_entry(cmd_name).is_some_and(|entry| {
-            matches!(
-                entry.execution_strategy(),
-                ExecutionStrategy::ConnectionLevel(_)
-                    | ExecutionStrategy::ScatterGather(_)
-                    | ExecutionStrategy::ServerWide(_)
-            )
-        })
+        self.registry
+            .get_entry(cmd_name)
+            .is_some_and(|entry| match entry.execution_strategy() {
+                ExecutionStrategy::ServerWide(_) => true,
+                ExecutionStrategy::ConnectionLevel(op) => op != ConnectionLevelOp::Scripting,
+                _ => false,
+            })
     }
 
     /// Validate slot ownership for keys in cluster mode (`ClusterSlotValidation`
@@ -684,6 +724,14 @@ impl PreDispatchView<'_> {
     /// - All keys present locally → serve locally (None)
     /// - All keys absent → ASK redirect
     /// - Mixed presence → TRYAGAIN
+    ///
+    /// The presence probe itself lives in [`Self::probe_key_presence`], shared
+    /// with the EXEC-time batch validation
+    /// ([`Self::validate_queued_batch`]) so the two paths cannot drift. The
+    /// `keys.len() >= 2` gate is this stage's own (a single-key command is
+    /// handled post-execution by
+    /// [`ConnectionHandler::migrating_ask_for_nil`]); the batch path has no
+    /// such gate.
     pub(crate) async fn check_migrating_multikey(&self, cmd: &ParsedCommand) -> Option<Response> {
         // Only relevant in cluster mode
         let cluster_state = self.cluster.cluster_state.as_ref()?;
@@ -714,51 +762,228 @@ impl PreDispatchView<'_> {
         let migration = snapshot.migrations.get(&slot)?;
         let target_addr = snapshot.nodes.get(&migration.target_node)?.addr;
 
-        // Send EXISTS scatter to the owning shard to check key presence
-        let shard_id = shard_for_key(keys[0], self.num_shards);
         let keys_bytes: Vec<Bytes> = keys.iter().map(|k| Bytes::copy_from_slice(k)).collect();
+        match self.probe_key_presence(&keys_bytes).await {
+            KeyPresence::Mixed => Some(redirect::tryagain()),
+            // All keys migrated away — ASK redirect.
+            KeyPresence::AllAbsent => Some(ask_response(slot, target_addr)),
+            KeyPresence::AllPresent => None,
+            KeyPresence::Unavailable => Some(Response::error("ERR shard unavailable")),
+        }
+    }
+
+    /// Probe whether `keys` currently exist on this node, via one
+    /// [`ScatterOp::Exists`] round-trip to the owning shard.
+    ///
+    /// All keys of a migrating slot hash to that slot and therefore to one
+    /// shard, so a single shard is addressed. The caller decides what the
+    /// verdict *means*: the source of a migration turns `AllAbsent` into `ASK`,
+    /// the importing target never does.
+    ///
+    /// `keys` must be non-empty; an empty probe reports [`KeyPresence::AllPresent`]
+    /// (nothing is missing), which is the "serve locally" answer on every caller.
+    ///
+    /// The probe **fails closed**: a shard that answers with anything other than
+    /// `Integer(0|1)` per key, or answers about fewer keys than were asked
+    /// about, yields [`KeyPresence::Unavailable`] rather than a presence
+    /// verdict. Failing open here would mean "serve the batch on the migration
+    /// source", which is exactly the orphan write this seam exists to prevent.
+    pub(crate) async fn probe_key_presence(&self, keys: &[Bytes]) -> KeyPresence {
+        let Some(first) = keys.first() else {
+            return KeyPresence::AllPresent;
+        };
+        let shard_id = shard_for_key(first, self.num_shards);
 
         let (response_tx, response_rx) = oneshot::channel();
         let msg = CoreMsg::ScatterRequest {
             request_id: next_txid(),
-            keys: keys_bytes,
+            keys: keys.to_vec(),
             operation: ScatterOp::Exists,
             conn_id: self.state.id,
             response_tx,
         };
 
         if self.shard_senders[shard_id].send(msg).await.is_err() {
-            return Some(Response::error("ERR shard unavailable"));
+            return KeyPresence::Unavailable;
         }
 
         let partial = match tokio::time::timeout(self.scatter_gather_timeout, response_rx).await {
             Ok(Ok(partial)) => partial,
-            _ => return Some(Response::error("ERR shard unavailable")),
+            _ => return KeyPresence::Unavailable,
         };
 
         let mut any_present = false;
         let mut any_absent = false;
+        let mut answered = 0usize;
         for (_, response) in partial.keyed_slice() {
+            answered += 1;
             match response {
                 Response::Integer(1) => any_present = true,
                 Response::Integer(0) => any_absent = true,
-                _ => {}
-            }
-            if any_present && any_absent {
-                return Some(Response::error(
-                    "TRYAGAIN Multiple keys request during rehashing of slot",
-                ));
+                // An EXISTS probe answers 0 or 1 per key. Anything else is a
+                // shard error or a protocol change; either way we do not know
+                // whether the key is here.
+                _ => return KeyPresence::Unavailable,
             }
         }
 
-        if any_absent && !any_present {
-            // All keys migrated away — ASK redirect
-            return Some(ask_response(slot, target_addr));
+        // A short answer means some key's verdict is missing.
+        if answered < keys.len() {
+            return KeyPresence::Unavailable;
         }
 
-        // All keys present locally — serve normally
-        None
+        match (any_present, any_absent) {
+            (true, true) => KeyPresence::Mixed,
+            (_, true) => KeyPresence::AllAbsent,
+            _ => KeyPresence::AllPresent,
+        }
     }
+
+    /// Fold an open MULTI's queued commands into the keyed footprint that
+    /// EXEC-time slot validation routes over.
+    ///
+    /// Mirrors the per-command seam exactly: cluster-exempt commands
+    /// ([`Self::is_cluster_exempt`]) contribute nothing, every other command's
+    /// keys come from the registry. The result is deliberately *not* the union
+    /// of per-command verdicts — a whole-batch decision against one snapshot is
+    /// the only way to avoid a torn verdict (see the EXEC re-validation PRD).
+    pub(crate) fn fold_queued_batch(&self, queue: &[ParsedCommand]) -> QueuedBatch {
+        let mut batch = BatchKeys::default();
+        // Batch-level READONLY eligibility: the connection must be in READONLY
+        // mode and no slot-routed command in the batch may be a write. Redis
+        // folds transaction write-ness the same way
+        // (`c->mstate.cmd_flags & CMD_WRITE` in `getNodeByQuery`), so a batch
+        // containing a single write is never rescued onto a replica.
+        let mut all_readonly = self.state.is_readonly();
+
+        for cmd in queue {
+            let name_bytes = cmd.name_uppercase();
+            let name = String::from_utf8_lossy(&name_bytes);
+            // Unknown commands never reach a queue that EXEC runs (queuing
+            // rejects and aborts them); ignore rather than guess a slot.
+            let Some(entry) = self.registry.get_entry(&name) else {
+                continue;
+            };
+            let flags = entry.flags();
+
+            // A write disqualifies the batch from replica service however it is
+            // routed, so this is evaluated *before* any exemption. Structural
+            // on purpose: an over-broad exemption then costs a redirect, never
+            // a write served locally on a node that does not own the slot.
+            if flags.contains(CommandFlags::WRITE) {
+                all_readonly = false;
+            }
+
+            if self.is_cluster_exempt(&name) {
+                continue;
+            }
+
+            // A slot-routed command that is not declared READONLY is treated as
+            // a write for eligibility purposes (conservative; only reached for
+            // non-exempt commands, so `PING` in a READONLY batch is unaffected).
+            if !flags.contains(CommandFlags::READONLY) {
+                all_readonly = false;
+            }
+            for key in entry.keys(&cmd.args) {
+                batch.add_key(key);
+            }
+        }
+
+        QueuedBatch {
+            keys: batch,
+            readonly_eligible: all_readonly,
+        }
+    }
+
+    /// EXEC-time whole-batch slot re-validation.
+    ///
+    /// Returns `Some(reply)` when the queued batch must not run on this node —
+    /// the reply is the bare `-MOVED` / `-ASK` / `-TRYAGAIN` / `-CROSSSLOT` /
+    /// `-CLUSTERDOWN` that becomes EXEC's answer, with the queue already
+    /// discarded by `take_transaction` (Redis: `discardTransaction` then
+    /// `clusterRedirectClient`). `None` means "run the batch here".
+    ///
+    /// Exactly one [`ClusterState::snapshot`] backs the whole decision, so a
+    /// migration applying mid-validation cannot produce an internally
+    /// inconsistent verdict. The residual window is Raft apply latency, which
+    /// the non-transaction path shares.
+    pub(crate) async fn validate_queued_batch(
+        &self,
+        queue: &[ParsedCommand],
+        asking: bool,
+    ) -> Option<Response> {
+        // Cluster mode only; standalone has no slot ownership to re-validate.
+        //
+        // Gated on the *same* handles as the per-command seam
+        // ([`Self::validate_cluster_slots`] needs `slot_migration` + `node_id`)
+        // plus the `cluster_state` this path snapshots. Deliberately identical
+        // so no configuration can leave one of the two validators live and the
+        // other silently off — the queue-time check passing while the EXEC-time
+        // check is disabled is precisely the hole this seam closes.
+        self.cluster.slot_migration.as_ref()?;
+        let cluster_state = self.cluster.cluster_state.as_ref()?;
+        let node_id = self.cluster.node_id?;
+
+        let QueuedBatch {
+            keys,
+            readonly_eligible,
+        } = self.fold_queued_batch(queue);
+
+        let snapshot = cluster_state.snapshot();
+        match route_queued_batch(&snapshot, &keys, asking, node_id, readonly_eligible) {
+            BatchRoute::ServeLocal => None,
+            BatchRoute::Redirect(reply) => Some(reply),
+            // We are the migration source: the presence of the batch's keys
+            // decides. All present → the batch is still ours; all gone → ASK
+            // the target; split → TRYAGAIN.
+            BatchRoute::ProbeMigratingSource { slot, target } => {
+                match self.probe_key_presence(keys.keys()).await {
+                    KeyPresence::AllPresent => None,
+                    KeyPresence::AllAbsent => Some(redirect::ask(slot, target)),
+                    KeyPresence::Mixed => Some(redirect::tryagain()),
+                    KeyPresence::Unavailable => Some(Response::error("ERR shard unavailable")),
+                }
+            }
+            // We are the importing target with ASKING set. Redis serves the
+            // batch here unless it is multi-key with something still missing,
+            // in which case neither side can satisfy it yet → TRYAGAIN. It
+            // never ASKs back at the source (that would be a redirect loop).
+            BatchRoute::ProbeImporting { .. } => {
+                if keys.keys().len() < 2 {
+                    return None;
+                }
+                match self.probe_key_presence(keys.keys()).await {
+                    KeyPresence::AllPresent => None,
+                    KeyPresence::AllAbsent | KeyPresence::Mixed => Some(redirect::tryagain()),
+                    KeyPresence::Unavailable => Some(Response::error("ERR shard unavailable")),
+                }
+            }
+        }
+    }
+}
+
+/// Verdict of the [`ScatterOp::Exists`] presence probe over a migrating slot's
+/// keys. The probe reports *facts*; each caller owns the redirect policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeyPresence {
+    /// Every probed key exists on this node.
+    AllPresent,
+    /// No probed key exists on this node (all already migrated away).
+    AllAbsent,
+    /// Some exist and some do not — the request straddles the open slot.
+    Mixed,
+    /// The shard did not answer (send failure or scatter timeout).
+    Unavailable,
+}
+
+/// The keyed footprint of a queued MULTI, plus the batch-level READONLY
+/// eligibility, as folded by [`PreDispatchView::fold_queued_batch`].
+pub(crate) struct QueuedBatch {
+    /// Distinct slots and the union of keys the batch touches.
+    pub(crate) keys: BatchKeys,
+    /// `true` iff the connection is READONLY *and* no slot-routed command in
+    /// the batch is a write, so a foreign-owned slot may be served locally.
+    pub(crate) readonly_eligible: bool,
 }
 
 fn is_nil_response(response: &Response) -> bool {

@@ -278,6 +278,49 @@ by `SlotValidator::same_slot`, before routing — matching Redis Cluster. (The s
 **Validation timing in the pipeline:**
 Parse -> Lookup -> Arity -> Extract keys -> CROSSSLOT check -> Slot routing -> Execute
 
+### MULTI/EXEC: validated twice
+
+A queued transaction is routed at two distinct moments, because a slot can change hands between
+`MULTI` and `EXEC`.
+
+1. **Queue time.** Each command is routed individually as it is queued. A `-MOVED` / `-ASK` /
+   `-CROSSSLOT` here is returned immediately *and* flags the transaction, so the eventual `EXEC`
+   replies `-EXECABORT Transaction discarded because of previous errors.` — the client sent
+   something the server refused to accept.
+2. **EXEC time.** Before any queued command runs, every queued key is folded into a single slot
+   set and routed as one unit against **one** `ClusterState` snapshot
+   (`route_queued_batch` in `slot_migration/routing.rs`, called from
+   `connection/transaction.rs`). If the batch no longer belongs here, `EXEC` answers with the bare
+   redirect — `-MOVED`, `-ASK`, `-TRYAGAIN`, `-CROSSSLOT`, or `-CLUSTERDOWN` — and the queue is
+   discarded. Not an array, not `-EXECABORT`.
+
+The batch rules mirror the per-command table above, with three whole-batch refinements:
+
+| Batch state | `EXEC` reply |
+|-------------|--------------|
+| No queued command touches a key | Executes locally (never redirected) |
+| Keys span more than one slot | `-CROSSSLOT` |
+| Slot owned locally and MIGRATING, all keys present | Executes locally |
+| Slot owned locally and MIGRATING, all keys already migrated | `-ASK <slot> <target>` |
+| Slot owned locally and MIGRATING, keys split across the boundary | `-TRYAGAIN` |
+| We are the importing target and `ASKING` is set | Executes locally (`-TRYAGAIN` if a multi-key batch is still incomplete) |
+| Slot owned elsewhere | `-MOVED` (a READONLY connection may serve it if **every** queued command is read-only) |
+
+Two ordering properties this design depends on:
+
+- **Validation is complete before the first command runs.** The shard executes a transaction as
+  one batch whose surviving commands propagate to replicas as a single `MULTI`…`EXEC` frame, so a
+  mid-batch abort would replicate a partial transaction. The batch is accepted or refused whole.
+- **`ASKING` is sticky for the duration of a `MULTI` block.** Outside a transaction the flag is
+  one-shot; inside one it survives every queued command and is consumed by `EXEC`, so the
+  importing target reaches the same routing arm at `EXEC` that it reached at queue time.
+
+A residual window remains: the snapshot is read once at `EXEC` entry, so a `CompleteSlotMigration`
+that commits through Raft microseconds later is not seen by an already-validated batch. This is the
+same window every Redis Cluster node has (its own view of ownership is also asynchronously
+updated), and it is bounded by Raft apply latency rather than by the client's think time — which
+is the property the double validation exists to establish.
+
 ---
 
 ## Slot Migration

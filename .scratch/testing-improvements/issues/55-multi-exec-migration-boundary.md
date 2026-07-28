@@ -127,3 +127,42 @@ re-validate.
   driven by explicit Raft-committed SETSLOTs plus `cluster_state()` assertions rather than sleeps
   alone, so there is no timing race to lose.
 - `cargo clippy -p frogdb-server --all-targets -- -D warnings` clean; `just fmt` applied.
+
+## Resolution addendum — 2026-07-28: the tripwire fired, the contract changed
+
+The escalation above was accepted. [`exec-slot-revalidation.md`](../../replication-cluster-rework/exec-slot-revalidation.md)
+(Status: implemented, pending review) closes the window, and the two tripwire tests were rewritten
+to assert the *new* contract rather than FrogDB's old divergence.
+
+What EXEC does now: at `EXEC` entry, before any queued command reaches a shard, the whole queue's
+keys are folded to a slot set and routed against **one** `ClusterState::snapshot()`. If the batch no
+longer belongs here, `EXEC` discards the queue and answers with a bare `-MOVED` / `-ASK` /
+`-TRYAGAIN` / `-CROSSSLOT`, matching `cluster.c::getNodeByQuery`'s EXEC special-case plus
+`server.c`'s `discardTransaction` before `clusterRedirectClient`. Validating the whole batch up
+front (rather than per command, mid-loop) is load-bearing: survivors of a mid-batch abort would ship
+to replicas as one `MULTI`…`EXEC` frame, replicating a partial transaction.
+
+Tests in `integration_cluster.rs`, rewritten or added:
+
+- `test_multi_exec_after_completed_slot_migration_redirects_with_moved` — `-MOVED`, queue discarded,
+  **and** `DBSIZE` on the former owner is 0 (the no-orphan-writes assertion; the orphan is otherwise
+  invisible, because a normal read of the key is answered by the very `MOVED` the former owner
+  emits).
+- `test_multi_exec_during_in_flight_slot_migration_asks_when_keys_migrated` — `-ASK`.
+- `test_multi_exec_during_migration_with_split_keys_returns_tryagain` — `-TRYAGAIN`.
+- `test_multi_exec_during_migration_serves_when_keys_still_local` — serve-through.
+- `test_multi_exec_on_import_target_with_asking_serves_the_batch` — requires `ASKING` to be sticky
+  for the whole MULTI block (it was one-shot; `take_asking` no longer clears inside a transaction).
+- `test_keyless_multi_exec_is_never_redirected`, plus tightened `READONLY` batch-eligibility tests.
+
+Jepsen: `slot_migration.clj` gained a `:queued-txn` / `:exec-queued-txn` pair on a pinned
+single connection that straddles a migration, and a fifth gating checker property —
+`no-orphaned-writes?`, computed from a `:read-orphans` op that reads every non-owner node directly
+with `CLUSTER GETKEYSINSLOT`.
+
+Flake bar re-met: 8 consecutive `--retries 0` runs of the boundary tests, 8/8 × 29 passed.
+
+Residual: the Raft-apply-latency window (a node that has not yet applied the reassignment still
+validates itself as owner) is unchanged and now documented in
+`website/src/content/docs/architecture/clustering.md`; closing it is
+[replication-cluster-rework/issues/02](../../replication-cluster-rework/issues/02-migration-finalization-pause-barrier.md).

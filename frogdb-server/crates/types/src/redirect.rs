@@ -16,6 +16,11 @@ use std::net::SocketAddr;
 /// `ScriptError::CrossSlot` Display impls are pinned to it by parity tests.
 pub const CROSSSLOT_MSG: &str = "CROSSSLOT Keys in request don't hash to the same slot";
 
+/// The `TRYAGAIN` wire message — a multi-key request whose keys are split
+/// across an open (`MIGRATING`/`IMPORTING`) slot, so no single node can serve
+/// it yet. Byte-identical to Redis's `CLUSTER_REDIR_UNSTABLE` reply.
+pub const TRYAGAIN_MSG: &str = "TRYAGAIN Multiple keys request during rehashing of slot";
+
 /// `MOVED <slot> <host>:<port>` — the slot is owned by another node; the client
 /// should reconnect to the owner.
 pub fn moved(slot: u16, addr: SocketAddr) -> Response {
@@ -37,6 +42,13 @@ pub fn clusterdown_slot(slot: u16) -> Response {
 /// `CROSSSLOT Keys in request don't hash to the same slot`.
 pub fn crossslot() -> Response {
     Response::error(CROSSSLOT_MSG)
+}
+
+/// `TRYAGAIN Multiple keys request during rehashing of slot` — the request's
+/// keys straddle an open slot; the client should retry once the migration
+/// settles.
+pub fn tryagain() -> Response {
+    Response::error(TRYAGAIN_MSG)
 }
 
 /// The single decision about how an owner address is rendered on the wire:
@@ -100,5 +112,13 @@ mod tests {
     #[test]
     fn crossslot_format() {
         assert_eq!(error_text(&crossslot()), CROSSSLOT_MSG);
+    }
+
+    #[test]
+    fn tryagain_format() {
+        assert_eq!(
+            error_text(&tryagain()),
+            "TRYAGAIN Multiple keys request during rehashing of slot"
+        );
     }
 }

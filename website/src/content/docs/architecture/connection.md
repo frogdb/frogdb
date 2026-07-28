@@ -102,6 +102,7 @@ independent field (`transaction.queue.is_some()`, `pubsub.in_pubsub_mode()`,
 |------|---------|--------|
 | NORMAL | MULTI | `transaction.queue` becomes `Some`; subsequent commands are queued |
 | TRANSACTION | EXEC / DISCARD | Queue is executed / cleared; back to NORMAL |
+| TRANSACTION | EXEC, cluster mode, slot no longer served here | Queue is discarded and a bare `-MOVED`/`-ASK`/`-TRYAGAIN`/`-CROSSSLOT` is returned instead of an array — see [MULTI/EXEC: validated twice](/architecture/clustering/#multiexec-validated-twice) |
 | NORMAL | SUBSCRIBE / PSUBSCRIBE | Subscription added; `in_pubsub_mode()` becomes true |
 | PUB/SUB | UNSUBSCRIBE (all) | Subscription sets empty; `in_pubsub_mode()` becomes false |
 | NORMAL | BLPOP / BRPOP / BLMOVE / … | `blocked` becomes `Some` until data, timeout, or `CLIENT UNBLOCK` |

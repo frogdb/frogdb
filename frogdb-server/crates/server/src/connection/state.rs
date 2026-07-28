@@ -465,6 +465,11 @@ pub struct TxnSummary {
     pub target: TransactionTarget,
     /// Whether a command failed during queuing (EXEC must abort).
     pub exec_abort: bool,
+    /// The connection's ASKING flag as it stood for the whole MULTI block.
+    /// Sticky across queuing (see [`ConnectionState::take_asking`]) and
+    /// consumed here, so EXEC's batch slot re-validation can reach the
+    /// importing-target routing arm.
+    pub asking: bool,
     /// When MULTI was issued, for duration metrics.
     pub start_time: Option<std::time::Instant>,
 }
@@ -625,7 +630,9 @@ pub struct ConnectionState {
     skip_next_reply: bool,
 
     /// ASKING flag for cluster slot migration. Private one-shot flag: set via
-    /// `set_asking`, read-and-clear via `take_asking`.
+    /// `set_asking`, read-and-clear via `take_asking` — except inside an open
+    /// MULTI, where it is sticky for the whole block and consumed by
+    /// `take_transaction` (see [`ConnectionState::take_asking`]).
     asking: bool,
 
     /// READONLY flag for allowing reads on cluster replicas. Private: set via
@@ -917,6 +924,10 @@ impl ConnectionState {
             self.transaction.slots.fold_shard(shard_id);
         }
         let txn = std::mem::take(&mut self.transaction);
+        // ASKING was held sticky for the duration of the block; EXEC is the
+        // last reader, so consume it here (the connection leaves EXEC with a
+        // clean flag, exactly as a non-transactional command would).
+        let asking = std::mem::replace(&mut self.asking, false);
         Some(TxnSummary {
             queue: txn.queue.expect("queue presence checked above"),
             watches: txn
@@ -930,25 +941,37 @@ impl ConnectionState {
                 .collect(),
             target: txn.slots.target,
             exec_abort: txn.exec_abort,
+            asking,
             start_time: txn.start_time,
         })
     }
 
     /// DISCARD: drop the whole transaction including watches. Returns `None` for
     /// DISCARD without MULTI; otherwise lightweight metrics for the caller.
+    ///
+    /// Also clears `ASKING`, which [`take_asking`](Self::take_asking) leaves
+    /// sticky for the life of the MULTI block. Without this the flag outlives
+    /// the transaction that made it sticky, and the next ordinary command on an
+    /// importing target would be accepted as if the client had just said
+    /// `ASKING` — a dual-homed write. Redis clears it on the same path
+    /// (`discardTransaction` → `resetClient`).
     pub fn discard_transaction(&mut self) -> Option<TxnMetrics> {
         let queued_count = self.transaction.queue.as_ref()?.len();
         let start_time = self.transaction.start_time;
         self.transaction = TransactionState::default();
+        self.asking = false;
         Some(TxnMetrics {
             queued_count,
             start_time,
         })
     }
 
-    /// Clear the entire transaction state unconditionally (QUIT / RESET).
+    /// Clear the entire transaction state unconditionally (QUIT / RESET),
+    /// including the MULTI-sticky `ASKING` flag (see
+    /// [`discard_transaction`](Self::discard_transaction)).
     pub fn clear_transaction(&mut self) {
         self.transaction = TransactionState::default();
+        self.asking = false;
     }
 
     // ------------------------------------------------------------------------
@@ -982,7 +1005,18 @@ impl ConnectionState {
 
     /// Read and clear the ASKING flag. Returns the value it held; a second call
     /// without an intervening [`set_asking`](Self::set_asking) returns `false`.
+    ///
+    /// **Exception — inside an open MULTI the flag is sticky**: it is read but
+    /// *not* cleared, so a single `ASKING` issued before `MULTI` covers every
+    /// queued command *and* the EXEC-time batch re-validation
+    /// ([`ConnectionHandler::execute_transaction`](crate::connection::ConnectionHandler)).
+    /// [`take_transaction`](Self::take_transaction) is what consumes it. This
+    /// mirrors Redis, which skips clearing `CLIENT_ASKING` while
+    /// `CLIENT_MULTI` is set (`networking.c`, `commandProcessed`).
     pub fn take_asking(&mut self) -> bool {
+        if self.in_transaction() {
+            return self.asking;
+        }
         std::mem::replace(&mut self.asking, false)
     }
 
@@ -1228,8 +1262,9 @@ impl ConnectionState {
     /// Returns what was active so the caller can perform the I/O half (shard
     /// notifications, invalidation/redirect teardown).
     ///
-    /// Per Redis `resetCommand`, RESET resets the reply mode to ON but does not
-    /// touch the ASKING / READONLY flags. Reverting authentication to the
+    /// Per Redis `resetCommand`, RESET also drops the cluster session flags:
+    /// `clearClientConnectionState` clears `CLIENT_ASKING | CLIENT_READONLY`
+    /// alongside the reply-mode latches. Reverting authentication to the
     /// default user is driven separately by the executor via
     /// [`revert_to_default_user`](Self::revert_to_default_user) (it needs the
     /// ACL manager to re-evaluate the auth flag).
@@ -1237,7 +1272,9 @@ impl ConnectionState {
         let tracking_was_enabled = self.tracking.enabled;
         let was_in_pubsub = self.exit_pubsub();
         self.tracking = TrackingState::default();
-        self.transaction = TransactionState::default();
+        // Clears the MULTI-sticky ASKING flag along with the queue.
+        self.clear_transaction();
+        self.readonly = false;
         self.protocol_version = ProtocolVersion::Resp2;
         // Reply mode → ON, clearing any CLIENT REPLY OFF/SKIP latch.
         self.reply_mode = ReplyMode::On;
@@ -1287,6 +1324,68 @@ mod tests {
         s.set_asking();
         assert!(s.take_asking(), "ASKING returns true exactly once");
         assert!(!s.take_asking(), "ASKING cleared after a single command");
+    }
+
+    /// Redis keeps `CLIENT_ASKING` set for the whole MULTI block so the EXEC-time
+    /// re-validation can still take the importing-target arm. FrogDB mirrors
+    /// that: inside an open transaction `take_asking` reads without clearing.
+    #[test]
+    fn asking_is_sticky_inside_multi_and_consumed_by_exec() {
+        let mut s = state();
+        s.set_asking();
+        s.begin_transaction().expect("MULTI");
+        assert!(s.take_asking(), "queued command 1 sees ASKING");
+        assert!(s.take_asking(), "queued command 2 still sees ASKING");
+
+        let summary = s.take_transaction().expect("in transaction");
+        assert!(summary.asking, "EXEC captures the block-scoped ASKING");
+        assert!(
+            !s.take_asking(),
+            "take_transaction consumes ASKING, leaving the connection clean"
+        );
+    }
+
+    /// A MULTI opened *without* a preceding ASKING never invents one.
+    #[test]
+    fn asking_absent_inside_multi_stays_absent() {
+        let mut s = state();
+        s.begin_transaction().expect("MULTI");
+        assert!(!s.take_asking());
+        let summary = s.take_transaction().expect("in transaction");
+        assert!(!summary.asking);
+    }
+
+    /// DISCARD ends the block that made ASKING sticky, so the flag must go with
+    /// it. Leaking it would let the *next* ordinary command be accepted on an
+    /// importing target as though the client had just said ASKING.
+    #[test]
+    fn asking_cleared_by_discard() {
+        let mut s = state();
+        s.set_asking();
+        s.begin_transaction().expect("MULTI");
+        assert!(s.take_asking(), "sticky inside the block");
+
+        assert!(s.discard_transaction().is_some());
+        assert!(!s.take_asking(), "DISCARD consumes the sticky ASKING");
+    }
+
+    /// DISCARD outside MULTI is an error and must not consume a pending ASKING.
+    #[test]
+    fn asking_survives_discard_without_multi() {
+        let mut s = state();
+        s.set_asking();
+        assert!(s.discard_transaction().is_none());
+        assert!(s.take_asking());
+    }
+
+    /// RESET / QUIT take the same path.
+    #[test]
+    fn asking_cleared_by_clear_transaction() {
+        let mut s = state();
+        s.set_asking();
+        s.begin_transaction().expect("MULTI");
+        s.clear_transaction();
+        assert!(!s.take_asking());
     }
 
     #[test]
@@ -2039,16 +2138,17 @@ mod tests {
     }
 
     #[test]
-    fn reset_leaves_cluster_flags_untouched() {
+    fn reset_clears_cluster_flags() {
         let mut s = state();
         s.set_asking();
         s.set_readonly(true);
 
         let _ = s.reset();
 
-        // RESET does not clear the ASKING / READONLY flags (Redis parity).
-        assert!(s.take_asking());
-        assert!(s.is_readonly());
+        // Redis `resetCommand` -> `clearClientConnectionState` clears
+        // CLIENT_ASKING | CLIENT_READONLY.
+        assert!(!s.take_asking());
+        assert!(!s.is_readonly());
     }
 
     #[test]

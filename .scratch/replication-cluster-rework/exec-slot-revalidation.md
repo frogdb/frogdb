@@ -1,6 +1,6 @@
 # PRD: EXEC-time slot re-validation for MULTI transactions
 
-Status: draft
+Status: implemented (pending review)
 Type: design + implementation follow-up
 Area: Transactions / Cluster
 Author: planning pass 2026-07-28
@@ -663,3 +663,132 @@ dead `:multi-write` op in `transaction.clj:101-108`.
 `cluster/src/commands.rs:286-367`); (b) pause barrier at migration finalization (Option C,
 Dragonfly parity, hardens Lua); (c) Lua-internal write validation, the same "validated once,
 executed later" shape flagged in issue 33.
+
+---
+
+## Implementation notes
+
+Implemented 2026-07-28 on branch `worktree-agent-a62ab6b4fde7fcca5`. All ten tasks are done; T10 was
+"file follow-ups", and the three issues are linked below.
+
+### Task status
+
+| Task | Status | Landed in |
+|---|---|---|
+| T1 Sticky `ASKING` inside MULTI | done | `connection/state.rs` |
+| T2 `redirect::tryagain()` | done | `types/src/redirect.rs`, `connection/guards.rs` |
+| T3 Extract the migrating presence probe | done | `connection/guards.rs` (`probe_key_presence`) |
+| T4 `route_queued_batch` | done | `slot_migration/routing.rs` + `slot_migration/tests.rs` |
+| T5 Wire it into EXEC | done | `connection/transaction.rs` |
+| T6 Rewrite the issue-55 boundary tests | done | `tests/integration_cluster.rs` |
+| T7 Issue-33 subsumption (`EXECABORT`) | done | `connection/dispatch.rs`, `connection/guards.rs`, `tests/integration_replication.rs` |
+| T8 Docs | done | `website/.../clustering.md` (canonical) + 3 linking pages |
+| T9 Jepsen `:queued-txn` + orphan checker | done | `testing/jepsen/.../slot_migration.clj`, `transaction.clj` |
+| T10 Follow-ups filed | done | [`issues/01`](issues/01-exec-slot-table-version-fast-path.md), [`issues/02`](issues/02-migration-finalization-pause-barrier.md), [`issues/03`](issues/03-lua-internal-write-validation.md) |
+
+### Ordering invariant, as built
+
+`Connection::exec` now runs, in order: `exec_abort` check → rate limit → empty-queue early return →
+**`validate_queued_batch`** → `CLIENT PAUSE` wait → shard round-trip. The validation therefore
+completes before any shard sees a single queued command, which is what keeps
+`broadcast_transaction_on_shard` from ever framing a partial `MULTI`…`EXEC` for replicas. A redirect
+returns `(TransactionOutcome::Redirected, vec![redirect])` — one bare error reply, queue discarded.
+
+### Deviations from the PRD
+
+1. **`BatchKeys` instead of `&[(u16, Vec<Bytes>)]`.** §5.1 sketched passing a slice of
+   `(slot, keys)` pairs. The implementation introduces a `BatchKeys` type (`BTreeSet<u16>` of slots
+   plus a flat `Vec<Bytes>` of keys) with `add_key`/`keys`/`single_slot`/`is_keyless`. The fold is
+   then a single pass with no intermediate grouping, and the CROSSSLOT decision is `slots.len() > 1`
+   rather than a scan. Per the repo's encapsulation rule, the routing code asks the type questions
+   instead of destructuring a tuple slice.
+2. **`ProbeMigrating` split into `ProbeMigratingSource` and `ProbeImporting`.** One variant would
+   have forced the caller to re-derive which side of the migration it was on in order to know which
+   reply to build. Two variants make the caller's match exhaustive over the two genuinely different
+   follow-ups (source: all-present → serve, none-present → `ASK`, split → `TRYAGAIN`; target: keys
+   must be absent from the source's perspective, `ASKING` already consumed).
+3. **The probe returns facts, not a `Response`.** `probe_key_presence` returns a `KeyPresence`
+   (`All` / `None` / `Split`) rather than a ready-made error reply, so `route_queued_batch` stays a
+   pure function over a snapshot and the reply construction lives in one place.
+4. **`readonly_eligible` is folded only over non-cluster-exempt commands.** A `READONLY` session's
+   batch is eligible for local service on a replica only when *every* keyed, non-exempt command is a
+   read. Exempt commands (`PING`, `ECHO`, connection-state commands) neither contribute keys nor
+   disqualify the batch. The PRD did not specify the exempt-command interaction. (Revised in the
+   review round: the `WRITE` flag is now consulted *before* the exemption test, so no classification
+   bug can rescue a write. See "Review round" below.)
+5. **Jepsen: `:read-orphans` gates, `:exec-queued-txn` reports.** The PRD asked for one new property.
+   As built, the *orphan* property gates `:valid?` (`no-orphaned-writes?`); the straddling
+   transaction's own outcome (`:redirected` vs `:executed`) is reported but not gated, because both
+   are legal — only a write on a former owner is a fault. The transaction uses a second key in the
+   same slot (`{migration-test}:txn`, alongside the register's `{migration-test}:key`) so a legally
+   refused transaction write cannot perturb the existing durability / value-correctness properties.
+6. **`transaction.clj`'s dead `:multi-write` op was deleted, not wired up.** The PRD allowed either.
+   Deleting leaves exactly one MULTI-under-migration workload in the repo, which is the stated goal;
+   wiring it up in a single-node workload would not have exercised migration at all.
+
+### Test results
+
+All local, targeted (the orchestrator gates the full suite):
+
+- `just test frogdb-server 'multi_exec|slot_migration|self_fence|min_replicas_to_write|asking|transaction'`
+  → **135 passed**, 1947 skipped.
+- `just test frogdb-server 'slot_migration::tests'` → 30 passed (12 new `route_queued_batch` cases).
+- `just check frogdb-server` → clean.
+- Flake bar from issue 55: 8 consecutive `cargo nextest run --retries 0 -E
+  'test(/multi_exec|keyless_multi|self_fence_multi|min_replicas_to_write_multi/)'` runs → **8/8 ×
+  29 passed**, zero flakes.
+- Clojure changes are paren-balanced and reference only existing `cluster-db` / `frogdb` fns; the
+  Jepsen suite itself needs a Docker cluster and was not executed here.
+
+### Not run here (deliberate, per the task's working rules)
+
+`just lint`, the full `just test`, and every `tb-*` testbox command.
+
+### Review round (adversarial review verdict: fix-first)
+
+Nine findings, all fixed in the same branch.
+
+| # | Severity | Finding | Fix |
+|---|----------|---------|-----|
+| F1 | CRITICAL | `is_cluster_exempt` treated *every* `ScatterGather` and `ConnectionLevel` command as node-scoped, so `MSET`/`MGET`/`DEL`/`EXISTS`/`TOUCH`/`UNLINK` and the whole scripting family folded to an empty key set and took the keyless fast path — committing on a former owner and replicating an orphan `MULTI`…`EXEC`. | Narrowed the predicate to what is genuinely node-scoped: `ServerWide(_)`, non-scripting `ConnectionLevel(_)`, and the hard-coded name list. Scatter-gather commands and scripting's `dynamic_keys` now fold. |
+| F2 | MAJOR | Sticky `ASKING` leaked: `take_asking` stops consuming inside a transaction, but `discard_transaction` / `clear_transaction` never cleared the flag, so `ASKING`→`MULTI`→`DISCARD` left the next ordinary command wrongly `AcceptImporting`. | Both clear `asking`. `DISCARD` without a `MULTI` (an error) still leaves a pending `ASKING` intact. |
+| F3 | MAJOR | The `WRITE`-flag fold ran *after* the exemption `continue`, so an exempt write never cleared `all_readonly`. | `WRITE` is evaluated before any exemption test; the invariant is structural, not a consequence of correct classification. |
+| F4 | MAJOR | Validation ran before the `CLIENT PAUSE` wait and never re-ran, so an `EXEC` parked across a finalization resumed on a stale verdict. | `wait_if_paused_for_transaction` returns whether it actually parked; validation re-runs only then, so the unpaused path still pays one snapshot. |
+| F5 | MINOR | `probe_key_presence` failed open (`_ => {}` swallowed non-`Integer` results; an empty keyed slice scored `AllPresent`). | Any reply that is not `Integer(0|1)`, or fewer replies than keys, returns `Unavailable`. |
+| F6 | MINOR | `reset()`'s comment claimed Redis's `resetCommand` leaves `ASKING`/`READONLY` alone; `clearClientConnectionState` clears both. | `reset()` clears both; comment corrected. |
+| F7 | NIT | `BatchKeys::add_key` pushed duplicates. | Deduped through a `HashSet`, keeping the fold linear. |
+| F8 | NIT | `validate_queued_batch` gated on `cluster_state`, `validate_cluster_slots` on `slot_migration`. | Both gate on both, so one seam cannot be silently disabled. |
+| F9 | Jepsen | `error-message` returned `nil` for non-`Exception` error carriers (a real `MOVED` scored `:executed`); `:queued-txn` ignored its `MULTI`/`SET` replies; `no-orphaned-writes?` gated on *all* orphans, including ones the ordinary `:write` generator can produce through the documented raft-apply window. | Error carriers extended to maps and raw error strings; `:queued-txn` records a queue-time refusal as `:queue-refused` and pins nothing; the orphan gate is scoped to keys the straddling transaction wrote, with all orphans still reported. |
+
+Disagreements: none — every finding was reproduced or is a straightforward invariant tightening. The
+only judgement call is F1's blast radius: the same predicate also guards the *non*-transactional
+path (`connection/routing.rs`), where a same-slot `MSET` or a keyed `EVAL` on a non-owner was
+likewise served locally instead of `MOVED`. Narrowing the shared predicate fixes both at one seam
+rather than special-casing the fold; the whole `integration_cluster` suite (174 tests) still passes,
+so the wider fix is contained.
+
+F4 has no integration coverage: driving it needs a `CLIENT PAUSE WRITE` on the source that outlives
+a slot handover, and the handover's own `MIGRATE` runs through a client connection on that same
+paused node. Documented in the test banner and in
+[issue 02](issues/02-migration-finalization-pause-barrier.md), which gains a natural hook for it.
+
+Review-round test results (all targeted, local):
+
+- `just test frogdb-server 'integration_cluster'` → **174 passed**, 1914 skipped.
+- `just test frogdb-server 'script|eval|reset|readonly|asking|multi|transaction|mset|mget|state::tests|guards'`
+  → **282 passed**, 1806 skipped.
+- `just check frogdb-server`, `just lint frogdb-server` (clippy `-D warnings`, both feature sets),
+  `just fmt` → clean.
+- `lein check` over the Jepsen project → `jepsen.frogdb.slot-migration` compiles with no warnings.
+- Negative control: reverting `is_cluster_exempt` to its pre-fix form makes
+  `test_multi_exec_scatter_gather_batch_is_slot_validated` and
+  `test_multi_exec_eval_with_declared_keys_is_slot_validated` fail (the scatter batch executes
+  locally: `Array([Simple("OK"), Integer(1), Array([Bulk(None), Bulk("v1")])])` instead of `MOVED`).
+
+### Known gaps
+
+- The residual Raft-apply-latency window (risk 7) is unchanged and is now documented in
+  `clustering.md`; closing it needs [issue 02](issues/02-migration-finalization-pause-barrier.md).
+- Lua's "validate once, write later" shape is untouched — [issue 03](issues/03-lua-internal-write-validation.md).
+- Validation is unconditional; the `slot_table_version` fast path is
+  [issue 01](issues/01-exec-slot-table-version-fast-path.md).

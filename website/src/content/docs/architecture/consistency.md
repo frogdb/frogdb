@@ -128,6 +128,8 @@ There is **no fencing-timeout config knob**; fencing is governed by these boolea
 
 **Limitations:** all keys in a transaction must resolve to the same internal shard (use hash tags); cross-shard transactions are not supported. There is no rollback — a command that fails at runtime does not undo earlier commands in the transaction (matching Redis).
 
+**In cluster mode**, slot ownership is re-validated for the whole queued batch at `EXEC` entry, against a single `ClusterState` snapshot and before any command runs. A transaction whose slot changed hands after queuing is refused whole — `EXEC` returns a bare `-MOVED`/`-ASK`/`-TRYAGAIN`/`-CROSSSLOT` and discards the queue — so a migrated slot never receives a partially applied or orphaned transaction. See [MULTI/EXEC: validated twice](/architecture/clustering/#multiexec-validated-twice).
+
 ### Transaction Durability — [Tested]
 A transaction is applied as a single RocksDB `WriteBatch` (atomic at the storage layer), so its durability follows the [durability mode](#durability--tested): `async`/`periodic` return before the batch is durable, `sync` blocks until fsync.
 

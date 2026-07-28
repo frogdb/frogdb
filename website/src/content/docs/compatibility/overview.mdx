@@ -73,6 +73,7 @@ In **cluster mode**, multi-key commands (`MGET`, `MSET`, and similar) require al
 ### Transactions
 
 - `MULTI`/`EXEC` requires all keys in the same hash slot in cluster mode.
+- In cluster mode, `EXEC` re-validates slot ownership for the whole queued batch and can therefore reply with a bare `-MOVED`, `-ASK`, `-TRYAGAIN`, or `-CROSSSLOT` instead of an array, discarding the queue — as Redis does. A command rejected while *queuing* instead makes `EXEC` reply `-EXECABORT`. See [MULTI/EXEC: validated twice](/architecture/clustering/#multiexec-validated-twice).
 - In standalone mode, cross-shard transactions obtain atomicity through [VLL](/architecture/vll/).
 - `WATCH` uses per-key version tracking.
 

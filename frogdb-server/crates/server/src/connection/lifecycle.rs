@@ -482,9 +482,14 @@ impl ConnectionHandler {
 
     /// Wait if the server is paused, for a write-containing transaction (EXEC).
     /// Both PAUSE ALL and PAUSE WRITE block write transactions.
-    pub(crate) async fn wait_if_paused_for_transaction(&self) {
+    ///
+    /// Returns `true` if the call actually blocked. EXEC uses that to decide
+    /// whether its pre-pause cluster-slot verdict is still fresh: nothing else
+    /// in the EXEC path can take unbounded wall-clock time, so an unblocked
+    /// call means the snapshot cannot have gone stale in between.
+    pub(crate) async fn wait_if_paused_for_transaction(&self) -> bool {
         if self.admin.client_registry.check_pause().is_none() {
-            return;
+            return false;
         }
 
         // Mark client as paused/blocked
@@ -504,6 +509,7 @@ impl ConnectionHandler {
         self.admin
             .client_registry
             .update_paused_state(self.state.id, false);
+        true
     }
 
     /// Check whether a MULTI/EXEC transaction contains write commands that

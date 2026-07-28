@@ -6148,8 +6148,8 @@ async fn test_self_fence_unarmed_allows_writes() {
 }
 
 /// The self-fence gate runs at MULTI *queue* time: the queued write is rejected
-/// with CLUSTERDOWN and, because FrogDB does not queue it, EXEC runs an empty
-/// transaction.
+/// with CLUSTERDOWN, and the rejection flags the transaction dirty so EXEC
+/// aborts with `EXECABORT` (Redis parity — `rejectCommand` → `flagTransaction`).
 #[tokio::test]
 async fn test_self_fence_multi_rejected_at_queue_time() {
     let (primary, replica) = start_primary_replica_pair(fence_config()).await;
@@ -6179,22 +6179,73 @@ async fn test_self_fence_multi_rejected_at_queue_time() {
         err_has_prefix(&queued, "CLUSTERDOWN"),
         "queued write not fenced: {queued:?}"
     );
-    // FrogDB applies the fence at MULTI *queue* time and does NOT queue the
-    // rejected write, so EXEC runs an empty transaction (empty array) rather
-    // than aborting with EXECABORT. This diverges from Redis, where the fence
-    // is an exec-time condition and the SET would be queued then fail at EXEC.
-    // Pinned as current behavior; the safety guarantee (the write does not
-    // apply) still holds — `mk` keeps its pre-MULTI value.
+    // FrogDB applies the fence at MULTI *queue* time rather than at EXEC, but
+    // the client-visible contract now matches Redis: a command rejected while
+    // queuing marks the transaction dirty, so EXEC answers `EXECABORT` instead
+    // of silently running the surviving (here: empty) subset. Reporting an
+    // empty array would tell the client "your transaction ran and did nothing",
+    // which is indistinguishable from a genuinely empty MULTI.
     let exec = c.command(&["EXEC"]).await;
-    assert_eq!(
-        exec,
-        Response::Array(vec![]),
-        "expected empty EXEC after queue-time fence, got {exec:?}"
+    assert!(
+        err_has_prefix(&exec, "EXECABORT"),
+        "expected EXECABORT after queue-time fence, got {exec:?}"
     );
     assert_eq!(
         primary.send("GET", &["mk"]).await,
         Response::Bulk(Some(Bytes::from_static(b"armed"))),
         "fenced MULTI must not have mutated the key"
+    );
+
+    primary.shutdown().await;
+}
+
+/// A rejected command must not leave a *partial* transaction behind. With one
+/// accepted command queued ahead of a fenced write, EXEC has a survivor it
+/// could run — the whole point of the dirty flag is that it must not. The
+/// client gets EXECABORT, never a one-element array that looks like success.
+#[tokio::test]
+async fn test_self_fence_multi_partial_queue_aborts_whole_transaction() {
+    let (primary, replica) = start_primary_replica_pair(fence_config()).await;
+    assert!(
+        wait_for_replication(&primary, 3000).await >= 1,
+        "replica never reached streaming"
+    );
+    assert_ok(&primary.send("SET", &["pk", "armed"]).await);
+    replica.shutdown().await;
+
+    let fenced = poll_set(&primary, "pk", Duration::from_secs(5), |r| {
+        err_has_prefix(r, "CLUSTERDOWN")
+    })
+    .await;
+    assert!(
+        err_has_prefix(&fenced, "CLUSTERDOWN"),
+        "fence never engaged: {fenced:?}"
+    );
+
+    let mut c = primary.connect().await;
+    assert_eq!(
+        parse_simple_string(&c.command(&["MULTI"]).await),
+        Some("OK")
+    );
+    // Accepted: ECHO carries no WRITE flag, so the fence lets it queue.
+    assert_eq!(
+        parse_simple_string(&c.command(&["ECHO", "survivor"]).await),
+        Some("QUEUED")
+    );
+    assert!(
+        err_has_prefix(&c.command(&["SET", "pk", "v"]).await, "CLUSTERDOWN"),
+        "queued write not fenced"
+    );
+
+    let exec = c.command(&["EXEC"]).await;
+    assert!(
+        err_has_prefix(&exec, "EXECABORT"),
+        "expected EXECABORT, not a partial array, got {exec:?}"
+    );
+    assert_eq!(
+        primary.send("GET", &["pk"]).await,
+        Response::Bulk(Some(Bytes::from_static(b"armed"))),
+        "aborted MULTI must not have mutated the key"
     );
 
     primary.shutdown().await;
@@ -6292,15 +6343,15 @@ async fn test_min_replicas_to_write_gate_tracks_replica_health() {
 }
 
 /// `min-replicas-to-write` gates MULTI at queue time (the queued write is
-/// rejected with NOREPLICAS and, un-queued, EXEC runs empty) but — same known
-/// gap as self-fence — does NOT gate Lua-internal writes.
+/// rejected with NOREPLICAS and the transaction is flagged dirty, so EXEC
+/// answers EXECABORT) but — same known gap as self-fence — does NOT gate
+/// Lua-internal writes.
 #[tokio::test]
 async fn test_min_replicas_to_write_multi_and_lua_paths() {
     let primary = TestServer::start_primary_with_config(min_replicas_config(1)).await;
 
-    // MULTI: the queue-time pre-check rejects the write and does not queue it,
-    // so EXEC runs an empty transaction (see the CLUSTERDOWN twin test for the
-    // divergence-from-Redis note).
+    // MULTI: the queue-time pre-check rejects the write, flags the transaction
+    // dirty, and EXEC aborts (see the CLUSTERDOWN twin test for the full note).
     let mut c = primary.connect().await;
     assert_eq!(
         parse_simple_string(&c.command(&["MULTI"]).await),
@@ -6311,10 +6362,10 @@ async fn test_min_replicas_to_write_multi_and_lua_paths() {
         err_has_prefix(&queued, "NOREPLICAS"),
         "queued write not gated: {queued:?}"
     );
-    assert_eq!(
-        c.command(&["EXEC"]).await,
-        Response::Array(vec![]),
-        "expected empty EXEC after queue-time NOREPLICAS gate"
+    let exec = c.command(&["EXEC"]).await;
+    assert!(
+        err_has_prefix(&exec, "EXECABORT"),
+        "expected EXECABORT after queue-time NOREPLICAS gate, got {exec:?}"
     );
 
     // KNOWN GAP (pinned): Lua-internal write bypasses the gate.
