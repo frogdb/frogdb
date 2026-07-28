@@ -51,7 +51,8 @@ pub use frame::{
 pub use fullsync::FullSyncMetadata;
 pub use offset_coordinator::OffsetCoordinator;
 pub use primary::{
-    DivergenceRecord, LagThresholdConfig, PrimaryReplicationHandler, SplitBrainBufferConfig,
+    DivergenceRecord, LagThresholdConfig, LagThresholds, PrimaryReplicationHandler,
+    SplitBrainBufferConfig,
 };
 pub use replica::{ReplicaConnection, ReplicaReplicationHandler};
 pub use replica_session::{Phase, ReplicaCapabilities, ReplicaInfo, ReplicaSession, SyncKind};

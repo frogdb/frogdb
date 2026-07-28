@@ -75,4 +75,10 @@ impl SnapshotCoordinator for NoopSnapshotCoordinator {
             other => other,
         }
     }
+    fn periodic_interval_secs(&self) -> u64 {
+        self.scheduler.periodic_interval_secs()
+    }
+    fn set_periodic_interval_secs(&self, secs: u64) {
+        self.scheduler.set_periodic_interval_secs(secs);
+    }
 }

@@ -279,15 +279,14 @@ pub(super) async fn init_infrastructure(
                 let coordinator = Arc::new(coordinator);
                 rocks_snapshot_coordinator = Some(coordinator.clone());
 
-                // Spawn periodic snapshot task if enabled
-                let snapshot_handle = if config.snapshot.snapshot_interval_secs > 0 {
-                    Some(startup::spawn_periodic_snapshot_task(
-                        coordinator.clone(),
-                        config.snapshot.snapshot_interval_secs,
-                    ))
-                } else {
-                    None
-                };
+                // Spawn the periodic snapshot task unconditionally: the cadence
+                // (seeded on the coordinator's scheduler from
+                // `snapshot.snapshot_interval_secs`) is read live by the loop, so
+                // a zero cadence idles the task rather than skipping it — which
+                // is what lets `CONFIG SET snapshot-interval-secs N` arm periodic
+                // saves on a server that booted with them disabled.
+                let snapshot_handle =
+                    Some(startup::spawn_periodic_snapshot_task(coordinator.clone()));
 
                 (coordinator, snapshot_handle)
             }

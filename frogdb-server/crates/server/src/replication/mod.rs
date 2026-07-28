@@ -15,6 +15,6 @@ pub use frogdb_replication::{ApplyError, ReplicaApplier, consume_frames};
 
 // Re-export from frogdb-replication for backward compatibility.
 pub use frogdb_replication::{
-    LagThresholdConfig, PrimaryReplicationHandler, ReplicaConnection, ReplicaReplicationHandler,
-    SplitBrainBufferConfig,
+    LagThresholdConfig, LagThresholds, PrimaryReplicationHandler, ReplicaConnection,
+    ReplicaReplicationHandler, SplitBrainBufferConfig,
 };

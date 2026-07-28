@@ -24,6 +24,10 @@ pub(super) struct ReplicationInitResult {
     pub primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
     pub shared_replication_offset: Option<Arc<AtomicU64>>,
     pub replication_quorum_checker: Option<Arc<dyn frogdb_core::command::QuorumChecker>>,
+    /// The same checker, un-erased, so `ConfigManager` can reach its live
+    /// self-fence / freshness-timeout setters (a `dyn QuorumChecker` cannot).
+    /// `Some` exactly when `replication_quorum_checker` is.
+    pub replication_self_fence: Option<Arc<ReplicationQuorumChecker>>,
     /// The resolved `replicaof` primary address when this node boots as a
     /// replica (`None` for a primary/standalone boot). Threaded into
     /// `init_cluster` so the `RoleManager` seeds `primary_target` with the
@@ -205,20 +209,32 @@ pub(super) fn init_replication(
         (Arc::new(NoopBroadcaster), None)
     };
 
-    // Create replication quorum checker for primary self-fencing
-    let replication_quorum_checker: Option<Arc<dyn frogdb_core::command::QuorumChecker>> =
-        if config.replication.is_primary() && config.replication.self_fence_on_replica_loss {
+    // Create the replication quorum checker for primary self-fencing. It is
+    // installed on every primary regardless of the toggle: both
+    // `self-fence-on-replica-loss` and `replica-freshness-timeout-ms` are live
+    // atomics inside the checker, so a checker that is present-but-disabled
+    // behaves exactly like the absent one it replaces (`has_quorum()` is
+    // unconditionally true) while leaving `CONFIG SET` a seam to arm fencing
+    // without a restart.
+    let replication_self_fence: Option<Arc<ReplicationQuorumChecker>> =
+        if config.replication.is_primary() {
             replication_tracker.as_ref().map(|tracker| {
                 Arc::new(ReplicationQuorumChecker::new(
                     tracker.clone(),
+                    config.replication.self_fence_on_replica_loss,
                     Duration::from_millis(config.replication.replica_freshness_timeout_ms),
-                )) as Arc<dyn frogdb_core::command::QuorumChecker>
+                ))
             })
         } else {
             None
         };
+    let replication_quorum_checker: Option<Arc<dyn frogdb_core::command::QuorumChecker>> =
+        replication_self_fence
+            .clone()
+            .map(|c| c as Arc<dyn frogdb_core::command::QuorumChecker>);
 
     Ok(ReplicationInitResult {
+        replication_self_fence,
         replication_broadcaster,
         replication_tracker,
         replica_handler,

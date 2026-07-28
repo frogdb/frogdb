@@ -39,7 +39,7 @@ use crate::fullsync::{
     CheckpointChecksum, CheckpointFileHeader, CheckpointStreamCodec, FullSyncMetadata,
     calculate_file_checksum, stream_file_to_writer,
 };
-use crate::primary::{LAG_CHECK_INTERVAL, LagThresholdConfig, PrimaryReplicationHandler};
+use crate::primary::{LAG_CHECK_INTERVAL, LagThresholds, PrimaryReplicationHandler};
 use crate::tracker::ReplicationTrackerImpl;
 
 // ============================================================================
@@ -691,7 +691,7 @@ impl ReplicaSession {
 
         let lag_tracker = handler.tracker.clone();
         let lag_replica_id = self.id;
-        let mut lag_policy = LagPolicy::from_config(&handler.lag_config);
+        let mut lag_policy = LagPolicy::new(handler.lag_thresholds.clone(), handler.lag_cooldown);
         let write_timeout = if handler.write_timeout_ms > 0 {
             Some(Duration::from_millis(handler.write_timeout_ms))
         } else {
@@ -814,10 +814,11 @@ async fn forward_frame(
 /// replica" as a value rather than inlining it. Checks fire every
 /// [`LAG_CHECK_INTERVAL`] frames (cadence unchanged by the extraction).
 struct LagPolicy {
-    /// Max replication lag in bytes before proactive disconnect. 0 = disabled.
-    threshold_bytes: u64,
-    /// Max replication lag in seconds (since last ACK) before disconnect. 0 = disabled.
-    threshold_secs: u64,
+    /// Live byte/time thresholds, shared with the owning
+    /// [`PrimaryReplicationHandler`]. Re-read on every evaluation, never copied
+    /// into the session, so a `CONFIG SET` retunes this already-streaming
+    /// session instead of only the next one.
+    thresholds: Arc<LagThresholds>,
     /// Cooldown after a proactive disconnect before allowing another.
     cooldown: Duration,
     /// Frames forwarded so far (the check cadence counter).
@@ -825,18 +826,12 @@ struct LagPolicy {
 }
 
 impl LagPolicy {
-    fn from_config(config: &LagThresholdConfig) -> Self {
+    fn new(thresholds: Arc<LagThresholds>, cooldown: Duration) -> Self {
         Self {
-            threshold_bytes: config.threshold_bytes,
-            threshold_secs: config.threshold_secs,
-            cooldown: config.cooldown,
+            thresholds,
+            cooldown,
             frames: 0,
         }
-    }
-
-    /// Whether any threshold is armed. A disabled policy never counts or fires.
-    fn enabled(&self) -> bool {
-        self.threshold_bytes > 0 || self.threshold_secs > 0
     }
 
     /// Count one forwarded frame and, every [`LAG_CHECK_INTERVAL`] frames,
@@ -845,26 +840,33 @@ impl LagPolicy {
     /// a proactive disconnect is warranted, or `None` otherwise. On a `Some`
     /// return the caller records the disconnect (logging the breach detail) and
     /// breaks the streaming loop.
+    ///
+    /// Both thresholds are loaded from the shared [`LagThresholds`] here, at the
+    /// point of use. A policy that is disabled at this instant neither counts
+    /// the frame nor fires — so arming a threshold mid-session starts the check
+    /// cadence from the next forwarded frame.
     fn should_disconnect(
         &mut self,
         tracker: &ReplicationTrackerImpl,
         id: u64,
     ) -> Option<LagBreach> {
-        if !self.enabled() {
+        let threshold_bytes = self.thresholds.threshold_bytes();
+        let threshold_secs = self.thresholds.threshold_secs();
+        if threshold_bytes == 0 && threshold_secs == 0 {
             return None;
         }
         self.frames += 1;
         if !self.frames.is_multiple_of(LAG_CHECK_INTERVAL) {
             return None;
         }
-        let byte_exceeded = self.threshold_bytes > 0
+        let byte_exceeded = threshold_bytes > 0
             && tracker
                 .replica_lag(id)
-                .is_some_and(|lag| lag >= self.threshold_bytes);
-        let time_exceeded = self.threshold_secs > 0
+                .is_some_and(|lag| lag >= threshold_bytes);
+        let time_exceeded = threshold_secs > 0
             && tracker
                 .replica_lag_secs(id)
-                .is_some_and(|secs| secs >= self.threshold_secs as f64);
+                .is_some_and(|secs| secs >= threshold_secs as f64);
         if (byte_exceeded || time_exceeded) && !tracker.is_in_lag_cooldown(id, self.cooldown) {
             Some(LagBreach {
                 byte_exceeded,
@@ -1774,12 +1776,7 @@ mod tests {
         let tracker = ReplicationTrackerImpl::new();
         let session = tracker.register_replica(addr());
         tracker.set_offset(1_000_000); // enormous byte lag, but nothing armed
-        let mut policy = LagPolicy {
-            threshold_bytes: 0,
-            threshold_secs: 0,
-            cooldown: Duration::ZERO,
-            frames: 0,
-        };
+        let mut policy = LagPolicy::new(Arc::new(LagThresholds::new(0, 0)), Duration::ZERO);
         for _ in 0..(2 * LAG_CHECK_INTERVAL) {
             assert!(policy.should_disconnect(&tracker, session.id()).is_none());
         }
@@ -1790,12 +1787,10 @@ mod tests {
         let tracker = ReplicationTrackerImpl::new();
         let session = tracker.register_replica(addr());
         tracker.set_offset(10_000); // acked = 0 → lag = 10_000 bytes
-        let mut policy = LagPolicy {
-            threshold_bytes: 1_000,
-            threshold_secs: 0,
-            cooldown: Duration::from_secs(60),
-            frames: 0,
-        };
+        let mut policy = LagPolicy::new(
+            Arc::new(LagThresholds::new(1_000, 0)),
+            Duration::from_secs(60),
+        );
         let breach = drive_one_interval_breach(&mut policy, &tracker, session.id())
             .expect("byte threshold should fire a breach");
         assert!(breach.byte_exceeded, "byte threshold must be flagged");
@@ -1810,12 +1805,10 @@ mod tests {
         let tracker = ReplicationTrackerImpl::new();
         let session = tracker.register_replica(addr());
         tracker.set_offset(500); // lag 500 < threshold 1_000
-        let mut policy = LagPolicy {
-            threshold_bytes: 1_000,
-            threshold_secs: 0,
-            cooldown: Duration::from_secs(60),
-            frames: 0,
-        };
+        let mut policy = LagPolicy::new(
+            Arc::new(LagThresholds::new(1_000, 0)),
+            Duration::from_secs(60),
+        );
         assert!(!drive_one_interval(&mut policy, &tracker, session.id()));
     }
 
@@ -1826,12 +1819,8 @@ mod tests {
         // The smallest armable time threshold is 1s; age the last-ACK time
         // past it.
         std::thread::sleep(Duration::from_millis(1100));
-        let mut policy = LagPolicy {
-            threshold_bytes: 0,
-            threshold_secs: 1,
-            cooldown: Duration::from_secs(60),
-            frames: 0,
-        };
+        let mut policy =
+            LagPolicy::new(Arc::new(LagThresholds::new(0, 1)), Duration::from_secs(60));
         let breach = drive_one_interval_breach(&mut policy, &tracker, session.id())
             .expect("time threshold should fire a breach");
         assert!(breach.time_exceeded, "time threshold must be flagged");
@@ -1849,24 +1838,83 @@ mod tests {
         // A prior proactive disconnect for this replica's address...
         tracker.record_lag_disconnect(session.id());
         // ...suppresses a re-trigger inside the cooldown window...
-        let mut in_cooldown = LagPolicy {
-            threshold_bytes: 1_000,
-            threshold_secs: 0,
-            cooldown: Duration::from_secs(60),
-            frames: 0,
-        };
+        let mut in_cooldown = LagPolicy::new(
+            Arc::new(LagThresholds::new(1_000, 0)),
+            Duration::from_secs(60),
+        );
         assert!(!drive_one_interval(
             &mut in_cooldown,
             &tracker,
             session.id()
         ));
         // ...but a zero cooldown (window already elapsed) fires again.
-        let mut expired = LagPolicy {
-            threshold_bytes: 1_000,
-            threshold_secs: 0,
-            cooldown: Duration::ZERO,
-            frames: 0,
-        };
+        let mut expired = LagPolicy::new(Arc::new(LagThresholds::new(1_000, 0)), Duration::ZERO);
         assert!(drive_one_interval(&mut expired, &tracker, session.id()));
+    }
+
+    /// Propagation truth for `replication-lag-threshold-bytes`: the policy of an
+    /// *already-running* session reads the shared thresholds at evaluation time,
+    /// so storing a new byte threshold changes the very next decision — no
+    /// reconnect, no new `LagPolicy`.
+    #[test]
+    fn lag_policy_byte_threshold_retunes_live() {
+        let tracker = ReplicationTrackerImpl::new();
+        let session = tracker.register_replica(addr());
+        tracker.set_offset(10_000); // acked = 0 → lag = 10_000 bytes
+
+        // Booted disabled: the same policy object never fires, whatever the lag.
+        let thresholds = Arc::new(LagThresholds::new(0, 0));
+        let mut policy = LagPolicy::new(thresholds.clone(), Duration::ZERO);
+        assert!(!drive_one_interval(&mut policy, &tracker, session.id()));
+
+        // CONFIG SET replication-lag-threshold-bytes 1000 — armed above the lag.
+        thresholds.set_threshold_bytes(1_000);
+        let breach = drive_one_interval_breach(&mut policy, &tracker, session.id())
+            .expect("a live-armed byte threshold must fire on the running policy");
+        assert!(breach.byte_exceeded);
+        assert!(!breach.time_exceeded);
+
+        // Raising it back above the lag disarms the same running policy.
+        thresholds.set_threshold_bytes(1_000_000);
+        assert!(!drive_one_interval(&mut policy, &tracker, session.id()));
+
+        // ...and disabling it entirely also takes effect immediately.
+        thresholds.set_threshold_bytes(1_000);
+        assert!(drive_one_interval(&mut policy, &tracker, session.id()));
+        thresholds.set_threshold_bytes(0);
+        assert!(!drive_one_interval(&mut policy, &tracker, session.id()));
+    }
+
+    /// Propagation truth for `replication-lag-threshold-secs`, via the handler's
+    /// own setter — the exact call `ConfigManager` will make. The handler and the
+    /// session's policy share one [`LagThresholds`], so the store is visible to
+    /// the running policy's next evaluation.
+    #[test]
+    fn lag_policy_time_threshold_retunes_live_via_handler() {
+        let tmp = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let session = tracker.register_replica(addr());
+        // `make_handler` boots with both lag thresholds disabled.
+        let handler = make_handler(tracker.clone(), None, tmp.path().to_path_buf());
+
+        // A session's policy, built exactly as the streaming loop builds it.
+        let mut policy = LagPolicy::new(handler.lag_thresholds(), handler.lag_cooldown);
+        // Age the last-ACK time past one second.
+        std::thread::sleep(Duration::from_millis(1100));
+        assert!(
+            !drive_one_interval(&mut policy, &tracker, session.id()),
+            "disabled at boot: nothing fires"
+        );
+
+        // CONFIG SET replication-lag-threshold-secs 1
+        handler.set_lag_threshold_secs(1);
+        let breach = drive_one_interval_breach(&mut policy, &tracker, session.id())
+            .expect("a live-armed time threshold must fire on the running policy");
+        assert!(breach.time_exceeded);
+        assert!(!breach.byte_exceeded);
+
+        // And back off again on the same policy object.
+        handler.set_lag_threshold_secs(0);
+        assert!(!drive_one_interval(&mut policy, &tracker, session.id()));
     }
 }

@@ -46,11 +46,15 @@ impl RocksSnapshotCoordinator {
         } else {
             None
         };
+        let scheduler = Arc::new(SnapshotScheduler::with_epoch(ie));
+        // Seed the live periodic cadence from config. The periodic task reads it
+        // back off the scheduler each cycle instead of capturing it at spawn.
+        scheduler.set_periodic_interval_secs(config.snapshot_interval_secs);
         Ok(Self {
             rocks_store: rs,
             snapshot_dir: config.snapshot_dir,
             num_shards: ns,
-            scheduler: Arc::new(SnapshotScheduler::with_epoch(ie)),
+            scheduler,
             last_save_time: Arc::new(RwLock::new(lst)),
             last_metadata: Arc::new(RwLock::new(lm)),
             max_snapshots: config.max_snapshots,
@@ -133,6 +137,12 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
             }
             other => other,
         }
+    }
+    fn periodic_interval_secs(&self) -> u64 {
+        self.scheduler.periodic_interval_secs()
+    }
+    fn set_periodic_interval_secs(&self, secs: u64) {
+        self.scheduler.set_periodic_interval_secs(secs);
     }
 }
 

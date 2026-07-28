@@ -9,22 +9,47 @@ use super::{SnapshotMode, SnapshotRequest};
 use std::sync::atomic::Ordering::SeqCst;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 
-/// The three scheduling atomics and their coalesce/reschedule handshake.
+/// The three scheduling atomics and their coalesce/reschedule handshake, plus
+/// the live periodic-save cadence the background snapshot task consults.
 pub struct SnapshotScheduler {
     in_progress: AtomicBool,
     scheduled: AtomicBool,
     epoch: AtomicU64,
+    /// Live periodic-save cadence in seconds; 0 disables periodic saves.
+    ///
+    /// The background periodic-snapshot task re-reads this before every
+    /// scheduling decision, so `CONFIG SET snapshot-interval-secs` retunes (or
+    /// disables/re-arms) periodic saves without a restart.
+    periodic_interval_secs: AtomicU64,
 }
 
 impl SnapshotScheduler {
     /// Create a scheduler whose epoch counter resumes from `initial_epoch`
     /// (the epoch of the newest snapshot recovered on startup, or 0).
+    ///
+    /// The periodic cadence starts disabled; the owning coordinator seeds it
+    /// from configuration via [`set_periodic_interval_secs`].
+    ///
+    /// [`set_periodic_interval_secs`]: SnapshotScheduler::set_periodic_interval_secs
     pub fn with_epoch(initial_epoch: u64) -> Self {
         Self {
             in_progress: AtomicBool::new(false),
             scheduled: AtomicBool::new(false),
             epoch: AtomicU64::new(initial_epoch),
+            periodic_interval_secs: AtomicU64::new(0),
         }
+    }
+
+    /// The live periodic-save cadence in seconds (0 = periodic saves disabled).
+    pub fn periodic_interval_secs(&self) -> u64 {
+        self.periodic_interval_secs.load(SeqCst)
+    }
+
+    /// Retune the periodic-save cadence. Reachable from `ConfigManager` for
+    /// `CONFIG SET snapshot-interval-secs`; the periodic task picks the new
+    /// value up at its next scheduling decision, without a restart.
+    pub fn set_periodic_interval_secs(&self, secs: u64) {
+        self.periodic_interval_secs.store(secs, SeqCst);
     }
 
     /// Try to claim the in-progress slot. Returns the new epoch on success, or

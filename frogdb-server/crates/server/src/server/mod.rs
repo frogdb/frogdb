@@ -177,8 +177,14 @@ pub struct Server {
     /// Used for PSYNC connection handoff.
     primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
 
-    /// Optional replication quorum checker (only when running as primary with self-fencing).
+    /// Optional replication quorum checker (installed on every primary; the
+    /// self-fence toggle lives inside it).
     replication_quorum_checker: Option<Arc<dyn frogdb_core::command::QuorumChecker>>,
+
+    /// The same checker, un-erased, so the live `self-fence-on-replica-loss` and
+    /// `replica-freshness-timeout-ms` setters stay reachable (a
+    /// `dyn QuorumChecker` hides them). `Some` exactly on a primary.
+    replication_self_fence: Option<Arc<crate::replication_quorum::ReplicationQuorumChecker>>,
 
     /// Optional connection task monitor for tokio-metrics instrumentation.
     conn_monitor: Option<tokio_metrics::TaskMonitor>,
@@ -392,6 +398,7 @@ impl Server {
             replica_frame_rx: repl.replica_frame_rx,
             primary_replication_handler: repl.primary_replication_handler,
             replication_quorum_checker: repl.replication_quorum_checker,
+            replication_self_fence: repl.replication_self_fence,
             conn_monitor: Some(infra.conn_monitor),
             _task_monitor_handle: Some(task_monitor_handle),
             shared_replication_offset,
@@ -413,8 +420,28 @@ impl Server {
     }
 
     /// Get the snapshot coordinator.
+    ///
+    /// Also the reach point for the live periodic-save cadence
+    /// (`SnapshotCoordinator::set_periodic_interval_secs`, backing
+    /// `CONFIG SET snapshot-interval-secs`).
     pub fn snapshot_coordinator(&self) -> &Arc<dyn SnapshotCoordinator> {
         &self.snapshot_coordinator
+    }
+
+    /// The primary's self-fence quorum checker, when this node booted as a
+    /// primary. Owns the live `self-fence-on-replica-loss` and
+    /// `replica-freshness-timeout-ms` seams.
+    pub fn replication_self_fence(
+        &self,
+    ) -> Option<&Arc<crate::replication_quorum::ReplicationQuorumChecker>> {
+        self.replication_self_fence.as_ref()
+    }
+
+    /// The primary replication handler, when this node booted as a primary.
+    /// Owns the live `replication-lag-threshold-bytes` /
+    /// `replication-lag-threshold-secs` seams.
+    pub fn primary_replication_handler(&self) -> Option<&Arc<PrimaryReplicationHandler>> {
+        self.primary_replication_handler.as_ref()
     }
 
     /// Get the local address of the RESP TCP listener.

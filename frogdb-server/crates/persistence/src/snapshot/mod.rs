@@ -59,4 +59,12 @@ pub trait SnapshotCoordinator: Send + Sync {
     /// `mode` selects the no-queue (`Immediate`) vs coalesce (`Schedule`)
     /// behaviour when a save is already running.
     fn request_snapshot(&self, mode: SnapshotMode) -> SnapshotRequest;
+    /// Live periodic-save cadence in seconds (0 = periodic saves disabled).
+    ///
+    /// The background periodic-snapshot task re-reads this before every
+    /// scheduling decision rather than capturing it once at spawn time.
+    fn periodic_interval_secs(&self) -> u64;
+    /// Retune the periodic-save cadence without a restart. Reachable from
+    /// `ConfigManager` for `CONFIG SET snapshot-interval-secs`.
+    fn set_periodic_interval_secs(&self, secs: u64);
 }

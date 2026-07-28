@@ -18,7 +18,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::{RwLock, broadcast};
 
@@ -68,6 +68,55 @@ pub struct LagThresholdConfig {
 /// How often the streaming task checks lag thresholds (every N frames).
 pub(crate) const LAG_CHECK_INTERVAL: u64 = 100;
 
+/// The **live** proactive lag-disconnect thresholds.
+///
+/// Shared by `Arc` between the primary handler and every streaming replica
+/// session's lag policy, which re-reads both values on each evaluation. A store
+/// here therefore retunes — or disables / arms — proactive lag disconnection on
+/// sessions that are already streaming, with no reconnect and no restart, which
+/// is what makes `CONFIG SET replication-lag-threshold-bytes` /
+/// `replication-lag-threshold-secs` meaningful.
+///
+/// The cooldown is deliberately *not* here: it is derived from
+/// `fullresync-cooldown-secs` and is captured per session.
+#[derive(Debug)]
+pub struct LagThresholds {
+    threshold_bytes: AtomicU64,
+    threshold_secs: AtomicU64,
+}
+
+impl LagThresholds {
+    /// Seed the thresholds (0 = that threshold disabled).
+    pub fn new(threshold_bytes: u64, threshold_secs: u64) -> Self {
+        Self {
+            threshold_bytes: AtomicU64::new(threshold_bytes),
+            threshold_secs: AtomicU64::new(threshold_secs),
+        }
+    }
+
+    /// Max replication lag in bytes before proactive disconnect (0 = disabled).
+    pub fn threshold_bytes(&self) -> u64 {
+        self.threshold_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Retune the byte-lag threshold. Reachable from `ConfigManager` for
+    /// `CONFIG SET replication-lag-threshold-bytes`.
+    pub fn set_threshold_bytes(&self, bytes: u64) {
+        self.threshold_bytes.store(bytes, Ordering::Relaxed);
+    }
+
+    /// Max seconds since the last ACK before proactive disconnect (0 = disabled).
+    pub fn threshold_secs(&self) -> u64 {
+        self.threshold_secs.load(Ordering::Relaxed)
+    }
+
+    /// Retune the time-lag threshold. Reachable from `ConfigManager` for
+    /// `CONFIG SET replication-lag-threshold-secs`.
+    pub fn set_threshold_secs(&self, secs: u64) {
+        self.threshold_secs.store(secs, Ordering::Relaxed);
+    }
+}
+
 /// Primary replication handler.
 ///
 /// Manages all replica connections and coordinates WAL streaming.
@@ -84,8 +133,11 @@ pub struct PrimaryReplicationHandler {
     pub(crate) rocks_store: Option<Arc<RocksStore>>,
     /// Directory for storing temporary checkpoint data.
     pub(crate) data_dir: PathBuf,
-    /// Proactive lag-threshold disconnect configuration.
-    pub(crate) lag_config: LagThresholdConfig,
+    /// Live proactive lag-disconnect thresholds, shared with every streaming
+    /// session's lag policy (see [`LagThresholds`]).
+    pub(crate) lag_thresholds: Arc<LagThresholds>,
+    /// Cooldown after a proactive lag disconnect before allowing another.
+    pub(crate) lag_cooldown: Duration,
     /// The replication backlog and its PSYNC grant decision. Owns the recent
     /// command buffer shared by partial-sync replay and split-brain
     /// reconciliation (see [`PartialSyncReplay`]).
@@ -122,6 +174,10 @@ impl PrimaryReplicationHandler {
         let state = Arc::new(RwLock::new(state));
         let offsets = Arc::new(OffsetCoordinator::new(tracker.clone(), state.clone()));
         let wait = WaitCoordinator::new(offsets.clone(), tracker.clone());
+        let lag_thresholds = Arc::new(LagThresholds::new(
+            lag_config.threshold_bytes,
+            lag_config.threshold_secs,
+        ));
         Self {
             state,
             state_path,
@@ -129,7 +185,8 @@ impl PrimaryReplicationHandler {
             wal_broadcast,
             rocks_store,
             data_dir,
-            lag_config,
+            lag_thresholds,
+            lag_cooldown: lag_config.cooldown,
             replay,
             write_timeout_ms,
             offsets,
@@ -149,6 +206,25 @@ impl PrimaryReplicationHandler {
     }
     pub fn tracker(&self) -> Arc<ReplicationTrackerImpl> {
         self.tracker.clone()
+    }
+
+    /// The live lag-threshold seam. Handing out the `Arc` (rather than only
+    /// setters) lets `ConfigManager` hold the thresholds directly, the way it
+    /// already holds `max_clients` and friends.
+    pub fn lag_thresholds(&self) -> Arc<LagThresholds> {
+        self.lag_thresholds.clone()
+    }
+
+    /// Retune the byte-lag disconnect threshold on every streaming session.
+    /// Backs `CONFIG SET replication-lag-threshold-bytes`.
+    pub fn set_lag_threshold_bytes(&self, bytes: u64) {
+        self.lag_thresholds.set_threshold_bytes(bytes);
+    }
+
+    /// Retune the time-lag disconnect threshold on every streaming session.
+    /// Backs `CONFIG SET replication-lag-threshold-secs`.
+    pub fn set_lag_threshold_secs(&self, secs: u64) {
+        self.lag_thresholds.set_threshold_secs(secs);
     }
 
     /// Persist the current replication identity + offset to the state file.

@@ -500,6 +500,37 @@ fn test_scheduler_resumes_epoch() {
     assert_eq!(s.try_begin(), Some(6));
 }
 
+/// The periodic cadence is a live seam: it starts disabled, and a store is
+/// visible to the very next read on the shared scheduler — no reconstruction.
+#[test]
+fn test_scheduler_periodic_interval_is_live() {
+    use std::sync::Arc;
+    let s = Arc::new(SnapshotScheduler::with_epoch(0));
+    assert_eq!(s.periodic_interval_secs(), 0);
+    s.set_periodic_interval_secs(3600);
+    assert_eq!(s.periodic_interval_secs(), 3600);
+    // A second holder of the same Arc (the periodic task, in production) sees
+    // the retune without being handed a new scheduler.
+    let reader = Arc::clone(&s);
+    s.set_periodic_interval_secs(5);
+    assert_eq!(reader.periodic_interval_secs(), 5);
+    s.set_periodic_interval_secs(0);
+    assert_eq!(reader.periodic_interval_secs(), 0);
+}
+
+/// Propagation truth through the coordinator trait: the Noop coordinator seeds
+/// a disabled cadence, and `set_periodic_interval_secs` on the trait object is
+/// observed by the next `periodic_interval_secs` read — the exact pair
+/// `ConfigManager` and the periodic task use.
+#[test]
+fn test_noop_coordinator_periodic_interval_seam() {
+    use std::sync::Arc;
+    let coord: Arc<dyn SnapshotCoordinator> = Arc::new(NoopSnapshotCoordinator::new());
+    assert_eq!(coord.periodic_interval_secs(), 0);
+    coord.set_periodic_interval_secs(42);
+    assert_eq!(coord.periodic_interval_secs(), 42);
+}
+
 /// Begin while a save is running is rejected (the `AlreadyInProgress` guard).
 #[test]
 fn test_scheduler_begin_while_running_rejected() {
