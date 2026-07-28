@@ -2422,7 +2422,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "same shard/tier does not increment this.",
+      "description": "Total post-clear space-reclamation passes started (a FLUSHDB/FLUSHALL range tombstone was followed by an async DeleteFilesInRange + CompactRange over the cleared column family). Only counts passes that actually began; a reclamation coalesced away because one was already in flight for the same shard/tier does not increment this.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -2512,7 +2512,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "reclamation passes still running or a stuck compaction.",
+      "description": "Total post-clear space-reclamation passes that finished executing (the compaction routine returned). Pairs with frogdb_flush_compact_started_total; a persistent gap between the two indicates reclamation passes still running or a stuck compaction.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -3284,7 +3284,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "from the band tracker at scrape time",
+      "description": "Cumulative requests at or under each configured latency band, flushed from the band tracker at scrape time",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -4888,7 +4888,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "output-buffer hard limit (slow / non-reading subscribers).",
+      "description": "Total subscriber connections disconnected for exceeding their pub/sub output-buffer hard limit (slow / non-reading subscribers).",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -9055,7 +9055,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "full value Put).",
+      "description": "Total HyperLogLog register-delta operands persisted as WAL merges (dense-HLL PFADD writes that took the merge-delta path instead of a full value Put).",
       "fieldConfig": {
         "defaults": {
           "color": {

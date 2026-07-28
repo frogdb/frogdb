@@ -203,10 +203,46 @@ dominates. On a freshly bootstrapped cluster the first election takes `raft_term
 leaves `cluster_current_epoch` at 1 before and after. To detect that a topology event happened, read
 the raw per-node `config_epoch` from `CLUSTER NODES` rather than `CLUSTER INFO`'s folded value.
 
-Redis's `redis-cli --cluster check` flags epoch **collisions** — two nodes independently claiming
-the same `configEpoch` — not epoch drift or exceedance. FrogDB has no equivalent detection today:
-`AddNode` inserts an incoming node's `config_epoch` as-is with no uniqueness check against existing
-nodes, and `frogctl cluster check` is an unimplemented stub. Tracked separately (issue 63).
+### Config Epoch collisions
+
+Two primaries claiming the same nonzero `config_epoch` is the invariant violation worth watching
+for — it is what Redis's `redis-cli --cluster check` flags, and it makes slot-ownership arbitration
+undecidable, because the epoch is the tiebreaker. Epoch drift or exceedance (the `CLUSTER INFO` fold
+above) is not a collision and is not a bug.
+
+**Prevention.** Every epoch FrogDB mints comes from the single Raft-replicated counter, so
+`Failover`, `MarkNodeFailed`, and `IncrementEpoch` cannot produce a duplicate. `AddNode` is the one
+transition that carries an epoch the counter did not mint — it takes whatever the joining node
+reports — so it is the one transition that can introduce a collision: a node rejoining with restored
+on-disk state, or two independently bootstrapped sub-clusters merged with `CLUSTER MEET`. It
+resolves the claim before recording the node
+(`ClusterStateInner::reconcile_incoming_epoch`, `frogdb-server/crates/cluster/src/state.rs`):
+
+| Incoming claim | Resolution |
+|----------------|------------|
+| `config_epoch == 0` (unassigned) | Recorded as-is. `NodeInfo::new_primary` starts at 0, so bootstrap seeding and self-registration always claim 0; any number of nodes may hold it. If the node is already known at a nonzero epoch, that epoch is **kept** rather than reset — a reset would free the epoch for another node to claim. |
+| Nonzero, held by another primary | Collision. The joining node is admitted with a freshly minted epoch (the cluster-wide counter advanced past every epoch currently claimed); the incumbent keeps the contested one. Logged at `warn` with `claimed_epoch` and `assigned_epoch`. |
+| Nonzero, uncontested | Recorded as-is, and the cluster-wide counter is raised to at least that value so it keeps dominating every per-node epoch. |
+
+Only primaries are compared, matching Redis's `clusterHandleConfigEpochCollision`, which returns
+early unless both nodes are masters: only a primary's epoch arbitrates slot ownership.
+
+This is a deliberate **divergence from Redis's gossip rule**. Redis breaks the tie by node ID (the
+node with the lexicographically smaller ID gives up its epoch and re-claims a fresh one), because
+under gossip both nodes learn of the collision independently and need a rule they can each apply
+without coordination. FrogDB applies `AddNode` in a linearized state-machine transition, where
+"which node was already there" is well defined, so the incumbent keeps the epoch and the joiner
+takes the fresh one. The outcome is the same — the two nodes end up at distinct epochs, and no
+node's epoch ever decreases — with no ID comparison needed. Every replica derives the same
+resolution from the same log entry, so nodes cannot disagree about who ended up with which epoch.
+
+**Detection.** `frogctl cluster check` reads `CLUSTER NODES` and reports every group of primaries
+sharing a nonzero `config_epoch`, naming the colliding node IDs and addresses, and exits `1` on any
+finding (`0` when everything passes). It is structured as a list of independent checks over the
+parsed node table (`frogctl/src/commands/cluster.rs`), with epoch collision as the first; further
+checks (slot coverage, open migrations) plug into the same list. Detection is deliberately kept
+even though the transition above prevents the collision: it catches a collision introduced by a bug
+elsewhere, or by an operator editing on-disk state, which prevention at `AddNode` cannot see.
 
 ---
 

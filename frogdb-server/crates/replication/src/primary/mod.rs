@@ -427,7 +427,15 @@ impl ReplicationBroadcaster for PrimaryReplicationHandler {
     }
 
     fn is_active(&self) -> bool {
-        self.tracker.replica_count() > 0
+        // Zero connected replicas is NOT idle while the backlog still holds a
+        // resume point: a replica that reconnects into that window is granted
+        // `+CONTINUE`, so every write in the meantime must have an offset and a
+        // backlog entry or the replica resumes past a hole and silently
+        // diverges. Redis keeps its `repl_backlog` (and advances
+        // `master_repl_offset`) after the last replica leaves for the same
+        // reason. A primary that never had a replica has an empty backlog and
+        // stays inactive, so standalone writes pay nothing.
+        self.tracker.replica_count() > 0 || self.replay.has_resume_history()
     }
     fn current_offset(&self) -> u64 {
         self.offsets.current()

@@ -133,6 +133,18 @@ impl PartialSyncReplay {
         self.backlog.oldest_offset()
     }
 
+    /// Whether the backlog currently holds a resume point a reconnecting replica
+    /// could be continued from — Redis's "the replication backlog exists".
+    ///
+    /// The primary must keep stamping offsets and recording writes for as long
+    /// as this holds, even with zero connected replicas: a write that skips the
+    /// backlog while a replica is away leaves a hole no later `+CONTINUE` can
+    /// fill, so the replica would resume at a stale offset and silently diverge.
+    /// See [`crate::ReplicationBroadcaster::is_active`].
+    pub fn has_resume_history(&self) -> bool {
+        self.enabled && self.backlog.oldest_offset().is_some()
+    }
+
     /// The single entry point. A pure decision over `(state, req_offset, current)`
     /// plus the backlog's current contents; performs no I/O. PSYNC turns the
     /// result into the `+CONTINUE`/`+FULLRESYNC` reply.

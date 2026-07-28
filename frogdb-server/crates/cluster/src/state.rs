@@ -178,6 +178,100 @@ impl ClusterState {
     }
 }
 
+/// What [`ClusterStateInner::reconcile_incoming_epoch`] did with the
+/// `config_epoch` an incoming [`NodeInfo`] claimed.
+///
+/// Returned (rather than only logged) so the resolution policy is unit-testable
+/// without reading tracing output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EpochReconciliation {
+    /// The claimed epoch was recorded as-is: either the unassigned `0`, or a
+    /// nonzero epoch no other primary holds.
+    Accepted,
+    /// The record claimed the unassigned `0` for a node already holding a real
+    /// epoch (a re-registration, which rebuilds `NodeInfo` from scratch); the
+    /// recorded epoch was kept instead of being reset.
+    Preserved(ConfigEpoch),
+    /// The claimed epoch collided with another primary's; a fresh epoch was
+    /// minted from the cluster-wide counter and assigned to the incoming node.
+    Reassigned {
+        /// The epoch the incoming node claimed.
+        claimed: ConfigEpoch,
+        /// The epoch it was given instead.
+        assigned: ConfigEpoch,
+    },
+}
+
+impl ClusterStateInner {
+    /// The highest `config_epoch` any known node currently claims.
+    fn max_node_epoch(&self) -> ConfigEpoch {
+        self.nodes
+            .values()
+            .map(|n| n.config_epoch)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Mint the next cluster-wide config epoch, advancing the counter past every
+    /// epoch currently claimed by a node.
+    ///
+    /// The `max` guard preserves the cluster invariant that the cluster-wide
+    /// counter is never below any per-node `config_epoch` (see
+    /// `website/src/content/docs/architecture/clustering.md`), which a node
+    /// joining with a claimed epoch higher than the counter could otherwise
+    /// break.
+    fn mint_config_epoch(&mut self) -> ConfigEpoch {
+        self.config_epoch = self.config_epoch.max(self.max_node_epoch()) + 1;
+        self.config_epoch
+    }
+
+    /// Resolve the `config_epoch` an incoming node claims against the epochs
+    /// already recorded, rewriting `node.config_epoch` in place.
+    ///
+    /// Policy (Redis's gossip rule, decided in one linearized transition):
+    ///
+    /// - `config_epoch == 0` is "unassigned" — the bootstrap and self-registration
+    ///   paths build `NodeInfo::new_primary`, which starts at `0`. It never
+    ///   collides, but it must not *lower* an epoch the node already holds, so a
+    ///   re-registration keeps the recorded epoch.
+    /// - A nonzero claim that another **primary** already holds is a collision:
+    ///   the incoming node is given a freshly minted epoch instead. Only
+    ///   primaries are compared, matching Redis's
+    ///   `clusterHandleConfigEpochCollision`, which skips replicas because only a
+    ///   primary's epoch arbitrates slot ownership.
+    /// - An uncontested nonzero claim is accepted, and the cluster-wide counter
+    ///   is raised to at least that value so the counter keeps dominating every
+    ///   per-node epoch.
+    pub(crate) fn reconcile_incoming_epoch(&mut self, node: &mut NodeInfo) -> EpochReconciliation {
+        let claimed = node.config_epoch;
+
+        if claimed == 0 {
+            if let Some(existing) = self.nodes.get(&node.id)
+                && existing.config_epoch != 0
+            {
+                node.config_epoch = existing.config_epoch;
+                return EpochReconciliation::Preserved(existing.config_epoch);
+            }
+            return EpochReconciliation::Accepted;
+        }
+
+        let collides = node.is_primary()
+            && self
+                .nodes
+                .values()
+                .any(|n| n.id != node.id && n.is_primary() && n.config_epoch == claimed);
+
+        if collides {
+            let assigned = self.mint_config_epoch();
+            node.config_epoch = assigned;
+            return EpochReconciliation::Reassigned { claimed, assigned };
+        }
+
+        self.config_epoch = self.config_epoch.max(claimed);
+        EpochReconciliation::Accepted
+    }
+}
+
 /// Event emitted when this node is demoted from primary to replica.
 #[derive(Debug, Clone)]
 pub struct DemotionEvent {
@@ -980,6 +1074,178 @@ mod tests {
         // Should succeed even with version mismatch (warning only)
         let result = state.apply_command(ClusterCommand::AddNode { node: node2 });
         assert!(matches!(result, Ok((ClusterResponse::Ok, _))));
+    }
+
+    // ========================================================================
+    // config_epoch collision resolution at AddNode (issue 64)
+    // ========================================================================
+
+    /// Build a primary claiming a specific `config_epoch`, as a node rejoining
+    /// with restored on-disk state would.
+    fn primary_claiming(id: NodeId, port: u16, epoch: ConfigEpoch) -> NodeInfo {
+        let mut node = NodeInfo::new_primary(id, test_addr(port), test_addr(port + 10000));
+        node.config_epoch = epoch;
+        node
+    }
+
+    /// The headline case: a second primary claiming an epoch an existing primary
+    /// already holds is admitted with a *freshly minted* epoch, and the incumbent
+    /// keeps the contested one. The cluster-wide counter advances with it, so it
+    /// still dominates every per-node epoch.
+    #[test]
+    fn test_add_node_epoch_collision_reassigns_incoming_node() {
+        let state = ClusterState::new();
+        state
+            .apply_command(ClusterCommand::AddNode {
+                node: primary_claiming(1, 6379, 5),
+            })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode {
+                node: primary_claiming(2, 6380, 5),
+            })
+            .unwrap();
+
+        assert_eq!(
+            state.get_node(1).unwrap().config_epoch,
+            5,
+            "incumbent keeps"
+        );
+        let reassigned = state.get_node(2).unwrap().config_epoch;
+        assert_ne!(reassigned, 5, "collision must be resolved");
+        assert!(reassigned > 5, "fresh epoch must exceed every existing one");
+        assert_eq!(state.config_epoch(), reassigned);
+    }
+
+    /// The minted epoch comes from the cluster-wide counter, so it clears a
+    /// counter that has already run ahead of every per-node epoch (e.g. after
+    /// `IncrementEpoch`), not just the contested value.
+    #[test]
+    fn test_add_node_collision_mints_above_cluster_counter() {
+        let state = ClusterState::new();
+        for _ in 0..9 {
+            state.apply_command(ClusterCommand::IncrementEpoch).unwrap();
+        }
+        assert_eq!(state.config_epoch(), 9);
+
+        state
+            .apply_command(ClusterCommand::AddNode {
+                node: primary_claiming(1, 6379, 3),
+            })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode {
+                node: primary_claiming(2, 6380, 3),
+            })
+            .unwrap();
+
+        assert_eq!(state.get_node(1).unwrap().config_epoch, 3);
+        assert_eq!(state.get_node(2).unwrap().config_epoch, 10);
+        assert_eq!(state.config_epoch(), 10);
+    }
+
+    /// An uncontested nonzero claim is recorded verbatim, but pulls the
+    /// cluster-wide counter up to it: the counter must never trail a per-node
+    /// epoch, or the next mint would hand out a duplicate.
+    #[test]
+    fn test_add_node_uncontested_epoch_raises_cluster_counter() {
+        let state = ClusterState::new();
+        state
+            .apply_command(ClusterCommand::AddNode {
+                node: primary_claiming(1, 6379, 9),
+            })
+            .unwrap();
+
+        assert_eq!(state.get_node(1).unwrap().config_epoch, 9);
+        assert_eq!(state.config_epoch(), 9);
+    }
+
+    /// `config_epoch == 0` means "unassigned" — the bootstrap/self-registration
+    /// convention — so several fresh nodes at 0 are not a collision.
+    #[test]
+    fn test_add_node_zero_epoch_is_not_a_collision() {
+        let state = ClusterState::new();
+        state
+            .apply_command(ClusterCommand::AddNode {
+                node: NodeInfo::new_primary(1, test_addr(6379), test_addr(16379)),
+            })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode {
+                node: NodeInfo::new_primary(2, test_addr(6380), test_addr(16380)),
+            })
+            .unwrap();
+
+        assert_eq!(state.get_node(1).unwrap().config_epoch, 0);
+        assert_eq!(state.get_node(2).unwrap().config_epoch, 0);
+        assert_eq!(state.config_epoch(), 0);
+    }
+
+    /// Self-registration rebuilds `NodeInfo` from scratch (epoch 0), so an
+    /// upsert must not reset an epoch the node already earned — otherwise a
+    /// restart would silently free an epoch for someone else to claim.
+    #[test]
+    fn test_add_node_zero_epoch_preserves_recorded_epoch() {
+        let state = ClusterState::new();
+        state
+            .apply_command(ClusterCommand::AddNode {
+                node: primary_claiming(1, 6379, 7),
+            })
+            .unwrap();
+
+        // Re-register with fresh addresses and no epoch, as a restart does.
+        state
+            .apply_command(ClusterCommand::AddNode {
+                node: NodeInfo::new_primary(1, test_addr(6390), test_addr(16390)),
+            })
+            .unwrap();
+
+        let node = state.get_node(1).unwrap();
+        assert_eq!(node.addr, test_addr(6390), "address update still applies");
+        assert_eq!(node.config_epoch, 7, "recorded epoch is not reset to 0");
+    }
+
+    /// Only primaries arbitrate slot ownership, so only primaries collide —
+    /// matching Redis's `clusterHandleConfigEpochCollision`, which returns early
+    /// unless both nodes are masters.
+    #[test]
+    fn test_add_node_replica_sharing_primary_epoch_is_not_a_collision() {
+        let state = ClusterState::new();
+        state
+            .apply_command(ClusterCommand::AddNode {
+                node: primary_claiming(1, 6379, 3),
+            })
+            .unwrap();
+
+        let mut replica = NodeInfo::new_replica(2, test_addr(6380), test_addr(16380), 1);
+        replica.config_epoch = 3;
+        state
+            .apply_command(ClusterCommand::AddNode { node: replica })
+            .unwrap();
+
+        assert_eq!(state.get_node(1).unwrap().config_epoch, 3);
+        assert_eq!(state.get_node(2).unwrap().config_epoch, 3);
+    }
+
+    /// A node re-registering with the epoch it already holds is an upsert, not a
+    /// collision with itself.
+    #[test]
+    fn test_add_node_self_epoch_is_not_a_collision() {
+        let state = ClusterState::new();
+        state
+            .apply_command(ClusterCommand::AddNode {
+                node: primary_claiming(1, 6379, 4),
+            })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode {
+                node: primary_claiming(1, 6390, 4),
+            })
+            .unwrap();
+
+        let node = state.get_node(1).unwrap();
+        assert_eq!(node.config_epoch, 4);
+        assert_eq!(node.addr, test_addr(6390));
     }
 
     // ========================================================================

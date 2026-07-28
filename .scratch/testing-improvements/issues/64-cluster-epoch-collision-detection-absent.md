@@ -1,6 +1,6 @@
 # No epoch-collision detection/prevention exists anywhere in FrogDB cluster mode
 
-Status: needs-triage
+Status: done
 Type: AFK
 Origin: Follow-up filed while implementing issue 47 (epoch-fold observability), per issue 47's
 acceptance criterion to investigate epoch-collision detection and file a separate gap if absent.
@@ -54,13 +54,72 @@ the scenario.
 
 ## Acceptance criteria
 
-- [ ] Documented (or implemented) resolution policy for a `config_epoch` collision introduced via
+- [x] Documented (or implemented) resolution policy for a `config_epoch` collision introduced via
       `AddNode`/`CLUSTER MEET`.
-- [ ] A detection mechanism exists (subcommand, observability field, or `frogctl cluster check`)
+- [x] A detection mechanism exists (subcommand, observability field, or `frogctl cluster check`)
       and is covered by a test that injects a real collision.
-- [ ] If the decision is "won't fix, structurally rare enough to accept" -- that must be an explicit,
+- [x] If the decision is "won't fix, structurally rare enough to accept" -- that must be an explicit,
       written decision (not silence), since it leaves operators with no tool to catch a collision
-      that does occur.
+      that does occur. (N/A -- both prevention and detection were implemented.)
+
+## Resolution
+
+Both prevention and detection were implemented.
+
+### Resolution policy (prevention at `AddNode`)
+
+`ClusterStateInner::reconcile_incoming_epoch` (`frogdb-server/crates/cluster/src/state.rs`) runs
+inside the `AddNode` state-machine transition, before the node lands in the table:
+
+| Incoming claim | Resolution |
+|----------------|------------|
+| `config_epoch == 0` | Recorded as-is; 0 is the "unassigned" bootstrap value (`NodeInfo::new_primary` starts there, and `CLUSTER MEET`, bootstrap seeding, and Raft self-registration all use it), so any number of nodes may hold it. If the node is already known at a nonzero epoch, that epoch is **preserved** instead of being reset to 0. |
+| Nonzero, already held by another primary | Collision: the joining node is admitted with a freshly minted epoch (`max(cluster counter, max per-node epoch) + 1`); the incumbent keeps the contested epoch. Logged at `warn` with `claimed_epoch`/`assigned_epoch`. |
+| Nonzero, uncontested | Recorded as-is; the cluster-wide counter is raised to at least that value, preserving the `cluster_current_epoch >= max(per-node config_epoch)` invariant from issue 47. |
+
+Only primaries are compared, matching Redis's `clusterHandleConfigEpochCollision`, which returns
+early unless both nodes are masters -- only a primary's epoch arbitrates slot ownership.
+
+The epoch-preservation rule is a small scope addition beyond the literal issue text. It closes a
+coupled latent bug: a node re-registering itself after a restart claims epoch 0, which would have
+reset its recorded nonzero epoch, freeing that epoch for another node to claim and manufacturing a
+future collision. `AddNode` now never lowers a recorded epoch.
+
+### Divergence from Redis's gossip rule
+
+Redis breaks the tie by node ID (lexicographically smaller ID gives up its epoch and re-claims a
+fresh one) because under gossip both nodes learn of the collision independently and need a rule
+each can apply without coordination. FrogDB applies `AddNode` in a linearized Raft state-machine
+transition where "which node was already there" is well defined, so the incumbent keeps the epoch
+and the joiner takes the fresh one -- no ID comparison needed. The outcome matches Redis's: the two
+nodes end at distinct epochs and no node's epoch decreases. Every replica derives the same
+resolution from the same log entry, so nodes cannot disagree about the result.
+
+### Detection surface
+
+`frogctl cluster check` (`frogctl/src/commands/cluster.rs`) is implemented for real. It reads
+`CLUSTER NODES`, parses the node table, and runs a list of independent checks; epoch collision is
+the first. It reports every group of primaries sharing a nonzero `config_epoch` (naming node IDs and
+addresses) and exits `1` on any finding, `0` otherwise. Detection is kept even though `AddNode`
+prevents the collision, because it catches one introduced by a bug elsewhere or by an operator
+editing on-disk state. Further checks (slot coverage, open migrations) plug into the same `CHECKS`
+list.
+
+Docs: `website/src/content/docs/architecture/clustering.md` gained a "Config Epoch collisions"
+subsection replacing the inline gap reference added by issue 47 (which referred to this issue by the
+wrong number, 63).
+
+### Tests
+
+- `frogdb-server/crates/cluster/src/state.rs` -- 7 unit tests on the reconciliation policy
+  (reassignment, minting above the cluster counter, uncontested claims raising the counter, epoch-0
+  exemption, epoch preservation, replica-sharing-primary-epoch, self-claim).
+- `frogdb-server/crates/server/tests/integration_cluster.rs` -- 2 tests injecting a real collision
+  through a live 3-node cluster's leader (`test_add_node_epoch_collision_resolved_by_state_machine`,
+  `test_add_node_without_epoch_preserves_recorded_epoch`), asserting the resolution converges on
+  every node and that `CLUSTER NODES` shows distinct nonzero primary epochs.
+- `frogctl/src/commands/cluster.rs` -- 10 unit tests on parsing, detection, and rendering.
+- `frogctl/tests/integration_cluster.rs` -- 3 end-to-end tests against a live server.
 
 ## Blocked by
 

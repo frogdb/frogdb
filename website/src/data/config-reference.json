@@ -1035,7 +1035,7 @@
           "name": "client-cert-file",
           "type": "string",
           "default": null,
-          "description": "Path to client certificate for outgoing replication/cluster connections.",
+          "description": "Path to client certificate for outgoing replication/cluster connections.\n\nOnly takes effect together with [`Self::client_key_file`]; while only one\nof the two is set the client identity is incomplete and outgoing\nconnections reuse the server identity (with a warning).",
           "config_param": "tls-client-cert-file",
           "mutable": true
         },
@@ -1043,7 +1043,7 @@
           "name": "client-key-file",
           "type": "string",
           "default": null,
-          "description": "Path to client private key for outgoing replication/cluster connections.",
+          "description": "Path to client private key for outgoing replication/cluster connections.\n\nSee [`Self::client_cert_file`] for the half-set-pair behaviour.",
           "config_param": "tls-client-key-file",
           "mutable": true
         },

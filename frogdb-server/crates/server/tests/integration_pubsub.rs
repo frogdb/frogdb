@@ -5941,12 +5941,11 @@ async fn test_stream_events_ported_from_redis_pubsub_tcl() {
 //   (a) the exact error text/kind per subscription kind;
 //   (b) all-or-nothing batch admission (a multi-channel SUBSCRIBE that
 //       would cross the cap must reject in full, not partially apply);
-//   (c) a duplicate-count quirk: `admit_subscriptions` is charged
-//       `args.len()` (raw arg count) while `add_subscription` inserts into a
-//       `HashSet` — so a command containing a duplicate channel name, or a
-//       re-subscribe to an already-held channel, can be charged more
-//       capacity than it will actually consume, spuriously rejecting a
-//       subscribe that would not have grown the subscription set at all.
+//   (c) the cap is charged the real `HashSet` delta, not the raw argument
+//       count: a duplicated name within one command, or a re-subscribe to an
+//       already-held channel, consumes no headroom because the subscription
+//       set does not grow for it (issue 62 — these assertions previously
+//       pinned the opposite, spurious-rejection behavior).
 //
 // The caps themselves (`MAX_SUBSCRIPTIONS_PER_CONNECTION` = 10_000,
 // `MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION` = 1_000,
@@ -6005,9 +6004,9 @@ struct CapKindSpec {
 /// Drive a real client through the full subscription-cap lifecycle for one
 /// kind: fill to 3-below-cap, prove all-or-nothing rejection of an
 /// over-sized batch (with prior subscriptions surviving), prove the exact
-/// boundary admits exactly at the cap, then pin the duplicate-count quirk
-/// two ways — a duplicated brand-new name in one command, and a re-subscribe
-/// to an already-held channel once genuinely full.
+/// boundary admits exactly at the cap, then prove the cap is charged the real
+/// set delta two ways — a duplicated brand-new name in one command, and a
+/// re-subscribe to an already-held channel once genuinely full.
 async fn run_subscription_cap_scenario(spec: CapKindSpec) {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -6074,49 +6073,82 @@ async fn run_subscription_cap_scenario(spec: CapKindSpec) {
         .await;
     assert_eq!(confirmation_count(&resp), (spec.max - 1) as i64);
 
-    // --- (c) duplicate-count quirk, part 1: one real slot remains.
-    // SUBSCRIBE to a brand-new name TWICE in the same command.
-    // `admit_subscriptions` is charged `args.len() == 2`, even though
-    // `add_subscription`'s `HashSet` would only grow by 1 — so this is
-    // spuriously rejected, even though the real growth (+1) would fit
-    // exactly at the cap. Pinned as current (surprising) behavior; see
-    // issue 50/61.
+    // --- (c) charge the real HashSet delta, part 1: one real slot remains.
+    // SUBSCRIBE to a brand-new name TWICE in the same command. The set only
+    // grows by 1, so the batch fits exactly at the cap and both confirmations
+    // report `spec.max`.
+    //
+    // Prior behavior (issue 62, fixed): `admit_subscriptions` was charged the
+    // raw `args.len() == 2`, so this was spuriously rejected with the kind's
+    // limit error even though the real growth (+1) fit.
     let dup_name = format!("{}-dup", spec.prefix);
-    let resp = client
-        .command(&[spec.subscribe_cmd, &dup_name, &dup_name])
+    client
+        .send_only(&[spec.subscribe_cmd, &dup_name, &dup_name])
         .await;
-    assert_eq!(
-        resp,
-        Response::error(spec.limit_error),
-        "{}: a duplicated new name in one command is spuriously rejected by the \
-         args.len()-vs-HashSet quirk (issue 50/61) even though real growth would fit",
-        spec.subscribe_cmd
-    );
+    for i in 0..2 {
+        let resp = client
+            .read_response(Duration::from_secs(20))
+            .await
+            .unwrap_or_else(|| {
+                panic!(
+                    "{}: missing confirmation #{i} for a duplicated new name at the cap",
+                    spec.subscribe_cmd
+                )
+            });
+        assert_eq!(
+            confirmation_count(&resp),
+            spec.max as i64,
+            "{}: a duplicated new name costs one slot, so both confirmations sit at the cap",
+            spec.subscribe_cmd
+        );
+    }
 
-    // The spurious rejection must not have leaked a partial insert: reaching
-    // the cap exactly with a single fresh name must still work right after.
+    // Now genuinely full (`spec.max` held): a *distinct* new name must still
+    // be rejected — the fix changed only the counting, not the cap itself.
     let resp = client
         .command(&[spec.subscribe_cmd, &format!("{}-verify", spec.prefix)])
         .await;
     assert_eq!(
-        confirmation_count(&resp),
-        spec.max as i64,
-        "{}: reaching the cap exactly must still work after the spurious dup rejection",
+        resp,
+        Response::error(spec.limit_error),
+        "{}: a genuinely new name at a full cap must still be rejected",
         spec.subscribe_cmd
     );
 
-    // --- (c) duplicate-count quirk, part 2: now genuinely full (`spec.max`
-    // held). Re-subscribing to an ALREADY-HELD channel is logically a no-op
-    // (the HashSet does not grow), but `admit_subscriptions` still charges
-    // +1 for it with no "already held" carve-out, so it is rejected too.
+    // --- (c) part 2: re-subscribing to an ALREADY-HELD channel at a full cap
+    // is a no-op for the HashSet, so it is admitted and simply re-confirms the
+    // unchanged count.
+    //
+    // Prior behavior (issue 62, fixed): charged +1 with no "already held"
+    // carve-out, so idempotent re-subscribe failed exactly when the connection
+    // was maximally subscribed.
     let resp = client.command(&[spec.subscribe_cmd, &survivor]).await;
     assert_eq!(
-        resp,
-        Response::error(spec.limit_error),
-        "{}: re-subscribing to an already-held channel at a full cap is spuriously \
-         rejected by the same quirk (issue 50/61)",
+        confirmation_count(&resp),
+        spec.max as i64,
+        "{}: re-subscribing to an already-held channel at a full cap must succeed as a no-op",
         spec.subscribe_cmd
     );
+
+    // A duplicated already-held name in one command is likewise free.
+    let resp_pair = {
+        client
+            .send_only(&[spec.subscribe_cmd, &survivor, &survivor])
+            .await;
+        [
+            client.read_response(Duration::from_secs(20)).await,
+            client.read_response(Duration::from_secs(20)).await,
+        ]
+    };
+    for resp in resp_pair {
+        let resp = resp.expect("confirmation for a repeated already-held name");
+        assert_eq!(
+            confirmation_count(&resp),
+            spec.max as i64,
+            "{}: repeating an already-held name consumes no headroom",
+            spec.subscribe_cmd
+        );
+    }
 
     server.shutdown().await;
 }

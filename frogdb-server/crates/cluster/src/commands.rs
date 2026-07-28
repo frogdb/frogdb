@@ -4,7 +4,7 @@ use crate::types::{
     ClusterCommand, ClusterError, ClusterEvent, ClusterResponse, NodeRole, SlotMigration,
 };
 
-use super::state::ClusterState;
+use super::state::{ClusterState, EpochReconciliation};
 
 impl ClusterState {
     /// Apply a command to the state, returning the response and any
@@ -22,7 +22,7 @@ impl ClusterState {
         let mut inner = self.inner.write();
 
         match cmd {
-            ClusterCommand::AddNode { node } => {
+            ClusterCommand::AddNode { mut node } => {
                 let existed = inner.nodes.contains_key(&node.id);
                 if existed {
                     tracing::info!(node_id = node.id, addr = %node.addr, "Updated node in cluster");
@@ -47,6 +47,30 @@ impl ClusterState {
                             node_version = %node.version,
                             cluster_version = %majority,
                             "Node joining with different binary version (mixed-version cluster)"
+                        );
+                    }
+                }
+
+                // Resolve the epoch the incoming node claims before it lands in
+                // the table: `AddNode` is the one path that carries an epoch the
+                // cluster-wide counter did not mint, so it is the one path that
+                // can introduce a collision.
+                match inner.reconcile_incoming_epoch(&mut node) {
+                    EpochReconciliation::Accepted => {}
+                    EpochReconciliation::Preserved(epoch) => {
+                        tracing::debug!(
+                            node_id = node.id,
+                            epoch,
+                            "Node re-registered without an epoch; kept its recorded config_epoch"
+                        );
+                    }
+                    EpochReconciliation::Reassigned { claimed, assigned } => {
+                        tracing::warn!(
+                            node_id = node.id,
+                            claimed_epoch = claimed,
+                            assigned_epoch = assigned,
+                            "config_epoch collision on join: claimed epoch is already held by \
+                             another primary, assigned a fresh epoch"
                         );
                     }
                 }

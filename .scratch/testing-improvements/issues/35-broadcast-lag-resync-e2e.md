@@ -130,3 +130,77 @@ scope for this test task. Filed as a follow-up.
   partial resync (large backlog) to exercise live convergence.
 - Harness: added `TestServerConfig.replication_replica_write_timeout_ms` and
   `replication_split_brain_buffer_size` overrides.
+
+### Addendum 2026-07-28 — Linux-only failure, and the real replication bug behind it
+
+The test as landed passed on macOS but failed **deterministically on the aarch64 Linux testbox**
+(both rstest cases) at the disconnect assertion:
+
+```
+assertion `left == right` failed: primary must disconnect the stalled replica
+(connected_slaves→0) once it exceeds the lag threshold
+  left: Some(1)
+ right: Some(0)
+```
+
+#### 1. Environment: the flood was smaller than the kernel's socket buffers
+
+Every disconnect trigger in `replica_session.rs::start_streaming` needs the primary's *userspace*
+to notice the stall: the write timeout only fires if `write_all` blocks, and `RecvError::Lagged`
+only fires if the write task stops draining the broadcast receiver — which likewise requires a
+blocked write. A write only blocks once `primary SO_SNDBUF + proxy SO_RCVBUF` are full, and both
+are per-kernel. macOS keeps the loopback send buffer small; Linux autotunes it to `tcp_wmem` max
+(testbox: `net.ipv4.tcp_wmem = 4096 16384 4194304`, i.e. 4 MiB), which swallowed the original
+flood whole — 20_000 unpadded SETs is only ~1.4 MiB.
+
+Measured on the testbox with an instrumented copy of the same proxy/flood:
+
+| flood bytes | proxy `SO_RCVBUF` | disconnect? |
+|---|---|---|
+| ~1.4 MiB (as landed) | default (autotuned) | no — `connected_slaves` stayed 1 |
+| ~1.4 MiB | 128 KiB | no — bytes pile into the *sender's* buffer regardless of window |
+| ~6.5 MiB | default | yes, mid-flood: `WARN … Write to replica timed out … timeout_ms=1000` |
+
+The middle row repeats issue 29's finding for
+`test_slow_subscriber_output_buffer_bound_disconnects`: shrinking the receiver alone does not
+bound the ceiling, the flood has to exceed it.
+
+Test fix: `LagProxy` pins `SO_RCVBUF` (`LAG_PROXY_RCVBUF_BYTES` = 128 KiB) on the leg it dials to
+the primary, and flood values carry `FLOOD_VALUE_PAD` (800 B) of padding — 20_000 frames x ~840 B
+≈ 16 MiB, several times the 4 MiB Linux ceiling. Frame count is unchanged (still past the
+10_000-slot broadcast cap) and 16 MiB stays inside the 100k-entry / 64 MiB backlog, so the
+reconnect still earns the partial resync the convergence assertions depend on.
+
+#### 2. Product bug the fixed test then exposed: writes made with zero replicas connected were never replicated
+
+With the disconnect finally firing on Linux, the test failed at the *next* assertion — the replica
+reconnected, `master_link_status:up`, `WAIT` acked, and its keyspace froze at ~7.4k of the
+primary's 20_001 keys. The primary's own log gave it away:
+
+```
+WARN  frogdb_replication::replica_session: Write to replica timed out, disconnecting replica_id=1
+INFO  frogdb_replication::primary: PSYNC -> partial resync (+CONTINUE) replay_from=10285 resume=6358797
+```
+
+`resume=6358797` — the primary's live offset was ~6.36 MB after applying ~16.8 MB of writes. The
+broadcast gate in `core/src/shard/post_execution.rs` was
+`ReplicationBroadcaster::is_active() == tracker.replica_count() > 0`, so from the instant the
+laggy replica was dropped until it reconnected (~3.4 s here) every write skipped offset stamping
+*and* the backlog. The replica then reconnected inside the stale window, was granted `+CONTINUE`,
+and resumed past the hole — silently divergent, with every health signal green. Any deployment
+that runs with `self_fence_on_replica_loss = false` (as this test does, and as any
+availability-over-consistency operator would) hits this on every lag-disconnect.
+
+Product fix (minimal, Redis-shaped): the gate is now
+`replica_count() > 0 || replay.has_resume_history()` — a primary keeps stamping and recording for
+as long as its backlog can still serve a `+CONTINUE`, exactly as Redis keeps `repl_backlog` alive
+and advances `master_repl_offset` after the last replica leaves. A primary that never had a
+replica has an empty backlog and stays inactive, so standalone writes pay nothing. Unit-guarded by
+`primary::tests::broadcast_gate_stays_open_while_backlog_can_resume`.
+
+Known gap left open (follow-up): FrogDB has no `repl-backlog-ttl`, so once a replica has ever
+connected the backlog (and the recording cost) lives for the life of the process. Bounded by
+`split_brain_buffer_size` / `split_brain_buffer_max_mb`, so it is a fixed cost, not a leak.
+
+Verified after both fixes: 3/3 clean on the Linux testbox, 3/3 clean on macOS, plus the full
+workspace suite.

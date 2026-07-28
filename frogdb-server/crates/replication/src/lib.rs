@@ -99,7 +99,13 @@ pub trait ReplicationBroadcaster: Send + Sync {
     /// The new replication offset after this command.
     fn broadcast_command_on_shard(&self, shard_id: u16, cmd_name: &str, args: &[Bytes]) -> u64;
 
-    /// Check if replication is active (has connected replicas).
+    /// Whether writes must be stamped and broadcast right now.
+    ///
+    /// True while replicas are connected, and — when none are — while the
+    /// primary's backlog still holds a resume point a reconnecting replica could
+    /// be continued from: skipping those writes would punch a hole a later
+    /// `+CONTINUE` cannot fill (see
+    /// [`primary::PartialSyncReplay::has_resume_history`]).
     fn is_active(&self) -> bool;
 
     /// Get the current replication offset.

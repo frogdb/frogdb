@@ -7104,6 +7104,196 @@ async fn test_cluster_info_epoch_monotonic_across_failover() {
 }
 
 // ============================================================================
+// config_epoch collision resolution at AddNode (issue 64)
+// ============================================================================
+
+/// Build an `AddNode` command for a primary that claims `epoch`, the way a node
+/// rejoining with restored on-disk state — or a node from an independently
+/// bootstrapped sub-cluster being `CLUSTER MEET`-ed in — reports itself.
+fn add_node_claiming(node_id: u64, port: u16, epoch: u64) -> frogdb_core::cluster::ClusterCommand {
+    let mut node = frogdb_core::cluster::NodeInfo::new_primary(
+        node_id,
+        format!("127.0.0.1:{}", port).parse().unwrap(),
+        format!("127.0.0.1:{}", port + 10000).parse().unwrap(),
+    );
+    node.config_epoch = epoch;
+    frogdb_core::cluster::ClusterCommand::AddNode { node }
+}
+
+/// Injects a genuine `config_epoch` collision and asserts the cluster resolves
+/// it instead of recording two primaries at the same epoch.
+///
+/// `AddNode` is the only path that carries an epoch the cluster-wide counter did
+/// not mint, so it is the only path that can introduce a collision. Two
+/// synthetic primaries are proposed straight through Raft, both claiming epoch
+/// 42: the first is uncontested, the second collides. The expected resolution is
+/// that the incumbent keeps 42 and the joiner is admitted with a freshly minted,
+/// strictly higher epoch.
+///
+/// The resolution is computed inside the state machine, so every node derives
+/// the same answer from the same log entry — asserted below on all three nodes,
+/// which is the property that lets FrogDB skip Redis's gossip tie-break.
+#[tokio::test]
+async fn test_add_node_epoch_collision_resolved_by_state_machine() {
+    const CLAIMED_EPOCH: u64 = 42;
+    const INCUMBENT_ID: u64 = 0xA11CE;
+    const JOINER_ID: u64 = 0xB0B;
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    let leader = harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    let raft = harness.node(leader).unwrap().raft().unwrap().clone();
+    raft.client_write(add_node_claiming(INCUMBENT_ID, 7401, CLAIMED_EPOCH))
+        .await
+        .expect("uncontested claim must commit");
+    raft.client_write(add_node_claiming(JOINER_ID, 7402, CLAIMED_EPOCH))
+        .await
+        .expect("colliding claim must be admitted, not rejected");
+
+    let leader_state = harness.node(leader).unwrap().cluster_state().unwrap();
+    let incumbent = leader_state.get_node(INCUMBENT_ID).unwrap();
+    let joiner = leader_state.get_node(JOINER_ID).unwrap();
+
+    assert_eq!(
+        incumbent.config_epoch, CLAIMED_EPOCH,
+        "the incumbent keeps the contested epoch"
+    );
+    assert_ne!(
+        joiner.config_epoch, CLAIMED_EPOCH,
+        "the joining node must not be recorded at the colliding epoch"
+    );
+    assert!(
+        joiner.config_epoch > CLAIMED_EPOCH,
+        "the minted epoch must exceed every epoch already claimed: got {}",
+        joiner.config_epoch
+    );
+    assert!(
+        leader_state.config_epoch() >= joiner.config_epoch,
+        "the cluster-wide counter must still dominate every per-node epoch: \
+         counter={}, joiner={}",
+        leader_state.config_epoch(),
+        joiner.config_epoch
+    );
+
+    // Every node applies the same log entry through the same transition, so the
+    // resolution must be identical everywhere — no node is left believing the
+    // joiner still holds 42.
+    let resolved = joiner.config_epoch;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    for node_id in harness.node_ids() {
+        let cs = harness.node(node_id).unwrap().cluster_state().unwrap();
+        loop {
+            let seen = cs.get_node(JOINER_ID).map(|n| n.config_epoch);
+            if seen == Some(resolved) {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "node {} should converge on the resolved epoch {} (saw {:?})",
+                node_id,
+                resolved,
+                seen
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            cs.get_node(INCUMBENT_ID).map(|n| n.config_epoch),
+            Some(CLAIMED_EPOCH),
+            "node {} should agree the incumbent kept the contested epoch",
+            node_id
+        );
+    }
+
+    // The detection surface (`CLUSTER NODES`, what `frogctl cluster check`
+    // reads) now shows no two primaries at the same nonzero epoch.
+    let nodes = parse_cluster_nodes(
+        &harness
+            .node(leader)
+            .unwrap()
+            .send("CLUSTER", &["NODES"])
+            .await,
+    )
+    .unwrap();
+    let mut claimed: Vec<u64> = nodes
+        .iter()
+        .filter(|n| n.is_master() && n.config_epoch != 0)
+        .map(|n| n.config_epoch)
+        .collect();
+    let total = claimed.len();
+    claimed.sort_unstable();
+    claimed.dedup();
+    assert_eq!(
+        claimed.len(),
+        total,
+        "CLUSTER NODES must report distinct nonzero config epochs per primary, got {:?}",
+        nodes
+            .iter()
+            .map(|n| (n.id.clone(), n.config_epoch))
+            .collect::<Vec<_>>()
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// A node re-registering without an epoch (`NodeInfo::new_primary` starts at 0,
+/// which every self-registration and bootstrap seed uses) must not have its
+/// recorded `config_epoch` reset — a reset would free the epoch for another node
+/// to claim, manufacturing the collision this transition exists to prevent.
+#[tokio::test]
+async fn test_add_node_without_epoch_preserves_recorded_epoch() {
+    const NODE_ID: u64 = 0xC0FFEE;
+    const EPOCH: u64 = 11;
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    let leader = harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    let raft = harness.node(leader).unwrap().raft().unwrap().clone();
+    raft.client_write(add_node_claiming(NODE_ID, 7403, EPOCH))
+        .await
+        .unwrap();
+    // Re-register at a new client address carrying no epoch, exactly as a
+    // restarted node's self-registration does.
+    raft.client_write(add_node_claiming(NODE_ID, 7404, 0))
+        .await
+        .unwrap();
+
+    let node = harness
+        .node(leader)
+        .unwrap()
+        .cluster_state()
+        .unwrap()
+        .get_node(NODE_ID)
+        .unwrap();
+    assert_eq!(
+        node.config_epoch, EPOCH,
+        "recorded epoch survives re-register"
+    );
+    assert_eq!(
+        node.addr,
+        "127.0.0.1:7404".parse().unwrap(),
+        "the rest of the record is still updated"
+    );
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
 // Tier 18: Writable Cluster Under Failover Stress
 // ============================================================================
 

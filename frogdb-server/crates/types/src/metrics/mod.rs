@@ -133,6 +133,42 @@ mod tests {
         assert!(definition_for("frogdb_not_a_metric").is_none());
     }
 
+    /// A `///` description spanning several source lines arrives at
+    /// `define_metrics!` as one `#[doc]` attribute per line. The macro must
+    /// join them: keeping only the last line silently truncated the HELP text
+    /// of every multi-line metric mid-clause (`"full value Put)."`), and that
+    /// string is what `/metrics`, the docs site and the Grafana panels show.
+    #[test]
+    fn multi_line_doc_comment_becomes_one_help_string() {
+        use definitions::WalMergeOperands;
+        let def = definition_for(WalMergeOperands::NAME).expect("registered");
+        assert_eq!(
+            def.help,
+            "Total HyperLogLog register-delta operands persisted as WAL merges \
+             (dense-HLL PFADD writes that took the merge-delta path instead of a \
+             full value Put)."
+        );
+    }
+
+    /// No metric's HELP text may start mid-sentence — the truncation signature
+    /// of the join bug is a description opening in lowercase or on a closing
+    /// bracket. (Descriptions legitimately starting with a lowercase metric or
+    /// identifier name would need an exemption here; none exist today.)
+    #[test]
+    fn every_help_string_reads_as_a_full_description() {
+        for def in ALL_METRICS {
+            let first = def.help.chars().next().unwrap_or_else(|| {
+                panic!("{}: metric has no HELP text", def.name);
+            });
+            assert!(
+                first.is_uppercase(),
+                "{}: HELP text looks truncated mid-sentence: {:?}",
+                def.name,
+                def.help
+            );
+        }
+    }
+
     #[test]
     fn handle_constants_match_registry_entry() {
         use definitions::LuaScriptsErrors;

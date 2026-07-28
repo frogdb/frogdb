@@ -185,13 +185,18 @@ Each command declares an execution strategy that determines how it is dispatched
 FrogDB validates commands in this order (matching Redis):
 
 1. **Parse** - Extract command name and args from RESP frame
-2. **Lookup** - Find command in registry (unknown -> ERR unknown command)
-3. **Arity** - Check argument count (wrong -> ERR wrong number of arguments)
-4. **Auth** - Check authentication state if required
-5. **ACL** - Check user permissions
+2. **Auth** - Check authentication state if required
+3. **ACL** - Check user permissions
+4. **Lookup** - Find command in registry (unknown -> ERR unknown command)
+5. **Arity** - Check argument count (wrong -> ERR wrong number of arguments)
 6. **Execute** - Run command logic
 
-Arity is checked BEFORE auth for performance (reject malformed commands early without auth overhead).
+Auth and ACL are checked BEFORE the command lookup, matching Redis's
+`processCommand`: an unauthenticated client is answered `NOAUTH` rather than
+being told which command names exist. Lookup and arity share one pre-dispatch
+guard (the `CommandLookup` stage of `server/src/connection/dispatch.rs`), so
+both are rejections — they are counted in `rejected_calls`, never
+`failed_calls`.
 
 ### Subcommand Arity Handling
 

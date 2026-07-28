@@ -15,7 +15,8 @@
 //! - [`PreDispatchView::validate_cluster_slots`] — MOVED/ASK/CROSSSLOT routing
 //! - [`PreDispatchView::check_migrating_multikey`] — TRYAGAIN during slot rehash
 //! - [`PreDispatchView::pubsub_mode_ping`] — RESP2 `["pong", msg]` framing
-//! - [`PreDispatchView::arity_check`] — wrong-arg-count rejection
+//! - [`PreDispatchView::command_lookup_check`] — unknown-command and
+//!   wrong-arg-count rejection
 //! - [`PreDispatchView::try_queue_in_transaction`] — MULTI queuing (+ slot
 //!   pre-validation) and [`PreDispatchView::queue_command`]
 //!
@@ -44,8 +45,9 @@ use crate::slot_migration::{RouteDecision, RouteOutcome, SlotValidator, redirect
 /// Everything the pre-dispatch gauntlet's *guard* stages read or mutate —
 /// connection-mode state, the registry, cluster/admin dep handles, per-command
 /// scratch — and nothing on the socket. Constructible in a unit test with no
-/// TCP pair (contrast the old `make_test_handler`). The `PreChecks`, `Arity`,
-/// `PubSubPing`, `TransactionQueue`, `ClusterSlotValidation`, and
+/// TCP pair (contrast the old `make_test_handler`). The `PreChecks`,
+/// `CommandLookup`, `PubSubPing`, `TransactionQueue`, `ClusterSlotValidation`,
+/// and
 /// `MigratingTryAgain` stages are pure functions over this view.
 ///
 /// The view holds `&mut` borrows only for the synchronous guard body (or, for
@@ -459,11 +461,23 @@ impl PreDispatchView<'_> {
         Some(vec![response])
     }
 
-    /// Validate arity (`Arity` stage). Returns `Some(Response)` with the
-    /// wrong-arg-count error if the command's argument count is invalid, `None`
-    /// otherwise. Ordered *before* the pause gate so syntax errors bypass pause.
-    pub(crate) fn arity_check(&self, cmd_name: &str, args: &[Bytes]) -> Option<Response> {
-        let entry = self.registry.get_entry(cmd_name)?;
+    /// Resolve the command in the registry and validate its arity
+    /// (`CommandLookup` stage). Returns `Some(Response)` with the
+    /// unknown-command or wrong-arg-count error, `None` if the command exists
+    /// and its argument count is valid.
+    ///
+    /// Both rejections are decided here — before any executor runs — so they
+    /// are accounted as `rejected_calls`, matching Redis's `processCommand`,
+    /// which rejects an unknown command (and a wrong arity) ahead of `call()`.
+    /// Ordered *before* the pause gate so syntax errors bypass `CLIENT PAUSE`,
+    /// and *after* the transaction-queuing stage so an unknown command inside a
+    /// `MULTI` still aborts the transaction at queue time.
+    pub(crate) fn command_lookup_check(&self, cmd_name: &str, args: &[Bytes]) -> Option<Response> {
+        let Some(entry) = self.registry.get_entry(cmd_name) else {
+            return Some(Response::error(format!(
+                "ERR unknown command '{cmd_name}', with args beginning with:"
+            )));
+        };
         if entry.arity().check(args.len()) {
             return None;
         }
@@ -922,10 +936,10 @@ mod tests {
     }
 
     #[test]
-    fn test_arity_check_rejects_wrong_argument_count() {
+    fn test_command_lookup_check_rejects_wrong_argument_count() {
         let mut fx = ViewFixture::new(None);
         // GET takes exactly one argument; zero args is an arity error.
-        match fx.view().arity_check("GET", &[]) {
+        match fx.view().command_lookup_check("GET", &[]) {
             Some(Response::Error(msg)) => assert!(
                 msg.starts_with(b"ERR wrong number of arguments"),
                 "got: {}",
@@ -936,9 +950,25 @@ mod tests {
         // One argument is valid.
         assert!(
             fx.view()
-                .arity_check("GET", &[Bytes::from_static(b"k")])
+                .command_lookup_check("GET", &[Bytes::from_static(b"k")])
                 .is_none()
         );
+    }
+
+    /// An unrecognized command name is rejected by the same guard, so the
+    /// error is decided pre-dispatch (a `rejected_call`) rather than falling
+    /// through to the terminal `Execute` stage (a `failed_call`).
+    #[test]
+    fn test_command_lookup_check_rejects_unknown_command() {
+        let mut fx = ViewFixture::new(None);
+        match fx.view().command_lookup_check("ASDFNOTACOMMAND", &[]) {
+            Some(Response::Error(msg)) => assert!(
+                msg.starts_with(b"ERR unknown command 'ASDFNOTACOMMAND'"),
+                "got: {}",
+                String::from_utf8_lossy(&msg)
+            ),
+            other => panic!("expected unknown-command error, got: {other:?}"),
+        }
     }
 
     #[test]

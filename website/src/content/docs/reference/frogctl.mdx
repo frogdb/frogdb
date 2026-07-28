@@ -43,8 +43,8 @@ frogctl scan --match "user:*"
 # Watch live commands
 frogctl watch
 
-# Cluster info
-frogctl cluster info
+# Check cluster consistency (exits 1 if any check fails)
+frogctl cluster check
 
 # Backup
 frogctl backup snapshot

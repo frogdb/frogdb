@@ -22,9 +22,10 @@ use crate::connection::conn_command::ConnectionCommand;
 /// top-to-bottom layout of an `if`-ladder.
 ///
 /// Two stage flavors:
-/// - **Guard stages** (`PreChecks`, `Arity`, `PubSubPing`, `TransactionQueue`,
-///   `ClusterSlotValidation`, `MigratingTryAgain`) are pure decisions over the
-///   socketless [`PreDispatchView`](crate::connection::guards::PreDispatchView).
+/// - **Guard stages** (`PreChecks`, `CommandLookup`, `PubSubPing`,
+///   `TransactionQueue`, `ClusterSlotValidation`, `MigratingTryAgain`) are pure
+///   decisions over the socketless
+///   [`PreDispatchView`](crate::connection::guards::PreDispatchView).
 /// - **Dispatch stages** (`PreAuthIntercept`, `ResetIntercept`,
 ///   `TransactionControl`, `PauseGate`, `ConnectionCommand`, `PsyncIntercept`,
 ///   `WaitIntercept`, `ServerWide`, `ClusterSlotSubcommand`, `Execute`)
@@ -44,8 +45,8 @@ pub(crate) enum DispatchStage {
     TransactionControl,
     /// queue if in MULTI (+ slot pre-validate).
     TransactionQueue,
-    /// wrong-arg-count error, before pause.
-    Arity,
+    /// unknown-command / wrong-arg-count error, before pause.
+    CommandLookup,
     /// CLIENT PAUSE wait, after queuing.
     PauseGate,
     /// CONFIG/CLIENT/INFO/ASKING/… registry union (capability from the spec).
@@ -66,6 +67,47 @@ pub(crate) enum DispatchStage {
     Execute,
 }
 
+impl DispatchStage {
+    /// Whether an error produced by this stage is a *rejection* (the command
+    /// never began executing → `rejected_calls`) rather than a *failure* (it
+    /// ran and errored → `failed_calls`). This is exactly the guard/dispatch
+    /// split of the two stage flavors documented on [`DispatchStage`]: a guard
+    /// decides without running anything, a dispatch stage terminates into a
+    /// command executor.
+    ///
+    /// Redis draws the same line: `processCommand`'s pre-`call()` refusals
+    /// (`rejectCommand*`, cluster redirects, unknown command, arity) count as
+    /// `rejected_calls`, while an error reply raised from inside `call()`
+    /// counts as `failed_calls` — including AUTH failures, `NOSCRIPT`, and
+    /// `EXECABORT`, all of which are dispatch stages here.
+    ///
+    /// Exhaustive on purpose: a new stage must state its disposition rather
+    /// than inherit a default.
+    const fn rejects_pre_execution(self) -> bool {
+        match self {
+            // Guard stages: pure decisions over the `PreDispatchView`.
+            Self::PreChecks
+            | Self::CommandLookup
+            | Self::PubSubPing
+            | Self::TransactionQueue
+            | Self::ClusterSlotValidation
+            | Self::MigratingTryAgain => true,
+            // Dispatch stages: they terminate into a command executor, so an
+            // error reply from one is a command that ran and failed.
+            Self::PreAuthIntercept
+            | Self::ResetIntercept
+            | Self::TransactionControl
+            | Self::PauseGate
+            | Self::ConnectionCommand
+            | Self::PsyncIntercept
+            | Self::WaitIntercept
+            | Self::ServerWide
+            | Self::ClusterSlotSubcommand
+            | Self::Execute => false,
+        }
+    }
+}
+
 /// THE canonical pre-dispatch order. The single source of truth for the
 /// gauntlet's sequence; [`ConnectionHandler::route_and_execute_with_transaction`]
 /// iterates this array. `Execute` is last and is the only stage that never
@@ -77,7 +119,7 @@ pub(crate) const PRE_DISPATCH_ORDER: [DispatchStage; 16] = [
     DispatchStage::PubSubPing,
     DispatchStage::TransactionControl,
     DispatchStage::TransactionQueue,
-    DispatchStage::Arity,
+    DispatchStage::CommandLookup,
     DispatchStage::PauseGate,
     DispatchStage::ConnectionCommand,
     DispatchStage::PsyncIntercept,
@@ -303,7 +345,20 @@ impl ConnectionHandler {
         for stage in PRE_DISPATCH_ORDER {
             match self.run_stage(stage, cmd, cmd_name).await {
                 StageOutcome::Continue => {}
-                StageOutcome::ShortCircuit(responses) => return Dispatched::Responses(responses),
+                StageOutcome::ShortCircuit(responses) => {
+                    // Error accounting happens *here*, once, for whichever
+                    // stage ended dispatch — so every stage is covered by
+                    // construction and a new stage cannot silently skip
+                    // errorstats (the bug this centralization fixed).
+                    for response in &responses {
+                        self.record_error_response(
+                            response,
+                            stage.rejects_pre_execution(),
+                            cmd_name,
+                        );
+                    }
+                    return Dispatched::Responses(responses);
+                }
                 StageOutcome::Handoff(handoff) => return Dispatched::Handoff(handoff),
             }
         }
@@ -358,7 +413,6 @@ impl ConnectionHandler {
             DispatchStage::PreChecks => {
                 let error_response = self.pre_dispatch_view().run_pre_checks(cmd_name, &cmd.args);
                 if let Some(error_response) = error_response {
-                    self.record_error_response(&error_response, true, cmd_name);
                     return StageOutcome::ShortCircuit(vec![error_response]);
                 }
                 StageOutcome::Continue
@@ -418,13 +472,19 @@ impl ConnectionHandler {
                 }
             }
 
-            // Validate arity BEFORE the pause check so that commands with wrong
-            // argument counts return an immediate error even when paused (test:
-            // syntax errors bypass pause).
-            DispatchStage::Arity => {
-                let err = self.pre_dispatch_view().arity_check(cmd_name, &cmd.args);
+            // Resolve the command in the registry and validate its arity BEFORE
+            // the pause check, so unknown commands and wrong argument counts
+            // return an immediate error even when paused (test: syntax errors
+            // bypass pause). Both are pre-execution rejections, matching Redis's
+            // `processCommand`, which rejects an unknown command ahead of
+            // `call()`. Runs *after* `TransactionQueue` so an unknown command
+            // inside a MULTI is still rejected by `queue_command`, which also
+            // aborts the transaction.
+            DispatchStage::CommandLookup => {
+                let err = self
+                    .pre_dispatch_view()
+                    .command_lookup_check(cmd_name, &cmd.args);
                 if let Some(err) = err {
-                    self.record_error_response(&err, true, cmd_name);
                     return StageOutcome::ShortCircuit(vec![err]);
                 }
                 StageOutcome::Continue
@@ -603,10 +663,9 @@ impl ConnectionHandler {
                 }
 
                 // Handle internal action signals (blocking, raft, migrate).
+                // The error accounting for whatever this produces is the
+                // driver's job (see `route_and_execute_with_transaction`).
                 let final_response = self.handle_internal_action(response).await;
-
-                // Record failed call if execution returned an error.
-                self.record_error_response(&final_response, false, cmd_name);
 
                 StageOutcome::ShortCircuit(vec![final_response])
             }
@@ -615,22 +674,67 @@ impl ConnectionHandler {
 
     /// Classify and record an error response for error statistics.
     ///
-    /// `is_rejected` = true means the command was rejected before execution (pre-checks, arity).
-    /// `is_rejected` = false means the command failed during execution.
-    fn record_error_response(&self, response: &Response, is_rejected: bool, cmd_name: &str) {
-        if let Response::Error(bytes) = response {
-            let prefix = frogdb_core::extract_error_prefix(bytes);
-            let error_stats = &self.admin.client_registry.error_stats;
-            if is_rejected {
-                error_stats.record_rejected(prefix);
+    /// `is_rejected` = true means the command was rejected before it began
+    /// executing (`rejected_calls`); false means it began executing and failed
+    /// (`failed_calls`). Callers pass the *stage's* disposition
+    /// ([`DispatchStage::rejects_pre_execution`]); this function still upgrades
+    /// the classification for the pre-execution refusals that can only be
+    /// detected downstream (see [`PRE_EXECUTION_ERROR_PREFIXES`]).
+    ///
+    /// Per-command (`cmdstat_*`) accounting is applied only for command names
+    /// the registry knows: see [`Self::records_command_stats`].
+    pub(crate) fn record_error_response(
+        &self,
+        response: &Response,
+        is_rejected: bool,
+        cmd_name: &str,
+    ) {
+        let Response::Error(bytes) = response else {
+            return;
+        };
+        let prefix = frogdb_core::extract_error_prefix(bytes);
+        let is_rejected = is_rejected || PRE_EXECUTION_ERROR_PREFIXES.contains(&prefix);
+        let error_stats = &self.admin.client_registry.error_stats;
+        let per_command = self.records_command_stats(cmd_name);
+        if is_rejected {
+            error_stats.record_rejected(prefix);
+            if per_command {
                 self.admin.client_registry.record_command_rejected(cmd_name);
-            } else {
-                error_stats.record_failed(prefix);
+            }
+        } else {
+            error_stats.record_failed(prefix);
+            if per_command {
                 self.admin.client_registry.record_command_failed(cmd_name);
             }
         }
     }
+
+    /// Whether `cmd_name` may key a per-command statistic (`cmdstat_<name>`,
+    /// latency histogram).
+    ///
+    /// Only registered command names qualify. An unrecognized name is raw
+    /// client input, so keying a stats map by it lets any client grow those
+    /// maps without bound — the cardinality guard `errorstat_*` already has in
+    /// `MAX_ERROR_TYPES`. Redis reaches the same place structurally: its
+    /// per-command counters live *on the command table entry*, so a command
+    /// that isn't in the table simply has nowhere to count.
+    pub(crate) fn records_command_stats(&self, cmd_name: &str) -> bool {
+        self.core.registry.get_entry(cmd_name).is_some()
+    }
 }
+
+/// Error prefixes that always denote a *rejection* — the command was refused
+/// and never ran — even when the refusal is only detectable downstream of the
+/// pre-dispatch gauntlet.
+///
+/// `OOM`: the `maxmemory` gate lives shard-side (`core/src/shard/eviction.rs`,
+/// `check_memory_for_write`) because the memory accounting it reads is the
+/// shard's own, so it fires inside the terminal `Execute` stage — but it fires
+/// *before* the write executes and nothing is mutated. Redis performs the same
+/// check in `processCommand` and counts it in `rejected_calls`; classifying it
+/// here keeps FrogDB's split faithful without hoisting a shard-local memory
+/// read onto the connection's hot path.
+const PRE_EXECUTION_ERROR_PREFIXES: &[&str] = &["OOM"];
 
 #[cfg(test)]
 mod tests {
@@ -659,7 +763,7 @@ mod tests {
             PubSubPing,
             TransactionControl,
             TransactionQueue,
-            Arity,
+            CommandLookup,
             PauseGate,
             ConnectionCommand,
             PsyncIntercept,
@@ -707,8 +811,18 @@ mod tests {
             // MULTI/EXEC/DISCARD control is recognized before the queuing stage
             // that would otherwise swallow them as ordinary queued commands.
             (TransactionControl, TransactionQueue),
-            // Arity runs before pause so syntax errors bypass CLIENT PAUSE.
-            (Arity, PauseGate),
+            // Command lookup (unknown command + arity) runs before pause so
+            // syntax errors bypass CLIENT PAUSE.
+            (CommandLookup, PauseGate),
+            // …and after queuing, so an unknown/wrong-arity command inside a
+            // MULTI is rejected by `queue_command`, which also aborts the
+            // transaction (rejecting it here instead would leave the
+            // transaction live).
+            (TransactionQueue, CommandLookup),
+            // Redis rejects an unauthenticated client with NOAUTH before it
+            // reports an unknown command name, so the pre-checks gate fronts
+            // the lookup.
+            (PreChecks, CommandLookup),
             // Queued MULTI commands must not block on pause.
             (TransactionQueue, PauseGate),
             // Queued commands slot-validate at queue time; the standalone
@@ -744,6 +858,46 @@ mod tests {
             assert!(
                 order_index(a) < order_index(b),
                 "{a:?} must run strictly before {b:?} in PRE_DISPATCH_ORDER"
+            );
+        }
+    }
+
+    /// Every stage's error disposition, pinned as data: `true` = an error from
+    /// this stage is a `rejected_call` (nothing executed), `false` = a
+    /// `failed_call` (an executor ran and errored). Guards the split the INFO
+    /// `commandstats` contract exposes — e.g. flipping `ConnectionCommand` to
+    /// "rejected" would silently misreport every `NOSCRIPT` as a rejection.
+    #[test]
+    fn stage_error_disposition_is_the_guard_dispatch_split() {
+        use DispatchStage::*;
+        let expected: &[(DispatchStage, bool)] = &[
+            (PreAuthIntercept, false),
+            (PreChecks, true),
+            (ResetIntercept, false),
+            (PubSubPing, true),
+            (TransactionControl, false),
+            (TransactionQueue, true),
+            (CommandLookup, true),
+            (PauseGate, false),
+            (ConnectionCommand, false),
+            (PsyncIntercept, false),
+            (WaitIntercept, false),
+            (ServerWide, false),
+            (ClusterSlotSubcommand, false),
+            (ClusterSlotValidation, true),
+            (MigratingTryAgain, true),
+            (Execute, false),
+        ];
+        assert_eq!(
+            expected.len(),
+            PRE_DISPATCH_ORDER.len(),
+            "every stage must declare an error disposition"
+        );
+        for &(stage, want) in expected {
+            assert_eq!(
+                stage.rejects_pre_execution(),
+                want,
+                "{stage:?} error disposition changed"
             );
         }
     }
