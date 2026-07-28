@@ -828,6 +828,14 @@
           "mutable": false
         },
         {
+          "name": "pubsub-output-buffer-hard-limit",
+          "type": "integer",
+          "default": 33554432,
+          "description": "Hard limit, in bytes, on the pub/sub messages buffered server-side for a\nsingle slow / non-reading subscriber. Once a connection's pending\ndelivery queue would exceed this, further messages are dropped and the\nconnection is torn down, so a stalled subscriber cannot force unbounded\nmemory growth. Mirrors Redis's `client-output-buffer-limit pubsub` hard\nlimit (default 32mb). `0` disables the bound (legacy unbounded delivery).\n\nStartup-fixed: consumed when a connection lazily allocates its pub/sub\nchannel, so `CONFIG GET` reports the honest startup value and `CONFIG\nSET` is rejected (immutable), matching the `json-max-size` treatment.",
+          "config_param": "pubsub-output-buffer-hard-limit",
+          "mutable": false
+        },
+        {
           "name": "scatter-gather-timeout-ms",
           "type": "integer",
           "default": 5000,

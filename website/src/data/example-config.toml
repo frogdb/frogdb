@@ -21,6 +21,7 @@ scatter-gather-timeout-ms = 5000
 sorted-set-index = "skiplist"
 max-clients = 10000
 enable-debug-command = false
+pubsub-output-buffer-hard-limit = 33554432
 
 [logging]
 level = "info"
