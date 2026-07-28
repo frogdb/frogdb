@@ -45,7 +45,7 @@ tokio-metrics = { workspace = true }
 # System info
 sysinfo = "0.38"
 
-# CPU time (getrusage)
+# CPU time (getrusage) and process RSS (sysconf / proc_pidinfo)
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

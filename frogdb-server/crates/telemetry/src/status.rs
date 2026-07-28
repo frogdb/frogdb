@@ -737,28 +737,66 @@ fn is_leap_year(year: i32) -> bool {
 }
 
 /// Get the process RSS (Resident Set Size) in bytes.
+///
+/// Every platform implementation returns bytes, so `rss_bytes` means the same
+/// thing wherever it is reported. Platforms without an implementation return
+/// `None` and the field is omitted rather than guessed at.
 fn get_process_rss() -> Option<u64> {
     #[cfg(target_os = "linux")]
     {
-        // Read from /proc/self/statm
-        if let Ok(contents) = std::fs::read_to_string("/proc/self/statm") {
-            let fields: Vec<&str> = contents.split_whitespace().collect();
-            if fields.len() >= 2
-                && let Ok(pages) = fields[1].parse::<u64>()
-            {
-                // Page size is typically 4096 bytes
-                return Some(pages * 4096);
-            }
-        }
-        None
+        process_rss_linux()
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_vendor = "apple")]
     {
-        // For non-Linux platforms, RSS is not easily available without libc
-        // Return None to indicate it's not available
+        process_rss_apple()
+    }
+
+    #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+    {
         None
     }
+}
+
+/// Read RSS from `/proc/self/statm`, whose second field is the resident set
+/// size measured in pages.
+#[cfg(target_os = "linux")]
+fn process_rss_linux() -> Option<u64> {
+    let contents = std::fs::read_to_string("/proc/self/statm").ok()?;
+    let pages: u64 = contents.split_whitespace().nth(1)?.parse().ok()?;
+
+    // SAFETY: `sysconf` is thread-safe and takes no pointers.
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page_size <= 0 {
+        return None;
+    }
+    pages.checked_mul(page_size as u64)
+}
+
+/// Read RSS from the kernel's task info, which reports resident size in bytes.
+#[cfg(target_vendor = "apple")]
+fn process_rss_apple() -> Option<u64> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_taskinfo>::uninit();
+    let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
+
+    // SAFETY: `proc_pidinfo` writes at most `size` bytes into the buffer we own
+    // and returns the number of bytes it actually wrote.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            std::process::id() as libc::c_int,
+            libc::PROC_PIDTASKINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    if written != size {
+        return None;
+    }
+
+    // SAFETY: the call above filled the entire struct.
+    let info = unsafe { info.assume_init() };
+    Some(info.pti_resident_size)
 }
 
 #[cfg(test)]
@@ -846,6 +884,20 @@ mod tests {
         let json = serde_json::to_string(&status).unwrap();
         // rss_bytes should be skipped when None
         assert!(!json.contains("rss_bytes"));
+    }
+
+    /// RSS must actually be reported on the platforms we develop and ship on:
+    /// an omitted `rss_bytes` is silently missing telemetry, not a benign gap.
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    #[test]
+    fn test_get_process_rss_reports_plausible_bytes() {
+        let rss = get_process_rss().expect("RSS must be available on linux and apple targets");
+        // A live test process always holds more than a page and less than 1 TiB;
+        // values outside that range mean the unit conversion is wrong.
+        assert!(
+            (4096..1 << 40).contains(&rss),
+            "implausible RSS reading: {rss} bytes"
+        );
     }
 
     #[test]
