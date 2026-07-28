@@ -2139,3 +2139,329 @@ fn test_reset_does_not_affect_other_client_transactions() {
         1000,
     );
 }
+
+// ============================================================================
+// Blocking-pop exactly-once conservation (serve-vs-timeout race)
+//
+// Deterministic guard for testing-improvements issue 07. A blocking pop (BLPOP /
+// BRPOP / BLMPOP / BZPOPMIN ...) satisfied by the shard has a pop -> send window:
+// the element is removed from the store, then handed to the waiter's response
+// channel. If the server-side connection task already timed out, the popped
+// element must not be lost -- it must be either delivered to the client or left
+// in the store, exactly once.
+//
+// SCOPE: this models the *cross-thread serve-vs-timeout race* on the deferred
+// (post-timeout) delivery path and proves the shipped `UnregisterWait` handshake
+// closes it. It is NOT a reproduction of concurrency-testing issue 11 Finding A:
+// investigation of that failure (seed 1, OPS=100) found the lost element never
+// traversed the deferred-serve path at all (zero serves fired for it), so
+// Finding A is a *distinct, still-open* defect -- see that issue's Resolution.
+// This guard nonetheless protects a genuine conservation property of the same
+// blocking-pop path.
+//
+// The critical fact the model must honour: a real
+// `tokio::sync::oneshot::send()` returning `Ok` does NOT prove delivery -- if
+// the server-side coordinator resolves as a timeout and drops the receiver
+// *after* a successful send, the value is discarded and `send` never reports
+// `Err`. The model therefore keeps `send` (setting the channel value) and the
+// receiver-drop as independent, non-atomic edges: a value can sit in the
+// channel yet never be consumed. Conservation counts an element as delivered
+// only when the client thread actually *consumes* it, not merely when it was
+// "sent".
+//
+// Three protocols are modeled so the guard is a faithful witness of both the
+// race and the shipped fix:
+//   * `Buggy`       -- pre-fix: the coordinator unilaterally times out and
+//                      drops the receiver; the shard fire-and-forgets. LOSES.
+//   * `RestoreOnly` -- an *insufficient* fix (send-first, restore on
+//                      `send`-`Err`). Because `send`-`Ok` != delivered, a
+//                      receiver dropped after a successful send still loses the
+//                      element and the `Err` arm never fires. LOSES.
+//   * `Handshake`   -- the shipped fix: the shard is the single serialization
+//                      point. Satisfaction and the coordinator's acknowledged
+//                      `UnregisterWait` both run on the shard's serial mailbox
+//                      (modeled by a per-waiter registry `Mutex`), so the ack
+//                      authoritatively reports `AlreadyServed` vs.
+//                      `Unregistered` and the client drains a raced serve
+//                      rather than losing it. CONSERVES.
+//
+// The real delivery channel is `tokio::sync::oneshot`, whose std atomics
+// Shuttle does not instrument, so the channel and the shard registry are
+// modeled with Shuttle-visible `Mutex`es. The modeled store mirrors the real
+// per-key `VecDeque` so restore order is observable.
+// ============================================================================
+
+/// Delivery protocol under test. See the module comment above for the mapping
+/// to real code paths.
+#[derive(Clone, Copy)]
+enum DeliveryProtocol {
+    Buggy,
+    RestoreOnly,
+    Handshake,
+}
+
+/// Whether the shard still holds a registered waiter for this key, from the
+/// shard's serial point of view. Mutated only while holding the registry
+/// `Mutex`, which models the shard's single-threaded mailbox: satisfaction and
+/// `UnregisterWait` cannot interleave within a single waiter.
+#[derive(Clone, Copy, PartialEq)]
+enum WaiterState {
+    /// Waiter is live; a serve may pop-and-deliver.
+    Registered,
+    /// A serve popped the element and placed it on the channel (real:
+    /// `UnregisterAck::AlreadyServed`).
+    Served,
+    /// The coordinator's `UnregisterWait` removed the waiter before any serve
+    /// (real: `UnregisterAck::Unregistered`); no element was consumed.
+    Unregistered,
+}
+
+/// Stands in for `tokio::sync::oneshot::{Sender,Receiver}`. `closed` is the
+/// receiver-dropped edge (the pre-fix unilateral timeout); `value` is what a
+/// `send` placed on the wire; `consumed` is what the client thread actually
+/// read back. A `value` that is `Some` while `consumed` is `None` is the
+/// send-Ok-but-never-delivered loss the fix must prevent.
+struct ModelChannel {
+    closed: bool,
+    value: Option<u64>,
+    consumed: Option<u64>,
+}
+
+fn pop_front(
+    store: &Arc<Mutex<HashMap<u64, std::collections::VecDeque<u64>>>>,
+    key: u64,
+) -> Option<u64> {
+    store
+        .lock()
+        .unwrap()
+        .get_mut(&key)
+        .and_then(|q| q.pop_front())
+}
+
+fn push_front(
+    store: &Arc<Mutex<HashMap<u64, std::collections::VecDeque<u64>>>>,
+    key: u64,
+    elem: u64,
+) {
+    store
+        .lock()
+        .unwrap()
+        .entry(key)
+        .or_default()
+        .push_front(elem);
+}
+
+/// The shard's satisfaction path for `key` (which holds exactly one element),
+/// racing the coordinator thread in [`conn_wait`].
+fn shard_satisfy(
+    proto: DeliveryProtocol,
+    store: &Arc<Mutex<HashMap<u64, std::collections::VecDeque<u64>>>>,
+    reg: &Arc<Mutex<WaiterState>>,
+    chan: &Arc<Mutex<ModelChannel>>,
+    key: u64,
+) {
+    match proto {
+        DeliveryProtocol::Buggy => {
+            // Stale pre-check, then a fire-and-forget send: if the receiver is
+            // dropped after the pre-check, the popped element is discarded.
+            if chan.lock().unwrap().closed {
+                return;
+            }
+            let Some(elem) = pop_front(store, key) else {
+                return;
+            };
+            let mut c = chan.lock().unwrap();
+            if !c.closed {
+                c.value = Some(elem);
+            }
+            // else: element lost -- popped, delivered to nobody.
+        }
+        DeliveryProtocol::RestoreOnly => {
+            // The insufficient fix: send-first, restore only on send-`Err`.
+            let Some(elem) = pop_front(store, key) else {
+                return;
+            };
+            let mut c = chan.lock().unwrap();
+            if c.closed {
+                // send-`Err` (receiver already gone) -> restore.
+                drop(c);
+                push_front(store, key, elem);
+            } else {
+                // send-`Ok`. But `closed` can still flip to true *after* this,
+                // in `conn_wait`, with the value never consumed -- the real
+                // send-Ok-but-dropped race the `Err` arm cannot catch. Lost.
+                c.value = Some(elem);
+            }
+        }
+        DeliveryProtocol::Handshake => {
+            // Shard serial point: hold the registry lock across the whole
+            // pop-and-mark so it cannot interleave with the coordinator's
+            // `UnregisterWait`.
+            let mut state = reg.lock().unwrap();
+            if *state != WaiterState::Registered {
+                return; // Coordinator already unregistered the waiter.
+            }
+            let Some(elem) = pop_front(store, key) else {
+                *state = WaiterState::Served;
+                return;
+            };
+            *state = WaiterState::Served;
+            chan.lock().unwrap().value = Some(elem);
+        }
+    }
+}
+
+/// The server-side coordinator thread: it decides to time out and tears the
+/// wait down, racing [`shard_satisfy`].
+fn conn_wait(
+    proto: DeliveryProtocol,
+    reg: &Arc<Mutex<WaiterState>>,
+    chan: &Arc<Mutex<ModelChannel>>,
+) {
+    match proto {
+        DeliveryProtocol::Buggy | DeliveryProtocol::RestoreOnly => {
+            // Unilateral timeout: drop the receiver and return, never asking
+            // the shard whether a serve raced. Any value the shard sends after
+            // this is never consumed.
+            chan.lock().unwrap().closed = true;
+        }
+        DeliveryProtocol::Handshake => {
+            // Acknowledged `UnregisterWait`, resolved on the shard's serial
+            // timeline via the registry lock.
+            let already_served = {
+                let mut state = reg.lock().unwrap();
+                match *state {
+                    WaiterState::Registered => {
+                        *state = WaiterState::Unregistered;
+                        false // UnregisterAck::Unregistered
+                    }
+                    WaiterState::Served => true, // UnregisterAck::AlreadyServed
+                    WaiterState::Unregistered => false,
+                }
+            };
+            if already_served {
+                // Drain the raced serve instead of losing it.
+                let mut c = chan.lock().unwrap();
+                c.consumed = c.value.take();
+            }
+        }
+    }
+}
+
+/// Run the model: `n` independent waiters, each on its own key seeded with one
+/// element, each raced against a coordinator thread that times out. Asserts
+/// exactly-once conservation for every element.
+fn run_conservation_model(proto: DeliveryProtocol, n: u64) {
+    let store = Arc::new(Mutex::new(
+        HashMap::<u64, std::collections::VecDeque<u64>>::new(),
+    ));
+    let mut regs = Vec::new();
+    let mut chans = Vec::new();
+    for k in 0..n {
+        store
+            .lock()
+            .unwrap()
+            .insert(k, std::collections::VecDeque::from([k * 100 + 1]));
+        regs.push(Arc::new(Mutex::new(WaiterState::Registered)));
+        chans.push(Arc::new(Mutex::new(ModelChannel {
+            closed: false,
+            value: None,
+            consumed: None,
+        })));
+    }
+    let regs = Arc::new(regs);
+    let chans = Arc::new(chans);
+
+    let mut handles = Vec::new();
+    for k in 0..n {
+        let store_w = store.clone();
+        let regs_w = regs.clone();
+        let chans_w = chans.clone();
+        handles.push(thread::spawn(move || {
+            shard_satisfy(
+                proto,
+                &store_w,
+                &regs_w[k as usize],
+                &chans_w[k as usize],
+                k,
+            );
+        }));
+
+        let regs_c = regs.clone();
+        let chans_c = chans.clone();
+        handles.push(thread::spawn(move || {
+            conn_wait(proto, &regs_c[k as usize], &chans_c[k as usize]);
+        }));
+    }
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    // Conservation: every seeded element must be exactly-once -- either still
+    // in the store or consumed by its client, never both, never neither. A
+    // value that was "sent" but never consumed counts as neither (lost).
+    for k in 0..n {
+        let elem = k * 100 + 1;
+        let in_store = store
+            .lock()
+            .unwrap()
+            .get(&k)
+            .is_some_and(|q| q.contains(&elem));
+        let delivered = chans[k as usize].lock().unwrap().consumed == Some(elem);
+        match (in_store, delivered) {
+            (true, false) | (false, true) => {} // exactly once
+            (false, false) => panic!(
+                "exactly-once delivery: element {elem} was neither delivered nor in final state"
+            ),
+            (true, true) => {
+                panic!("exactly-once delivery: element {elem} both delivered and retained")
+            }
+        }
+    }
+}
+
+/// Regression guard: under the shipped handshake protocol, no interleaving of
+/// the pop->send window against a timing-out coordinator can lose or duplicate
+/// an element. Multi-waiter to exercise the multi-key BLMPOP conservation shape.
+#[test]
+fn test_blocking_pop_exactly_once_conservation() {
+    check_random(
+        || run_conservation_model(DeliveryProtocol::Handshake, 4),
+        2000,
+    );
+}
+
+/// Also stress the handshake protocol with PCT, which biases toward the rare
+/// preemption points where the timeout races the serve mid-window.
+#[test]
+fn test_blocking_pop_conservation_pct() {
+    check_pct(
+        || run_conservation_model(DeliveryProtocol::Handshake, 3),
+        2000,
+        3,
+    );
+}
+
+/// Sensitivity witness: the buggy (pre-fix) protocol MUST lose an element on
+/// some interleaving, proving the model actually reproduces the serve-vs-timeout
+/// race rather than passing vacuously. Shuttle panics on the first losing
+/// schedule; the panic message mirrors the nightly-smoke conservation-failure
+/// signature verbatim.
+#[test]
+#[should_panic(expected = "was neither delivered nor in final state")]
+fn test_blocking_pop_buggy_protocol_loses_element() {
+    check_random(|| run_conservation_model(DeliveryProtocol::Buggy, 1), 5000);
+}
+
+/// Witness that the restore-on-`send`-`Err` fix is insufficient: a receiver
+/// dropped after a successful `send` still loses the element because the `Err`
+/// arm never fires. This is why the shipped fix moves serialization onto the
+/// shard via the acknowledged `UnregisterWait` handshake.
+#[test]
+#[should_panic(expected = "was neither delivered nor in final state")]
+fn test_blocking_pop_restore_only_still_loses_element() {
+    check_random(
+        || run_conservation_model(DeliveryProtocol::RestoreOnly, 1),
+        5000,
+    );
+}

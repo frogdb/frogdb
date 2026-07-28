@@ -71,9 +71,15 @@ pub struct TlsConfig {
     #[param(name = "tls-protocols")]
     pub protocols: Vec<TlsProtocol>,
 
-    /// Allowed ciphersuites. Empty means use rustls defaults.
+    /// Allowed ciphersuites, by rustls IANA name (case-insensitive), e.g.
+    /// `TLS13_AES_256_GCM_SHA384` or `TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256`.
+    /// Empty means use rustls defaults. Applied by the server crate when
+    /// building the rustls Server/Client config; an unknown name or a set that
+    /// excludes every enabled protocol version fails loudly at startup.
     #[serde(default)]
-    #[param(skip)] // skip: config not yet consumed by server
+    // issue-14: consumed at TLS manager startup (rustls ciphersuite selection);
+    // immutable CONFIG GET-only. Redis-compat name `tls-ciphersuites`.
+    #[param(name = "tls-ciphersuites")]
     pub ciphersuites: Vec<String>,
 
     /// Whether to encrypt replication connections.

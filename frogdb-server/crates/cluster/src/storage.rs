@@ -458,4 +458,72 @@ mod tests {
         // Clear committed
         storage.save_committed(None).await.unwrap();
     }
+
+    /// Config epoch round-trips through the persistence layer alone (issue 16).
+    ///
+    /// `test_cluster_epoch_persists` (integration_cluster.rs) restarts a whole
+    /// harness node, which also triggers a fresh Raft election that bumps the
+    /// term -- masking a lost `config_epoch` behind the composite
+    /// `cluster_current_epoch = max(config_epoch, raft_term)`. This test
+    /// isolates the storage layer from that election/term interaction
+    /// entirely: entries carrying `ClusterCommand::IncrementEpoch` are
+    /// persisted directly to the RocksDB-backed log (the same column family
+    /// and encoding `append` uses), the store is closed and reopened
+    /// (simulating a process restart with no election involved), and the
+    /// recovered entries are replayed into a brand-new state machine.
+    #[tokio::test]
+    async fn test_config_epoch_round_trips_through_storage_restart() {
+        use crate::state::ClusterStateMachine;
+        use crate::types::ClusterCommand;
+        use openraft::EntryPayload;
+        use openraft::storage::RaftStateMachine;
+
+        let dir = tempdir().unwrap();
+        let leader_id = openraft::CommittedLeaderId::new(1, 1);
+
+        // Persist 3 epoch-incrementing commands, then drop the storage
+        // handle -- simulating the process shutting down.
+        {
+            let storage = ClusterStorage::open(dir.path()).unwrap();
+            let cf = storage.cf_logs();
+            let mut batch = rocksdb::WriteBatch::default();
+            for index in 1..=3u64 {
+                let entry: Entry<TypeConfig> = Entry {
+                    log_id: LogId::new(leader_id, index),
+                    payload: EntryPayload::Normal(ClusterCommand::IncrementEpoch),
+                };
+                let key = ClusterStorage::encode_log_key(index);
+                let value = serde_json::to_vec(&entry).unwrap();
+                batch.put_cf(&cf, key, value);
+            }
+            storage
+                .db
+                .write(batch)
+                .expect("writing persisted log entries must succeed");
+        }
+
+        // Reopen (simulated restart) and read the log back via the public
+        // `RaftLogReader` interface -- no Raft instance, no election, no term.
+        let mut storage = ClusterStorage::open(dir.path()).unwrap();
+        let recovered = storage.try_get_log_entries(1..=3).await.unwrap();
+        assert_eq!(
+            recovered.len(),
+            3,
+            "all persisted entries must survive the storage reopen"
+        );
+
+        // Replay the recovered entries into a fresh state machine: this is
+        // exactly what a real restart does to rebuild `config_epoch`.
+        let mut state_machine = ClusterStateMachine::new();
+        state_machine
+            .apply(recovered)
+            .await
+            .expect("replaying persisted entries must succeed");
+
+        assert_eq!(
+            state_machine.state().config_epoch(),
+            3,
+            "config_epoch must round-trip through storage persistence unchanged"
+        );
+    }
 }

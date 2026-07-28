@@ -27,9 +27,12 @@ ATTEST_BUILD_PROVENANCE = (
     "actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45"  # v2
 )
 RELEASE_PLEASE = "googleapis/release-please-action@c3fc4de07084f75a2b61a5b933069bda6edf3d5c"  # v4
-# taiki-e/install-action: still used by the disabled coverage job for cargo-llvm-cov.
+# taiki-e/install-action: used by coverage_nightly.py to install cargo-llvm-cov.
 # Pass tool= via Step.with_.
 INSTALL_ACTION = "taiki-e/install-action@80e6af7a2ec7f280fffe2d0a9d3a12a9d11d86e9"  # v2
+# Not currently wired into any generated workflow (no CODECOV_TOKEN repo secret
+# configured yet). coverage_nightly.py publishes the lcov report as a CI artifact
+# instead; add a step using this action if/when a Codecov account + token exist.
 CODECOV = "codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe"  # v5
 UPLOAD_PAGES_ARTIFACT = (
     "actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b"  # v4
@@ -48,5 +51,9 @@ APT_REPO_URL = (
 )
 
 CACHE = "actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7"  # v5
+# Restore-only sub-action of actions/cache (same commit): used where a job must read a
+# cache without registering a post-job save (e.g. the PR corpus-replay job, which must
+# not write per-PR corpus cache entries).
+CACHE_RESTORE = "actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7"  # v5
 PATHS_FILTER = "dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d"  # v4
 IMPORT_GPG = "crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd"  # v7

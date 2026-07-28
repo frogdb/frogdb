@@ -25,11 +25,14 @@ impl Command for XaddCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::Kind(WaiterKind::Stream),
-            event: EventSpec::Emits {
-                class: KeyspaceEventFlags::STREAM,
-                name: "xadd",
-            },
+            // XADD unconditionally notifies "xadd" on success (xaddCommand,
+            // t_stream.c:2562), but a trailing MAXLEN/MINID clause fires a
+            // *second*, conditional "xtrim" only when that trim actually
+            // removed something (t_stream.c:2567, `if (streamTrim(...))`) —
+            // Dynamic so both can be deposited independently.
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -97,8 +100,11 @@ impl Command for XaddCommand {
         let id = stream.add(id_spec, fields)?;
 
         // Apply trimming if specified
-        if let Some(opts) = trim_options {
-            stream.trim(opts);
+        let trimmed = trim_options.map(|opts| stream.trim(opts)).unwrap_or(0);
+
+        ctx.notify_event(key.clone(), "xadd", KeyspaceEventFlags::STREAM);
+        if trimmed > 0 {
+            ctx.notify_event(key.clone(), "xtrim", KeyspaceEventFlags::STREAM);
         }
 
         Ok(Response::bulk(Bytes::from(id.to_string())))
@@ -123,6 +129,7 @@ impl Command for XlenCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -158,6 +165,7 @@ impl Command for XrangeCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -211,6 +219,7 @@ impl Command for XrevrangeCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -263,11 +272,14 @@ impl Command for XdelCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
-            event: EventSpec::Emits {
-                class: KeyspaceEventFlags::STREAM,
-                name: "xdel",
-            },
+            // Redis fires "xdel" only when at least one ID was actually
+            // deleted (xdelCommand, t_stream.c:4582, `if (deleted) { ...
+            // notifyKeyspaceEvent(...,"xdel",...) }`) — a call whose IDs are
+            // all absent notifies nothing, so this is Dynamic rather than a
+            // blanket Emits.
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -288,6 +300,9 @@ impl Command for XdelCommand {
         match ctx.store.get_stream_mut(key)? {
             Some(stream) => {
                 let deleted = stream.delete(&ids);
+                if deleted > 0 {
+                    ctx.notify_event(key.clone(), "xdel", KeyspaceEventFlags::STREAM);
+                }
                 Ok(Response::Integer(deleted as i64))
             }
             None => Ok(Response::Integer(0)),
@@ -311,11 +326,13 @@ impl Command for XtrimCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
-            event: EventSpec::Emits {
-                class: KeyspaceEventFlags::STREAM,
-                name: "xtrim",
-            },
+            // Redis fires "xtrim" only when at least one entry was actually
+            // removed (xtrimCommand, t_stream.c:4776, `if (deleted) { ...
+            // notifyKeyspaceEvent(...,"xtrim",...) }`) — a trim that removes
+            // nothing (e.g. MAXLEN already satisfied) notifies nothing.
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -332,6 +349,9 @@ impl Command for XtrimCommand {
         match ctx.store.get_stream_mut(key)? {
             Some(stream) => {
                 let trimmed = stream.trim(trim_options);
+                if trimmed > 0 {
+                    ctx.notify_event(key.clone(), "xtrim", KeyspaceEventFlags::STREAM);
+                }
                 Ok(Response::Integer(trimmed as i64))
             }
             None => Ok(Response::Integer(0)),
@@ -355,8 +375,15 @@ impl Command for XsetidCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
-            event: EventSpec::Suppressed,
+            // Redis unconditionally notifies "xsetid" on success (xsetidCommand,
+            // t_stream.c:3667) — every error path (missing key, ID regression)
+            // returns before that point, so a static Emits matches XADD/XDEL/XTRIM.
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::STREAM,
+                name: "xsetid",
+            },
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -446,8 +473,14 @@ impl Command for XdelexCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistOrDeleteFirstKey,
             wakes: WaiterWake::None,
-            event: EventSpec::Suppressed,
+            // Redis fires "xdel" (the same event XDEL uses) only when an ID was
+            // actually removed from the stream (xdelexCommand, t_stream.c:4739,
+            // `if (deleted) { ... notifyKeyspaceEvent(...,"xdel",...) }`) — an
+            // all-STILL_REFERENCED/all-not-found call notifies nothing, so this
+            // is Dynamic rather than a blanket Emits.
+            event: EventSpec::Dynamic,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -468,6 +501,11 @@ impl Command for XdelexCommand {
         match ctx.store.get_stream_mut(key)? {
             Some(stream) => {
                 let results = stream.delete_ex(&ids, strategy);
+                // `1` marks an ID that was actually deleted (see delete_ex);
+                // `-1` not-found and `2` acked-but-not-deleted never delete.
+                if results.contains(&1) {
+                    ctx.notify_event(key.clone(), "xdel", KeyspaceEventFlags::STREAM);
+                }
                 Ok(Response::Array(
                     results.into_iter().map(Response::Integer).collect(),
                 ))

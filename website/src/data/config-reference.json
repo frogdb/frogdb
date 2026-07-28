@@ -217,29 +217,6 @@
         }
       ]
     },
-    "hotshards": {
-      "description": "Hot shard detection configuration.",
-      "fields": [
-        {
-          "name": "default-period-secs",
-          "type": "integer",
-          "default": 10,
-          "description": "Default period for stats collection in seconds."
-        },
-        {
-          "name": "hot-threshold-percent",
-          "type": "number",
-          "default": 20.0,
-          "description": "Threshold percentage for \"HOT\" status."
-        },
-        {
-          "name": "warm-threshold-percent",
-          "type": "number",
-          "default": 15.0,
-          "description": "Threshold percentage for \"WARM\" status."
-        }
-      ]
-    },
     "http": {
       "description": "HTTP server configuration for the unified observability/admin endpoint.",
       "fields": [
@@ -282,13 +259,17 @@
           "name": "max-depth",
           "type": "integer",
           "default": 128,
-          "description": "Maximum nesting depth for JSON documents."
+          "description": "Maximum nesting depth for JSON documents.",
+          "config_param": "json-max-depth",
+          "mutable": false
         },
         {
           "name": "max-size",
           "type": "integer",
           "default": 67108864,
-          "description": "Maximum size in bytes for JSON documents."
+          "description": "Maximum size in bytes for JSON documents.",
+          "config_param": "json-max-size",
+          "mutable": false
         }
       ]
     },
@@ -470,12 +451,6 @@
       "description": "Metrics configuration.",
       "fields": [
         {
-          "name": "bind",
-          "type": "string",
-          "default": "127.0.0.1",
-          "description": "Bind address for the metrics HTTP server."
-        },
-        {
           "name": "enabled",
           "type": "boolean",
           "default": true,
@@ -487,19 +462,25 @@
           "name": "otlp-enabled",
           "type": "boolean",
           "default": false,
-          "description": "Whether OTLP export is enabled."
+          "description": "Whether OTLP export is enabled.",
+          "config_param": "metrics-otlp-enabled",
+          "mutable": false
         },
         {
           "name": "otlp-endpoint",
           "type": "string",
           "default": "http://localhost:4317",
-          "description": "OTLP endpoint URL."
+          "description": "OTLP endpoint URL.",
+          "config_param": "metrics-otlp-endpoint",
+          "mutable": false
         },
         {
           "name": "otlp-interval-secs",
           "type": "integer",
           "default": 15,
-          "description": "OTLP push interval in seconds."
+          "description": "OTLP push interval in seconds.",
+          "config_param": "metrics-otlp-interval-secs",
+          "mutable": false
         },
         {
           "name": "port",
@@ -652,7 +633,9 @@
           "name": "ack-interval-ms",
           "type": "integer",
           "default": 1000,
-          "description": "ACK interval - how often replicas send ACKs to primary (milliseconds)."
+          "description": "ACK interval - how often replicas send ACKs to primary (milliseconds).",
+          "config_param": "repl-ack-interval-ms",
+          "mutable": false
         },
         {
           "name": "connect-timeout-ms",
@@ -665,18 +648,6 @@
           "type": "integer",
           "default": 60,
           "description": "Cooldown seconds after proactive lag disconnect before allowing another."
-        },
-        {
-          "name": "fullsync-max-memory-mb",
-          "type": "integer",
-          "default": 512,
-          "description": "Maximum memory for full sync buffering (MB).\nIf exceeded, FULLRESYNC requests will be rejected."
-        },
-        {
-          "name": "fullsync-timeout-secs",
-          "type": "integer",
-          "default": 300,
-          "description": "Full sync timeout (seconds).\nMaximum time to wait for a full sync operation."
         },
         {
           "name": "handshake-timeout-ms",
@@ -1005,7 +976,9 @@
           "name": "ciphersuites",
           "type": "array",
           "default": [],
-          "description": "Allowed ciphersuites. Empty means use rustls defaults."
+          "description": "Allowed ciphersuites, by rustls IANA name (case-insensitive), e.g.\n`TLS13_AES_256_GCM_SHA384` or `TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256`.\nEmpty means use rustls defaults. Applied by the server crate when\nbuilding the rustls Server/Client config; an unknown name or a set that\nexcludes every enabled protocol version fails loudly at startup.",
+          "config_param": "tls-ciphersuites",
+          "mutable": false
         },
         {
           "name": "client-cert-file",
@@ -1185,41 +1158,6 @@
           "type": "boolean",
           "default": false,
           "description": "Enable shard execution spans (spans inside shard workers)."
-        }
-      ]
-    },
-    "vll": {
-      "description": "VLL (Very Lightweight Locking) configuration.",
-      "fields": [
-        {
-          "name": "lock-acquisition-timeout-ms",
-          "type": "integer",
-          "default": 4000,
-          "description": "Timeout for acquiring locks on all shards (ms)."
-        },
-        {
-          "name": "max-continuation-lock-ms",
-          "type": "integer",
-          "default": 65000,
-          "description": "Maximum time a continuation lock can be held (ms)."
-        },
-        {
-          "name": "max-queue-depth",
-          "type": "integer",
-          "default": 10000,
-          "description": "Maximum queue depth per shard before rejecting new operations."
-        },
-        {
-          "name": "per-shard-lock-timeout-ms",
-          "type": "integer",
-          "default": 2000,
-          "description": "Per-shard lock acquisition timeout (ms)."
-        },
-        {
-          "name": "timeout-check-interval-ms",
-          "type": "integer",
-          "default": 100,
-          "description": "Interval for checking/cleaning up expired operations (ms)."
         }
       ]
     }

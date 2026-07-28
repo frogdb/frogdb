@@ -8,7 +8,8 @@
 use std::path::Path;
 
 use frogdb_core::persistence::{RocksConfig, RocksStore};
-use frogdb_core::{KeyMetadata, Store, Value, serialize};
+use frogdb_core::sync::Arc;
+use frogdb_core::{KeyMetadata, NoopMetricsRecorder, Store, Value, serialize};
 use tempfile::TempDir;
 
 use super::{RecoveryInputs, RecoveryPhase, recover};
@@ -65,6 +66,7 @@ fn fresh_boot_creates_empty_shards() {
         cluster: &cluster_cfg,
         num_shards: 4,
         warm_enabled: false,
+        metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
     };
 
     let recovered = recover(&inputs).expect("fresh boot recovers");
@@ -98,6 +100,7 @@ fn persistence_disabled_touches_nothing() {
         cluster: &cluster_cfg,
         num_shards: 3,
         warm_enabled: false,
+        metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
     };
 
     let recovered = recover(&inputs).expect("disabled persistence recovers");
@@ -127,6 +130,7 @@ fn restart_with_data_restores_keys() {
         cluster: &cluster_cfg,
         num_shards: 2,
         warm_enabled: false,
+        metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
     };
 
     let mut recovered = recover(&inputs).expect("restart recovers");
@@ -161,6 +165,7 @@ fn corrupt_functions_file_is_tolerated() {
         cluster: &cluster_cfg,
         num_shards: 1,
         warm_enabled: false,
+        metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
     };
 
     let recovered = recover(&inputs).expect("corrupt functions.fdb is not fatal");
@@ -184,12 +189,13 @@ fn standalone_does_not_persist_replication_state() {
         cluster: &cluster_cfg,
         num_shards: 1,
         warm_enabled: false,
+        metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
     };
 
     let recovered = recover(&inputs).expect("standalone recovers");
 
     // A fresh in-memory state, offset 0, and no state file written to disk.
-    assert_eq!(recovered.replication.replication_offset, 0);
+    assert_eq!(recovered.replication.offset_at_save, 0);
     assert!(
         !db_dir.join(&repl_cfg.state_file).exists(),
         "standalone must not write a replication state file"
@@ -210,11 +216,12 @@ fn primary_loads_and_persists_replication_state() {
         cluster: &cluster_cfg,
         num_shards: 1,
         warm_enabled: false,
+        metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
     };
 
     let recovered = recover(&inputs).expect("primary recovers");
 
-    assert_eq!(recovered.replication.replication_offset, 0);
+    assert_eq!(recovered.replication.offset_at_save, 0);
     assert_eq!(recovered.replication.replication_id.len(), 40);
     assert!(
         db_dir.join(&repl_cfg.state_file).exists(),
@@ -247,13 +254,14 @@ fn staged_replication_metadata_is_adopted_and_consumed() {
         cluster: &cluster_cfg,
         num_shards: 1,
         warm_enabled: false,
+        metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
     };
 
     let recovered = recover(&inputs).expect("replica recovers");
 
     // Phase 5 returns the reconciled state: staged id + offset win.
     assert_eq!(recovered.replication.replication_id, staged_id);
-    assert_eq!(recovered.replication.replication_offset, 4242);
+    assert_eq!(recovered.replication.offset_at_save, 4242);
     // The staging file is consumed so later restarts use the state file.
     assert!(
         !db_dir.join("replication_metadata.json").exists(),
@@ -277,6 +285,7 @@ fn cluster_mode_opens_raft_storage() {
         cluster: &cluster_cfg,
         num_shards: 1,
         warm_enabled: false,
+        metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
     };
 
     let recovered = recover(&inputs).expect("cluster recovers");
@@ -309,6 +318,7 @@ fn shard_count_mismatch_is_a_recovery_error() {
         cluster: &cluster_cfg,
         num_shards: 4,
         warm_enabled: false,
+        metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
     };
 
     let err = recover(&inputs)
@@ -337,6 +347,7 @@ fn staged_checkpoint_is_installed() {
         cluster: &cluster_cfg,
         num_shards: 2,
         warm_enabled: false,
+        metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
     };
 
     let mut recovered = recover(&inputs).expect("staged checkpoint installs");
@@ -387,6 +398,7 @@ fn incomplete_staged_checkpoint_is_refused_without_touching_live_db() {
         cluster: &cluster_cfg,
         num_shards: 2,
         warm_enabled: false,
+        metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
     };
 
     let err = recover(&inputs)

@@ -31,7 +31,6 @@ pub mod status;
 pub mod tiered;
 pub mod tls;
 pub mod validators;
-pub mod vll;
 
 // Re-export all config types
 pub use admin::AdminConfig;
@@ -57,10 +56,9 @@ pub use replication::ReplicationConfigSection;
 pub use security::{AclFileConfig, SecurityConfig};
 pub use server::ServerConfig;
 pub use slowlog::SlowlogConfig;
-pub use status::{HotShardsConfig, StatusConfig};
+pub use status::StatusConfig;
 pub use tiered::TieredStorageConfig;
 pub use tls::{ClientCertMode, TlsConfig, TlsProtocol};
-pub use vll::VllConfig;
 
 use anyhow::Result;
 use frogdb_config_derive::ConfigSections;
@@ -147,11 +145,6 @@ pub struct Config {
     #[section]
     pub blocking: BlockingConfig,
 
-    /// VLL (Very Lightweight Locking) configuration.
-    #[serde(default)]
-    #[section]
-    pub vll: VllConfig,
-
     /// Replication configuration.
     #[serde(default)]
     #[section]
@@ -176,11 +169,6 @@ pub struct Config {
     #[serde(default)]
     #[section]
     pub status: StatusConfig,
-
-    /// Hot shard detection configuration.
-    #[serde(default)]
-    #[section]
-    pub hotshards: HotShardsConfig,
 
     /// Latency testing configuration.
     #[serde(default)]
@@ -331,9 +319,7 @@ impl Config {
         self.admin.validate()?;
         self.tls.validate()?;
         self.json.validate()?;
-        self.vll.validate()?;
         self.status.validate()?;
-        self.hotshards.validate()?;
         self.tiered_storage.validate()?;
         if self.tiered_storage.enabled && !self.persistence.enabled {
             anyhow::bail!("tiered_storage.enabled=true requires persistence.enabled=true");

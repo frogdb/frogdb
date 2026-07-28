@@ -21,6 +21,7 @@ impl Command for VsetattrCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,

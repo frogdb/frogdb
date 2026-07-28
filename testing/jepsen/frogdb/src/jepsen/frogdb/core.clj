@@ -21,9 +21,13 @@
             [jepsen.frogdb.hash :as hash]
             [jepsen.frogdb.lag :as lag]
             [jepsen.frogdb.nemesis :as nemesis]
+            [jepsen.frogdb.pubsub-order :as pubsub-order]
             [jepsen.frogdb.queue :as queue]
             [jepsen.frogdb.register :as register]
+            [jepsen.frogdb.ryw :as ryw]
+            [jepsen.frogdb.wc-order :as wc-order]
             [jepsen.frogdb.replication :as replication]
+            [jepsen.frogdb.replication-failover :as replication-failover]
             [jepsen.frogdb.set :as set-workload]
             [jepsen.frogdb.sortedset :as sortedset]
             [jepsen.frogdb.split-brain :as split-brain]
@@ -78,8 +82,13 @@
    :sortedset sortedset/workload
    :expiry expiry/workload
    :blocking blocking/workload
+   ;; Consistency-guarantee workloads (single-connection RYW / ordering / pubsub)
+   :ryw ryw/workload
+   :wc-order wc-order/workload
+   :pubsub-order pubsub-order/workload
    ;; Replication workloads
    :replication replication/workload
+   :replication-failover replication-failover/workload
    :split-brain split-brain/workload
    :zombie zombie/workload
    :lag lag/workload
@@ -136,7 +145,8 @@
         ;; and available for membership-change tests (CLUSTER MEET).
         cluster-node-count (get opts :cluster-nodes 3)
         ;; Replication workloads default to multi-node
-        replication-workload? (contains? #{:replication :split-brain :zombie :lag
+        replication-workload? (contains? #{:replication :replication-failover
+                                           :split-brain :zombie :lag
                                            :partition-recovery}
                                          (keyword (:workload opts)))
         ;; Cluster workloads default to cluster mode
@@ -153,7 +163,13 @@
         nodes (cond
                 local? ["n1"]
                 cluster-mode? (vec (map #(str "n" (inc %)) (range cluster-node-count)))
-                multi-node? ["n1" "n2" "n3"]
+                ;; Multi-node (replication) defaults to the full 3-node set, but an
+                ;; explicit --node/:nodes list (non-empty) pins the client to a subset.
+                ;; This lets a single-key linearizable workload (register) run on the
+                ;; replication topology while only ever talking to the primary — the
+                ;; async replicas stay reachable by the partition nemesis (by IP) yet
+                ;; never serve the client, so Knossos linearizability stays valid.
+                multi-node? (if (seq (:nodes opts)) (vec (:nodes opts)) ["n1" "n2" "n3"])
                 docker? ["n1"]
                 :else (or (:nodes opts) ["n1"]))]
     (merge tests/noop-test
@@ -233,7 +249,10 @@
     :parse-fn #(Long/parseLong %)
     :validate [pos? "Must be positive"]]
 
-   [nil "--independent" "Use independent key testing for register workload"
+   [nil "--independent" "Use independent per-key linearizable testing (register: per-key registers; hash: per-field registers)"
+    :default false]
+
+   [nil "--membership-changes" "Drive cluster membership changes (node join/leave) from the workload generator. Currently consumed by the cluster-formation workload, which switches to its membership-change-generator when set."
     :default false]
 
    [nil "--local" "Local testing mode (FrogDB already running, no Docker)"

@@ -9,11 +9,24 @@ name: Fuzz
 env:
   CARGO_TERM_COLOR: always
 'on':
-  workflow_dispatch: {}
+  schedule:
+  - cron: '41 2 * * *'
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: Per-target fuzzing budget in seconds for the scheduled campaign (default 180).
+        required: false
+        default: '180'
+        type: string
+  pull_request:
+    branches:
+    - main
 jobs:
-  fuzz-regression:
-    name: Fuzz Regression
+  fuzz-campaign:
+    if: github.event_name != 'pull_request'
+    name: Fuzz Campaign
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 360
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -37,10 +50,99 @@ jobs:
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       with:
         shared-key: fuzz
-    - name: Run fuzz targets
+    - name: Persist fuzz corpus
+      uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7
+      with:
+        path: testing/fuzz/corpus
+        key: fuzz-corpus-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: fuzz-corpus-
+    - name: Run fuzz campaign
+      env:
+        FUZZ_SECONDS: ${{ github.event.inputs.duration || '180' }}
       run: |
-        targets=$(cargo +nightly fuzz list --fuzz-dir testing/fuzz 2>/dev/null)
+        set -uo pipefail
+        targets=$(cargo +nightly fuzz list --fuzz-dir testing/fuzz)
+        rc=0
         for target in $targets; do
-          echo "=== Fuzzing $target for 10s ==="
-          cargo +nightly fuzz run "$target" --fuzz-dir testing/fuzz -- -max_total_time=10
+          echo "::group::Fuzzing $target for ${FUZZ_SECONDS}s"
+          if cargo +nightly fuzz run "$target" --fuzz-dir testing/fuzz \
+               -- -max_total_time="${FUZZ_SECONDS}"; then
+            echo "$target: OK"
+          else
+            echo "$target: CRASH (reproducer in testing/fuzz/artifacts/$target)"
+            rc=1
+          fi
+          echo "::endgroup::"
         done
+        exit $rc
+    - name: Upload fuzz-artifacts
+      if: failure()
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+      with:
+        name: fuzz-artifacts
+        path: testing/fuzz/artifacts
+        retention-days: '7'
+        if-no-files-found: error
+  corpus-replay:
+    if: github.event_name == 'pull_request'
+    name: Corpus Replay
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 60
+    steps:
+    - name: Checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    - name: Configure self-hosted build environment
+      if: runner.environment == 'self-hosted'
+      run: |
+        {
+          echo "CC=clang-18"
+          echo "CXX=clang++-18"
+          echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
+          echo "CARGO_BUILD_JOBS=4"
+        } >> "$GITHUB_ENV"
+    - name: Install Rust nightly toolchain
+      uses: dtolnay/rust-toolchain@nightly
+    - name: Install libclang
+      if: runner.environment != 'self-hosted'
+      run: sudo apt-get install -y libclang-dev
+    - name: Install cargo-fuzz
+      run: cargo install cargo-fuzz
+    - name: Cache Rust build artifacts
+      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      with:
+        shared-key: fuzz
+    - name: Restore fuzz corpus
+      uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7
+      with:
+        path: testing/fuzz/corpus
+        key: fuzz-corpus-replay-${{ github.run_id }}
+        restore-keys: fuzz-corpus-
+    - name: Replay persisted corpus
+      run: |
+        set -uo pipefail
+        targets=$(cargo +nightly fuzz list --fuzz-dir testing/fuzz)
+        rc=0
+        for target in $targets; do
+          corpus_dir="testing/fuzz/corpus/$target"
+          if [ ! -d "$corpus_dir" ] || [ -z "$(ls -A "$corpus_dir" 2>/dev/null)" ]; then
+            echo "$target: no persisted corpus, skipping"
+            continue
+          fi
+          echo "::group::Replaying corpus for $target"
+          if cargo +nightly fuzz run "$target" --fuzz-dir testing/fuzz -- -runs=0; then
+            echo "$target: OK"
+          else
+            echo "$target: REGRESSION (reproducer in testing/fuzz/artifacts/$target)"
+            rc=1
+          fi
+          echo "::endgroup::"
+        done
+        exit $rc
+    - name: Upload fuzz-artifacts
+      if: failure()
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+      with:
+        name: fuzz-artifacts
+        path: testing/fuzz/artifacts
+        retention-days: '7'
+        if-no-files-found: error

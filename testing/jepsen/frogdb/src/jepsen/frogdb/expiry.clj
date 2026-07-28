@@ -3,12 +3,31 @@
 
    Tests key expiration behavior under faults using SET EX, EXPIRE, TTL, PERSIST.
 
-   This workload verifies:
-   - Keys expire after TTL (within tolerance)
-   - No premature expiration (key disappears before TTL)
-   - No zombie keys (key exists after TTL + tolerance)
-   - PERSIST correctly removes expiration
-   - TTL reports consistent values"
+   This workload verifies, in a way that is SOUND UNDER CLOCK SKEW between the
+   Jepsen control node and the DB nodes:
+   - No resurrection: a key once observed expired/deleted never reappears alive
+     unless a later SET re-creates it (holds regardless of clock behaviour).
+   - No premature expiry: a key does not disappear before its server-reported
+     remaining lifetime (PTTL) elapses.
+   - No zombie keys: a key does not stay alive past its server-reported lifetime.
+   - PERSIST durability: a persisted key does not spontaneously expire.
+   - TTL sanity: reported TTL/PTTL never exceeds the configured maximum.
+
+   Server-time authority
+   ---------------------
+   Expiry in Redis/FrogDB is decided by the *server's* clock. A checker that
+   predicts an expiry instant from the Jepsen client's wall clock (the TTL the
+   client asked for + `System/currentTimeMillis` at SET time) is unsound the
+   moment a DB node's clock diverges from the control node's: a skewed node
+   legitimately expires keys early or late relative to the control clock, which
+   such a checker would misreport as a bug. This checker therefore never predicts
+   an expiry from a client-chosen TTL. It anchors on the *server's own* reported
+   remaining lifetime (PTTL) and projects it forward using only ELAPSED
+   control-node time — a duration, which is invariant under a constant clock
+   OFFSET between the control node and the server. All ordering uses Jepsen's
+   per-op `:time` (a single control-node monotonic clock, unaffected by server
+   skew); every correctness value (alive/dead, remaining TTL) comes from the
+   server."
   (:require [clojure.tools.logging :refer [info warn]]
             [jepsen.client :as client]
             [jepsen.checker :as checker]
@@ -25,8 +44,10 @@
 (def min-ttl 3)
 (def max-ttl 10)
 
-;; Tolerance for expiration checking (in seconds)
-;; Allow some slack for clock drift, processing delays
+;; Tolerance for expiration checking (in seconds).
+;; Absorbs server processing latency and the coarseness of projecting a
+;; server-reported PTTL forward across control-node elapsed time. Applied to
+;; both edges of every projection so borderline windows never false-positive.
 (def expiry-tolerance 2)
 
 ;; ===========================================================================
@@ -98,64 +119,57 @@
     this)
 
   (invoke! [this test op]
+    ;; No client wall-clock timestamps are recorded: the checker orders
+    ;; operations by Jepsen's control-node `:time` and derives all timing from
+    ;; server-reported TTL/PTTL. See the ns docstring.
     (frogdb/with-error-handling op
       (let [k (:key op (rand-nth key-pool))]
         (case (:f op)
           ;; Set with TTL
           :set-with-ttl
-          (let [{:keys [key value ttl]} (:value op)
-                set-time (System/currentTimeMillis)]
+          (let [{:keys [key value ttl]} (:value op)]
             (set-ex! conn key value ttl)
             (assoc op :type :ok
-                   :value {:key key :value value :ttl ttl}
-                   :set-time set-time
-                   :expected-expiry (+ set-time (* ttl 1000))))
+                   :value {:key key :value value :ttl ttl}))
 
           ;; Read key (may return nil if expired)
           :read
           (let [key (:value op)
-                read-time (System/currentTimeMillis)
                 value (get-key conn key)]
             (assoc op :type :ok
-                   :value {:key key :value value}
-                   :read-time read-time))
+                   :value {:key key :value value}))
 
-          ;; Get TTL
+          ;; Get TTL (seconds) AND PTTL (milliseconds). PTTL is the
+          ;; server-authoritative remaining-lifetime anchor the checker projects
+          ;; forward; TTL is kept for the configured-maximum sanity check.
           :ttl
           (let [key (:value op)
-                check-time (System/currentTimeMillis)
-                ttl (ttl-key conn key)]
+                ttl (ttl-key conn key)
+                pttl (pttl-key conn key)]
             (assoc op :type :ok
-                   :value {:key key :ttl ttl}
-                   :check-time check-time))
+                   :value {:key key :ttl ttl :pttl pttl}))
 
           ;; Set expiration on existing key
           :expire
           (let [{:keys [key ttl]} (:value op)
-                set-time (System/currentTimeMillis)
                 result (expire! conn key ttl)]
             (assoc op :type :ok
                    :value {:key key :ttl ttl}
-                   :result result
-                   :set-time set-time))
+                   :result result))
 
           ;; Remove expiration
           :persist
           (let [key (:value op)
-                op-time (System/currentTimeMillis)
                 result (persist! conn key)]
             (assoc op :type :ok
                    :value {:key key}
-                   :result result
-                   :op-time op-time))
+                   :result result))
 
           ;; Delete key
           :delete
           (let [key (:value op)
-                op-time (System/currentTimeMillis)
                 result (del! conn key)]
-            (assoc op :type :ok :value {:key key} :result result
-                   :op-time op-time))))))
+            (assoc op :type :ok :value {:key key} :result result))))))
 
   (teardown! [this test]
     nil)
@@ -233,178 +247,219 @@
        (gen/each-thread)))
 
 ;; ===========================================================================
-;; Checker
+;; Checker (server-time authoritative — see ns docstring)
 ;; ===========================================================================
 
-(defn build-key-timeline
-  "Build a per-key timeline of TTL-setting events from the history.
-   Returns a map of key -> sorted list of events (by time)."
-  [ops]
-  (reduce
-   (fn [timelines op]
-     (let [key (or (get-in op [:value :key])
-                   (:value op))]
-       (case (:f op)
-         :set-with-ttl
-         (update timelines key (fnil conj [])
-                 {:type :set-ttl
-                  :time (:set-time op)
-                  :ttl-ms (* (get-in op [:value :ttl]) 1000)
-                  :expected-expiry (:expected-expiry op)})
+(defn- ns->ms
+  "Convert Jepsen's control-node nanosecond `:time` to milliseconds."
+  [t]
+  (when t (quot (long t) 1000000)))
 
-         :expire
-         (if (= 1 (:result op))
-           (update timelines key (fnil conj [])
-                   {:type :expire
-                    :time (:set-time op)
-                    :ttl-ms (* (get-in op [:value :ttl]) 1000)
-                    :expected-expiry (+ (:set-time op) (* (get-in op [:value :ttl]) 1000))})
-           timelines)
+(defn pair-completions
+  "Pair each :ok completion with its :invoke, attaching :invoke-ms and
+   :complete-ms (control-node monotonic time in ms). Returns the completed :ok
+   ops in history order.
 
-         :persist
-         (if (= 1 (:result op))
-           (update timelines key (fnil conj [])
-                   {:type :persist
-                    :time (:op-time op)})
-           timelines)
+   Ordering and timing come exclusively from the control node's single clock, so
+   they are unaffected by any skew of the DB nodes' clocks. Correctness values
+   (alive/dead, TTL) are read from the server, never predicted from a client
+   wall clock. Non-:ok completions (:fail/:info, including nemesis ops) are
+   dropped."
+  [history]
+  (:done
+   (reduce
+    (fn [{:keys [pending] :as acc} op]
+      (case (:type op)
+        :invoke (assoc-in acc [:pending (:process op)] op)
+        (:ok :fail :info)
+        (if-let [inv (get pending (:process op))]
+          (let [acc (update acc :pending dissoc (:process op))]
+            (if (= :ok (:type op))
+              (update acc :done conj
+                      (assoc op
+                             :invoke-ms (ns->ms (:time inv))
+                             :complete-ms (ns->ms (:time op))))
+              acc))
+          acc)
+        acc))
+    {:pending {} :done []}
+    history)))
 
-         :delete
-         (update timelines key (fnil conj [])
-                 {:type :delete
-                  :time (:op-time op)})
+(defn- op->event
+  "Normalize a completed :ok op into a per-key event, or nil if irrelevant.
 
-         timelines)))
-   {}
-   ops))
+   Events carry :it / :ct = control-node invoke / complete time (ms), the flags
+   :mutation? (changes the key's existence or expiry) and :create? (a SET, the
+   only way a key can transition dead -> alive), and observation flags
+   :alive?/:dead?."
+  [op]
+  (let [k (get-in op [:value :key])
+        it (:invoke-ms op)
+        ct (:complete-ms op)]
+    (when (and k it ct)
+      (case (:f op)
+        :set-with-ttl
+        {:key k :kind :set :mutation? true :create? true :it it :ct ct}
 
-(defn find-most-recent-event
-  "Find the most recent timeline event for a key before a given time."
-  [timeline read-time]
-  (when (seq timeline)
-    (->> timeline
-         (filter #(<= (:time %) read-time))
-         last)))
+        :expire
+        (when (= 1 (:result op))
+          {:key k :kind :expire :mutation? true :it it :ct ct})
 
-(defn check-read-against-timeline
-  "Check a read operation against the key's timeline.
-   Returns a violation map if the read is clearly inconsistent, nil otherwise.
+        :persist
+        ;; PERSIST returns 1 only when the key existed (with a TTL) — so it both
+        ;; mutates the key (removes its expiry) and observes it alive.
+        (when (= 1 (:result op))
+          {:key k :kind :persist :mutation? true :alive? true :it it :ct ct})
 
-   A read is a clear violation if:
-   - Key should be alive (well before TTL expiry) but read returns nil
-   - Key should be expired (well after TTL + tolerance) but read returns non-nil"
-  [timelines op tolerance-ms]
-  (let [key (get-in op [:value :key])
-        read-time (:read-time op)
-        value (get-in op [:value :value])
-        timeline (get timelines key)]
-    (when (and timeline read-time)
-      (let [event (find-most-recent-event timeline read-time)]
-        (when event
-          (case (:type event)
-            ;; After SET-with-TTL or EXPIRE: check read against expected expiry
-            (:set-ttl :expire)
-            (let [expected-expiry (:expected-expiry event)
-                  well-before? (< read-time (- expected-expiry tolerance-ms))
-                  well-after? (> read-time (+ expected-expiry tolerance-ms))]
-              (cond
-                ;; Key should still be alive but returned nil — premature expiration
-                (and well-before? (nil? value))
-                {:violation :premature-expiry
-                 :key key
-                 :read-time read-time
-                 :expected-expiry expected-expiry
-                 :ms-before-expiry (- expected-expiry read-time)
-                 :value value}
+        :delete
+        ;; A successful DELETE both mutates the key and observes it dead.
+        {:key k :kind :delete :mutation? true :dead? true :it it :ct ct}
 
-                ;; Key should be expired but still has a value — zombie key
-                (and well-after? (some? value))
-                {:violation :zombie-key
-                 :key key
-                 :read-time read-time
-                 :expected-expiry expected-expiry
-                 :ms-after-expiry (- read-time expected-expiry)
-                 :value value}
+        :read
+        (let [v (get-in op [:value :value])]
+          {:key k :kind :read :alive? (some? v) :dead? (nil? v) :it it :ct ct})
 
-                :else nil))
+        :ttl
+        (let [ttl (get-in op [:value :ttl])
+              pttl (get-in op [:value :pttl])]
+          {:key k :kind :ttl :ttl ttl :pttl pttl
+           :alive? (and (number? ttl) (or (>= ttl 0) (= -1 ttl)))
+           :dead? (= ttl -2)
+           :it it :ct ct})
 
-            ;; After PERSIST: key should exist (no expiry)
-            :persist
-            nil  ;; Can't verify — we don't know if the key had a value
+        nil))))
 
-            ;; After DELETE: key should be nil
-            :delete
-            (when (some? value)
-              {:violation :read-after-delete
-               :key key
-               :read-time read-time
-               :value value})
+(defn- mutation-overlaps?
+  "True if mutation m's [it,ct] window overlaps the span [a.it, b.ct] — i.e. m
+   could have executed anywhere between events a and b. Conservative (widest
+   plausible window) so an ambiguous concurrent mutation suppresses a comparison
+   rather than producing a false positive."
+  [m a b]
+  (and (< (:it m) (:ct b))
+       (> (:ct m) (:it a))))
 
-            nil))))))
+(defn- any-mutation-between?
+  [muts a b]
+  (boolean (some #(mutation-overlaps? % a b) muts)))
+
+(defn- latest-before
+  "The event in `evs` with the greatest :ct that still completed strictly before
+   `ref`'s invocation (i.e. happens-before ref)."
+  [evs ref]
+  (->> evs
+       (filter #(< (:ct %) (:it ref)))
+       (sort-by :ct)
+       last))
+
+(defn- check-key
+  "Return the vector of violations for a single key's event stream."
+  [k events tol-ms max-pttl-ms]
+  (let [muts        (filter :mutation? events)
+        creates     (filter :create? events)
+        expiry-muts (filter #(#{:set :expire :delete} (:kind %)) events)
+        anchors     (filter #(and (= :ttl (:kind %))
+                                  (number? (:pttl %)) (>= (:pttl %) 0))
+                            events)
+        reads       (filter #(= :read (:kind %)) events)
+        dead-obs    (filter :dead? events)
+        alive-obs   (filter :alive? events)
+        persists    (filter #(= :persist (:kind %)) events)
+        vs (transient [])]
+
+    ;; (1) & (2) PTTL-anchored premature-expiry / zombie-key.
+    ;; PTTL p was the server's remaining lifetime measured at some instant in
+    ;; [a.it, a.ct]. The projection is only valid for a read that happens AFTER
+    ;; the anchor (a PTTL says nothing about a read in its own past). Projecting
+    ;; with elapsed control time (rate parity holds even under a constant offset
+    ;; skew): after the anchor the key must be alive until ~anchor + p and dead
+    ;; after. Both edges use the conservative anchor + the full tolerance so only
+    ;; unambiguous violations are flagged, and any mutation in the span suppresses
+    ;; the comparison.
+    (doseq [a anchors
+            r reads
+            :when (and (> (:it r) (:ct a))                   ; read strictly after the anchor
+                       (not (any-mutation-between? muts a r)))]
+      (let [p (:pttl a)]
+        (cond
+          ;; Read finished while remaining lifetime (from the EARLIEST the anchor
+          ;; could have been measured) was still clearly positive — yet gone.
+          (and (:dead? r) (< (:ct r) (- (+ (:it a) p) tol-ms)))
+          (conj! vs {:violation :premature-expiry :key k
+                     :pttl-ms p :anchor-invoke-ms (:it a) :read-complete-ms (:ct r)
+                     :slack-ms (- (+ (:it a) p) (:ct r))})
+
+          ;; Read began after remaining lifetime (from the LATEST the anchor could
+          ;; have been measured) was surely exhausted — yet still alive.
+          (and (:alive? r) (> (:it r) (+ (:ct a) p tol-ms)))
+          (conj! vs {:violation :zombie-key :key k
+                     :pttl-ms p :anchor-complete-ms (:ct a) :read-invoke-ms (:it r)
+                     :overshoot-ms (- (:it r) (+ (:ct a) p))}))))
+
+    ;; (3) No resurrection. A key observed dead (read nil, TTL -2, or DELETE) can
+    ;; only become alive again via a SET. If the closest preceding death has no
+    ;; intervening SET, an alive observation is a resurrection. Holds under ANY
+    ;; clock behaviour — a value that was gone must not reappear from nothing.
+    (doseq [al alive-obs]
+      (when-let [d (latest-before dead-obs al)]
+        (when-not (any-mutation-between? creates d al)
+          (conj! vs {:violation :resurrection :key k
+                     :dead-complete-ms (:ct d) :alive-invoke-ms (:it al)
+                     :alive-kind (:kind al)}))))
+
+    ;; (4) Persisted-key durability. After a successful PERSIST (expiry removed),
+    ;; with no intervening SET / EXPIRE / DELETE, the key must not be observed
+    ;; dead. Server-authoritative and skew-independent.
+    (doseq [r (filter :dead? reads)]
+      (when-let [p (latest-before persists r)]
+        (when-not (any-mutation-between? expiry-muts p r)
+          (conj! vs {:violation :persisted-key-expired :key k
+                     :persist-complete-ms (:ct p) :read-invoke-ms (:it r)}))))
+
+    ;; (5) TTL/PTTL sanity: a reported remaining lifetime must never exceed the
+    ;; configured maximum (server value only).
+    (doseq [a (filter #(= :ttl (:kind %)) events)]
+      (let [ttl (:ttl a) pttl (:pttl a)]
+        (when (or (and (number? ttl) (> ttl (+ max-ttl expiry-tolerance)))
+                  (and (number? pttl) (> pttl (+ max-pttl-ms tol-ms))))
+          (conj! vs {:violation :suspicious-ttl :key k :ttl ttl :pttl pttl}))))
+
+    (persistent! vs)))
 
 (defn check-expiry-history
-  "Analyze the history for TTL/expiration correctness.
+  "Analyze the history for TTL/expiration correctness, server-time authoritative.
 
-   Uses timeline-based validation: for each read, find the most recent
-   TTL-setting event on that key and verify the read is consistent with
-   the expected expiration state.
+   Flags:
+   - :premature-expiry — key gone before its server-reported PTTL elapsed
+   - :zombie-key — key alive past its server-reported PTTL
+   - :resurrection — key reappeared alive after being observed dead, no SET
+   - :persisted-key-expired — a persisted key spontaneously expired
+   - :suspicious-ttl — reported TTL/PTTL exceeds the configured maximum
 
-   Flags clear violations:
-   - Premature expiry: key returns nil well before TTL should expire
-   - Zombie keys: key returns a value well after TTL + tolerance
-   - TTL values exceeding configured maximum
-
-   Known limitations:
-   - Concurrent operations create ambiguous windows (handled via tolerance)
-   - Client-side timestamps may have minor skew"
+   All ordering derives from the control node's monotonic clock and all
+   correctness values from the server, so a clock offset between the control node
+   and the DB nodes never produces false positives (see ns docstring)."
   [history]
-  (let [ops (->> history
-                 (filter #(= :ok (:type %))))
-
-        ;; Build per-key timelines
-        timelines (build-key-timeline ops)
-
-        tolerance-ms (* expiry-tolerance 1000)
-
-        ;; Check each read against the timeline
-        read-violations
-        (->> ops
-             (filter #(= :read (:f %)))
-             (keep #(check-read-against-timeline timelines % tolerance-ms)))
-
-        ;; Check for TTL values that exceed configured maximum
-        suspicious-ttls
-        (->> ops
-             (filter #(= :ttl (:f %)))
-             (filter (fn [op]
-                       (let [ttl (get-in op [:value :ttl])]
-                         (and (number? ttl)
-                              (pos? ttl)
-                              (> ttl (+ max-ttl expiry-tolerance))))))
-             (map (fn [op]
-                    {:key (get-in op [:value :key])
-                     :ttl (get-in op [:value :ttl])})))
-
-        ;; Count operations
-        set-count (count (filter #(= :set-with-ttl (:f %)) ops))
-        expire-count (count (filter #(= :expire (:f %)) ops))
-        persist-count (count (filter #(= :persist (:f %)) ops))
-        read-count (count (filter #(= :read (:f %)) ops))
-        ttl-check-count (count (filter #(= :ttl (:f %)) ops))
-        delete-count (count (filter #(= :delete (:f %)) ops))
-
-        all-violations (concat read-violations suspicious-ttls)]
-
-    {:valid? (empty? all-violations)
-     :set-count set-count
-     :expire-count expire-count
-     :persist-count persist-count
-     :read-count read-count
-     :ttl-check-count ttl-check-count
-     :delete-count delete-count
-     :premature-expiries (seq (filter #(= :premature-expiry (:violation %)) read-violations))
-     :zombie-keys (seq (filter #(= :zombie-key (:violation %)) read-violations))
-     :reads-after-delete (seq (filter #(= :read-after-delete (:violation %)) read-violations))
-     :suspicious-ttls (seq suspicious-ttls)}))
+  (let [ok          (pair-completions history)
+        by-key      (group-by :key (keep op->event ok))
+        tol-ms      (* expiry-tolerance 1000)
+        max-pttl-ms (* max-ttl 1000)
+        violations  (mapcat (fn [[k evs]] (check-key k evs tol-ms max-pttl-ms)) by-key)
+        by-type     (group-by :violation violations)
+        f-count     (fn [f] (count (filter #(= f (:f %)) ok)))]
+    {:valid? (empty? violations)
+     :set-count (f-count :set-with-ttl)
+     :expire-count (f-count :expire)
+     :persist-count (f-count :persist)
+     :read-count (f-count :read)
+     :ttl-check-count (f-count :ttl)
+     :delete-count (f-count :delete)
+     :keys-tracked (count by-key)
+     :violation-count (count violations)
+     :premature-expiries (seq (:premature-expiry by-type))
+     :zombie-keys (seq (:zombie-key by-type))
+     :resurrections (seq (:resurrection by-type))
+     :persisted-key-expiries (seq (:persisted-key-expired by-type))
+     :suspicious-ttls (seq (:suspicious-ttl by-type))}))
 
 (defn checker
   "Create a checker for expiry operations."

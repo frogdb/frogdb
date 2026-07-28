@@ -1296,6 +1296,53 @@ async fn test_tracking_off_stops() {
     server.shutdown().await;
 }
 
+/// Lazy-expiry effect parity (D8 real-path repro): a tracked key that dies via
+/// the LAZY read path must invalidate the tracking client, exactly as active
+/// expiry does (`apply_expiry_effects` -> `tracking.invalidate_keys`). Active
+/// expiry is disabled so only the third-party lazy `GET` can remove the key —
+/// isolating the lazy seam. Before this fix the lazy purge was version- and
+/// effect-ignorant, so the cached client silently missed the invalidation and
+/// served a stale value forever.
+#[tokio::test]
+async fn regression_lazy_expiry_invalidates_tracked_key() {
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut tracker = server.connect_resp3().await;
+    let mut admin = server.connect().await;
+
+    // Disable active expiry: only a lazy read may now remove the key.
+    admin.command(&["DEBUG", "SET-ACTIVE-EXPIRE", "0"]).await;
+
+    // RESP3 + tracking, then read the key (with a TTL) to start tracking it.
+    tracker.command(&["HELLO", "3"]).await;
+    tracker.command(&["CLIENT", "TRACKING", "ON"]).await;
+    tracker.command(&["SET", "lazytrack", "v"]).await;
+    tracker.command(&["PEXPIRE", "lazytrack", "100000"]).await;
+    tracker.command(&["GET", "lazytrack"]).await; // caches + tracks the live key
+
+    // Backdate so the key is logically expired but still physically present.
+    admin
+        .command(&["DEBUG", "EXPIRE-BACKDATE", "lazytrack", "50"])
+        .await;
+
+    // A third party's lazy value read physically purges the key. This is a READ,
+    // not a write, yet the expiry-driven removal must invalidate the tracker.
+    admin.command(&["GET", "lazytrack"]).await;
+
+    let msg = tracker.read_message(Duration::from_secs(2)).await;
+    assert!(
+        msg.is_some(),
+        "lazy expiry (third-party GET on a backdated key) must invalidate the \
+         tracked key, matching active expiry"
+    );
+    assert_invalidation_keys(&msg.unwrap(), &["lazytrack"]);
+
+    server.shutdown().await;
+}
+
 #[tokio::test]
 async fn test_tracking_trackinginfo() {
     let server = TestServer::start_standalone().await;

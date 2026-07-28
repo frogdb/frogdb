@@ -19,7 +19,7 @@
 //! and no longer lives here.)
 
 use bytes::Bytes;
-use frogdb_core::{CoreMsg, RateLimitExceeded, ServerWideOp, TransactionResult};
+use frogdb_core::{CoreMsg, RateLimitExceeded, ServerWideOp, TransactionResult, WatchEntry};
 use frogdb_protocol::{ParsedCommand, Response};
 use tokio::sync::oneshot;
 use tracing::debug;
@@ -324,7 +324,7 @@ impl ConnectionHandler {
         &mut self,
         target_shard: usize,
         commands: Vec<ParsedCommand>,
-        watches: Vec<(Bytes, u64)>,
+        watches: Vec<WatchEntry>,
     ) -> Result<Vec<Response>, (TransactionOutcome, Response)> {
         let (response_tx, response_rx) = oneshot::channel();
         let msg = CoreMsg::ExecTransaction {
@@ -397,10 +397,11 @@ impl ConnectionHandler {
             // (`dispatch_connection_command`) — never from its string name.
             return match command.spec().mutation {
                 // Pub/sub deferred to EXEC: multi-response with bespoke MULTI
-                // framing (PUBLISH/SPUBLISH single; SUBSCRIBE-family one
-                // confirmation per channel; PUBSUB/SSUBSCRIBE/SUNSUBSCRIBE
-                // rejected inside MULTI). This is a distinct framing path from the
-                // main `execute_pubsub`. See `exec_pubsub_in_transaction`.
+                // framing (PUBLISH/SPUBLISH/PUBSUB single response;
+                // SUBSCRIBE-family incl. SUNSUBSCRIBE one confirmation per
+                // channel; SSUBSCRIBE alone rejected inside MULTI — verified
+                // Redis-parity policy, see `exec_pubsub_in_transaction`). This
+                // is a distinct framing path from the main `execute_pubsub`.
                 frogdb_core::ConnMutation::PubSub => {
                     self.exec_pubsub_in_transaction(cmd_name, command, args)
                         .await

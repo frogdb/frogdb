@@ -7,8 +7,8 @@ use frogdb_protocol::Response;
 use serde_json::Value as JsonData;
 
 use super::{
-    default_limits, get_json, get_json_mut, json_error_to_command_error, parse_json_value,
-    parse_path, single_or_multi,
+    enforce_growth_limits, get_json, get_json_mut, json_error_to_command_error,
+    parse_json_value_limited, parse_path, single_or_multi,
 };
 
 // ============================================================================
@@ -29,6 +29,9 @@ impl Command for JsonSetCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::FirstKey {
+                kind: frogdb_core::IndexKind::Json,
+            },
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -39,7 +42,11 @@ impl Command for JsonSetCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let path = String::from_utf8_lossy(&args[1]).to_string();
-        let value = parse_json_value(&args[2])?;
+        let limits = ctx.json_limits;
+        // Enforce configured limits on the client-supplied fragment up front, so
+        // an over-nested/oversized value is rejected before it can be stored on
+        // either the new-document or the existing-key path.
+        let value = parse_json_value_limited(&args[2], &limits)?;
 
         // Parse NX/XX options
         let mut nx = false;
@@ -68,8 +75,6 @@ impl Command for JsonSetCommand {
             });
         }
 
-        let limits = default_limits();
-
         // Check if key exists
         let key_exists = ctx.store.get(key).is_some();
 
@@ -87,14 +92,11 @@ impl Command for JsonSetCommand {
                 });
             }
 
-            // Parse and validate the value
-            let json_bytes =
-                serde_json::to_vec(&value).map_err(|e| CommandError::InvalidArgument {
-                    message: format!("invalid JSON: {}", e),
-                })?;
-            let json = JsonValue::parse_with_limits(&json_bytes, &limits)
-                .map_err(json_error_to_command_error)?;
-            ctx.store.set(key.clone(), Value::Json(json));
+            // `value` was already limit-checked at the ingest boundary above; for
+            // a new root document it is the whole document, so no further check is
+            // needed.
+            ctx.store
+                .set(key.clone(), Value::Json(JsonValue::new(value)));
             return Ok(Response::ok());
         }
 
@@ -102,11 +104,15 @@ impl Command for JsonSetCommand {
         // owns the WrongType invariant and the check-before-mut COW ordering.
         let json = get_json_mut!(ctx, key);
 
+        // Snapshot for rollback: a SET at a nested path can grow the resulting
+        // document past the caps even though the fragment itself is within them.
+        let snapshot = json.clone();
         let result = json
             .set(&path, value, nx, xx)
             .map_err(json_error_to_command_error)?;
 
         if result {
+            enforce_growth_limits(json, snapshot, &limits)?;
             Ok(Response::ok())
         } else {
             Ok(Response::null())
@@ -132,6 +138,7 @@ impl Command for JsonGetCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -252,6 +259,9 @@ impl Command for JsonDelCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::FirstKeyOrDelete {
+                kind: frogdb_core::IndexKind::Json,
+            },
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -294,6 +304,7 @@ impl Command for JsonMgetCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -349,6 +360,7 @@ impl Command for JsonTypeCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -393,6 +405,7 @@ impl Command for JsonDebugCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,

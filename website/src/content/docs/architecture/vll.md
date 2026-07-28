@@ -218,15 +218,21 @@ attempt rollback.
 
 ## VLL Queue Configuration
 
+The overall multi-shard deadline is configurable; the per-shard queue depth is a
+compile-time constant.
+
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `scatter-gather-timeout-ms` | 5000 | Overall deadline for a multi-shard operation (VLL locking plus scatter-gather execution) |
-| `max-queue-depth` (under `[vll]`) | 10000 | Maximum pending operations per shard before new ones are rejected |
+| `scatter-gather-timeout-ms` (under `[server]`) | 5000 | Overall deadline for a multi-shard operation (VLL locking plus scatter-gather execution) |
 
-Defaults are defined in `frogdb-server/crates/config/src/server.rs` and
-`frogdb-server/crates/config/src/vll.rs`; treat those files as the source of
-truth. A validator enforces that the per-shard and lock-acquisition timeouts are
-each smaller than `scatter-gather-timeout-ms`.
+The maximum number of pending operations per shard before new ones are rejected
+is a compile-time constant, `DEFAULT_MAX_QUEUE_DEPTH` (10000), in
+`frogdb-server/crates/vll/src/shard.rs`. The `scatter-gather-timeout-ms` default
+is defined in `frogdb-server/crates/config/src/server.rs`; treat that file as the
+source of truth. The lock-acquisition timeout is also a compile-time constant
+(`DEFAULT_LOCK_ACQUISITION_TIMEOUT`, 4000 ms, in
+`frogdb-server/crates/vll/src/coordinator.rs`) and is smaller than
+`scatter-gather-timeout-ms`.
 
 **Queue overflow.** When a shard's pending queue is full, the lock request fails
 with `VllError::QueueFull`; the client receives `ERR VLL lock acquisition failed`.

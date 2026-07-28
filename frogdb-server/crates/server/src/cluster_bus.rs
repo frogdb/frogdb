@@ -6,25 +6,25 @@
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-#[cfg(not(feature = "turmoil"))]
 use std::sync::atomic::Ordering;
 
-#[cfg(not(feature = "turmoil"))]
 use frogdb_core::PubSubMsg;
 use frogdb_core::ShardSender;
-use frogdb_core::cluster::{ClusterRaft, NodeId};
-#[cfg(not(feature = "turmoil"))]
 use frogdb_core::cluster::{
-    ClusterRpcRequest, ClusterRpcResponse, handle_rpc_request, new_framed_tcp, parse_rpc_message,
-    send_rpc_response,
+    BusRpc, ClusterRaft, ClusterRpcRequest, ClusterRpcResponse, NodeId, handle_rpc_request,
+    parse_rpc_message, send_rpc_response,
 };
+// Framing helpers diverge by transport: production wraps a `tokio::net::TcpStream`
+// (optionally TLS) via `new_framed_tcp`; under turmoil the accepted stream is a
+// type-erased `BoxedStream` framed via `new_framed`.
+#[cfg(feature = "turmoil")]
+use frogdb_core::cluster::new_framed;
 #[cfg(not(feature = "turmoil"))]
+use frogdb_core::cluster::new_framed_tcp;
 use frogdb_core::shard_for_key;
-#[cfg(not(feature = "turmoil"))]
 use tokio::sync::oneshot;
 
 use crate::net::TcpListener;
-#[cfg(not(feature = "turmoil"))]
 use tracing::warn;
 use tracing::{debug, error, info};
 
@@ -63,13 +63,10 @@ pub async fn run(listener: TcpListener, ctx: Arc<ClusterBusContext>) -> std::io:
                 let ctx = ctx.clone();
                 tokio::spawn(async move {
                     debug!(%peer, "Cluster bus connection accepted");
-                    #[cfg(not(feature = "turmoil"))]
                     if let Err(e) = handle_connection(stream, &ctx).await {
                         // Connection errors are expected when nodes disconnect
                         debug!(%peer, error = %e, "Cluster bus connection closed");
                     }
-                    #[cfg(feature = "turmoil")]
-                    drop((stream, ctx));
                 });
             }
             Err(e) => {
@@ -151,20 +148,11 @@ async fn handle_connection(
             }
         };
 
-        // Dispatch based on request type
+        // Dispatch on the wire envelope: one typed seam. The bus owns its
+        // subset (`BusRpc`) locally; the Raft handler owns the rest (`RaftRpc`).
         let response = match request {
-            ClusterRpcRequest::PubSubBroadcast { channel, message } => {
-                handle_pubsub_broadcast(&ctx.shard_senders, &channel, &message).await
-            }
-            ClusterRpcRequest::PubSubForward { channel, message } => {
-                handle_pubsub_forward(&ctx.shard_senders, ctx.num_shards, &channel, &message).await
-            }
-            ClusterRpcRequest::HealthProbe => ClusterRpcResponse::HealthProbeResponse {
-                node_id: ctx.node_id,
-                replication_offset: ctx.replication_offset.load(Ordering::Acquire),
-            },
-            // All Raft RPCs (AppendEntries, Vote, InstallSnapshot, ForwardedWrite)
-            raft_request => handle_rpc_request(&ctx.raft, raft_request).await,
+            ClusterRpcRequest::Bus(bus_rpc) => handle_bus_rpc(ctx, bus_rpc).await,
+            ClusterRpcRequest::Raft(raft_rpc) => handle_rpc_request(&ctx.raft, raft_rpc).await,
         };
 
         // Send the response
@@ -178,9 +166,78 @@ async fn handle_connection(
     }
 }
 
+/// Handle a single cluster bus connection under turmoil.
+///
+/// Turmoil's accepted stream is a `turmoil::net::TcpStream` (no TLS); type-erase
+/// it into a `BoxedStream` and frame it the same way the production plaintext
+/// path does. The read/dispatch/respond loop is otherwise identical to
+/// [`handle_connection`] (the non-turmoil variant), so real Raft RPCs — vote,
+/// append-entries, install-snapshot — and the bus subset flow through turmoil's
+/// simulated network, giving deterministic multi-node cluster consensus.
+#[cfg(feature = "turmoil")]
+async fn handle_connection(
+    stream: crate::net::ConnectionStream,
+    ctx: &ClusterBusContext,
+) -> std::io::Result<()> {
+    let mut framed = new_framed(Box::new(stream));
+
+    loop {
+        let request = match parse_rpc_message(&mut framed).await {
+            Ok(req) => req,
+            Err(e) => {
+                let error_msg = e.to_string();
+                if error_msg.contains("connection closed")
+                    || error_msg.contains("connection reset")
+                    || error_msg.contains("broken pipe")
+                {
+                    return Ok(());
+                }
+                warn!(error = %e, "Failed to parse cluster RPC request");
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    e.to_string(),
+                ));
+            }
+        };
+
+        let response = match request {
+            ClusterRpcRequest::Bus(bus_rpc) => handle_bus_rpc(ctx, bus_rpc).await,
+            ClusterRpcRequest::Raft(raft_rpc) => handle_rpc_request(&ctx.raft, raft_rpc).await,
+        };
+
+        if let Err(e) = send_rpc_response(&mut framed, response).await {
+            warn!(error = %e, "Failed to send cluster RPC response");
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                e.to_string(),
+            ));
+        }
+    }
+}
+
+/// Handle a bus-local RPC: pub/sub fan-out and health probes, serviced from the
+/// cluster-bus context (shard senders, node id, replication offset) without ever
+/// touching Raft.
+///
+/// The match is exhaustive by construction — [`BusRpc`] names only the variants
+/// this function can service, so it cannot carry (nor mis-route) a Raft RPC.
+async fn handle_bus_rpc(ctx: &ClusterBusContext, request: BusRpc) -> ClusterRpcResponse {
+    match request {
+        BusRpc::PubSubBroadcast { channel, message } => {
+            handle_pubsub_broadcast(&ctx.shard_senders, &channel, &message).await
+        }
+        BusRpc::PubSubForward { channel, message } => {
+            handle_pubsub_forward(&ctx.shard_senders, ctx.num_shards, &channel, &message).await
+        }
+        BusRpc::HealthProbe => ClusterRpcResponse::HealthProbeResponse {
+            node_id: ctx.node_id,
+            replication_offset: ctx.replication_offset.load(Ordering::Acquire),
+        },
+    }
+}
+
 /// Handle a PubSubBroadcast RPC: deliver to the broadcast pub/sub coordinator
 /// shard ([`BROADCAST_SHARD`]).
-#[cfg(not(feature = "turmoil"))]
 async fn handle_pubsub_broadcast(
     shard_senders: &[ShardSender],
     channel: &[u8],
@@ -203,7 +260,6 @@ async fn handle_pubsub_broadcast(
 }
 
 /// Handle a PubSubForward RPC: deliver to the shard that owns the channel's slot.
-#[cfg(not(feature = "turmoil"))]
 async fn handle_pubsub_forward(
     shard_senders: &[ShardSender],
     num_shards: usize,

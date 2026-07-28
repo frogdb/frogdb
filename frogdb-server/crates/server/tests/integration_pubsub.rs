@@ -1,10 +1,11 @@
 //! Integration tests for pub/sub commands (SUBSCRIBE, PUBLISH, PSUBSCRIBE, etc.)
 
-use crate::common::test_server::{TestServer, TestServerConfig};
+use crate::common::test_server::{TestClient, TestServer, TestServerConfig};
 use bytes::Bytes;
 use frogdb_protocol::Response;
+use futures::StreamExt;
 use redis_protocol::resp3::types::BytesFrame as Resp3Frame;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[tokio::test]
 async fn test_subscribe_publish() {
@@ -350,6 +351,206 @@ async fn test_cross_shard_expired_keyevent_delivered() {
     } else {
         panic!("Expected array response for expired keyevent message");
     }
+
+    server.shutdown().await;
+}
+
+/// Lazy-expiry effect parity (D8 real-path repro): a whole-key TTL that dies via
+/// the LAZY read path (`check_and_delete_expired` -> `uninstall`) must emit the
+/// same `expired` keyevent the active sweep emits for its `deleted_keys`. Active
+/// expiry is disabled (`DEBUG SET-ACTIVE-EXPIRE 0`) so the ONLY thing that can
+/// remove the key is the third-party `GET` — isolating the lazy seam. Redis/Valkey
+/// fire `expired` from `expireIfNeeded` (on-access) and `activeExpireCycle`
+/// (sweep) alike; before this fix the lazy seam silently dropped the event.
+#[tokio::test]
+async fn regression_lazy_expiry_emits_expired_keyevent() {
+    // Single shard so the key and the shard-0 subscriber share a shard.
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut admin = server.connect().await;
+    let mut subscriber = server.connect().await;
+
+    // Disable active expiry: only a lazy read may now remove the key.
+    let resp = admin.command(&["DEBUG", "SET-ACTIVE-EXPIRE", "0"]).await;
+    assert_eq!(resp, Response::ok());
+
+    // Enable keyevent notifications.
+    let resp = admin
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // Seed a key with a TTL, then backdate its deadline into the past so it is
+    // logically expired but still physically present (backdate rewrites only the
+    // timestamp — no purge, no version bump).
+    admin.command(&["SET", "k", "v"]).await;
+    admin.command(&["PEXPIRE", "k", "100000"]).await;
+    let resp = admin
+        .command(&["DEBUG", "EXPIRE-BACKDATE", "k", "50"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    let resp = subscriber
+        .command(&["SUBSCRIBE", "__keyevent@0__:expired"])
+        .await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+
+    // Trigger the lazy purge: a value read of the already-expired key.
+    admin.command(&["GET", "k"]).await;
+
+    let msg = subscriber.read_message(Duration::from_secs(2)).await;
+    assert!(
+        msg.is_some(),
+        "lazy expiry (GET on a backdated key) must emit the `expired` keyevent, \
+         matching active expiry"
+    );
+    if let Some(Response::Array(arr)) = msg {
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("message"))));
+        assert_eq!(
+            arr[1],
+            Response::Bulk(Some(Bytes::from("__keyevent@0__:expired")))
+        );
+        assert_eq!(arr[2], Response::Bulk(Some(Bytes::from("k"))));
+    } else {
+        panic!("Expected array response for expired keyevent message");
+    }
+
+    server.shutdown().await;
+}
+
+/// Lazy last-hash-field-death `del` parity (issue 09 real-path repro): a hash
+/// whose LAST field dies via field TTL empties the key, and Redis emits a
+/// generic `del` (not `expired`) for that removal. Active expiry emits it from
+/// its `emptied_keys` branch; before this fix the LAZY read seam
+/// (`purge_expired_hash_fields` -> `delete`) dropped it silently. Active expiry
+/// is disabled (`DEBUG SET-ACTIVE-EXPIRE 0`) so the ONLY thing that can reap the
+/// field is the third-party `HGET` — isolating the lazy seam. Hash-field TTL
+/// cannot be backdated (`DEBUG EXPIRE-BACKDATE` is whole-key only), so a short
+/// real TTL + a brief wait makes the field due before the triggering read.
+#[tokio::test]
+async fn regression_lazy_hash_field_death_emits_del_keyevent() {
+    // Single shard so the key and the shard-0 subscriber share a shard.
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut admin = server.connect().await;
+    let mut subscriber = server.connect().await;
+
+    // Disable active expiry: only a lazy read may now reap the field / empty
+    // the key.
+    let resp = admin.command(&["DEBUG", "SET-ACTIVE-EXPIRE", "0"]).await;
+    assert_eq!(resp, Response::ok());
+
+    // Enable keyevent notifications (KEA includes the generic `g` class `del`
+    // rides on).
+    let resp = admin
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // Seed a single-field hash and give that field a short TTL.
+    admin.command(&["HSET", "h", "f", "v"]).await;
+    let resp = admin
+        .command(&["HPEXPIRE", "h", "60", "FIELDS", "1", "f"])
+        .await;
+    assert!(matches!(resp, Response::Array(_)));
+
+    let resp = subscriber
+        .command(&["SUBSCRIBE", "__keyevent@0__:del"])
+        .await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+
+    // Let the field's TTL elapse (no active sweep will touch it).
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // Trigger the lazy purge: a read of the hash reaps the expired field, which
+    // empties and removes the key.
+    admin.command(&["HGET", "h", "f"]).await;
+
+    let msg = subscriber.read_message(Duration::from_secs(2)).await;
+    assert!(
+        msg.is_some(),
+        "lazy last-hash-field death (HGET reaping the final field) must emit the \
+         `del` keyevent, matching active expiry's emptied_keys branch"
+    );
+    if let Some(Response::Array(arr)) = msg {
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("message"))));
+        assert_eq!(
+            arr[1],
+            Response::Bulk(Some(Bytes::from("__keyevent@0__:del")))
+        );
+        assert_eq!(arr[2], Response::Bulk(Some(Bytes::from("h"))));
+    } else {
+        panic!("Expected array response for del keyevent message");
+    }
+
+    server.shutdown().await;
+}
+
+/// No double-fire under the active sweep (issue 09): the sweep reaps a
+/// last-hash-field death through the *same* `purge_expired_hash_fields` seam a
+/// lazy read uses, so it also fills the store's lazily-emptied buffer — but it
+/// already reports the key via `ExpiryResult::emptied_keys`. `run_active_expiry`
+/// discards the buffer, so a following command's lazy drain fires nothing:
+/// exactly one `del` total. Active expiry stays ENABLED (default) here.
+#[tokio::test]
+async fn lazy_hash_field_death_del_event_fires_once_under_active_sweep() {
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut admin = server.connect().await;
+    let mut subscriber = server.connect().await;
+
+    let resp = admin
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    admin.command(&["HSET", "h", "f", "v"]).await;
+    let resp = admin
+        .command(&["HPEXPIRE", "h", "80", "FIELDS", "1", "f"])
+        .await;
+    assert!(matches!(resp, Response::Array(_)));
+
+    let resp = subscriber
+        .command(&["SUBSCRIBE", "__keyevent@0__:del"])
+        .await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+
+    // The active sweep (100 ms cadence) reaps the field and emits exactly one
+    // `del`.
+    let msg = subscriber.read_message(Duration::from_secs(2)).await;
+    assert!(
+        msg.is_some(),
+        "active sweep must emit the `del` keyevent for the emptied hash key"
+    );
+    if let Some(Response::Array(arr)) = msg {
+        assert_eq!(arr[2], Response::Bulk(Some(Bytes::from("h"))));
+    } else {
+        panic!("Expected array response for del keyevent message");
+    }
+
+    // Drive several command seams that would drain a leaked lazily-emptied
+    // buffer. None may produce a second `del`.
+    for _ in 0..3 {
+        admin.command(&["HGET", "h", "f"]).await;
+        admin.command(&["GET", "nonexistent"]).await;
+    }
+    let extra = subscriber.read_message(Duration::from_millis(300)).await;
+    assert!(
+        extra.is_none(),
+        "the sweep already reported this key — no second `del` may fire on a \
+         later command's lazy drain, got {extra:?}"
+    );
 
     server.shutdown().await;
 }
@@ -1461,28 +1662,58 @@ async fn test_ssubscribe_redirect_matches_keyed_path() {
 
     // Find a node that does NOT own the slot: GET there returns MOVED. On that
     // same node, SSUBSCRIBE must produce an identical MOVED redirect.
+    // The GET (harness connection) and the SSUBSCRIBE (fresh connection) are two
+    // separate round-trips. If the node's routing view updates between them (e.g.
+    // just after convergence, under parallel load), their MOVED targets can differ
+    // even though both paths are correct — a transient race, not a parity bug.
+    // Retry the whole GET/SSUBSCRIBE pair a bounded number of times: a genuine
+    // parity break (SSUBSCRIBE taking a different redirect path than keyed commands)
+    // disagrees persistently and still fails; a transient view update converges.
+    const MAX_ATTEMPTS: usize = 10;
     let mut checked_a_non_owner = false;
     for &nid in &node_ids {
         let node = harness.node(nid).unwrap();
-        let get_resp = node.send("GET", &[channel]).await;
-        let Some(get_moved) = is_moved_redirect(&get_resp) else {
+        if is_moved_redirect(&node.send("GET", &[channel]).await).is_none() {
             continue; // this node owns the slot (GET served locally)
-        };
-
-        let mut client = node.connect().await;
-        let ssub_resp = client.command(&["SSUBSCRIBE", channel]).await;
-        let ssub_moved = is_moved_redirect(&ssub_resp).unwrap_or_else(|| {
-            panic!(
-                "SSUBSCRIBE on a non-owner must MOVED-redirect like GET, got: {:?}",
-                ssub_resp
-            )
-        });
-
-        assert_eq!(
-            get_moved, ssub_moved,
-            "SSUBSCRIBE redirect (slot + addr) must match the keyed-path redirect"
-        );
+        }
         checked_a_non_owner = true;
+
+        let mut last_pair = None;
+        let mut agreed = false;
+        for _ in 0..MAX_ATTEMPTS {
+            // Fresh GET + fresh SSUBSCRIBE each attempt so a stale routing view on
+            // either round-trip is replaced rather than compared.
+            let get_resp = node.send("GET", &[channel]).await;
+            let Some(get_moved) = is_moved_redirect(&get_resp) else {
+                // Node became the owner mid-retry (routing view moved): transient,
+                // try again.
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            };
+
+            let mut client = node.connect().await;
+            let ssub_resp = client.command(&["SSUBSCRIBE", channel]).await;
+            let ssub_moved = is_moved_redirect(&ssub_resp).unwrap_or_else(|| {
+                panic!(
+                    "SSUBSCRIBE on a non-owner must MOVED-redirect like GET, got: {:?}",
+                    ssub_resp
+                )
+            });
+
+            if get_moved == ssub_moved {
+                agreed = true;
+                break;
+            }
+            last_pair = Some((get_moved, ssub_moved));
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        assert!(
+            agreed,
+            "SSUBSCRIBE redirect (slot + addr) must match the keyed-path redirect; \
+             still disagreed after {} attempts: {:?}",
+            MAX_ATTEMPTS, last_pair
+        );
         break;
     }
 
@@ -1865,9 +2096,11 @@ async fn test_subscribe_confirmation_in_multi_exec_resp3() {
     server.shutdown().await;
 }
 
-/// SSUBSCRIBE inside MULTI is not supported; EXEC surfaces the error. Pinning
-/// this keeps the confirmation-shape work from silently changing the
-/// unsupported-in-transaction behavior.
+/// SSUBSCRIBE inside MULTI is rejected — pinned against Redis 8.6.4 source
+/// (`pubsub.c: ssubscribeCommand`), which guards on bare `CLIENT_DENY_BLOCKING`
+/// with no `!CLIENT_MULTI` carve-out (unlike SUBSCRIBE/PSUBSCRIBE, which are
+/// MULTI-exempt). This is the one genuinely-rejected member of the subscribe
+/// family; the exact error text matches Redis's own wire text.
 #[tokio::test]
 async fn test_ssubscribe_inside_multi_rejected() {
     let server = TestServer::start_standalone().await;
@@ -1881,11 +2114,211 @@ async fn test_ssubscribe_inside_multi_rejected() {
     match c.command(&["EXEC"]).await {
         Response::Array(items) => {
             assert_eq!(items.len(), 1);
-            assert!(
-                matches!(&items[0], Response::Error(e) if e.starts_with(b"ERR")),
-                "expected an error for SSUBSCRIBE inside MULTI, got {:?}",
+            assert_eq!(
+                items[0],
+                Response::error("ERR SSUBSCRIBE isn't allowed for a DENY BLOCKING client"),
+                "expected Redis's exact SSUBSCRIBE-in-MULTI error text, got {:?}",
                 items[0]
             );
+        }
+        other => panic!("expected Array, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Full subscribe-family-in-MULTI matrix (issue 57)
+//
+// Verified against Redis 8.6.4 source (pubsub.c): SUBSCRIBE/PSUBSCRIBE are
+// MULTI-exempt (`DENY_BLOCKING && !CLIENT_MULTI`); UNSUBSCRIBE/PUNSUBSCRIBE/
+// SUNSUBSCRIBE/PUBSUB carry no DENY_BLOCKING guard at all; only SSUBSCRIBE
+// (above) is unconditionally gated on DENY_BLOCKING and so genuinely rejected.
+// RESET inside MULTI is covered separately by
+// `test_reset_aborts_transaction` (integration_client.rs) — RESET is
+// intercepted before the transaction queue and always executes directly,
+// dropping the queue and returning `+RESET`, which that test already pins.
+// ============================================================================
+
+/// SUBSCRIBE queued in MULTI genuinely subscribes at EXEC time (Redis-exempt,
+/// not rejected). Pinned here as the reference case for the matrix even though
+/// `test_subscribe_confirmation_in_multi_exec_resp2` covers it too.
+#[tokio::test]
+async fn test_subscribe_inside_multi_executes() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    assert_eq!(c.command(&["MULTI"]).await, Response::ok());
+    assert_eq!(
+        c.command(&["SUBSCRIBE", "ch"]).await,
+        Response::Simple(Bytes::from("QUEUED"))
+    );
+    match c.command(&["EXEC"]).await {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1);
+            match &items[0] {
+                Response::Array(conf) => {
+                    assert_eq!(conf[0], Response::Bulk(Some(Bytes::from("subscribe"))));
+                    assert_eq!(conf[1], Response::Bulk(Some(Bytes::from("ch"))));
+                    assert_eq!(conf[2], Response::Integer(1));
+                }
+                other => panic!("expected confirmation Array, got {other:?}"),
+            }
+        }
+        other => panic!("expected Array, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// PSUBSCRIBE queued in MULTI genuinely subscribes at EXEC time (Redis-exempt,
+/// same guard as SUBSCRIBE).
+#[tokio::test]
+async fn test_psubscribe_inside_multi_executes() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    assert_eq!(c.command(&["MULTI"]).await, Response::ok());
+    assert_eq!(
+        c.command(&["PSUBSCRIBE", "ch.*"]).await,
+        Response::Simple(Bytes::from("QUEUED"))
+    );
+    match c.command(&["EXEC"]).await {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1);
+            match &items[0] {
+                Response::Array(conf) => {
+                    assert_eq!(conf[0], Response::Bulk(Some(Bytes::from("psubscribe"))));
+                    assert_eq!(conf[1], Response::Bulk(Some(Bytes::from("ch.*"))));
+                    assert_eq!(conf[2], Response::Integer(1));
+                }
+                other => panic!("expected confirmation Array, got {other:?}"),
+            }
+        }
+        other => panic!("expected Array, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// UNSUBSCRIBE carries no DENY_BLOCKING guard at all in Redis, so it executes
+/// unconditionally inside MULTI too. With no active subscriptions this yields
+/// the same null-channel confirmation shape as the direct path.
+#[tokio::test]
+async fn test_unsubscribe_inside_multi_executes() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    assert_eq!(c.command(&["MULTI"]).await, Response::ok());
+    assert_eq!(
+        c.command(&["UNSUBSCRIBE"]).await,
+        Response::Simple(Bytes::from("QUEUED"))
+    );
+    match c.command(&["EXEC"]).await {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1);
+            match &items[0] {
+                Response::Array(conf) => {
+                    assert_eq!(conf[0], Response::Bulk(Some(Bytes::from("unsubscribe"))));
+                    assert_eq!(conf[1], Response::Bulk(None), "null channel");
+                    assert_eq!(conf[2], Response::Integer(0));
+                }
+                other => panic!("expected confirmation Array, got {other:?}"),
+            }
+        }
+        other => panic!("expected Array, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// PUNSUBSCRIBE carries no DENY_BLOCKING guard either — same treatment as
+/// UNSUBSCRIBE.
+#[tokio::test]
+async fn test_punsubscribe_inside_multi_executes() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    assert_eq!(c.command(&["MULTI"]).await, Response::ok());
+    assert_eq!(
+        c.command(&["PUNSUBSCRIBE"]).await,
+        Response::Simple(Bytes::from("QUEUED"))
+    );
+    match c.command(&["EXEC"]).await {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1);
+            match &items[0] {
+                Response::Array(conf) => {
+                    assert_eq!(conf[0], Response::Bulk(Some(Bytes::from("punsubscribe"))));
+                    assert_eq!(conf[1], Response::Bulk(None), "null pattern");
+                    assert_eq!(conf[2], Response::Integer(0));
+                }
+                other => panic!("expected confirmation Array, got {other:?}"),
+            }
+        }
+        other => panic!("expected Array, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// SUNSUBSCRIBE carries no DENY_BLOCKING guard in Redis (only SSUBSCRIBE
+/// does) — this is the residue fix: FrogDB previously rejected it inside
+/// MULTI with a bespoke error, where Redis genuinely allows it to execute.
+///
+/// Note: this connection is never actually SSUBSCRIBE'd to `sch` first —
+/// doing so would enter pub/sub mode, and (matching Redis) a RESP2 client in
+/// pub/sub mode cannot issue MULTI at all (`is_allowed_in_pubsub_mode`
+/// rejects it, same as real Redis's context restriction). That restriction is
+/// unrelated to this issue; a fresh, never-subscribed connection is
+/// sufficient to prove SUNSUBSCRIBE *executes* (count 0) rather than being
+/// rejected.
+#[tokio::test]
+async fn test_sunsubscribe_inside_multi_executes() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    assert_eq!(c.command(&["MULTI"]).await, Response::ok());
+    assert_eq!(
+        c.command(&["SUNSUBSCRIBE", "sch"]).await,
+        Response::Simple(Bytes::from("QUEUED"))
+    );
+    match c.command(&["EXEC"]).await {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1);
+            match &items[0] {
+                Response::Array(conf) => {
+                    assert_eq!(conf[0], Response::Bulk(Some(Bytes::from("sunsubscribe"))));
+                    assert_eq!(conf[1], Response::Bulk(Some(Bytes::from("sch"))));
+                    assert_eq!(conf[2], Response::Integer(0));
+                }
+                other => panic!("expected confirmation Array, got {other:?}"),
+            }
+        }
+        other => panic!("expected Array, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// PUBSUB carries no DENY_BLOCKING guard in Redis either — it executes inside
+/// MULTI exactly like the direct path, folding its single reply into the EXEC
+/// array slot (same framing as PUBLISH/SPUBLISH). This is the other residue
+/// fix: FrogDB previously rejected PUBSUB inside MULTI.
+#[tokio::test]
+async fn test_pubsub_inside_multi_executes() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    assert_eq!(c.command(&["MULTI"]).await, Response::ok());
+    assert_eq!(
+        c.command(&["PUBSUB", "NUMPAT"]).await,
+        Response::Simple(Bytes::from("QUEUED"))
+    );
+    match c.command(&["EXEC"]).await {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0], Response::Integer(0));
         }
         other => panic!("expected Array, got {other:?}"),
     }
@@ -3776,4 +4209,1956 @@ async fn test_eval_scripted_noop_stays_silent() {
         "a scripted no-op write must not deliver a keyspace notification"
     );
     server.shutdown().await;
+}
+
+// ===========================================================================
+// `new` (key-creation, class `n`) and `keymiss` (class `m`) events (task 09)
+//
+// Both classes parse in `notify-keyspace-events` but previously had zero
+// emission sites. Redis 8.x fires `new` from `dbAdd` on first key creation
+// (before the command's own type event) and `keymiss` from `lookupKeyRead`
+// on a read that misses (never from write lookups). Both are excluded from the
+// `A` alias, so `A` alone must deliver neither. These tests assert end-to-end
+// delivery and the `A`-exclusion.
+// ===========================================================================
+
+/// `new` fires on the first creation of a key. SET of a fresh key creates it,
+/// so a `new` keyevent naming the key is delivered when class `n` is enabled.
+#[tokio::test]
+async fn test_new_event_fires_on_key_creation() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    // `En` = keyevent notifications for the new-key class only.
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "En"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut subscriber, "new").await;
+
+    let resp = client.command(&["SET", "freshkey", "v"]).await;
+    assert_eq!(resp, Response::ok());
+
+    assert_keyevent_keys(&mut subscriber, "new", &["freshkey"]).await;
+    server.shutdown().await;
+}
+
+/// `new` fires only on *first* creation: overwriting an existing key does not
+/// create it, so no `new` event is emitted for the second SET.
+#[tokio::test]
+async fn test_new_event_not_fired_on_overwrite() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "En"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // Seed the key *before* subscribing, so the creation `new` event is not
+    // observed; only the subsequent overwrite is under test.
+    client.command(&["SET", "dupkey", "v1"]).await;
+
+    subscribe_keyevent(&mut subscriber, "new").await;
+
+    let resp = client.command(&["SET", "dupkey", "v2"]).await;
+    assert_eq!(resp, Response::ok());
+
+    // Overwrite creates nothing: no `new` event.
+    assert_keyevent_keys(&mut subscriber, "new", &[]).await;
+    server.shutdown().await;
+}
+
+/// `keymiss` fires on a read command that misses (key absent). GET of a missing
+/// key delivers a `keymiss` keyevent naming the key when class `m` is enabled.
+#[tokio::test]
+async fn test_keymiss_event_fires_on_read_miss() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    // `Em` = keyevent notifications for the key-miss class only.
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Em"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut subscriber, "keymiss").await;
+
+    let resp = client.command(&["GET", "absentkey"]).await;
+    assert_eq!(resp, Response::Bulk(None));
+
+    assert_keyevent_keys(&mut subscriber, "keymiss", &["absentkey"]).await;
+    server.shutdown().await;
+}
+
+/// `keymiss` does not fire when the read hits: a present key delivers no
+/// `keymiss` event.
+#[tokio::test]
+async fn test_keymiss_not_fired_on_read_hit() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Em"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    client.command(&["SET", "presentkey", "v"]).await;
+
+    subscribe_keyevent(&mut subscriber, "keymiss").await;
+
+    let resp = client.command(&["GET", "presentkey"]).await;
+    assert_eq!(resp, Response::Bulk(Some(Bytes::from("v"))));
+
+    assert_keyevent_keys(&mut subscriber, "keymiss", &[]).await;
+    server.shutdown().await;
+}
+
+/// `keymiss` fires only from read lookups, never write lookups (Redis parity:
+/// `lookupKeyRead` vs `lookupKeyWrite`). GETDEL is a WRITE command with a
+/// first-key lookup; a GETDEL that misses must emit no `keymiss`.
+#[tokio::test]
+async fn test_keymiss_not_fired_for_write_command() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Em"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut subscriber, "keymiss").await;
+
+    // GETDEL of a missing key: a write-lookup miss, so no `keymiss`.
+    let resp = client.command(&["GETDEL", "absent-write-key"]).await;
+    assert_eq!(resp, Response::Bulk(None));
+
+    assert_keyevent_keys(&mut subscriber, "keymiss", &[]).await;
+    server.shutdown().await;
+}
+
+/// The `A` alias must NOT enable `new` or `keymiss` (both are excluded from
+/// `NOTIFY_ALL` in Redis). With `KEA` set, creating a key and missing a read
+/// deliver their ordinary type events but neither `new` nor `keymiss`.
+#[tokio::test]
+async fn test_all_alias_excludes_new_and_keymiss() {
+    let server = TestServer::start_standalone().await;
+    let mut new_sub = server.connect().await;
+    let mut keymiss_sub = server.connect().await;
+    let mut set_sub = server.connect().await;
+    let mut client = server.connect().await;
+
+    // `KEA` enables keyspace + keyevent for every class in the `A` alias,
+    // which deliberately excludes `n` and `m`.
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut new_sub, "new").await;
+    subscribe_keyevent(&mut keymiss_sub, "keymiss").await;
+    subscribe_keyevent(&mut set_sub, "set").await;
+
+    // Create a key (would fire `new` if `n` were on) and miss a read (would
+    // fire `keymiss` if `m` were on).
+    let resp = client.command(&["SET", "akey", "v"]).await;
+    assert_eq!(resp, Response::ok());
+    let resp = client.command(&["GET", "amiss"]).await;
+    assert_eq!(resp, Response::Bulk(None));
+
+    // The ordinary `set` type event IS delivered (proves notifications are on).
+    assert_keyevent_keys(&mut set_sub, "set", &["akey"]).await;
+    // But neither `new` nor `keymiss` under the `A` alias.
+    assert_keyevent_keys(&mut new_sub, "new", &[]).await;
+    assert_keyevent_keys(&mut keymiss_sub, "keymiss", &[]).await;
+    server.shutdown().await;
+}
+
+/// `new` is emitted before the command's own type event: a single SET of a
+/// fresh key with both `n` and the string class enabled delivers `new` first,
+/// then `set`, on a subscriber pattern-listening to both.
+#[tokio::test]
+async fn test_new_precedes_type_event() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    // `E$n` = keyevent + string class + new-key class.
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "E$n"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // Pattern-subscribe so both `new` and `set` keyevents arrive in order.
+    let resp = subscriber
+        .command(&["PSUBSCRIBE", "__keyevent@0__:*"])
+        .await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let resp = client.command(&["SET", "ordkey", "v"]).await;
+    assert_eq!(resp, Response::ok());
+
+    // First message: `new`. pmessage shape: ["pmessage", pattern, channel, payload].
+    let msg = subscriber.read_message(Duration::from_secs(2)).await;
+    let Some(Response::Array(arr)) = msg else {
+        panic!("expected a `new` pmessage, got {msg:?}");
+    };
+    assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("pmessage"))));
+    assert_eq!(
+        arr[2],
+        Response::Bulk(Some(Bytes::from("__keyevent@0__:new")))
+    );
+    assert_eq!(arr[3], Response::Bulk(Some(Bytes::from("ordkey"))));
+
+    // Second message: `set`.
+    let msg = subscriber.read_message(Duration::from_secs(2)).await;
+    let Some(Response::Array(arr)) = msg else {
+        panic!("expected a `set` pmessage after `new`, got {msg:?}");
+    };
+    assert_eq!(
+        arr[2],
+        Response::Bulk(Some(Bytes::from("__keyevent@0__:set")))
+    );
+    assert_eq!(arr[3], Response::Bulk(Some(Bytes::from("ordkey"))));
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Subscriber disconnect cross-shard deregistration (issue 30)
+// ============================================================================
+//
+// A real client disconnect must deregister the connection from the broadcast
+// subscription map (shard 0, where SUBSCRIBE/PSUBSCRIBE register) *and* from
+// every sharded-channel subscription map on each owning shard. That fan-out
+// rides the `ConnectionClosed` broadcast to all shards
+// (`connection/lifecycle.rs` -> `notify_connection_closed`). These e2e tests
+// subscribe one client across >= 2 shards (broadcast + pattern on shard 0, a
+// sharded channel on a non-zero shard) and then assert PUBSUB introspection and
+// PUBLISH/SPUBLISH receiver counts drop to zero after both a graceful
+// `CLIENT KILL` and an ungraceful raw-socket close.
+
+/// Number of active broadcast channels reported by `PUBSUB CHANNELS`.
+async fn pubsub_channels_len(client: &mut TestClient) -> usize {
+    match client.command(&["PUBSUB", "CHANNELS"]).await {
+        Response::Array(a) => a.len(),
+        other => panic!("expected array from PUBSUB CHANNELS, got {other:?}"),
+    }
+}
+
+/// Subscriber count for a single broadcast channel via `PUBSUB NUMSUB <ch>`
+/// (reply shape `[<ch>, <count>]`).
+async fn pubsub_numsub(client: &mut TestClient, channel: &str) -> i64 {
+    match client.command(&["PUBSUB", "NUMSUB", channel]).await {
+        Response::Array(a) => match a.as_slice() {
+            [_, Response::Integer(n)] => *n,
+            other => panic!("unexpected PUBSUB NUMSUB reply: {other:?}"),
+        },
+        other => panic!("expected array from PUBSUB NUMSUB, got {other:?}"),
+    }
+}
+
+/// Total pattern-subscription count via `PUBSUB NUMPAT`.
+async fn pubsub_numpat(client: &mut TestClient) -> i64 {
+    match client.command(&["PUBSUB", "NUMPAT"]).await {
+        Response::Integer(n) => n,
+        other => panic!("expected integer from PUBSUB NUMPAT, got {other:?}"),
+    }
+}
+
+/// Subscriber count for a single sharded channel via
+/// `PUBSUB SHARDNUMSUB <ch>` (reply shape `[<ch>, <count>]`).
+async fn pubsub_shardnumsub(client: &mut TestClient, channel: &str) -> i64 {
+    match client.command(&["PUBSUB", "SHARDNUMSUB", channel]).await {
+        Response::Array(a) => match a.as_slice() {
+            [_, Response::Integer(n)] => *n,
+            other => panic!("unexpected PUBSUB SHARDNUMSUB reply: {other:?}"),
+        },
+        other => panic!("expected array from PUBSUB SHARDNUMSUB, got {other:?}"),
+    }
+}
+
+/// Poll PUBSUB introspection (via a separate control connection) until every
+/// subscription count for the given broadcast + pattern + sharded channels
+/// reaches zero across all shards, or panic after `deadline`. Uses a polling
+/// deadline rather than a fixed sleep so the test is robust to disconnect
+/// timing (the `ConnectionClosed` fan-out is asynchronous).
+async fn wait_for_full_dereg(
+    client: &mut TestClient,
+    broadcast_channel: &str,
+    sharded_channel: &str,
+    deadline: Duration,
+) {
+    let start = Instant::now();
+    loop {
+        let numsub = pubsub_numsub(client, broadcast_channel).await;
+        let numpat = pubsub_numpat(client).await;
+        let shardnumsub = pubsub_shardnumsub(client, sharded_channel).await;
+        let channels = pubsub_channels_len(client).await;
+
+        if numsub == 0 && numpat == 0 && shardnumsub == 0 && channels == 0 {
+            return;
+        }
+        assert!(
+            start.elapsed() < deadline,
+            "subscriptions leaked after disconnect: \
+             PUBSUB CHANNELS={channels} NUMSUB({broadcast_channel})={numsub} \
+             NUMPAT={numpat} SHARDNUMSUB({sharded_channel})={shardnumsub}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Poll until the subscriptions are visible across all shards (registration is
+/// synchronous per command, but the scatter-gather introspection read is polled
+/// to avoid any startup race), returning once all counts are >= 1.
+async fn wait_for_full_reg(
+    client: &mut TestClient,
+    broadcast_channel: &str,
+    sharded_channel: &str,
+    deadline: Duration,
+) {
+    let start = Instant::now();
+    loop {
+        let numsub = pubsub_numsub(client, broadcast_channel).await;
+        let numpat = pubsub_numpat(client).await;
+        let shardnumsub = pubsub_shardnumsub(client, sharded_channel).await;
+
+        if numsub >= 1 && numpat >= 1 && shardnumsub >= 1 {
+            return;
+        }
+        assert!(
+            start.elapsed() < deadline,
+            "subscriptions never fully registered: \
+             NUMSUB({broadcast_channel})={numsub} NUMPAT={numpat} \
+             SHARDNUMSUB({sharded_channel})={shardnumsub}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// How the subscriber connection is torn down.
+enum DisconnectMode {
+    /// Graceful server-driven close via `CLIENT KILL ID`.
+    ClientKill,
+    /// Ungraceful transport-level close: drop the TCP socket without any RESP
+    /// teardown, exercising the `ConnectionClosed` broadcast fan-out.
+    RawClose,
+}
+
+/// Shared body: subscribe one connection across >= 2 shards (broadcast + pattern
+/// on shard 0, sharded channel off shard 0), disconnect it via `mode`, then
+/// assert every per-shard registration is gone and PUBLISH/SPUBLISH no longer
+/// count it as a receiver.
+async fn run_disconnect_dereg_test(mode: DisconnectMode) {
+    let num_shards = 4;
+    // Sharded channel deliberately owned by a shard other than the broadcast
+    // coordinator (shard 0), so deregistration must fan out across shards.
+    let sharded_channel = key_off_shard_zero(num_shards);
+    assert_ne!(
+        frogdb_core::shard_for_key(sharded_channel.as_bytes(), num_shards),
+        0,
+        "sharded channel must live off shard 0 to exercise the fan-out"
+    );
+    let broadcast_channel = "dereg:broadcast";
+    let pattern = "dereg:pat:*";
+
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(num_shards),
+        ..Default::default()
+    })
+    .await;
+
+    let mut subscriber = server.connect().await;
+    let mut control = server.connect().await;
+    let mut publisher = server.connect().await;
+
+    // Capture the client id *before* entering pub/sub mode (RESP2 pub/sub mode
+    // rejects CLIENT commands).
+    let subscriber_id = match subscriber.command(&["CLIENT", "ID"]).await {
+        Response::Integer(id) => id,
+        other => panic!("expected integer from CLIENT ID, got {other:?}"),
+    };
+
+    // Subscribe across >= 2 shards: broadcast channel + pattern (shard 0) and a
+    // sharded channel owned by a non-zero shard.
+    subscriber.command(&["SUBSCRIBE", broadcast_channel]).await;
+    subscriber.command(&["PSUBSCRIBE", pattern]).await;
+    subscriber.command(&["SSUBSCRIBE", &sharded_channel]).await;
+
+    // Confirm the subscriptions are fully registered across shards first, so the
+    // post-disconnect assertion is meaningful (0 must be a real drop, not a
+    // never-registered state).
+    wait_for_full_reg(
+        &mut control,
+        broadcast_channel,
+        &sharded_channel,
+        Duration::from_secs(5),
+    )
+    .await;
+
+    // Sanity: the live subscriber is counted as a receiver on both namespaces.
+    assert_eq!(
+        publisher
+            .command(&["PUBLISH", broadcast_channel, "hi"])
+            .await,
+        Response::Integer(1),
+        "live subscriber must be counted by PUBLISH"
+    );
+    assert_eq!(
+        publisher
+            .command(&["SPUBLISH", &sharded_channel, "hi"])
+            .await,
+        Response::Integer(1),
+        "live subscriber must be counted by SPUBLISH"
+    );
+
+    // Disconnect.
+    match mode {
+        DisconnectMode::ClientKill => {
+            let resp = control
+                .command(&["CLIENT", "KILL", "ID", &subscriber_id.to_string()])
+                .await;
+            assert_eq!(resp, Response::Integer(1), "CLIENT KILL should kill 1 conn");
+            // Drop the local socket too so no buffered client state masks a
+            // server-side leak.
+            drop(subscriber);
+        }
+        DisconnectMode::RawClose => {
+            // Ungraceful: drop the TCP stream with no RESET/UNSUBSCRIBE/QUIT.
+            drop(subscriber);
+        }
+    }
+
+    // Deregistration is asynchronous (ConnectionClosed fan-out to all shards);
+    // poll to a deadline.
+    wait_for_full_dereg(
+        &mut control,
+        broadcast_channel,
+        &sharded_channel,
+        Duration::from_secs(5),
+    )
+    .await;
+
+    // PUBLISH / SPUBLISH must no longer count the gone subscriber.
+    assert_eq!(
+        publisher
+            .command(&["PUBLISH", broadcast_channel, "after"])
+            .await,
+        Response::Integer(0),
+        "PUBLISH must not count a disconnected subscriber"
+    );
+    assert_eq!(
+        publisher
+            .command(&["SPUBLISH", &sharded_channel, "after"])
+            .await,
+        Response::Integer(0),
+        "SPUBLISH must not count a disconnected subscriber"
+    );
+
+    server.shutdown().await;
+}
+
+/// Variant A: graceful `CLIENT KILL` deregisters the subscriber across every
+/// shard (broadcast, pattern, and the off-shard-0 sharded channel).
+#[tokio::test]
+async fn test_subscriber_dereg_on_client_kill_cross_shard() {
+    run_disconnect_dereg_test(DisconnectMode::ClientKill).await;
+}
+
+/// Variant B: an ungraceful raw TCP close deregisters the subscriber across
+/// every shard, exercising the `ConnectionClosed` broadcast fan-out
+/// (`connection/lifecycle.rs`) rather than a command-driven teardown.
+#[tokio::test]
+async fn test_subscriber_dereg_on_raw_close_cross_shard() {
+    run_disconnect_dereg_test(DisconnectMode::RawClose).await;
+}
+
+/// Slow-subscriber output-buffer bound (issue 29).
+///
+/// Regression + policy pin for the pub/sub client-output-buffer DoS: a
+/// subscriber that stops reading its socket must NOT let the server buffer
+/// published messages without bound. FrogDB caps the per-connection pub/sub
+/// output buffer at `server.pubsub-output-buffer-hard-limit` bytes (mirroring
+/// Redis `client-output-buffer-limit pubsub`): once the queue would exceed the
+/// limit, further messages are dropped to keep memory bounded, the overflow is
+/// latched, and the connection task tears the slow subscriber down on its next
+/// drain — exactly as Redis disconnects a client that trips its pubsub buffer
+/// limit.
+///
+/// This exercises the *client-facing* delivery path (shard `publish` ->
+/// per-connection `PubSubSender` -> connection delivery loop -> socket), which
+/// is distinct from the already-bounded cross-shard keyspace-notification hop
+/// (`keyspace_coordinator.rs`): that internal hop is a separate, upstream-capped
+/// channel and is deliberately left uncapped here (`PubSubSender::unbounded`).
+///
+/// # Making the overflow deterministic across kernels
+///
+/// The in-process output budget only accumulates (and overflows) once the
+/// connection's delivery-loop socket write *blocks* — which needs the kernel's
+/// own socket buffering (server `SO_SNDBUF` + the subscriber's `SO_RCVBUF`) to
+/// fill first. Linux loopback autotunes `SO_SNDBUF` up to `tcp_wmem` max (4 MiB
+/// on the CI box), so a small flood is silently absorbed by kernel buffers, the
+/// userspace budget never overflows, and nothing is disconnected. Shrinking the
+/// *receiver* buffer alone does not help: unsent bytes still pile into the
+/// server's send buffer regardless of the advertised window.
+///
+/// So the flood must exceed the total kernel buffering ceiling. We cap the
+/// subscriber's `SO_RCVBUF` to a known small value and publish ~16 MiB — far
+/// past `server SO_SNDBUF (<= 4 MiB) + subscriber SO_RCVBUF (128 KiB) + the
+/// 32 KiB output budget` — so the delivery write is guaranteed to block, the
+/// budget is guaranteed to overflow, and the slow subscriber is torn down. The
+/// per-connection *server memory* stays bounded by the 32 KiB budget throughout
+/// (the kernel buffers are the OS's fixed ceiling, not unbounded growth) — the
+/// whole point of the bound.
+#[tokio::test]
+async fn test_slow_subscriber_output_buffer_bound_disconnects() {
+    // Small budget so accumulation overflows well before the flood ends, but
+    // larger than one message so this tests message *accumulation* (a slow
+    // subscriber), not a single oversized message.
+    let hard_limit = 32 * 1024;
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        pubsub_output_buffer_hard_limit: Some(hard_limit),
+        ..Default::default()
+    })
+    .await;
+
+    let mut subscriber = server.connect().await;
+    let mut publisher = server.connect().await;
+    let mut control = server.connect().await;
+
+    // Cap the subscriber's receive buffer so the kernel buffering ceiling the
+    // flood must exceed is bounded and known (the dominant term is the server's
+    // <= 4 MiB autotuned send buffer). A modest 128 KiB — not a tiny window —
+    // keeps the post-disconnect drain fast. The bound itself is unit-tested in
+    // `core/src/pubsub.rs`; here we pin the end-to-end operator-visible
+    // disconnect across both macOS and the Linux testbox.
+    socket2::SockRef::from(subscriber.framed.get_ref())
+        .set_recv_buffer_size(128 * 1024)
+        .expect("cap subscriber SO_RCVBUF");
+
+    // Subscribe, then deliberately STALL: never read from `subscriber` again
+    // until after the flood, so the server-side output buffer is the only thing
+    // standing between a hostile publisher and unbounded memory growth.
+    let resp = subscriber.command(&["SUBSCRIBE", "flood"]).await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Flood far past the kernel buffering ceiling: 4000 * 4 KiB = ~16 MiB
+    // attempted against a 32 KiB budget. Fire back-to-back without awaiting each
+    // reply so they arrive as a burst the single stalled subscriber cannot drain;
+    // once the kernel buffers fill, the delivery write blocks and the budget
+    // drops the rest.
+    let attempted = 4000;
+    let payload = "x".repeat(4 * 1024);
+    for _ in 0..attempted {
+        publisher.send_only(&["PUBLISH", "flood", &payload]).await;
+    }
+
+    // The server must stay responsive throughout — no OOM, no wedge. A separate
+    // connection completes a round trip while the flood is in flight.
+    let pong = control.command(&["PING"]).await;
+    assert_eq!(pong, Response::Simple(Bytes::from("PONG")));
+
+    // Now let the subscriber drain. It receives the bounded prefix that fit in
+    // the kernel buffers and then hits EOF: the server tore the connection down
+    // because the output buffer overflowed. `framed.next()` yields `None` on the
+    // clean close (or `Some(Err(..))` on an ungraceful reset); either means
+    // disconnected.
+    let mut disconnected = false;
+    let mut frames_read = 0usize;
+    for _ in 0..(attempted + 1) {
+        match tokio::time::timeout(Duration::from_secs(10), subscriber.framed.next()).await {
+            Ok(None) => {
+                disconnected = true;
+                break;
+            }
+            Ok(Some(Ok(_frame))) => {
+                frames_read += 1;
+            }
+            Ok(Some(Err(_))) => {
+                disconnected = true;
+                break;
+            }
+            Err(_) => break, // timeout: still connected (unexpected)
+        }
+    }
+
+    assert!(
+        disconnected,
+        "server must disconnect the slow subscriber after the output buffer \
+         overflowed (read {frames_read} frames before EOF)"
+    );
+    // Memory bound in action: only the bounded prefix that fit in kernel buffers
+    // was ever delivered, well short of the ~4000 published — the rest were
+    // dropped by the output budget rather than buffered without bound.
+    assert!(
+        frames_read < attempted,
+        "far fewer than the published messages should be delivered; got {frames_read}"
+    );
+
+    // The disconnect is observable as a metric for operators.
+    let metrics = server.fetch_metrics().await;
+    let disconnects = frogdb_telemetry::testing::get_counter(
+        &metrics,
+        "frogdb_pubsub_output_buffer_disconnects_total",
+        &[],
+    );
+    assert!(
+        disconnects >= 1.0,
+        "output-buffer disconnect counter must record the teardown; got {disconnects}"
+    );
+
+    // Control connection is still fully functional after the storm.
+    let pong = control.command(&["PING"]).await;
+    assert_eq!(pong, Response::Simple(Bytes::from("PONG")));
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Subscribe-mode command gate (issue 28)
+//
+// Pins the RESP2/RESP3 boundary of `is_allowed_in_pubsub_mode`
+// (guards.rs:196-217): verified against Redis 8.6 `processCommand`'s
+// subscribe-context gate (server.c), which allows exactly 9 commands in RESP2
+// while subscribed — SUBSCRIBE, UNSUBSCRIBE, PSUBSCRIBE, PUNSUBSCRIBE,
+// SSUBSCRIBE, SUNSUBSCRIBE, PING, QUIT, RESET — and lifts the restriction
+// entirely in RESP3. Complements the direct unit coverage added on
+// `is_allowed_in_pubsub_mode` itself in `connection::guards::tests`.
+// ============================================================================
+
+/// RESP2: enumerate the full allow-set boundary. A single anchor subscription
+/// is held for the whole test so the connection never leaves pub/sub mode
+/// between assertions (unsubscribing the *last* channel would exit the mode
+/// and stop testing the gate).
+#[tokio::test]
+async fn test_pubsub_mode_resp2_allowed_commands_succeed() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    // Enter pub/sub mode and keep this subscription alive for the duration.
+    let resp = c.command(&["SUBSCRIBE", "anchor"]).await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+
+    // SUBSCRIBE (a second channel) is allowed.
+    match c.command(&["SUBSCRIBE", "s2"]).await {
+        Response::Array(arr) => {
+            assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("subscribe"))));
+            assert_eq!(arr[1], Response::Bulk(Some(Bytes::from("s2"))));
+        }
+        other => panic!("SUBSCRIBE should be allowed while subscribed, got {other:?}"),
+    }
+
+    // UNSUBSCRIBE (of that second channel, not the anchor) is allowed.
+    match c.command(&["UNSUBSCRIBE", "s2"]).await {
+        Response::Array(arr) => {
+            assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("unsubscribe"))));
+        }
+        other => panic!("UNSUBSCRIBE should be allowed while subscribed, got {other:?}"),
+    }
+
+    // PSUBSCRIBE is allowed.
+    match c.command(&["PSUBSCRIBE", "p.*"]).await {
+        Response::Array(arr) => {
+            assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("psubscribe"))));
+        }
+        other => panic!("PSUBSCRIBE should be allowed while subscribed, got {other:?}"),
+    }
+
+    // PUNSUBSCRIBE is allowed.
+    match c.command(&["PUNSUBSCRIBE", "p.*"]).await {
+        Response::Array(arr) => {
+            assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("punsubscribe"))));
+        }
+        other => panic!("PUNSUBSCRIBE should be allowed while subscribed, got {other:?}"),
+    }
+
+    // SSUBSCRIBE is allowed.
+    match c.command(&["SSUBSCRIBE", "sc1"]).await {
+        Response::Array(arr) => {
+            assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("ssubscribe"))));
+        }
+        other => panic!("SSUBSCRIBE should be allowed while subscribed, got {other:?}"),
+    }
+
+    // SUNSUBSCRIBE is allowed.
+    match c.command(&["SUNSUBSCRIBE", "sc1"]).await {
+        Response::Array(arr) => {
+            assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("sunsubscribe"))));
+        }
+        other => panic!("SUNSUBSCRIBE should be allowed while subscribed, got {other:?}"),
+    }
+
+    // PING is allowed (bespoke RESP2 subscribed framing: ["pong", ""]).
+    assert_eq!(
+        c.command(&["PING"]).await,
+        Response::Array(vec![
+            Response::Bulk(Some(Bytes::from("pong"))),
+            Response::Bulk(Some(Bytes::from(""))),
+        ])
+    );
+
+    // Still subscribed to "anchor" throughout: confirm the connection never
+    // fell out of pub/sub mode by asserting a plain data command is still
+    // rejected right now.
+    let resp = c.command(&["GET", "foo"]).await;
+    assert!(matches!(resp, Response::Error(ref e) if e.starts_with(b"ERR Can't execute")));
+
+    server.shutdown().await;
+}
+
+/// RESP2 QUIT is allowed while subscribed and closes the connection (needs its
+/// own connection since QUIT is terminal).
+#[tokio::test]
+async fn test_pubsub_mode_resp2_quit_allowed() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    let resp = c.command(&["SUBSCRIBE", "ch"]).await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+
+    let response = c.command(&["QUIT"]).await;
+    assert!(
+        matches!(response, Response::Simple(_)),
+        "QUIT should return +OK before closing, got {response:?}"
+    );
+
+    // The connection is torn down after QUIT's reply.
+    let after = c.read_response(Duration::from_secs(2)).await;
+    assert!(
+        after.is_none(),
+        "connection should be closed after QUIT, got {after:?}"
+    );
+
+    server.shutdown().await;
+}
+
+/// RESET while subscribed is allowed, and exits pub/sub mode: a plain data
+/// command succeeds immediately afterward (acceptance criterion — RESET is
+/// the documented escape hatch from subscribe mode).
+#[tokio::test]
+async fn test_pubsub_mode_resp2_reset_exits_pubsub_mode() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    let resp = c.command(&["SUBSCRIBE", "ch"]).await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+
+    // RESET itself is allowed while subscribed (it's in the 9-command set).
+    assert_eq!(
+        c.command(&["RESET"]).await,
+        Response::Simple(Bytes::from("RESET"))
+    );
+
+    // Pub/sub mode is exited: a plain data command now succeeds instead of
+    // being rejected with the subscribe-mode gate error.
+    assert_eq!(c.command(&["SET", "foo", "bar"]).await, Response::ok());
+    assert_eq!(
+        c.command(&["GET", "foo"]).await,
+        Response::bulk(Bytes::from("bar"))
+    );
+
+    server.shutdown().await;
+}
+
+/// RESP2: a representative set of disallowed data commands are rejected with
+/// Redis's exact wire text while subscribed.
+#[tokio::test]
+async fn test_pubsub_mode_resp2_disallowed_commands_exact_error_text() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    let resp = c.command(&["SUBSCRIBE", "ch"]).await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+
+    let cases: &[(&str, &[&str])] = &[
+        ("GET", &["foo"]),
+        ("SET", &["foo", "bar"]),
+        ("DEL", &["foo"]),
+    ];
+    for (cmd, args) in cases {
+        let cmd = *cmd;
+        let mut full = vec![cmd];
+        full.extend_from_slice(args);
+        let response = c.command(&full).await;
+        assert_eq!(
+            response,
+            Response::error(format!(
+                "ERR Can't execute '{}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / \
+                 PING / QUIT / RESET are allowed in this context",
+                cmd
+            )),
+            "{cmd} should be rejected with Redis's exact subscribe-mode error text"
+        );
+    }
+
+    server.shutdown().await;
+}
+
+/// KNOWN DIVERGENCE from Redis (pinned, not silently fixed): ASKING /
+/// READONLY / READWRITE share RESET's `ConnectionLevel(ConnectionState)`
+/// execution strategy in `is_allowed_in_pubsub_mode`, so the gate lets them
+/// through too — Redis's 9-command allow-set does *not* include them. This
+/// integration test proves the divergence is visible on the wire: each reply
+/// is the command's own normal response (cluster-support-disabled on a
+/// standalone server), never the subscribe-mode gate's error text.
+#[tokio::test]
+async fn test_pubsub_mode_resp2_connection_state_siblings_bypass_gate() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    let resp = c.command(&["SUBSCRIBE", "ch"]).await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+
+    for cmd in ["ASKING", "READONLY", "READWRITE"] {
+        let response = c.command(&[cmd]).await;
+        assert_eq!(
+            response,
+            Response::error("ERR This instance has cluster support disabled"),
+            "{cmd} reaches its own handler while subscribed (gate divergence), got {response:?}"
+        );
+    }
+
+    server.shutdown().await;
+}
+
+/// RESP3 lifts the subscribe-mode restriction entirely: a normal data command
+/// issued while subscribed returns a normal (non-push) reply, and push
+/// messages continue to arrive independently on the same connection.
+#[tokio::test]
+async fn test_pubsub_mode_resp3_normal_command_succeeds_while_subscribed() {
+    let server = TestServer::start_standalone().await;
+    let mut sub = server.connect_resp3().await;
+    sub.command(&["HELLO", "3"]).await;
+    let mut publisher = server.connect().await;
+
+    // Subscribe (Push confirmation consumed by `command`'s subscribe-aware path).
+    let confirm = sub.command(&["SUBSCRIBE", "resp3chan"]).await;
+    assert_resp3_push_label(Some(confirm), "subscribe");
+
+    // A normal data command succeeds with a normal (non-push) reply while
+    // subscribed under RESP3.
+    let set_resp = sub.command(&["SET", "foo", "bar"]).await;
+    assert!(
+        matches!(&set_resp, Resp3Frame::SimpleString { data, .. } if data.as_ref() == b"OK"),
+        "SET should return a normal +OK reply while subscribed under RESP3, got {set_resp:?}"
+    );
+    let get_resp = sub.command(&["GET", "foo"]).await;
+    assert!(
+        matches!(&get_resp, Resp3Frame::BlobString { data, .. } if data.as_ref() == b"bar"),
+        "GET should return a normal bulk reply while subscribed under RESP3, got {get_resp:?}"
+    );
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Push delivery keeps working independently of the normal command traffic
+    // above.
+    let published = publisher.command(&["PUBLISH", "resp3chan", "hello"]).await;
+    assert!(matches!(published, Response::Integer(n) if n >= 1));
+
+    let msg = sub.read_message(Duration::from_secs(2)).await;
+    match msg {
+        Some(Resp3Frame::Push { data, .. }) => {
+            assert!(
+                matches!(&data[0], Resp3Frame::BlobString { data, .. } if data.as_ref() == b"message")
+            );
+            assert!(
+                matches!(&data[1], Resp3Frame::BlobString { data, .. } if data.as_ref() == b"resp3chan")
+            );
+            assert!(
+                matches!(&data[2], Resp3Frame::BlobString { data, .. } if data.as_ref() == b"hello")
+            );
+        }
+        other => panic!("expected Push message, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// RESP3: even an unknown command is allowed through the gate while
+/// subscribed (the RESP3 branch is unconditional — `guards.rs:202-204` returns
+/// `true` before consulting the registry at all). It still fails downstream as
+/// an unknown command, but *not* with the subscribe-mode gate's error text.
+#[tokio::test]
+async fn test_pubsub_mode_resp3_gate_is_unconditional_allow() {
+    let server = TestServer::start_standalone().await;
+    let mut sub = server.connect_resp3().await;
+    sub.command(&["HELLO", "3"]).await;
+
+    let confirm = sub.command(&["SUBSCRIBE", "ch"]).await;
+    assert_resp3_push_label(Some(confirm), "subscribe");
+
+    let response = sub.command(&["NOSUCHCOMMAND"]).await;
+    match &response {
+        Resp3Frame::SimpleError { data, .. } => {
+            assert!(
+                !data.starts_with("ERR Can't execute"),
+                "unknown command must fail as unknown, not via the subscribe-mode \
+                 gate, got {response:?}"
+            );
+        }
+        other => panic!("expected a SimpleError for an unknown command, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+// ===========================================================================
+// Stream (`t`) keyspace-notification class end-to-end (issue 27)
+//
+// Every stream command's EventSpec was declarative but never asserted, and
+// auditing against live Redis 8.6.4 source (t_stream.c) surfaced real
+// emission gaps beyond the missing tests: XSETID, XDELEX, XACKDEL never
+// notified at all; XGROUP's five subcommands shared one static event name
+// ("xgroup-create") instead of each firing its own; and XCLAIM/XAUTOCLAIM/
+// XREADGROUP never notified their implicit "xgroup-createconsumer" side
+// effect. All of those are fixed in the command implementations; the tests
+// below cover the resulting (correct) behavior and would fail again if any
+// of those emission sites were removed.
+// ===========================================================================
+
+/// XADD fires `xadd` unconditionally on success (basic.rs, unchanged
+/// pre-existing behavior — establishes the baseline the rest of this section
+/// builds on).
+#[tokio::test]
+async fn test_xadd_notifies_xadd_event() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut subscriber, "xadd").await;
+
+    let resp = client
+        .command(&["XADD", "mystream", "*", "field1", "value1"])
+        .await;
+    assert!(matches!(resp, Response::Bulk(Some(_))));
+
+    assert_keyevent_keys(&mut subscriber, "xadd", &["mystream"]).await;
+    server.shutdown().await;
+}
+
+/// Regression (issue 27): XADD's own trailing MAXLEN/MINID clause fires a
+/// second, conditional `xtrim` event (shared with the standalone XTRIM
+/// command) only when that trim actually removed an entry — previously,
+/// `XaddCommand`'s static `Emits{"xadd"}` spec made this impossible to
+/// represent, and the trim's return value was silently discarded.
+#[tokio::test]
+async fn test_xadd_notifies_xtrim_event_when_own_trim_removes_entries() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XADD", "s", "2-0", "f", "v2"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xtrim").await;
+
+    // MAXLEN 1 trims the two existing entries down to one as part of the add.
+    let resp = client
+        .command(&["XADD", "s", "MAXLEN", "1", "3-0", "f", "v3"])
+        .await;
+    assert!(matches!(resp, Response::Bulk(Some(_))));
+
+    assert_keyevent_keys(&mut subscriber, "xtrim", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// XADD with a MAXLEN clause that removes nothing does not fire `xtrim`.
+#[tokio::test]
+async fn test_xadd_not_fired_xtrim_when_own_trim_removes_nothing() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xtrim").await;
+
+    // MAXLEN 10 with only 2 entries after this add: nothing to trim.
+    let resp = client
+        .command(&["XADD", "s", "MAXLEN", "10", "2-0", "f", "v2"])
+        .await;
+    assert!(matches!(resp, Response::Bulk(Some(_))));
+
+    assert_keyevent_keys(&mut subscriber, "xtrim", &[]).await;
+    server.shutdown().await;
+}
+
+/// The stream class is gated behind the `t` flag: with only the generic
+/// class (`g`) enabled, XADD notifies nothing; switching to `t` (or `A`,
+/// which includes it) delivers the same command's `xadd` event.
+#[tokio::test]
+async fn test_stream_events_gated_behind_t_class() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    // `Eg` = keyevent notifications for the generic class only — no `t`.
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Eg"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    subscribe_keyevent(&mut subscriber, "xadd").await;
+
+    let resp = client
+        .command(&["XADD", "mystream", "*", "field1", "value1"])
+        .await;
+    assert!(matches!(resp, Response::Bulk(Some(_))));
+
+    // Not delivered: `g` alone does not include the stream class.
+    assert_keyevent_keys(&mut subscriber, "xadd", &[]).await;
+
+    // Now enable `t`: the same command now delivers the event.
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    let resp = client
+        .command(&["XADD", "mystream", "*", "field2", "value2"])
+        .await;
+    assert!(matches!(resp, Response::Bulk(Some(_))));
+
+    assert_keyevent_keys(&mut subscriber, "xadd", &["mystream"]).await;
+    server.shutdown().await;
+}
+
+/// XTRIM fires `xtrim` only when it actually removes an entry (t_stream.c
+/// `xtrimCommand`, `if (deleted)`).
+#[tokio::test]
+async fn test_xtrim_notifies_xtrim_event_when_entries_removed() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XADD", "s", "2-0", "f", "v2"]).await;
+    client.command(&["XADD", "s", "3-0", "f", "v3"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xtrim").await;
+
+    let resp = client.command(&["XTRIM", "s", "MAXLEN", "1"]).await;
+    assert_eq!(resp, Response::Integer(2));
+
+    assert_keyevent_keys(&mut subscriber, "xtrim", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// XTRIM notifies nothing when there was nothing to remove.
+#[tokio::test]
+async fn test_xtrim_not_fired_when_nothing_removed() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xtrim").await;
+
+    let resp = client.command(&["XTRIM", "s", "MAXLEN", "10"]).await;
+    assert_eq!(resp, Response::Integer(0));
+
+    assert_keyevent_keys(&mut subscriber, "xtrim", &[]).await;
+    server.shutdown().await;
+}
+
+/// XDEL fires `xdel` only for a call that actually removes an entry.
+#[tokio::test]
+async fn test_xdel_notifies_xdel_event_when_entry_removed() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xdel").await;
+
+    let resp = client.command(&["XDEL", "s", "1-0"]).await;
+    assert_eq!(resp, Response::Integer(1));
+
+    assert_keyevent_keys(&mut subscriber, "xdel", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// XDEL of an absent ID deletes nothing and notifies nothing.
+#[tokio::test]
+async fn test_xdel_not_fired_when_id_absent() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xdel").await;
+
+    let resp = client.command(&["XDEL", "s", "99-0"]).await;
+    assert_eq!(resp, Response::Integer(0));
+
+    assert_keyevent_keys(&mut subscriber, "xdel", &[]).await;
+    server.shutdown().await;
+}
+
+/// Regression (issue 27): XDELEX previously had `EventSpec::Suppressed` and
+/// never notified. It shares XDEL's `xdel` event and fires only when at
+/// least one ID was actually deleted (t_stream.c `xdelexCommand`).
+#[tokio::test]
+async fn test_xdelex_notifies_xdel_event_when_entry_deleted() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XADD", "s", "2-0", "f", "v2"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xdel").await;
+
+    // Mixed present/absent IDs: still fires once because *something* deleted.
+    let resp = client
+        .command(&["XDELEX", "s", "IDS", "2", "1-0", "99-0"])
+        .await;
+    assert_eq!(
+        resp,
+        Response::Array(vec![Response::Integer(1), Response::Integer(-1)])
+    );
+
+    assert_keyevent_keys(&mut subscriber, "xdel", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// XDELEX notifies nothing when it deletes nothing (all IDs absent).
+#[tokio::test]
+async fn test_xdelex_not_fired_when_nothing_deleted() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xdel").await;
+
+    let resp = client.command(&["XDELEX", "s", "IDS", "1", "99-0"]).await;
+    assert_eq!(resp, Response::Array(vec![Response::Integer(-1)]));
+
+    assert_keyevent_keys(&mut subscriber, "xdel", &[]).await;
+    server.shutdown().await;
+}
+
+/// Regression (issue 27): XACKDEL previously had `EventSpec::Suppressed`.
+/// Like XDELEX, it shares the `xdel` event and fires only when at least one
+/// ID was acked *and* deleted (t_stream.c `xackdelCommand`).
+#[tokio::test]
+async fn test_xackdel_notifies_xdel_event_when_entry_deleted() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+    client
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "g1",
+            "c1",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "s",
+            ">",
+        ])
+        .await;
+
+    subscribe_keyevent(&mut subscriber, "xdel").await;
+
+    let resp = client
+        .command(&["XACKDEL", "s", "g1", "IDS", "1", "1-0"])
+        .await;
+    assert_eq!(resp, Response::Array(vec![Response::Integer(1)]));
+
+    assert_keyevent_keys(&mut subscriber, "xdel", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// XACKDEL notifies nothing when nothing was acked/deleted (ID unknown to
+/// the stream entirely).
+#[tokio::test]
+async fn test_xackdel_not_fired_when_nothing_deleted() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xdel").await;
+
+    // 99-0 was never added to the stream at all, so there's nothing to ack
+    // or delete (ack_and_delete returns -1 for an unknown ID, matching
+    // test_xackdel_not_found in integration_streams.rs).
+    let resp = client
+        .command(&["XACKDEL", "s", "g1", "IDS", "1", "99-0"])
+        .await;
+    assert_eq!(resp, Response::Array(vec![Response::Integer(-1)]));
+
+    assert_keyevent_keys(&mut subscriber, "xdel", &[]).await;
+    server.shutdown().await;
+}
+
+/// Regression (issue 27): XSETID previously had `EventSpec::Suppressed` and
+/// never notified. Redis fires `xsetid` unconditionally on success
+/// (t_stream.c `xsetidCommand`).
+#[tokio::test]
+async fn test_xsetid_notifies_xsetid_event() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xsetid").await;
+
+    let resp = client.command(&["XSETID", "s", "100-0"]).await;
+    assert_eq!(resp, Response::ok());
+
+    assert_keyevent_keys(&mut subscriber, "xsetid", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// XGROUP CREATE fires `xgroup-create` on success.
+#[tokio::test]
+async fn test_xgroup_create_notifies_xgroup_create_event() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xgroup-create").await;
+
+    let resp = client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+    assert_eq!(resp, Response::ok());
+
+    assert_keyevent_keys(&mut subscriber, "xgroup-create", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// Regression (issue 27): before this fix, `XgroupCommand`'s spec used one
+/// static `Emits{name: "xgroup-create"}` for *every* subcommand, so
+/// XGROUP SETID would have mislabeled its event as `xgroup-create` instead
+/// of firing its own `xgroup-setid`. Asserts both: the correct event fires,
+/// and the (wrong, pre-fix) event does not.
+#[tokio::test]
+async fn test_xgroup_setid_notifies_xgroup_setid_event_not_xgroup_create() {
+    let server = TestServer::start_standalone().await;
+    let mut setid_sub = server.connect().await;
+    let mut create_sub = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+
+    subscribe_keyevent(&mut setid_sub, "xgroup-setid").await;
+    subscribe_keyevent(&mut create_sub, "xgroup-create").await;
+
+    let resp = client.command(&["XGROUP", "SETID", "s", "g1", "0"]).await;
+    assert_eq!(resp, Response::ok());
+
+    assert_keyevent_keys(&mut setid_sub, "xgroup-setid", &["s"]).await;
+    assert_keyevent_keys(&mut create_sub, "xgroup-create", &[]).await;
+    server.shutdown().await;
+}
+
+/// Regression (issue 27): XGROUP DESTROY previously mislabeled its event as
+/// `xgroup-create` (see above) and fired unconditionally. Redis's
+/// `xgroupCommand` DESTROY only notifies `xgroup-destroy` when the group
+/// actually existed.
+#[tokio::test]
+async fn test_xgroup_destroy_notifies_xgroup_destroy_event_when_group_existed() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xgroup-destroy").await;
+
+    let resp = client.command(&["XGROUP", "DESTROY", "s", "g1"]).await;
+    assert_eq!(resp, Response::Integer(1));
+
+    assert_keyevent_keys(&mut subscriber, "xgroup-destroy", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// XGROUP DESTROY of a nonexistent group notifies nothing.
+#[tokio::test]
+async fn test_xgroup_destroy_not_fired_when_group_absent() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xgroup-destroy").await;
+
+    let resp = client
+        .command(&["XGROUP", "DESTROY", "s", "nosuchgroup"])
+        .await;
+    assert_eq!(resp, Response::Integer(0));
+
+    assert_keyevent_keys(&mut subscriber, "xgroup-destroy", &[]).await;
+    server.shutdown().await;
+}
+
+/// Regression (issue 27): XGROUP CREATECONSUMER previously mislabeled its
+/// event as `xgroup-create` and fired unconditionally. It should fire
+/// `xgroup-createconsumer` only when the consumer is newly created, not on a
+/// repeat call for a consumer that already exists.
+#[tokio::test]
+async fn test_xgroup_createconsumer_notifies_only_when_consumer_is_new() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xgroup-createconsumer").await;
+
+    let resp = client
+        .command(&["XGROUP", "CREATECONSUMER", "s", "g1", "Bob"])
+        .await;
+    assert_eq!(resp, Response::Integer(1));
+
+    let resp = client
+        .command(&["XGROUP", "CREATECONSUMER", "s", "g1", "Bob"])
+        .await;
+    assert_eq!(resp, Response::Integer(0));
+
+    // Only the first (creating) call notifies.
+    assert_keyevent_keys(&mut subscriber, "xgroup-createconsumer", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// Regression (issue 27): XGROUP DELCONSUMER previously mislabeled its event
+/// as `xgroup-create` and fired unconditionally, even for a consumer that
+/// never existed. It should fire `xgroup-delconsumer` only when the consumer
+/// actually existed.
+#[tokio::test]
+async fn test_xgroup_delconsumer_notifies_only_when_consumer_existed() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+    client
+        .command(&["XGROUP", "CREATECONSUMER", "s", "g1", "Bob"])
+        .await;
+
+    subscribe_keyevent(&mut subscriber, "xgroup-delconsumer").await;
+
+    let resp = client
+        .command(&["XGROUP", "DELCONSUMER", "s", "g1", "NoSuchConsumer"])
+        .await;
+    assert_eq!(resp, Response::Integer(0));
+
+    let resp = client
+        .command(&["XGROUP", "DELCONSUMER", "s", "g1", "Bob"])
+        .await;
+    assert_eq!(resp, Response::Integer(0));
+
+    // Only the second call (Bob, who existed) notifies.
+    assert_keyevent_keys(&mut subscriber, "xgroup-delconsumer", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// Regression (issue 27): XCLAIM has no dedicated event, but it always
+/// ensures its target consumer exists (creating it when FORCE is used and
+/// the entry isn't pending). It previously never notified that implicit
+/// creation; it should fire `xgroup-createconsumer` only when the consumer
+/// is genuinely new.
+#[tokio::test]
+async fn test_xclaim_notifies_xgroup_createconsumer_when_consumer_is_new() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xgroup-createconsumer").await;
+
+    let resp = client
+        .command(&["XCLAIM", "s", "g1", "NewConsumer", "0", "1-0", "FORCE"])
+        .await;
+    assert!(matches!(resp, Response::Array(_)));
+
+    assert_keyevent_keys(&mut subscriber, "xgroup-createconsumer", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// XCLAIM notifies nothing when its target consumer already exists.
+#[tokio::test]
+async fn test_xclaim_not_fired_when_consumer_already_exists() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+    client
+        .command(&["XGROUP", "CREATECONSUMER", "s", "g1", "Bob"])
+        .await;
+
+    subscribe_keyevent(&mut subscriber, "xgroup-createconsumer").await;
+
+    let resp = client
+        .command(&["XCLAIM", "s", "g1", "Bob", "0", "1-0", "FORCE"])
+        .await;
+    assert!(matches!(resp, Response::Array(_)));
+
+    assert_keyevent_keys(&mut subscriber, "xgroup-createconsumer", &[]).await;
+    server.shutdown().await;
+}
+
+/// Regression (issue 27): XAUTOCLAIM has the same implicit
+/// consumer-creation behavior as XCLAIM, and previously never notified it.
+#[tokio::test]
+async fn test_xautoclaim_notifies_xgroup_createconsumer_when_consumer_is_new() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+    client
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "g1",
+            "c1",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "s",
+            ">",
+        ])
+        .await;
+
+    subscribe_keyevent(&mut subscriber, "xgroup-createconsumer").await;
+
+    let resp = client
+        .command(&["XAUTOCLAIM", "s", "g1", "NewConsumer", "0", "0"])
+        .await;
+    assert!(matches!(resp, Response::Array(_)));
+
+    assert_keyevent_keys(&mut subscriber, "xgroup-createconsumer", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// XAUTOCLAIM notifies nothing when its target consumer already exists.
+#[tokio::test]
+async fn test_xautoclaim_not_fired_when_consumer_already_exists() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+    client
+        .command(&["XGROUP", "CREATECONSUMER", "s", "g1", "Bob"])
+        .await;
+
+    subscribe_keyevent(&mut subscriber, "xgroup-createconsumer").await;
+
+    let resp = client
+        .command(&["XAUTOCLAIM", "s", "g1", "Bob", "0", "0"])
+        .await;
+    assert!(matches!(resp, Response::Array(_)));
+
+    assert_keyevent_keys(&mut subscriber, "xgroup-createconsumer", &[]).await;
+    server.shutdown().await;
+}
+
+/// Regression (issue 27): XREADGROUP auto-creates its named consumer as a
+/// side effect (before deciding whether to block), and previously never
+/// notified that creation.
+#[tokio::test]
+async fn test_xreadgroup_notifies_xgroup_createconsumer_when_consumer_is_new() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+
+    subscribe_keyevent(&mut subscriber, "xgroup-createconsumer").await;
+
+    let resp = client
+        .command(&["XREADGROUP", "GROUP", "g1", "Alice", "STREAMS", "s", ">"])
+        .await;
+    assert!(matches!(resp, Response::Array(_)));
+
+    assert_keyevent_keys(&mut subscriber, "xgroup-createconsumer", &["s"]).await;
+    server.shutdown().await;
+}
+
+/// XREADGROUP notifies nothing when its named consumer already exists —
+/// including on a no-new-entries call (the consumer lookup happens before
+/// the entries check, so this also exercises that ordering).
+#[tokio::test]
+async fn test_xreadgroup_not_fired_when_consumer_already_exists() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Et"])
+        .await;
+    client
+        .command(&["XGROUP", "CREATE", "s", "g1", "$", "MKSTREAM"])
+        .await;
+    client
+        .command(&["XGROUP", "CREATECONSUMER", "s", "g1", "Alice"])
+        .await;
+
+    subscribe_keyevent(&mut subscriber, "xgroup-createconsumer").await;
+
+    // No new entries and Alice already exists: neither blocks nor notifies.
+    let resp = client
+        .command(&["XREADGROUP", "GROUP", "g1", "Alice", "STREAMS", "s", ">"])
+        .await;
+    assert_eq!(resp, Response::Bulk(None));
+
+    assert_keyevent_keys(&mut subscriber, "xgroup-createconsumer", &[]).await;
+    server.shutdown().await;
+}
+
+/// Upstream Redis parity port of `tests/unit/pubsub.tcl`'s "Keyspace
+/// notifications: stream events test" (see the exclusion note in
+/// `pubsub_tcl.rs` — the original is skipped because it depends on runtime
+/// `notify-keyspace-events` config, which the TCL-port harness doesn't drive).
+/// Reproduces the exact mystream/mygroup/Bob/Alice/Mike/Lee sequence from
+/// Redis 8.6.4 and asserts the precise 6-event order, including both
+/// intentional non-fire cases (Lee never existed; Bob already existed).
+#[tokio::test]
+async fn test_stream_events_ported_from_redis_pubsub_tcl() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+    let mut subscriber = server.connect().await;
+
+    // `Kt`: keyspace notifications for the stream class only (matches the
+    // upstream test's `config set notify-keyspace-events Kt`).
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "Kt"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    let resp = subscriber
+        .command(&["SUBSCRIBE", "__keyspace@0__:mystream"])
+        .await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let resp = client
+        .command(&["XGROUP", "CREATE", "mystream", "mygroup", "$", "MKSTREAM"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    let resp = client
+        .command(&["XGROUP", "CREATECONSUMER", "mystream", "mygroup", "Bob"])
+        .await;
+    assert_eq!(resp, Response::Integer(1));
+
+    let resp = client
+        .command(&["XADD", "mystream", "1-1", "field1", "A"])
+        .await;
+    let id = match resp {
+        Response::Bulk(Some(b)) => String::from_utf8(b.to_vec()).unwrap(),
+        other => panic!("expected a bulk stream ID from XADD, got {other:?}"),
+    };
+
+    client
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "Alice",
+            "STREAMS",
+            "mystream",
+            ">",
+        ])
+        .await;
+
+    client
+        .command(&["XCLAIM", "mystream", "mygroup", "Mike", "0", &id, "FORCE"])
+        .await;
+
+    // Lee has never existed: XGROUP DELCONSUMER must not notify.
+    let resp = client
+        .command(&["XGROUP", "DELCONSUMER", "mystream", "mygroup", "Lee"])
+        .await;
+    assert_eq!(resp, Response::Integer(0));
+
+    // Bob already exists (created above): XAUTOCLAIM's implicit
+    // get-or-create must not notify.
+    client
+        .command(&["XAUTOCLAIM", "mystream", "mygroup", "Bob", "0", &id])
+        .await;
+
+    client
+        .command(&["XGROUP", "DELCONSUMER", "mystream", "mygroup", "Bob"])
+        .await;
+
+    let expected_sequence = [
+        "xgroup-create",
+        "xgroup-createconsumer", // Bob, via XGROUP CREATECONSUMER
+        "xadd",
+        "xgroup-createconsumer", // Alice, via XREADGROUP's implicit creation
+        "xgroup-createconsumer", // Mike, via XCLAIM FORCE's implicit creation
+        "xgroup-delconsumer",    // Bob, via XGROUP DELCONSUMER
+    ];
+    for (i, expected) in expected_sequence.iter().enumerate() {
+        let msg = subscriber.read_message(Duration::from_secs(2)).await;
+        let Some(Response::Array(arr)) = msg else {
+            panic!("expected keyspace message #{i} ('{expected}'), got {msg:?}");
+        };
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("message"))));
+        assert_eq!(
+            arr[1],
+            Response::Bulk(Some(Bytes::from("__keyspace@0__:mystream")))
+        );
+        assert_eq!(
+            arr[2],
+            Response::Bulk(Some(Bytes::from(*expected))),
+            "keyspace message #{i}: wrong event in upstream-parity sequence"
+        );
+    }
+
+    // No further notifications: both intentional non-fire cases (Lee,
+    // Bob-already-existed) produced no extra messages.
+    let extra = subscriber.read_message(Duration::from_millis(400)).await;
+    assert!(
+        extra.is_none(),
+        "unexpected extra keyspace event (over-emission): {extra:?}"
+    );
+
+    server.shutdown().await;
+}
+
+// ===========================================================================
+// Subscription cap: integration-level residue (issue 50)
+//
+// `admit_subscriptions` (`server/src/connection/state.rs`) enforces the
+// per-connection SUBSCRIBE/PSUBSCRIBE/SSUBSCRIBE cap and a one-shot 80%
+// warning latch; that admission arithmetic is already unit-tested directly
+// in isolation by `state.rs`'s `subscribe_limit_and_80pct_latch` and
+// `subscribe_rejects_over_limit` (do not re-file those as "zero coverage").
+// What's untested is what a real client observes over the wire:
+//   (a) the exact error text/kind per subscription kind;
+//   (b) all-or-nothing batch admission (a multi-channel SUBSCRIBE that
+//       would cross the cap must reject in full, not partially apply);
+//   (c) a duplicate-count quirk: `admit_subscriptions` is charged
+//       `args.len()` (raw arg count) while `add_subscription` inserts into a
+//       `HashSet` — so a command containing a duplicate channel name, or a
+//       re-subscribe to an already-held channel, can be charged more
+//       capacity than it will actually consume, spuriously rejecting a
+//       subscribe that would not have grown the subscription set at all.
+//
+// The caps themselves (`MAX_SUBSCRIPTIONS_PER_CONNECTION` = 10_000,
+// `MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION` = 1_000,
+// `MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION` = 10_000, all in
+// `frogdb_core::pubsub`) are compile-time constants, not a runtime config
+// knob — there is no `CONFIG SET`-style lever to lower them for the test
+// harness (verified: no `max-subscriptions`/`subscription-limit`-shaped
+// param exists anywhere in the config crate). These tests therefore drive
+// real clients to the actual production caps rather than a lowered
+// harness-only value.
+// ===========================================================================
+
+/// Send `cmd` followed by `names` as one multi-bulk command and drain exactly
+/// `names.len()` reply frames (the success path emits one confirmation per
+/// channel/pattern). Panics if fewer than that many frames arrive in time.
+async fn subscribe_batch_ok(client: &mut TestClient, cmd: &str, names: &[String]) {
+    let args: Vec<&str> = std::iter::once(cmd)
+        .chain(names.iter().map(String::as_str))
+        .collect();
+    client.send_only(&args).await;
+    for i in 0..names.len() {
+        client
+            .read_response(Duration::from_secs(20))
+            .await
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing confirmation #{i} for a {cmd} batch of {} names",
+                    names.len()
+                )
+            });
+    }
+}
+
+/// Extract the trailing count integer from a subscribe/psubscribe/ssubscribe
+/// confirmation array (`[kind, name, count]`).
+fn confirmation_count(resp: &Response) -> i64 {
+    match resp {
+        Response::Array(arr) if arr.len() == 3 => match arr[2] {
+            Response::Integer(n) => n,
+            ref other => panic!("expected integer count in confirmation, got {other:?}"),
+        },
+        other => panic!("expected a 3-element array confirmation, got {other:?}"),
+    }
+}
+
+/// What varies between the three subscription kinds for the cap scenario
+/// below.
+struct CapKindSpec {
+    subscribe_cmd: &'static str,
+    publish_cmd: &'static str,
+    limit_error: &'static str,
+    max: usize,
+    prefix: &'static str,
+}
+
+/// Drive a real client through the full subscription-cap lifecycle for one
+/// kind: fill to 3-below-cap, prove all-or-nothing rejection of an
+/// over-sized batch (with prior subscriptions surviving), prove the exact
+/// boundary admits exactly at the cap, then pin the duplicate-count quirk
+/// two ways — a duplicated brand-new name in one command, and a re-subscribe
+/// to an already-held channel once genuinely full.
+async fn run_subscription_cap_scenario(spec: CapKindSpec) {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+    let mut publisher = server.connect().await;
+
+    // Fill to `max - 3` in a single batched command, leaving exactly 3 real
+    // slots free.
+    let base: Vec<String> = (0..spec.max - 3)
+        .map(|i| format!("{}-{i}", spec.prefix))
+        .collect();
+    subscribe_batch_ok(&mut client, spec.subscribe_cmd, &base).await;
+
+    // --- (b) all-or-nothing: only 3 slots remain; a batch of 4 new names
+    // must be rejected in its entirety, with (a) the exact per-kind error
+    // text.
+    let overflow: Vec<String> = (0..4)
+        .map(|i| format!("{}-overflow-{i}", spec.prefix))
+        .collect();
+    let args: Vec<&str> = std::iter::once(spec.subscribe_cmd)
+        .chain(overflow.iter().map(String::as_str))
+        .collect();
+    let resp = client.command(&args).await;
+    assert_eq!(
+        resp,
+        Response::error(spec.limit_error),
+        "{}: an over-cap batch must report the exact per-kind limit error",
+        spec.subscribe_cmd
+    );
+
+    // Prior subscriptions must survive the rejected batch untouched: publish
+    // to one of the base names and confirm the client still gets delivery.
+    let survivor = base[0].clone();
+    let pub_resp = publisher
+        .command(&[spec.publish_cmd, &survivor, "still-alive"])
+        .await;
+    assert_eq!(
+        pub_resp,
+        Response::Integer(1),
+        "{}: the base subscription must survive an all-or-nothing rejection",
+        spec.subscribe_cmd
+    );
+    let msg = client.read_message(Duration::from_secs(2)).await;
+    assert!(
+        msg.is_some(),
+        "{}: expected delivery proving the prior subscription set is intact after the rejected batch",
+        spec.subscribe_cmd
+    );
+
+    // A single legit new name now must land at exactly `base.len() + 1` —
+    // proving none of the 4 overflow names were partially admitted.
+    let resp = client
+        .command(&[spec.subscribe_cmd, &format!("{}-post-reject", spec.prefix)])
+        .await;
+    assert_eq!(
+        confirmation_count(&resp),
+        base.len() as i64 + 1,
+        "{}: all-or-nothing batch must not have partially applied",
+        spec.subscribe_cmd
+    );
+
+    // Climb to exactly `max - 1` (one real slot left).
+    let resp = client
+        .command(&[spec.subscribe_cmd, &format!("{}-almost-full", spec.prefix)])
+        .await;
+    assert_eq!(confirmation_count(&resp), (spec.max - 1) as i64);
+
+    // --- (c) duplicate-count quirk, part 1: one real slot remains.
+    // SUBSCRIBE to a brand-new name TWICE in the same command.
+    // `admit_subscriptions` is charged `args.len() == 2`, even though
+    // `add_subscription`'s `HashSet` would only grow by 1 — so this is
+    // spuriously rejected, even though the real growth (+1) would fit
+    // exactly at the cap. Pinned as current (surprising) behavior; see
+    // issue 50/61.
+    let dup_name = format!("{}-dup", spec.prefix);
+    let resp = client
+        .command(&[spec.subscribe_cmd, &dup_name, &dup_name])
+        .await;
+    assert_eq!(
+        resp,
+        Response::error(spec.limit_error),
+        "{}: a duplicated new name in one command is spuriously rejected by the \
+         args.len()-vs-HashSet quirk (issue 50/61) even though real growth would fit",
+        spec.subscribe_cmd
+    );
+
+    // The spurious rejection must not have leaked a partial insert: reaching
+    // the cap exactly with a single fresh name must still work right after.
+    let resp = client
+        .command(&[spec.subscribe_cmd, &format!("{}-verify", spec.prefix)])
+        .await;
+    assert_eq!(
+        confirmation_count(&resp),
+        spec.max as i64,
+        "{}: reaching the cap exactly must still work after the spurious dup rejection",
+        spec.subscribe_cmd
+    );
+
+    // --- (c) duplicate-count quirk, part 2: now genuinely full (`spec.max`
+    // held). Re-subscribing to an ALREADY-HELD channel is logically a no-op
+    // (the HashSet does not grow), but `admit_subscriptions` still charges
+    // +1 for it with no "already held" carve-out, so it is rejected too.
+    let resp = client.command(&[spec.subscribe_cmd, &survivor]).await;
+    assert_eq!(
+        resp,
+        Response::error(spec.limit_error),
+        "{}: re-subscribing to an already-held channel at a full cap is spuriously \
+         rejected by the same quirk (issue 50/61)",
+        spec.subscribe_cmd
+    );
+
+    server.shutdown().await;
+}
+
+/// Channel (SUBSCRIBE) subscription cap, integration-level, over real RESP.
+#[tokio::test]
+async fn test_subscribe_cap_channel_kind_integration() {
+    run_subscription_cap_scenario(CapKindSpec {
+        subscribe_cmd: "SUBSCRIBE",
+        publish_cmd: "PUBLISH",
+        limit_error: "ERR max subscriptions reached",
+        max: frogdb_core::MAX_SUBSCRIPTIONS_PER_CONNECTION,
+        prefix: "cap-ch",
+    })
+    .await;
+}
+
+/// Pattern (PSUBSCRIBE) subscription cap, integration-level, over real RESP.
+#[tokio::test]
+async fn test_subscribe_cap_pattern_kind_integration() {
+    run_subscription_cap_scenario(CapKindSpec {
+        subscribe_cmd: "PSUBSCRIBE",
+        publish_cmd: "PUBLISH",
+        limit_error: "ERR max pattern subscriptions reached",
+        max: frogdb_core::MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
+        prefix: "cap-pat",
+    })
+    .await;
+}
+
+/// Sharded (SSUBSCRIBE) subscription cap, integration-level, over real RESP.
+/// Standalone mode (no cluster router), so multi-channel SSUBSCRIBE batches
+/// are not subject to the cluster CROSSSLOT restriction covered separately
+/// by `test_ssubscribe_multi_channel_different_slots_rejected`.
+#[tokio::test]
+async fn test_subscribe_cap_sharded_kind_integration() {
+    run_subscription_cap_scenario(CapKindSpec {
+        subscribe_cmd: "SSUBSCRIBE",
+        publish_cmd: "SPUBLISH",
+        limit_error: "ERR max sharded subscriptions reached",
+        max: frogdb_core::MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
+        prefix: "cap-shd",
+    })
+    .await;
 }

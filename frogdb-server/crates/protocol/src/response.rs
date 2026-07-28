@@ -1468,6 +1468,77 @@ mod tests {
         }
     }
 
+    // -------------------------------------------------------------------
+    // Regression pin (issue 54): RESP3 non-finite double wire bytes.
+    //
+    // `WireResponse::Double(f64)` is a pure passthrough into
+    // `Resp3BytesFrame::Double` (see the `to_resp3_frame` match arm above,
+    // response.rs:320-323) — FrogDB's own `format_float` inf/-inf/nan
+    // special-casing (used for RESP2, see `to_resp2_frame` above and
+    // `format_float` near the bottom of this file) is bypassed entirely for
+    // RESP3. The external `redis-protocol` 6.0.0 crate's encoder
+    // (`resp3/encode.rs:108-120` calling `resp3/utils.rs:595`
+    // `f64_to_redis_string`) is correct-by-construction: it special-cases
+    // NaN/+inf/-inf to the literal strings `nan`/`inf`/`-inf` before the
+    // generic `f64::to_string()` fallback, matching the RESP3 spec's
+    // `,inf\r\n` / `,-inf\r\n` / `,nan\r\n` grammar. There is no live bug
+    // here (verdict ADJUSTED L1/C2 in
+    // .scratch/testing-improvements/audit/verdicts-A.md #3) — these tests
+    // exist purely to pin the wire bytes so a future change to this
+    // passthrough (FrogDB adding its own RESP3 float formatting layer, or a
+    // `redis-protocol` upgrade/swap that alters non-finite handling) cannot
+    // silently regress without a test failing.
+    fn encode_resp3_double(value: f64) -> bytes::BytesMut {
+        let frame = WireResponse::Double(value).to_resp3_frame();
+        let mut buf = bytes::BytesMut::new();
+        redis_protocol::resp3::encode::complete::extend_encode(&mut buf, &frame, false).unwrap();
+        buf
+    }
+
+    #[test]
+    fn test_resp3_double_positive_infinity_wire_bytes() {
+        assert_eq!(encode_resp3_double(f64::INFINITY).as_ref(), b",inf\r\n");
+    }
+
+    #[test]
+    fn test_resp3_double_negative_infinity_wire_bytes() {
+        assert_eq!(
+            encode_resp3_double(f64::NEG_INFINITY).as_ref(),
+            b",-inf\r\n"
+        );
+    }
+
+    #[test]
+    fn test_resp3_double_nan_wire_bytes() {
+        // NaN is not reachable through any live command path today: ZADD,
+        // ZINCRBY, ZADD ... INCR, and INCRBYFLOAT all explicitly reject a
+        // NaN score/result before it can reach a Response::Double (see
+        // commands/src/sorted_set/basic.rs is_nan checks and
+        // types/src/types/string_value.rs increment_float's
+        // IncrementError::NotFinite). This test pins the encoder's behavior
+        // directly at the protocol layer instead, satisfying issue 54's "add
+        // nan coverage if reachable" by covering the one path that *is*
+        // reachable: constructing the wire frame directly.
+        assert_eq!(encode_resp3_double(f64::NAN).as_ref(), b",nan\r\n");
+    }
+
+    #[test]
+    fn test_resp3_double_integer_valued_wire_bytes() {
+        // Redis/redis-protocol emit `,3\r\n`, not `,3.0\r\n`, for an
+        // integer-valued double in RESP3 (f64's Display/`to_string()` omits
+        // the trailing `.0`). Distinct from RESP2's `format_float`, which
+        // also collapses to a bare integer string but via its own explicit
+        // `f.fract() == 0.0` branch rather than relying on `to_string()`.
+        assert_eq!(encode_resp3_double(3.0).as_ref(), b",3\r\n");
+        assert_eq!(encode_resp3_double(-3.0).as_ref(), b",-3\r\n");
+        assert_eq!(encode_resp3_double(0.0).as_ref(), b",0\r\n");
+    }
+
+    #[test]
+    fn test_resp3_double_finite_fractional_wire_bytes() {
+        assert_eq!(encode_resp3_double(3.125).as_ref(), b",3.125\r\n");
+    }
+
     #[test]
     fn test_from_wire() {
         // Test round-trip: Response -> WireResponse -> Response

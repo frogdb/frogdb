@@ -34,7 +34,7 @@ use frogdb_core::shard::types::{
 };
 use frogdb_core::shard::{
     BlockingMsg, CoreMsg, DebugIntrospectionMsg, Envelope, NewConnection, ShardMessage,
-    ShardReceiver, ShardSender, ShardWorkerBuilder,
+    ShardReceiver, ShardSender, ShardWorkerBuilder, WatchEntry,
 };
 use frogdb_core::types::BlockingOp;
 use frogdb_core::{CommandRegistry, ShardWorker};
@@ -145,18 +145,36 @@ impl ShardDriver {
         rx.await.expect("execute response")
     }
 
-    /// Read a shard's WATCH version (pure probe: no keys, so no lazy purge).
-    pub async fn get_version(&mut self, shard: usize) -> u64 {
+    /// Read a shard's per-key WATCH versions AND per-key liveness for the given
+    /// keys — the full `GetVersion` round-trip a real WATCH drives.
+    ///
+    /// The shard (a) returns each key's per-slot WATCH version and its
+    /// `live_at_watch` flag (present and unexpired at watch time, both aligned
+    /// with `keys`) and (b) runs the WATCH-time no-bump lazy purge for any
+    /// already-expired key. Use [`Self::key_version`] for a non-destructive
+    /// single-key version read (no purge).
+    pub async fn watch_keys(&mut self, shard: usize, keys: &[&str]) -> (Vec<u64>, Vec<bool>) {
         let (tx, rx) = oneshot::channel();
         self.dispatch(
             shard,
             CoreMsg::GetVersion {
-                keys: vec![],
+                keys: keys
+                    .iter()
+                    .map(|k| Bytes::copy_from_slice(k.as_bytes()))
+                    .collect(),
                 response_tx: tx,
             },
         )
         .await;
-        rx.await.expect("version")
+        rx.await.expect("version + liveness")
+    }
+
+    /// Non-destructively read the WATCH version the shard would compare a watch
+    /// on `key` against — reads `get_key_version` directly (no `GetVersion`
+    /// round-trip, so no lazy purge). This is exactly the value `check_watches`
+    /// uses, so it is the honest attribution signal for over-abort tests.
+    pub async fn key_version(&mut self, shard: usize, key: &str) -> u64 {
+        self.worker(shard).get_key_version(key.as_bytes())
     }
 
     /// Run a transaction with the given watches; returns the result.
@@ -165,7 +183,7 @@ impl ShardDriver {
         shard: usize,
         conn_id: u64,
         commands: Vec<ParsedCommand>,
-        watches: Vec<(Bytes, u64)>,
+        watches: Vec<WatchEntry>,
     ) -> TransactionResult {
         let (tx, rx) = oneshot::channel();
         let msg = CoreMsg::ExecTransaction {
@@ -202,16 +220,18 @@ impl ShardDriver {
         rx
     }
 
-    /// Fire-and-forget waiter cleanup (connection gave up).
+    /// Waiter cleanup (connection gave up). The acknowledgement is discarded —
+    /// these deterministic scenarios do not model the timeout reconciliation.
     pub async fn unregister_wait(&mut self, shard: usize, conn_id: u64) {
-        self.dispatch(shard, BlockingMsg::UnregisterWait { conn_id })
+        let (ack, _ack_rx) = oneshot::channel();
+        self.dispatch(shard, BlockingMsg::UnregisterWait { conn_id, ack })
             .await;
     }
 
     // --- Ticks (timer-only work; no ShardMessage exists) ----------------
 
-    pub fn tick_expiry(&mut self, shard: usize) {
-        self.workers[shard].drive_expiry_tick();
+    pub async fn tick_expiry(&mut self, shard: usize) {
+        self.workers[shard].drive_expiry_tick().await;
     }
 
     pub fn tick_waiter_timeout(&mut self, shard: usize) {
@@ -239,6 +259,31 @@ impl ShardDriver {
     /// Drain every buffered message on a shard until its queue is empty.
     pub async fn drain(&mut self, shard: usize) {
         while self.pump_one(shard).await {}
+    }
+
+    // --- Keyspace-notification capture (S8 order consistency) ------------
+
+    /// Enable keyspace notifications (`flags`) on `shard` and register a capture
+    /// PSUBSCRIBE for each glob in `patterns`, returning the capture. The
+    /// single-shard driver runs the `Local` topology, so notifications emitted
+    /// by driven schedules (expiry sweeps, EXEC writes) land synchronously in
+    /// the returned receiver. See [`notify_capture`](super::notify_capture).
+    pub fn capture_keyspace(
+        &mut self,
+        shard: usize,
+        conn_id: u64,
+        patterns: &[&str],
+        flags: u32,
+    ) -> super::notify_capture::NotificationCapture {
+        let rx = self.workers[shard].drive_capture_keyspace(
+            patterns
+                .iter()
+                .map(|c| Bytes::from(c.to_string()))
+                .collect(),
+            conn_id,
+            flags,
+        );
+        super::notify_capture::NotificationCapture::new(rx)
     }
 
     // --- Probes (production DEBUG seam) ----------------------------------

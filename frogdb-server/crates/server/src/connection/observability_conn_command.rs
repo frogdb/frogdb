@@ -129,6 +129,7 @@ static SLOWLOG_SPEC: CommandSpec = CommandSpec {
     wakes: WaiterWake::None,
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
+    reindex: frogdb_core::ReindexSpec::None,
     lookup: LookupSpec::None,
     mutation: frogdb_core::ConnMutation::None,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin),
@@ -287,6 +288,7 @@ static MEMORY_SPEC: CommandSpec = CommandSpec {
     wakes: WaiterWake::None,
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
+    reindex: frogdb_core::ReindexSpec::None,
     lookup: LookupSpec::None,
     mutation: frogdb_core::ConnMutation::None,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin),
@@ -519,6 +521,7 @@ static LATENCY_SPEC: CommandSpec = CommandSpec {
     wakes: WaiterWake::None,
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
+    reindex: frogdb_core::ReindexSpec::None,
     lookup: LookupSpec::None,
     mutation: frogdb_core::ConnMutation::None,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin),
@@ -805,6 +808,7 @@ static STATUS_SPEC: CommandSpec = CommandSpec {
     wakes: WaiterWake::None,
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
+    reindex: frogdb_core::ReindexSpec::None,
     lookup: LookupSpec::None,
     mutation: frogdb_core::ConnMutation::None,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin),
@@ -1296,8 +1300,18 @@ mod tests {
         // Agrees field-for-field with the HTTP `/status` render from the same
         // collector (time-varying `frogdb` block excepted).
         let http = collector.collect().await;
-        let http_v: serde_json::Value =
+        let mut http_v: serde_json::Value =
             serde_json::from_str(&collector.to_json(&http)).expect("valid JSON");
+        // `memory.rss_bytes` is re-sampled from the live process on every
+        // collect, so the two renders can legitimately disagree on it.
+        let mut v = v;
+        for val in [&mut v, &mut http_v] {
+            let rss = val["memory"]
+                .as_object_mut()
+                .expect("memory section is an object")
+                .remove("rss_bytes");
+            assert!(rss.is_some_and(|r| r.is_number()), "rss_bytes missing");
+        }
         for section in [
             "cluster",
             "health",

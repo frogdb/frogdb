@@ -31,11 +31,11 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, BoxFuture, CommandFlags, CommandSpec, ConnCtx, ConnId, ConnectionCommand,
     ConnectionLevelOp, EventSpec, ExecutionStrategy, GlobPattern, IntrospectionRequest,
-    IntrospectionResponse, KeySpec, LookupSpec, PubSubConfirmation, PubSubMessage, PubSubMsg,
-    PubSubProvider, PubSubSender, WaiterWake, WalStrategy, shard_for_key, slot_for_key,
+    IntrospectionResponse, KeySpec, LookupSpec, PubSubConfirmation, PubSubMsg, PubSubProvider,
+    PubSubReceiver, PubSubSender, WaiterWake, WalStrategy, shard_for_key, slot_for_key,
 };
 use frogdb_protocol::Response;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 use tracing::debug;
 
 use crate::connection::ConnectionHandler;
@@ -90,10 +90,12 @@ struct SubKindSpec {
     arity_error: &'static str,
     /// Error returned when the per-connection limit is hit.
     limit_error: &'static str,
-    /// Build the batched shard registration message.
-    subscribe_msg: fn(Vec<Bytes>, ConnId, PubSubSender, oneshot::Sender<Vec<usize>>) -> PubSubMsg,
-    /// Build the batched shard deregistration message.
-    unsubscribe_msg: fn(Vec<Bytes>, ConnId, oneshot::Sender<Vec<usize>>) -> PubSubMsg,
+    /// Build the batched shard registration message. The `oneshot` carries a
+    /// bare registration ack — a barrier, not a count (see [`PubSubMsg`]).
+    subscribe_msg: fn(Vec<Bytes>, ConnId, PubSubSender, oneshot::Sender<()>) -> PubSubMsg,
+    /// Build the batched shard deregistration message. The `oneshot` carries a
+    /// bare deregistration ack — a barrier, not a count.
+    unsubscribe_msg: fn(Vec<Bytes>, ConnId, oneshot::Sender<()>) -> PubSubMsg,
     /// Build the subscribe confirmation.
     subscribed: fn(Bytes, usize) -> PubSubConfirmation,
     /// Build the unsubscribe confirmation (`None` channel = "nothing to
@@ -225,7 +227,7 @@ pub(crate) struct PubSubIo<'a> {
     /// Lazily-created pub/sub sender (cloned to shards on first subscribe).
     pubsub_tx: &'a mut Option<PubSubSender>,
     /// Lazily-created pub/sub receiver (paired with `pubsub_tx`).
-    pubsub_rx: &'a mut Option<mpsc::UnboundedReceiver<PubSubMessage>>,
+    pubsub_rx: &'a mut Option<PubSubReceiver>,
     /// Shard senders + ACL manager (channel-access enforcement).
     core: &'a CoreDeps,
     /// Cluster slot-migration routing + cross-node pub/sub forwarding.
@@ -234,18 +236,23 @@ pub(crate) struct PubSubIo<'a> {
     num_shards: usize,
     /// Scatter-gather deadline for PUBSUB introspection.
     scatter_gather_timeout: Duration,
+    /// Hard byte limit for the per-connection pub/sub output buffer (0 = off).
+    /// Applied when the channel is lazily created on first subscribe.
+    pubsub_output_buffer_hard_limit: usize,
 }
 
 impl<'a> PubSubIo<'a> {
     /// Bundle the disjoint handler borrows the pub/sub family needs.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         state: &'a mut ConnectionState,
         pubsub_tx: &'a mut Option<PubSubSender>,
-        pubsub_rx: &'a mut Option<mpsc::UnboundedReceiver<PubSubMessage>>,
+        pubsub_rx: &'a mut Option<PubSubReceiver>,
         core: &'a CoreDeps,
         cluster: &'a ClusterDeps,
         num_shards: usize,
         scatter_gather_timeout: Duration,
+        pubsub_output_buffer_hard_limit: usize,
     ) -> Self {
         Self {
             state,
@@ -255,6 +262,7 @@ impl<'a> PubSubIo<'a> {
             cluster,
             num_shards,
             scatter_gather_timeout,
+            pubsub_output_buffer_hard_limit,
         }
     }
 
@@ -265,7 +273,7 @@ impl<'a> PubSubIo<'a> {
         if let Some(tx) = self.pubsub_tx.as_ref() {
             return tx.clone();
         }
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = PubSubSender::channel(self.pubsub_output_buffer_hard_limit);
         *self.pubsub_tx = Some(tx.clone());
         *self.pubsub_rx = Some(rx);
         tx
@@ -372,10 +380,10 @@ impl<'a> PubSubIo<'a> {
         }
 
         // One batched registration message per destination shard. Await each
-        // shard's ack (the per-shard subscriber counts, unused here — the
-        // client-visible count is the per-connection one above) so that by the
-        // time the confirmation reaches the client, a PUBLISH processed after
-        // it is guaranteed to see the registration.
+        // shard's registration ack (the PUBLISH-visibility barrier) so that by
+        // the time the confirmation reaches the client, a PUBLISH processed
+        // after it is guaranteed to see the registration. The client-visible
+        // count is the per-connection one above; the ack carries no count.
         if !accepted.is_empty() {
             let pubsub_tx = self.ensure_pubsub_channel();
             for (shard, channels) in
@@ -743,6 +751,7 @@ const fn pubsub_spec(
         wakes: WaiterWake::None,
         event: EventSpec::NotApplicable,
         requires_same_slot: false,
+        reindex: frogdb_core::ReindexSpec::None,
         lookup: LookupSpec::None,
         mutation: frogdb_core::ConnMutation::PubSub,
         strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub),
@@ -915,6 +924,7 @@ impl ConnectionHandler {
             &self.cluster,
             self.num_shards,
             self.scatter_gather_timeout,
+            self.pubsub_output_buffer_hard_limit,
         );
         let mut ctx = Self::base_ctx(
             &self.admin,
@@ -928,14 +938,27 @@ impl ConnectionHandler {
         command.execute_multi(&mut ctx, args).await
     }
 
-    /// Execute a pub/sub command deferred from a transaction (EXEC time),
-    /// preserving the pre-migration MULTI semantics exactly:
-    /// - PUBLISH / SPUBLISH: a single response into the EXEC array;
-    /// - SUBSCRIBE / UNSUBSCRIBE / PSUBSCRIBE / PUNSUBSCRIBE: one confirmation
-    ///   per channel — in RESP3 they ride out-of-band after the EXEC array (the
-    ///   last is the EXEC-slot value); in RESP2 the last is the EXEC-slot value
-    ///   and no out-of-band frames are emitted;
-    /// - PUBSUB / SSUBSCRIBE / SUNSUBSCRIBE: rejected inside MULTI.
+    /// Execute a pub/sub command deferred from a transaction (EXEC time).
+    ///
+    /// Policy verified against Redis 8.6.4 source (`pubsub.c`): a MULTI/EXEC
+    /// client runs with `CLIENT_DENY_BLOCKING` set for the duration of the
+    /// EXEC loop while `CLIENT_MULTI` also remains set, so a queued command's
+    /// gate sees both flags simultaneously.
+    /// - `subscribeCommand`/`psubscribeCommand` guard on
+    ///   `DENY_BLOCKING && !CLIENT_MULTI` — the MULTI flag exempts them, so
+    ///   SUBSCRIBE/PSUBSCRIBE genuinely execute at EXEC time, one confirmation
+    ///   per channel (RESP3: Push frames out-of-band after the EXEC array;
+    ///   RESP2: the last confirmation is the EXEC-slot value, no out-of-band
+    ///   frames). UNSUBSCRIBE/PUNSUBSCRIBE/SUNSUBSCRIBE carry no such guard at
+    ///   all (unconditional execute) and PUBSUB has none either — all execute
+    ///   at EXEC exactly like their non-transaction path.
+    /// - `ssubscribeCommand` is the one exception: its guard is bare
+    ///   `DENY_BLOCKING` with **no** `!CLIENT_MULTI` carve-out, so SSUBSCRIBE
+    ///   is genuinely rejected inside MULTI in real Redis too, with
+    ///   `"SSUBSCRIBE isn't allowed for a DENY BLOCKING client"`.
+    ///
+    /// Do not reintroduce queue-time `NO_MULTI`/`EXECABORT` rejection for any
+    /// of these commands — verified they don't carry that flag upstream.
     ///
     /// Returns `(exec_slot_response, push_confirmations)`.
     pub(crate) async fn exec_pubsub_in_transaction(
@@ -945,14 +968,14 @@ impl ConnectionHandler {
         args: &[Bytes],
     ) -> (Response, Vec<Response>) {
         match cmd_name {
-            "PUBLISH" | "SPUBLISH" => {
+            "PUBLISH" | "SPUBLISH" | "PUBSUB" => {
                 let responses = self.execute_pubsub(command, args).await;
                 (
                     responses.into_iter().next().unwrap_or_else(Response::ok),
                     vec![],
                 )
             }
-            "SUBSCRIBE" | "UNSUBSCRIBE" | "PSUBSCRIBE" | "PUNSUBSCRIBE" => {
+            "SUBSCRIBE" | "UNSUBSCRIBE" | "PSUBSCRIBE" | "PUNSUBSCRIBE" | "SUNSUBSCRIBE" => {
                 // Pub/sub subscription commands inside MULTI: the executor returns
                 // Vec<Response> (one confirmation per channel), already shaped by
                 // the PubSubConfirmation seam — Push in RESP3, Array in RESP2.
@@ -969,6 +992,10 @@ impl ConnectionHandler {
                     )
                 }
             }
+            "SSUBSCRIBE" => (
+                Response::error("ERR SSUBSCRIBE isn't allowed for a DENY BLOCKING client"),
+                vec![],
+            ),
             _ => (
                 Response::error("ERR command not supported inside MULTI"),
                 vec![],

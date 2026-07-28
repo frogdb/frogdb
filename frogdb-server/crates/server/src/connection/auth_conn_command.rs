@@ -163,8 +163,8 @@ impl ConnStateMut for ConnectionState {
         ConnectionState::in_transaction(self)
     }
 
-    fn watch_key(&mut self, key: Bytes, shard_id: usize, version: u64) {
-        ConnectionState::watch_key(self, key, shard_id, version);
+    fn watch_key(&mut self, key: Bytes, shard_id: usize, version: u64, live_at_watch: bool) {
+        ConnectionState::watch_key(self, key, shard_id, version, live_at_watch);
     }
 
     fn unwatch(&mut self) {
@@ -192,6 +192,7 @@ static AUTH_SPEC: CommandSpec = CommandSpec {
     wakes: WaiterWake::None,
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
+    reindex: frogdb_core::ReindexSpec::None,
     lookup: LookupSpec::None,
     mutation: frogdb_core::ConnMutation::Auth,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Auth),
@@ -283,6 +284,7 @@ static HELLO_SPEC: CommandSpec = CommandSpec {
     wakes: WaiterWake::None,
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
+    reindex: frogdb_core::ReindexSpec::None,
     lookup: LookupSpec::None,
     mutation: frogdb_core::ConnMutation::Auth,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Auth),

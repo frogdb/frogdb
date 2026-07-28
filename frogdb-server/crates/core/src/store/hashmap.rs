@@ -114,6 +114,18 @@ pub enum SpillError {
     Rocks(#[from] frogdb_persistence::rocks::RocksError),
 }
 
+/// Outcome of [`HashMapStore::backdate_expiry`] (DEBUG EXPIRE-BACKDATE).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackdateExpiryResult {
+    /// The key's expiry deadline was rewritten into the past; it now reads as
+    /// expired on the next access (lazy purge) or active-expiry sweep.
+    Backdated,
+    /// No such key in the store.
+    NoSuchKey,
+    /// The key exists but carries no TTL, so there is nothing to backdate.
+    NoExpiry,
+}
+
 /// Default store implementation using griddle::HashMap.
 pub struct HashMapStore {
     data: HashMap<Bytes, Entry>,
@@ -130,6 +142,45 @@ pub struct HashMapStore {
     warm_tier: WarmTier,
     /// Total number of keys expired (lazy + active expiry).
     expired_keys: u64,
+    /// Keys physically removed by lazy expiry (`check_and_delete_expired`)
+    /// since the last `take_lazily_purged`. Reported to the worker so it can
+    /// apply the same version-bump + XREADGROUP-drain effects active expiry
+    /// applies; the store itself never reads or acts on it.
+    lazily_purged: Vec<Bytes>,
+    /// Keys removed because their **last hash field** expired on a lazy read
+    /// (`purge_expired_hash_fields` -> `delete`) since the last
+    /// `take_lazily_emptied`. A distinct seam from `lazily_purged`: the whole
+    /// key never had its own TTL elapse — the hash simply emptied — so Redis
+    /// emits a generic `del` (not `expired`) for it. Reported to the worker so
+    /// it can fire the matching `del` notification + tracking/search
+    /// invalidation, exactly as active expiry does for
+    /// `ExpiryResult::emptied_keys`. The store never reads or acts on it. The
+    /// active sweep shares `purge_expired_hash_fields` and so populates this too,
+    /// but owns its own reporting (`ExpiryResult::emptied_keys`) and discards the
+    /// buffer at the sweep seam, so the buffer only ever fires for lazy reads.
+    lazily_emptied: Vec<Bytes>,
+    /// Count of hash fields reaped by a **lazy** read
+    /// (`purge_expired_hash_fields`) since the last `take_lazily_expired_fields`,
+    /// whether or not the reap emptied the key. Reported to the worker so it can
+    /// bump `frogdb_fields_expired_total` with the same per-field parity the
+    /// active sweep applies from `ExpiryResult::fields_expired`. Like
+    /// `lazily_emptied`, the active sweep populates this through the shared
+    /// `purge_expired_hash_fields` but owns its own field counting and discards
+    /// this counter at the sweep seam, so it only ever counts genuine lazy reaps.
+    lazily_expired_fields: u64,
+    /// Keys whose hash was **shrunk in place** by a lazy field-TTL reap
+    /// (`purge_expired_hash_fields` removed ≥1 field but the hash still exists)
+    /// since the last `take_lazily_shrunk`. Distinct from `lazily_emptied` (the
+    /// hash still holds surviving fields) and from `lazily_purged` (no whole-key
+    /// TTL elapsed): the key is a live, mutated hash whose search-index doc now
+    /// holds a stale (reaped) field value. Reported to the worker so it can
+    /// re-index the survivor, exactly as a WRITE command's `ReindexSpec` would —
+    /// READONLY commands that lazily reap fields (HGET/HMGET/HGETALL/…) carry no
+    /// such spec. The active sweep shares `purge_expired_hash_fields` and so
+    /// populates this too, but drains and re-indexes it at its own seam
+    /// (event_loop.rs) so it only ever fires for genuinely lazy reads. The store
+    /// never reads or acts on it.
+    lazily_shrunk: Vec<Bytes>,
     /// Whether passive/lazy expiry is suppressed (set during CLIENT PAUSE).
     /// When true, expired keys are logically invisible (get returns None)
     /// but not physically deleted and the expired_keys counter is not
@@ -171,6 +222,10 @@ impl HashMapStore {
             dirty: 0,
             warm_tier: WarmTier::new(),
             expired_keys: 0,
+            lazily_purged: Vec::new(),
+            lazily_emptied: Vec::new(),
+            lazily_expired_fields: 0,
+            lazily_shrunk: Vec::new(),
             expiry_suppressed: false,
             suppress_touch: false,
             keysizes: KeysizeHistograms::new(),
@@ -191,6 +246,10 @@ impl HashMapStore {
             dirty: 0,
             warm_tier: WarmTier::new(),
             expired_keys: 0,
+            lazily_purged: Vec::new(),
+            lazily_emptied: Vec::new(),
+            lazily_expired_fields: 0,
+            lazily_shrunk: Vec::new(),
             expiry_suppressed: false,
             suppress_touch: false,
             keysizes: KeysizeHistograms::new(),
@@ -429,6 +488,10 @@ impl HashMapStore {
             debug!(key_len = key.len(), "Key expired via lazy deletion");
             self.uninstall(key);
             self.expired_keys += 1;
+            // Report the lazy removal so the worker can apply the parity
+            // effects (version bump + XREADGROUP drain). The store stays
+            // version- and wait-queue-ignorant.
+            self.lazily_purged.push(Bytes::copy_from_slice(key));
             return true;
         }
         false
@@ -437,6 +500,19 @@ impl HashMapStore {
     /// Total number of expired keys (lazy + active).
     pub fn expired_keys(&self) -> u64 {
         self.expired_keys
+    }
+
+    /// Whether every lazy-purge report buffer is currently empty — the
+    /// whole-key removal buffer, the last-hash-field-death buffer, and the
+    /// lazy field-reap counter. Used by the active-expiry cycle's
+    /// `debug_assert!` to catch any future interleaving that would leave a
+    /// partially-drained command's report pending across the sweep's
+    /// discard-and-own-reporting seam.
+    pub fn lazy_purge_buffers_empty(&self) -> bool {
+        self.lazily_purged.is_empty()
+            && self.lazily_emptied.is_empty()
+            && self.lazily_shrunk.is_empty()
+            && self.lazily_expired_fields == 0
     }
 
     /// Add to the expired keys counter (for active expiry which bypasses `check_and_delete_expired`).
@@ -452,6 +528,38 @@ impl HashMapStore {
     /// Set whether passive/lazy expiry is suppressed (during CLIENT PAUSE).
     pub fn set_expiry_suppressed(&mut self, suppressed: bool) {
         self.expiry_suppressed = suppressed;
+    }
+
+    /// Backdate an existing key's expiry deadline to lie `ms` milliseconds in
+    /// the past (DEBUG EXPIRE-BACKDATE), making it already-expired without any
+    /// wall-clock wait.
+    ///
+    /// This rewrites *only* the deadline (the entry's `expires_at` and its
+    /// expiry-index slot). It deliberately does **not** purge the key, does not
+    /// touch `lazily_purged`, and fires no expiry effects — the next read
+    /// (`check_and_delete_expired`) or active-expiry sweep performs the actual
+    /// expiry through the normal seams, exactly as a naturally-elapsed TTL would.
+    /// This keeps the command a pure timestamp rewrite so sim tests can drive
+    /// deterministic expiry under turmoil's virtual clock (real-clock TTLs would
+    /// otherwise require a `std::thread::sleep`).
+    ///
+    /// A key with no TTL is left untouched and reported via
+    /// [`BackdateExpiryResult::NoExpiry`]; a missing key via
+    /// [`BackdateExpiryResult::NoSuchKey`].
+    pub fn backdate_expiry(&mut self, key: &[u8], ms: u64) -> BackdateExpiryResult {
+        let Some(entry) = self.data.get_mut(key) else {
+            return BackdateExpiryResult::NoSuchKey;
+        };
+        if entry.metadata.expires_at.is_none() {
+            return BackdateExpiryResult::NoExpiry;
+        }
+        // `Instant - Duration` panics on monotonic-clock underflow; saturate to
+        // `now` for an absurdly large `ms` (still <= now, so still expired).
+        let now = Instant::now();
+        let deadline = now.checked_sub(Duration::from_millis(ms)).unwrap_or(now);
+        entry.metadata.expires_at = Some(deadline);
+        self.expiry_index.set(Bytes::copy_from_slice(key), deadline);
+        BackdateExpiryResult::Backdated
     }
 
     // ========================================================================
@@ -1057,6 +1165,22 @@ impl Store for HashMapStore {
         self.check_and_delete_expired(key)
     }
 
+    fn take_lazily_purged(&mut self) -> Vec<Bytes> {
+        std::mem::take(&mut self.lazily_purged)
+    }
+
+    fn take_lazily_emptied(&mut self) -> Vec<Bytes> {
+        std::mem::take(&mut self.lazily_emptied)
+    }
+
+    fn take_lazily_expired_fields(&mut self) -> u64 {
+        std::mem::take(&mut self.lazily_expired_fields)
+    }
+
+    fn take_lazily_shrunk(&mut self) -> Vec<Bytes> {
+        std::mem::take(&mut self.lazily_shrunk)
+    }
+
     fn set_with_options(&mut self, key: Bytes, value: Value, opts: SetOptions) -> SetResult {
         // Check condition (NX/XX)
         let key_exists = self.data.contains_key(&key) && !self.check_and_delete_expired(&key);
@@ -1293,6 +1417,14 @@ impl Store for HashMapStore {
 
         let count = removed_fields.len();
 
+        // Report the reaped fields so the worker can bump
+        // `frogdb_fields_expired_total` with per-field parity to the active
+        // sweep (which counts `ExpiryResult::fields_expired`). Counts every lazy
+        // reap, whether or not it empties the key below. The active sweep also
+        // lands here but discards this counter at its seam, so it only ever
+        // counts genuine lazy reaps.
+        self.lazily_expired_fields += count as u64;
+
         // Update field expiry index
         for field in &removed_fields {
             self.field_expiry_index.remove(key, field);
@@ -1306,14 +1438,40 @@ impl Store for HashMapStore {
             self.resize(key, Some(snap), snap.key_mem);
         }
 
-        // If hash is now empty, delete the key
-        if count > 0
-            && let Some(entry) = self.data.get(key)
-            && let Some(v) = entry.hot_value()
-            && let Some(hash) = v.as_hash()
-            && hash.is_empty()
-        {
-            self.delete(key);
+        // If hash is now empty, delete the key and report the removal so the
+        // worker can fire the `del` keyspace notification + tracking/search
+        // invalidation active expiry fires for `ExpiryResult::emptied_keys`.
+        // This is the last-hash-field-death seam — distinct from the whole-key
+        // TTL seam that feeds `lazily_purged` — so Redis emits `del`, not
+        // `expired`. The active sweep also reaches here, but discards this
+        // buffer at its seam (it owns reporting via `ExpiryResult`), so only a
+        // genuinely lazy read ever drains it downstream.
+        //
+        // Otherwise the hash was shrunk in place but still exists: report it on
+        // `lazily_shrunk` so the worker re-indexes the survivor (its search-index
+        // doc still holds the reaped field's stale value). A READONLY command
+        // that triggered the reap carries no `ReindexSpec`, so this buffer is the
+        // only place the mutation is surfaced to the search index.
+        if count > 0 {
+            // Classify the post-reap state of the key: emptied (last field gone)
+            // vs shrunk-but-surviving. `None` (key somehow already absent) falls
+            // through to neither buffer.
+            let now_empty = self
+                .data
+                .get(key)
+                .and_then(|entry| entry.hot_value())
+                .and_then(|v| v.as_hash())
+                .map(|hash| hash.is_empty());
+            match now_empty {
+                Some(true) => {
+                    self.delete(key);
+                    self.lazily_emptied.push(Bytes::copy_from_slice(key));
+                }
+                Some(false) => {
+                    self.lazily_shrunk.push(Bytes::copy_from_slice(key));
+                }
+                None => {}
+            }
         }
 
         count
@@ -2406,5 +2564,316 @@ mod tests {
         assert_eq!(store.warm_tier().expired_on_unspill(), 1);
         assert!(!store.contains(b"s"));
         assert_eq!(store.memory_used(), 0);
+    }
+
+    #[test]
+    fn lazy_value_read_reports_purge_but_nondestructive_probes_do_not() {
+        let mut s = HashMapStore::new();
+        // Seed an already-expired key.
+        s.set(Bytes::from_static(b"k"), Value::string("v"));
+        s.set_expiry(b"k", Instant::now() - Duration::from_secs(1));
+
+        // Non-destructive probes must NOT purge or report.
+        assert!(!s.exists_unexpired(b"k"));
+        let _ = s.key_type(b"k");
+        assert!(
+            s.take_lazily_purged().is_empty(),
+            "TYPE/EXISTS must not report a purge"
+        );
+
+        // A value read via the expiry-checking path purges and reports.
+        assert!(s.get_with_expiry_check(b"k").is_none());
+        assert_eq!(
+            s.take_lazily_purged(),
+            vec![Bytes::from_static(b"k")],
+            "get_with_expiry_check must report the physical lazy removal"
+        );
+        // Drained: a second take is empty.
+        assert!(s.take_lazily_purged().is_empty());
+    }
+
+    #[test]
+    fn suppressed_expiry_does_not_report() {
+        let mut s = HashMapStore::new();
+        s.set(Bytes::from_static(b"k"), Value::string("v"));
+        s.set_expiry(b"k", Instant::now() - Duration::from_secs(1));
+        s.set_expiry_suppressed(true);
+        // Suppressed: logically expired (read as absent) but NOT physically removed.
+        assert!(s.get_with_expiry_check(b"k").is_none());
+        assert!(
+            s.take_lazily_purged().is_empty(),
+            "CLIENT PAUSE suppression must not report a purge (key not removed)"
+        );
+    }
+
+    #[test]
+    fn backdate_expiry_makes_key_expired_on_next_access() {
+        let mut s = HashMapStore::new();
+        s.set(Bytes::from_static(b"k"), Value::string("v"));
+        // Live TTL well into the future.
+        assert!(s.set_expiry(b"k", Instant::now() + Duration::from_secs(100)));
+
+        // Backdate rewrites only the deadline: it must NOT purge and must NOT
+        // report a lazy purge, and the key stays physically present.
+        assert_eq!(
+            s.backdate_expiry(b"k", 1000),
+            BackdateExpiryResult::Backdated
+        );
+        assert!(
+            s.contains(b"k"),
+            "backdate must not physically remove the key"
+        );
+        assert!(
+            s.take_lazily_purged().is_empty(),
+            "backdate must not fire any lazy-purge effect"
+        );
+
+        // The next expiry-aware read observes the key as gone (nil) and lazily
+        // purges it through the normal seam.
+        assert!(s.get_with_expiry_check(b"k").is_none());
+        assert_eq!(
+            s.take_lazily_purged(),
+            vec![Bytes::from_static(b"k")],
+            "the read-path lazy purge must fire normally after backdate"
+        );
+        assert!(!s.contains(b"k"), "the key must now be physically gone");
+    }
+
+    #[test]
+    fn backdate_expiry_missing_key_errors() {
+        let mut s = HashMapStore::new();
+        assert_eq!(
+            s.backdate_expiry(b"absent", 1000),
+            BackdateExpiryResult::NoSuchKey
+        );
+    }
+
+    #[test]
+    fn backdate_expiry_no_ttl_key_is_left_untouched() {
+        let mut s = HashMapStore::new();
+        s.set(Bytes::from_static(b"k"), Value::string("v"));
+        // No TTL installed: nothing to backdate.
+        assert_eq!(
+            s.backdate_expiry(b"k", 1000),
+            BackdateExpiryResult::NoExpiry
+        );
+        // The key remains live and readable — backdate did not affect it.
+        assert!(s.get_with_expiry_check(b"k").is_some());
+        assert_eq!(s.get_expiry(b"k"), None);
+    }
+
+    #[test]
+    fn backdate_expiry_saturates_on_absurd_ms() {
+        // A huge `ms` would underflow `Instant - Duration`; the method saturates
+        // to `now` rather than panicking, and the key still ends up expired.
+        let mut s = HashMapStore::new();
+        s.set(Bytes::from_static(b"k"), Value::string("v"));
+        assert!(s.set_expiry(b"k", Instant::now() + Duration::from_secs(100)));
+        assert_eq!(
+            s.backdate_expiry(b"k", u64::MAX),
+            BackdateExpiryResult::Backdated
+        );
+        assert!(s.get_with_expiry_check(b"k").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // SCAN full-iteration guarantee under mid-scan table resizes (issue 24).
+    //
+    // The store's `data` is a `griddle::HashMap`, which rehashes incrementally
+    // on insert. A naive positional cursor would skip keys whenever the table
+    // resizes mid-scan; the content-hash cursor (`scan_cursor_hash`) makes the
+    // resume ordering independent of table layout so a key present for the
+    // whole scan is always returned at least once. These tests pin that
+    // guarantee by forcing many resizes between SCAN batches.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn scan_full_iteration_survives_resizes_mid_scan() {
+        use std::collections::HashSet;
+
+        let mut store = HashMapStore::new();
+
+        // Seed the keyspace we expect to fully observe.
+        const ORIGINAL: usize = 5_000;
+        for i in 0..ORIGINAL {
+            store.set(Bytes::from(format!("orig:{i}")), Value::string("v"));
+        }
+        let starting_keys = store.data.len();
+
+        let mut seen: HashSet<Bytes> = HashSet::new();
+        let mut cursor = 0u64;
+        let count = 500;
+        // Distinct-key counter so every inserted key is brand new (forces the
+        // table to grow, unlike idempotent rewrites of the same keys). We spend
+        // a fixed budget of ~50k inserts across the early batches, then stop —
+        // if we inserted faster than the cursor drains the scan would never
+        // terminate, so the budget is bounded while still forcing many resizes.
+        let mut extra = 0usize;
+        const INSERT_BUDGET: usize = 50_000;
+
+        loop {
+            let (next, batch) = store.scan(cursor, count, None);
+            seen.extend(batch);
+            cursor = next;
+            if cursor == 0 {
+                break;
+            }
+
+            // Front-load the growth: insert a burst of distinct keys between
+            // batches until the budget is exhausted. The table grows from ~5k
+            // to ~55k while the scan is in flight, forcing multiple griddle
+            // resizes mid-iteration.
+            for _ in 0..5_000 {
+                if extra >= INSERT_BUDGET {
+                    break;
+                }
+                store.set(Bytes::from(format!("extra:{extra}")), Value::string("v"));
+                extra += 1;
+            }
+        }
+
+        // The table must have grown by an order of magnitude (resizes happened).
+        assert!(
+            store.data.len() >= starting_keys * 5,
+            "expected table growth to force resizes: started {starting_keys}, ended {}",
+            store.data.len()
+        );
+
+        // Every original key — present for the entire scan — must be returned.
+        for i in 0..ORIGINAL {
+            let k = Bytes::from(format!("orig:{i}"));
+            assert!(
+                seen.contains(&k),
+                "original key orig:{i} was skipped despite being present the whole scan"
+            );
+        }
+    }
+
+    #[test]
+    fn scan_full_iteration_survives_shrink_mid_scan() {
+        use std::collections::HashSet;
+
+        // Grow large first so the table is at a high capacity, then delete a
+        // large fraction of the (non-original) keys between SCAN batches to
+        // exercise the shrink direction while iterating.
+        let mut store = HashMapStore::new();
+        const ORIGINAL: usize = 2_000;
+        const FILLER: usize = 40_000;
+        for i in 0..ORIGINAL {
+            store.set(Bytes::from(format!("orig:{i}")), Value::string("v"));
+        }
+        for i in 0..FILLER {
+            store.set(Bytes::from(format!("filler:{i}")), Value::string("v"));
+        }
+
+        let mut seen: HashSet<Bytes> = HashSet::new();
+        let mut cursor = 0u64;
+        let count = 100;
+        let mut next_to_delete = 0usize;
+
+        loop {
+            let (next, batch) = store.scan(cursor, count, None);
+            seen.extend(batch);
+            cursor = next;
+            if cursor == 0 {
+                break;
+            }
+
+            // Delete a burst of filler keys between batches (shrinks the table).
+            for _ in 0..1_500 {
+                if next_to_delete < FILLER {
+                    store.delete(format!("filler:{next_to_delete}").as_bytes());
+                    next_to_delete += 1;
+                }
+            }
+        }
+
+        for i in 0..ORIGINAL {
+            let k = Bytes::from(format!("orig:{i}"));
+            assert!(
+                seen.contains(&k),
+                "original key orig:{i} was skipped despite being present the whole scan"
+            );
+        }
+    }
+
+    mod scan_stress {
+        use super::*;
+        use proptest::prelude::*;
+        use std::collections::HashSet;
+
+        fn seed_key(i: usize) -> Bytes {
+            Bytes::from(format!("seed:{i}"))
+        }
+
+        proptest! {
+            // Redis's full-iteration guarantee: any key present for the entire
+            // duration of the scan is returned at least once. We drive a full
+            // keyspace SCAN to completion while applying randomized
+            // insert/delete operations between batches, then assert that the
+            // set of keys present-throughout is a subset of the returned keys.
+            #[test]
+            fn scan_present_throughout_is_subset_of_returned(
+                seed_count in 64usize..512,
+                count in 1usize..24,
+                ops_per_batch in 1usize..8,
+                ops in prop::collection::vec(
+                    (any::<bool>(), 0usize..1024),
+                    0..600,
+                ),
+            ) {
+                let mut store = HashMapStore::new();
+                for i in 0..seed_count {
+                    store.set(seed_key(i), Value::string("v"));
+                }
+
+                // Keys present at scan start.
+                let initial: HashSet<Bytes> =
+                    (0..seed_count).map(seed_key).collect();
+                // Any initial key deleted at any point during the scan is no
+                // longer "present throughout" and is dropped from the required
+                // set (conservative: a delete+reinsert also disqualifies it).
+                let mut disqualified: HashSet<Bytes> = HashSet::new();
+
+                let mut seen: HashSet<Bytes> = HashSet::new();
+                let mut cursor = 0u64;
+                let mut op_iter = ops.into_iter();
+
+                loop {
+                    let (next, batch) = store.scan(cursor, count, None);
+                    seen.extend(batch);
+                    cursor = next;
+                    if cursor == 0 {
+                        break;
+                    }
+
+                    for _ in 0..ops_per_batch {
+                        let Some((is_insert, idx)) = op_iter.next() else {
+                            break;
+                        };
+                        // Index range overlaps the seed range so deletes can
+                        // target present-throughout candidates, while higher
+                        // indices are pure concurrent churn.
+                        let k = seed_key(idx);
+                        if is_insert {
+                            store.set(k, Value::string("v"));
+                        } else {
+                            store.delete(
+                                format!("seed:{idx}").as_bytes(),
+                            );
+                            disqualified.insert(k);
+                        }
+                    }
+                }
+
+                for k in initial.difference(&disqualified) {
+                    prop_assert!(
+                        seen.contains(k),
+                        "key present for the whole scan was not returned: {:?}",
+                        k
+                    );
+                }
+            }
+        }
     }
 }

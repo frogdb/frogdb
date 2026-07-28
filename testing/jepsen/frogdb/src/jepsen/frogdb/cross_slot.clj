@@ -339,24 +339,56 @@
 ;; ===========================================================================
 
 (defn checker
-  "Checker for cross-slot workload.
+  "Fault-aware checker for the cross-slot workload.
 
-   Verifies:
-   - Total balance conserved across transfers
-   - Hash-tagged keys route to same slot
-   - Cross-slot operations correctly rejected"
+   Three properties are computed. Two ALWAYS gate :valid? (they are
+   fault-independent client-side/safety invariants); one is kill-gated (it
+   encodes a contract the architecture does not promise under a crash).
+
+   - Slot co-location (ALWAYS gates): every :verify-slot-locality op must report
+     that its hash-tagged keys map to a single slot. This is a pure client-side
+     CRC16 computation — it never touches a server and cannot be perturbed by a
+     fault — so a failure here is a real hash-tag/CRC16 bug and always fails.
+
+   - Cross-slot rejection safety (ALWAYS gates): a multi-key op spanning slots
+     must NEVER be silently accepted. The client refuses cross-slot keys with a
+     client-side slot check (throwing :crossslot); if that check ever lets a
+     genuinely cross-slot multi-get through, the op is recorded as
+     :fail :should-have-failed. That is a correctness bug independent of fault
+     injection, so it always gates. (`:keys-unexpectedly-same-slot` — the two
+     probe keys coincidentally colliding to one slot — is a test-data artifact,
+     not a FrogDB violation, so it is surfaced but does not gate.)
+
+   - Balance conservation (KILL-GATED): the account balances are hash-tag
+     co-located, so they live on a single shard and every atomic transfer applies
+     both SET legs or neither — total is conserved. Under a network partition
+     (no kill) committed data is never destroyed, so a conservation shortfall is
+     a real failure and gates. Under a SIGKILL, however, FrogDB does NOT promise
+     failure atomicity: the raft-cluster shards are single-owner with no per-shard
+     replication (docker-compose.raft-cluster.yml), so a kill can lose recent
+     un-fsynced acknowledged writes (Redis-style async persistence), and a
+     cross-shard VLL EXEC may land as a durable partial commit by documented
+     design (concurrency issue 05 — option 4 fail-stop; failure-atomic recovery
+     deferred to the durability phase). So when a kill fired, a conservation
+     shortfall is the accepted contract: it is surfaced loudly (totals + balances
+     retained in the result) for visibility but does not fail the run. This
+     mirrors the kill-gating the key-routing checker already encodes."
   []
   (reify checker/Checker
     (check [this test history opts]
       (let [completed (filter #(= :ok (:type %)) history)
             failed (filter #(= :fail (:type %)) history)
+            info-ops (filter #(= :info (:type %)) history)
 
-            ;; Extract balance reads
+            ;; Extract balance reads (successful hash-tag reads of the accounts).
+            ;; Using the last SUCCESSFUL read as the final snapshot means a final
+            ;; read that failed under an active fault does not manufacture a false
+            ;; imbalance — every successful snapshot of the two balances totals the
+            ;; same conserved sum.
             balance-reads (->> completed
                                (filter #(= :hash-tag-read (:f %)))
                                (filter #(= account-tag (get-in % [:value :tag]))))
 
-            ;; Get initial and final balances
             initial-balances (get-in (first balance-reads) [:value :values])
             final-balances (get-in (last balance-reads) [:value :values])
 
@@ -365,31 +397,63 @@
             final-total (when final-balances
                           (reduce + (map #(or % 0) (vals final-balances))))
 
+            ;; Conservation holds when we lack an endpoint (degenerate, e.g. a
+            ;; fault swallowed the seeding write) or the two endpoints agree.
+            balance-conserved? (or (nil? initial-total)
+                                   (nil? final-total)
+                                   (= initial-total final-total))
+
             ;; Check transfer count
             transfers (filter #(= :atomic-transfer (:f %)) completed)
             failed-transfers (filter #(and (= :atomic-transfer (:f %))
                                            (= :fail (:type %)))
                                      (concat completed failed))
 
-            ;; Check cross-slot rejection
+            ;; Cross-slot rejection accounting.
             cross-slot-ops (filter #(= :cross-slot-attempt (:f %)) completed)
             correctly-rejected (filter #(= :correctly-rejected (:value %)) cross-slot-ops)
+            ;; SAFETY (fault-independent): a cross-slot multi-key op that was NOT
+            ;; rejected is recorded as :fail :should-have-failed by the client.
+            cross-slot-not-rejected (filter #(= :should-have-failed (:error %))
+                                            (concat completed failed))
+            cross-slot-safe? (empty? cross-slot-not-rejected)
+            ;; Probe keys coincidentally landing in one slot — a test-data artifact
+            ;; that means the rejection path was not actually exercised. Surfaced,
+            ;; not gated.
+            cross-slot-untested (filter #(= :keys-unexpectedly-same-slot (:error %))
+                                        (concat completed failed))
 
-            ;; Check slot locality verifications
+            ;; Check slot locality verifications (pure client-side CRC16).
             locality-checks (filter #(= :verify-slot-locality (:f %)) completed)
-            all-local (every? #(get-in % [:value :all-same-slot]) locality-checks)]
+            all-local (every? #(get-in % [:value :all-same-slot]) locality-checks)
 
-        {:valid? (and (or (nil? initial-total) (nil? final-total) (= initial-total final-total))
-                      all-local)
-         :balance-conserved (= initial-total final-total)
+            ;; Kill-gating: a SIGKILL of a single-owner shard can lose recently
+            ;; acked un-fsynced writes / leave a documented partial commit, so
+            ;; conservation is only enforced when no kill fired. Nemesis kill ops
+            ;; appear in the history as :f :kill.
+            process-killed? (boolean (some #(= :kill (:f %)) history))
+            conservation-enforced? (not process-killed?)]
+
+        {:valid? (boolean (and all-local
+                               cross-slot-safe?
+                               (or (not conservation-enforced?) balance-conserved?)))
+         :balance-conserved balance-conserved?
+         :conservation-enforced? conservation-enforced?
+         :process-killed? process-killed?
          :initial-total initial-total
          :final-total final-total
          :initial-balances initial-balances
          :final-balances final-balances
          :total-transfers (count transfers)
          :failed-transfers (count failed-transfers)
+         :cross-slot-attempts (count cross-slot-ops)
          :cross-slot-correctly-rejected (count correctly-rejected)
-         :hash-tags-colocated all-local}))))
+         :cross-slot-not-rejected (count cross-slot-not-rejected)
+         :cross-slot-safe? cross-slot-safe?
+         :cross-slot-untested (count cross-slot-untested)
+         :hash-tags-colocated all-local
+         :timeout-ops (count (filter #(= :timeout (:error %)) info-ops))
+         :failed-ops (count failed)}))))
 
 ;; ===========================================================================
 ;; Workload

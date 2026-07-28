@@ -29,6 +29,7 @@ impl Command for PingCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -60,6 +61,7 @@ impl Command for EchoCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -90,6 +92,7 @@ impl Command for QuitCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -123,6 +126,7 @@ impl Command for CommandCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -455,6 +459,7 @@ impl Command for GetCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             // Keyspace hit/miss counted at the seam from `args[0]` existence.
             lookup: LookupSpec::FirstKey,
             mutation: frogdb_core::ConnMutation::None,
@@ -496,6 +501,11 @@ impl Command for SetCommand {
         WaiterWake::All,
             event: EventSpec::Emits { class: KeyspaceEventFlags::STRING, name: "set" },
             requires_same_slot: false,
+            // A blind `SET` overwrites any existing key with a string, so it can
+            // clobber an indexed hash. Refresh the key: index it if it is still a
+            // hash (a failed NX/XX leaves it unchanged), else drop the now-stale
+            // hash doc.
+            reindex: frogdb_core::ReindexSpec::RefreshFirstKey,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -622,6 +632,13 @@ impl Command for SetCommand {
                 None => Ok(Response::null()),
             },
             SetResult::NotSet => {
+                // NX/XX prevented the SET: nothing was written. Declaring the
+                // write a no-op skips the whole effect pipeline (reindex — SET is
+                // `RefreshFirstKey`, so an NX miss on an indexed key would
+                // otherwise re-index the entire unchanged key — plus WAL,
+                // replication, keyspace notification, WATCH dirty). Redis returns
+                // before signalModifiedKey on a condition miss.
+                ctx.effects.write_was_noop = true;
                 // When GET flag is set, return the old value even when NX/XX prevents the SET
                 match old_string_value {
                     Some(v) => Ok(Response::bulk(v)),
@@ -739,6 +756,7 @@ impl SetCommand {
                 }
                 SetResult::NotSet => {
                     // Shouldn't happen since we don't set NX/XX with IFxx
+                    ctx.effects.write_was_noop = true;
                     match old_string_value {
                         Some(v) => Ok(Response::bulk(v)),
                         None => Ok(Response::null()),
@@ -746,7 +764,11 @@ impl SetCommand {
                 }
             }
         } else {
-            // Condition not met — return nil or old value with GET
+            // Condition not met — nothing was written, so this is a no-op write
+            // (same contract as an NX/XX miss: skip reindex / WAL / replication /
+            // notification / WATCH dirty).
+            ctx.effects.write_was_noop = true;
+            // Return nil or old value with GET
             if opts.return_old {
                 match old_string_value {
                     Some(v) => Ok(Response::bulk(v)),
@@ -777,6 +799,7 @@ impl Command for DelCommand {
         WaiterWake::All,
             event: EventSpec::Emits { class: KeyspaceEventFlags::GENERIC, name: "del" },
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::DeleteKeys,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::ScatterGather(ScatterGatherOp::Del),
@@ -842,6 +865,7 @@ impl Command for ExistsCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::EveryKey,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::ScatterGather(ScatterGatherOp::Exists),
@@ -960,5 +984,67 @@ mod expiry_grammar_pin_tests {
             .execute(&mut c, &args(&["k", "v", "PX", "18446744073709551"]))
             .unwrap();
         assert_eq!(r, Response::ok());
+    }
+
+    /// A successful SET is a real write — it must NOT declare itself a no-op
+    /// (positive control for the NX/XX miss assertions below).
+    #[test]
+    fn set_write_is_not_noop() {
+        let mut c = ctx();
+        SetCommand.execute(&mut c, &args(&["k", "v"])).unwrap();
+        assert!(!c.effects.write_was_noop, "a real SET is not a no-op");
+    }
+
+    /// Finding 3: `SET k v NX` on an *existing* key sets nothing (`NotSet`). It
+    /// must declare the write a no-op so the effect pipeline is skipped — no
+    /// reindex (SET is `RefreshFirstKey`, so otherwise it would re-index the
+    /// whole existing key), no WAL, no replication, no keyspace notification,
+    /// no WATCH dirty. Redis returns before signalModifiedKey on an NX miss.
+    #[test]
+    fn set_nx_miss_is_noop() {
+        let mut c = ctx();
+        SetCommand.execute(&mut c, &args(&["k", "v"])).unwrap();
+        // Fresh effects for the second command.
+        c.effects = Default::default();
+        let r = SetCommand
+            .execute(&mut c, &args(&["k", "v2", "NX"]))
+            .unwrap();
+        assert_eq!(r, Response::null(), "NX miss returns nil");
+        assert!(
+            c.effects.write_was_noop,
+            "SET NX that did not set must be a no-op write"
+        );
+    }
+
+    /// `SET k v XX` on a *missing* key sets nothing (`NotSet`) — the same no-op
+    /// contract as the NX miss.
+    #[test]
+    fn set_xx_miss_is_noop() {
+        let mut c = ctx();
+        let r = SetCommand
+            .execute(&mut c, &args(&["absent", "v", "XX"]))
+            .unwrap();
+        assert_eq!(r, Response::null(), "XX miss returns nil");
+        assert!(
+            c.effects.write_was_noop,
+            "SET XX that did not set must be a no-op write"
+        );
+    }
+
+    /// The GET variant of an NX miss (`SET k v NX GET`) returns the old value but
+    /// still writes nothing — it is a no-op write.
+    #[test]
+    fn set_nx_get_miss_is_noop() {
+        let mut c = ctx();
+        SetCommand.execute(&mut c, &args(&["k", "old"])).unwrap();
+        c.effects = Default::default();
+        let r = SetCommand
+            .execute(&mut c, &args(&["k", "new", "NX", "GET"]))
+            .unwrap();
+        assert_eq!(r, Response::bulk(Bytes::from_static(b"old")));
+        assert!(
+            c.effects.write_was_noop,
+            "SET NX GET that did not set must be a no-op write"
+        );
     }
 }

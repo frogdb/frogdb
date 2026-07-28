@@ -127,33 +127,6 @@ impl NodeInfo {
     pub fn is_replica(&self) -> bool {
         self.role == NodeRole::Replica
     }
-
-    /// Format node info in Redis CLUSTER NODES format.
-    pub fn to_cluster_nodes_line(&self, myself: bool, slots: &[SlotRange]) -> String {
-        let flags = if myself {
-            format!("myself,{}", self.role)
-        } else {
-            self.role.to_string()
-        };
-
-        let primary_id = self
-            .primary_id
-            .map(|id| format!("{:016x}", id))
-            .unwrap_or_else(|| "-".to_string());
-
-        let slots_str: Vec<String> = slots.iter().map(|r| r.to_string()).collect();
-
-        format!(
-            "{:016x} {}@{} {} {} 0 {} connected {}",
-            self.id,
-            self.addr,
-            self.cluster_addr.port(),
-            flags,
-            primary_id,
-            self.config_epoch,
-            slots_str.join(" ")
-        )
-    }
 }
 
 /// Flags describing node state.
@@ -264,6 +237,52 @@ impl std::str::FromStr for SlotRange {
     }
 }
 
+/// Partition all [`CLUSTER_SLOTS`] hash slots as evenly as possible across
+/// `node_ids`, in the given order, assigning any remainder to the last node.
+///
+/// Returns one `(NodeId, SlotRange)` per node, together covering `0..CLUSTER_SLOTS`
+/// exactly once with disjoint, contiguous, inclusive ranges. The order of
+/// `node_ids` is significant and preserved: the node at index 0 always owns the
+/// range starting at slot 0, so callers must pass a deterministically ordered
+/// slice (bootstrap uses `BTreeMap` node-id order).
+///
+/// Returns an empty `Vec` for empty input. `node_ids.len()` must be
+/// `<= CLUSTER_SLOTS` (a cluster cannot have more primaries than slots); callers
+/// already guarantee a small member count far below the slot count, so this is a
+/// `debug_assert`, not a runtime error.
+///
+/// This is the single owner of the bootstrap even-split arithmetic: both the
+/// local-seed path and the Raft-replication path in the server's cluster
+/// bootstrap consume it, so their slot ownership is identical by construction
+/// rather than by hand-synced comment.
+pub fn even_slot_ranges(node_ids: &[NodeId]) -> Vec<(NodeId, SlotRange)> {
+    let num_nodes = node_ids.len();
+    if num_nodes == 0 {
+        return Vec::new();
+    }
+    debug_assert!(
+        num_nodes <= CLUSTER_SLOTS as usize,
+        "cannot partition {} slots across {} nodes (more nodes than slots)",
+        CLUSTER_SLOTS,
+        num_nodes
+    );
+
+    let slots_per_node = CLUSTER_SLOTS as usize / num_nodes;
+    node_ids
+        .iter()
+        .enumerate()
+        .map(|(i, &nid)| {
+            let start = (i * slots_per_node) as u16;
+            let end = if i == num_nodes - 1 {
+                CLUSTER_SLOTS - 1 // Last node gets the remainder.
+            } else {
+                ((i + 1) * slots_per_node - 1) as u16
+            };
+            (nid, SlotRange::new(start, end))
+        })
+        .collect()
+}
+
 /// Commands that modify cluster state via Raft consensus.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClusterCommand {
@@ -357,14 +376,34 @@ pub enum ClusterCommand {
 }
 
 /// Response from applying a cluster command.
+///
+/// This is the openraft `R` value — the only value that crosses back from a
+/// Raft apply. It carries structure end-to-end: the typed [`ClusterError`]
+/// survives the apply boundary instead of being flattened to a display string,
+/// and successful epoch-bumping commands return a typed [`ConfigEpoch`] rather
+/// than a stringly-encoded number (proposal 32).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClusterResponse {
     /// Command succeeded.
     Ok,
-    /// Command returned a value.
-    Value(String),
-    /// Command failed.
-    Error(String),
+    /// Command succeeded and produced a configuration epoch (e.g.
+    /// `IncrementEpoch`, `Failover`).
+    Epoch(ConfigEpoch),
+    /// Command failed, carrying the typed error the state machine produced.
+    Error(ClusterError),
+}
+
+impl ClusterResponse {
+    /// Return the typed error iff this response is an [`ClusterResponse::Error`].
+    ///
+    /// Lets callers that only want the `Display` string stay terse while a
+    /// caller that wants to branch on the variant can match it directly.
+    pub fn as_error(&self) -> Option<&ClusterError> {
+        match self {
+            ClusterResponse::Error(e) => Some(e),
+            _ => None,
+        }
+    }
 }
 
 /// A node-agnostic description of a side effect a successful cluster mutation
@@ -430,7 +469,13 @@ impl Default for ClusterConfig {
 }
 
 /// Errors that can occur in cluster operations.
-#[derive(Debug, Error, Clone)]
+///
+/// `Serialize`/`Deserialize` are required because this type is now carried in
+/// [`ClusterResponse`], the openraft `R` value, which must be `serde` under the
+/// enabled feature. Every variant holds only plain data (`NodeId`/`u16`/`String`),
+/// so the enum stays serde-clean — keep it that way (a `#[from] io::Error`-style
+/// variant would break the derive).
+#[derive(Debug, Error, Clone, Serialize, Deserialize)]
 pub enum ClusterError {
     /// Node not found.
     #[error("node {0} not found")]
@@ -516,8 +561,9 @@ pub struct ClusterSnapshot {
     pub config_epoch: ConfigEpoch,
     /// Active slot migrations.
     pub migrations: BTreeMap<u16, SlotMigration>,
-    /// The Raft leader node ID (if known).
-    pub leader_id: Option<NodeId>,
+    // `leader_id` removed (proposal 33): the leader is Raft runtime state, not
+    // replicated metadata, so this DTO's builder cannot supply it. The debug
+    // seam reads it live from `Raft::metrics().current_leader` instead.
     /// The finalized active version, if any.
     #[serde(default)]
     pub active_version: Option<String>,
@@ -651,15 +697,157 @@ mod tests {
     }
 
     #[test]
-    fn test_node_info_to_cluster_nodes_line() {
-        let node = NodeInfo::new_primary(
-            1,
-            "127.0.0.1:6379".parse().unwrap(),
-            "127.0.0.1:16379".parse().unwrap(),
+    fn test_cluster_response_as_error() {
+        // Error carries the typed variant, retrievable via as_error().
+        let err = ClusterResponse::Error(ClusterError::NodeNotFound(7));
+        assert!(matches!(
+            err.as_error(),
+            Some(ClusterError::NodeNotFound(7))
+        ));
+
+        // Non-error variants yield None.
+        assert!(ClusterResponse::Ok.as_error().is_none());
+        assert!(ClusterResponse::Epoch(3).as_error().is_none());
+    }
+
+    #[test]
+    fn test_cluster_response_serde_round_trip() {
+        // The new derives + the openraft `R: Serialize + Deserialize` bound:
+        // a typed error and the typed epoch both survive a serde round-trip.
+        let err = ClusterResponse::Error(ClusterError::SlotAlreadyAssigned(1, 2));
+        let json = serde_json::to_string(&err).unwrap();
+        let back: ClusterResponse = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            back.as_error(),
+            Some(ClusterError::SlotAlreadyAssigned(1, 2))
+        ));
+
+        let epoch = ClusterResponse::Epoch(7);
+        let json = serde_json::to_string(&epoch).unwrap();
+        let back: ClusterResponse = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, ClusterResponse::Epoch(7)));
+    }
+
+    /// The headline test: for a representative spread of node counts (divisors,
+    /// non-divisors, and edges), the partition covers every slot in
+    /// `0..CLUSTER_SLOTS` exactly once with disjoint, contiguous ranges, and the
+    /// remainder always lands on the last node.
+    #[test]
+    fn test_even_slot_ranges_partition_correctness() {
+        for num_nodes in [1usize, 2, 3, 5, 7, 16] {
+            let node_ids: Vec<NodeId> = (1..=num_nodes as NodeId).collect();
+            let ranges = even_slot_ranges(&node_ids);
+
+            // One entry per node, in input order.
+            assert_eq!(ranges.len(), num_nodes, "num_nodes={num_nodes}");
+            for (i, (nid, _)) in ranges.iter().enumerate() {
+                assert_eq!(*nid, node_ids[i], "order preserved, num_nodes={num_nodes}");
+            }
+
+            // Every slot covered exactly once.
+            let mut covered = vec![false; CLUSTER_SLOTS as usize];
+            for (_, range) in &ranges {
+                for slot in range.iter() {
+                    assert!(
+                        !covered[slot as usize],
+                        "slot {slot} covered twice, num_nodes={num_nodes}"
+                    );
+                    covered[slot as usize] = true;
+                }
+            }
+            assert!(
+                covered.iter().all(|&c| c),
+                "not all slots covered, num_nodes={num_nodes}"
+            );
+
+            // Disjoint + contiguous: first starts at 0, each range abuts the next.
+            assert_eq!(ranges[0].1.start, 0, "starts at 0, num_nodes={num_nodes}");
+            for pair in ranges.windows(2) {
+                assert_eq!(
+                    pair[0].1.end + 1,
+                    pair[1].1.start,
+                    "ranges abut, num_nodes={num_nodes}"
+                );
+            }
+
+            // Remainder lands on the last node.
+            assert_eq!(
+                ranges.last().unwrap().1.end,
+                CLUSTER_SLOTS - 1,
+                "last range ends at CLUSTER_SLOTS-1, num_nodes={num_nodes}"
+            );
+        }
+    }
+
+    /// Order-in equals partition-out: the node at index 0 always owns the range
+    /// starting at slot 0, regardless of the node ids' numeric order. This pins
+    /// the "position i -> node i" contract both bootstrap call sites rely on.
+    #[test]
+    fn test_even_slot_ranges_order_preservation() {
+        let ascending = even_slot_ranges(&[10, 20, 30]);
+        let reordered = even_slot_ranges(&[30, 10, 20]);
+
+        // Same ranges assigned by slice position...
+        let ascending_ranges: Vec<SlotRange> = ascending.iter().map(|(_, r)| *r).collect();
+        let reordered_ranges: Vec<SlotRange> = reordered.iter().map(|(_, r)| *r).collect();
+        assert_eq!(ascending_ranges, reordered_ranges);
+
+        // ...but bound to whichever node sits at that position.
+        assert_eq!(ascending[0].0, 10);
+        assert_eq!(reordered[0].0, 30);
+        assert_eq!(ascending[0].1.start, 0);
+        assert_eq!(reordered[0].1.start, 0);
+    }
+
+    /// Exact boundaries for the common cases — the literal values a regression in
+    /// either bootstrap block would change.
+    #[test]
+    fn test_even_slot_ranges_exact_boundaries() {
+        let three = even_slot_ranges(&[1, 2, 3]);
+        assert_eq!(
+            three,
+            vec![
+                (1, SlotRange::new(0, 5460)),
+                (2, SlotRange::new(5461, 10921)),
+                (3, SlotRange::new(10922, 16383)),
+            ]
         );
-        let slots = vec![SlotRange::new(0, 5460)];
-        let line = node.to_cluster_nodes_line(true, &slots);
-        assert!(line.contains("myself,master"));
-        assert!(line.contains("0-5460"));
+
+        let one = even_slot_ranges(&[42]);
+        assert_eq!(one, vec![(42, SlotRange::new(0, 16383))]);
+    }
+
+    /// Degenerate input: an empty slice yields an empty partition.
+    #[test]
+    fn test_even_slot_ranges_empty() {
+        assert!(even_slot_ranges(&[]).is_empty());
+    }
+
+    /// Cross-path equivalence (regression guard for the original bug): mapping
+    /// `even_slot_ranges` into `AssignSlots` commands yields the identical command
+    /// sequence for the "local" and "raft" bootstrap paths. Trivially true now
+    /// that both share the function — the test documents the invariant the
+    /// hand-synced comment used to assert.
+    #[test]
+    fn test_even_slot_ranges_cross_path_equivalence() {
+        let node_ids: Vec<NodeId> = vec![7, 11, 13];
+        let to_commands = |ids: &[NodeId]| -> Vec<(NodeId, Vec<SlotRange>)> {
+            even_slot_ranges(ids)
+                .into_iter()
+                .map(|(nid, range)| {
+                    let cmd = ClusterCommand::AssignSlots {
+                        node_id: nid,
+                        slots: vec![range],
+                    };
+                    match cmd {
+                        ClusterCommand::AssignSlots { node_id, slots } => (node_id, slots),
+                        _ => unreachable!(),
+                    }
+                })
+                .collect()
+        };
+        let local_path = to_commands(&node_ids);
+        let raft_path = to_commands(&node_ids);
+        assert_eq!(local_path, raft_path);
     }
 }

@@ -65,6 +65,9 @@ pub(crate) struct PreDispatchView<'a> {
     pub(crate) cluster: &'a ClusterDeps,
     /// ACL manager, for building the per-connection [`PermissionGuard`].
     pub(crate) acl_manager: &'a AclManager,
+    /// Runtime config, read live on the write path for the
+    /// `min-replicas-to-write` gate (so `CONFIG SET` takes effect at once).
+    pub(crate) config_manager: &'a crate::runtime_config::ConfigManager,
     /// Shard senders, for the multi-key MIGRATING presence scatter.
     pub(crate) shard_senders: &'a [ShardSender],
     /// Replica flag: writes are rejected on a read-only replica.
@@ -91,6 +94,7 @@ impl ConnectionHandler {
             registry: &self.core.registry,
             cluster: &self.cluster,
             acl_manager: &self.core.acl_manager,
+            config_manager: &self.admin.config_manager,
             shard_senders: &self.core.shard_senders,
             is_replica: &self.is_replica,
             is_admin: self.is_admin,
@@ -292,6 +296,41 @@ impl PreDispatchView<'_> {
             return Some(Response::error(
                 "CLUSTERDOWN The cluster is down (quorum lost, writes rejected)",
             ));
+        }
+
+        // min-replicas-to-write: reject writes when fewer than the configured
+        // number of "good" (recently-ACKing streaming) replicas are connected —
+        // Redis's `NOREPLICAS` write-safety gate. Unlike the self-fence checker
+        // above this does not "arm": with `min-replicas-to-write N` and zero
+        // replicas the primary refuses writes from boot, exactly as Redis does.
+        // The config is read live so `CONFIG SET` applies immediately; the read
+        // only happens for WRITE-flagged commands.
+        //
+        // NOTE: like the self-fence gate this fires only in `run_pre_checks`,
+        // which covers direct writes and MULTI *queue* time. Writes issued from
+        // inside a Lua script (`redis.call`, EVAL lacks the WRITE flag) and the
+        // narrow window where a MULTI is queued while replicas are healthy and
+        // then EXEC'd after they drop are NOT gated here — a bound shared with
+        // self-fence, tracked as a follow-up (uniform enforcement belongs at the
+        // shard/script-gate write seam).
+        if let Some(cmd_impl) = self.registry.get_entry(cmd_name)
+            && cmd_impl.flags().contains(CommandFlags::WRITE)
+        {
+            let min_replicas = self.config_manager.min_replicas_to_write();
+            if min_replicas > 0 {
+                let max_lag = Duration::from_millis(self.config_manager.min_replicas_timeout_ms());
+                let good = self
+                    .cluster
+                    .replication_tracker
+                    .as_ref()
+                    .map(|t| t.count_good_replicas(max_lag))
+                    .unwrap_or(0);
+                if good < min_replicas {
+                    return Some(Response::error(
+                        "NOREPLICAS Not enough good replicas to write.",
+                    ));
+                }
+            }
         }
 
         // Block admin commands on regular port when admin port is enabled
@@ -685,7 +724,7 @@ impl PreDispatchView<'_> {
 
         let mut any_present = false;
         let mut any_absent = false;
-        for (_, response) in &partial.results {
+        for (_, response) in partial.keyed_slice() {
             match response {
                 Response::Integer(1) => any_present = true,
                 Response::Integer(0) => any_absent = true,
@@ -751,6 +790,7 @@ mod tests {
         is_replica: AtomicBool,
         is_admin: bool,
         admin_enabled: bool,
+        config_manager: Arc<crate::runtime_config::ConfigManager>,
     }
 
     impl ViewFixture {
@@ -770,6 +810,9 @@ mod tests {
                 is_replica: AtomicBool::new(false),
                 is_admin: false,
                 admin_enabled: false,
+                config_manager: Arc::new(crate::runtime_config::ConfigManager::new(
+                    &crate::config::Config::default(),
+                )),
             }
         }
 
@@ -779,6 +822,7 @@ mod tests {
                 registry: &self.registry,
                 cluster: &self.cluster,
                 acl_manager: self.acl_manager.as_ref(),
+                config_manager: &self.config_manager,
                 shard_senders: &self.shard_senders,
                 is_replica: &self.is_replica,
                 is_admin: self.is_admin,
@@ -927,6 +971,83 @@ mod tests {
 
         // Non-PING command returns None even in pub/sub mode.
         assert!(fx.view().pubsub_mode_ping("GET", &[]).is_none());
+    }
+
+    /// `is_allowed_in_pubsub_mode` unit coverage (no unit test existed prior to
+    /// this task — see issue 28). Pins the exact RESP2 allow-set boundary
+    /// against Redis 8.6's `processCommand` subscribe-context gate: SUBSCRIBE,
+    /// UNSUBSCRIBE, PSUBSCRIBE, PUNSUBSCRIBE, SSUBSCRIBE, SUNSUBSCRIBE, PING,
+    /// QUIT, RESET — exactly 9 commands — plus a representative disallowed
+    /// data command.
+    #[test]
+    fn test_is_allowed_in_pubsub_mode_resp2_allow_set_boundary() {
+        let mut fx = ViewFixture::new(None);
+        // Default protocol version is RESP2.
+        assert!(!fx.view().state.protocol_version.is_resp3());
+
+        for allowed in [
+            "SUBSCRIBE",
+            "UNSUBSCRIBE",
+            "PSUBSCRIBE",
+            "PUNSUBSCRIBE",
+            "SSUBSCRIBE",
+            "SUNSUBSCRIBE",
+            "PING",
+            "QUIT",
+            "RESET",
+        ] {
+            assert!(
+                fx.view().is_allowed_in_pubsub_mode(allowed),
+                "{allowed} should be allowed while subscribed under RESP2"
+            );
+        }
+
+        // Representative disallowed data commands.
+        for disallowed in ["GET", "SET", "DEL"] {
+            assert!(
+                !fx.view().is_allowed_in_pubsub_mode(disallowed),
+                "{disallowed} should be rejected while subscribed under RESP2"
+            );
+        }
+    }
+
+    /// RESP3 lifts the restriction entirely: every command, including plain
+    /// data commands and even unknown ones, is allowed while subscribed —
+    /// `is_allowed_in_pubsub_mode` short-circuits to `true` before consulting
+    /// the registry (`guards.rs:202-204`).
+    #[test]
+    fn test_is_allowed_in_pubsub_mode_resp3_allows_everything() {
+        let mut fx = ViewFixture::new(None);
+        fx.state.protocol_version = frogdb_protocol::ProtocolVersion::Resp3;
+
+        for cmd in ["GET", "SET", "DEL", "SUBSCRIBE", "PING", "NOSUCHCOMMAND"] {
+            assert!(
+                fx.view().is_allowed_in_pubsub_mode(cmd),
+                "{cmd} should be allowed while subscribed under RESP3"
+            );
+        }
+    }
+
+    /// KNOWN DIVERGENCE from Redis: `is_allowed_in_pubsub_mode` permits any
+    /// command sharing RESET's `ConnectionLevel(ConnectionState)` execution
+    /// strategy, not just RESET itself. ASKING/READONLY/READWRITE share that
+    /// strategy (`connection_state_conn_command.rs`), so they are — contrary
+    /// to Redis 8.6, which allows only the 9 commands pinned above — also
+    /// permitted while subscribed under RESP2. Pinned here so a future
+    /// strategy split (or intentional accept) is a deliberate test change,
+    /// not a silent behavior drift.
+    #[test]
+    fn test_is_allowed_in_pubsub_mode_resp2_connection_state_siblings_diverge_from_redis() {
+        let mut fx = ViewFixture::new(None);
+        for sibling in ["ASKING", "READONLY", "READWRITE"] {
+            assert!(
+                fx.view().is_allowed_in_pubsub_mode(sibling),
+                "{sibling} shares RESET's ConnectionState strategy, so the \
+                 current gate allows it too (divergence from Redis's 9-command \
+                 allow-set — Redis rejects ASKING/READONLY/READWRITE while \
+                 subscribed)"
+            );
+        }
     }
 
     #[test]

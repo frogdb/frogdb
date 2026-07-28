@@ -280,6 +280,29 @@
                        {}
                        score-writes)
 
+        ;; Cross-check the final read against the tracked latest scores.
+        ;; Every member present in the final ZRANGE must carry the score of
+        ;; the most recent ZADD/ZADD-XX that targeted it (by history order).
+        ;; This is what catches "score drift" — a member whose stored score no
+        ;; longer matches the last write applied to it.
+        ;;
+        ;; Soundness: the final reads run in a dedicated phase AFTER all
+        ;; mutations have quiesced (see core.clj gen/phases), and single-node
+        ;; workloads run at concurrency 1n (serial), so the last write by
+        ;; history index is the last write actually applied. Members present in
+        ;; the final set necessarily had an ADD after any REM, so their latest
+        ;; tracked write applied (an XX update on a present member always
+        ;; applies). Phantom members (no tracked write at all) are handled by
+        ;; the separate phantom-members check and skipped here.
+        score-drift
+        (when (seq final-set)
+          (->> final-set
+               (keep (fn [{:keys [member score]}]
+                       (when-let [expected (get-in latest-scores [member :score])]
+                         (when-not (== (double score) (double expected))
+                           {:member member :expected expected :actual score}))))
+               seq))
+
         ;; Count operations
         add-count (count (filter #(= :add (:f %)) ops))
         update-count (count (filter #(= :update-score (:f %)) ops))
@@ -289,7 +312,8 @@
         read-count (count (filter #(= :read (:f %)) ops))]
 
     {:valid? (and (empty? ordering-violations)
-                  (empty? phantom-members))
+                  (empty? phantom-members)
+                  (empty? score-drift))
      :add-count add-count
      :update-count update-count
      :remove-count remove-count
@@ -298,7 +322,8 @@
      :read-count read-count
      :final-size (count final-set)
      :ordering-violations (seq ordering-violations)
-     :phantom-members (seq phantom-members)}))
+     :phantom-members (seq phantom-members)
+     :score-drift score-drift}))
 
 (defn checker
   "Create a checker for sorted set operations."

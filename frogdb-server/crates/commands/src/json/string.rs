@@ -7,8 +7,8 @@ use frogdb_protocol::Response;
 use serde_json::Value as JsonData;
 
 use super::{
-    get_json, get_json_mut, json_error_to_command_error, parse_json_value, parse_path,
-    single_or_multi,
+    enforce_growth_limits, get_json, get_json_mut, json_error_to_command_error,
+    parse_json_value_limited, parse_path, single_or_multi,
 };
 
 // ============================================================================
@@ -29,6 +29,9 @@ impl Command for JsonStrAppendCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::FirstKey {
+                kind: frogdb_core::IndexKind::Json,
+            },
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -47,7 +50,8 @@ impl Command for JsonStrAppendCommand {
         };
 
         // Parse the JSON string value to extract the actual string content
-        let append_value: JsonData = parse_json_value(value_str)?;
+        let limits = ctx.json_limits;
+        let append_value: JsonData = parse_json_value_limited(value_str, &limits)?;
         let append_str = match &append_value {
             JsonData::String(s) => s.as_str(),
             _ => {
@@ -58,9 +62,12 @@ impl Command for JsonStrAppendCommand {
         };
 
         let json = get_json_mut!(ctx, key);
+        // Appending can grow the string past the size cap; snapshot for rollback.
+        let snapshot = json.clone();
         let results = json
             .str_append(&path, append_str)
             .map_err(json_error_to_command_error)?;
+        enforce_growth_limits(json, snapshot, &limits)?;
 
         Ok(single_or_multi(results, |len| {
             Response::Integer(len as i64)
@@ -86,6 +93,7 @@ impl Command for JsonStrLenCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,

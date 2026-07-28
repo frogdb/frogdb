@@ -72,25 +72,6 @@ pub fn is_write_command(cmd: &str) -> bool {
     }
 }
 
-/// Validate that a key is declared in the KEYS array.
-///
-/// When `declared_keys` is empty (numkeys=0) we skip validation, matching
-/// Redis behaviour where standalone scripts aren't required to declare keys.
-/// In cluster mode, undeclared key access prevents proper slot routing, but
-/// Redis still allows it for backward compatibility.
-#[allow(dead_code)]
-pub fn validate_key_access(key: &[u8], declared_keys: &[Bytes]) -> Result<(), ScriptError> {
-    if declared_keys.is_empty() {
-        return Ok(());
-    }
-    if !declared_keys.iter().any(|k| k.as_ref() == key) {
-        return Err(ScriptError::UndeclaredKey {
-            key: String::from_utf8_lossy(key).to_string(),
-        });
-    }
-    Ok(())
-}
-
 /// Convert a RESP Response to a Lua Value.
 ///
 /// A [`Response`] is a union of wire-serializable data and internal control-flow
@@ -398,15 +379,6 @@ mod tests {
         assert!(is_write_command("LPUSH"));
         assert!(!is_write_command("GET"));
         assert!(!is_write_command("LRANGE"));
-    }
-
-    #[test]
-    fn test_validate_key_access() {
-        let declared = vec![Bytes::from_static(b"key1"), Bytes::from_static(b"key2")];
-
-        assert!(validate_key_access(b"key1", &declared).is_ok());
-        assert!(validate_key_access(b"key2", &declared).is_ok());
-        assert!(validate_key_access(b"key3", &declared).is_err());
     }
 
     #[test]

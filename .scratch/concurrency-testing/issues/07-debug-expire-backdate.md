@@ -1,6 +1,6 @@
 # 07 — DEBUG command to backdate key expiry (kill the real-clock sleep in sim tests)
 
-Status: needs-triage
+Status: done
 Type: AFK
 Origin: lazy-expiry plan review 2026-07-21
 
@@ -14,10 +14,10 @@ Note: Redis has no equivalent DEBUG subcommand for this. DEBUG is an unstable, n
 
 ## Acceptance criteria
 
-- [ ] `DEBUG EXPIRE-BACKDATE <key> <ms>` (or equivalent name) implemented in the DEBUG command family, mirroring how `DEBUG SET-ACTIVE-EXPIRE` is wired (`frogdb-server/crates/server/src/connection/debug_conn_command.rs`, `debug_handler.rs`)
-- [ ] Existing sim-test `std::thread::sleep` TTL-elapse waits replaced with the backdate command where applicable (stage-1 lazy-expiry repros, the F3 pin, and any `regression_`-flipped pins the lazy-expiry-parity fix-stage plan lands)
-- [ ] S7 (`client_pause_write_vs_exec`) expiry sub-assertion feasibility revisited now that the real-clock-TTL blocker has a fix — either pinned or the doc comment updated to explain why it still cannot be, now that backdating is available
-- [ ] Brief doc note added wherever DEBUG subcommands are documented (mirroring the existing `DEBUG SET-ACTIVE-EXPIRE` doc entry)
+- [x] `DEBUG EXPIRE-BACKDATE <key> <ms>` implemented, mirroring `DEBUG SET-ACTIVE-EXPIRE`. Wiring: parse/dispatch in `debug_conn_command.rs` (`b"EXPIRE-BACKDATE"` arm + `dynamic_keys`); `DebugProvider::expire_backdate` in `conn_command.rs`; handler round-trip in `debug_handler.rs` via `query_one` to the key's owning shard; `DebugIntrospectionMsg::ExpireBackdate` in `shard/message.rs`; dispatch in `shard/dispatch_debug_introspection.rs` (now `&mut self`); store method `HashMapStore::backdate_expiry` + `BackdateExpiryResult` in `store/hashmap.rs`. No-TTL key → `ERR key has no expiry to backdate`; missing key → `ERR no such key`. The method rewrites only the deadline (metadata `expires_at` + expiry index) — it never purges, never pushes to `lazily_purged`, never bumps the version. Direct tests: `backdate_expiry_*` (store) and `expire_backdate_*` (executor).
+- [x] Sim-test `std::thread::sleep` TTL-elapse waits replaced with `DEBUG EXPIRE-BACKDATE` in all four sites in `tests/simulation.rs`: `watch_lazy_expiry_false_negative_realpath` (F3 pin), `xreadgroup_ttl_no_nogroup_realpath` (F1 pin, backdate + kept the active-expiry sweep window), `regression_watch_read_lazy_purge_aborts_realpath` (gap 3), `regression_watch_second_watcher_aborts_realpath` (gap 4). PEXPIRE-before-WATCH ordering preserved in each (backdate doesn't bump the version). All doc comments updated; zero `std::thread::sleep` left in the file. Fail-for-right-reason spot-checked by temporarily neutering `backdate_expiry` (tests flip to failing).
+- [x] S7 (`client_pause_write_vs_exec`) expiry sub-assertion pinned. Backdate removes the cited real-clock-TTL blocker, so the sub-assertion is now pinned in a dedicated focused test `client_pause_write_expiry_suppression_realpath` (kept out of S7's seed-looped 3-connection body to avoid conflating concerns): under `CLIENT PAUSE WRITE`, a backdated key reads gone to `GET` (nil) yet `OBJECT ENCODING` still sees it physically present (client-visible suppression), and after `UNPAUSE` the next sweep reaps it (`no such key`). S7's doc comment updated to point at the pin.
+- [x] Doc note added to `website/src/content/docs/architecture/debugging.md` (DEBUG subcommand table, alongside the `SET-ACTIVE-EXPIRE` entry) and to the `DEBUG HELP` output.
 
 ## Blocked by
 

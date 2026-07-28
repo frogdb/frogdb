@@ -24,19 +24,20 @@ All operations on a single key are totally ordered; concurrent writes from diffe
 ### Per-Shard Linearizability — [Tested]
 Within a single internal shard, operations are linearizable. Same evidence as above; all real-server linearizability tests are single-node and single-key.
 
-### Read-Your-Writes — [Design intent]
-A client sees its own writes on the **same connection to the same node**. This follows from per-connection in-order execution and single-key linearizability, but there is no dedicated read-your-writes test.
+### Read-Your-Writes — [Tested]
+A client sees its own writes on the **same connection to the same node**. This follows from per-connection in-order execution and single-key linearizability. Verified by the Jepsen `ryw` workload: each worker holds a dedicated single connection and a private key, and every `SET v` immediately followed by a `GET` on that same connection reads back exactly `v` (200+ ops per run, zero violations). Only the same-connection scenario is exercised; the reconnect and failover rows below remain design intent.
 
 | Scenario | Read-Your-Writes |
 |----------|------------------|
-| Same connection, no failover | Expected |
-| Reconnect to same node | Expected (data persisted per the durability mode) |
+| Same connection, no failover | **Tested** (Jepsen `ryw`) |
+| Reconnect to same node | Expected (data persisted per the durability mode) — [Design intent] |
+| `WAIT`-acked write, then read from the replica | **Tested** (`test_replica_read_monotonic_after_primary_writes`, `frogdb-server/crates/server/tests/integration_replication.rs`) |
 | Failover to replica (async) | **Not guaranteed** — unreplicated writes may be lost |
 
-**Mitigation:** for writes that must survive failover, require replica acknowledgment with `min-replicas-to-write` and/or use `WAIT` (see [Cluster Consistency](#cluster-consistency) and [Replication](/architecture/replication/#write-quorum-and-fencing)).
+**Mitigation:** for writes that must survive failover, require replica acknowledgment with `min-replicas-to-write` and/or use `WAIT` (see [Cluster Consistency](#cluster-consistency) and [Replication](/architecture/replication/#write-quorum-and-fencing)). The `WAIT` row above confirms that once `WAIT` reports the replica acknowledged, a read on that replica observes the acknowledged value.
 
-### Monotonic Reads — [Design intent]
-On a single connection to a single node, a client will not see an older value for a key after seeing a newer one. Implied by linearizability on the connection; no dedicated test.
+### Monotonic Reads — [Tested]
+A client will not see an older value for a key after seeing a newer one. Verified by `test_replica_read_monotonic_after_primary_writes` (`frogdb-server/crates/server/tests/integration_replication.rs`): while the primary writes a strictly increasing sequence, a tight read loop against the **replica** — a stronger cross-node case than the single-connection scenario this row previously described — never observes a value lower than one already returned, both before and after `WAIT` acknowledgment.
 
 ### Cross-Slot Handling — [Tested]
 Multi-key commands spanning multiple hash slots are rejected with a `CROSSSLOT` error before execution, matching Redis Cluster. Verified by the Jepsen `cross_slot` workload (which also confirms same-slot atomic transfers conserve their invariant). Use hash tags `{tag}` to colocate keys on one slot:
@@ -58,13 +59,15 @@ In **standalone mode only**, FrogDB can optionally serve atomic cross-shard oper
 
 ## Durability — [Tested]
 
-Durability follows the configured mode (`DurabilityMode`; default `periodic`, 1000 ms). Per-mode crash windows are verified by crash-recovery tests (`frogdb-server/crates/core/src/persistence/crash_recovery_tests.rs`).
+Durability follows the configured mode (`DurabilityMode`; default `periodic`, 1000 ms).
 
 | Mode | Write Acknowledged When | Data at Risk on Crash |
 |------|------------------------|----------------------|
 | `async` | Written to memory | All writes not yet flushed |
 | `periodic` | Written to memory | Up to one flush interval (default ~1 s) |
 | `sync` | fsync completes | None — every acknowledged write is durable |
+
+The per-mode loss windows are verified by fsync-boundary fault-injection tests (`test_sync_mode_zero_acked_write_loss`, `test_periodic_mode_loss_bounded_by_flush_interval`, and the async-window tests in `frogdb-server/crates/persistence/src/wal/tests.rs`). These drive the real WAL flush thread and durability-mode selection, but substitute the storage backend with a page-cache model that discards committed-but-unfsynced writes on a simulated crash — the fsync boundary the modes exist to control. That is exactly the boundary the ordinary crash-recovery tests (`crash_recovery_tests.rs`) cannot exercise, because they reopen the same directory in-process and the OS page cache flushes unsynced writes anyway. A full end-to-end power-loss test against real storage (VM hard reset or block-device fault injection) remains design intent.
 
 See [Persistence Internals](/architecture/persistence/#durability-modes) for the mechanism.
 
@@ -87,7 +90,7 @@ During failover, writes accepted by the old primary but not yet replicated may b
 | Write to an isolated old primary during split-brain | Discarded and audit-logged — [Tested] |
 
 ### Reads from a Replica — [Design intent]
-A replica may return a value older than the primary's; staleness is bounded only by replication lag.
+A replica may return a value older than the primary's; staleness is bounded only by replication lag. The magnitude of that lag is untested, but the *ordering* of what a replica returns over time is — see [Monotonic Reads](#monotonic-reads--tested) above.
 
 ---
 
@@ -131,15 +134,23 @@ A transaction is applied as a single RocksDB `WriteBatch` (atomic at the storage
 ### WATCH — [Tested]
 `WATCH` provides optimistic locking: `EXEC` aborts (returns nil) if a watched key was modified by another client. Watched keys must be on the same internal shard as the transaction's keys. Verified in `integration_transactions.rs` (`test_watch_exec_success`, `test_watch_exec_abort`, and the PFADD watch-version regression tests).
 
+### Checkpoint (BGSAVE) Cross-Shard Cut — [Tested]
+A `BGSAVE` checkpoint is a single RocksDB `Checkpoint` over one shared database, so it captures an atomic point-in-time image at one RocksDB sequence number across every internal shard's column family. Before the cut, `BGSAVE` drains every shard's WAL flush engine into RocksDB, so the image is a committed prefix of each shard's history rather than a partial mid-flush state.
+
+- **Single-shard transactions are never torn by the cut.** A single-shard `MULTI`/`EXEC` runs as one shard event-loop step that enqueues all of its writes before the pre-snapshot drain runs, and RocksDB commits in sequence order, so a checkpoint captures either all of a transaction's writes or none. This matters because a torn single-shard transaction in a recovery image would resurrect a half-applied transaction that no client ever observed.
+- **Cross-shard writes may be torn by the cut.** A cross-shard `MSET`/scatter dispatches independent per-shard writes, and the drain is likewise per-shard, so a checkpoint can capture one shard's half of a cross-shard write and not another's. This matches FrogDB's cross-shard model — execution atomicity via locking, without failure/durability atomicity (see [Cross-Slot in Standalone Mode](#cross-slot-in-standalone-mode) and the cross-shard transaction framing tracked for the durability phase). Within any one shard, the subset of a cross-shard write that lands on that shard is still applied atomically, so a shard's own portion is never itself torn.
+
+Verified in `integration_persistence.rs` (`test_checkpoint_preserves_single_shard_multi_atomicity_under_concurrent_bgsave`, `test_checkpoint_cross_shard_mset_contract_under_concurrent_bgsave`, and `test_concurrent_bgsave_stress_restores_cleanly`), which hammer transactions and cross-shard `MSET`s concurrently with repeated `BGSAVE`, then restore the resulting checkpoint and assert the cut preserved single-shard and per-shard atomicity.
+
 ---
 
 ## Ordering Guarantees
 
-### Within a Single Connection — [Design intent]
-Commands execute in the order sent; pipelining preserves order; responses return in order.
+### Within a Single Connection — [Tested]
+Commands execute in the order sent; pipelining preserves order; responses return in order. Verified by the Jepsen `wc-order` workload: each op pipelines N ordered `RPUSH`es on a single connection, then reads the list back. Both the server-observed execution order (the `LRANGE` contents must be `[0,1,…,N-1]`) and the response order (the pipelined return values must be the strictly increasing list lengths `[1,2,…,N]`) are asserted every op, so any reordering of execution or of responses fails the run.
 
 ### Across Connections — [Asserted negative]
 No ordering is guaranteed between different clients beyond per-key serialization.
 
-### Pub/Sub Message Ordering — [Design intent]
-Messages are delivered in publish order per channel, with no ordering across channels and at-most-once delivery (messages may be lost on reconnect).
+### Pub/Sub Message Ordering — [Tested]
+Messages are delivered in publish order per channel, with no ordering across channels and at-most-once delivery (messages may be lost on reconnect). Verified by the Jepsen `pubsub-order` workload: a subscriber records the arrival order while a publisher publishes `0,1,…,N-1` in order on a private channel, and the checker asserts the arrival sequence is a strictly increasing (in-publish-order) subsequence of what was published — delivery may **drop** messages (at-most-once) but must never **reorder** them. A reconnect flavour (drop the subscription and re-subscribe mid-stream) exercises the harder cross-reconnect case, where messages published while unsubscribed are lost but everything actually delivered is still in order. Ordering across channels is not claimed or tested.

@@ -222,9 +222,12 @@ Each a named test, proptest-permuted around its critical window:
    sweeps).
 8. **Expiry sweep interleaved with EXEC on the same shard**: serialization holds;
    notifications and version consistent. The "keyspace notifications consistent with
-   the chosen order" half of this goal is not yet pinned: the shard-driver harness has
-   no notification-capture seam; deferred to a future phase (candidate: phase 4c pubsub
-   oracle work).
+   the chosen order" half of this goal is now pinned (4c): the shard-driver harness has
+   a notification-capture seam (`ShardWorker::drive_capture_keyspace` +
+   `tests/shard_driver/notify_capture.rs`) and `scenario_s8` asserts the `expired`/`set`
+   keyevent stream matches the chosen serialization order in both the sweep→EXEC and
+   EXEC→sweep orderings. Broader rollout to S2/F3 lazy-expiry arms is a follow-up
+   (`.scratch/concurrency-testing/issues/10-notify-capture-broader-scenario-rollout.md`).
 
 ## Bug workflow
 
@@ -299,8 +302,48 @@ Each phase lands independently:
      don't count). Not per-key-linearizability-checkable; needs its own oracle:
      per-channel delivery conservation (a client subscribed for the entire
      publish window must receive the message exactly once) + per-publisher order
-     preservation per channel; SUBSCRIBE/PSUBSCRIBE/PUBLISH vocabulary.
-5. CI wiring (per-PR + nightly).
+     preservation per channel; SUBSCRIBE/PSUBSCRIBE/PUBLISH vocabulary. **Done.**
+     `frogdb_testing::pubsub_oracle` (`PubSubHistory` of bracketed
+     subscribe-ack/publish/receive/unsubscribe events; `check_pubsub_conservation`
+     asserts exactly-once for publishes firmly inside the confirmed subscription
+     window and at-most-once at the subscribe/unsubscribe edges — derived from the
+     confirmed server facts that PUBLISH routes to shard 0 and delivers synchronously
+     into unbounded subscriber queues with no drop path; `check_pubsub_order` asserts
+     per-publisher order per channel), a seeded `PubSubWorkload`, a turmoil
+     `pubsub_runner` + `concurrency_pubsub` seed sweep, and drop/duplicate/phantom/
+     reorder fault-injection self-tests. It also closed the deferred S8
+     notification-capture item (see scenario 8 above).
+5. CI wiring (per-PR + nightly). **Done** (2026-07-22): `test.yml`'s
+   `shuttle-tests`/`turmoil-tests` jobs already ran the shuttle suite and the
+   turmoil `simulation` tests per PR, but not the `just concurrency`
+   generated-workload seed sweeps (`seed_sweep_short_workloads`,
+   `seed_sweep_txheavy`) — added those as extra steps on `turmoil-tests`, so
+   per-PR now matches `just concurrency` exactly (part of `just test-all`).
+   Added the nightly tier: a new generated workflow
+   (`concurrency-nightly.yml`, source `workflow_gen/workflows/concurrency_nightly.py`)
+   on a `03:14 UTC` cron + `workflow_dispatch` (with a `seeds` input), running
+   `just concurrency-nightly` — a new `#[ignore]`d `seed_sweep_nightly` test
+   that sweeps every profile (`Mixed`/`BlockingHeavy`/`TxHeavy`/`MultiWaiter`)
+   with longer per-client histories, continuing past the first failing seed
+   and emitting a repro file per failure so one run can surface multiple bugs;
+   failing repros under `target/concurrency-repros/` (anchored off the
+   workspace root, not the test process's CWD, so it agrees with where
+   `just concurrency-repro` and the CI upload step look) are uploaded as a CI
+   artifact on failure (`if-no-files-found: error`, so a path regression fails
+   loudly instead of silently uploading nothing). Default 250 unique seeds x 4
+   profiles = 1000 (seed, profile) generated-workload runs — our reading of
+   this section's "1000+ seeds" bar as "1000+ runs," since a literal 1000
+   *unique* seeds x 4 profiles would be 4000 runs; both the seed count and
+   `ops_per_client` are env-var overridable. Plumbing validated on a testbox
+   smoke run; that validation also surfaced real, pre-existing invariant
+   violations at higher seed counts and `ops_per_client` (tracked as
+   `.scratch/concurrency-testing/issues/11-nightly-smoke-findings.md`),
+   including a near-deterministic MultiWaiter exactly-once-delivery bug once
+   `ops_per_client` crosses roughly 90 — so the nightly default (both the
+   harness's `env_override` fallback and the `Justfile` recipe's `OPS`
+   parameter) is set to 75, not the originally-planned larger value, so the
+   job doesn't go permanently red on that known, tracked bug. It may still
+   occasionally surface the tier's rarer findings, which is expected.
 6. Replication & cluster in-process testing (see next section).
 
 Future phases (accommodated, not built): durability/crash-injection via the persistence

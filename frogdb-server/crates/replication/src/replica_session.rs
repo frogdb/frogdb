@@ -34,14 +34,12 @@ use tokio::sync::broadcast;
 use frogdb_types::ADVERTISED_REDIS_VERSION;
 
 use crate::BoxedStream;
-use crate::frame::ReplicationFrame;
+use crate::frame::{ReplconfCodec, ReplicationFrame};
 use crate::fullsync::{
     CheckpointChecksum, CheckpointFileHeader, CheckpointStreamCodec, FullSyncMetadata,
     calculate_file_checksum, stream_file_to_writer,
 };
-use crate::primary::{
-    LAG_CHECK_INTERVAL, LagThresholdConfig, PrimaryReplicationHandler, parse_replconf_ack,
-};
+use crate::primary::{LAG_CHECK_INTERVAL, LagThresholdConfig, PrimaryReplicationHandler};
 use crate::tracker::ReplicationTrackerImpl;
 
 // ============================================================================
@@ -678,7 +676,7 @@ impl ReplicaSession {
                 match read_half.read_buf(&mut buf).await {
                     Ok(0) => break,
                     Ok(_) => {
-                        while let Some((ack_offset, consumed)) = parse_replconf_ack(&buf) {
+                        while let Some((ack_offset, consumed)) = ReplconfCodec::parse_ack(&buf) {
                             read_offsets.ingest_replica_ack(read_replica_id, ack_offset);
                             buf.advance(consumed);
                         }
@@ -745,9 +743,18 @@ impl ReplicaSession {
             }
         });
 
+        // When either half ends — the write task after a lag / write-timeout
+        // disconnect, or the read task on a replica-initiated close — abort the
+        // sibling so BOTH halves of the split stream drop and the TCP socket
+        // actually closes. Dropping the `JoinHandle`s alone does *not* abort the
+        // tasks: a detached read task would otherwise keep its half alive after
+        // a lag-disconnect, leaving the replica in a zombie half-open link
+        // (unregistered here, but never sent a FIN, so it never resyncs).
+        let mut read_task = read_task;
+        let mut write_task = write_task;
         tokio::select! {
-            _ = read_task => {}
-            _ = write_task => {}
+            _ = &mut read_task => { write_task.abort(); }
+            _ = &mut write_task => { read_task.abort(); }
         }
         Ok(())
     }

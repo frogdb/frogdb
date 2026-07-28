@@ -42,6 +42,7 @@ impl Command for BlpopCommand {
             // (core/src/shard/blocking.rs, phase 4).
             event: EventSpec::Dynamic,
             requires_same_slot: true, // All keys must be in the same shard,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Blocking {
@@ -124,6 +125,7 @@ impl Command for BrpopCommand {
             // Runtime-deposited: `rpop` on the popped key (see BLPOP).
             event: EventSpec::Dynamic,
             requires_same_slot: true,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Blocking {
@@ -208,6 +210,7 @@ impl Command for BlmoveCommand {
             // shard satisfaction seam (core/src/shard/blocking.rs, phase 4).
             event: EventSpec::Dynamic,
             requires_same_slot: true, // Source and destination must be in same shard,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Blocking {
@@ -328,6 +331,7 @@ impl Command for BlmpopCommand {
             // shard satisfaction seam.
             event: EventSpec::Dynamic,
             requires_same_slot: true,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Blocking {
@@ -461,6 +465,7 @@ impl Command for BzpopminCommand {
             // Runtime-deposited: `zpopmin` on the popped key (see BLPOP).
             event: EventSpec::Dynamic,
             requires_same_slot: true,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Blocking {
@@ -545,6 +550,7 @@ impl Command for BzpopmaxCommand {
             // Runtime-deposited: `zpopmax` on the popped key (see BLPOP).
             event: EventSpec::Dynamic,
             requires_same_slot: true,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Blocking {
@@ -632,6 +638,7 @@ impl Command for BzmpopCommand {
             // The woken path emits the same from the shard satisfaction seam.
             event: EventSpec::Dynamic,
             requires_same_slot: true,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Blocking {
@@ -774,6 +781,7 @@ impl Command for BrpoplpushCommand {
             // emits the same events from the shard satisfaction seam.
             event: EventSpec::Dynamic,
             requires_same_slot: true,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Blocking {

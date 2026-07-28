@@ -6,10 +6,10 @@ use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 
 use frogdb_types::metrics::definitions::{KeyspaceHits, KeyspaceMisses, WalRollbacks};
 
-use super::message::ScatterOp;
+use super::message::{ScatterOp, WatchEntry};
 use super::post_execution::{EffectScope, WalPhase, WriteSummary};
 use super::rollback::WriteSnapshot;
-use super::types::{PartialResult, TransactionResult};
+use super::types::{CopyPayload, PartialResult, TransactionResult};
 use super::worker::ShardWorker;
 use crate::command::{Command, CommandEffects, WriteRecord};
 use crate::store::Store;
@@ -30,6 +30,14 @@ pub(crate) struct WriteCommandMeta {
     /// [`EventSpec::Dynamic`]: crate::command_spec::EventSpec::Dynamic
     /// [`CommandContext::notify_event`]: crate::command::CommandContext::notify_event
     pub keyspace_events: crate::command::KeyspaceEventDeposits,
+    /// Keys this write created for the first time, for the `new` keyspace event.
+    /// Populated by the execution seam only when the `n` class is enabled;
+    /// empty otherwise (the diff is skipped entirely when `n` is off).
+    pub newly_created_keys: Vec<Bytes>,
+    /// Deterministic-propagation override deposited by the command (e.g. SPOP
+    /// rewriting itself to `SREM`/`DEL`); consumed by the replication-broadcast
+    /// write effect. `None` for verbatim-propagating writes.
+    pub repl_override: Option<crate::command::ReplicationOverride>,
 }
 
 impl CommandEffects {
@@ -61,6 +69,7 @@ impl CommandEffects {
             hll_wal_delta,
             keyspace_events,
             script_writes: _,
+            repl_override,
         } = self;
         if write_was_noop {
             return None;
@@ -70,6 +79,11 @@ impl CommandEffects {
             dirty_delta,
             hll_wal_delta,
             keyspace_events,
+            // The key-creation diff is computed at the execution seam (it needs
+            // store access before and after the handler runs); the caller fills
+            // this in after `into_write_meta` returns.
+            newly_created_keys: Vec::new(),
+            repl_override,
         })
     }
 }
@@ -79,7 +93,30 @@ impl ShardWorker {
     ///
     /// Returns the response and, for write commands, metadata needed by the
     /// post-execution pipeline. Read commands return `None` for the metadata.
-    fn execute_command_inner(
+    ///
+    /// Wraps [`Self::execute_command_body`] so that any keys the command lazily
+    /// purged (`Store::check_and_delete_expired` → reported via
+    /// `take_lazily_purged`) have their parity effects applied once, after the
+    /// command, regardless of which of the body's many early returns fired.
+    async fn execute_command_inner(
+        &mut self,
+        command: &ParsedCommand,
+        conn_id: u64,
+        protocol_version: ProtocolVersion,
+        track_reads: bool,
+    ) -> (Response, Option<WriteCommandMeta>) {
+        let out = self
+            .execute_command_body(command, conn_id, protocol_version, track_reads)
+            .await;
+        // Apply parity effects for any keys the command lazily purged (gaps 1-3).
+        // Task 1: this is a no-op drain; Task 2 fills in the effects.
+        self.apply_lazy_purge_effects();
+        out
+    }
+
+    /// The command handler body proper (see [`Self::execute_command_inner`],
+    /// which wraps this to drain lazy-purge effects afterward).
+    async fn execute_command_body(
         &mut self,
         command: &ParsedCommand,
         conn_id: u64,
@@ -117,7 +154,7 @@ impl ShardWorker {
         let is_write = handler
             .flags()
             .contains(crate::command::CommandFlags::WRITE);
-        if is_write && let Err(err) = self.check_memory_for_write() {
+        if is_write && let Err(err) = self.check_memory_for_write().await {
             return (err.to_response(), None);
         }
 
@@ -145,6 +182,19 @@ impl ShardWorker {
                         hits += 1;
                     } else {
                         misses += 1;
+                        // `keymiss` (the `m` class) fires on a read lookup that
+                        // misses, before the command runs — matching Redis, which
+                        // emits it only from `lookupKeyRead` (never write lookups),
+                        // so write commands with a `FirstKey`/`EveryKey` read (e.g.
+                        // GETDEL) do not emit it. Guarded internally by the `m`
+                        // flag; `m` is excluded from the `A` alias.
+                        if !is_write {
+                            self.emit_keyspace_notification(
+                                key,
+                                "keymiss",
+                                crate::keyspace_event::KeyspaceEventFlags::MISS,
+                            );
+                        }
                     }
                 }
                 Some((hits, misses))
@@ -152,6 +202,23 @@ impl ShardWorker {
             crate::command_spec::LookupSpec::None | crate::command_spec::LookupSpec::Reported => {
                 None
             }
+        };
+
+        // `new` (key-creation, the `n` class) event seam: when `n` is enabled,
+        // snapshot which of this write's keys are absent *before* it runs. After
+        // the handler executes we keep those that now exist — the keys created
+        // for the first time. Skipped entirely (empty snapshot) when `n` is off,
+        // so the common path pays only one atomic load. `n` is excluded from the
+        // `A` alias, so this never fires under `A` alone.
+        let new_watch: Vec<Bytes> = if is_write && self.new_events_enabled() {
+            handler
+                .keys(&command.args)
+                .into_iter()
+                .filter(|key| !self.store.exists_unexpired(key))
+                .map(Bytes::copy_from_slice)
+                .collect()
+        } else {
+            Vec::new()
         };
 
         // Create command context and execute. `command_context` is the single
@@ -181,6 +248,7 @@ impl ShardWorker {
             hll_wal_delta: _,
             keyspace_events: _,
             script_writes: _,
+            repl_override: _,
         } = &effects;
         let (lazyfreed_delta, keyspace_hits, keyspace_misses) =
             (*lazyfreed_delta, *keyspace_hits, *keyspace_misses);
@@ -224,7 +292,16 @@ impl ShardWorker {
         // rollback, and MULTI/EXEC paths in one place. Redis parity: no-op
         // writes do not propagate, notify, or dirty WATCH.
         let meta = if is_write {
-            effects.into_write_meta(handler)
+            effects.into_write_meta(handler).map(|mut meta| {
+                // Keep only the pre-absent keys that now exist: the keys this
+                // write created. `new` is emitted for these in the notification
+                // effect, before the command's own type event.
+                meta.newly_created_keys = new_watch
+                    .into_iter()
+                    .filter(|key| self.store.exists_unexpired(key))
+                    .collect();
+                meta
+            })
         } else {
             None
         };
@@ -355,8 +432,9 @@ impl ShardWorker {
             None
         };
 
-        let (response, meta) =
-            self.execute_command_inner(command, conn_id, protocol_version, track_reads);
+        let (response, meta) = self
+            .execute_command_inner(command, conn_id, protocol_version, track_reads)
+            .await;
 
         // Post-execution: rollback mode vs default path. The WAL phase becomes a
         // value (Persist vs AlreadyPersisted) rather than a separate function.
@@ -367,6 +445,8 @@ impl ShardWorker {
                     args: command.args.as_slice(),
                     hll_wal_delta: write_meta.hll_wal_delta.as_deref(),
                     keyspace_events: write_meta.keyspace_events.as_slice(),
+                    newly_created_keys: write_meta.newly_created_keys.as_slice(),
+                    repl_override: write_meta.repl_override.as_ref(),
                 };
                 match self
                     .persist(
@@ -381,6 +461,7 @@ impl ShardWorker {
                                 writes: std::slice::from_ref(&record),
                                 dirty_delta: write_meta.dirty_delta,
                                 conn_id,
+                                removal_reasons: &[],
                             },
                             WalPhase::AlreadyPersisted,
                             EffectScope::Command,
@@ -405,12 +486,15 @@ impl ShardWorker {
                     args: command.args.as_slice(),
                     hll_wal_delta: write_meta.hll_wal_delta.as_deref(),
                     keyspace_events: write_meta.keyspace_events.as_slice(),
+                    newly_created_keys: write_meta.newly_created_keys.as_slice(),
+                    repl_override: write_meta.repl_override.as_ref(),
                 };
                 self.run_write_effects(
                     WriteSummary {
                         writes: std::slice::from_ref(&record),
                         dirty_delta: write_meta.dirty_delta,
                         conn_id,
+                        removal_reasons: &[],
                     },
                     WalPhase::Persist,
                     EffectScope::Command,
@@ -438,7 +522,7 @@ impl ShardWorker {
     pub(crate) async fn execute_transaction(
         &mut self,
         commands: Vec<ParsedCommand>,
-        watches: &[(Bytes, u64)],
+        watches: &[WatchEntry],
         conn_id: u64,
         protocol_version: ProtocolVersion,
     ) -> TransactionResult {
@@ -487,8 +571,9 @@ impl ShardWorker {
                 }
             }
 
-            let (response, meta) =
-                self.execute_command_inner(command, conn_id, protocol_version, false);
+            let (response, meta) = self
+                .execute_command_inner(command, conn_id, protocol_version, false)
+                .await;
 
             // Keyspace hit/miss metrics are recorded inside execute_command_inner
             // (lookup level), so MULTI/EXEC commands are counted the same way as
@@ -524,6 +609,8 @@ impl ShardWorker {
                     args: commands[*idx].args.as_slice(),
                     hll_wal_delta: meta.hll_wal_delta.as_deref(),
                     keyspace_events: meta.keyspace_events.as_slice(),
+                    newly_created_keys: meta.newly_created_keys.as_slice(),
+                    repl_override: meta.repl_override.as_ref(),
                 })
                 .collect();
 
@@ -557,6 +644,7 @@ impl ShardWorker {
                         writes: &write_infos,
                         dirty_delta: total_dirty,
                         conn_id,
+                        removal_reasons: &[],
                     },
                     WalPhase::AlreadyPersisted,
                     EffectScope::Transaction,
@@ -568,6 +656,7 @@ impl ShardWorker {
                         writes: &write_infos,
                         dirty_delta: total_dirty,
                         conn_id,
+                        removal_reasons: &[],
                     },
                     WalPhase::Persist,
                     EffectScope::Transaction,
@@ -579,8 +668,33 @@ impl ShardWorker {
         TransactionResult::Success(results)
     }
 
-    /// Execute part of a scatter-gather operation.
+    /// Execute one shard's slice of a cross-shard scatter operation.
+    ///
+    /// Wraps [`Self::execute_scatter_part_body`] so that any keys a scatter part
+    /// lazily purged (MGET/DEL/TOUCH/COPY/DUMP funnel through
+    /// `check_and_delete_expired`) have their parity effects applied once, after
+    /// the part, regardless of which of the body's early returns fired. This is
+    /// the scatter-path counterpart of the [`Self::execute_command_inner`] seam —
+    /// scatter dispatch (`ScatterRequest`) never routes through
+    /// `execute_command_inner`, so the drain must be anchored here too.
     pub(crate) async fn execute_scatter_part(
+        &mut self,
+        keys: &[Bytes],
+        operation: &ScatterOp,
+        conn_id: u64,
+    ) -> PartialResult {
+        let out = self
+            .execute_scatter_part_body(keys, operation, conn_id)
+            .await;
+        // Apply parity effects for any keys the scatter part lazily purged
+        // (gaps 1-3). Task 1: this is a no-op drain; Task 2 fills in the effects.
+        self.apply_lazy_purge_effects();
+        out
+    }
+
+    /// The scatter-part body proper (see [`Self::execute_scatter_part`], which
+    /// wraps this to drain lazy-purge effects afterward).
+    async fn execute_scatter_part_body(
         &mut self,
         keys: &[Bytes],
         operation: &ScatterOp,
@@ -631,14 +745,13 @@ impl ShardWorker {
                 matching_keys
             }
             ScatterOp::DbSize => {
-                // Return the key count for this shard
-                let count = self.store.len();
-                vec![(
-                    Bytes::from_static(b"__dbsize__"),
-                    Response::Integer(count as i64),
-                )]
+                // Return the key count for this shard as a typed scalar.
+                return PartialResult::Count(self.store.len() as i64);
             }
-            ScatterOp::FlushDb => self.scatter_flushdb(conn_id).await,
+            ScatterOp::FlushDb => {
+                self.scatter_flushdb(conn_id).await;
+                return PartialResult::Flushed;
+            }
             ScatterOp::Scan {
                 cursor,
                 count,
@@ -650,39 +763,23 @@ impl ShardWorker {
                 let (next_cursor, found_keys) =
                     self.store
                         .scan_filtered(*cursor, *count, pattern_ref, *key_type);
-                // Return cursor and keys as a special response
-                let mut results = Vec::with_capacity(found_keys.len() + 1);
-                results.push((
-                    Bytes::from_static(b"__cursor__"),
-                    Response::Integer(next_cursor as i64),
-                ));
-                for key in found_keys {
-                    results.push((key.clone(), Response::bulk(key)));
-                }
-                results
+                // Cursor and keys ride typed fields — no sentinel key.
+                return PartialResult::Scan {
+                    next_cursor,
+                    keys: found_keys,
+                };
             }
             ScatterOp::Copy { source_key } => {
                 // Get the value and expiry from source key for cross-shard copy.
-                // Returns an array with: [serialized_value, expiry_ms_or_nil].
-                // COPY ships the expiry out-of-band (the array's second element),
-                // so the transport frame is produced with an expiry-free header.
-                match self.serialize_key_for_transport(source_key, false) {
-                    Some((serialized, expiry_ms)) => {
-                        let expiry_resp = match expiry_ms {
-                            Some(ms) if ms > 0 => Response::Integer(ms),
-                            _ => Response::null(),
-                        };
-
-                        vec![(
-                            source_key.clone(),
-                            Response::Array(vec![Response::bulk(serialized), expiry_resp]),
-                        )]
-                    }
-                    None => {
-                        // Source key doesn't exist
-                        vec![(source_key.clone(), Response::null())]
-                    }
-                }
+                // COPY ships the expiry out-of-band (typed `CopyPayload`), so the
+                // transport frame is produced with an expiry-free header.
+                let payload = self.serialize_key_for_transport(source_key, false).map(
+                    |(serialized, expiry_ms)| CopyPayload {
+                        value: serialized,
+                        expiry_ms: expiry_ms.filter(|ms| *ms > 0),
+                    },
+                );
+                return PartialResult::Copy(payload);
             }
             ScatterOp::CopySet {
                 dest_key,
@@ -690,17 +787,14 @@ impl ShardWorker {
                 expiry_ms,
                 replace,
             } => {
-                return PartialResult::from_results(
+                return PartialResult::keyed(
                     self.scatter_copy_set(dest_key, value_data, expiry_ms, *replace, conn_id)
                         .await,
                 );
             }
             ScatterOp::RandomKey => {
-                // Return a random key from this shard
-                match self.store.random_key() {
-                    Some(key) => vec![(Bytes::from_static(b"__randomkey__"), Response::bulk(key))],
-                    None => vec![(Bytes::from_static(b"__randomkey__"), Response::null())],
-                }
+                // Return a random key from this shard (typed option, no filler key).
+                return PartialResult::RandomKey(self.store.random_key());
             }
             ScatterOp::Dump => {
                 // Serialize keys with full metadata for MIGRATE through the single
@@ -723,7 +817,7 @@ impl ShardWorker {
                 index_name,
                 request,
             } => {
-                return PartialResult::from_ft(frogdb_search::FtShardReply::Search(
+                return PartialResult::ft(frogdb_search::FtShardReply::Search(
                     self.execute_ft_search(index_name, request),
                 ));
             }
@@ -744,7 +838,7 @@ impl ShardWorker {
                 index_name,
                 request,
             } => {
-                return PartialResult::from_ft(frogdb_search::FtShardReply::Aggregate(
+                return PartialResult::ft(frogdb_search::FtShardReply::Aggregate(
                     self.execute_ft_aggregate(index_name, request),
                 ));
             }
@@ -752,7 +846,7 @@ impl ShardWorker {
                 index_name,
                 query_args,
             } => {
-                return PartialResult::from_ft(frogdb_search::FtShardReply::Search(
+                return PartialResult::ft(frogdb_search::FtShardReply::Search(
                     self.execute_ft_hybrid(index_name, query_args),
                 ));
             }
@@ -784,7 +878,7 @@ impl ShardWorker {
             ScatterOp::EsAll { count, after_id } => self.execute_es_all(count, after_id),
         };
 
-        PartialResult::from_results(results)
+        PartialResult::keyed(results)
     }
 
     fn scatter_mget(&mut self, keys: &[Bytes], conn_id: u64) -> Vec<(Bytes, Response)> {
@@ -908,7 +1002,7 @@ impl ShardWorker {
         results
     }
 
-    async fn scatter_flushdb(&mut self, conn_id: u64) -> Vec<(Bytes, Response)> {
+    async fn scatter_flushdb(&mut self, conn_id: u64) {
         // Clear all keys in this shard.
         // Only increment version if there were live (non-expired) keys to clear,
         // so WATCH on non-existing keys or stale (expired) keys is not aborted.
@@ -938,7 +1032,6 @@ impl ShardWorker {
         };
         self.run_scatter_effects(vec![(handler, Vec::new())], dirty_delta, conn_id)
             .await;
-        vec![(Bytes::from_static(b"__flushdb__"), Response::ok())]
     }
 
     async fn scatter_copy_set(
@@ -1126,6 +1219,7 @@ mod scatter_effect_tests {
                     name: "set",
                 },
                 requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
                 lookup: LookupSpec::None,
                 mutation: crate::command::ConnMutation::None,
                 strategy: crate::command::ExecutionStrategy::Standard,
@@ -1159,6 +1253,38 @@ mod scatter_effect_tests {
                     name: "del",
                 },
                 requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
+                lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
+                strategy: crate::command::ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+        fn execute(
+            &self,
+            _ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            Ok(Response::ok())
+        }
+    }
+
+    /// Mock `FLUSHDB` (the always-registered write handler the FLUSHDB scatter
+    /// part routes its clear through): a keyless write with no keyspace event.
+    struct MockFlushDb;
+    impl Command for MockFlushDb {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "FLUSHDB",
+                arity: Arity::AtLeast(1),
+                flags: CommandFlags::WRITE,
+                keys: KeySpec::None,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::NoOp,
+                wakes: WaiterWake::All,
+                event: EventSpec::Suppressed,
+                requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
                 lookup: LookupSpec::None,
                 mutation: crate::command::ConnMutation::None,
                 strategy: crate::command::ExecutionStrategy::Standard,
@@ -1184,6 +1310,7 @@ mod scatter_effect_tests {
         let mut registry = CommandRegistry::new();
         registry.register(MockSet);
         registry.register(MockDel);
+        registry.register(MockFlushDb);
         let mut worker = ShardWorker::with_eviction(
             0,
             1,
@@ -1209,7 +1336,7 @@ mod scatter_effect_tests {
         let mut worker = scatter_worker(bc.clone() as SharedBroadcaster);
 
         // Observe the `set` key-event notification the old inline MSET skipped.
-        let (ntx, mut nrx) = mpsc::unbounded_channel();
+        let (ntx, mut nrx) = crate::pubsub::PubSubSender::unbounded();
         worker
             .subscriptions
             .subscribe(Bytes::from_static(b"__keyevent@0__:set"), 1, ntx);
@@ -1220,8 +1347,8 @@ mod scatter_effect_tests {
 
         // Value landed.
         assert!(worker.store.contains(b"mk"));
-        // Version bumped exactly once for the whole scatter part.
-        assert_eq!(worker.shard_version, 1);
+        // The written key's slot bumped exactly once for the scatter part.
+        assert_eq!(worker.get_key_version(b"mk"), 1);
 
         // Keyspace notification emitted (previously skipped).
         match nrx.try_recv() {
@@ -1276,7 +1403,7 @@ mod scatter_effect_tests {
         );
 
         // Observe the `del` key-event notification.
-        let (ntx, mut nrx) = mpsc::unbounded_channel();
+        let (ntx, mut nrx) = crate::pubsub::PubSubSender::unbounded();
         worker
             .subscriptions
             .subscribe(Bytes::from_static(b"__keyevent@0__:del"), 1, ntx);
@@ -1285,7 +1412,7 @@ mod scatter_effect_tests {
             .scatter_del(&[Bytes::from_static(b"sk")], 42, false)
             .await;
         assert!(matches!(results[0].1, Response::Integer(1)));
-        assert_eq!(worker.shard_version, 1);
+        assert_eq!(worker.get_key_version(b"sk"), 1);
 
         // Waiter woken (previously skipped): drained with NOGROUP, queue empty.
         assert!(
@@ -1333,7 +1460,8 @@ mod scatter_effect_tests {
             .await;
         assert!(matches!(results[0].1, Response::Integer(0)));
         assert_eq!(
-            worker.shard_version, 0,
+            worker.get_key_version(b"absent"),
+            0,
             "no version bump when nothing deleted"
         );
         assert!(
@@ -1424,16 +1552,11 @@ mod scatter_effect_tests {
                 1,
             )
             .await;
-        let arr = match &r.results[0].1 {
-            Response::Array(a) => a,
-            other => panic!("expected COPY array, got {other:?}"),
+        let payload = match r {
+            PartialResult::Copy(Some(payload)) => payload,
+            other => panic!("expected COPY payload, got {other:?}"),
         };
-        assert_eq!(arr.len(), 2);
-        let frame = match &arr[0] {
-            Response::Bulk(Some(b)) => b.clone(),
-            other => panic!("expected bulk frame, got {other:?}"),
-        };
-        let (val, meta) = ShardWorker::deserialize_transport_frame(&frame).unwrap();
+        let (val, meta) = ShardWorker::deserialize_transport_frame(&payload.value).unwrap();
         assert_eq!(
             val.as_string().map(|s| s.as_bytes()),
             Some(Bytes::from_static(b"hello"))
@@ -1442,12 +1565,83 @@ mod scatter_effect_tests {
             meta.expires_at.is_none(),
             "COPY frame header is expiry-free"
         );
-        match &arr[1] {
-            Response::Integer(ms) => {
-                assert!((49_000..=50_000).contains(ms), "unexpected ttl {ms}")
-            }
-            other => panic!("expected integer ttl, got {other:?}"),
+        match payload.expiry_ms {
+            Some(ms) => assert!((49_000..=50_000).contains(&ms), "unexpected ttl {ms}"),
+            None => panic!("expected out-of-band ttl, got none"),
         }
+    }
+
+    /// Proposal 16: the DBSIZE scatter arm replies with a typed `Count`, not a
+    /// fabricated `__dbsize__` key.
+    #[tokio::test]
+    async fn scatter_dbsize_arm_replies_typed_count() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = scatter_worker(bc as SharedBroadcaster);
+        worker.store.set(
+            Bytes::from_static(b"a"),
+            Value::string(Bytes::from_static(b"1")),
+        );
+        worker.store.set(
+            Bytes::from_static(b"b"),
+            Value::string(Bytes::from_static(b"2")),
+        );
+
+        let reply = worker
+            .execute_scatter_part(&[], &ScatterOp::DbSize, 1)
+            .await;
+        assert!(
+            matches!(reply, PartialResult::Count(2)),
+            "expected Count(2), got {reply:?}"
+        );
+    }
+
+    /// Proposal 16: RANDOMKEY on an empty shard replies with a typed
+    /// `RandomKey(None)`, not a `__randomkey__` filler key carrying nil.
+    #[tokio::test]
+    async fn scatter_randomkey_arm_replies_typed_option() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = scatter_worker(bc as SharedBroadcaster);
+
+        let empty = worker
+            .execute_scatter_part(&[], &ScatterOp::RandomKey, 1)
+            .await;
+        assert!(
+            matches!(empty, PartialResult::RandomKey(None)),
+            "expected RandomKey(None) on an empty shard, got {empty:?}"
+        );
+
+        worker.store.set(
+            Bytes::from_static(b"only"),
+            Value::string(Bytes::from_static(b"1")),
+        );
+        let present = worker
+            .execute_scatter_part(&[], &ScatterOp::RandomKey, 1)
+            .await;
+        match present {
+            PartialResult::RandomKey(Some(key)) => assert_eq!(key.as_ref(), b"only"),
+            other => panic!("expected RandomKey(Some(only)), got {other:?}"),
+        }
+    }
+
+    /// Proposal 16: the FLUSHDB scatter arm replies with a payload-free `Flushed`
+    /// ack, not a `__flushdb__` sentinel key, and still clears the shard.
+    #[tokio::test]
+    async fn scatter_flushdb_arm_replies_flushed_ack() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = scatter_worker(bc as SharedBroadcaster);
+        worker.store.set(
+            Bytes::from_static(b"a"),
+            Value::string(Bytes::from_static(b"1")),
+        );
+
+        let reply = worker
+            .execute_scatter_part(&[], &ScatterOp::FlushDb, 1)
+            .await;
+        assert!(
+            matches!(reply, PartialResult::Flushed),
+            "expected Flushed ack, got {reply:?}"
+        );
+        assert_eq!(worker.store.len(), 0, "FLUSHDB must clear the shard");
     }
 
     /// D2: EXISTS, TOUCH, and MGET all route hit/miss accounting through the one
@@ -1596,9 +1790,9 @@ mod scatter_effect_tests {
                 1,
             )
             .await;
-        match &copy.results[0].1 {
-            Response::Bulk(None) => {}
-            other => panic!("expected COPY of an expired source to be nil, got {other:?}"),
+        match copy {
+            PartialResult::Copy(None) => {}
+            other => panic!("expected COPY of an expired source to be absent, got {other:?}"),
         }
 
         // Re-arm the key for the DUMP half of the test (COPY's fetch already
@@ -1614,10 +1808,119 @@ mod scatter_effect_tests {
         let dump = worker
             .execute_scatter_part(&[Bytes::from_static(b"stale2")], &ScatterOp::Dump, 1)
             .await;
-        match &dump.results[0].1 {
+        match &dump.keyed_slice()[0].1 {
             Response::Bulk(None) => {}
             other => panic!("expected DUMP of an expired key to be nil, got {other:?}"),
         }
+    }
+
+    /// A scatter part that lazily purges an expired key must drain the store's
+    /// `lazily_purged` report at the `execute_scatter_part` seam. Scatter
+    /// dispatch (`ScatterRequest`) never routes through `execute_command_inner`,
+    /// so without the wrapper drain the report would leak into the NEXT,
+    /// unrelated message and be applied at the wrong site (a spurious version
+    /// bump / waiter drain under Task 2). Pins both halves: the purge physically
+    /// fired AND its report was drained at the scatter seam.
+    #[tokio::test]
+    async fn scatter_mget_drains_lazy_purge_report() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = scatter_worker(bc as SharedBroadcaster);
+
+        // Seed an already-expired key.
+        worker.store.set(
+            Bytes::from_static(b"k"),
+            Value::string(Bytes::from_static(b"v")),
+        );
+        worker
+            .store
+            .set_expiry(b"k", Instant::now() - Duration::from_secs(60));
+        assert!(worker.store.contains(b"k"));
+
+        // A scatter MGET part reads the key via `get_with_expiry_check`, which
+        // physically purges it (`check_and_delete_expired` -> `uninstall`).
+        let _ = worker
+            .execute_scatter_part(&[Bytes::from_static(b"k")], &ScatterOp::MGet, 1)
+            .await;
+
+        // The purge physically fired ...
+        assert!(
+            !worker.store.contains(b"k"),
+            "scatter MGET must have physically purged the expired key"
+        );
+        // ... and the `execute_scatter_part` wrapper drained the report, so no
+        // stale entry leaks to the next message.
+        assert!(
+            worker.store.take_lazily_purged().is_empty(),
+            "execute_scatter_part must drain the lazy-purge report (no leak to the next message)"
+        );
+    }
+
+    /// Gap-4 clause coverage for the CLIENT-PAUSE-ALL under-abort window
+    /// (carried Task-2 observation): a logically-expired watched key whose
+    /// physical purge is *suppressed* (CLIENT PAUSE ALL → `expiry_suppressed`)
+    /// reports nothing at the EXEC-time seam, so `purge_expired_watches` does
+    /// NOT bump — the old version-compare `check_watches` would under-abort.
+    /// The new `live_at_watch && !exists_unexpired` clause closes it: the
+    /// non-destructive probe reads present-but-expired as not-live, so a watcher
+    /// that saw the key live still aborts. Pins both halves: no bump at the seam
+    /// AND the clause aborts. (CLIENT PAUSE is connection-side / pre-dispatch, so
+    /// this is only reachable as a store-level worker test, not a shard-driver
+    /// arm.)
+    #[tokio::test]
+    async fn suppressed_expired_watched_key_still_aborts_via_clause() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = scatter_worker(bc as SharedBroadcaster);
+
+        // Seed a live watched key and snapshot the watch baseline.
+        worker.store.set(
+            Bytes::from_static(b"k"),
+            Value::string(Bytes::from_static(b"v")),
+        );
+        let watched_ver = worker.get_key_version(b"k");
+
+        // The key's TTL elapses, but CLIENT PAUSE ALL suppresses physical purge:
+        // logically expired, still physically present.
+        worker
+            .store
+            .set_expiry(b"k", Instant::now() - Duration::from_secs(60));
+        worker.store.set_expiry_suppressed(true);
+
+        // EXEC-time watched-key purge seam: suppression means nothing is removed
+        // or reported, so no version bump — the under-abort window.
+        let watch = [WatchEntry {
+            key: Bytes::from_static(b"k"),
+            version: watched_ver,
+            live_at_watch: true,
+        }];
+        worker.purge_expired_watches(&watch);
+        assert!(
+            worker.store.contains(b"k"),
+            "suppression must keep the expired key physically present"
+        );
+        assert_eq!(
+            worker.get_key_version(b"k"),
+            watched_ver,
+            "suppressed purge must NOT bump the version (the under-abort window)"
+        );
+
+        // The new clause aborts anyway: exists_unexpired reads present-but-expired
+        // as not-live, so a live watcher's watch is dirty.
+        assert!(
+            !worker.check_watches(&watch),
+            "gap 4 clause: a live watcher of a suppressed-but-elapsed key must abort"
+        );
+
+        // Control: a stale watcher (live_at_watch == false) of the same key must
+        // NOT abort — Redis wk->expired semantics, no live->gone transition.
+        let stale = [WatchEntry {
+            key: Bytes::from_static(b"k"),
+            version: watched_ver,
+            live_at_watch: false,
+        }];
+        assert!(
+            worker.check_watches(&stale),
+            "gap 4 clause: a stale watcher (saw k already-dead) must NOT abort"
+        );
     }
 }
 
@@ -1652,6 +1955,7 @@ mod command_effects_tests {
                 wakes: WaiterWake::None,
                 event: EventSpec::Dynamic,
                 requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
                 lookup: LookupSpec::None,
                 mutation: crate::command::ConnMutation::None,
                 strategy: crate::command::ExecutionStrategy::Standard,

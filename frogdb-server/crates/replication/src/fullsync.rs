@@ -17,6 +17,12 @@
 //! Per-replica progress and lifecycle live on `ReplicaSession`; this file
 //! has no per-session state of its own.
 
+pub mod receiver;
+pub mod stager;
+
+pub use receiver::receive_checkpoint_files;
+pub use stager::{CheckpointStager, StagedOutcome};
+
 use bytes::{Bytes, BytesMut};
 use sha2::{Digest, Sha256};
 use std::io;
@@ -24,9 +30,6 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::fs::{self, File};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufWriter};
-
-/// Maximum memory for full sync buffering (default: 512 MB).
-pub const DEFAULT_FULLSYNC_MAX_MEMORY_MB: usize = 512;
 
 /// Chunk size for streaming RDB data.
 const CHUNK_SIZE: usize = 64 * 1024;

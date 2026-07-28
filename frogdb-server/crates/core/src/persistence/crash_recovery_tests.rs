@@ -16,7 +16,7 @@
 //! | DurabilityMode::Async | appendfsync no        | ~30 seconds   |
 
 use super::recover_all_shards;
-use super::rocks::{RocksConfig, RocksStore};
+use super::rocks::{RawBatchOp, RocksConfig, RocksStore};
 use super::serialization::{deserialize, serialize};
 use super::snapshot::SnapshotMetadataFile;
 use super::test_harness::*;
@@ -25,7 +25,7 @@ use crate::noop::NoopMetricsRecorder;
 use crate::store::Store;
 use crate::types::{KeyMetadata, Value};
 use bytes::Bytes;
-use rocksdb::{WriteBatch, WriteOptions};
+use rocksdb::WriteOptions;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -119,11 +119,17 @@ mod durability_mode {
         }
     }
 
-    /// Test 1.3: Periodic mode - documents potential data loss within window.
+    /// Test 1.3: Periodic mode - recovery plumbing after an immediate crash.
     ///
-    /// This test documents the expected behavior: writes within the sync
-    /// interval MAY be lost. This is not a failure - it's the expected
-    /// trade-off for better performance.
+    /// NOTE: `crash()` here drops the `RocksStore` handle and `recover()`
+    /// reopens the same directory, which preserves the OS page cache — so
+    /// unflushed writes may still be recovered and this test cannot actually
+    /// distinguish the periodic loss window. It only exercises that recovery
+    /// after a mid-write crash succeeds and the flushed baseline is intact. The
+    /// real per-mode fsync-boundary window (bounded by the flush interval) is
+    /// verified by `test_periodic_mode_loss_bounded_by_flush_interval` in
+    /// `frogdb-persistence`'s `wal::tests`, which severs the page cache at the
+    /// `WriteSink::commit(sync)` seam.
     #[test]
     fn test_periodic_mode_within_window() {
         let mut harness = CrashTestHarness::with_periodic_mode(60000); // 60s interval (long)
@@ -159,10 +165,17 @@ mod durability_mode {
         );
     }
 
-    /// Test 1.4: Async mode - only explicitly flushed writes guaranteed.
+    /// Test 1.4: Async mode - recovery plumbing after a crash.
     ///
-    /// With Async mode, writes are buffered and only guaranteed to persist
-    /// after an explicit flush.
+    /// NOTE: like `test_periodic_mode_within_window`, `crash()`+`recover()`
+    /// preserve the OS page cache (same-process reopen of the same directory),
+    /// so the unflushed `key2` may still be recovered and this test cannot
+    /// distinguish async's (unbounded) loss window. It only exercises that
+    /// recovery succeeds and the flushed `key1` is intact. The real async
+    /// window — everything acked-but-unsynced is lost until an out-of-band
+    /// fsync — is verified by `test_async_mode_unbounded_loss_without_fsync`
+    /// and `test_async_mode_window_bounded_only_by_external_fsync` in
+    /// `frogdb-persistence`'s `wal::tests`.
     #[test]
     fn test_async_mode_explicit_flush() {
         let mut harness = CrashTestHarness::with_async_mode();
@@ -265,23 +278,29 @@ mod atomicity {
         let tmp = TempDir::new().unwrap();
         let rocks = Arc::new(RocksStore::open(tmp.path(), 4, &RocksConfig::default()).unwrap());
 
-        // Create a batch with multiple keys
-        let mut batch = WriteBatch::default();
+        // Serialize all keys up front so the raw-batch ops can borrow them.
         let keys: Vec<String> = (0..10).map(|i| format!("batch_key_{}", i)).collect();
+        let entries: Vec<(String, Vec<u8>)> = keys
+            .iter()
+            .map(|key| {
+                let value = Value::string(format!("value_for_{}", key));
+                let metadata = KeyMetadata::new(value.memory_size());
+                (key.clone(), serialize(&value, &metadata))
+            })
+            .collect();
+        let ops: Vec<RawBatchOp> = entries
+            .iter()
+            .map(|(key, serialized)| RawBatchOp::Put {
+                shard: 0,
+                key: key.as_bytes(),
+                value: serialized,
+            })
+            .collect();
 
-        for key in &keys {
-            let value = Value::string(format!("value_for_{}", key));
-            let metadata = KeyMetadata::new(value.memory_size());
-            let serialized = serialize(&value, &metadata);
-            rocks
-                .batch_put(&mut batch, 0, key.as_bytes(), &serialized)
-                .unwrap();
-        }
-
-        // Write batch with sync
+        // Commit the whole batch atomically with sync.
         let mut write_opts = WriteOptions::default();
         write_opts.set_sync(true);
-        rocks.write_batch_opt(batch, &write_opts).unwrap();
+        rocks.commit_raw_batch(&ops, &write_opts).unwrap();
 
         // Drop (simulate crash)
         drop(rocks);
@@ -314,22 +333,30 @@ mod atomicity {
         let tmp = TempDir::new().unwrap();
         let rocks = Arc::new(RocksStore::open(tmp.path(), 4, &RocksConfig::default()).unwrap());
 
-        // Write to multiple shards in one batch
-        let mut batch = WriteBatch::default();
-        for shard_id in 0..4 {
-            let key = format!("shard_{}_key", shard_id);
-            let value = Value::string(format!("shard_{}_value", shard_id));
-            let metadata = KeyMetadata::new(value.memory_size());
-            let serialized = serialize(&value, &metadata);
-            rocks
-                .batch_put(&mut batch, shard_id, key.as_bytes(), &serialized)
-                .unwrap();
-        }
+        // Stage writes to four different shards into ONE atomic batch to verify
+        // cross-shard all-or-nothing. The per-op `shard` on RawBatchOp is what
+        // lets a single commit span shards (a batch-level shard could not).
+        let entries: Vec<(usize, String, Vec<u8>)> = (0..4)
+            .map(|shard_id| {
+                let key = format!("shard_{}_key", shard_id);
+                let value = Value::string(format!("shard_{}_value", shard_id));
+                let metadata = KeyMetadata::new(value.memory_size());
+                (shard_id, key, serialize(&value, &metadata))
+            })
+            .collect();
+        let ops: Vec<RawBatchOp> = entries
+            .iter()
+            .map(|(shard, key, serialized)| RawBatchOp::Put {
+                shard: *shard,
+                key: key.as_bytes(),
+                value: serialized,
+            })
+            .collect();
 
-        // Sync write
+        // Sync commit
         let mut write_opts = WriteOptions::default();
         write_opts.set_sync(true);
-        rocks.write_batch_opt(batch, &write_opts).unwrap();
+        rocks.commit_raw_batch(&ops, &write_opts).unwrap();
 
         // Drop
         drop(rocks);
@@ -370,17 +397,20 @@ mod atomicity {
         }
         rocks.flush().unwrap();
 
-        // Create a batch that deletes all keys
-        let mut batch = WriteBatch::default();
-        for i in 0..5 {
-            let key = format!("delete_key_{}", i);
-            rocks.batch_delete(&mut batch, 0, key.as_bytes()).unwrap();
-        }
+        // Stage a batch that deletes all keys and commit atomically.
+        let del_keys: Vec<String> = (0..5).map(|i| format!("delete_key_{}", i)).collect();
+        let ops: Vec<RawBatchOp> = del_keys
+            .iter()
+            .map(|key| RawBatchOp::Delete {
+                shard: 0,
+                key: key.as_bytes(),
+            })
+            .collect();
 
-        // Sync write the delete batch
+        // Sync commit the delete batch
         let mut write_opts = WriteOptions::default();
         write_opts.set_sync(true);
-        rocks.write_batch_opt(batch, &write_opts).unwrap();
+        rocks.commit_raw_batch(&ops, &write_opts).unwrap();
 
         // Drop
         drop(rocks);

@@ -36,7 +36,6 @@ data:
 
     [metrics]
     enabled = {{ .Values.frogdb.metrics.enabled }}
-    bind = "0.0.0.0"
     port = {{ .Values.frogdb.metrics.port }}
     {{- if .Values.frogdb.metrics.otlp.enabled }}
     otlp-enabled = true

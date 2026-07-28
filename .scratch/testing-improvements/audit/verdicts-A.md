@@ -1,0 +1,5 @@
+# Verdicts A (basic commands)
+1 errorstats-info-untested-end-to-end: CONFIRMED L2/C1. Nuance: introspection2_tcl.rs:630-655 tcl_errors_stats_for_geoadd DOES assert per-command failed_calls=1 e2e; still unasserted: errorstat_<PREFIX> section, rejected-vs-failed split, total_error_replies. info_tcl.rs doc genuinely stale.
+2 scan-full-iteration-guarantee-weak-test: CONFIRMED L2/C2. hashmap test mod has only test_store_* tests; scan_regression.rs full-iteration tests do zero concurrent writes.
+3 resp3-double-non-finite-wire-format-untested: ADJUSTED L1/C2. redis-protocol 6.0.0 encoder (resp3/encode.rs:108-120 f64_to_redis_string) emits ,inf/,‑inf/,nan correctly w/ upstream tests (encode.rs:1484-1506); FrogDB is passthrough — correct by construction; only silent-regression risk.
+4 restore-corrupt-payload-contract-untested: CONFIRMED L2/C2. RESTORE fails closed w/ correct Redis error text before store.set (server/src/commands/persistence.rs:122-124) — no-crash covered; untested residue: bit-flipped type byte that still parses materializes wrong-type key; per-type validator regressions undetected.

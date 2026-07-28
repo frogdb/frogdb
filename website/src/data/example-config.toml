@@ -57,7 +57,6 @@ port = 9090
 
 [metrics]
 enabled = true
-bind = "127.0.0.1"
 port = 9090
 otlp-enabled = false
 otlp-endpoint = "http://localhost:4317"
@@ -100,13 +99,6 @@ log-max-len = 128
 max-waiters-per-key = 10000
 max-blocked-connections = 50000
 
-[vll]
-max-queue-depth = 10000
-lock-acquisition-timeout-ms = 4000
-per-shard-lock-timeout-ms = 2000
-timeout-check-interval-ms = 100
-max-continuation-lock-ms = 65000
-
 [replication]
 role = "standalone"
 primary-host = ""
@@ -114,8 +106,6 @@ primary-port = 6379
 min-replicas-to-write = 0
 min-replicas-timeout-ms = 5000
 ack-interval-ms = 1000
-fullsync-timeout-secs = 300
-fullsync-max-memory-mb = 512
 state-file = "replication_state.json"
 connect-timeout-ms = 5000
 handshake-timeout-ms = 10000
@@ -161,11 +151,6 @@ memory-warning-percent = 90
 connection-warning-percent = 90
 durability-lag-warning-ms = 5000
 durability-lag-critical-ms = 30000
-
-[hotshards]
-hot-threshold-percent = 20.0
-warm-threshold-percent = 15.0
-default-period-secs = 10
 
 [latency]
 startup-test = false

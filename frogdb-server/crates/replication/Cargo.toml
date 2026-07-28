@@ -25,6 +25,10 @@ rand.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
+# test-support exposes RocksStore's single-key put/get accessors to the
+# replica_session full-sync tests; dev-only, kept out of the production build by
+# resolver "2".
+frogdb-persistence = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
 serde_json.workspace = true
 proptest.workspace = true

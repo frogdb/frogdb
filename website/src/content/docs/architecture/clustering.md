@@ -168,6 +168,46 @@ Nodes detect that their local view is stale by:
 | Client redirect | A `-MOVED` reply names the current owner of a slot |
 | Replication handshake | The primary's Config Epoch travels with the replication stream |
 
+### `CLUSTER INFO`'s current epoch folds in the Raft term
+
+`CLUSTER INFO` reports `cluster_current_epoch` as `max(config_epoch, raft_term)`, where
+`config_epoch` is the cluster-wide counter above and `raft_term` is the local Raft leadership term
+(`commands/cluster/mod.rs`, `fold_current_epoch`). Every Raft election bumps the term, whether or
+not it changes cluster topology, so a leader re-election with no `Failover`/`MarkNodeFailed`/
+`IncrementEpoch` committed can push `cluster_current_epoch` strictly above every per-node
+`config_epoch` reported by `CLUSTER NODES`.
+
+This is a deliberate **divergence from Redis**: Redis's `currentEpoch` is agreed by gossip and
+bumped only by epoch-owning commands (`CLUSTER BUMPEPOCH`, failover votes, `CLUSTER
+SET-CONFIG-EPOCH`), never by a leader-election mechanism, because Redis Cluster has none. FrogDB's
+consensus plane does have one, and folding its term into the reported epoch means a stale reader
+can tell "the cluster's control plane has moved on" (a new Raft term) even when no slot ownership
+changed — at the cost of `cluster_current_epoch` no longer being a pure count of committed
+topology events.
+
+The relationship this guarantees, and the one regression tests pin
+(`frogdb-server/crates/server/tests/integration_cluster.rs`,
+`test_cluster_info_epoch_vs_nodes_epoch_after_reelection_no_topology_change` and
+`test_cluster_info_epoch_monotonic_across_failover`), is `cluster_current_epoch >= max(per-node
+config_epoch)` — never the reverse. A node's own `config_epoch` is only ever set to a value it
+claims from the same counter `cluster_current_epoch` folds in (the `Failover` transition, see
+below), so the cluster-wide counter can never trail behind any individual node. Do not assert
+`cluster_current_epoch <= max(NODES config_epoch)`: an audit once proposed that bound and it does
+not hold — a passing test asserting it would be testing a coincidence, not a guarantee (issue 47).
+
+The fold is lossy in the other direction too, which matters if you are monitoring for topology
+changes. `cluster_current_epoch` is monotonic (both inputs to the `max` only ever move forward) but
+**not strictly increasing**: a `config_epoch` bump is invisible whenever `raft_term` already
+dominates. On a freshly bootstrapped cluster the first election takes `raft_term` to 1 while
+`config_epoch` is still 0, so the first `CLUSTER FAILOVER` moves `config_epoch` from 0 to 1 and
+leaves `cluster_current_epoch` at 1 before and after. To detect that a topology event happened, read
+the raw per-node `config_epoch` from `CLUSTER NODES` rather than `CLUSTER INFO`'s folded value.
+
+Redis's `redis-cli --cluster check` flags epoch **collisions** — two nodes independently claiming
+the same `configEpoch` — not epoch drift or exceedance. FrogDB has no equivalent detection today:
+`AddNode` inserts an incoming node's `config_epoch` as-is with no uniqueness check against existing
+nodes, and `frogctl cluster check` is an unimplemented stub. Tracked separately (issue 63).
+
 ---
 
 ## Slot Ownership Routing
@@ -265,6 +305,34 @@ A node that finds itself demoted (via `SetRole { role: Replica }` or a graceful 
 receives a `DemotionEvent` carrying the new primary's id, and switches to streaming from the new
 primary via PSYNC.
 
+### Asymmetric partitions and false positives
+
+Because detection is leader-only, the leader's view of a peer's health is the *only* input to
+`MarkNodeFailed`. An asymmetric partition — where a primary is cut off from the leader's TCP probe
+but stays reachable to clients and keeps Raft quorum through the remaining nodes — therefore
+produces a *false positive*: the leader marks a live, serving primary `FAIL`. This is the
+deliberate trade-off of leader-centric detection (avoiding O(N²) gossip), and it is bounded so that
+the false positive is benign:
+
+- **No spurious slot movement.** `MarkNodeFailed` only sets the `FAIL` flag and bumps the Config
+  Epoch; it does not move slots. Auto-failover moves slots only when the failed primary has a
+  replica to promote — with none, it is a no-op even when `auto_failover` is enabled, so the
+  wrongly-flagged primary keeps its slots and remains the sole owner cluster-wide.
+- **No split-brain from the flagged node.** A `FAIL` flag does not stop the flagged primary from
+  serving. What stops unsafe writes is the independent self-fence (`self-fence-on-quorum-loss`,
+  default on): a primary rejects writes with `CLUSTERDOWN` once *it* loses quorum. A node that keeps quorum (partitioned
+  from the leader only, not from the majority) safely continues to accept writes; a node that loses
+  quorum fences itself. Either way, a write the flagged primary accepts is not lost, because no
+  failover transferred its slots.
+- **Automatic recovery.** The leader keeps probing flagged nodes; the first successful probe
+  proposes `MarkNodeRecovered`, clearing the flag.
+
+The dangerous case — a promoted replica and the old primary both serving the same slot — requires
+both a replica topology and auto-failover racing the old primary's self-fence; that is a separate,
+replica-topology concern. The replica-less false-positive contract above is regression-guarded by
+`test_cluster_asymmetric_partition_false_failover`
+(`frogdb-server/crates/server/tests/simulation.rs`, deterministic turmoil).
+
 ---
 
 ## Node-to-Node Communication
@@ -281,6 +349,51 @@ Nodes do NOT gossip topology. They connect directly for:
 Only the first row is Raft; the rest are data-path or health-probe connections that never pass
 through consensus. All topology knowledge comes from the replicated Raft state machine, not from a
 peer's gossip or an external control plane.
+
+---
+
+## Node-Local Surfaces: Keyspace Notifications and SCAN
+
+Two client-visible surfaces are scoped to a single node in cluster mode. Both match Redis Cluster,
+and both mean a client that wants a cluster-wide view has to fan out across the primaries itself.
+
+### Keyspace notifications are emitted only by the slot-owning primary
+
+A write executes on the primary that owns the key's slot, and that node's shard worker publishes
+the `__keyspace@0__:<key>` and `__keyevent@0__:<event>` messages directly into its own subscription
+table (`emit_keyspace_notification` in
+`frogdb-server/crates/core/src/shard/keyspace_notify.rs`, routed by the
+`KeyspaceNotificationCoordinator`). That path never reaches `ClusterPubSubForwarder`, so the event
+does not cross the cluster bus.
+
+The distinction matters because ordinary `PUBLISH` *does* cross it: `PUBLISH` broadcasts to every
+node so a broadcast-channel subscriber can attach anywhere. A keyspace notification is not routed
+that way — it is delivered only to clients subscribed **on the owning primary**. This is Redis's
+behavior too, where event emission publishes locally while only the `PUBLISH` command propagates
+across the cluster.
+
+Consequences for clients:
+
+- To observe every mutation in the cluster, hold one subscription **per primary**. A single
+  connection sees only the slots that node owns.
+- After a slot migration or a failover, the emitting node for those slots changes with ownership,
+  so a long-lived consumer must re-fan-out on topology change.
+- Replicas apply the primary's write stream through the ordinary execution path
+  (`ReplicaCommandExecutor` sends each replicated command as a normal shard execute), so a replica
+  with notifications enabled emits its own copy locally as it applies the write. Events never cross
+  nodes in either direction — each node's subscribers see only what that node executed.
+
+### SCAN iterates one node's keyspace
+
+`SCAN` is a scatter across the node's own [internal shards](#two-level-sharding) with no cluster
+fan-out (`handle_scan` in `frogdb-server/crates/server/src/connection/scatter.rs`). It needs no slot
+filtering: a node only ever holds keys for the slots it owns, so the keys it can return are already
+exactly its own. The cursor encodes an internal shard index plus a position, so a cursor from one
+node is meaningless on another and must not be replayed there.
+
+A full-keyspace scan is therefore a client-side fan-out: run `SCAN` to completion against every
+primary and union the results. Because slot ownership is exclusive, that union is free of duplicates
+and no key ever appears via a non-owning node. `DBSIZE` and `KEYS` are per-node for the same reason.
 
 ---
 

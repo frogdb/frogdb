@@ -1,6 +1,7 @@
 //! Replica node replication handling.
 
 pub(crate) mod connection;
+pub(crate) mod offset;
 mod streaming;
 #[cfg(test)]
 mod tests;
@@ -23,6 +24,7 @@ use crate::state::ReplicationState;
 
 use connection::SyncType;
 pub use connection::{ConnectionState, ReplicaConnection};
+use offset::ReplicaOffset;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -55,6 +57,16 @@ pub struct ReplicaReplicationHandler {
     frame_tx: mpsc::Sender<ReplicationFrame>,
     shutdown: tokio::sync::watch::Sender<bool>,
     data_dir: PathBuf,
+    /// The live applied offset — the canonical home of "how far this replica has
+    /// applied", owned here so it persists across reconnect attempts (each
+    /// [`ReplicaConnection`] adopts a clone). Seeded from the persisted
+    /// `offset_at_save` at construction; in cluster mode this same atomic becomes
+    /// the cluster-bus HealthProbe handle (see [`Self::set_shared_offset`]).
+    live: Arc<AtomicU64>,
+    /// `Some` iff the live atomic is also wired to the cluster-bus HealthProbe;
+    /// when set it is the SAME `Arc` as [`Self::live`]. `None` outside cluster
+    /// mode. Preserves the vend-only-when-wired contract INFO/the failure
+    /// detector depend on.
     shared_offset: Option<Arc<AtomicU64>>,
     connect_factory: ConnectFactory,
     /// Whether the connection to the primary is currently up: TCP-connected,
@@ -66,7 +78,17 @@ pub struct ReplicaReplicationHandler {
     /// reset to `false` whenever [`Self::connect_and_sync`] returns for any
     /// reason (clean close, error, or a fresh attempt not yet past PSYNC).
     link_up: Arc<AtomicBool>,
+    /// Cadence of the spontaneous replica→primary ACK tick (Redis
+    /// `repl-ping-replica-period`). Seeded to a 1s default at construction and
+    /// overridden from `replication.ack-interval-ms` via [`Self::set_ack_interval`];
+    /// stamped into each [`ReplicaConnection`] built in [`Self::connect_and_sync`].
+    ack_interval: Duration,
 }
+
+/// Default spontaneous-ACK cadence when config supplies nothing (1s, matching
+/// `DEFAULT_ACK_INTERVAL_MS` in the config crate and Redis's default
+/// `repl-ping-replica-period`).
+const DEFAULT_ACK_INTERVAL: Duration = Duration::from_secs(1);
 
 impl ReplicaReplicationHandler {
     pub fn new(
@@ -80,6 +102,9 @@ impl ReplicaReplicationHandler {
         let (shutdown, _) = tokio::sync::watch::channel(false);
         state.master_host = Some(primary_addr.ip().to_string());
         state.master_port = Some(primary_addr.port());
+        // Seed the live offset from the persisted save-point offset so a clean
+        // restart resumes from where it left off rather than rewinding to 0.
+        let live = Arc::new(AtomicU64::new(state.offset_at_save));
         let handler = Self {
             primary_addr,
             listening_port,
@@ -88,11 +113,29 @@ impl ReplicaReplicationHandler {
             frame_tx,
             shutdown,
             data_dir,
+            live,
             shared_offset: None,
             connect_factory: plain_tcp_connect_factory(),
             link_up: Arc::new(AtomicBool::new(false)),
+            ack_interval: DEFAULT_ACK_INTERVAL,
         };
         (handler, frame_rx)
+    }
+
+    /// Override the spontaneous replica→primary ACK cadence from
+    /// `replication.ack-interval-ms`. A zero value is ignored (config validation
+    /// already rejects it), keeping the safe non-zero default rather than
+    /// spinning a zero-duration `tokio::time::interval`.
+    pub fn set_ack_interval(&mut self, ms: u64) {
+        if ms > 0 {
+            self.ack_interval = Duration::from_millis(ms);
+        }
+    }
+
+    /// The spontaneous-ACK cadence this handler stamps into each connection.
+    /// Exposed so the boot/demotion wiring can be asserted without a socket.
+    pub fn ack_interval(&self) -> Duration {
+        self.ack_interval
     }
 
     /// Whether the replica currently has a live, streaming connection to its
@@ -107,12 +150,15 @@ impl ReplicaReplicationHandler {
 
     /// Persist the replica's replication identity + offset to the state file.
     ///
-    /// The replica advances `state.replication_offset` as it consumes the WAL
-    /// stream, so the in-memory state is the source of truth here. Saving on
-    /// graceful shutdown lets a clean restart resume from the right offset and
-    /// attempt a partial resync instead of rewinding to the boot value.
+    /// The replica advances its live offset (in [`ReplicaOffset`]) as it consumes
+    /// the WAL stream; this snapshots that live applied value into the persisted
+    /// `offset_at_save` (monotone-guarded) before writing — preserving the
+    /// persist-what-you-applied semantic. Saving on graceful shutdown lets a
+    /// clean restart resume from the right offset and attempt a partial resync
+    /// instead of rewinding to the boot value.
     pub async fn save_state(&self) -> std::io::Result<()> {
-        let snapshot = self.state.read().await.clone();
+        let offsets = ReplicaOffset::new(self.state.clone(), self.live.clone());
+        let snapshot = offsets.reconcile_for_persist().await;
         snapshot.save(&self.state_path)
     }
 
@@ -121,7 +167,13 @@ impl ReplicaReplicationHandler {
         self.connect_factory = factory;
     }
 
+    /// Wire the cluster-bus HealthProbe atomic. The handler adopts `offset` as
+    /// its live-offset home (carrying the current live value into it first) so
+    /// there is a single atomic: the failure detector reads exactly what the
+    /// replica advances, and the handle identity the caller passed is preserved.
     pub fn set_shared_offset(&mut self, offset: Arc<AtomicU64>) {
+        offset.store(self.live.load(Ordering::Acquire), Ordering::Release);
+        self.live = offset.clone();
         self.shared_offset = Some(offset);
     }
 
@@ -133,15 +185,18 @@ impl ReplicaReplicationHandler {
         self.shared_offset.clone()
     }
 
-    /// Run the connect/sync/reconnect loop until the primary connection
-    /// closes normally or [`Self::stop`] is called.
+    /// Run the connect/sync/reconnect loop until [`Self::stop`] is called.
     ///
-    /// Selects on the `shutdown` watch at every point the loop could block
-    /// (an in-flight connect/handshake/stream, and the backoff sleep between
-    /// attempts) so `stop()` breaks the loop directly — no `task.abort()`
-    /// required, which matters for a boot-spawned handler whose reconnect
-    /// loop otherwise keeps dialing a primary this node has since been
-    /// promoted away from.
+    /// The loop reconnects after *any* link loss — a transport error or a
+    /// clean close the primary initiated to force a resync (broadcast-lag /
+    /// write-timeout disconnect) — because a configured replica must keep
+    /// re-establishing its link, like a Redis replica. Termination is driven
+    /// solely by the `shutdown` watch: the loop selects on it at every point
+    /// it could block (an in-flight connect/handshake/stream, and the backoff
+    /// sleep between attempts) so `stop()` breaks the loop directly — no
+    /// `task.abort()` required, which matters for a boot-spawned handler whose
+    /// reconnect loop would otherwise keep dialing a primary this node has
+    /// since been promoted away from.
     pub async fn start(&self) -> io::Result<()> {
         let mut backoff = Duration::from_millis(100);
         let max_backoff = Duration::from_secs(30);
@@ -162,8 +217,30 @@ impl ReplicaReplicationHandler {
                 result = self.connect_and_sync() => {
                     match result {
                         Ok(()) => {
-                            tracing::info!("Replication connection closed normally");
-                            return Ok(());
+                            // The link closed without a transport error: almost
+                            // always the primary dropped us on purpose to force a
+                            // resync (a broadcast-lag / write-timeout disconnect,
+                            // see `replica_session`'s write task) or the primary
+                            // restarted. A configured replica must keep
+                            // re-establishing the link — Redis replicas reconnect
+                            // after *any* link loss until told otherwise. Every
+                            // intentional teardown (promotion, re-demotion, server
+                            // shutdown) fires the shutdown watch above, whose biased
+                            // branch returns before we would reconnect, so treating a
+                            // clean close as terminal here only stranded replicas
+                            // that a primary had disconnected for lag. Reset the
+                            // backoff since the connection had been healthy, then
+                            // pause briefly to avoid a hot reconnect spin.
+                            tracing::info!("Replication link closed by primary; reconnecting");
+                            backoff = Duration::from_millis(100);
+                            tokio::select! {
+                                biased;
+                                _ = shutdown_rx.changed() => {
+                                    tracing::info!("Replica replication stopped via shutdown watch after link close");
+                                    return Ok(());
+                                }
+                                _ = tokio::time::sleep(backoff) => {}
+                            }
                         }
                         Err(e) => {
                             tracing::warn!(error = %e, backoff_ms = backoff.as_millis(), "Replication connection failed, retrying");
@@ -186,14 +263,19 @@ impl ReplicaReplicationHandler {
     async fn connect_and_sync(&self) -> io::Result<()> {
         let stream = (self.connect_factory)(self.primary_addr).await?;
         tracing::info!(primary = %self.primary_addr, "Connected to primary");
+        // Adopt the handler-owned live atomic (already holds the applied offset,
+        // seeded once at construction), so a reconnect never rewinds the live
+        // head to the lagging persisted field.
+        let offsets = ReplicaOffset::new(self.state.clone(), self.live.clone());
         let mut conn = ReplicaConnection {
             stream,
             _primary_addr: self.primary_addr,
             state: self.state.clone(),
             connection_state: ConnectionState::Connected,
             data_dir: self.data_dir.clone(),
-            shared_offset: self.shared_offset.clone(),
+            offsets,
             link_up: self.link_up.clone(),
+            ack_interval: self.ack_interval,
         };
         // Whatever ends this attempt — clean close, a handshake/sync error, or
         // the caller dropping the stream — the link is no longer up. `conn`

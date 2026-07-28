@@ -45,6 +45,20 @@
   []
   (str "key-" (rand-int 100000)))
 
+;; A bounded pool of keys that clients both write to and read back. The keys
+;; are plain (no hash tag), so CRC16 spreads them across many slots — and thus
+;; across every shard owner — preserving the multi-slot routing coverage that
+;; is the whole point of raft-chaos. Correlating reads with previously-written
+;; keys is what lets the checker (below) actually validate data: durability
+;; (an acked write must stay readable) and value-correctness (a read must
+;; return a value that was really written to that key).
+(def key-pool-size 100)
+
+(defn pool-key
+  "The i-th key in the shared read/write pool."
+  [i]
+  (str "kr-" i))
+
 (defn key-spread-across-slots
   "Generate n keys that spread across different slots."
   [n]
@@ -108,7 +122,11 @@
                                        :slot (cluster-client/slot-for-key key)
                                        :redirects (:redirects result)}))
 
-        :read
+        ;; :read is a mid-run read; :final-read is a post-recovery read issued by
+        ;; the final-generator once faults have healed. They execute identically;
+        ;; the distinct :f lets the checker assert durability only on final reads
+        ;; (which are guaranteed to happen after every write completed).
+        (:read :final-read)
         (let [key (or (:value op) (random-key))
               result (track-redirect slot-mapping nil key ["GET" key] docker-host? nodes base-port)]
           (swap! routing-stats update :total-ops inc)
@@ -247,16 +265,51 @@
 
 (defn generator
   "Generator for key routing testing.
-   Mix of reads and writes across different slots."
+
+   Reads and writes are drawn from a bounded, multi-slot key pool so that reads
+   actually target keys that were previously written — this is what gives the
+   checker real data to validate (durability + value-correctness), instead of
+   reading random never-written keys that are legally nil. Written values come
+   from a per-run monotonic counter, so every value is globally unique: a value
+   that surfaces under the wrong key (routing corruption) or that was never
+   written (fabrication) is detectable. Keys are un-tagged, so they still spread
+   across every shard, preserving routing coverage under chaos."
   [opts]
-  (let [rate (get opts :rate 20)]
-    (->> (gen/mix [(fn [] (write-op))
-                   (fn [] (write-op))
-                   (fn [] (read-op))
-                   (fn [] (read-op))
-                   (fn [] (targeted-write (rand-int 16384) (rand-int 10000)))
+  (let [rate (get opts :rate 20)
+        ;; Monotonic, globally-unique value source for this run.
+        ctr (atom 0)
+        next-val (fn [] (swap! ctr inc))
+        ;; Random key from the shared pool.
+        rk (fn [] (pool-key (rand-int key-pool-size)))]
+    (->> (gen/mix [(fn [] (write-op (rk) (next-val)))
+                   (fn [] (write-op (rk) (next-val)))
+                   (fn [] (read-op (rk)))
+                   (fn [] (read-op (rk)))
+                   ;; Targeted ops keep exercising slot-specific routing. Their
+                   ;; values come from the same unique counter, so when a
+                   ;; targeted-read happens to hit a slot a targeted-write
+                   ;; touched (key-for-slot is deterministic) it is value-checked
+                   ;; too; otherwise it still stresses redirect handling.
+                   (fn [] (targeted-write (rand-int 16384) (next-val)))
                    (fn [] (targeted-read (rand-int 16384)))])
          (gen/stagger (/ 1 rate)))))
+
+(defn final-read-op
+  "Generate a post-recovery final-read operation."
+  [key]
+  {:type :invoke :f :final-read :value key})
+
+(defn final-generator
+  "Final-reads generator: read back every pool key once, after faults have been
+   healed. Emits :final-read (not :read) so the checker can assert durability on
+   exactly these reads — they run after the main phase's time-limit and the
+   nemesis recovery/heal, so every acknowledged write has completed before them.
+   Reads of keys that were acknowledged-written must return their value; a nil
+   there is a lost acknowledged write. Reads of never-written pool keys are
+   legally nil and ignored by the checker."
+  [_opts]
+  (->> (map (fn [i] (final-read-op (pool-key i))) (range key-pool-size))
+       (gen/stagger 0.02)))
 
 (defn redirect-stress-generator
   "Generator that intentionally causes redirects to stress test routing."
@@ -299,12 +352,39 @@
 ;; ===========================================================================
 
 (defn checker
-  "Checker for key routing workload.
+  "Data-checking checker for the key-routing workload.
 
-   Verifies:
-   - All operations eventually succeed (after redirects)
-   - Redirect count is reasonable
-   - No data loss due to routing issues"
+   Historically this checker only counted :too-many-redirects failures, so a
+   wrong-value GET or a silently dropped write passed green — leaving raft-chaos
+   (the harshest nemesis) validated by a checker blind to data. It now validates
+   the actual key/value data on top of the redirect accounting.
+
+   Three properties are computed; two ALWAYS gate :valid?, one is conditional:
+
+   - Value-correctness (ALWAYS gates): every successful non-nil read must return
+     a value that was actually written to that key. Written values are globally
+     unique per run, so a value belonging to a different key (routing corruption
+     / cross-slot contamination) or one that was never written (fabrication) is
+     caught. This is timing-independent and topology-independent — a GET must
+     never return the wrong bytes, under any fault schedule — so it always gates.
+
+   - Routing (ALWAYS gates): no operation exhausted its redirect budget
+     (:too-many-redirects).
+
+   - Durability (conditional gate): every acknowledged write must still be
+     readable in the post-recovery final-read phase. This is asserted soundly on
+     the :final-read ops only (they run after the main phase and nemesis heal, so
+     every write completed before them — a mid-run read of a key not-yet-written
+     is legally nil and must NOT count as loss). It gates :valid? ONLY when no
+     process was killed during the run: the Raft cluster's shards have a single
+     owner with no per-shard replication (see docker-compose.raft-cluster.yml),
+     so a SIGKILL of a slot owner can lose recent un-fsynced acknowledged writes
+     by design (Redis-style async persistence) — that is expected single-master
+     behavior, not a linearizability violation, and the same reasoning the
+     raft-cluster-membership nemesis already encodes. When a kill fires, lost
+     writes are surfaced for visibility but do not fail the run; without kills
+     (e.g. the plain key-routing test, or a chaos run that only partitions /
+     pauses / slows), a lost acknowledged write IS a hard failure."
   []
   (reify checker/Checker
     (check [this test history opts]
@@ -314,7 +394,7 @@
 
             ;; Count redirects
             ops-with-redirects (->> completed
-                                    (filter #(contains? #{:write :read :targeted-write :targeted-read :force-wrong-node} (:f %)))
+                                    (filter #(contains? #{:write :read :final-read :targeted-write :targeted-read :force-wrong-node} (:f %)))
                                     (filter #(some? (get-in % [:value :redirects]))))
             total-redirects (reduce + (map #(get-in % [:value :redirects] 0) ops-with-redirects))
 
@@ -325,12 +405,69 @@
 
             ;; Track writes and reads
             writes (filter #(#{:write :targeted-write} (:f %)) completed)
-            reads (filter #(#{:read :targeted-read} (:f %)) completed)
+            reads (filter #(#{:read :final-read :targeted-read} (:f %)) completed)
+            final-reads (filter #(= :final-read (:f %)) completed)
+
+            ;; Build key -> set of acknowledged written values. Writes carry the
+            ;; concrete key under :value :key and the value under :value :written.
+            acked (reduce (fn [m w]
+                            (let [k (get-in w [:value :key])
+                                  v (get-in w [:value :written])]
+                              (if (and (some? k) (some? v))
+                                (update m k (fnil conj #{}) v)
+                                m)))
+                          {} writes)
+            written-keys (set (keys acked))
+
+            ;; Durability (sound ordering): only the post-recovery final reads,
+            ;; which are guaranteed to run after every write completed. A nil for
+            ;; a key we know was acked-written is a lost acknowledged write.
+            lost-writes (->> final-reads
+                             (filter (fn [r]
+                                       (let [k (get-in r [:value :key])]
+                                         (and (contains? written-keys k)
+                                              (nil? (get-in r [:value :value]))))))
+                             (map #(get-in % [:value :key]))
+                             distinct
+                             vec)
+            no-lost-writes? (empty? lost-writes)
+
+            ;; Value-correctness: a successful non-nil read of a written key must
+            ;; return a value that was actually written to that key.
+            wrong-value-reads (->> reads
+                                   (keep (fn [r]
+                                           (let [k (get-in r [:value :key])
+                                                 v (get-in r [:value :value])
+                                                 ks (get acked k)]
+                                             (when (and (some? v) ks (not (contains? ks v)))
+                                               {:key k :read v}))))
+                                   vec)
+            values-correct? (empty? wrong-value-reads)
+
+            ;; Did any process get killed? Un-replicated shards can lose recent
+            ;; acked writes on SIGKILL by design, so durability only gates when no
+            ;; kill fired. Nemesis kill ops appear in the history as :f :kill.
+            process-killed? (boolean (some #(= :kill (:f %)) history))
+            durability-enforced? (not process-killed?)
+            durable? (or durability-enforced? no-lost-writes?)
 
             ;; Check for too-many-redirects failures
             redirect-failures (filter #(= :too-many-redirects (:error %)) failed)]
 
-        {:valid? (empty? redirect-failures)
+        {:valid? (and (empty? redirect-failures)
+                      values-correct?
+                      ;; Durability gates only when no kill occurred.
+                      (or (not durability-enforced?) no-lost-writes?))
+         :values-correct? values-correct?
+         :no-lost-writes? no-lost-writes?
+         :durability-enforced? durability-enforced?
+         :process-killed? process-killed?
+         :lost-write-keys lost-writes
+         :lost-write-count (count lost-writes)
+         :wrong-value-reads (vec (take 20 wrong-value-reads))
+         :wrong-value-count (count wrong-value-reads)
+         :written-keys (count written-keys)
+         :final-reads (count final-reads)
          :total-ops (count completed)
          :total-writes (count writes)
          :total-reads (count reads)
@@ -361,4 +498,8 @@
      :checker (checker)}
     {:client (create-client)
      :generator (generator opts)
+     ;; Read every pool key back after faults heal, so durability is asserted on
+     ;; the full written set from a recovered cluster (overrides core's generic
+     ;; final-reads, which would read random never-written keys).
+     :final-generator (final-generator opts)
      :checker (checker)}))

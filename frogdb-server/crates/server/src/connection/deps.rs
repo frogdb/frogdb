@@ -13,7 +13,7 @@ use frogdb_core::{
     ReplicationTrackerImpl, ShardSender, SharedFunctionRegistry, SharedHotkeySession,
     command::QuorumChecker, new_shared_hotkey_session, persistence::SnapshotCoordinator,
 };
-use frogdb_debug::{HotShardConfig, MemoryDiagConfig};
+use frogdb_debug::MemoryDiagConfig;
 use frogdb_telemetry::SharedTracer;
 use tokio::sync::RwLock;
 
@@ -180,9 +180,6 @@ pub struct ConnectionConfig {
     /// Whether admin port separation is enabled.
     pub admin_enabled: bool,
 
-    /// Hot shard detection configuration.
-    pub hotshards_config: HotShardConfig,
-
     /// Memory diagnostics configuration.
     pub memory_diag_config: MemoryDiagConfig,
 
@@ -196,6 +193,11 @@ pub struct ConnectionConfig {
     /// Whether the DEBUG family of unsafe subcommands (currently DEBUG SLEEP)
     /// is enabled. Default false; test harness sets to true.
     pub enable_debug_command: bool,
+
+    /// Hard limit (bytes) on pub/sub messages buffered for a slow subscriber
+    /// before further messages are dropped and the connection is torn down.
+    /// `0` disables the bound. Sourced from `server.pubsub-output-buffer-hard-limit`.
+    pub pubsub_output_buffer_hard_limit: usize,
 
     /// Chaos testing configuration (turmoil simulation only).
     #[cfg(feature = "turmoil")]
@@ -212,11 +214,11 @@ impl ConnectionConfig {
             scatter_gather_timeout: Duration::from_millis(5000),
             is_admin: false,
             admin_enabled: false,
-            hotshards_config: HotShardConfig::default(),
             memory_diag_config: MemoryDiagConfig::default(),
             per_request_spans: Arc::new(AtomicBool::new(false)),
             is_replica: Arc::new(AtomicBool::new(false)),
             enable_debug_command: true,
+            pubsub_output_buffer_hard_limit: frogdb_core::DEFAULT_PUBSUB_OUTPUT_BUFFER_HARD_LIMIT,
             #[cfg(feature = "turmoil")]
             chaos_config: std::sync::Arc::new(crate::config::ChaosConfig::default()),
         }

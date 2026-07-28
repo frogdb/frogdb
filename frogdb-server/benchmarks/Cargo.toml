@@ -16,6 +16,13 @@ tempfile.workspace = true
 rand.workspace = true
 redis-protocol.workspace = true
 
+[dev-dependencies]
+# test-support exposes RocksStore's single-key put/get accessors used by the
+# persistence bench (benches/persistence.rs, reaching RocksStore through
+# frogdb-core's re-export). frogdb-benches is a leaf bench crate — nothing
+# depends on it — so this never enters a production graph.
+frogdb-persistence = { workspace = true, features = ["test-support"] }
+
 [[bench]]
 name = "store"
 harness = false

@@ -141,6 +141,40 @@ pub mod bytes_vec_serde_pub {
     }
 }
 
+/// Public single-`Bytes` codec (lossless UTF-8-or-base64), reused by the
+/// pub/sub oracle's channel/message fields. Same codec as [`bytes_codec`].
+pub mod bytes_serde_pub {
+    use super::bytes_codec;
+    use bytes::Bytes;
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(b: &Bytes, s: S) -> Result<S::Ok, S::Error> {
+        bytes_codec::serialize(b, s)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Bytes, D::Error> {
+        bytes_codec::deserialize(d)
+    }
+}
+
+/// Public `Option<Bytes>` codec, reused by the pub/sub oracle's optional
+/// pattern field. Same lossless codec as [`bytes_codec`].
+pub mod bytes_option_serde_pub {
+    use super::bytes_codec;
+    use bytes::Bytes;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Serialize, Deserialize)]
+    struct Wrap(#[serde(with = "bytes_codec")] Bytes);
+
+    pub fn serialize<S: Serializer>(b: &Option<Bytes>, s: S) -> Result<S::Ok, S::Error> {
+        b.as_ref().cloned().map(Wrap).serialize(s)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Bytes>, D::Error> {
+        let w: Option<Wrap> = Option::deserialize(d)?;
+        Ok(w.map(|w| w.0))
+    }
+}
+
 /// Custom serialization for Option<Bytes>.
 mod bytes_option_serde {
     use super::bytes_codec;

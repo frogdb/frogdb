@@ -60,8 +60,10 @@ pre-snapshot values — concurrent writes proceed against the live **Store** unt
 the checkpoint is cut.
 
 **Checkpoint**:
-The on-disk snapshot artifact: a RocksDB checkpoint (plus search-index sidecar and
-`metadata.json`). FrogDB does not write RDB files.
+The on-disk snapshot artifact: a RocksDB checkpoint plus `metadata.json`. Search indexes are
+deliberately excluded — recovery rebuilds them from the `search_meta` column family against the
+live search directory (round-10 proposal 23 removed the reader-less sidecar copy). FrogDB does
+not write RDB files.
 _Avoid_: "RDB file", "RDB-compatible file"
 
 **Snapshot Epoch**:

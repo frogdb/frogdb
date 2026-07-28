@@ -30,7 +30,7 @@ use std::path::Path;
 
 use frogdb_core::persistence::{RecoveryStats, RocksStore};
 use frogdb_core::sync::Arc;
-use frogdb_core::{ClusterStorage, ExpiryIndex, HashMapStore, ReplicationState};
+use frogdb_core::{ClusterStorage, ExpiryIndex, HashMapStore, MetricsRecorder, ReplicationState};
 use tracing::info;
 
 use crate::config::{ClusterConfigSection, Config, PersistenceConfig, ReplicationConfigSection};
@@ -58,11 +58,22 @@ pub(crate) struct RecoveryInputs<'a> {
     pub num_shards: usize,
     /// Whether the warm tier (tiered storage) column families are enabled.
     pub warm_enabled: bool,
+    /// Metrics recorder injected into the RocksDB store at open, so
+    /// store-initiated background work (post-clear reclamation counters) is
+    /// wired to the real recorder from construction. Built separately at server
+    /// startup (`init.rs`) before recovery runs, so it cannot be derived from
+    /// `config` and is threaded in explicitly.
+    pub metrics_recorder: Arc<dyn MetricsRecorder>,
 }
 
 impl<'a> RecoveryInputs<'a> {
-    /// Build recovery inputs from the server config and the resolved shard count.
-    pub fn from_config(config: &'a Config, num_shards: usize) -> Self {
+    /// Build recovery inputs from the server config, the resolved shard count,
+    /// and the already-constructed metrics recorder.
+    pub fn from_config(
+        config: &'a Config,
+        num_shards: usize,
+        metrics_recorder: Arc<dyn MetricsRecorder>,
+    ) -> Self {
         Self {
             data_dir: &config.persistence.data_dir,
             persistence: &config.persistence,
@@ -70,6 +81,7 @@ impl<'a> RecoveryInputs<'a> {
             cluster: &config.cluster,
             num_shards,
             warm_enabled: config.tiered_storage.enabled,
+            metrics_recorder,
         }
     }
 }

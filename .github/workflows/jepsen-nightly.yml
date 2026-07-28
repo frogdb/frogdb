@@ -1,0 +1,101 @@
+# =============================================================================
+# GENERATED FILE - DO NOT EDIT DIRECTLY
+# =============================================================================
+# Source: .github/workflows/workflow_gen/
+# Regenerate with: just workflow-gen
+# =============================================================================
+
+name: Jepsen Nightly
+'on':
+  schedule:
+  - cron: '37 5 * * *'
+  - cron: '37 6 * * 0'
+  workflow_dispatch:
+    inputs:
+      suites:
+        description: Space-separated run.py suites to run (e.g. 'raft replication'). Empty = core suites on manual dispatch.
+        required: false
+        default: ''
+        type: string
+jobs:
+  jepsen-nightly:
+    name: Nightly Jepsen Distributed-Correctness Suites
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 360
+    steps:
+    - name: Checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      with:
+        install: 'true'
+        install_args: just uv java
+        cache: 'true'
+        experimental: 'true'
+    - name: Install Leiningen
+      run: |
+        if command -v lein >/dev/null 2>&1; then
+          echo "lein already present: $(command -v lein)"
+          exit 0
+        fi
+        mkdir -p "$HOME/.local/bin"
+        curl -fsSL https://raw.githubusercontent.com/technomancy/leiningen/stable/bin/lein \
+          -o "$HOME/.local/bin/lein"
+        chmod +x "$HOME/.local/bin/lein"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        export PATH="$HOME/.local/bin:$PATH"
+        lein version
+    - name: Build debug Docker image
+      run: |
+        just docker-build-debug
+    - name: Run Jepsen suites
+      env:
+        SUITES_INPUT: ${{ github.event.inputs.suites }}
+        SCHEDULE: ${{ github.event.schedule }}
+        WEEKLY_CRON: 37 6 * * 0
+        CORE_SUITES: single crash replication raft
+        WEEKLY_SUITES: single crash replication raft raft-extended replication-extended register-fault
+      run: |
+        set -uo pipefail
+        if [ -n "${SUITES_INPUT}" ]; then
+          suites="${SUITES_INPUT}"
+        elif [ "${SCHEDULE}" = "${WEEKLY_CRON}" ]; then
+          suites="${WEEKLY_SUITES}"
+        else
+          suites="${CORE_SUITES}"
+        fi
+        echo "Running Jepsen suites: ${suites}"
+
+        rc_total=0
+        for suite in ${suites}; do
+          echo "::group::Jepsen suite: ${suite}"
+          # --no-build: the image was built once by the previous step; never let
+          # run.py fall back to its host cross/zigbuild path here.
+          if uv run testing/jepsen/run.py run \
+               --suite "${suite}" --no-build --teardown --no-color; then
+            echo "suite ${suite}: OK"
+          else
+            rc=$?
+            echo "suite ${suite}: FAILED (run.py exit ${rc})"
+            rc_total=1
+          fi
+          echo "::endgroup::"
+        done
+        exit ${rc_total}
+    - name: Jepsen summary
+      if: always()
+      run: |
+        just jepsen-summary | tee /tmp/jepsen-summary.txt || true
+        {
+          echo '### Jepsen nightly results'
+          echo '```'
+          cat /tmp/jepsen-summary.txt 2>/dev/null || echo '(no summary produced)'
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+    - name: Upload jepsen-store
+      if: failure()
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+      with:
+        name: jepsen-store
+        path: testing/jepsen/frogdb/store
+        retention-days: '7'

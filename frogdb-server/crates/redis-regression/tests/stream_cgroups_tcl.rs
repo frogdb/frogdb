@@ -1699,6 +1699,88 @@ async fn tcl_rename_can_unblock_xreadgroup_with_nogroup() {
 }
 
 // ---------------------------------------------------------------------------
+// 30c. XREADGROUP BLOCK: XTRIM and XDEL must not wake the blocker (issue 53)
+// ---------------------------------------------------------------------------
+//
+// XREADGROUP analogue of the XREAD no-wake property pinned in stream_tcl.rs
+// (tcl_xread_xtrim_should_not_awake_client / tcl_xread_xdel_should_not_awake_client):
+// `try_satisfy_stream_waiters` (core/src/shard/blocking.rs) only runs after
+// XADD, DEL, UNLINK, SET, XGROUP DESTROY, and RENAME — not XTRIM or XDEL.
+// A consumer blocked on `XREADGROUP ... STREAMS s >` waits for new entries
+// delivered to the group; trimming or deleting existing (already-history)
+// entries produces nothing new, so it must stay blocked. A follow-up XADD
+// must still wake it with exactly the newly added entry.
+
+#[tokio::test]
+async fn tcl_xreadgroup_xtrim_xdel_should_not_awake_client() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut writer = server.connect().await;
+
+    writer.command(&["DEL", "s1cg"]).await;
+    writer.command(&["XADD", "s1cg", "1-1", "item", "1"]).await;
+    writer.command(&["XADD", "s1cg", "1-2", "item", "2"]).await;
+    writer.command(&["XADD", "s1cg", "1-3", "item", "3"]).await;
+    writer
+        .command(&["XGROUP", "CREATE", "s1cg", "mygroup", "$"])
+        .await;
+
+    blocker
+        .send_only(&[
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "Alice",
+            "BLOCK",
+            "0",
+            "STREAMS",
+            "s1cg",
+            ">",
+        ])
+        .await;
+    server.wait_for_blocked_clients(1).await;
+
+    // XTRIM removes existing (already-delivered/history) entries; must not wake.
+    writer.command(&["XTRIM", "s1cg", "MAXLEN", "1"]).await;
+    let still_blocked = blocker.read_response(Duration::from_millis(200)).await;
+    assert!(
+        still_blocked.is_none(),
+        "blocker should still be blocked after XTRIM, got {still_blocked:?}"
+    );
+    assert_eq!(server.blocked_client_count(), 1);
+
+    // XDEL removes an existing entry; must not wake either.
+    writer.command(&["XDEL", "s1cg", "1-3"]).await;
+    let still_blocked = blocker.read_response(Duration::from_millis(200)).await;
+    assert!(
+        still_blocked.is_none(),
+        "blocker should still be blocked after XDEL, got {still_blocked:?}"
+    );
+    assert_eq!(server.blocked_client_count(), 1);
+
+    // A fresh XADD should wake the blocker with exactly the new entry.
+    writer
+        .command(&["XADD", "s1cg", "*", "new", "abcd1234"])
+        .await;
+
+    let resp = blocker
+        .read_response(Duration::from_secs(5))
+        .await
+        .expect("blocker should unblock after post-trim/del XADD");
+
+    let streams = unwrap_array(resp);
+    assert_eq!(streams.len(), 1);
+    let stream_data = unwrap_array(streams[0].clone());
+    assert_eq!(stream_data.len(), 2);
+    let mut stream_iter = stream_data.into_iter();
+    let stream_name = parse_bulk_string(&stream_iter.next().unwrap());
+    assert_eq!(stream_name, "s1cg");
+    let entries = unwrap_array(stream_iter.next().unwrap());
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entry_fields(&entries[0]), vec!["new", "abcd1234"]);
+}
+
+// ---------------------------------------------------------------------------
 // 31. XCLAIM can claim PEL items from another consumer
 // ---------------------------------------------------------------------------
 

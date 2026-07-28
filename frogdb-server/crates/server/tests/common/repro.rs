@@ -39,9 +39,34 @@ pub fn read_repro(path: impl AsRef<Path>) -> ReproFile {
         .unwrap_or_else(|e| panic!("parse repro {}: {e}", path.as_ref().display()))
 }
 
-/// The default repro-file path for a seed: `target/concurrency-repros/<seed>.json`.
+/// The default repro-file path for a seed: `<workspace-root>/target/concurrency-repros/<seed>.json`.
 pub fn repro_path(seed: u64) -> PathBuf {
-    PathBuf::from("target/concurrency-repros").join(format!("{seed}.json"))
+    concurrency_repro_dir().join(format!("{seed}.json"))
+}
+
+/// The repro directory, anchored deterministically rather than trusting the test process's
+/// CWD: nextest runs each test binary with CWD set to its *crate* root
+/// (`frogdb-server/crates/server`), not the repo root, so a CWD-relative `target/...` path
+/// silently resolves to `frogdb-server/crates/server/target/concurrency-repros` — a directory
+/// nothing else reads or uploads. Honor `CARGO_TARGET_DIR` if the build was configured with a
+/// custom target dir; otherwise derive the workspace root from this crate's
+/// `CARGO_MANIFEST_DIR`, which `rustc` bakes in at compile time and is therefore independent of
+/// the runtime CWD.
+fn concurrency_repro_dir() -> PathBuf {
+    match std::env::var_os("CARGO_TARGET_DIR") {
+        Some(dir) => PathBuf::from(dir).join("concurrency-repros"),
+        None => workspace_root().join("target").join("concurrency-repros"),
+    }
+}
+
+/// The workspace root: `CARGO_MANIFEST_DIR` for this crate is
+/// `<workspace-root>/frogdb-server/crates/server`, so the workspace root is three ancestors up.
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .expect("CARGO_MANIFEST_DIR (frogdb-server/crates/server) has at least 3 ancestors")
+        .to_path_buf()
 }
 
 #[cfg(test)]
@@ -62,5 +87,36 @@ mod tests {
         write_repro(&path, &r).unwrap();
         assert_eq!(read_repro(&path), r);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `repro_path()` must resolve to the workspace-root `target/concurrency-repros/`,
+    /// regardless of the test process's CWD — nextest runs test binaries with CWD set to the
+    /// crate root, not the repo root, so a CWD-relative path would silently miss the directory
+    /// the nightly CI workflow uploads as an artifact.
+    #[test]
+    fn repro_path_resolves_under_workspace_root_target_dir() {
+        let path = repro_path(42);
+        assert!(
+            path.ends_with("target/concurrency-repros/42.json"),
+            "expected path to end with target/concurrency-repros/42.json, got {}",
+            path.display()
+        );
+
+        // Workspace root is `CARGO_MANIFEST_DIR` (this crate: frogdb-server/crates/server)
+        // minus three components (server, crates, frogdb-server) — verify the repo's own
+        // Cargo.toml (the workspace manifest) actually lives there, so this isn't just
+        // asserting the suffix in isolation.
+        if std::env::var_os("CARGO_TARGET_DIR").is_none() {
+            let workspace_root = path
+                .parent() // target/concurrency-repros
+                .and_then(Path::parent) // target
+                .and_then(Path::parent) // workspace root
+                .expect("repro_path has at least 3 ancestors");
+            assert!(
+                workspace_root.join("Cargo.toml").is_file(),
+                "expected {} to be the workspace root (contain Cargo.toml)",
+                workspace_root.display()
+            );
+        }
     }
 }

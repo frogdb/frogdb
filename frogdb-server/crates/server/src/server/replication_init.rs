@@ -64,12 +64,12 @@ pub(super) fn init_replication(
 
         info!(
             replication_id = %repl_state.replication_id,
-            offset = repl_state.replication_offset,
+            offset_at_save = repl_state.offset_at_save,
             "Initialized primary replication state"
         );
 
         let tracker = Arc::new(frogdb_core::ReplicationTrackerImpl::new());
-        tracker.set_offset(repl_state.replication_offset);
+        tracker.set_offset(repl_state.offset_at_save);
 
         let handler = Arc::new(PrimaryReplicationHandler::new(
             repl_state,
@@ -120,7 +120,7 @@ pub(super) fn init_replication(
         info!(
             primary = %resolved_primary_addr,
             replication_id = %repl_state.replication_id,
-            offset = repl_state.replication_offset,
+            offset_at_save = repl_state.offset_at_save,
             "Initialized replica replication state"
         );
 
@@ -131,6 +131,30 @@ pub(super) fn init_replication(
             state_path,
             config.persistence.data_dir.clone(),
         );
+        handler.set_ack_interval(config.replication.ack_interval_ms);
+
+        // Under turmoil simulation the replica must dial its primary through
+        // turmoil's simulated network — the default factory's
+        // `tokio::net::TcpStream::connect` would try (and fail) to leave the
+        // simulation. Mirrors the `crate::net` alias the inbound listener uses.
+        #[cfg(feature = "turmoil")]
+        {
+            let factory: frogdb_replication::replica::ConnectFactory =
+                Arc::new(|addr: std::net::SocketAddr| {
+                    Box::pin(async move {
+                        let stream = turmoil::net::TcpStream::connect(addr).await?;
+                        Ok(Box::new(stream) as frogdb_replication::BoxedStream)
+                    })
+                        as std::pin::Pin<
+                            Box<
+                                dyn std::future::Future<
+                                        Output = std::io::Result<frogdb_replication::BoxedStream>,
+                                    > + Send,
+                            >,
+                        >
+                });
+            handler.set_connect_factory(factory);
+        }
 
         // Wire up TLS connection factory for encrypted replication.
         // Captures Arc<TlsManager> (not a snapshot connector) so that

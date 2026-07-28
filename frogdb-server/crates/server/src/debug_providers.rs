@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use frogdb_cluster::ClusterRaft;
 use frogdb_cluster::types::{ClusterSnapshot, NodeFlags, NodeRole, SlotMigration};
 use frogdb_core::{CLUSTER_SLOTS, ClientRegistry, ClusterState, NodeInfo, ReplicationTrackerImpl};
 use frogdb_debug::{
@@ -18,6 +19,25 @@ use frogdb_debug::{
 use frogdb_telemetry::LiveMode;
 
 use crate::role_manager::RoleManagerHandle;
+
+/// The current Raft leader, read live from the Metadata Plane.
+///
+/// The leader is Raft **runtime** state (it lives on the Raft node, not in the
+/// replicated `ClusterStateInner`), so it cannot be sourced from the applied
+/// state machine's `ClusterState::snapshot()`. This trait is the seam that lets
+/// the debug provider read the leader from the one object that owns it — the
+/// live `ClusterRaft` in production, a stub in tests.
+pub trait LeaderReader: Send + Sync {
+    /// The current Raft leader node ID, or `None` when standalone or no leader
+    /// is currently known (e.g. an election is in progress).
+    fn current_leader(&self) -> Option<u64>;
+}
+
+impl LeaderReader for ClusterRaft {
+    fn current_leader(&self) -> Option<u64> {
+        self.metrics().borrow().current_leader
+    }
+}
 
 /// Composite adapter feeding node-observable state to the debug web UI.
 pub struct ServerDebugProvider {
@@ -30,11 +50,15 @@ pub struct ServerDebugProvider {
     /// Owns the live primary target, so master host/port track runtime
     /// `REPLICAOF` promote/demote instead of freezing at the boot config.
     role_manager: RoleManagerHandle,
+    /// Live Raft leader source, `Some` only in cluster mode. Read at the display
+    /// seam because the leader is Raft runtime state, not replicated metadata.
+    leader_reader: Option<Arc<dyn LeaderReader>>,
 }
 
 impl ServerDebugProvider {
     /// Build a provider. `cluster_state` is `Some` only in cluster mode;
-    /// `replication_tracker` is `Some` only when replication is configured.
+    /// `replication_tracker` is `Some` only when replication is configured;
+    /// `leader_reader` is `Some` only in cluster mode (the live `ClusterRaft`).
     pub fn new(
         client_registry: Arc<ClientRegistry>,
         cluster_state: Option<Arc<ClusterState>>,
@@ -42,6 +66,7 @@ impl ServerDebugProvider {
         replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
         mode: LiveMode,
         role_manager: RoleManagerHandle,
+        leader_reader: Option<Arc<dyn LeaderReader>>,
     ) -> Self {
         Self {
             client_registry,
@@ -50,7 +75,14 @@ impl ServerDebugProvider {
             replication_tracker,
             mode,
             role_manager,
+            leader_reader,
         }
+    }
+
+    /// The current Raft leader, read live from metrics. `None` when standalone or
+    /// no leader is currently known (election in progress) — the honest value.
+    fn current_leader(&self) -> Option<u64> {
+        self.leader_reader.as_ref()?.current_leader()
     }
 }
 
@@ -104,7 +136,7 @@ impl NodeStateProvider for ServerDebugProvider {
             slots_assigned,
             total_slots: CLUSTER_SLOTS,
             config_epoch: snapshot.config_epoch,
-            leader_id: snapshot.leader_id,
+            leader_id: self.current_leader(),
             active_version: snapshot.active_version.clone(),
             migrations,
         })
@@ -235,6 +267,7 @@ mod tests {
             None,
             LiveMode::new(false, flag.clone(), "primary"),
             handle.clone(),
+            None,
         );
 
         // Boot: primary, no master reported.
@@ -293,6 +326,7 @@ mod tests {
             None,
             LiveMode::new(true, flag.clone(), "primary"),
             handle.clone(),
+            None,
         );
 
         let primary: SocketAddr = "127.0.0.1:7000".parse().unwrap();
@@ -302,5 +336,83 @@ mod tests {
         assert_eq!(view.role, "cluster");
         assert_eq!(view.master_host.as_deref(), Some("127.0.0.1"));
         assert_eq!(view.master_port, Some(7000));
+    }
+
+    /// Build a `RoleManagerHandle` backed by a no-op streamer, for provider tests
+    /// that only exercise the cluster-overview path.
+    fn noop_role_handle() -> RoleManagerHandle {
+        use crate::role_manager::{ReplicaStream, ReplicaStreamer, RoleManager};
+        use std::net::SocketAddr;
+        use std::sync::atomic::AtomicBool;
+
+        struct NoopStream;
+        impl ReplicaStream for NoopStream {
+            fn link_up(&self) -> bool {
+                false
+            }
+        }
+        struct NoopStreamer;
+        impl ReplicaStreamer for NoopStreamer {
+            fn start(&self, _primary: SocketAddr) -> Box<dyn ReplicaStream> {
+                Box::new(NoopStream)
+            }
+        }
+
+        let flag = Arc::new(AtomicBool::new(false));
+        RoleManagerHandle::new(RoleManager::new(flag, Arc::new(NoopStreamer), None))
+    }
+
+    /// A stub leader source standing in for the live `ClusterRaft` metrics watch.
+    struct StubLeaderReader(Option<u64>);
+    impl LeaderReader for StubLeaderReader {
+        fn current_leader(&self) -> Option<u64> {
+            self.0
+        }
+    }
+
+    /// Proposal 33: the Cluster Overview panel must report the *real* Raft leader,
+    /// read live from metrics at the display seam — not the always-`None`
+    /// `ClusterSnapshot.leader_id` field, which made every node render its leader
+    /// as "Unknown". With a leader source reporting node 7, the overview's
+    /// `leader_id` must be `Some(7)`.
+    #[test]
+    fn cluster_overview_reports_raft_leader() {
+        let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let provider = ServerDebugProvider::new(
+            Arc::new(ClientRegistry::new()),
+            Some(Arc::new(ClusterState::new())),
+            Some(1),
+            None,
+            LiveMode::new(true, flag, "primary"),
+            noop_role_handle(),
+            Some(Arc::new(StubLeaderReader(Some(7)))),
+        );
+
+        let overview = provider.cluster_overview().expect("cluster mode overview");
+        assert_eq!(
+            overview.leader_id,
+            Some(7),
+            "overview must report the live Raft leader, not the always-None DTO field"
+        );
+    }
+
+    /// Proposal 33: when no leader source is present (or no leader is currently
+    /// known — election in progress), the overview reports `leader_id: None`, and
+    /// the UI's existing "Unknown" fallback is then *correct* rather than permanent.
+    #[test]
+    fn cluster_overview_reports_no_leader_without_source() {
+        let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let provider = ServerDebugProvider::new(
+            Arc::new(ClientRegistry::new()),
+            Some(Arc::new(ClusterState::new())),
+            Some(1),
+            None,
+            LiveMode::new(true, flag, "primary"),
+            noop_role_handle(),
+            None,
+        );
+
+        let overview = provider.cluster_overview().expect("cluster mode overview");
+        assert_eq!(overview.leader_id, None);
     }
 }

@@ -545,6 +545,7 @@ mod tests {
                 wakes: WaiterWake::None,
                 event: EventSpec::Suppressed,
                 requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
                 lookup: LookupSpec::None,
                 mutation: crate::command::ConnMutation::None,
                 strategy: ExecutionStrategy::Standard,

@@ -13,7 +13,7 @@
 //!
 //! - `SLOWLOG - Certain commands are omitted that contain sensitive information` — intentional-incompatibility:replication — needs:repl tag (config set masterauth/masteruser/tls-key-file-pass); FrogDB does not redact ACL SETUSER / CONFIG SET sensitive arguments in slowlog
 //! - `SLOWLOG - Some commands can redact sensitive fields` — intentional-incompatibility:replication — needs:repl tag (MIGRATE AUTH/AUTH2 redaction)
-//! - `SLOWLOG - Rewritten commands are logged as their original command` — intentional-incompatibility:observability — tests Redis-internal command rewriting (SPOP->DEL, GEOADD->ZADD, GETSET->SET, INCRBYFLOAT->SET, blocked BLPOP->LPOP) for replication purposes; FrogDB does not implement replication command rewriting
+//! - `SLOWLOG - Rewritten commands are logged as their original command` — intentional-incompatibility:observability — tests that Redis's replication command rewriting never leaks into slowlog. FrogDB's replication rewriting (a `ReplicationOverride` deposited at execution, e.g. SPOP->SREM/DEL) lives purely in the broadcast effect and never touches the client-visible command, so slowlog trivially logs the original; the specific Redis rewrite pairs asserted there (GEOADD->ZADD, GETSET->SET, INCRBYFLOAT->SET, blocked BLPOP->LPOP) don't all have FrogDB counterparts
 //! - `SLOWLOG - EXEC is not logged, just executed commands` — intentional-incompatibility:observability — FrogDB logs each command inside a MULTI/EXEC block individually but does not skip the enclosing EXEC
 //! - `SLOWLOG - blocking command is reported only after unblocked` — intentional-incompatibility:observability — FrogDB logs blocking commands at submit time, not after unblock
 

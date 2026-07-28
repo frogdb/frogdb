@@ -7,7 +7,6 @@ use frogdb_core::{
     BlockingMsg, BoxFuture, ClientTrackingProvider, CommandFlags, FunctionFlags,
     InvalidationMessage, InvalidationSender, PauseMode, PubSubMsg, ShardSender, TrackingMsg,
 };
-use frogdb_protocol::Response;
 use tokio::sync::mpsc;
 
 use frogdb_core::ClientMemoryUsage;
@@ -197,54 +196,21 @@ impl ConnectionHandler {
                 .await;
         }
 
-        // Unregister any blocking waits
+        // Unregister any blocking waits. The connection is closing, so there is
+        // no client to hand a raced serve back to — the ack is discarded (a
+        // serve that raced this teardown is instead made whole by the shard's
+        // restore-on-send-failure path). See `BlockingMsg::UnregisterWait`.
         if let Some(shard_id) = self.state.blocked_shard()
             && let Some(sender) = self.core.shard_senders.get(shard_id)
         {
+            let (ack_tx, _ack_rx) = tokio::sync::oneshot::channel();
             let _ = sender
                 .send(BlockingMsg::UnregisterWait {
                     conn_id: self.state.id,
+                    ack: ack_tx,
                 })
                 .await;
         }
-    }
-
-    /// Extract PSYNC_HANDOFF parameters from responses.
-    ///
-    /// The PSYNC command returns a special response array to signal that
-    /// the connection should be handed off to the replication handler:
-    /// `[PSYNC_HANDOFF, replication_id, offset]`
-    ///
-    /// Returns `Some((replication_id, offset))` if handoff is needed.
-    pub(super) fn extract_psync_handoff(responses: &[Response]) -> Option<(String, i64)> {
-        if responses.len() != 1 {
-            return None;
-        }
-
-        if let Response::Array(items) = &responses[0]
-            && items.len() >= 3
-        {
-            // Check for PSYNC_HANDOFF marker
-            if let Response::Simple(marker) = &items[0]
-                && marker.as_ref() == b"PSYNC_HANDOFF"
-            {
-                // Extract replication_id
-                let replication_id = match &items[1] {
-                    Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-                    _ => return None,
-                };
-
-                // Extract offset
-                let offset = match &items[2] {
-                    Response::Bulk(Some(b)) => String::from_utf8_lossy(b).parse::<i64>().ok()?,
-                    _ => return None,
-                };
-
-                return Some((replication_id, offset));
-            }
-        }
-
-        None
     }
 
     /// Periodically sync local stats and memory usage to the registry.

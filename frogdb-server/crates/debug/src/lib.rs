@@ -11,7 +11,7 @@ pub mod memory;
 pub mod web_ui;
 
 // Config re-exports
-pub use config::{HotShardConfig, MemoryDiagConfig};
+pub use config::MemoryDiagConfig;
 
 // Memory diagnostics re-exports
 pub use memory::{MemoryDiagCollector, format_memory_report};

@@ -127,7 +127,7 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
-    use crate::pubsub::{PubSubMessage, PubSubSender};
+    use crate::pubsub::{PubSubMessage, PubSubReceiver, PubSubSender};
     use crate::shard::message::{Envelope, ShardMessage};
 
     /// Records counter increments so tests can read cumulative totals back.
@@ -154,11 +154,9 @@ mod tests {
 
     /// A `ShardSubscriptions` with one connection subscribed to `channel`, plus
     /// the receiver that connection would read delivered messages from.
-    fn subscribed_table(
-        channel: &str,
-    ) -> (ShardSubscriptions, mpsc::UnboundedReceiver<PubSubMessage>) {
+    fn subscribed_table(channel: &str) -> (ShardSubscriptions, PubSubReceiver) {
         let mut subs = ShardSubscriptions::new();
-        let (tx, rx): (PubSubSender, _) = mpsc::unbounded_channel();
+        let (tx, rx) = PubSubSender::unbounded();
         subs.subscribe(Bytes::from(channel.to_string()), 1, tx);
         (subs, rx)
     }

@@ -35,7 +35,10 @@ impl ConnectionHandler {
 
         match tokio::time::timeout(self.scatter_gather_timeout, response_rx).await {
             Ok(Ok(partial)) => {
-                if let Some((_, resp)) = partial.results.into_iter().next() {
+                if let Some(err) = partial.as_shard_error() {
+                    return err.clone();
+                }
+                if let Some((_, resp)) = partial.into_keyed_results().into_iter().next() {
                     if cli_mode {
                         // FT.EXPLAINCLI returns array of strings (one per line)
                         if let Response::Bulk(Some(ref b)) = resp {

@@ -53,12 +53,12 @@ pub use client_registry::{
     UnblockMode, extract_error_prefix,
 };
 pub use cluster::{
-    CLUSTER_SLOTS, ClusterCommand, ClusterConfig, ClusterError, ClusterNetwork,
+    BusRpc, CLUSTER_SLOTS, ClusterCommand, ClusterConfig, ClusterError, ClusterNetwork,
     ClusterNetworkFactory, ClusterRaft, ClusterResponse, ClusterRpcRequest, ClusterRpcResponse,
     ClusterSnapshot, ClusterState, ClusterStateMachine, ClusterStorage, ConfigEpoch, DemotionEvent,
-    FramedStream, NodeId, NodeInfo, NodeRole, SharedClusterRaft, SlotMigrationCompleteEvent,
-    SlotRange, TypeConfig, handle_rpc_request, new_framed, new_framed_tcp, parse_rpc_message,
-    send_rpc_response,
+    FramedStream, NodeId, NodeInfo, NodeRole, RaftRpc, SharedClusterRaft,
+    SlotMigrationCompleteEvent, SlotRange, TypeConfig, handle_rpc_request, new_framed,
+    new_framed_tcp, parse_rpc_message, send_rpc_response,
 };
 /// The shard-local executor trait. Alias of [`command::Command`], whose
 /// `execute(&mut CommandContext)` runs on the owning shard. Named `ShardCommand`
@@ -68,11 +68,12 @@ pub use command::Command as ShardCommand;
 pub use command::{
     Arity, ClusterContextRef, Command, CommandContext, CommandContextCore, CommandFlags,
     ConnMutation, ConnectionLevelOp, ExecutionStrategy, KeyAccessFlag, ListpackConfig,
-    QuorumChecker, ReplicationContextRef, RoleController, ScatterGatherOp, ServerWideOp,
-    WaiterKind, WaiterWake, WalAction, WalStrategy,
+    QuorumChecker, ReplicationContextRef, ReplicationOverride, RoleController, ScatterGatherOp,
+    ServerWideOp, SynthesizedCommand, WaiterKind, WaiterWake, WalAction, WalStrategy,
 };
 pub use command_spec::{
-    AccessSpec, CommandSpec, EventSpec, KeySpec, LookupOutcome, LookupSpec, SpecError,
+    AccessSpec, CommandSpec, EventSpec, IndexKind, KeySpec, LookupOutcome, LookupSpec,
+    ReindexAction, ReindexSpec, SpecError,
 };
 pub use conn_command::{
     BoxFuture, ClientTrackingProvider, ConfigProvider, ConnCtx, ConnStateMut, ConnectionCommand,
@@ -117,10 +118,10 @@ pub use persistence::{
     recover_all_shards, recover_shard, serialize, spawn_periodic_sync,
 };
 pub use pubsub::{
-    ConnId, GlobPattern, IntrospectionRequest, IntrospectionResponse,
-    MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
-    MAX_SUBSCRIPTIONS_PER_CONNECTION, PubSubConfirmation, PubSubMessage, PubSubSender,
-    ShardSubscriptions,
+    ConnId, DEFAULT_PUBSUB_OUTPUT_BUFFER_HARD_LIMIT, Drained, GlobPattern, IntrospectionRequest,
+    IntrospectionResponse, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
+    MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION, PubSubClosed,
+    PubSubConfirmation, PubSubMessage, PubSubReceiver, PubSubSender, ShardSubscriptions,
 };
 pub use registry::{CommandEntry, CommandImpl, CommandRegistry};
 pub use replication::{
@@ -140,8 +141,8 @@ pub use shard::{
     RecoveryOutcome, RecoveryResult, ScatterOp, ScriptingMsg, SearchMsg, ShardBuilderError,
     ShardClusterDeps, ShardConfig, ShardCoreDeps, ShardMemoryStats, ShardMessage,
     ShardPersistenceDeps, ShardReceiver, ShardSender, ShardWaitQueue, ShardWorker,
-    ShardWorkerBuilder, TieredCounts, TrackingMsg, TransactionResult, VllMsg, WaitEntry,
-    WalLagStatsResponse, extract_hash_tag, shard_for_key, slot_for_key,
+    ShardWorkerBuilder, TieredCounts, TrackingMsg, TransactionResult, UnregisterAck, VllMsg,
+    WaitEntry, WalLagStatsResponse, WatchEntry, extract_hash_tag, shard_for_key, slot_for_key,
 };
 pub use slowlog::{
     DEFAULT_SLOWLOG_LOG_SLOWER_THAN, DEFAULT_SLOWLOG_MAX_ARG_LEN, DEFAULT_SLOWLOG_MAX_LEN, SlowLog,
@@ -156,4 +157,4 @@ pub use tracking::{
     BroadcastTable, DEFAULT_TRACKING_TABLE_MAX_KEYS, InvalidationMessage, InvalidationRegistry,
     InvalidationSender, TrackedConnection, TrackingTable,
 };
-pub use vll::{LockMode, PendingOpState, ShardReadyResult, VllConfig, VllError};
+pub use vll::{LockMode, PendingOpState, ShardReadyResult, VllError};

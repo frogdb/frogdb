@@ -48,17 +48,23 @@ pub mod state;
 pub mod storage;
 pub mod types;
 pub mod version_gate;
+pub mod wire;
+pub mod writer;
 
 pub use network::{
-    ClusterNetwork, ClusterNetworkFactory, ClusterRpcRequest, ClusterRpcResponse, FramedStream,
-    handle_rpc_request, new_framed, new_framed_tcp, parse_rpc_message, send_rpc_response,
-    spawn_add_raft_voter,
+    BusRpc, ClusterNetwork, ClusterNetworkFactory, ClusterRpcRequest, ClusterRpcResponse,
+    FramedStream, RaftRpc, handle_rpc_request, new_framed, new_framed_tcp, parse_rpc_message,
+    send_rpc_response, spawn_add_raft_voter,
 };
 pub use state::{ClusterState, ClusterStateMachine, DemotionEvent, SlotMigrationCompleteEvent};
 pub use storage::ClusterStorage;
 pub use types::{
     CLUSTER_SLOTS, ClusterCommand, ClusterConfig, ClusterError, ClusterResponse, ClusterSnapshot,
-    ConfigEpoch, NodeId, NodeInfo, NodeRole, SlotRange, TypeConfig,
+    ConfigEpoch, NodeId, NodeInfo, NodeRole, SlotRange, TypeConfig, even_slot_ranges,
+};
+pub use writer::{
+    ClusterWriter, LeaderForwarder, LeaderRedirect, ProposeError, Proposed, RaftClientWriteError,
+    RaftProposer, resolve_redirect,
 };
 
 use openraft::Raft;

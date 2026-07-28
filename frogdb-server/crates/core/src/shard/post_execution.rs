@@ -59,11 +59,56 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 
-use crate::command::{Command, ScriptWriteRecord, WaiterKind, WaiterWake, WriteRecord};
+use crate::command::{
+    Command, CommandFlags, ReplicationOverride, ScriptWriteRecord, WaiterKind, WaiterWake,
+    WriteRecord,
+};
+use crate::keyspace_event::KeyspaceEventFlags;
 use crate::store::Store;
 
 use super::helpers::REPLICA_INTERNAL_CONN_ID;
 use super::worker::ShardWorker;
+
+/// Resolve the replication broadcast form(s) of one write record — the single
+/// home of the deterministic-propagation rules:
+///
+/// - a deposited [`ReplicationOverride::Rewrite`] replaces the verbatim command
+///   with the synthesized command(s) naming exactly what the primary did
+///   (SPOP → `SREM` of the popped members / `DEL` on a full drain);
+/// - a deposited [`ReplicationOverride::Suppress`] (Redis
+///   `preventCommandPropagation`) and the static
+///   [`CommandFlags::NO_PROPAGATE`] flag ship nothing;
+/// - everything else propagates verbatim.
+///
+/// A `NONDETERMINISTIC` write reaching the verbatim arm is a bug — its
+/// re-execution on the replica would diverge — surfaced by debug assertion so
+/// any newly flagged command fails tests until it deposits an override (or
+/// declares its write a no-op).
+fn replication_forms<'r>(
+    record: &'r WriteRecord<'r>,
+) -> smallvec::SmallVec<[(&'r str, &'r [Bytes]); 1]> {
+    match record.repl_override {
+        Some(ReplicationOverride::Suppress) => smallvec::SmallVec::new(),
+        Some(ReplicationOverride::Rewrite(commands)) => commands
+            .iter()
+            .map(|cmd| (cmd.name, cmd.args.as_slice()))
+            .collect(),
+        None => {
+            let flags = record.handler.flags();
+            if flags.contains(CommandFlags::NO_PROPAGATE) {
+                return smallvec::SmallVec::new();
+            }
+            debug_assert!(
+                !flags.contains(CommandFlags::NONDETERMINISTIC),
+                "nondeterministic write `{}` must deposit a ReplicationOverride \
+                 (rewrite_propagation/suppress_propagation) or declare write_was_noop \
+                 instead of propagating verbatim",
+                record.handler.name()
+            );
+            smallvec::smallvec![(record.handler.name(), record.args)]
+        }
+    }
+}
 
 /// What a (possibly batched) execution wrote — the input to the effect pipeline.
 pub(crate) struct WriteSummary<'a> {
@@ -78,6 +123,74 @@ pub(crate) struct WriteSummary<'a> {
     /// Originating connection. `REPLICA_INTERNAL_CONN_ID` suppresses broadcast
     /// (replication loop guard).
     pub conn_id: u64,
+    /// Per-write removal reason, parallel to [`WriteSummary::writes`], consumed
+    /// only under [`EffectScope::InternalRemoval`]: it overrides each synthetic
+    /// `DEL`'s keyspace-event class (`expired`/`del`/`evicted`). Empty for every
+    /// command/transaction/scatter/script summary (their notification class comes
+    /// from the command's own [`EventSpec`](crate::command_spec::EventSpec)).
+    pub removal_reasons: &'a [RemovalReason],
+}
+
+/// Originating-connection sentinel for engine-initiated removals (active
+/// expiry, eviction).
+///
+/// Must be non-zero so the replication broadcast is **not** suppressed by the
+/// `REPLICA_INTERNAL_CONN_ID` (== 0) loop guard — an engine removal that opts
+/// into replication (eviction) genuinely originates here and must propagate.
+/// `u64::MAX` cannot collide with a real client connection id or with the
+/// replica-internal sentinel, so client-tracking invalidation excludes no live
+/// client (an engine removal invalidates every interested cache).
+pub(crate) const ENGINE_INTERNAL_CONN_ID: u64 = u64::MAX;
+
+/// Why an internal (engine-initiated, non-command) removal happened.
+///
+/// Selects the keyspace-event class the pipeline emits for a synthetic removal,
+/// replacing `DelCommand`'s fixed `del`/GENERIC event when the removal was not a
+/// client `DEL`. Carried per-write on [`WriteSummary::removal_reasons`] so a
+/// single active-expiry cycle can coalesce whole-key-expired (`Expired`) and
+/// field-emptied (`FieldEmptied`) removals into **one** effect batch — one
+/// version bump — while still emitting the correct per-key event class.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum RemovalReason {
+    /// Whole-key TTL elapsed (active or lazy expiry). Emits `expired` / EXPIRED.
+    Expired,
+    /// Key removed because its last live hash field expired. Emits `del` /
+    /// GENERIC — identical to a client `DEL`, matching Redis (a hash emptied via
+    /// field TTL fires a generic `del`, not `expired`).
+    FieldEmptied,
+    /// Key removed to reclaim memory under maxmemory. Emits `evicted` / EVICTED.
+    Evicted,
+}
+
+impl RemovalReason {
+    /// The keyspace-event name + class this removal reason emits.
+    fn keyspace_event(self) -> (&'static str, KeyspaceEventFlags) {
+        match self {
+            RemovalReason::Expired => ("expired", KeyspaceEventFlags::EXPIRED),
+            RemovalReason::FieldEmptied => ("del", KeyspaceEventFlags::GENERIC),
+            RemovalReason::Evicted => ("evicted", KeyspaceEventFlags::EVICTED),
+        }
+    }
+}
+
+/// Propagation policy for an internal removal — makes the WAL/replication
+/// decision explicit **data** instead of an accidental omission.
+///
+/// The two dimensions an engine removal needs beyond a user `DEL`:
+/// - `wal`: persist the delete tombstone to the FrogDB WAL (durability).
+///   `true` for eviction fixes restart-resurrection of evicted non-TTL keys;
+///   for expiry it drops the stale RocksDB entry at the source.
+/// - `replicate`: broadcast the synthetic `DEL` to replicas. A **policy**
+///   choice — FrogDB replicas currently expire independently (role-agnostic
+///   active expiry), so expiry defaults to `false` (status quo) and only makes
+///   the choice explicit and testable; flipping it toward Redis-style
+///   primary-drives-expiry is a deliberate ADR, out of scope here.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct RemovalPropagation {
+    /// Persist the delete to the FrogDB WAL.
+    pub wal: bool,
+    /// Broadcast the synthetic `DEL` to replicas.
+    pub replicate: bool,
 }
 
 /// Whether the pipeline persists the WAL, or the caller already did so.
@@ -113,6 +226,19 @@ pub(crate) enum EffectScope {
     /// nothing — e.g. DEL of only-missing keys — carries no writes and short-
     /// circuits before any effect runs).
     ScatterPart,
+    /// A batch of keys removed by the engine itself (active expiry or eviction),
+    /// not by a client command. Reconstructed as synthetic `DEL`s — one write
+    /// record per removal-reason group, over exactly the keys removed — so they
+    /// flow through the *same* effect set + order as every other write path.
+    ///
+    /// Like [`EffectScope::ScatterPart`] it may carry more than one write and
+    /// replicates each write independently (no MULTI/EXEC wrap), and its version
+    /// bump follows the same dirty-delta no-op rule. It differs in two axes an
+    /// engine removal owns that a user `DEL` does not: the per-key notification
+    /// class comes from [`WriteSummary::removal_reasons`] (not the `DEL` spec's
+    /// `del`/GENERIC), and `propagation` gates the WAL-persist and
+    /// replication-broadcast effects.
+    InternalRemoval { propagation: RemovalPropagation },
 }
 
 /// One step in the canonical write-effect order.
@@ -198,23 +324,53 @@ impl ShardWorker {
                     //   Command/ScatterPart: skip when dirty_delta < 0 (WATCH
                     //                        no-op rule)
                     //   Transaction:         unconditional, once per EXEC
-                    match scope {
-                        EffectScope::Command | EffectScope::ScatterPart => {
-                            if summary.dirty_delta >= 0 {
-                                self.increment_version();
-                            }
-                        }
-                        EffectScope::Transaction => self.increment_version(),
+                    let warranted = match scope {
+                        EffectScope::Command
+                        | EffectScope::ScatterPart
+                        | EffectScope::InternalRemoval { .. } => summary.dirty_delta >= 0,
+                        EffectScope::Transaction => true,
+                    };
+                    if warranted {
+                        // Slot-granular (proposal 18): bump only the slots of the
+                        // written keys, so a watch on a different-slot key on this
+                        // shard survives. The keys come from the same
+                        // `record.handler.keys(args)` extraction client-tracking
+                        // uses one step later (`invalidate_written_keys`). A
+                        // warranted bump that names NO key (a whole-DB `FLUSHDB`
+                        // write record carries none) falls through to the
+                        // shard-wide epoch inside `bump_versions_for`, invalidating
+                        // every watch — matching Redis's flush-touches-all.
+                        self.bump_versions_for(
+                            summary
+                                .writes
+                                .iter()
+                                .flat_map(|record| record.handler.keys(record.args)),
+                        );
                     }
                 }
                 WriteEffectKind::TrackingInvalidation => {
                     self.invalidate_written_keys(summary.writes, summary.conn_id);
                 }
-                WriteEffectKind::KeyspaceNotifications => {
-                    for record in summary.writes {
-                        self.emit_keyspace_notifications_for_command(record);
+                WriteEffectKind::KeyspaceNotifications => match scope {
+                    // Engine removals override the synthetic `DEL`'s `del`/GENERIC
+                    // event with the reason's class (`expired`/`del`/`evicted`),
+                    // per write record (a record's keys share one reason).
+                    EffectScope::InternalRemoval { .. } => {
+                        for (record, reason) in
+                            summary.writes.iter().zip(summary.removal_reasons.iter())
+                        {
+                            let (name, class) = reason.keyspace_event();
+                            for key in &record.handler.keys(record.args) {
+                                self.emit_keyspace_notification(key, name, class);
+                            }
+                        }
                     }
-                }
+                    _ => {
+                        for record in summary.writes {
+                            self.emit_keyspace_notifications_for_command(record);
+                        }
+                    }
+                },
                 WriteEffectKind::DirtyCounter => {
                     self.update_dirty_counter(summary.dirty_delta);
                 }
@@ -227,7 +383,16 @@ impl ShardWorker {
                     self.store.flush_keysizes_refreshes();
                 }
                 WriteEffectKind::WalPersistence => {
-                    if matches!(wal, WalPhase::Persist) {
+                    // Internal removals additionally gate WAL persist on their
+                    // propagation policy (`wal`): eviction persists the delete
+                    // tombstone (durability — fixes restart resurrection), and
+                    // the choice is explicit data, not an accidental omission.
+                    let persist = matches!(wal, WalPhase::Persist)
+                        && match scope {
+                            EffectScope::InternalRemoval { propagation } => propagation.wal,
+                            _ => true,
+                        };
+                    if persist {
                         // Hot path: stage every write's actions and log on error;
                         // the flush pipeline owns durability asynchronously.
                         let _ = self
@@ -241,12 +406,28 @@ impl ShardWorker {
                 WriteEffectKind::SearchIndex => {
                     if !self.search.indexes.is_empty() {
                         for record in summary.writes {
-                            self.update_search_indexes(record.handler.name(), record.args);
+                            self.apply_reindex(record.handler.spec().reindex, record.args);
                         }
                     }
                 }
                 WriteEffectKind::ReplicationBroadcast => {
-                    if summary.conn_id != REPLICA_INTERNAL_CONN_ID
+                    // Deterministic pop commands the `WaiterSatisfaction` effect
+                    // synthesized for served blocking pops (issue 02). Drained
+                    // unconditionally so the buffer never leaks into the next
+                    // `run_write_effects` call — broadcast only when the gate
+                    // below passes (a suppressed / replica-sourced / no-replica
+                    // write ships nothing, and neither do its served pops).
+                    let served_pops = std::mem::take(&mut self.pending_serve_propagations);
+                    // Internal removals gate the broadcast on their propagation
+                    // policy (`replicate`): expiry defaults to `false` (replicas
+                    // expire independently — documented divergence), eviction to
+                    // the policy chosen at the call site.
+                    let replicate = match scope {
+                        EffectScope::InternalRemoval { propagation } => propagation.replicate,
+                        _ => true,
+                    };
+                    if replicate
+                        && summary.conn_id != REPLICA_INTERNAL_CONN_ID
                         && self.replication_broadcaster.is_active()
                     {
                         // Every frame is tagged with the shard the write executed
@@ -262,33 +443,49 @@ impl ShardWorker {
                         // intermediate state; a scatter part broadcasts each of
                         // its (synthetic, per-key) writes independently — it is
                         // not a transaction, so no MULTI/EXEC wrap.
+                        //
+                        // Every record resolves through `replication_forms`,
+                        // the single home of the deterministic-propagation
+                        // rules (rewrite override, dynamic suppression, the
+                        // NO_PROPAGATE flag).
                         match scope {
-                            EffectScope::Command => {
-                                let record = &summary.writes[0];
-                                self.replication_broadcaster.broadcast_command_on_shard(
-                                    shard_id,
-                                    record.handler.name(),
-                                    record.args,
-                                );
-                            }
-                            EffectScope::ScatterPart => {
+                            EffectScope::Command
+                            | EffectScope::ScatterPart
+                            | EffectScope::InternalRemoval { .. } => {
                                 for record in summary.writes {
-                                    self.replication_broadcaster.broadcast_command_on_shard(
-                                        shard_id,
-                                        record.handler.name(),
-                                        record.args,
-                                    );
+                                    for (name, args) in replication_forms(record) {
+                                        self.replication_broadcaster
+                                            .broadcast_command_on_shard(shard_id, name, args);
+                                    }
                                 }
                             }
                             EffectScope::Transaction => {
                                 let commands: Vec<(&str, &[Bytes])> = summary
                                     .writes
                                     .iter()
-                                    .map(|record| (record.handler.name(), record.args))
+                                    .flat_map(|record| replication_forms(record))
                                     .collect();
-                                self.replication_broadcaster
-                                    .broadcast_transaction_on_shard(shard_id, &commands);
+                                // A group whose every write was rewritten away
+                                // (suppressed / NO_PROPAGATE) ships nothing —
+                                // not an empty MULTI/EXEC frame.
+                                if !commands.is_empty() {
+                                    self.replication_broadcaster
+                                        .broadcast_transaction_on_shard(shard_id, &commands);
+                                }
                             }
+                        }
+                        // Served blocking pops ship AFTER the waking write's
+                        // broadcast, as independent commands (issue 02). The
+                        // waking write (LPUSH/ZADD/…) reaches the replica first,
+                        // then each deterministic pop the primary served —
+                        // preserving the primary's push-then-pop order so the
+                        // consumed element is removed on the replica too. They
+                        // are not part of any MULTI/EXEC frame: waiter
+                        // satisfaction runs after the transaction commits, so
+                        // Redis likewise propagates the serve outside the frame.
+                        for cmd in &served_pops {
+                            self.replication_broadcaster
+                                .broadcast_command_on_shard(shard_id, cmd.name, &cmd.args);
                         }
                     }
                 }
@@ -334,11 +531,88 @@ impl ShardWorker {
                 writes: &write_refs,
                 dirty_delta,
                 conn_id,
+                removal_reasons: &[],
             },
             WalPhase::Persist,
             EffectScope::ScatterPart,
         )
         .await;
+    }
+
+    /// Drive a batch of engine-initiated removals (active expiry, eviction)
+    /// through [`WRITE_EFFECT_ORDER`].
+    ///
+    /// This is the internal-removal counterpart of [`Self::run_scatter_effects`]:
+    /// each `(reason, keys)` group is reconstructed as a synthetic `DEL` over
+    /// exactly the keys the engine removed, and the whole batch runs the
+    /// canonical effect set in one call — so a removal inherits **every** effect
+    /// (version, tracking invalidation, keyspace notification, dirty counter,
+    /// waiter drain, WAL persist, search-index delete, replication) in the exact
+    /// same order as any other write, instead of a hand-rolled partial subset.
+    ///
+    /// The caller performed the store removal already (the key is gone before
+    /// this runs — the synthetic `DEL`'s `DeleteIfMissing` WAL action therefore
+    /// writes the tombstone, and its `DeleteKeys` reindex drops the search
+    /// entry). Empty groups are skipped; an all-empty batch short-circuits before
+    /// any effect. Coalescing all groups into one call means a single cycle bumps
+    /// the WATCH version **once**, not once per reason group. `conn_id` is the
+    /// engine connection (typically `0`); it must never be
+    /// [`REPLICA_INTERNAL_CONN_ID`].
+    pub(crate) async fn run_internal_removal_effects(
+        &mut self,
+        groups: Vec<(RemovalReason, Vec<Bytes>)>,
+        propagation: RemovalPropagation,
+        conn_id: u64,
+    ) {
+        // Drop empty reason groups so an expiry cycle that removed only whole-key
+        // TTLs (or only field-emptied keys) carries a single write record.
+        let groups: Vec<(RemovalReason, Vec<Bytes>)> = groups
+            .into_iter()
+            .filter(|(_, keys)| !keys.is_empty())
+            .collect();
+        if groups.is_empty() {
+            return;
+        }
+
+        // Resolve the always-registered `DEL` handler once; its spec carries the
+        // right WAL (`DeleteKeys`), reindex (`DeleteKeys`), waiter-wake (`All` →
+        // stream NOGROUP drain), and key extraction (`KeySpec::All`). Only the
+        // notification class is overridden, per reason.
+        let handler = self.internal_removal_handler();
+        let reasons: Vec<RemovalReason> = groups.iter().map(|(reason, _)| *reason).collect();
+        let dirty_delta: i64 = groups.iter().map(|(_, keys)| keys.len() as i64).sum();
+        // Own the per-group key vecs so the borrowed `WriteRecord`s outlive the
+        // effect run (mirrors `run_scatter_effects`).
+        let write_args: Vec<Vec<Bytes>> = groups.into_iter().map(|(_, keys)| keys).collect();
+        let write_refs: Vec<WriteRecord<'_>> = write_args
+            .iter()
+            .map(|args| WriteRecord::new(handler.as_ref() as &dyn Command, args.as_slice()))
+            .collect();
+
+        self.run_write_effects(
+            WriteSummary {
+                writes: &write_refs,
+                dirty_delta,
+                conn_id,
+                removal_reasons: &reasons,
+            },
+            WalPhase::Persist,
+            EffectScope::InternalRemoval { propagation },
+        )
+        .await;
+    }
+
+    /// Resolve the `DEL` handler used to reconstruct an internal removal as a
+    /// synthetic write in the canonical pipeline.
+    ///
+    /// `DEL` is an always-registered write command in any running server (the
+    /// engine could not accept writes otherwise), so a miss is a
+    /// server-construction bug surfaced loudly rather than a silently dropped
+    /// removal — mirroring `scatter_write_handler`.
+    fn internal_removal_handler(&self) -> Arc<dyn Command> {
+        self.registry.get("DEL").unwrap_or_else(|| {
+            panic!("internal removal pipeline requires the `DEL` command to be registered")
+        })
     }
 
     /// Run the canonical write-effect pipeline for the effective writes a
@@ -378,6 +652,7 @@ impl ShardWorker {
                 writes: &write_refs,
                 dirty_delta,
                 conn_id,
+                removal_reasons: &[],
             },
             WalPhase::Persist,
             scope,
@@ -646,6 +921,7 @@ mod tests {
                 wakes: WaiterWake::None,
                 event: EventSpec::Suppressed,
                 requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
                 lookup: LookupSpec::None,
                 mutation: crate::command::ConnMutation::None,
                 strategy: crate::command::ExecutionStrategy::Standard,
@@ -674,6 +950,7 @@ mod tests {
                 wakes: WaiterWake::None,
                 event: EventSpec::Suppressed,
                 requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
                 lookup: LookupSpec::None,
                 mutation: crate::command::ConnMutation::None,
                 strategy: crate::command::ExecutionStrategy::Standard,
@@ -743,7 +1020,11 @@ mod tests {
         worker
             .execute_command(&noop, 1, ProtocolVersion::Resp2, false)
             .await;
-        assert_eq!(worker.shard_version, 0, "no-op write must not bump version");
+        assert_eq!(
+            worker.get_key_version(b"k"),
+            0,
+            "no-op write must not bump version"
+        );
         assert!(
             bc.commands.lock().unwrap().is_empty(),
             "no-op write must not replicate"
@@ -757,7 +1038,7 @@ mod tests {
         worker
             .execute_command(&real, 1, ProtocolVersion::Resp2, false)
             .await;
-        assert_eq!(worker.shard_version, 1);
+        assert_eq!(worker.get_key_version(b"k"), 1);
         assert_eq!(bc.commands.lock().unwrap().len(), 1);
     }
 
@@ -782,8 +1063,9 @@ mod tests {
         ];
         worker.run_scatter_effects(writes, 2, 42).await;
 
-        // Version bumped once for the whole part (not once per write).
-        assert_eq!(worker.shard_version, 1);
+        // Each written key's slot bumped once (a and b are different slots).
+        assert_eq!(worker.get_key_version(b"a"), 1);
+        assert_eq!(worker.get_key_version(b"b"), 1);
 
         // Two independent broadcasts, no MULTI/EXEC framing.
         let cmds = bc.commands.lock().unwrap();
@@ -813,11 +1095,813 @@ mod tests {
         worker.run_scatter_effects(writes, -1, 42).await;
 
         assert_eq!(
-            worker.shard_version, 0,
+            worker.get_key_version(b"a"),
+            0,
             "negative dirty delta must not bump version"
         );
         // The write still replicates (the effect happened; only WATCH-dirtying
         // is suppressed).
         assert_eq!(bc.commands.lock().unwrap().len(), 1);
+    }
+
+    // ------------------------------------------------------------------------
+    // Deterministic-propagation pins (`replication_forms`).
+    //
+    // The replication-broadcast effect resolves every record through
+    // `replication_forms`: a deposited `ReplicationOverride::Rewrite` replaces
+    // the verbatim command (SPOP → SREM/DEL), `Suppress` and the static
+    // NO_PROPAGATE flag ship nothing, and everything else propagates verbatim.
+    // These tests pin each rule, including the substitution inside MULTI/EXEC
+    // framing, against the same pipeline the real write path runs.
+    // ------------------------------------------------------------------------
+
+    use crate::command::{ReplicationOverride, SynthesizedCommand};
+
+    /// A WRITE command statically flagged NO_PROPAGATE: local effects run,
+    /// replicas never see it.
+    struct MockNoPropagateWrite;
+    impl Command for MockNoPropagateWrite {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "NOPROPW",
+                arity: Arity::AtLeast(2),
+                flags: CommandFlags::WRITE.union(CommandFlags::NO_PROPAGATE),
+                keys: KeySpec::First,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::NoOp,
+                wakes: WaiterWake::None,
+                event: EventSpec::Suppressed,
+                requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
+                lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
+                strategy: crate::command::ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+        fn execute(
+            &self,
+            _ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            Ok(Response::ok())
+        }
+    }
+
+    /// A WRITE command flagged NONDETERMINISTIC (SPOP's class): the broadcast
+    /// path requires it to carry an override.
+    struct MockNondeterministicWrite;
+    impl Command for MockNondeterministicWrite {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "RANDW",
+                arity: Arity::AtLeast(1),
+                flags: CommandFlags::WRITE.union(CommandFlags::NONDETERMINISTIC),
+                keys: KeySpec::First,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::NoOp,
+                wakes: WaiterWake::None,
+                event: EventSpec::Suppressed,
+                requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
+                lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
+                strategy: crate::command::ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+        fn execute(
+            &self,
+            _ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            Ok(Response::ok())
+        }
+    }
+
+    fn record_with_override<'a>(
+        handler: &'a dyn Command,
+        args: &'a [Bytes],
+        repl_override: Option<&'a ReplicationOverride>,
+    ) -> WriteRecord<'a> {
+        WriteRecord {
+            handler,
+            args,
+            hll_wal_delta: None,
+            keyspace_events: &[],
+            newly_created_keys: &[],
+            repl_override,
+        }
+    }
+
+    /// A deposited rewrite replaces the verbatim broadcast with the
+    /// synthesized command(s), in deposit order — the SPOP → SREM/DEL shape.
+    #[tokio::test]
+    async fn rewrite_override_replaces_verbatim_broadcast() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with(bc.clone() as SharedBroadcaster);
+
+        let handler = MockNondeterministicWrite;
+        let args = vec![Bytes::from_static(b"k")];
+        let ov = ReplicationOverride::Rewrite(smallvec::smallvec![SynthesizedCommand {
+            name: "SREM",
+            args: vec![Bytes::from_static(b"k"), Bytes::from_static(b"m1")],
+        }]);
+        let record = record_with_override(&handler, &args, Some(&ov));
+        worker
+            .run_write_effects(
+                WriteSummary {
+                    writes: std::slice::from_ref(&record),
+                    dirty_delta: 1,
+                    conn_id: 1,
+                    removal_reasons: &[],
+                },
+                WalPhase::Persist,
+                EffectScope::Command,
+            )
+            .await;
+
+        let cmds = bc.commands.lock().unwrap();
+        assert_eq!(cmds.len(), 1, "exactly the synthesized command is shipped");
+        assert_eq!(cmds[0].0, "SREM");
+        assert_eq!(
+            cmds[0].1,
+            vec![Bytes::from_static(b"k"), Bytes::from_static(b"m1")]
+        );
+        drop(cmds);
+        // Local effects still ran from the original record.
+        assert_eq!(worker.get_key_version(b"k"), 1);
+    }
+
+    /// A rewrite may synthesize several commands; all ship, in order.
+    #[tokio::test]
+    async fn rewrite_override_ships_all_synthesized_commands_in_order() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with(bc.clone() as SharedBroadcaster);
+
+        let handler = MockNondeterministicWrite;
+        let args = vec![Bytes::from_static(b"k")];
+        let ov = ReplicationOverride::Rewrite(smallvec::smallvec![
+            SynthesizedCommand {
+                name: "SREM",
+                args: vec![Bytes::from_static(b"k"), Bytes::from_static(b"m1")],
+            },
+            SynthesizedCommand {
+                name: "DEL",
+                args: vec![Bytes::from_static(b"k")],
+            },
+        ]);
+        let record = record_with_override(&handler, &args, Some(&ov));
+        worker
+            .run_write_effects(
+                WriteSummary {
+                    writes: std::slice::from_ref(&record),
+                    dirty_delta: 1,
+                    conn_id: 1,
+                    removal_reasons: &[],
+                },
+                WalPhase::Persist,
+                EffectScope::Command,
+            )
+            .await;
+
+        let cmds = bc.commands.lock().unwrap();
+        assert_eq!(
+            cmds.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            ["SREM", "DEL"]
+        );
+    }
+
+    /// `Suppress` (dynamic `preventCommandPropagation`) ships nothing while
+    /// local effects (version bump) still run.
+    #[tokio::test]
+    async fn suppress_override_broadcasts_nothing() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with(bc.clone() as SharedBroadcaster);
+
+        let handler = MockWrite;
+        let args = vec![Bytes::from_static(b"k"), Bytes::from_static(b"v")];
+        let ov = ReplicationOverride::Suppress;
+        let record = record_with_override(&handler, &args, Some(&ov));
+        worker
+            .run_write_effects(
+                WriteSummary {
+                    writes: std::slice::from_ref(&record),
+                    dirty_delta: 1,
+                    conn_id: 1,
+                    removal_reasons: &[],
+                },
+                WalPhase::Persist,
+                EffectScope::Command,
+            )
+            .await;
+
+        assert!(
+            bc.commands.lock().unwrap().is_empty(),
+            "a suppressed write must not reach replicas"
+        );
+        assert_eq!(worker.get_key_version(b"k"), 1, "local effects still run");
+    }
+
+    /// The static NO_PROPAGATE flag suppresses the broadcast with no override
+    /// deposited — the flag is consulted, not informational.
+    #[tokio::test]
+    async fn no_propagate_flag_suppresses_broadcast() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with(bc.clone() as SharedBroadcaster);
+
+        let handler = MockNoPropagateWrite;
+        let args = vec![Bytes::from_static(b"k"), Bytes::from_static(b"v")];
+        let record = record_with_override(&handler, &args, None);
+        worker
+            .run_write_effects(
+                WriteSummary {
+                    writes: std::slice::from_ref(&record),
+                    dirty_delta: 1,
+                    conn_id: 1,
+                    removal_reasons: &[],
+                },
+                WalPhase::Persist,
+                EffectScope::Command,
+            )
+            .await;
+
+        assert!(
+            bc.commands.lock().unwrap().is_empty(),
+            "a NO_PROPAGATE write must not reach replicas"
+        );
+        assert_eq!(worker.get_key_version(b"k"), 1, "local effects still run");
+    }
+
+    /// Inside a MULTI/EXEC group the rewrite substitutes in place: the framing
+    /// stays, the rewritten write ships its synthesized form.
+    #[tokio::test]
+    async fn transaction_framing_substitutes_rewritten_commands() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with(bc.clone() as SharedBroadcaster);
+
+        let set = MockWrite;
+        let set_args = vec![Bytes::from_static(b"k"), Bytes::from_static(b"v")];
+        let spop_like = MockNondeterministicWrite;
+        let spop_args = vec![Bytes::from_static(b"s")];
+        let ov = ReplicationOverride::Rewrite(smallvec::smallvec![SynthesizedCommand {
+            name: "SREM",
+            args: vec![Bytes::from_static(b"s"), Bytes::from_static(b"m")],
+        }]);
+        let records = [
+            record_with_override(&set, &set_args, None),
+            record_with_override(&spop_like, &spop_args, Some(&ov)),
+        ];
+        worker
+            .run_write_effects(
+                WriteSummary {
+                    writes: &records,
+                    dirty_delta: 2,
+                    conn_id: 1,
+                    removal_reasons: &[],
+                },
+                WalPhase::Persist,
+                EffectScope::Transaction,
+            )
+            .await;
+
+        let cmds = bc.commands.lock().unwrap();
+        assert_eq!(
+            cmds.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            ["MULTI", "SET", "SREM", "EXEC"],
+            "the rewritten command substitutes inside the MULTI/EXEC frame"
+        );
+    }
+
+    /// A transaction whose every write is suppressed ships nothing at all —
+    /// not an empty MULTI/EXEC frame.
+    #[tokio::test]
+    async fn fully_suppressed_transaction_ships_no_frames() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with(bc.clone() as SharedBroadcaster);
+
+        let handler = MockWrite;
+        let args = vec![Bytes::from_static(b"k"), Bytes::from_static(b"v")];
+        let ov = ReplicationOverride::Suppress;
+        let records = [record_with_override(&handler, &args, Some(&ov))];
+        worker
+            .run_write_effects(
+                WriteSummary {
+                    writes: &records,
+                    dirty_delta: 1,
+                    conn_id: 1,
+                    removal_reasons: &[],
+                },
+                WalPhase::Persist,
+                EffectScope::Transaction,
+            )
+            .await;
+
+        assert!(
+            bc.commands.lock().unwrap().is_empty(),
+            "an all-suppressed transaction must not ship MULTI/EXEC framing"
+        );
+    }
+
+    /// A NONDETERMINISTIC write reaching the verbatim arm is a bug; the debug
+    /// assertion surfaces it. (Debug builds only — release ships verbatim
+    /// rather than crashing.)
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    #[should_panic(expected = "must deposit a ReplicationOverride")]
+    async fn nondeterministic_write_without_override_panics_in_debug() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with(bc as SharedBroadcaster);
+
+        let handler = MockNondeterministicWrite;
+        let args = vec![Bytes::from_static(b"k")];
+        let record = record_with_override(&handler, &args, None);
+        worker
+            .run_write_effects(
+                WriteSummary {
+                    writes: std::slice::from_ref(&record),
+                    dirty_delta: 1,
+                    conn_id: 1,
+                    removal_reasons: &[],
+                },
+                WalPhase::Persist,
+                EffectScope::Command,
+            )
+            .await;
+    }
+
+    // ------------------------------------------------------------------------
+    // Internal-removal (active expiry / eviction) pipeline pins.
+    //
+    // Engine removals (`run_internal_removal_effects`) reconstruct each removed
+    // key as a synthetic `DEL` and drive it through THIS pipeline under
+    // `EffectScope::InternalRemoval`. These tests pin the axes an engine removal
+    // owns beyond a user `DEL`: the per-reason notification-class override
+    // (`expired`/`del`/`evicted`), the propagation policy gating WAL + broadcast,
+    // and the single coalesced version bump per cycle — the same
+    // `WRITE_EFFECT_ORDER` a command `DEL` runs, so the three removal sources
+    // (command DEL / active-expiry / eviction) emit one uniform effect set.
+    // ------------------------------------------------------------------------
+
+    use crate::command_spec::ReindexSpec;
+
+    /// Minimal `DEL` stand-in the internal-removal pipeline resolves from the
+    /// registry; its spec carries the removal facts (`KeySpec::All`,
+    /// `WalStrategy::DeleteKeys`, `ReindexSpec::DeleteKeys`, `WaiterWake::All`).
+    /// `execute` is never invoked (the store removal already happened).
+    struct MockDel;
+    impl Command for MockDel {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "DEL",
+                arity: Arity::AtLeast(1),
+                flags: CommandFlags::WRITE,
+                keys: KeySpec::All,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::DeleteKeys,
+                wakes: WaiterWake::All,
+                event: EventSpec::Emits {
+                    class: KeyspaceEventFlags::GENERIC,
+                    name: "del",
+                },
+                requires_same_slot: false,
+                reindex: ReindexSpec::DeleteKeys,
+                lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
+                strategy: crate::command::ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+        fn execute(
+            &self,
+            _ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            Ok(Response::ok())
+        }
+    }
+
+    fn worker_with_del(bc: SharedBroadcaster) -> ShardWorker {
+        worker_with_registry(bc, |r| r.register(MockDel))
+    }
+
+    /// Enable every keyspace-event class this suite observes and subscribe `rx`
+    /// to the given keyevent channels.
+    fn enable_notify_and_subscribe(
+        worker: &mut ShardWorker,
+        channels: &[&str],
+    ) -> crate::pubsub::PubSubReceiver {
+        let flags = KeyspaceEventFlags::KEYSPACE
+            | KeyspaceEventFlags::KEYEVENT
+            | KeyspaceEventFlags::GENERIC
+            | KeyspaceEventFlags::EXPIRED
+            | KeyspaceEventFlags::EVICTED;
+        worker
+            .set_notify_keyspace_events(Arc::new(std::sync::atomic::AtomicU32::new(flags.bits())));
+        let (tx, rx) = crate::pubsub::PubSubSender::unbounded();
+        for ch in channels {
+            worker
+                .subscriptions
+                .subscribe(Bytes::from((*ch).to_string()), 1, tx.clone());
+        }
+        rx
+    }
+
+    fn keyevents(rx: &mut crate::pubsub::PubSubReceiver) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        while let Ok(crate::pubsub::PubSubMessage::Message { channel, payload }) = rx.try_recv() {
+            out.push((
+                String::from_utf8_lossy(&channel).into_owned(),
+                String::from_utf8_lossy(&payload).into_owned(),
+            ));
+        }
+        out
+    }
+
+    /// The headline: a single `Evicted` removal runs the full canonical effect
+    /// set — version bump (once), `evicted` notification, and a replicated
+    /// synthetic `DEL` over exactly the removed key.
+    #[tokio::test]
+    async fn internal_removal_evicted_runs_full_effect_set() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with_del(bc.clone() as SharedBroadcaster);
+        let mut rx = enable_notify_and_subscribe(&mut worker, &["__keyevent@0__:evicted"]);
+
+        worker
+            .run_internal_removal_effects(
+                vec![(RemovalReason::Evicted, vec![Bytes::from_static(b"k")])],
+                RemovalPropagation {
+                    wal: true,
+                    replicate: true,
+                },
+                ENGINE_INTERNAL_CONN_ID,
+            )
+            .await;
+
+        assert_eq!(
+            worker.get_key_version(b"k"),
+            1,
+            "one version bump for the removed key's slot"
+        );
+        assert_eq!(
+            keyevents(&mut rx),
+            vec![("__keyevent@0__:evicted".to_string(), "k".to_string())],
+            "eviction emits an `evicted` keyevent, not `del`"
+        );
+        let cmds = bc.commands.lock().unwrap();
+        assert_eq!(cmds.len(), 1, "the synthetic DEL is broadcast to replicas");
+        assert_eq!(cmds[0].0, "DEL");
+        assert_eq!(cmds[0].1, vec![Bytes::from_static(b"k")]);
+    }
+
+    /// The removal reason selects the keyspace-event class uniformly:
+    /// whole-key expiry -> `expired`, hash-emptied -> `del`, eviction ->
+    /// `evicted`. This is the one axis an engine removal overrides on the shared
+    /// `DEL` handler (which would otherwise emit `del`/GENERIC).
+    #[tokio::test]
+    async fn internal_removal_reason_selects_notification_class() {
+        for (reason, channel, expected_event) in [
+            (RemovalReason::Expired, "__keyevent@0__:expired", "expired"),
+            (RemovalReason::FieldEmptied, "__keyevent@0__:del", "del"),
+            (RemovalReason::Evicted, "__keyevent@0__:evicted", "evicted"),
+        ] {
+            let bc = Arc::new(RecordingBroadcaster::default());
+            let mut worker = worker_with_del(bc.clone() as SharedBroadcaster);
+            let mut rx = enable_notify_and_subscribe(&mut worker, &[channel]);
+
+            worker
+                .run_internal_removal_effects(
+                    vec![(reason, vec![Bytes::from_static(b"k")])],
+                    RemovalPropagation {
+                        wal: false,
+                        replicate: false,
+                    },
+                    ENGINE_INTERNAL_CONN_ID,
+                )
+                .await;
+
+            assert_eq!(
+                keyevents(&mut rx),
+                vec![(channel.to_string(), "k".to_string())],
+                "reason {reason:?} must emit `{expected_event}`"
+            );
+        }
+    }
+
+    /// `replicate: false` (the active-expiry default — replicas expire on their
+    /// own clock) suppresses the broadcast, while the local effects (version
+    /// bump, notification) still run. Documents the policy as a test, not a
+    /// comment.
+    #[tokio::test]
+    async fn internal_removal_replicate_false_suppresses_broadcast() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with_del(bc.clone() as SharedBroadcaster);
+        let mut rx = enable_notify_and_subscribe(&mut worker, &["__keyevent@0__:expired"]);
+
+        worker
+            .run_internal_removal_effects(
+                vec![(RemovalReason::Expired, vec![Bytes::from_static(b"k")])],
+                RemovalPropagation {
+                    wal: true,
+                    replicate: false,
+                },
+                ENGINE_INTERNAL_CONN_ID,
+            )
+            .await;
+
+        assert_eq!(
+            worker.get_key_version(b"k"),
+            1,
+            "local version bump still happens"
+        );
+        assert_eq!(
+            keyevents(&mut rx).len(),
+            1,
+            "local notification still fires"
+        );
+        assert!(
+            bc.commands.lock().unwrap().is_empty(),
+            "replicate=false must broadcast nothing"
+        );
+    }
+
+    /// A single cycle removing BOTH a whole-key-expired key (`Expired`) and a
+    /// hash-emptied key (`FieldEmptied`) bumps each removed key's slot exactly
+    /// once — not more, even though the two keys arrive in separate reason
+    /// groups — while still emitting the correct per-key event class and
+    /// replicating both synthetic `DEL`s.
+    #[tokio::test]
+    async fn internal_removal_coalesces_version_bump_across_reason_groups() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with_del(bc.clone() as SharedBroadcaster);
+        let mut rx = enable_notify_and_subscribe(
+            &mut worker,
+            &["__keyevent@0__:expired", "__keyevent@0__:del"],
+        );
+
+        worker
+            .run_internal_removal_effects(
+                vec![
+                    (RemovalReason::Expired, vec![Bytes::from_static(b"a")]),
+                    (RemovalReason::FieldEmptied, vec![Bytes::from_static(b"h")]),
+                ],
+                RemovalPropagation {
+                    wal: false,
+                    replicate: true,
+                },
+                ENGINE_INTERNAL_CONN_ID,
+            )
+            .await;
+
+        // Each removed key's slot bumps exactly once (a and h are different
+        // slots); within one cycle a given slot is never double-bumped.
+        assert_eq!(worker.get_key_version(b"a"), 1);
+        assert_eq!(worker.get_key_version(b"h"), 1);
+        let events = keyevents(&mut rx);
+        assert!(events.contains(&("__keyevent@0__:expired".into(), "a".into())));
+        assert!(events.contains(&("__keyevent@0__:del".into(), "h".into())));
+        // Both synthetic DELs replicate (one per reason group).
+        assert_eq!(bc.commands.lock().unwrap().len(), 2);
+    }
+
+    /// An all-empty removal batch is a no-op: no version bump, no broadcast, no
+    /// panic (the DEL handler is never even resolved).
+    #[tokio::test]
+    async fn internal_removal_empty_batch_is_noop() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        // Deliberately no DEL registered: an empty batch must short-circuit
+        // before resolving the handler.
+        let mut worker = worker_with(bc.clone() as SharedBroadcaster);
+
+        worker
+            .run_internal_removal_effects(
+                vec![
+                    (RemovalReason::Expired, vec![]),
+                    (RemovalReason::Evicted, vec![]),
+                ],
+                RemovalPropagation {
+                    wal: true,
+                    replicate: true,
+                },
+                ENGINE_INTERNAL_CONN_ID,
+            )
+            .await;
+
+        assert_eq!(worker.get_key_version(b"k"), 0);
+        assert!(bc.commands.lock().unwrap().is_empty());
+    }
+
+    /// A removal invalidates RESP3 client-tracking caches for the removed key —
+    /// the effect eviction previously skipped, leaving clients serving a stale
+    /// value for a key the server no longer holds.
+    #[tokio::test]
+    async fn internal_removal_invalidates_tracking() {
+        use crate::tracking::{InvalidationMessage, TrackedConnection};
+
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with_del(bc as SharedBroadcaster);
+
+        // Register a tracking client that read the key (so it is cached).
+        let (tx, mut inval_rx) = mpsc::unbounded_channel();
+        worker.tracking.register(
+            7,
+            TrackedConnection {
+                sender: tx,
+                noloop: false,
+            },
+        );
+        worker.tracking.record_read(b"k", 7);
+
+        worker
+            .run_internal_removal_effects(
+                vec![(RemovalReason::Evicted, vec![Bytes::from_static(b"k")])],
+                RemovalPropagation {
+                    wal: true,
+                    replicate: true,
+                },
+                ENGINE_INTERNAL_CONN_ID,
+            )
+            .await;
+
+        match inval_rx.try_recv() {
+            Ok(InvalidationMessage::Keys(keys)) => {
+                assert_eq!(keys, vec![Bytes::from_static(b"k")]);
+            }
+            other => panic!("tracking client must be invalidated, got {other:?}"),
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Served-blocking-pop replication (issue 02).
+    //
+    // A blocking pop served by a later write mutates the store at the
+    // `WaiterSatisfaction` effect (idx 4), but only the *waking* write is
+    // broadcast at `ReplicationBroadcast` (idx 8) — a replica re-executing it
+    // keeps the element the primary's blocked client consumed. The satisfaction
+    // driver records the equivalent deterministic pop in
+    // `pending_serve_propagations`; this test pins that the terminal broadcast
+    // ships the waking write FIRST, then the served pop, so replicas apply
+    // push-then-pop and converge.
+    // ------------------------------------------------------------------------
+
+    /// A minimal `LPUSH`-shaped write: WRITE, wakes List waiters, first-key. Its
+    /// `execute` is never called — `run_write_effects` assumes the store
+    /// mutation already happened, so the test seeds the popped element directly.
+    struct MockListPush;
+    impl Command for MockListPush {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "LPUSH",
+                arity: Arity::AtLeast(2),
+                flags: CommandFlags::WRITE,
+                keys: KeySpec::First,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::NoOp,
+                wakes: WaiterWake::Kind(WaiterKind::List),
+                event: EventSpec::Suppressed,
+                requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
+                lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
+                strategy: crate::command::ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+        fn execute(
+            &self,
+            _ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            Ok(Response::Integer(1))
+        }
+    }
+
+    /// The headline issue-02 fix at the pipeline level: a waking `LPUSH` that
+    /// serves a blocked `BLPOP` broadcasts BOTH the push and the served `LPOP`,
+    /// in that order — the divergence-closing sequence a replica must apply.
+    #[tokio::test]
+    async fn served_blpop_broadcasts_push_then_pop() {
+        use crate::types::BlockingOp;
+        use tokio::sync::oneshot;
+
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with(bc.clone() as SharedBroadcaster);
+
+        let key = Bytes::from_static(b"k");
+
+        // Park a live BLPOP waiter on the key (future deadline, receiver kept
+        // open so the serve is not treated as doomed).
+        let (tx, _rx) = oneshot::channel();
+        worker
+            .wait_queue
+            .register(crate::shard::wait_queue::WaitEntry {
+                conn_id: 1,
+                keys: vec![key.clone()],
+                op: BlockingOp::BLPop,
+                response_tx: tx,
+                deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(60)),
+                protocol_version: frogdb_protocol::ProtocolVersion::default(),
+            })
+            .unwrap();
+
+        // The waking LPUSH already ran: seed the pushed element so the waiter
+        // can consume it during the WaiterSatisfaction effect.
+        let mut v = crate::types::Value::list();
+        v.as_list_mut()
+            .unwrap()
+            .push_back(Bytes::from_static(b"val"));
+        worker.store.set(key.clone(), v);
+
+        let push = MockListPush;
+        let push_args = vec![key.clone(), Bytes::from_static(b"val")];
+        let record = WriteRecord::new(&push as &dyn Command, &push_args);
+        worker
+            .run_write_effects(
+                WriteSummary {
+                    writes: std::slice::from_ref(&record),
+                    dirty_delta: 1,
+                    conn_id: 1,
+                    removal_reasons: &[],
+                },
+                WalPhase::Persist,
+                EffectScope::Command,
+            )
+            .await;
+
+        // Broadcast order: the waking LPUSH first, then the served LPOP.
+        let cmds = bc.commands.lock().unwrap();
+        assert_eq!(
+            cmds.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            ["LPUSH", "LPOP"],
+            "the served pop must ship after the waking write, not before"
+        );
+        assert_eq!(cmds[1].1, vec![key.clone()], "LPOP names the served key");
+        drop(cmds);
+        // The element was consumed on the primary — the whole point.
+        assert!(
+            worker.store.get_hot(&key).is_none(),
+            "the served BLPOP consumed the element on the primary"
+        );
+        // Buffer drained: nothing leaks into the next call.
+        assert!(worker.pending_serve_propagations.is_empty());
+    }
+
+    /// The served-pop broadcast inherits the waking write's gate: a
+    /// replica-sourced write (conn_id == REPLICA_INTERNAL_CONN_ID) broadcasts
+    /// nothing, and the pending buffer is still drained (no leak). This is the
+    /// loop-guard that stops a replica re-propagating a pop it applied.
+    #[tokio::test]
+    async fn served_pop_respects_replica_loop_guard_and_drains() {
+        use crate::types::BlockingOp;
+        use tokio::sync::oneshot;
+
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with(bc.clone() as SharedBroadcaster);
+        let key = Bytes::from_static(b"k");
+
+        let (tx, _rx) = oneshot::channel();
+        worker
+            .wait_queue
+            .register(crate::shard::wait_queue::WaitEntry {
+                conn_id: 1,
+                keys: vec![key.clone()],
+                op: BlockingOp::BLPop,
+                response_tx: tx,
+                deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(60)),
+                protocol_version: frogdb_protocol::ProtocolVersion::default(),
+            })
+            .unwrap();
+
+        let mut v = crate::types::Value::list();
+        v.as_list_mut()
+            .unwrap()
+            .push_back(Bytes::from_static(b"val"));
+        worker.store.set(key.clone(), v);
+
+        let push = MockListPush;
+        let push_args = vec![key.clone(), Bytes::from_static(b"val")];
+        let record = WriteRecord::new(&push as &dyn Command, &push_args);
+        worker
+            .run_write_effects(
+                WriteSummary {
+                    writes: std::slice::from_ref(&record),
+                    dirty_delta: 1,
+                    // Replica-internal origin: the whole broadcast is suppressed.
+                    conn_id: REPLICA_INTERNAL_CONN_ID,
+                    removal_reasons: &[],
+                },
+                WalPhase::Persist,
+                EffectScope::Command,
+            )
+            .await;
+
+        assert!(
+            bc.commands.lock().unwrap().is_empty(),
+            "a replica-sourced write must broadcast neither the push nor the served pop"
+        );
+        assert!(
+            worker.pending_serve_propagations.is_empty(),
+            "the served-pop buffer must drain even when the broadcast is gated off"
+        );
     }
 }

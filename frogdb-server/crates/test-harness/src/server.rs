@@ -57,6 +57,13 @@ pub struct TestServerConfig {
     /// crate dir), so leaving it unset leaks snapshot artifacts into the source
     /// tree.
     pub snapshot_dir: Option<PathBuf>,
+    /// Override `snapshot.snapshot_interval_secs` (periodic background-save
+    /// cadence). `None` keeps the server default (3600s). Set to `Some(0)` to
+    /// disable the periodic snapshot task entirely — including the
+    /// fire-immediately first tick, which otherwise races a manual `BGSAVE` by
+    /// writing an empty startup snapshot. Tests that assert on a specific
+    /// `BGSAVE` artifact must disable it for determinism.
+    pub snapshot_interval_secs: Option<u64>,
 
     // --- Logging ---
     /// Log level (default: "warn" to reduce test noise).
@@ -77,6 +84,33 @@ pub struct TestServerConfig {
     pub replication_primary_host: Option<String>,
     /// Primary port for replica mode.
     pub replication_primary_port: Option<u16>,
+    /// Override `replication.self-fence-on-replica-loss` (primary refuses writes
+    /// once a streaming replica has been seen and then goes stale/disconnects).
+    /// `None` keeps the server default (currently `true`).
+    pub replication_self_fence_on_replica_loss: Option<bool>,
+    /// Override `replication.replica-freshness-timeout-ms` (self-fence ACK
+    /// freshness window). `None` keeps the server default.
+    pub replication_replica_freshness_timeout_ms: Option<u64>,
+    /// Override `replication.repl-ack-interval-ms` (how often a replica ACKs).
+    /// Lowering this makes fence engage/recover tests converge faster.
+    pub replication_ack_interval_ms: Option<u64>,
+    /// Override `replication.replica-write-timeout-ms` (how long the primary
+    /// waits on a blocked write to a replica before disconnecting it for a
+    /// resync). `None` keeps the server default (5000ms). Lowering it makes a
+    /// stalled-replica lag-disconnect fire quickly and deterministically.
+    pub replication_replica_write_timeout_ms: Option<u64>,
+    /// Override `replication.split-brain-buffer-size` (the replication backlog's
+    /// max entry count — Redis `repl-backlog-size` analogue). `None` keeps the
+    /// server default (10_000). Raising it lets a reconnecting replica whose gap
+    /// exceeds 10k commands still qualify for a partial resync (`+CONTINUE`)
+    /// instead of falling back to a full resync.
+    pub replication_split_brain_buffer_size: Option<usize>,
+    /// Override `replication.min-replicas-to-write` (Redis `NOREPLICAS` gate:
+    /// refuse writes with fewer than N good replicas). `None` keeps the default 0.
+    pub replication_min_replicas_to_write: Option<u32>,
+    /// Override `replication.min-replicas-max-lag` (ms), the good-replica ACK
+    /// freshness window for `min-replicas-to-write`. `None` keeps the default.
+    pub replication_min_replicas_timeout_ms: Option<u64>,
 
     // --- Cluster ---
     /// Enable cluster mode (default: false).
@@ -140,6 +174,35 @@ pub struct TestServerConfig {
     /// Allow multi-key commands whose keys span shards in standalone mode
     /// (default: false). Enables the cross-shard scatter path.
     pub allow_cross_slot_standalone: bool,
+
+    // --- JSON ---
+    /// Override `json.max-depth` (max JSON nesting depth). None = server default.
+    pub json_max_depth: Option<usize>,
+    /// Override `json.max-size` (max JSON document size in bytes). None = server default.
+    pub json_max_size: Option<usize>,
+
+    // --- Pub/Sub ---
+    /// Override `server.pubsub-output-buffer-hard-limit` (bytes buffered per slow
+    /// subscriber before messages are dropped and the connection is torn down).
+    /// `Some(0)` disables the bound. None = server default. Used by slow-subscriber
+    /// tests to hit the limit with a small, non-OOMing publish volume.
+    pub pubsub_output_buffer_hard_limit: Option<usize>,
+
+    // --- Memory / eviction ---
+    /// Override `memory.maxmemory` (byte limit; 0 = unlimited). `None` keeps the
+    /// server default (unlimited). Set a small value together with a `tiered-*`
+    /// or `*-lru`/`*-lfu` policy to drive eviction/spill under memory pressure.
+    pub maxmemory: Option<u64>,
+    /// Override `memory.maxmemory-policy` (e.g. `"tiered-lru"`, `"allkeys-lru"`,
+    /// `"noeviction"`). `None` keeps the server default (`noeviction`).
+    pub maxmemory_policy: Option<String>,
+
+    // --- Tiered storage ---
+    /// Enable the two-tier (hot/warm) storage subsystem so `tiered-*` eviction
+    /// policies spill cold values to the RocksDB warm tier instead of deleting
+    /// them (default: false). Requires `persistence: true` — the warm tier is
+    /// backed by the same RocksDB instance.
+    pub tiered_storage_enabled: bool,
 }
 
 impl Clone for TestServerConfig {
@@ -149,12 +212,20 @@ impl Clone for TestServerConfig {
             persistence: self.persistence,
             data_dir: self.data_dir.clone(),
             snapshot_dir: self.snapshot_dir.clone(),
+            snapshot_interval_secs: self.snapshot_interval_secs,
             log_level: self.log_level.clone(),
             requirepass: self.requirepass.clone(),
             admin_enabled: self.admin_enabled,
             replication_role: self.replication_role.clone(),
             replication_primary_host: self.replication_primary_host.clone(),
             replication_primary_port: self.replication_primary_port,
+            replication_self_fence_on_replica_loss: self.replication_self_fence_on_replica_loss,
+            replication_replica_freshness_timeout_ms: self.replication_replica_freshness_timeout_ms,
+            replication_ack_interval_ms: self.replication_ack_interval_ms,
+            replication_replica_write_timeout_ms: self.replication_replica_write_timeout_ms,
+            replication_split_brain_buffer_size: self.replication_split_brain_buffer_size,
+            replication_min_replicas_to_write: self.replication_min_replicas_to_write,
+            replication_min_replicas_timeout_ms: self.replication_min_replicas_timeout_ms,
             cluster_enabled: self.cluster_enabled,
             cluster_node_id: self.cluster_node_id,
             cluster_initial_nodes: self.cluster_initial_nodes.clone(),
@@ -180,6 +251,12 @@ impl Clone for TestServerConfig {
             tls_client_key_file: self.tls_client_key_file.clone(),
             config_file_path: self.config_file_path.clone(),
             allow_cross_slot_standalone: self.allow_cross_slot_standalone,
+            json_max_depth: self.json_max_depth,
+            json_max_size: self.json_max_size,
+            pubsub_output_buffer_hard_limit: self.pubsub_output_buffer_hard_limit,
+            maxmemory: self.maxmemory,
+            maxmemory_policy: self.maxmemory_policy.clone(),
+            tiered_storage_enabled: self.tiered_storage_enabled,
         }
     }
 }
@@ -366,6 +443,10 @@ impl TestServer {
             None => None,
         };
 
+        if let Some(secs) = test_config.snapshot_interval_secs {
+            config.snapshot.snapshot_interval_secs = secs;
+        }
+
         config.server.allow_cross_slot_standalone = test_config.allow_cross_slot_standalone;
         config.http.bind = "127.0.0.1".to_string();
         config.http.port = 0; // OS assigns
@@ -401,6 +482,29 @@ impl TestServer {
                     config.replication.primary_port = port;
                 }
             }
+        }
+
+        // Replication write-safety knobs (self-fence + min-replicas-to-write).
+        if let Some(v) = test_config.replication_self_fence_on_replica_loss {
+            config.replication.self_fence_on_replica_loss = v;
+        }
+        if let Some(v) = test_config.replication_replica_freshness_timeout_ms {
+            config.replication.replica_freshness_timeout_ms = v;
+        }
+        if let Some(v) = test_config.replication_ack_interval_ms {
+            config.replication.ack_interval_ms = v;
+        }
+        if let Some(v) = test_config.replication_replica_write_timeout_ms {
+            config.replication.replica_write_timeout_ms = v;
+        }
+        if let Some(v) = test_config.replication_split_brain_buffer_size {
+            config.replication.split_brain_buffer_size = v;
+        }
+        if let Some(v) = test_config.replication_min_replicas_to_write {
+            config.replication.min_replicas_to_write = v;
+        }
+        if let Some(v) = test_config.replication_min_replicas_timeout_ms {
+            config.replication.min_replicas_timeout_ms = v;
         }
 
         // Pre-bind all listeners before creating Server to eliminate TOCTOU
@@ -476,6 +580,31 @@ impl TestServer {
         // Max clients
         if let Some(max) = test_config.max_clients {
             config.server.max_clients = max;
+        }
+
+        // JSON document limits
+        if let Some(depth) = test_config.json_max_depth {
+            config.json.max_depth = depth;
+        }
+        if let Some(size) = test_config.json_max_size {
+            config.json.max_size = size;
+        }
+        if let Some(limit) = test_config.pubsub_output_buffer_hard_limit {
+            config.server.pubsub_output_buffer_hard_limit = limit;
+        }
+
+        // Memory / eviction knobs (drive spill/eviction under memory pressure).
+        if let Some(maxmemory) = test_config.maxmemory {
+            config.memory.maxmemory = maxmemory;
+        }
+        if let Some(ref policy) = test_config.maxmemory_policy {
+            config.memory.maxmemory_policy = policy.clone();
+        }
+
+        // Tiered (hot/warm) storage. Startup-only: the warm store is wired into
+        // each shard at boot when this is enabled and persistence is on.
+        if test_config.tiered_storage_enabled {
+            config.tiered_storage.enabled = true;
         }
 
         // Enable DEBUG SLEEP and other unsafe DEBUG subcommands for tests.

@@ -27,6 +27,9 @@ impl Command for JsonNumIncrByCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::FirstKey {
+                kind: frogdb_core::IndexKind::Json,
+            },
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -83,6 +86,9 @@ impl Command for JsonNumMultByCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::FirstKey {
+                kind: frogdb_core::IndexKind::Json,
+            },
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,

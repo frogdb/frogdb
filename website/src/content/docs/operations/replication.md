@@ -11,7 +11,8 @@ FrogDB implements asynchronous primary-replica replication using the Redis PSYNC
 - **RocksDB checkpoints for full resync** instead of an RDB transfer. The primary streams a consistent RocksDB checkpoint rather than serializing an RDB file.
 - **SHA256 integrity verification.** The checkpoint payload carries a SHA256 checksum that the replica verifies on receipt.
 - **Replicas do not evict independently.** Eviction decisions are made on the primary and applied on replicas through the replicated write stream, not recomputed locally.
-- **Memory-aware full sync.** A full resync is bounded by `fullsync-max-memory-mb`; a `FULLRESYNC` is rejected when the buffered payload would exceed that limit.
+- **Memory-aware full sync.** A full resync is bounded by a fixed internal buffering cap; a `FULLRESYNC` is rejected when the buffered payload would exceed that limit rather than risking an out-of-memory condition.
+- **No chained replication (replica-of-replica).** Redis allows `REPLICAOF` to target another replica, fanning the write stream out transitively. FrogDB does not support this: the primary-side replication handler that serves `PSYNC` only exists on a node that is actually a primary (booted or promoted as one). Pointing `REPLICAOF` at a replica is accepted at the command layer — the sub-replica's role flips and it keeps retrying — but every `PSYNC` attempt against that target is rejected with `-ERR PSYNC not supported - server is not running as primary`, so `master_link_status` never reaches `up` and no data flows. Point every replica directly at the primary.
 
 ## Configuration
 
@@ -45,8 +46,6 @@ The full key set and defaults:
 | `min-replicas-to-write` | `0` | Replicas that must acknowledge a write before it returns success (`0` disables). |
 | `min-replicas-timeout-ms` | `5000` | How long a write waits for those acknowledgements. |
 | `ack-interval-ms` | `1000` | How often a replica sends `REPLCONF ACK`. |
-| `fullsync-timeout-secs` | `300` | Maximum duration of a full sync. |
-| `fullsync-max-memory-mb` | `512` | Buffering cap for full sync; a `FULLRESYNC` over this is rejected. |
 | `state-file` | `replication_state.json` | Persists the replication ID and offset for partial-sync recovery. |
 | `connect-timeout-ms` | `5000` | Replica-to-primary connect timeout. |
 | `handshake-timeout-ms` | `10000` | Replication handshake timeout. |
@@ -72,7 +71,7 @@ Self-fencing is a separate, stricter guard. With `self-fence-on-replica-loss` en
 
 ## Full sync and partial sync
 
-A replica that cannot resume from its saved offset performs a **full sync**. The primary produces a consistent RocksDB checkpoint and streams it in 64 KB chunks; a SHA256 checksum computed over the payload is sent with the trailing metadata and verified by the replica before the data is accepted. Full sync is memory-bounded by `fullsync-max-memory-mb` — if servicing the `FULLRESYNC` would exceed that cap, the request is rejected rather than risking an out-of-memory condition. Checkpoint internals are covered in [Persistence & durability](/operations/persistence/).
+A replica that cannot resume from its saved offset performs a **full sync**. The primary produces a consistent RocksDB checkpoint and streams it in 64 KB chunks; a SHA256 checksum computed over the payload is sent with the trailing metadata and verified by the replica before the data is accepted. Full sync is memory-bounded by a fixed internal buffering cap — if servicing the `FULLRESYNC` would exceed that cap, the request is rejected rather than risking an out-of-memory condition. Checkpoint internals are covered in [Persistence & durability](/operations/persistence/).
 
 A replica that is only briefly behind performs a **partial sync**: it sends `PSYNC <replication-id> <offset>`, and if the primary still holds the required history it replies `CONTINUE` and resumes streaming write frames from that offset. The replication ID and offset are persisted in `state-file` so a replica can attempt partial sync across a restart.
 
@@ -105,7 +104,7 @@ To measure lag, compare `master_repl_offset` on the primary with `master_repl_of
 |---|---|---|
 | Repeated full resyncs | Replica offset falls outside retained history, or lag guards trip | Review `replication-lag-threshold-bytes` / `-secs` and `fullresync-cooldown-secs`; check network stability between primary and replica. |
 | Writes rejected on the primary | Self-fencing after loss of replica ACK freshness | Confirm replicas are connected and ACKing; check `replica-freshness-timeout-ms` relative to `ack-interval-ms`. |
-| `FULLRESYNC` rejected | Full-sync payload exceeds `fullsync-max-memory-mb` | Raise `fullsync-max-memory-mb`, or provision more replica memory. |
+| `FULLRESYNC` rejected | Full-sync payload exceeds the internal buffering cap | Provision more replica memory, or reduce the primary's dataset footprint. |
 | Replica out of memory during sync | Dataset exceeds replica capacity | Provision the replica with headroom above the primary's footprint. |
 
 The [Metrics reference](/reference/metrics/) lists the exported Prometheus metrics.

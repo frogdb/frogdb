@@ -116,6 +116,28 @@ impl ShardReceiver {
     }
 }
 
+/// One watched key carried by [`ShardMessage::ExecTransaction`].
+///
+/// Bundles the per-key state EXEC's watch validation needs: the key, the
+/// per-slot `version` snapshotted at WATCH time, and `live_at_watch` — whether
+/// the key was present-and-unexpired when it was watched (the inverse of Redis
+/// `wk->expired`, PR #7920 / issue #7918).
+///
+/// `live_at_watch` lets EXEC distinguish a key watched **live** that then
+/// expired during the window (must abort, even absent a version bump this
+/// watcher observed) from one already expired/absent when watched (a
+/// "nonexistent" watch that must NOT abort when it stays gone). The version
+/// alone (even slot-granular) cannot express that per-key discriminator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchEntry {
+    /// The watched key.
+    pub key: Bytes,
+    /// The per-slot version snapshotted at WATCH time.
+    pub version: u64,
+    /// Whether the key was live (present and unexpired) at WATCH time.
+    pub live_at_watch: bool,
+}
+
 /// Messages sent to shard workers.
 ///
 /// A thin two-level wrapper: every variant except [`ShardMessage::Shutdown`]
@@ -195,16 +217,25 @@ pub enum CoreMsg {
     /// from one that was already gone when watched (must NOT abort), matching
     /// Redis's `wk->expired` flag (PR #7920). Pass an empty `keys` for a pure
     /// version probe (no purge).
+    ///
+    /// The reply is `(versions, live_at_watch)`, both aligned with `keys`:
+    /// `versions[i]` is the **per-slot** WATCH version of `keys[i]` (proposal
+    /// 18 — the version is slot-granular, so distinct-slot keys carry distinct
+    /// versions), and `live_at_watch[i]` reports whether the key was live
+    /// (present and unexpired) at watch time — the `wk->expired` discriminator
+    /// (see [`WatchEntry::live_at_watch`]). The flags are computed via a
+    /// non-destructive `exists_unexpired` probe before the no-bump lazy purge.
+    /// An empty `keys` yields two empty vectors (a pure no-op probe).
     GetVersion {
         keys: Vec<Bytes>,
-        response_tx: oneshot::Sender<u64>,
+        response_tx: oneshot::Sender<(Vec<u64>, Vec<bool>)>,
     },
 
     /// Execute a transaction atomically.
     ExecTransaction {
         commands: Vec<ParsedCommand>,
-        /// Watched keys: (key, version_at_watch_time).
-        watches: Vec<(Bytes, u64)>,
+        /// Watched keys with their watch-time version and liveness.
+        watches: Vec<WatchEntry>,
         conn_id: u64,
         /// Protocol version for response encoding.
         protocol_version: ProtocolVersion,
@@ -216,33 +247,49 @@ pub enum CoreMsg {
 #[derive(Debug)]
 pub enum PubSubMsg {
     /// Subscribe to broadcast channels.
+    ///
+    /// `response_tx` is a bare registration ack: the round trip is a barrier, not
+    /// a count. Awaiting it guarantees the registration is visible in the shard's
+    /// subscription table before the client sees its confirmation, so a PUBLISH
+    /// processed after the confirmation sees this subscriber. The client-visible
+    /// subscription count is the per-connection one, computed server-side before
+    /// this message is sent (see `pubsub_conn_command`).
     Subscribe {
         channels: Vec<Bytes>,
         conn_id: ConnId,
         sender: PubSubSender,
-        response_tx: oneshot::Sender<Vec<usize>>,
+        response_tx: oneshot::Sender<()>,
     },
 
     /// Unsubscribe from broadcast channels.
+    ///
+    /// `response_tx` is a bare deregistration ack (barrier, not a count); see
+    /// [`PubSubMsg::Subscribe`].
     Unsubscribe {
         channels: Vec<Bytes>,
         conn_id: ConnId,
-        response_tx: oneshot::Sender<Vec<usize>>,
+        response_tx: oneshot::Sender<()>,
     },
 
     /// Subscribe to patterns.
+    ///
+    /// `response_tx` is a bare registration ack (barrier, not a count); see
+    /// [`PubSubMsg::Subscribe`].
     PSubscribe {
         patterns: Vec<Bytes>,
         conn_id: ConnId,
         sender: PubSubSender,
-        response_tx: oneshot::Sender<Vec<usize>>,
+        response_tx: oneshot::Sender<()>,
     },
 
     /// Unsubscribe from patterns.
+    ///
+    /// `response_tx` is a bare deregistration ack (barrier, not a count); see
+    /// [`PubSubMsg::Subscribe`].
     PUnsubscribe {
         patterns: Vec<Bytes>,
         conn_id: ConnId,
-        response_tx: oneshot::Sender<Vec<usize>>,
+        response_tx: oneshot::Sender<()>,
     },
 
     /// Publish to a broadcast channel.
@@ -260,18 +307,24 @@ pub enum PubSubMsg {
     PublishKeyspace { channel: Bytes, payload: Bytes },
 
     /// Subscribe to sharded channels.
+    ///
+    /// `response_tx` is a bare registration ack (barrier, not a count); see
+    /// [`PubSubMsg::Subscribe`].
     ShardedSubscribe {
         channels: Vec<Bytes>,
         conn_id: ConnId,
         sender: PubSubSender,
-        response_tx: oneshot::Sender<Vec<usize>>,
+        response_tx: oneshot::Sender<()>,
     },
 
     /// Unsubscribe from sharded channels.
+    ///
+    /// `response_tx` is a bare deregistration ack (barrier, not a count); see
+    /// [`PubSubMsg::Subscribe`].
     ShardedUnsubscribe {
         channels: Vec<Bytes>,
         conn_id: ConnId,
-        response_tx: oneshot::Sender<Vec<usize>>,
+        response_tx: oneshot::Sender<()>,
     },
 
     /// Publish to a sharded channel.
@@ -434,10 +487,37 @@ pub enum BlockingMsg {
     },
 
     /// Cancel a blocking wait (timeout or disconnect).
+    ///
+    /// Acknowledged so the client's timeout path can reconcile against a serve
+    /// that may have raced it: the shard processes its mailbox serially, so
+    /// whether the waiter was still registered here is the single source of
+    /// truth for "did the serve win or the timeout win". Without the ack, a
+    /// serve that popped an element and called `response_tx.send` (returning
+    /// `Ok` because the receiver was still alive) could have that value silently
+    /// discarded when the client dropped the receiver on timeout — the element
+    /// neither delivered nor left in the store (the serve-vs-timeout race). The
+    /// ack lets the client drain the already-sent value instead.
     UnregisterWait {
         /// Connection ID to unregister.
         conn_id: u64,
+        /// Reports whether the waiter was still registered (removed here) or had
+        /// already been served/GC'd (its response is in the client's channel).
+        ack: oneshot::Sender<UnregisterAck>,
     },
+}
+
+/// Reply to [`BlockingMsg::UnregisterWait`], resolving the serve-vs-timeout race
+/// on the shard's serial timeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnregisterAck {
+    /// The waiter was still registered and has been removed. No store data was
+    /// consumed on its behalf, so the client finalizes as a timeout/unblock.
+    Unregistered,
+    /// The waiter was already gone — a serve (or the GC tick) removed it and
+    /// sent a response on the client's channel. The client must drain that
+    /// channel and return the value rather than timing out, or the served
+    /// element is lost.
+    AlreadyServed,
 }
 
 /// Observability messages: slowlog, memory, latency, stats, and runtime config.
@@ -700,6 +780,18 @@ pub enum DebugIntrospectionMsg {
         /// Channel to send the response.
         response_tx: oneshot::Sender<super::types::ExpiryIndexCheckInfo>,
     },
+
+    /// Backdate a key's expiry deadline into the past (DEBUG EXPIRE-BACKDATE),
+    /// making it already-expired without a wall-clock wait. Rewrites only the
+    /// deadline; the next read/sweep performs the actual expiry.
+    ExpireBackdate {
+        /// The key whose deadline is rewritten.
+        key: Bytes,
+        /// How many milliseconds into the past to move the deadline.
+        ms: u64,
+        /// Channel to report whether the key existed / had a TTL.
+        response_tx: oneshot::Sender<crate::store::BackdateExpiryResult>,
+    },
 }
 
 /// Search index flush + pub/sub limits messages.
@@ -708,6 +800,16 @@ pub enum SearchMsg {
     /// Flush (commit) all dirty search indexes on this shard.
     /// Used by the snapshot coordinator to ensure search index consistency.
     FlushSearchIndexes { response_tx: oneshot::Sender<()> },
+
+    /// Drain this shard's WAL flush-engine into RocksDB.
+    ///
+    /// Used by the snapshot coordinator so a `BGSAVE` checkpoint captures every
+    /// acknowledged write. Under non-`sync` durability (the default is
+    /// `periodic`) a write is acked once staged in the flush engine and only
+    /// committed to RocksDB on a later size/timeout trigger; without this drain,
+    /// `create_checkpoint` would snapshot a RocksDB that is missing the most
+    /// recent writes, producing a silently-incomplete disaster-recovery artifact.
+    FlushWal { response_tx: oneshot::Sender<()> },
 
     /// Get pub/sub limits info from this shard.
     GetPubSubLimitsInfo {
@@ -905,6 +1007,7 @@ impl DebugIntrospectionMsg {
             DebugIntrospectionMsg::GetWaitQueueInfo { .. } => "GetWaitQueueInfo",
             DebugIntrospectionMsg::MemoryCheck { .. } => "MemoryCheck",
             DebugIntrospectionMsg::ExpiryIndexCheck { .. } => "ExpiryIndexCheck",
+            DebugIntrospectionMsg::ExpireBackdate { .. } => "ExpireBackdate",
         }
     }
 }
@@ -924,6 +1027,7 @@ impl SearchMsg {
     pub fn probe_type_str(&self) -> &'static str {
         match self {
             SearchMsg::FlushSearchIndexes { .. } => "FlushSearchIndexes",
+            SearchMsg::FlushWal { .. } => "FlushWal",
             SearchMsg::GetPubSubLimitsInfo { .. } => "GetPubSubLimitsInfo",
         }
     }

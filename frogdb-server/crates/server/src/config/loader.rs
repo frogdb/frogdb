@@ -430,7 +430,7 @@ mod tests {
     /// struct that isn't `#[serde(skip)]`) must appear as a `[section]`
     /// header in the generated default TOML. This is section-level coverage
     /// specifically for the sections that regressed before this test existed:
-    /// blocking, tiered-storage, compat, hotshards, debug-bundle, monitor.
+    /// blocking, tiered-storage, compat, debug-bundle, monitor.
     #[test]
     fn default_toml_contains_every_config_section() {
         let text = default_toml_impl();
@@ -438,9 +438,13 @@ mod tests {
         let sections = default_json
             .as_object()
             .expect("Config serializes to a JSON object");
+        // Floor lowered 25 -> 24 in the issue-14 consolidation pass: the
+        // config-wiring lanes deleted the dead `vll` and `hotshards` sections,
+        // so 24 is the honest current section count. Raise this floor when
+        // sections are added; only lower it when one is deliberately removed.
         assert!(
-            sections.len() >= 25,
-            "expected at least 25 top-level config sections, found {} — \
+            sections.len() >= 24,
+            "expected at least 24 top-level config sections, found {} — \
              this sanity floor should be raised, not deleted, if it fails",
             sections.len()
         );
@@ -453,7 +457,7 @@ mod tests {
         }
     }
 
-    /// Names the six sections that were missing from the hand-maintained
+    /// Names sections that were missing from the hand-maintained
     /// `default_toml_impl()` string prior to this fix, so a regression to a
     /// hand-maintained (and incomplete) string is caught with a specific,
     /// readable failure rather than only the generic round-trip assertion.
@@ -464,7 +468,6 @@ mod tests {
             "blocking",
             "tiered-storage",
             "compat",
-            "hotshards",
             "debug-bundle",
             "monitor",
         ] {

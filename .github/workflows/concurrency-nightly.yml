@@ -1,0 +1,62 @@
+# =============================================================================
+# GENERATED FILE - DO NOT EDIT DIRECTLY
+# =============================================================================
+# Source: .github/workflows/workflow_gen/
+# Regenerate with: just workflow-gen
+# =============================================================================
+
+name: Concurrency Nightly
+'on':
+  schedule:
+  - cron: '14 3 * * *'
+  workflow_dispatch:
+    inputs:
+      seeds:
+        description: Unique seeds to sweep, each run under all 4 profiles (default 250 seeds x 4 profiles = 1000 total runs)
+        required: false
+        default: '250'
+        type: string
+jobs:
+  seed-sweep-nightly:
+    name: Nightly Generated-Workload Seed Sweep
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 360
+    steps:
+    - name: Checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    - name: Configure self-hosted build environment
+      if: runner.environment == 'self-hosted'
+      run: |
+        {
+          echo "CC=clang-18"
+          echo "CXX=clang++-18"
+          echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
+          echo "CARGO_BUILD_JOBS=4"
+        } >> "$GITHUB_ENV"
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      with:
+        install: 'true'
+        install_args: just cargo:cargo-nextest
+        cache: 'true'
+        experimental: 'true'
+    - name: Install Rust 1.92.0
+      uses: dtolnay/rust-toolchain@1.92.0
+    - name: Install libclang
+      if: runner.environment != 'self-hosted'
+      run: sudo apt-get install -y libclang-dev
+    - name: Cache Rust build artifacts
+      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      with:
+        shared-key: concurrency-nightly
+    - name: Run nightly generated-workload seed sweep
+      run: |
+        just concurrency-nightly "${{ github.event.inputs.seeds || '250' }}"
+    - name: Upload concurrency-nightly-repros
+      if: failure()
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+      with:
+        name: concurrency-nightly-repros
+        path: target/concurrency-repros
+        retention-days: '7'
+        if-no-files-found: error

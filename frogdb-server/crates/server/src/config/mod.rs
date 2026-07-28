@@ -154,22 +154,6 @@ impl StatusConfigExt for StatusConfig {
     }
 }
 
-/// Extension trait for HotShardsConfig conversion methods.
-pub trait HotShardsConfigExt {
-    /// Convert to HotShardConfig for the debug crate.
-    fn to_collector_config(&self) -> frogdb_debug::HotShardConfig;
-}
-
-impl HotShardsConfigExt for HotShardsConfig {
-    fn to_collector_config(&self) -> frogdb_debug::HotShardConfig {
-        frogdb_debug::HotShardConfig {
-            hot_threshold_percent: self.hot_threshold_percent,
-            warm_threshold_percent: self.warm_threshold_percent,
-            default_period_secs: self.default_period_secs,
-        }
-    }
-}
-
 /// Extension trait for TracingConfig conversion methods.
 pub trait TracingConfigExt {
     /// Convert to frogdb_telemetry::TracingConfig.

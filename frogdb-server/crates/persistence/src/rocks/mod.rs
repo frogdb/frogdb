@@ -7,12 +7,13 @@ mod reclaim;
 pub mod staged;
 #[cfg(test)]
 mod tests;
+pub(crate) mod wal_watermark;
 
 pub use columns::{CfTier, RocksIterator};
 pub use config::{CompressionType, RocksConfig, RocksError};
 use manifest::ColumnFamilyManifest;
 use rocksdb::{
-    BlockBasedOptions, BoundColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType,
+    BlockBasedOptions, BoundColumnFamily, ColumnFamilyDescriptor, DB, DBRecoveryMode,
     DBWithThreadMode, MergeOperands, MultiThreaded, Options, WriteBatch, WriteOptions,
 };
 pub use staged::StagedCheckpoint;
@@ -37,29 +38,82 @@ pub struct RocksStore {
     /// and any other trigger site via the `Arc<RocksStore>`.
     pub(crate) reclaim_guard: reclaim::ReclaimGuard,
     /// Metrics recorder for store-initiated background work (post-clear
-    /// reclamation counters). Starts as a no-op recorder; server startup
-    /// installs the real one via [`RocksStore::set_metrics_recorder`] before
-    /// any client command can run.
-    metrics: std::sync::Mutex<Arc<dyn frogdb_types::traits::MetricsRecorder>>,
+    /// reclamation counters). Injected at construction and immutable: a Store
+    /// can never exist without a recorder, so the "no-metrics window" cannot
+    /// occur by construction. Callers that legitimately want no metrics (tests,
+    /// benches, tooling) pass an explicit
+    /// [`NoopMetricsRecorder`](frogdb_types::traits::NoopMetricsRecorder) via the
+    /// [`open`](RocksStore::open)/[`open_with_warm`](RocksStore::open_with_warm)
+    /// shims; production threads the real recorder through
+    /// [`open_with_warm_metrics`](RocksStore::open_with_warm_metrics).
+    metrics: Arc<dyn frogdb_types::traits::MetricsRecorder>,
 }
 
 impl RocksStore {
+    /// Noop-metrics shim over [`open_with_warm_metrics`](Self::open_with_warm_metrics)
+    /// (non-warm). The `NoopMetricsRecorder` is *explicit at the call site* — not a
+    /// hidden default a later install "should" overwrite — so tests, benches, and
+    /// tools opt into no metrics deliberately.
     pub fn open(path: &Path, num_shards: usize, config: &RocksConfig) -> Result<Self, RocksError> {
-        Self::open_with_warm(path, num_shards, config, false)
+        Self::open_with_warm_metrics(
+            path,
+            num_shards,
+            config,
+            false,
+            Arc::new(frogdb_types::traits::NoopMetricsRecorder),
+        )
     }
+    /// Non-warm open with an explicit metrics recorder. Symmetric to
+    /// [`open`](Self::open) for callers that want the real recorder without the
+    /// warm tier (e.g. the Main-tier reclamation counter test).
+    pub fn open_with_metrics(
+        path: &Path,
+        num_shards: usize,
+        config: &RocksConfig,
+        metrics: Arc<dyn frogdb_types::traits::MetricsRecorder>,
+    ) -> Result<Self, RocksError> {
+        Self::open_with_warm_metrics(path, num_shards, config, false, metrics)
+    }
+    /// Noop-metrics shim over [`open_with_warm_metrics`](Self::open_with_warm_metrics).
+    /// See [`open`](Self::open) on why the Noop is explicit rather than a default.
     pub fn open_with_warm(
         path: &Path,
         num_shards: usize,
         config: &RocksConfig,
         warm_enabled: bool,
     ) -> Result<Self, RocksError> {
+        Self::open_with_warm_metrics(
+            path,
+            num_shards,
+            config,
+            warm_enabled,
+            Arc::new(frogdb_types::traits::NoopMetricsRecorder),
+        )
+    }
+    /// Production entry point: the caller supplies the metrics recorder up front,
+    /// so store-initiated background work (post-clear reclamation counters) is
+    /// wired to the real recorder from the moment the Store exists. The recorder
+    /// is stored immutably — there is no separate late-install step and thus no
+    /// window in which reclamation counts into a no-op.
+    pub fn open_with_warm_metrics(
+        path: &Path,
+        num_shards: usize,
+        config: &RocksConfig,
+        warm_enabled: bool,
+        metrics: Arc<dyn frogdb_types::traits::MetricsRecorder>,
+    ) -> Result<Self, RocksError> {
         // Production path: enumerate the persisted column families with the real
         // `DB::list_cf`. The enumeration is threaded through an injectable seam
         // ([`open_with_cf_lister`]) so tests can force it to fail and assert the
         // error propagates rather than being coerced into an empty CF list.
-        Self::open_with_cf_lister(path, num_shards, config, warm_enabled, |opts, p| {
-            DB::list_cf(opts, p).map_err(RocksError::from)
-        })
+        Self::open_with_cf_lister(
+            path,
+            num_shards,
+            config,
+            warm_enabled,
+            metrics,
+            |opts, p| DB::list_cf(opts, p).map_err(RocksError::from),
+        )
     }
 
     /// Reopen seam parameterised over the column-family enumerator. The public
@@ -72,6 +126,7 @@ impl RocksStore {
         num_shards: usize,
         config: &RocksConfig,
         warm_enabled: bool,
+        metrics: Arc<dyn frogdb_types::traits::MetricsRecorder>,
         list_cf: impl FnOnce(&Options, &Path) -> Result<Vec<String>, RocksError>,
     ) -> Result<Self, RocksError> {
         let path_str = path.display().to_string();
@@ -80,6 +135,36 @@ impl RocksStore {
         db_opts.create_if_missing(config.create_if_missing);
         db_opts.create_missing_column_families(true);
         db_opts.set_max_background_jobs(config.max_background_jobs);
+        // Pin the WAL recovery mode deliberately rather than inheriting RocksDB's
+        // implicit default. We choose `PointInTime`, which also happens to be the
+        // library default — the point is that it is now an *explicit, documented*
+        // decision, verified by the corruption tests in `rocks/tests.rs`, not an
+        // assumption about what version of RocksDB we linked.
+        //
+        // Why `PointInTime` for Redis-comparable durability:
+        //   * A crash mid-append leaves a torn record at the *tail* of the WAL.
+        //     Every mode except `AbsoluteConsistency` tolerates that torn tail;
+        //     `AbsoluteConsistency` would refuse to open the database at all,
+        //     turning an ordinary unclean shutdown into a hard startup failure —
+        //     the opposite of Redis AOF, which trims a partial trailing command
+        //     and carries on.
+        //   * `PointInTime` recovers the longest *uninterrupted* prefix of valid
+        //     records and stops at the first checksum failure, discarding the
+        //     (possibly still-valid) suffix behind it. This mirrors Redis
+        //     `aof-load-truncated`/point-in-time AOF loading: replay up to the
+        //     first inconsistency, then stop, so recovered state is always a real
+        //     prefix of history and never interleaves post-corruption records.
+        //   * `TolerateCorruptedTailRecords` only tolerates corruption in the
+        //     final log and would treat a mid-log checksum failure as fatal;
+        //     `SkipAnyCorruptedRecord` keeps replaying *past* a corrupt record,
+        //     which can resurrect stale values and reorder history — unacceptable
+        //     for a database that promises prefix-consistent recovery.
+        //
+        // The one sharp edge `PointInTime` has — silently dropping the valid
+        // suffix behind a mid-log corruption with no signal — is covered by the
+        // durable-sync watermark in [`wal_watermark`], which emits a metric + log
+        // when recovery lands below the last synced sequence.
+        db_opts.set_wal_recovery_mode(DBRecoveryMode::PointInTime);
         if let Some(rate_mb) = config.compaction_rate_limit_mb {
             db_opts.set_ratelimiter(rate_mb as i64 * 1024 * 1024, 100_000, 10);
         }
@@ -96,15 +181,11 @@ impl RocksStore {
         cf_opts.set_write_buffer_size(config.write_buffer_size);
         cf_opts.set_max_write_buffer_number(config.max_write_buffer_number);
         cf_opts.set_block_based_table_factory(&block_opts);
-        cf_opts.set_compression_per_level(&[
-            DBCompressionType::None,
-            DBCompressionType::None,
-            DBCompressionType::Lz4,
-            DBCompressionType::Lz4,
-            DBCompressionType::Zstd,
-            DBCompressionType::Zstd,
-            DBCompressionType::Zstd,
-        ]);
+        // Honor the configured compression preset (proposal 19). Each
+        // `CompressionType` maps to a curated 7-level schedule; the default
+        // `Lz4` preset reproduces the historical `[None,None,Lz4,Lz4,Zstd,Zstd,Zstd]`
+        // array exactly, so existing data directories keep their on-disk format.
+        cf_opts.set_compression_per_level(&config.compression.per_level_schedule());
         // Value-merge operator: folds type-tagged merge operands into the base
         // value. Registered on every data CF (the bare `default` CF holds no
         // values). Currently only HyperLogLog emits merges; the operator
@@ -180,6 +261,17 @@ impl RocksStore {
                 RocksError::from(e)
             })?
         };
+        // Detect (and log/count) any point-in-time WAL truncation that just
+        // happened, by comparing what RocksDB recovered to against the
+        // durable-sync watermark persisted before the crash. Only meaningful for
+        // an existing database — a freshly created one replayed nothing. On a
+        // fresh open we still seed the watermark to the current sequence so the
+        // first subsequent recovery has a baseline. See [`wal_watermark`].
+        if db_exists {
+            wal_watermark::detect_and_reset(path, db.latest_sequence_number(), &*metrics);
+        } else if let Err(e) = wal_watermark::write(path, db.latest_sequence_number()) {
+            debug!(path = %path_str, error = %e, "Failed to seed WAL watermark on fresh open");
+        }
         info!(path = %path_str, num_shards, warm_enabled, "RocksDB opened");
         Ok(Self {
             db,
@@ -190,7 +282,7 @@ impl RocksStore {
             search_meta_cf_names: manifest.search_meta_names().to_vec(),
             flush_compact_range: config.flush_compact_range,
             reclaim_guard: reclaim::ReclaimGuard::new(),
-            metrics: std::sync::Mutex::new(Arc::new(frogdb_types::traits::NoopMetricsRecorder)),
+            metrics,
         })
     }
     /// Main-tier resolver shim; see [`RocksStore::tier_cf_handle`] for the
@@ -201,9 +293,22 @@ impl RocksStore {
     ) -> Result<StdArc<BoundColumnFamily<'_>>, RocksError> {
         self.tier_cf_handle(CfTier::Main, shard_id)
     }
+    /// Single-key write into a shard's main-tier column family.
+    ///
+    /// Test-only convenience with **zero production callers**: production writes
+    /// flow through the FrogDB WAL batch path (`RocksSink` →
+    /// [`batch_put`](Self::batch_put) → [`write_batch_opt`](Self::write_batch_opt)).
+    /// Exposed to dependent crates' test builds via the `test-support` feature
+    /// (mirroring its sibling [`put_opt`](Self::put_opt)), absent from production
+    /// builds.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn put(&self, shard_id: usize, key: &[u8], value: &[u8]) -> Result<(), RocksError> {
         self.put_tier(CfTier::Main, shard_id, key, value)
     }
+    /// Single-key write with explicit [`WriteOptions`]. Test-only (no production
+    /// caller); exposed to dependent crates' test builds via the `test-support`
+    /// feature, absent from production builds.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn put_opt(
         &self,
         shard_id: usize,
@@ -221,7 +326,17 @@ impl RocksStore {
     /// Apply a single merge operand to `key` via the registered value-merge
     /// operator (mirrors [`RocksStore::put`]). RocksDB folds the operand into
     /// the base value at read/compaction time.
-    pub fn merge(&self, shard_id: usize, key: &[u8], operand: &[u8]) -> Result<(), RocksError> {
+    ///
+    /// Same-crate test-only: production merges flow through the WAL batch path
+    /// ([`RocksStore::batch_merge`]), never this single-key shim. Compiled only
+    /// under `cfg(test)`.
+    #[cfg(test)]
+    pub(crate) fn merge(
+        &self,
+        shard_id: usize,
+        key: &[u8],
+        operand: &[u8],
+    ) -> Result<(), RocksError> {
         let cf = self.cf_handle(shard_id)?;
         self.db.merge_cf(&cf, key, operand).map_err(|e| {
             error!(shard_id, error = %e, "RocksDB merge failed");
@@ -229,49 +344,51 @@ impl RocksStore {
         })?;
         Ok(())
     }
+    /// Single-key read from a shard's main-tier column family.
+    ///
+    /// Test-only convenience with **zero production callers**: production reads
+    /// stream every key via [`iter_cf`](Self::iter_cf) during recovery. Exposed
+    /// to dependent crates' test builds via the `test-support` feature, absent
+    /// from production builds.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn get(&self, shard_id: usize, key: &[u8]) -> Result<Option<Vec<u8>>, RocksError> {
         self.get_tier(CfTier::Main, shard_id, key)
     }
+    /// Single-key delete from a shard's main-tier column family. Test-only (no
+    /// production caller; production deletes flow through the WAL batch path).
+    /// Exposed to dependent crates' test builds via the `test-support` feature,
+    /// absent from production builds.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn delete(&self, shard_id: usize, key: &[u8]) -> Result<(), RocksError> {
         self.delete_tier(CfTier::Main, shard_id, key)
     }
-    pub fn delete_opt(
-        &self,
-        shard_id: usize,
-        key: &[u8],
-        wo: &WriteOptions,
-    ) -> Result<(), RocksError> {
-        let cf = self.cf_handle(shard_id)?;
-        self.db.delete_cf_opt(&cf, key, wo).map_err(|e| {
-            error!(shard_id, error = %e, "RocksDB delete failed");
-            RocksError::from(e)
-        })?;
-        Ok(())
-    }
-    pub fn write_batch(&self, batch: WriteBatch) -> Result<(), RocksError> {
+    /// Commit a batch with default write options. Same-crate test-only: the
+    /// production commit path uses [`RocksStore::write_batch_opt`]. Compiled
+    /// only under `cfg(test)`.
+    #[cfg(test)]
+    pub(crate) fn write_batch(&self, batch: WriteBatch) -> Result<(), RocksError> {
         self.db.write(batch).map_err(|e| {
             error!(error = %e, "RocksDB batch write failed");
             RocksError::from(e)
         })?;
         Ok(())
     }
-    pub fn write_batch_opt(&self, batch: WriteBatch, wo: &WriteOptions) -> Result<(), RocksError> {
+    /// Commit a staged batch with explicit [`WriteOptions`] — the production
+    /// commit primitive driven by `RocksSink`. Crate-internal; the cross-crate
+    /// crash tests reach the same durability path through the feature-gated
+    /// [`commit_raw_batch`](Self::commit_raw_batch) seam.
+    pub(crate) fn write_batch_opt(
+        &self,
+        batch: WriteBatch,
+        wo: &WriteOptions,
+    ) -> Result<(), RocksError> {
         self.db.write_opt(batch, wo).map_err(|e| {
             error!(error = %e, "RocksDB batch write failed");
             RocksError::from(e)
         })?;
         Ok(())
     }
-    pub fn create_batch_for_shard(
-        &self,
-        shard_id: usize,
-    ) -> Result<(WriteBatch, String), RocksError> {
-        if shard_id >= self.num_shards {
-            return Err(RocksError::InvalidShardId(shard_id));
-        }
-        Ok((WriteBatch::default(), self.cf_names[shard_id].clone()))
-    }
-    pub fn batch_put(
+    pub(crate) fn batch_put(
         &self,
         batch: &mut WriteBatch,
         shard_id: usize,
@@ -282,7 +399,7 @@ impl RocksStore {
         batch.put_cf(&cf, key, value);
         Ok(())
     }
-    pub fn batch_merge(
+    pub(crate) fn batch_merge(
         &self,
         batch: &mut WriteBatch,
         shard_id: usize,
@@ -293,7 +410,7 @@ impl RocksStore {
         batch.merge_cf(&cf, key, operand);
         Ok(())
     }
-    pub fn batch_delete(
+    pub(crate) fn batch_delete(
         &self,
         batch: &mut WriteBatch,
         shard_id: usize,
@@ -322,7 +439,7 @@ impl RocksStore {
     /// CF was empty (nothing staged). The caller uses the bound to trigger
     /// post-commit space reclamation ([`RocksStore::spawn_clear_reclamation`])
     /// once — and only if — the batch containing the tombstone commits.
-    pub fn batch_clear_shard(
+    pub(crate) fn batch_clear_shard(
         &self,
         batch: &mut WriteBatch,
         shard_id: usize,
@@ -382,7 +499,7 @@ impl RocksStore {
     /// tombstone's exclusive upper bound as returned by
     /// [`RocksStore::batch_clear_shard`]. Coalesced: a second call for the same
     /// `(tier, shard)` while a pass is in flight is dropped, not queued.
-    pub fn spawn_clear_reclamation(
+    pub(crate) fn spawn_clear_reclamation(
         self: &Arc<Self>,
         tier: CfTier,
         shard_id: usize,
@@ -391,16 +508,11 @@ impl RocksStore {
         reclaim::spawn_clear_reclamation(Arc::clone(self), tier, shard_id, upper_bound);
     }
 
-    /// Install the metrics recorder used by store-initiated background work
-    /// (post-clear reclamation counters). Called once during server startup.
-    pub fn set_metrics_recorder(&self, recorder: Arc<dyn frogdb_types::traits::MetricsRecorder>) {
-        *self.metrics.lock().unwrap() = recorder;
-    }
-
-    /// Current metrics recorder (no-op until
-    /// [`set_metrics_recorder`](Self::set_metrics_recorder) installs the real one).
+    /// The metrics recorder injected at construction, used by store-initiated
+    /// background work (post-clear reclamation counters). Immutable — cloned per
+    /// reclamation pass without any lock.
     pub(crate) fn metrics_recorder(&self) -> Arc<dyn frogdb_types::traits::MetricsRecorder> {
-        Arc::clone(&self.metrics.lock().unwrap())
+        Arc::clone(&self.metrics)
     }
     pub fn iter_cf(&self, shard_id: usize) -> Result<RocksIterator<'_>, RocksError> {
         self.iter_tier(CfTier::Main, shard_id)
@@ -430,6 +542,10 @@ impl RocksStore {
     pub fn num_shards(&self) -> usize {
         self.num_shards
     }
+    /// Flush every shard's memtable with `wait = true`. Test-only (the
+    /// crash-recovery harness forces a durable point); exposed to dependent
+    /// crates' test builds via the `test-support` feature.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn sync_wal(&self) -> Result<(), RocksError> {
         let mut fo = rocksdb::FlushOptions::default();
         fo.set_wait(true);
@@ -441,6 +557,51 @@ impl RocksStore {
             })?;
         }
         Ok(())
+    }
+}
+
+/// A single put/delete operation for [`RocksStore::commit_raw_batch`], each
+/// carrying its own target shard so one atomic batch can span multiple shards.
+///
+/// The per-op `shard` (rather than a batch-level parameter) is load-bearing:
+/// the crash-recovery `test_cross_shard_batch` stages writes to several shards
+/// into one `WriteBatch` to verify cross-shard all-or-nothing atomicity, which
+/// a single batch-level shard could not express.
+#[cfg(any(test, feature = "test-support"))]
+pub enum RawBatchOp<'a> {
+    Put {
+        shard: usize,
+        key: &'a [u8],
+        value: &'a [u8],
+    },
+    Delete {
+        shard: usize,
+        key: &'a [u8],
+    },
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl RocksStore {
+    /// Stage a batch of raw put/delete ops — each carrying its own shard — and
+    /// commit them atomically with the given [`WriteOptions`], bypassing the
+    /// FrogDB WAL. The one named cross-crate seam the crash-atomicity tests
+    /// drive, replacing open-coded `WriteBatch`/`batch_put`/`write_batch_opt`
+    /// so no `rocksdb::WriteBatch` type crosses the `mod.rs` interface.
+    pub fn commit_raw_batch(
+        &self,
+        ops: &[RawBatchOp<'_>],
+        wo: &WriteOptions,
+    ) -> Result<(), RocksError> {
+        let mut batch = WriteBatch::default();
+        for op in ops {
+            match op {
+                RawBatchOp::Put { shard, key, value } => {
+                    self.batch_put(&mut batch, *shard, key, value)?
+                }
+                RawBatchOp::Delete { shard, key } => self.batch_delete(&mut batch, *shard, key)?,
+            }
+        }
+        self.write_batch_opt(batch, wo)
     }
 }
 /// Full RocksDB merge callback: fold every operand onto `existing` in order.
@@ -467,13 +628,4 @@ fn partial_value_merge(
 ) -> Option<Vec<u8>> {
     let ops: Vec<&[u8]> = operands.iter().collect();
     crate::partial_merge_hll_deltas(&ops)
-}
-
-#[allow(dead_code)]
-pub fn open_shared(
-    path: &Path,
-    num_shards: usize,
-    config: &RocksConfig,
-) -> Result<Arc<RocksStore>, RocksError> {
-    Ok(Arc::new(RocksStore::open(path, num_shards, config)?))
 }

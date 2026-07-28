@@ -23,6 +23,7 @@ use crate::common::test_server::{
     parse_simple_string,
 };
 use bytes::Bytes;
+use frogdb_core::{Arity, CommandFlags, CommandRegistry};
 use frogdb_protocol::Response;
 use rstest::rstest;
 use std::time::Duration;
@@ -625,6 +626,25 @@ async fn test_client_unblock_releases_wait() {
 
 /// WAIT inside MULTI/EXEC never blocks: it returns the current acked count
 /// immediately (Redis CLIENT_DENY_BLOCKING semantics), not nil.
+///
+/// Matches documented Redis behavior (redis.io `WAIT` docs, "Details"): "If
+/// the command is sent as part of a MULTI transaction (since Redis 7.0, any
+/// context that does not allow blocking, such as inside scripts), the
+/// command does not block but instead just return ASAP the number of
+/// replicas that acknowledged the previous write commands."
+///
+/// Regression guard, not a bug fix (testing-gap issue 51 / audit
+/// B-transactions#4, verdict ADJUSTED L1/C2 — correct by design). `WAIT`
+/// keeps `ExecutionStrategy::Standard`, so a queued `WAIT` is executed on
+/// the shard at EXEC time (`connection/transaction.rs:277-298`), landing in
+/// `WaitCommand::execute`'s deny-blocking branch
+/// (`commands/replication.rs:568-575`) — never the connection-level
+/// `WaitIntercept`/`WaitCoordinator` blocking path, which `dispatch.rs`
+/// documents (`connection/dispatch.rs:491-494`) as reachable only *outside*
+/// MULTI. `WAIT 1 0` requests a 1-replica quorum with timeout 0 (Redis:
+/// block forever until reached) — a maximally strict probe, since a
+/// regression that routed this through the blocking coordinator would hang
+/// EXEC permanently rather than merely running long.
 #[tokio::test]
 async fn test_wait_inside_multi_returns_count_immediately() {
     let config = TestServerConfig::default();
@@ -652,6 +672,174 @@ async fn test_wait_inside_multi_returns_count_immediately() {
         }
         other => panic!("expected EXEC array, got {other:?}"),
     }
+
+    primary.shutdown().await;
+}
+
+/// `MULTI; WAIT 0 0; EXEC` — the literal acceptance-criteria case for
+/// testing-gap issue 51: zero replicas requested, zero timeout. Same
+/// non-blocking routing as `test_wait_inside_multi_returns_count_immediately`
+/// (`ExecutionStrategy::Standard` -> `transaction.rs:277-298` -> shard
+/// deny-blocking branch `replication.rs:568-575`; the blocking
+/// `WaitIntercept` path is documented as unreachable inside MULTI,
+/// `dispatch.rs:491-494`). Asserts a tight (<1s) elapsed bound rather than
+/// relying on the nextest 15s force-kill to reveal a hang.
+#[tokio::test]
+async fn test_wait_inside_multi_zero_replicas_zero_timeout() {
+    let config = TestServerConfig::default();
+    let primary = TestServer::start_primary_with_config(config).await;
+
+    let mut client = primary.connect().await;
+    assert_ok(&client.command(&["MULTI"]).await);
+    client.command(&["WAIT", "0", "0"]).await; // QUEUED
+
+    let start = std::time::Instant::now();
+    let response = client.command(&["EXEC"]).await;
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "WAIT 0 0 queued in MULTI must return immediately via the shard's \
+         non-blocking branch; took {elapsed:?}"
+    );
+    match &response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1);
+            assert_eq!(parse_integer(&items[0]), Some(0));
+        }
+        other => panic!("expected EXEC array, got {other:?}"),
+    }
+
+    primary.shutdown().await;
+}
+
+/// `MULTI; WAIT 3 100; EXEC` on standalone (0 replicas connected) with a
+/// nonzero, finite timeout — the second acceptance-criteria case for issue
+/// 51. Asserts completion well *under* the requested 100ms window (not just
+/// under it), which is the only way to tell "returned immediately via the
+/// non-blocking shard branch" apart from "blocked for the full timeout and
+/// then returned the same answer." Same routing citation as the sibling
+/// tests above (`transaction.rs:277-298` -> `replication.rs:568-575`;
+/// blocking path unreachable inside MULTI per `dispatch.rs:491-494`).
+#[tokio::test]
+async fn test_wait_inside_multi_nonzero_timeout_does_not_block() {
+    let config = TestServerConfig::default();
+    let primary = TestServer::start_primary_with_config(config).await;
+
+    let mut client = primary.connect().await;
+    assert_ok(&client.command(&["MULTI"]).await);
+    client.command(&["WAIT", "3", "100"]).await; // QUEUED
+
+    let start = std::time::Instant::now();
+    let response = client.command(&["EXEC"]).await;
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(50),
+        "WAIT 3 100 queued in MULTI must return immediately, well under its \
+         own 100ms timeout window (a blocking implementation would also \
+         finish under 1s, so a tight sub-window bound is the only assertion \
+         that actually distinguishes the two); took {elapsed:?}"
+    );
+    match &response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1);
+            assert_eq!(parse_integer(&items[0]), Some(0));
+        }
+        other => panic!("expected EXEC array, got {other:?}"),
+    }
+
+    primary.shutdown().await;
+}
+
+/// With a live, acknowledged replica, a queued `WAIT` at EXEC returns the
+/// *correct* acked-replica count (1), not just a fast 0 — closing the last
+/// acceptance-criterion gap for issue 51 (the pre-existing MULTI/WAIT tests
+/// above only ever exercised the no-replica case). A plain (non-MULTI) WAIT
+/// first drives the connection-level `WaitCoordinator` to solicit `REPLCONF
+/// GETACK *` and confirm the replica has acked the current offset; only then
+/// is the *queued* WAIT known to hit an already-satisfied `count_acked`
+/// (`replication.rs:568-575`) via the shard non-blocking branch reached from
+/// `transaction.rs:277-298`, rather than coincidentally returning 0 because
+/// the replica hadn't caught up yet.
+#[tokio::test]
+async fn test_wait_inside_multi_returns_correct_acked_count_with_replica() {
+    let (primary, replica) = start_primary_replica_pair(TestServerConfig::default()).await;
+
+    let mut client = primary.connect().await;
+    client
+        .command(&["SET", "wait_multi_replica_key", "v"])
+        .await;
+
+    // Sync point: a blocking, non-MULTI WAIT confirms the replica has acked
+    // the offset written above before we probe the non-blocking MULTI path.
+    let synced = client.command(&["WAIT", "1", "5000"]).await;
+    assert_eq!(
+        parse_integer(&synced),
+        Some(1),
+        "setup WAIT must observe the replica ack before the MULTI probe, got {synced:?}"
+    );
+
+    assert_ok(&client.command(&["MULTI"]).await);
+    client.command(&["WAIT", "1", "5000"]).await; // QUEUED
+
+    let start = std::time::Instant::now();
+    let response = client.command(&["EXEC"]).await;
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "WAIT queued in MULTI must not block even with a real, unsatisfied-\
+         at-queue-time-looking timeout (5000ms); took {elapsed:?}"
+    );
+    match &response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1);
+            assert_eq!(
+                parse_integer(&items[0]),
+                Some(1),
+                "WAIT in MULTI must report the already-acked replica count, got {:?}",
+                items[0]
+            );
+        }
+        other => panic!("expected EXEC array, got {other:?}"),
+    }
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// PSYNC queued inside MULTI/EXEC replies `+OK` and never triggers a socket
+/// takeover. This path bypasses `PsyncIntercept` entirely: `TransactionQueue`
+/// (earlier in `PRE_DISPATCH_ORDER`) queues the command, and at EXEC
+/// `execute_connection_level_in_transaction` short-circuits it to `+OK` without
+/// calling `PsyncCommand::execute`. Guards that the typed-handoff refactor left
+/// this behavior untouched (the connection stays a normal request/reply client).
+#[tokio::test]
+async fn test_psync_inside_multi_replies_ok() {
+    let config = TestServerConfig::default();
+    let primary = TestServer::start_primary_with_config(config).await;
+
+    let mut client = primary.connect().await;
+    assert_ok(&client.command(&["MULTI"]).await);
+    client.command(&["PSYNC", "?", "-1"]).await; // QUEUED
+
+    let response = client.command(&["EXEC"]).await;
+    match &response {
+        Response::Array(items) => {
+            assert_eq!(
+                items.len(),
+                1,
+                "EXEC returns one reply for the queued PSYNC"
+            );
+            assert_ok(&items[0]);
+        }
+        other => panic!("expected EXEC array, got {other:?}"),
+    }
+
+    // The connection is still a normal client: a follow-up PING must answer.
+    let pong = client.command(&["PING"]).await;
+    assert!(
+        !is_error(&pong),
+        "connection must remain a normal request/reply client after MULTI PSYNC EXEC, got {pong:?}"
+    );
 
     primary.shutdown().await;
 }
@@ -1319,7 +1507,11 @@ async fn test_different_shard_counts(#[case] num_shards: usize) {
 // Tier 4: Partial Sync Tests
 // ============================================================================
 
-/// Test that PSYNC with valid replication ID and offset gets CONTINUE or FULLRESYNC response.
+/// PSYNC presenting the primary's own replid at its current live offset must be
+/// granted a partial resync (`+CONTINUE`) — the fully-caught-up reconnect case.
+/// (Previously this test accepted "CONTINUE, FULLRESYNC, or OK" and only checked
+/// for a non-error; that over-permissive assertion would have let a silent
+/// full-resync regression through — issue 34.)
 #[rstest]
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
@@ -1346,21 +1538,23 @@ async fn test_partial_sync_continue_response(#[case] persistence: bool) {
     let _ = primary.send("WAIT", &["1", "2000"]).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Get replication info from INFO
-    let repl_state = get_replication_state(&primary).await;
-
-    // If we got replication info, test PSYNC with valid offset
-    if let Some((id, offset)) = repl_state {
-        // Create a new connection and attempt PSYNC
-        let response = primary.send("PSYNC", &[&id, &offset.to_string()]).await;
-
-        // Should get CONTINUE, FULLRESYNC, or OK (implementation may vary)
-        // The key is that it should NOT error
-        assert!(
-            !is_error(&response),
-            "PSYNC should not error with valid params"
-        );
-    }
+    // The primary's own replid at its live offset is squarely inside the
+    // continuable window, so PSYNC must answer +CONTINUE (not a full resync).
+    let (id, offset) = get_replication_state(&primary)
+        .await
+        .expect("primary INFO replication");
+    let resp = primary
+        .send_raw(&encode_resp_command(&["PSYNC", &id, &offset.to_string()]))
+        .await;
+    let head = String::from_utf8_lossy(&resp);
+    assert!(
+        head.starts_with("+CONTINUE"),
+        "PSYNC at the live offset with the primary's own replid must get +CONTINUE, got: {head:?}"
+    );
+    assert!(
+        !head.contains("FULLRESYNC"),
+        "no full resync may occur for an in-window reconnect, got: {head:?}"
+    );
 
     replica.shutdown().await;
     primary.shutdown().await;
@@ -1418,8 +1612,10 @@ async fn test_partial_sync_preserves_ordering(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
-/// Test that PSYNC with invalid offset gets handled appropriately.
-/// The server may return FULLRESYNC or OK depending on implementation.
+/// PSYNC presenting a replid the primary does not recognize must fall back to a
+/// full resync (`+FULLRESYNC`) — never a partial resync. (Previously this test
+/// accepted "FULLRESYNC or OK"; the loose `OK` alternative would have masked a
+/// bogus partial-resync grant on an unknown replid — issue 34.)
 #[rstest]
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
@@ -1431,45 +1627,47 @@ async fn test_partial_sync_falls_back_to_full(#[case] persistence: bool) {
     };
     let primary = TestServer::start_primary_with_config(config).await;
 
-    // Try PSYNC with a completely invalid replication ID
-    let response = primary
-        .send("PSYNC", &["invalid_repl_id_12345", "99999"])
+    // A replid the primary has never issued cannot match its window -> FULLRESYNC.
+    let resp = primary
+        .send_raw(&encode_resp_command(&[
+            "PSYNC",
+            "invalid_repl_id_12345",
+            "99999",
+        ]))
         .await;
-
-    // Server should handle this gracefully (FULLRESYNC, OK, or other non-error response)
-    // The key is that invalid replication IDs should be handled, not crash
-    match &response {
-        Response::Simple(s) => {
-            let s_str = String::from_utf8_lossy(s);
-            // FULLRESYNC or OK are both acceptable responses
-            assert!(
-                s_str.starts_with("FULLRESYNC") || s_str == "OK",
-                "Expected FULLRESYNC or OK for invalid repl ID, got: {}",
-                s_str
-            );
-        }
-        Response::Bulk(Some(b)) => {
-            let b_str = String::from_utf8_lossy(b);
-            // FULLRESYNC or OK in bulk form
-            assert!(
-                b_str.starts_with("FULLRESYNC") || b_str == "OK",
-                "Expected FULLRESYNC or OK for invalid repl ID, got: {}",
-                b_str
-            );
-        }
-        _ => {
-            // Any non-error response is acceptable
-            assert!(
-                !is_error(&response),
-                "PSYNC should not error on invalid repl ID"
-            );
-        }
-    }
+    let head = String::from_utf8_lossy(&resp);
+    assert!(
+        head.starts_with("+FULLRESYNC"),
+        "unknown replid must fall back to +FULLRESYNC, got: {head:?}"
+    );
+    assert!(
+        !head.contains("CONTINUE"),
+        "an unknown replid must never be granted a partial resync, got: {head:?}"
+    );
 
     primary.shutdown().await;
 }
 
-/// Test that promoted replica accepts old primary's replication ID for partial sync.
+/// Replication-ID handling across a `REPLICAOF NO ONE` promotion.
+///
+/// This test PINS FrogDB's actual PSYNC2-divergent promotion semantics rather
+/// than asserting Redis parity — see [`docs`](../../../website/src/content/docs/operations/replication.md)
+/// ("do not rely on a specific secondary-ID continuation behavior").
+///
+/// Redis PSYNC2 on promotion: the promoted node mints a *new* `master_replid`
+/// and preserves the old one as `master_replid2` with `second_repl_offset` = the
+/// live offset at promotion, so downstream replicas can partial-resync
+/// (`+CONTINUE`) through the failover.
+///
+/// FrogDB DIVERGES on the manual `REPLICAOF NO ONE` path:
+///   1. the promoted node keeps the *same* `master_replid` it adopted from its
+///      former primary during FULLRESYNC — no new id is minted;
+///   2. no secondary window is established — `master_replid2` stays all-zero and
+///      `second_repl_offset` stays `-1`.
+/// (The replid-rotation machinery — [`ReplicationState::new_replication_id`] and
+/// the `secondary_id`/`secondary_offset` window — exists in the replication
+/// crate but is NOT wired to the runtime promotion path; it currently has no
+/// production caller.)
 #[rstest]
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
@@ -1490,32 +1688,246 @@ async fn test_secondary_replication_id_failover(#[case] persistence: bool) {
     let _ = primary.send("WAIT", &["1", "2000"]).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Get primary's replication ID before failover (informational)
-    let _old_repl_id = get_replication_state(&primary).await.map(|(id, _)| id);
+    // The replica adopts the primary's replication id during FULLRESYNC. This
+    // also gates that the initial sync has completed before we promote.
+    let primary_replid = get_replication_state(&primary)
+        .await
+        .expect("primary INFO replication")
+        .0;
+    let before = parse_info_replication(&replica.send("INFO", &["replication"]).await).unwrap();
+    let replid_before = before.get("master_replid").cloned().unwrap();
+    assert_eq!(
+        replid_before, primary_replid,
+        "replica must adopt the primary's replid via FULLRESYNC before promotion"
+    );
 
-    // Promote replica to primary (stop replication)
+    // Promote replica to primary (stop replication).
     let promote_resp = replica.send("REPLICAOF", &["NO", "ONE"]).await;
     assert_ok(&promote_resp);
 
-    // Check INFO replication on promoted replica
-    let new_info = replica.send("INFO", &["replication"]).await;
-    let info_map = parse_info_replication(&new_info).unwrap();
-    // Should now report as master
+    let after = parse_info_replication(&replica.send("INFO", &["replication"]).await).unwrap();
     assert_eq!(
-        info_map.get("role").map(|s| s.as_str()),
+        after.get("role").map(String::as_str),
         Some("master"),
         "Promoted replica should report as master"
     );
 
-    // Check for master_replid2 (secondary replication ID)
-    // This would contain the old primary's ID if implemented
-    let has_replid2 = info_map.contains_key("master_replid2");
-    eprintln!(
-        "Has secondary replication ID (master_replid2): {}",
-        has_replid2
+    // (a) DIVERGENCE: the replid is NOT rotated on promotion — the promoted node
+    // keeps the id it adopted from its former primary. (Redis mints a new one.)
+    assert_eq!(
+        after.get("master_replid").cloned().unwrap(),
+        replid_before,
+        "FrogDB keeps the same master_replid across REPLICAOF NO ONE promotion \
+         (diverges from Redis, which mints a new replid)"
+    );
+
+    // (b) DIVERGENCE: no secondary window is established — replid2 stays all-zero
+    // and second_repl_offset stays -1. (Redis sets replid2 = the old replid.)
+    assert_eq!(
+        after.get("master_replid2").map(String::as_str),
+        Some("0000000000000000000000000000000000000000"),
+        "FrogDB does not populate master_replid2 on REPLICAOF NO ONE promotion \
+         (diverges from Redis PSYNC2, which stores the prior replid as replid2)"
+    );
+    assert_eq!(
+        after.get("second_repl_offset").map(String::as_str),
+        Some("-1"),
+        "second_repl_offset must remain the -1 sentinel when no failover window is set"
     );
 
     replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// A node promoted via manual `REPLICAOF NO ONE` becomes *writable* but does NOT
+/// become a replication *source*: it rejects downstream `PSYNC` outright.
+///
+/// This pins a second FrogDB divergence from Redis PSYNC2. In Redis a promoted
+/// replica serves PSYNC to surviving replicas (partial-resync via replid2, or a
+/// full resync). In FrogDB the primary-side replication handler
+/// (`primary_replication_handler`) is wired ONLY at boot for a node started as a
+/// primary; the runtime `REPLICAOF NO ONE` path (`RoleManager::promote`) only
+/// clears the read-only flag and tears down the inbound stream — it never spins
+/// up a `PrimaryReplicationHandler`. So PSYNC stays gated off and a downstream
+/// replica gets neither `+CONTINUE` nor `+FULLRESYNC`.
+///
+/// NOTE: this makes the manual-promotion path unable to head a replication chain
+/// (candidate follow-up: wire promotion to establish the primary handler). It
+/// does not affect boot-configured primaries, whose partial/full resync is
+/// covered by `test_partial_resync_after_brief_disconnect_grants_continue` and
+/// `test_partial_resync_unknown_replid_falls_back_to_full`.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_promoted_node_via_replicaof_no_one_rejects_downstream_psync(
+    #[case] persistence: bool,
+) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    for i in 0..5 {
+        primary.send("SET", &[&format!("k{i}"), "v"]).await;
+    }
+    let _ = primary.send("WAIT", &["1", "2000"]).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Capture the replid + offset a surviving replica would present when it
+    // reconnects to the promoted node.
+    let (replid, offset) = get_replication_state(&replica)
+        .await
+        .expect("replica INFO replication");
+
+    // Promote via manual REPLICAOF NO ONE.
+    assert_ok(&replica.send("REPLICAOF", &["NO", "ONE"]).await);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        parse_info_replication(&replica.send("INFO", &["replication"]).await)
+            .unwrap()
+            .get("role")
+            .map(String::as_str),
+        Some("master"),
+        "promoted node must report role:master"
+    );
+
+    // PSYNC to the promoted node is rejected — not a partial resync, not a full
+    // resync, but an outright "not running as primary" error.
+    let resp = replica
+        .send_raw(&encode_resp_command(&[
+            "PSYNC",
+            &replid,
+            &offset.to_string(),
+        ]))
+        .await;
+    let head = String::from_utf8_lossy(&resp);
+    assert!(
+        head.starts_with("-ERR") && head.contains("not running as primary"),
+        "manual-promoted node must reject downstream PSYNC (not running as primary), got: {head:?}"
+    );
+    assert!(
+        !head.contains("CONTINUE") && !head.contains("FULLRESYNC"),
+        "promoted node must not offer any resync via PSYNC, got: {head:?}"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// Chained replication (replica-of-replica) contract, pinned (testing-gap
+/// issue 48): FrogDB does **not** implement transitive replication, and this
+/// covers the more common real-world trigger than the manual-promotion case
+/// above — a plain, never-promoted replica as the chain target.
+///
+/// `REPLICAOF` accepts a target that is itself a replica: the command layer
+/// does no target-role validation, flips the sub-replica's own role, and
+/// returns `+OK` synchronously (matching Redis's async REPLICAOF semantics —
+/// REPLICAOF cannot know the target's role without a round trip). But the
+/// background connection then performs a `PSYNC` handshake against that
+/// target, and — same mechanism as
+/// `test_promoted_node_via_replicaof_no_one_rejects_downstream_psync` — a
+/// node without a live `primary_replication_handler` (every replica; it's
+/// wired only for a booted-or-promoted primary, see `replication_init.rs`)
+/// answers PSYNC with an outright `-ERR ... not running as primary`
+/// (`connection/dispatch.rs`'s `PsyncIntercept` presence gate). The
+/// sub-replica's link never comes up and no primary-origin write ever
+/// reaches it — a *reject*, not a silent black hole, just one that is only
+/// visible through the link status and logs rather than the `REPLICAOF`
+/// reply itself.
+///
+/// DIVERGENCE (pinned, intentional): Redis supports arbitrary replica
+/// fan-out chains; FrogDB does not. See `operations/replication.md` "How
+/// FrogDB differs from Redis replication" for the documented contract.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_chained_replication_rejected_sub_replica_never_receives_data(
+    #[case] persistence: bool,
+) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+
+    // Primary <- replica_a: an ordinary, never-promoted replica.
+    let primary = TestServer::start_primary_with_config(config.clone()).await;
+    let replica_a = TestServer::start_replica_with_config(&primary, config.clone()).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    assert_ok(&primary.send("SET", &["k1", "v1"]).await);
+    wait_for_replication(&primary, 2000).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        matches!(&replica_a.send("GET", &["k1"]).await, Response::Bulk(Some(v)) if v.as_ref() == b"v1"),
+        "sanity: replica_a must have synced from primary before B attaches to it"
+    );
+
+    // node_b: boots standalone-writable, then REPLICAOF at runtime targets
+    // replica_a — the literal scenario from the acceptance criteria.
+    let node_b = TestServer::start_primary_with_config(config).await;
+    let a_port = replica_a.port().to_string();
+    assert_ok(&node_b.send("REPLICAOF", &["127.0.0.1", &a_port]).await);
+
+    // node_b's role flips immediately even though no data will ever flow.
+    assert_eq!(
+        role_name(&node_b.send("ROLE", &[]).await).as_deref(),
+        Some("slave"),
+        "REPLICAOF must flip node_b's role even though the target is a replica"
+    );
+
+    // Give the reconnect/backoff loop several attempts to "succeed" (it can't).
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let info = parse_info_replication(&node_b.send("INFO", &["replication"]).await).unwrap();
+    assert_eq!(
+        info.get("master_link_status").map(String::as_str),
+        Some("down"),
+        "a sub-replica pointed at a replica must never report master_link_status:up, got: {info:?}"
+    );
+
+    // Neither the pre-existing key nor a write issued after node_b attached
+    // ever reaches it — no full sync, no streamed frame.
+    assert!(
+        matches!(node_b.send("GET", &["k1"]).await, Response::Bulk(None)),
+        "sub-replica must never receive the pre-existing key via a replica target"
+    );
+
+    assert_ok(&primary.send("SET", &["k2", "v2"]).await);
+    wait_for_replication(&primary, 2000).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        matches!(node_b.send("GET", &["k2"]).await, Response::Bulk(None)),
+        "sub-replica must never receive a primary-origin write relayed through a replica target"
+    );
+
+    // Confirm this is an explicit reject, not merely an absence of data: a raw
+    // PSYNC against replica_a — the same handshake node_b's reconnect loop is
+    // attempting — gets an outright error, never CONTINUE/FULLRESYNC.
+    let (replid, offset) = get_replication_state(&replica_a)
+        .await
+        .expect("replica_a INFO replication");
+    let resp = replica_a
+        .send_raw(&encode_resp_command(&[
+            "PSYNC",
+            &replid,
+            &offset.to_string(),
+        ]))
+        .await;
+    let head = String::from_utf8_lossy(&resp);
+    assert!(
+        head.starts_with("-ERR") && head.contains("not running as primary"),
+        "a plain (never-promoted) replica must reject downstream PSYNC outright, got: {head:?}"
+    );
+    assert!(
+        !head.contains("CONTINUE") && !head.contains("FULLRESYNC"),
+        "a replica must never offer a resync to a would-be sub-replica, got: {head:?}"
+    );
+
+    node_b.shutdown().await;
+    replica_a.shutdown().await;
     primary.shutdown().await;
 }
 
@@ -1752,11 +2164,14 @@ async fn test_wait_with_disconnected_replica(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
-/// Test replica behavior under high write load.
-/// Documents broadcast channel behavior when replica lags.
+/// Test replica behavior under high write load: a burst of writes must still
+/// converge on the replica once it catches up (a smoke test that a moderate
+/// backlog does not wedge the stream).
 ///
-/// NOTE: Currently ignored because replica becomes unresponsive under high load.
-/// This documents Issue #2 from the test plan: "Broadcast overflow only warns - No resync triggered"
+/// For the full lag-disconnect → reconnect → resync cycle that a *stalled*
+/// replica triggers (broadcast overflow / write-timeout on the primary side),
+/// see [`test_broadcast_lag_disconnect_and_resync`], which drives the stall
+/// deterministically through an interposed throttling proxy.
 #[rstest]
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
@@ -2905,68 +3320,262 @@ async fn test_sync_returns_not_implemented() {
 // ============================================================================
 // Tier 9: Expired Key Replication
 // ============================================================================
+//
+// FrogDB's replica-expiry contract (issue 32) — this differs from Redis, and
+// the tests below pin the *actual* behavior rather than an aspirational one:
+//
+// - Redis: TTL-setting commands are rewritten to an absolute `PEXPIREAT`
+//   before replication, and organic key expiry is propagated to replicas as
+//   an explicit `DEL`/`UNLINK`. Because the replica's deadline is
+//   byte-identical to the primary's, a replica `GET` returns nil at exactly
+//   the same instant the primary would, even before the `DEL` arrives.
+// - FrogDB (`core/src/shard/post_execution.rs::apply_expiry_effects`,
+//   `RemovalPropagation`): a replica expires **independently**, on its own
+//   clock (`get_with_expiry_check` / active expiry are both role-agnostic).
+//   TTL-setting commands (e.g. `PEXPIRE`) replicate **verbatim** — a relative
+//   duration, not an absolute deadline (`expire_tcl.rs` documents this as a
+//   deliberate, accepted incompatibility) — so the replica computes its own
+//   deadline as `replica_apply_time + duration`, which lands later than the
+//   primary's `primary_apply_time + duration` by however long replication
+//   took to deliver the write. The primary never broadcasts a `DEL` for
+//   organic expiry at all (`replicate: false`).
+//
+// Net effect: there is a real, but *bounded* (bounded by replication lag,
+// not unbounded) window after the primary has logically expired a key
+// during which a replica `GET` still returns the stale (pre-expiry) value,
+// and the key only disappears on the replica once, independently, via the
+// replica's own clock — never via a propagated `DEL`.
 
-/// Test that a key that expires on the primary eventually disappears on the replica.
+/// Poll a replica until it reports a positive `PTTL` for `key`, proving it
+/// has actually applied the TTL-setting write (not just that `WAIT`
+/// acknowledged the bytes).
+async fn poll_until_replica_has_positive_pttl(
+    replica: &TestServer,
+    key: &str,
+    timeout_ms: u64,
+) -> Option<i64> {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        if let Some(pttl) = parse_integer(&replica.send("PTTL", &[key]).await)
+            && pttl > 0
+        {
+            return Some(pttl);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// Pins the actual (not Redis's) replica-expiry contract: a real, bounded
+/// drift window where the replica serves a value the primary has already
+/// expired, and eventual independent convergence — never via a propagated
+/// `DEL` — proven by `master_repl_offset` not advancing.
 ///
-/// Inspired by Redis `14-consistency-check.tcl`.
-/// Redis propagates key expiration as DEL commands rather than expiring on the replica.
+/// Previously `test_expire_propagated_as_del_not_expire`, which resolved
+/// every possible outcome via `eprintln!` instead of asserting one.
 #[rstest]
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
 #[tokio::test]
-async fn test_expire_propagated_as_del_not_expire(#[case] persistence: bool) {
+async fn test_replica_expires_independently_not_via_del(#[case] persistence: bool) {
     let config = TestServerConfig {
         persistence,
         ..Default::default()
     };
-
     let (primary, replica) = start_primary_replica_pair(config).await;
+    let key = "expire_drift_test";
 
-    // Set a key with a short TTL (500ms)
-    let set_resp = primary.send("SET", &["expire_test", "expiring"]).await;
-    assert_ok(&set_resp);
-    let expire_resp = primary.send("PEXPIRE", &["expire_test", "500"]).await;
+    assert_ok(&primary.send("SET", &[key, "expiring"]).await);
+    let expire_resp = primary.send("PEXPIRE", &[key, "1500"]).await;
     assert!(
         matches!(expire_resp, Response::Integer(1)),
-        "PEXPIRE should return 1"
+        "PEXPIRE should return 1, got: {:?}",
+        expire_resp
     );
 
-    // Wait for replication
-    let _ = wait_for_replication(&primary, 2000).await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    let _ = wait_for_replication(&primary, 5000).await;
 
-    // Verify key exists on replica before expiry
-    let pre_expire = replica.send("GET", &["expire_test"]).await;
-    if let Response::Bulk(Some(v)) = &pre_expire {
-        assert_eq!(v.as_ref(), b"expiring", "Key should exist before expiry");
-    }
+    // The write-effect pipeline never broadcasts a DEL for organic expiry
+    // (`RemovalPropagation { replicate: false }`), so the primary's
+    // replication offset right after the TTL-setting write is the offset it
+    // must *still* report once the key is gone on both nodes.
+    let (_, offset_after_pexpire) = get_replication_state(&primary)
+        .await
+        .expect("primary should report replication state");
 
-    // Wait for the key to expire on primary
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    // Confirm the replica actually applied PEXPIRE (not just that WAIT
+    // acknowledged bytes) before measuring drift.
+    let replica_pttl_early = poll_until_replica_has_positive_pttl(&replica, key, 2000)
+        .await
+        .expect("replica should apply PEXPIRE and report a positive PTTL");
+    assert!(
+        replica_pttl_early > 0 && replica_pttl_early <= 1500,
+        "replica PTTL right after apply should be in (0, 1500], got {replica_pttl_early}"
+    );
 
-    // Access the key on primary to trigger lazy expiry
-    let primary_get = primary.send("GET", &["expire_test"]).await;
+    // Read both PTTLs as close to simultaneously as possible (concurrent
+    // requests, not sequential) to measure the deadline drift caused by
+    // verbatim relative-TTL propagation.
+    let pttl_args: [&str; 1] = [key];
+    let (primary_pttl_resp, replica_pttl_resp) = tokio::join!(
+        primary.send("PTTL", &pttl_args),
+        replica.send("PTTL", &pttl_args)
+    );
+    let primary_pttl =
+        parse_integer(&primary_pttl_resp).expect("primary PTTL should be an integer");
+    let replica_pttl =
+        parse_integer(&replica_pttl_resp).expect("replica PTTL should be an integer");
+    assert!(
+        primary_pttl > 0,
+        "primary PTTL should still be positive: {primary_pttl}"
+    );
+    assert!(
+        replica_pttl > 0,
+        "replica PTTL should still be positive: {replica_pttl}"
+    );
+
+    let drift_ms = replica_pttl - primary_pttl;
+    eprintln!(
+        "measured replica-primary PTTL drift: {drift_ms}ms (primary={primary_pttl}ms, replica={replica_pttl}ms)"
+    );
+
+    // Sleep exactly past the primary's *measured* deadline (deterministic —
+    // computed from the PTTL we just read, not a guessed knife-edge sleep),
+    // plus a small margin so the primary is guaranteed to have expired.
+    let margin_ms: i64 = 20;
+    tokio::time::sleep(Duration::from_millis((primary_pttl + margin_ms) as u64)).await;
+
+    let primary_get = primary.send("GET", &[key]).await;
     assert!(
         matches!(primary_get, Response::Bulk(None)),
-        "Key should be expired on primary"
+        "primary must have expired the key by now, got: {:?}",
+        primary_get
     );
 
-    // Wait for DEL propagation
-    let _ = wait_for_replication(&primary, 2000).await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Pin the actual drift-window contract. When the measured drift
+    // comfortably exceeds the margin we just slept, the replica's own local
+    // deadline has NOT been reached yet, so it must still serve the
+    // (already primary-expired) stale value — the documented divergence from
+    // Redis. When the measured drift happens to be smaller than the margin
+    // (replication this run was very fast), the replica may have already
+    // expired too; both outcomes are consistent with the pinned contract, so
+    // branch on the measured drift rather than asserting one outcome
+    // blindly.
+    let replica_get = replica.send("GET", &[key]).await;
+    if drift_ms > margin_ms {
+        assert!(
+            matches!(replica_get, Response::Bulk(Some(_))),
+            "replica should still serve the stale pre-expiry value during the \
+             drift window (measured drift {drift_ms}ms > margin {margin_ms}ms); \
+             got: {:?}",
+            replica_get
+        );
+    } else {
+        eprintln!(
+            "measured drift {drift_ms}ms <= margin {margin_ms}ms this run; \
+             replica may already have expired independently too: {:?}",
+            replica_get
+        );
+    }
 
-    // Key should be gone on replica too
-    let replica_get = replica.send("GET", &["expire_test"]).await;
-    match &replica_get {
-        Response::Bulk(None) => {
-            eprintln!("Key correctly expired on replica via DEL propagation");
-        }
-        Response::Bulk(Some(_)) => {
-            eprintln!("Note: Key still present on replica (DEL propagation may be delayed)");
-        }
-        _ => {
-            eprintln!("Unexpected response: {:?}", replica_get);
-        }
+    // Eventually (generous poll, not a knife-edge sleep) the key must be
+    // gone on the replica too, via its OWN clock.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut replica_final = replica.send("GET", &[key]).await;
+    while !matches!(replica_final, Response::Bulk(None)) && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        replica_final = replica.send("GET", &[key]).await;
+    }
+    assert!(
+        matches!(replica_final, Response::Bulk(None)),
+        "replica must eventually expire the key independently, got: {:?}",
+        replica_final
+    );
+
+    // Prove convergence happened via independent expiry, not a propagated
+    // DEL: the primary's replication offset must not have advanced.
+    let (_, offset_final) = get_replication_state(&primary)
+        .await
+        .expect("primary should report replication state");
+    assert_eq!(
+        offset_final, offset_after_pexpire,
+        "primary's replication offset must not advance for organic expiry — \
+         RemovalPropagation {{ replicate: false }} means no DEL is ever \
+         broadcast for TTL-driven removal (core/src/shard/post_execution.rs)"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// PTTL bound test (issue 32 acceptance criteria): the replica's `PTTL` for a
+/// key whose TTL was set by a verbatim-propagated relative-TTL command must
+/// be bounded relative to the primary's `PTTL` by a documented lag bound —
+/// not merely "some value close to the primary's". A large, unbounded
+/// divergence would indicate the drift is not actually governed by
+/// replication lag (or that replication itself is starved).
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_replica_pttl_bounded_by_replication_lag(#[case] persistence: bool) {
+    /// Generous local-test lag bound: real replication lag between two
+    /// in-process servers over loopback is normally single-digit
+    /// milliseconds; this leaves ample headroom for scheduler jitter while
+    /// still being a meaningfully finite bound (not "any value").
+    const DRIFT_BOUND_MS: i64 = 2000;
+
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+    let key = "pttl_drift_bound_test";
+
+    assert_ok(&primary.send("SET", &[key, "v"]).await);
+    let expire_resp = primary.send("PEXPIRE", &[key, "10000"]).await;
+    assert!(
+        matches!(expire_resp, Response::Integer(1)),
+        "PEXPIRE should return 1, got: {:?}",
+        expire_resp
+    );
+    let _ = wait_for_replication(&primary, 5000).await;
+    poll_until_replica_has_positive_pttl(&replica, key, 2000)
+        .await
+        .expect("replica should apply PEXPIRE and report a positive PTTL");
+
+    // Take several concurrent (primary, replica) PTTL samples; every sample
+    // must fall inside the documented bound.
+    let pttl_args: [&str; 1] = [key];
+    for _ in 0..5 {
+        let (primary_pttl_resp, replica_pttl_resp) = tokio::join!(
+            primary.send("PTTL", &pttl_args),
+            replica.send("PTTL", &pttl_args)
+        );
+        let primary_pttl =
+            parse_integer(&primary_pttl_resp).expect("primary PTTL should be an integer");
+        let replica_pttl =
+            parse_integer(&replica_pttl_resp).expect("replica PTTL should be an integer");
+        assert!(
+            primary_pttl > 0,
+            "primary PTTL should be positive: {primary_pttl}"
+        );
+        assert!(
+            replica_pttl > 0,
+            "replica PTTL should be positive: {replica_pttl}"
+        );
+
+        let drift_ms = replica_pttl - primary_pttl;
+        assert!(
+            drift_ms.abs() <= DRIFT_BOUND_MS,
+            "replica/primary PTTL drift must be bounded by replication lag \
+             (documented bound {DRIFT_BOUND_MS}ms), got {drift_ms}ms \
+             (primary={primary_pttl}ms, replica={replica_pttl}ms)"
+        );
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
     replica.shutdown().await;
@@ -3410,6 +4019,211 @@ async fn test_set_operations_replicate(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
+// ============================================================================
+// SPOP deterministic propagation (issue 01: nondeterministic verbatim
+// propagation diverged primary and replica).
+//
+// SPOP pops a *random* member; replicating it verbatim let the replica pop a
+// different one. The fix rewrites the broadcast to `SREM <popped members>`
+// (partial drain) or `DEL` (full drain) via the ReplicationOverride mechanism.
+// These tests pin primary/replica set equality for every drain shape.
+// ============================================================================
+
+/// Extract the bulk-string members of an SMEMBERS reply, sorted.
+fn sorted_members(resp: &Response) -> Vec<String> {
+    match resp {
+        Response::Array(arr) => {
+            let mut members: Vec<String> = arr
+                .iter()
+                .filter_map(|r| match r {
+                    Response::Bulk(Some(b)) => Some(String::from_utf8_lossy(b).to_string()),
+                    _ => None,
+                })
+                .collect();
+            members.sort();
+            members
+        }
+        other => panic!("expected array from SMEMBERS, got: {other:?}"),
+    }
+}
+
+/// Poll until the replica's SMEMBERS of `key` equals the primary's (both
+/// sorted), or `timeout_ms` elapses. Returns `(primary, replica)` members for
+/// the caller's assertion (so a timeout fails with the divergent contents).
+async fn wait_for_set_convergence(
+    primary: &TestServer,
+    replica: &TestServer,
+    key: &str,
+    timeout_ms: u64,
+) -> (Vec<String>, Vec<String>) {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        let p = sorted_members(&primary.send("SMEMBERS", &[key]).await);
+        let r = sorted_members(&replica.send("SMEMBERS", &[key]).await);
+        if p == r || tokio::time::Instant::now() >= deadline {
+            return (p, r);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// SPOP with a count that leaves members behind (partial drain): the replica
+/// must end up with exactly the primary's remaining members — the divergence
+/// the verbatim `SPOP` broadcast used to cause.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_spop_partial_drain_replicates(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    let sadd = primary
+        .send("SADD", &["{r}spop", "a", "b", "c", "d", "e"])
+        .await;
+    assert_eq!(parse_integer(&sadd), Some(5), "SADD failed: {sadd:?}");
+
+    let spop = primary.send("SPOP", &["{r}spop", "2"]).await;
+    let popped = match &spop {
+        Response::Array(arr) => arr.len(),
+        other => panic!("expected array from SPOP with count, got: {other:?}"),
+    };
+    assert_eq!(popped, 2, "SPOP 2 must pop exactly 2 members");
+
+    let _ = wait_for_replication(&primary, 5000).await;
+    let (p, r) = wait_for_set_convergence(&primary, &replica, "{r}spop", 5000).await;
+    assert_eq!(p.len(), 3, "primary must retain 3 members, got {p:?}");
+    assert_eq!(
+        p, r,
+        "replica set must equal primary set after SPOP (primary {p:?}, replica {r:?})"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// SPOP draining the whole set (count == cardinality): the rewrite propagates
+/// a `DEL`, so the key must be gone on both nodes.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_spop_full_drain_replicates_as_delete(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    let sadd = primary.send("SADD", &["{r}drain", "x", "y", "z"]).await;
+    assert_eq!(parse_integer(&sadd), Some(3), "SADD failed: {sadd:?}");
+
+    let spop = primary.send("SPOP", &["{r}drain", "3"]).await;
+    match &spop {
+        Response::Array(arr) => assert_eq!(arr.len(), 3),
+        other => panic!("expected array from SPOP, got: {other:?}"),
+    }
+    assert_eq!(
+        parse_integer(&primary.send("EXISTS", &["{r}drain"]).await),
+        Some(0),
+        "full drain must delete the key on the primary"
+    );
+
+    let _ = wait_for_replication(&primary, 5000).await;
+    let (p, r) = wait_for_set_convergence(&primary, &replica, "{r}drain", 5000).await;
+    assert!(
+        p.is_empty() && r.is_empty(),
+        "both must be empty: {p:?} {r:?}"
+    );
+    assert_eq!(
+        parse_integer(&replica.send("EXISTS", &["{r}drain"]).await),
+        Some(0),
+        "full drain must delete the key on the replica"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// SPOP with count exceeding the cardinality pops everything; the key must be
+/// gone on both nodes.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_spop_count_exceeding_cardinality_replicates(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    let sadd = primary.send("SADD", &["{r}over", "p", "q"]).await;
+    assert_eq!(parse_integer(&sadd), Some(2), "SADD failed: {sadd:?}");
+
+    let spop = primary.send("SPOP", &["{r}over", "10"]).await;
+    match &spop {
+        Response::Array(arr) => assert_eq!(arr.len(), 2, "SPOP pops what exists"),
+        other => panic!("expected array from SPOP, got: {other:?}"),
+    }
+
+    let _ = wait_for_replication(&primary, 5000).await;
+    let (p, r) = wait_for_set_convergence(&primary, &replica, "{r}over", 5000).await;
+    assert!(
+        p.is_empty() && r.is_empty(),
+        "both must be empty: {p:?} {r:?}"
+    );
+    assert_eq!(
+        parse_integer(&replica.send("EXISTS", &["{r}over"]).await),
+        Some(0),
+        "key must be deleted on the replica"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// Repeated single-member SPOP (no count): each pop rewrites to `SREM` of the
+/// specific popped member, so the replica tracks the primary exactly.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_spop_single_member_replicates(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    let sadd = primary
+        .send("SADD", &["{r}one", "a", "b", "c", "d", "e"])
+        .await;
+    assert_eq!(parse_integer(&sadd), Some(5), "SADD failed: {sadd:?}");
+
+    for _ in 0..2 {
+        let spop = primary.send("SPOP", &["{r}one"]).await;
+        assert!(
+            matches!(&spop, Response::Bulk(Some(_))),
+            "single SPOP must return a member, got: {spop:?}"
+        );
+    }
+
+    let _ = wait_for_replication(&primary, 5000).await;
+    let (p, r) = wait_for_set_convergence(&primary, &replica, "{r}one", 5000).await;
+    assert_eq!(p.len(), 3, "primary must retain 3 members, got {p:?}");
+    assert_eq!(
+        p, r,
+        "replica set must equal primary set after single SPOPs (primary {p:?}, replica {r:?})"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
 /// Sorted set operations (ZADD) replicate to replica via ZRANGE.
 #[rstest]
 #[case::in_memory(false)]
@@ -3591,7 +4405,14 @@ async fn test_role_changes_after_replicaof(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
-/// After REPLICAOF NO ONE, other replicas can partial-sync via secondary repl ID.
+/// Cross-failover behavior after `REPLICAOF NO ONE`, pinning FrogDB's actual
+/// (PSYNC2-divergent) semantics. In Redis a promoted replica hands surviving
+/// replicas a partial resync via `master_replid2`; FrogDB neither sets replid2
+/// nor serves PSYNC from a manually-promoted node (see
+/// `test_secondary_replication_id_failover` and
+/// `test_promoted_node_via_replicaof_no_one_rejects_downstream_psync` for the
+/// primitives). This test pins that whole shape end-to-end from a two-replica
+/// topology, and confirms the promoted node still holds the pre-promotion data.
 #[rstest]
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
@@ -3616,34 +4437,65 @@ async fn test_psync2_failover_partial_sync(#[case] persistence: bool) {
     let _ = primary.send("WAIT", &["2", "5000"]).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Get replica1's replication state before promotion
-    let pre_state = get_replication_state(&replica1).await;
-    eprintln!("Replica1 state before promotion: {:?}", pre_state);
+    // Replica1 adopts the primary's replid; capture it (and the offset a
+    // surviving replica would present) before promotion.
+    let (pre_replid, pre_offset) = get_replication_state(&replica1)
+        .await
+        .expect("replica1 INFO replication");
 
     // Promote replica1 to primary
     let promote = replica1.send("REPLICAOF", &["NO", "ONE"]).await;
     assert_ok(&promote);
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Check that promoted replica has secondary repl ID
-    let info_resp = replica1.send("INFO", &["replication"]).await;
-    let info_map = parse_info_replication(&info_resp).unwrap();
-    let has_replid2 = info_map
-        .get("master_replid2")
-        .map(|v| v != "0000000000000000000000000000000000000000")
-        .unwrap_or(false);
-    eprintln!("Has non-zero master_replid2: {}", has_replid2);
+    let info_map = parse_info_replication(&replica1.send("INFO", &["replication"]).await).unwrap();
+    assert_eq!(
+        info_map.get("role").map(String::as_str),
+        Some("master"),
+        "promoted replica1 must report role:master"
+    );
+    // DIVERGENCE (pinned): the replid is not rotated and no secondary window is
+    // established on promotion.
+    assert_eq!(
+        info_map.get("master_replid").cloned().unwrap(),
+        pre_replid,
+        "promoted node keeps its adopted replid (no rotation)"
+    );
+    assert_eq!(
+        info_map.get("master_replid2").map(String::as_str),
+        Some("0000000000000000000000000000000000000000"),
+        "no secondary replication id is established on REPLICAOF NO ONE promotion"
+    );
 
-    // Write data on promoted replica
-    replica1.send("SET", &["{{psync2}}newkey", "newval"]).await;
+    // DIVERGENCE (pinned): a surviving replica cannot partial-sync (or even
+    // full-sync) from the promoted node — PSYNC is rejected outright, so the
+    // PSYNC2 failover chain does not exist on the manual-promotion path.
+    let psync = replica1
+        .send_raw(&encode_resp_command(&[
+            "PSYNC",
+            &pre_replid,
+            &pre_offset.to_string(),
+        ]))
+        .await;
+    let psync_head = String::from_utf8_lossy(&psync);
+    assert!(
+        psync_head.contains("not running as primary"),
+        "promoted node rejects downstream PSYNC, got: {psync_head:?}"
+    );
+    assert!(
+        !psync_head.contains("CONTINUE") && !psync_head.contains("FULLRESYNC"),
+        "no partial/full resync is offered by a manually-promoted node, got: {psync_head:?}"
+    );
 
-    // Verify promoted replica has all the original data
+    // The promoted node remains writable and still holds all pre-promotion data.
+    assert_ok(&replica1.send("SET", &["{{psync2}}newkey", "newval"]).await);
     for i in 0..5 {
         let key = format!("{{psync2}}key{}", i);
         let resp = replica1.send("GET", &[&key]).await;
-        if let Response::Bulk(Some(v)) = &resp {
-            assert_eq!(v.as_ref(), b"value");
-        }
+        assert!(
+            matches!(&resp, Response::Bulk(Some(v)) if v.as_ref() == b"value"),
+            "promoted node must retain pre-promotion key {key}, got: {resp:?}"
+        );
     }
 
     replica2.shutdown().await;
@@ -4131,7 +4983,7 @@ async fn test_replica_recovers_offset_from_staged_metadata() {
     // 4. The reconciled state is persisted and the staging file is consumed.
     let persisted = read_json_file(&data_dir.join("replication_state.json")).await;
     assert_eq!(
-        persisted["replication_offset"].as_u64().unwrap(),
+        persisted["offset_at_save"].as_u64().unwrap(),
         staged_offset,
         "recovered offset must match the staged checkpoint, not reset to 0"
     );
@@ -4392,7 +5244,7 @@ async fn test_replica_ignores_corrupt_staged_metadata() {
     // Fresh state with offset 0 -> the replica will PSYNC "? -1" -> full resync.
     let persisted = read_json_file(&data_dir.join("replication_state.json")).await;
     assert_eq!(
-        persisted["replication_offset"].as_u64().unwrap(),
+        persisted["offset_at_save"].as_u64().unwrap(),
         0,
         "corrupt metadata must not be trusted; offset falls back to 0 (full resync)"
     );
@@ -4583,6 +5435,1458 @@ async fn test_writes_during_full_sync_are_not_lost() {
         Response::Bulk(Some(Bytes::from("ok"))),
     );
     drop(client);
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+// ============================================================================
+// Served blocking-pop propagation (issue 02: a blocking pop satisfied by a
+// later write mutated the primary's store but was never broadcast).
+//
+// When a parked BLPOP/BZPOPMIN/BLMOVE/BLMPOP is SERVED by a subsequent push,
+// the primary consumes the element, but only the *waking* write (LPUSH/ZADD)
+// was replicated — the replica re-executed the push and kept the element the
+// primary handed to its blocked client, diverging forever. The fix synthesizes
+// the equivalent deterministic pop and broadcasts it after the waking write.
+// These tests park a real blocked client, wake it, and pin primary/replica
+// equality for every served-pop shape.
+// ============================================================================
+
+/// Poll until `replica`'s reply to `cmd args` equals `primary`'s, or
+/// `timeout_ms` elapses. Returns both replies so a timeout fails with the
+/// divergent contents.
+async fn wait_for_cmd_convergence(
+    primary: &TestServer,
+    replica: &TestServer,
+    cmd: &str,
+    args: &[&str],
+    timeout_ms: u64,
+) -> (Response, Response) {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        let p = primary.send(cmd, args).await;
+        let r = replica.send(cmd, args).await;
+        if p == r || tokio::time::Instant::now() >= deadline {
+            return (p, r);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// A served BLPOP consumes the pushed element on the primary; the replica must
+/// end with the same (empty) list — before the fix it retained the element.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_served_blpop_replicates(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    // Park a real blocked BLPOP on the primary.
+    let mut blocker = primary.connect().await;
+    blocker.send_only(&["BLPOP", "{b}list", "0"]).await;
+    primary.wait_for_blocked_clients(1).await;
+
+    // Wake it with a push; the blocked client receives the element.
+    primary.send("LPUSH", &["{b}list", "v1"]).await;
+    let served = blocker.read_response(Duration::from_secs(2)).await;
+    assert_eq!(
+        served,
+        Some(Response::Array(vec![
+            Response::Bulk(Some(Bytes::from("{b}list"))),
+            Response::Bulk(Some(Bytes::from("v1"))),
+        ])),
+        "BLPOP must be served the pushed element"
+    );
+
+    // Primary consumed the element — the list is empty there.
+    assert_eq!(
+        parse_integer(&primary.send("LLEN", &["{b}list"]).await),
+        Some(0),
+        "the served pop must leave the primary list empty"
+    );
+
+    let _ = wait_for_replication(&primary, 5000).await;
+    let (p, r) =
+        wait_for_cmd_convergence(&primary, &replica, "LRANGE", &["{b}list", "0", "-1"], 5000).await;
+    assert_eq!(
+        p,
+        Response::Array(vec![]),
+        "primary list must be empty after the served BLPOP"
+    );
+    assert_eq!(
+        p, r,
+        "replica list must equal primary after served BLPOP (primary {p:?}, replica {r:?})"
+    );
+
+    drop(blocker);
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// A served BZPOPMIN pops the minimum on the primary; the replica's sorted set
+/// must match (only the untouched members remain).
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_served_bzpopmin_replicates(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    // The key must be absent so BZPOPMIN actually blocks (an ZADD before it
+    // would satisfy it inline). The waking ZADD adds *two* members at once —
+    // the waiter pops the min, and the higher-scored member is the residue we
+    // converge on (proving the synthesized pop, not just the add, replicated).
+    let mut blocker = primary.connect().await;
+    blocker.send_only(&["BZPOPMIN", "{z}set", "0"]).await;
+    primary.wait_for_blocked_clients(1).await;
+
+    // Two members added in one write; the lower score wins the min and is popped.
+    primary
+        .send("ZADD", &["{z}set", "1", "low", "5", "keep"])
+        .await;
+    let served = blocker.read_response(Duration::from_secs(2)).await;
+    assert_eq!(
+        served,
+        Some(Response::Array(vec![
+            Response::Bulk(Some(Bytes::from("{z}set"))),
+            Response::Bulk(Some(Bytes::from("low"))),
+            Response::Bulk(Some(Bytes::from("1"))),
+        ])),
+        "BZPOPMIN must be served the lowest-scored member"
+    );
+
+    let _ = wait_for_replication(&primary, 5000).await;
+    let (p, r) = wait_for_cmd_convergence(
+        &primary,
+        &replica,
+        "ZRANGE",
+        &["{z}set", "0", "-1", "WITHSCORES"],
+        5000,
+    )
+    .await;
+    assert_eq!(
+        p,
+        Response::Array(vec![
+            Response::Bulk(Some(Bytes::from("keep"))),
+            Response::Bulk(Some(Bytes::from("5"))),
+        ]),
+        "primary must retain only the untouched member after the served BZPOPMIN"
+    );
+    assert_eq!(
+        p, r,
+        "replica sorted set must equal primary after served BZPOPMIN (primary {p:?}, replica {r:?})"
+    );
+
+    drop(blocker);
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// A served BLMOVE writes *both* keys on the primary (pop source, push dest);
+/// both must converge on the replica.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_served_blmove_replicates_both_keys(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    let mut blocker = primary.connect().await;
+    // Same hash-tag keeps src+dst in one slot.
+    blocker
+        .send_only(&["BLMOVE", "{m}src", "{m}dst", "LEFT", "RIGHT", "0"])
+        .await;
+    primary.wait_for_blocked_clients(1).await;
+
+    // Pushing to the source wakes the waiter, which atomically moves the
+    // element to the destination.
+    primary.send("LPUSH", &["{m}src", "x"]).await;
+    let served = blocker.read_response(Duration::from_secs(2)).await;
+    assert_eq!(
+        served,
+        Some(Response::Bulk(Some(Bytes::from("x")))),
+        "BLMOVE must return the moved element"
+    );
+
+    // Primary: source drained, destination holds the element.
+    assert_eq!(
+        parse_integer(&primary.send("LLEN", &["{m}src"]).await),
+        Some(0),
+        "source must be empty on the primary"
+    );
+    assert_eq!(
+        primary.send("LRANGE", &["{m}dst", "0", "-1"]).await,
+        Response::Array(vec![Response::Bulk(Some(Bytes::from("x")))]),
+        "destination must hold the moved element on the primary"
+    );
+
+    let _ = wait_for_replication(&primary, 5000).await;
+    let (ps, rs) =
+        wait_for_cmd_convergence(&primary, &replica, "LRANGE", &["{m}src", "0", "-1"], 5000).await;
+    assert_eq!(ps, Response::Array(vec![]), "primary source must be empty");
+    assert_eq!(
+        ps, rs,
+        "replica source must equal primary (src {ps:?} / {rs:?})"
+    );
+    let (pd, rd) =
+        wait_for_cmd_convergence(&primary, &replica, "LRANGE", &["{m}dst", "0", "-1"], 5000).await;
+    assert_eq!(
+        pd,
+        Response::Array(vec![Response::Bulk(Some(Bytes::from("x")))]),
+        "primary destination must hold the element"
+    );
+    assert_eq!(
+        pd, rd,
+        "replica destination must equal primary (dst {pd:?} / {rd:?})"
+    );
+
+    drop(blocker);
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// A served BLMPOP (multi-key list pop) consumes the element on the primary;
+/// the replica must converge.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_served_blmpop_replicates(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    let mut blocker = primary.connect().await;
+    blocker
+        .send_only(&["BLMPOP", "0", "1", "{p}list", "LEFT"])
+        .await;
+    primary.wait_for_blocked_clients(1).await;
+
+    primary.send("RPUSH", &["{p}list", "a", "b"]).await;
+    let served = blocker.read_response(Duration::from_secs(2)).await;
+    assert_eq!(
+        served,
+        Some(Response::Array(vec![
+            Response::Bulk(Some(Bytes::from("{p}list"))),
+            Response::Array(vec![Response::Bulk(Some(Bytes::from("a")))]),
+        ])),
+        "BLMPOP LEFT must return the head element"
+    );
+
+    // Primary popped exactly one; "b" remains.
+    assert_eq!(
+        primary.send("LRANGE", &["{p}list", "0", "-1"]).await,
+        Response::Array(vec![Response::Bulk(Some(Bytes::from("b")))]),
+        "primary must retain the un-popped element"
+    );
+
+    let _ = wait_for_replication(&primary, 5000).await;
+    let (p, r) =
+        wait_for_cmd_convergence(&primary, &replica, "LRANGE", &["{p}list", "0", "-1"], 5000).await;
+    assert_eq!(
+        p,
+        Response::Array(vec![Response::Bulk(Some(Bytes::from("b")))]),
+        "primary must retain exactly the un-popped element"
+    );
+    assert_eq!(
+        p, r,
+        "replica list must equal primary after served BLMPOP (primary {p:?}, replica {r:?})"
+    );
+
+    drop(blocker);
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// Two blocked BLPOP clients served by a single multi-element push: each
+/// consumes one element on the primary, and the replica must end empty (not
+/// retain the pushed elements).
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_served_blpop_multi_waiter_replicates(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    let mut a = primary.connect().await;
+    let mut b = primary.connect().await;
+    a.send_only(&["BLPOP", "{w}list", "0"]).await;
+    b.send_only(&["BLPOP", "{w}list", "0"]).await;
+    primary.wait_for_blocked_clients(2).await;
+
+    // One push carrying two elements satisfies both waiters (FIFO order).
+    primary.send("RPUSH", &["{w}list", "e1", "e2"]).await;
+    let sa = a.read_response(Duration::from_secs(2)).await;
+    let sb = b.read_response(Duration::from_secs(2)).await;
+    // Both must be served; the two consumed values are e1 and e2 in some order.
+    let val = |r: &Option<Response>| match r {
+        Some(Response::Array(arr)) if arr.len() == 2 => match &arr[1] {
+            Response::Bulk(Some(v)) => String::from_utf8_lossy(v).to_string(),
+            other => panic!("expected bulk element, got {other:?}"),
+        },
+        other => panic!("both waiters must be served, got {other:?}"),
+    };
+    let mut vals = vec![val(&sa), val(&sb)];
+    vals.sort();
+    assert_eq!(vals, vec!["e1".to_string(), "e2".to_string()]);
+
+    // Primary fully drained.
+    assert_eq!(
+        parse_integer(&primary.send("LLEN", &["{w}list"]).await),
+        Some(0),
+        "both served pops must leave the primary list empty"
+    );
+
+    let _ = wait_for_replication(&primary, 5000).await;
+    let (p, r) =
+        wait_for_cmd_convergence(&primary, &replica, "LRANGE", &["{w}list", "0", "-1"], 5000).await;
+    assert_eq!(p, Response::Array(vec![]), "primary must be empty");
+    assert_eq!(
+        p, r,
+        "replica must be empty after both served BLPOPs (primary {p:?}, replica {r:?})"
+    );
+
+    drop(a);
+    drop(b);
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+// ============================================================================
+// Tier 4: Write fencing — self-fence-on-replica-loss + min-replicas-to-write
+// ============================================================================
+//
+// End-to-end coverage for the two write-safety gates enforced in
+// `connection/guards.rs::run_pre_checks`:
+//
+//   * self-fence-on-replica-loss — rejects writes with `CLUSTERDOWN ...` once a
+//     primary that *had* a healthy streaming replica loses quorum. It "arms"
+//     only after the first fresh streaming replica, so a primary that never had
+//     a replica keeps accepting writes.
+//   * min-replicas-to-write — Redis's `NOREPLICAS ...` gate. Does not arm: with
+//     `min-replicas-to-write N` and fewer than N good (streaming, recently
+//     ACKing) replicas the primary refuses writes immediately, from boot.
+//
+// Both gates fire in `run_pre_checks`, which covers direct writes and MULTI
+// *queue* time, but NOT writes issued from inside Lua (`EVAL` lacks the WRITE
+// flag). The Lua-bypass tests below pin that known gap so a future fix flips
+// them deliberately.
+
+/// Fast self-fence config: arm the checker quickly and let it detect replica
+/// loss within ~0.5s. `replica_freshness_timeout_ms` must be >= 3x
+/// `ack_interval_ms` (config validation), hence 500 vs 100.
+fn fence_config() -> TestServerConfig {
+    TestServerConfig {
+        replication_self_fence_on_replica_loss: Some(true),
+        replication_ack_interval_ms: Some(100),
+        replication_replica_freshness_timeout_ms: Some(500),
+        ..Default::default()
+    }
+}
+
+/// `min-replicas-to-write N` with self-fence disabled (so the NOREPLICAS gate
+/// is exercised in isolation, not shadowed by the earlier CLUSTERDOWN check).
+fn min_replicas_config(n: u32) -> TestServerConfig {
+    TestServerConfig {
+        replication_min_replicas_to_write: Some(n),
+        replication_min_replicas_timeout_ms: Some(500),
+        replication_ack_interval_ms: Some(100),
+        replication_self_fence_on_replica_loss: Some(false),
+        ..Default::default()
+    }
+}
+
+/// True when `resp` is an error whose message starts with `prefix`.
+fn err_has_prefix(resp: &Response, prefix: &str) -> bool {
+    matches!(get_error_message(resp), Some(m) if m.starts_with(prefix))
+}
+
+/// Poll `SET <key> vN` on `server` until `pred` matches the response or the
+/// deadline elapses, then return the last response. This is polling with a hard
+/// deadline (short interval, no fixed sleep-then-assert), so it tolerates the
+/// asynchronous window between replica loss and the gate engaging.
+async fn poll_set<F: Fn(&Response) -> bool>(
+    server: &TestServer,
+    key: &str,
+    deadline: Duration,
+    pred: F,
+) -> Response {
+    let start = std::time::Instant::now();
+    let mut n = 0u64;
+    loop {
+        n += 1;
+        let resp = server.send("SET", &[key, &format!("v{n}")]).await;
+        if pred(&resp) || start.elapsed() >= deadline {
+            return resp;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Self-fence engages on replica loss: a primary that had a healthy replica
+/// rejects writes with the exact `CLUSTERDOWN ...` string once the replica
+/// drops, while reads stay allowed.
+#[tokio::test]
+async fn test_self_fence_engages_on_replica_loss() {
+    let (primary, replica) = start_primary_replica_pair(fence_config()).await;
+
+    // A streaming replica must exist, then a write arms the fence checker.
+    assert!(
+        wait_for_replication(&primary, 3000).await >= 1,
+        "replica never reached streaming"
+    );
+    assert_ok(&primary.send("SET", &["fk", "armed"]).await);
+
+    // Drop the replica; the checker loses its only fresh streaming replica.
+    replica.shutdown().await;
+
+    // Poll until writes are fenced (freshness window + margin).
+    let fenced = poll_set(&primary, "fk", Duration::from_secs(5), |r| {
+        err_has_prefix(r, "CLUSTERDOWN")
+    })
+    .await;
+    assert!(
+        err_has_prefix(&fenced, "CLUSTERDOWN"),
+        "self-fence did not engage after replica loss: {fenced:?}"
+    );
+
+    // Exact error string. NOTE: the "cluster is down" wording is surfaced here
+    // on a *non-cluster* primary — a documented divergence from Redis, which has
+    // no CLUSTERDOWN in this configuration and would instead refuse the write
+    // via `min-replicas-to-write` (NOREPLICAS). Pinned so any reword is
+    // intentional.
+    assert_eq!(
+        get_error_message(&primary.send("SET", &["fk", "x"]).await),
+        Some("CLUSTERDOWN The cluster is down (quorum lost, writes rejected)"),
+    );
+
+    // Reads remain allowed while fenced.
+    assert!(!is_error(&primary.send("GET", &["fk"]).await));
+
+    primary.shutdown().await;
+}
+
+/// Self-fence recovers: once a fresh replica reconnects and restores quorum,
+/// writes are accepted again.
+#[tokio::test]
+async fn test_self_fence_recovers_after_replica_reconnect() {
+    let (primary, replica) = start_primary_replica_pair(fence_config()).await;
+    assert!(
+        wait_for_replication(&primary, 3000).await >= 1,
+        "replica never reached streaming"
+    );
+    assert_ok(&primary.send("SET", &["rk", "armed"]).await);
+
+    replica.shutdown().await;
+    let fenced = poll_set(&primary, "rk", Duration::from_secs(5), |r| {
+        err_has_prefix(r, "CLUSTERDOWN")
+    })
+    .await;
+    assert!(
+        err_has_prefix(&fenced, "CLUSTERDOWN"),
+        "fence never engaged: {fenced:?}"
+    );
+
+    // Bring a fresh replica back; quorum is restored.
+    let replica2 = TestServer::start_replica_with_config(&primary, fence_config()).await;
+
+    let recovered = poll_set(&primary, "rk", Duration::from_secs(10), |r| {
+        parse_simple_string(r) == Some("OK")
+    })
+    .await;
+    assert_ok(&recovered);
+
+    replica2.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// A primary that never had a replica does not fence: the checker never arms,
+/// so writes are always allowed even with self-fence enabled.
+#[tokio::test]
+async fn test_self_fence_unarmed_allows_writes() {
+    let primary = TestServer::start_primary_with_config(fence_config()).await;
+    assert_ok(&primary.send("SET", &["uk", "v"]).await);
+    assert_ok(&primary.send("SET", &["uk", "v2"]).await);
+    primary.shutdown().await;
+}
+
+/// The self-fence gate runs at MULTI *queue* time: the queued write is rejected
+/// with CLUSTERDOWN and, because FrogDB does not queue it, EXEC runs an empty
+/// transaction.
+#[tokio::test]
+async fn test_self_fence_multi_rejected_at_queue_time() {
+    let (primary, replica) = start_primary_replica_pair(fence_config()).await;
+    assert!(
+        wait_for_replication(&primary, 3000).await >= 1,
+        "replica never reached streaming"
+    );
+    assert_ok(&primary.send("SET", &["mk", "armed"]).await);
+    replica.shutdown().await;
+
+    let fenced = poll_set(&primary, "mk", Duration::from_secs(5), |r| {
+        err_has_prefix(r, "CLUSTERDOWN")
+    })
+    .await;
+    assert!(
+        err_has_prefix(&fenced, "CLUSTERDOWN"),
+        "fence never engaged: {fenced:?}"
+    );
+
+    let mut c = primary.connect().await;
+    assert_eq!(
+        parse_simple_string(&c.command(&["MULTI"]).await),
+        Some("OK")
+    );
+    let queued = c.command(&["SET", "mk", "v"]).await;
+    assert!(
+        err_has_prefix(&queued, "CLUSTERDOWN"),
+        "queued write not fenced: {queued:?}"
+    );
+    // FrogDB applies the fence at MULTI *queue* time and does NOT queue the
+    // rejected write, so EXEC runs an empty transaction (empty array) rather
+    // than aborting with EXECABORT. This diverges from Redis, where the fence
+    // is an exec-time condition and the SET would be queued then fail at EXEC.
+    // Pinned as current behavior; the safety guarantee (the write does not
+    // apply) still holds — `mk` keeps its pre-MULTI value.
+    let exec = c.command(&["EXEC"]).await;
+    assert_eq!(
+        exec,
+        Response::Array(vec![]),
+        "expected empty EXEC after queue-time fence, got {exec:?}"
+    );
+    assert_eq!(
+        primary.send("GET", &["mk"]).await,
+        Response::Bulk(Some(Bytes::from_static(b"armed"))),
+        "fenced MULTI must not have mutated the key"
+    );
+
+    primary.shutdown().await;
+}
+
+/// KNOWN GAP (pinned): writes issued from inside a Lua script bypass the
+/// self-fence gate because `EVAL` lacks the WRITE flag and so skips
+/// `run_pre_checks`. A future fix that enforces at the script/shard write seam
+/// must flip this assertion deliberately. See the NOTE in `guards.rs`.
+#[tokio::test]
+async fn test_self_fence_does_not_gate_lua_writes() {
+    let (primary, replica) = start_primary_replica_pair(fence_config()).await;
+    assert!(
+        wait_for_replication(&primary, 3000).await >= 1,
+        "replica never reached streaming"
+    );
+    assert_ok(&primary.send("SET", &["lk", "armed"]).await);
+    replica.shutdown().await;
+
+    // Direct writes are fenced.
+    let fenced = poll_set(&primary, "lk", Duration::from_secs(5), |r| {
+        err_has_prefix(r, "CLUSTERDOWN")
+    })
+    .await;
+    assert!(
+        err_has_prefix(&fenced, "CLUSTERDOWN"),
+        "fence never engaged: {fenced:?}"
+    );
+
+    // But a Lua-internal write slips through and applies.
+    let lua = primary
+        .send(
+            "EVAL",
+            &[
+                "return redis.call('SET', KEYS[1], ARGV[1])",
+                "1",
+                "lua_key",
+                "lua_val",
+            ],
+        )
+        .await;
+    assert!(
+        !is_error(&lua),
+        "EVAL write unexpectedly fenced (gap closed?): {lua:?}"
+    );
+    let got = primary.send("GET", &["lua_key"]).await;
+    assert_eq!(
+        got,
+        Response::Bulk(Some(Bytes::from_static(b"lua_val"))),
+        "Lua write did not apply despite bypassing the fence: {got:?}"
+    );
+
+    primary.shutdown().await;
+}
+
+/// `min-replicas-to-write 1` with zero replicas refuses writes from boot with
+/// the exact `NOREPLICAS ...` string (no arming), while reads stay allowed.
+#[tokio::test]
+async fn test_min_replicas_to_write_rejects_without_replicas() {
+    let primary = TestServer::start_primary_with_config(min_replicas_config(1)).await;
+    assert_eq!(
+        get_error_message(&primary.send("SET", &["k", "v"]).await),
+        Some("NOREPLICAS Not enough good replicas to write."),
+    );
+    assert!(!is_error(&primary.send("GET", &["k"]).await));
+    primary.shutdown().await;
+}
+
+/// The `min-replicas-to-write` gate tracks replica health live: writes are
+/// allowed while a good replica streams, then rejected with NOREPLICAS once it
+/// drops below the configured count.
+#[tokio::test]
+async fn test_min_replicas_to_write_gate_tracks_replica_health() {
+    let (primary, replica) = start_primary_replica_pair(min_replicas_config(1)).await;
+
+    // A good (streaming, fresh-ACKing) replica satisfies the gate.
+    let allowed = poll_set(&primary, "k", Duration::from_secs(5), |r| {
+        parse_simple_string(r) == Some("OK")
+    })
+    .await;
+    assert_ok(&allowed);
+
+    // Drop the replica: good-replica count falls below 1 → NOREPLICAS.
+    replica.shutdown().await;
+    let rejected = poll_set(&primary, "k", Duration::from_secs(5), |r| {
+        err_has_prefix(r, "NOREPLICAS")
+    })
+    .await;
+    assert!(
+        err_has_prefix(&rejected, "NOREPLICAS"),
+        "min-replicas gate did not re-engage after replica loss: {rejected:?}"
+    );
+
+    primary.shutdown().await;
+}
+
+/// `min-replicas-to-write` gates MULTI at queue time (the queued write is
+/// rejected with NOREPLICAS and, un-queued, EXEC runs empty) but — same known
+/// gap as self-fence — does NOT gate Lua-internal writes.
+#[tokio::test]
+async fn test_min_replicas_to_write_multi_and_lua_paths() {
+    let primary = TestServer::start_primary_with_config(min_replicas_config(1)).await;
+
+    // MULTI: the queue-time pre-check rejects the write and does not queue it,
+    // so EXEC runs an empty transaction (see the CLUSTERDOWN twin test for the
+    // divergence-from-Redis note).
+    let mut c = primary.connect().await;
+    assert_eq!(
+        parse_simple_string(&c.command(&["MULTI"]).await),
+        Some("OK")
+    );
+    let queued = c.command(&["SET", "k", "v"]).await;
+    assert!(
+        err_has_prefix(&queued, "NOREPLICAS"),
+        "queued write not gated: {queued:?}"
+    );
+    assert_eq!(
+        c.command(&["EXEC"]).await,
+        Response::Array(vec![]),
+        "expected empty EXEC after queue-time NOREPLICAS gate"
+    );
+
+    // KNOWN GAP (pinned): Lua-internal write bypasses the gate.
+    let lua = primary
+        .send(
+            "EVAL",
+            &[
+                "return redis.call('SET', KEYS[1], ARGV[1])",
+                "1",
+                "lk",
+                "lv",
+            ],
+        )
+        .await;
+    assert!(
+        !is_error(&lua),
+        "EVAL write unexpectedly gated (gap closed?): {lua:?}"
+    );
+
+    primary.shutdown().await;
+}
+
+/// `CONFIG SET min-replicas-to-write` takes effect on the hot write path
+/// immediately (the gate reads the value live, not at boot).
+#[tokio::test]
+async fn test_min_replicas_to_write_config_set_live() {
+    let config = TestServerConfig {
+        replication_self_fence_on_replica_loss: Some(false),
+        ..Default::default()
+    };
+    let primary = TestServer::start_primary_with_config(config).await;
+
+    // Default min-replicas-to-write 0 → writes allowed.
+    assert_ok(&primary.send("SET", &["k", "v"]).await);
+
+    // Raise the bar at runtime; with zero replicas writes now fail.
+    assert_ok(
+        &primary
+            .send("CONFIG", &["SET", "min-replicas-to-write", "1"])
+            .await,
+    );
+    assert!(
+        err_has_prefix(&primary.send("SET", &["k", "v2"]).await, "NOREPLICAS"),
+        "live CONFIG SET min-replicas-to-write did not take effect"
+    );
+
+    // Lower it again; writes resume immediately.
+    assert_ok(
+        &primary
+            .send("CONFIG", &["SET", "min-replicas-to-write", "0"])
+            .await,
+    );
+    assert_ok(&primary.send("SET", &["k", "v3"]).await);
+    primary.shutdown().await;
+}
+
+// ============================================================================
+// Tier 8: Broadcast-lag disconnect → reconnect → resync (E2E)
+// ============================================================================
+
+/// A throttling TCP proxy interposed between a replica and its primary.
+///
+/// It forwards both directions verbatim, except the primary→replica direction
+/// can be *stalled* on demand: while stalled the proxy stops draining bytes
+/// from the primary, so the primary's kernel send buffer to the proxy fills,
+/// the primary's per-replica write task blocks in `write_all`, and the primary
+/// disconnects the replica for lag (write-timeout / broadcast overflow — both
+/// close the link the same way). The replica→primary direction (the PSYNC
+/// handshake and ACKs) always flows, so a reconnecting replica can complete a
+/// fresh handshake through the proxy.
+struct LagProxy {
+    port: u16,
+    stalled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    accept_task: tokio::task::JoinHandle<()>,
+}
+
+impl LagProxy {
+    /// Bind an ephemeral port and start accepting replica connections, each
+    /// dialed through to `primary_port`.
+    async fn spawn(primary_port: u16) -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind lag-proxy listener");
+        let port = listener.local_addr().expect("proxy local_addr").port();
+        let stalled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stalled_accept = stalled.clone();
+
+        let accept_task = tokio::spawn(async move {
+            loop {
+                let (inbound, _) = match listener.accept().await {
+                    Ok(pair) => pair,
+                    Err(_) => break,
+                };
+                let outbound =
+                    match tokio::net::TcpStream::connect(("127.0.0.1", primary_port)).await {
+                        Ok(stream) => stream,
+                        Err(_) => continue,
+                    };
+                let stalled_conn = stalled_accept.clone();
+                tokio::spawn(proxy_connection(inbound, outbound, stalled_conn));
+            }
+        });
+
+        Self {
+            port,
+            stalled,
+            accept_task,
+        }
+    }
+
+    fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// Freeze the primary→replica direction: the replica stops receiving the
+    /// WAL stream and falls behind until the primary disconnects it.
+    fn stall(&self) {
+        self.stalled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Resume forwarding so a reconnecting replica can resync.
+    fn resume(&self) {
+        self.stalled
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl Drop for LagProxy {
+    fn drop(&mut self) {
+        self.accept_task.abort();
+    }
+}
+
+/// Pump one accepted replica↔primary connection through the proxy, honoring
+/// the shared stall flag on the primary→replica leg.
+async fn proxy_connection(
+    inbound: tokio::net::TcpStream,
+    outbound: tokio::net::TcpStream,
+    stalled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    use std::sync::atomic::Ordering;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (mut replica_rx, mut replica_tx) = inbound.into_split();
+    let (mut primary_rx, mut primary_tx) = outbound.into_split();
+
+    // replica → primary: always flowing (handshake commands + ACKs).
+    let mut up = tokio::spawn(async move {
+        let mut buf = [0u8; 16 * 1024];
+        loop {
+            match replica_rx.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if primary_tx.write_all(&buf[..n]).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    // primary → replica: stalled on demand. While stalled we stop reading from
+    // the primary, so its send buffer fills and its write task blocks. (At most
+    // one 16 KiB chunk already in-flight leaks through before we park — far
+    // below the buffering needed to keep a replica in sync under a write flood.)
+    let mut down = tokio::spawn(async move {
+        let mut buf = [0u8; 16 * 1024];
+        loop {
+            while stalled.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            match primary_rx.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if replica_tx.write_all(&buf[..n]).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    // Tear both legs down together the moment either peer closes its side, so
+    // the replica observes a *full* connection close exactly as it would on a
+    // direct link. Managing the halves independently would leave the socket
+    // half-open: when the primary drops the replica for lag, `up` would die but
+    // `down` would keep the replica's write side open, wedging the replica in
+    // its next ACK write (the proxy buffer fills instead of erroring) so it
+    // never reads the FIN — a proxy artifact that never happens on a real link.
+    tokio::select! {
+        _ = &mut up => { down.abort(); }
+        _ = &mut down => { up.abort(); }
+    }
+}
+
+/// Read `connected_slaves` (streaming replicas) from a server's
+/// `INFO replication`. Returns `None` if the field is missing/unparseable.
+async fn connected_slaves(server: &TestServer) -> Option<i64> {
+    let response = server.send("INFO", &["replication"]).await;
+    let info = parse_info_replication(&response)?;
+    info.get("connected_slaves")?.trim().parse().ok()
+}
+
+/// Poll `connected_slaves` until it equals `want` or the deadline elapses.
+/// Returns the last observed value (for assertion messages).
+async fn wait_connected_slaves(server: &TestServer, want: i64, within: Duration) -> Option<i64> {
+    let deadline = std::time::Instant::now() + within;
+    let mut last = connected_slaves(server).await;
+    while std::time::Instant::now() < deadline {
+        if last == Some(want) {
+            return last;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        last = connected_slaves(server).await;
+    }
+    last
+}
+
+/// End-to-end coverage of the broadcast-lag disconnect path (audit gap E#8):
+/// a streaming replica is stalled at the network layer until it exceeds the
+/// primary's lag tolerance; the primary disconnects it; the replica then
+/// reconnects, resyncs, and converges to the primary's full keyspace —
+/// including the writes it missed while stalled — plus the WAIT ack-count
+/// behaviour across the disconnect (0 while dropped) and recovery (1 once
+/// caught up).
+///
+/// The stall is driven deterministically through [`LagProxy`] (no timing luck)
+/// and every wait polls a condition with a deadline (no fixed sleeps for
+/// correctness). `replica_write_timeout_ms` is lowered so the primary's
+/// blocked-write lag-disconnect fires promptly (the deterministic trigger here;
+/// the flood also drives the per-replica broadcast receiver past its 10k slots,
+/// the secondary `Lagged` trigger — either way the primary drops the replica).
+/// Self-fence is disabled so the primary keeps accepting the write flood.
+///
+/// The backlog is sized above the flood so the reconnecting replica qualifies
+/// for a *partial* resync (`+CONTINUE`): the missed writes replay as live
+/// commands and the running keyspace converges without a restart. This is the
+/// only resync path that converges the live store in place — a full resync
+/// stages a checkpoint that installs on the next boot (persistence) or ships an
+/// empty RDB (in-memory), neither of which updates the running keyspace.
+///
+/// Regression guard for two replication bugs found writing this test:
+///   1. the replica did not reconnect after a primary-initiated clean close
+///      (`replica/mod.rs`: a clean `Ok(())` from the sync loop was terminal); and
+///   2. the primary's lag-disconnect never closed the socket, because the
+///      streaming `select!` dropped the sibling task's `JoinHandle` instead of
+///      aborting it, leaving a zombie half-open link the replica never saw close
+///      (`replica_session.rs`).
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_broadcast_lag_disconnect_and_resync(#[case] persistence: bool) {
+    let primary = TestServer::start_primary_with_config(TestServerConfig {
+        persistence,
+        // Keep accepting writes while the replica is stale — the flood is the
+        // whole point.
+        replication_self_fence_on_replica_loss: Some(false),
+        // Disconnect a blocked (stalled) replica quickly for a fast, robust test.
+        replication_replica_write_timeout_ms: Some(1000),
+        // Size the backlog above the flood so the reconnecting replica's gap is
+        // still covered — the primary grants a partial resync (+CONTINUE) and
+        // replays the missed writes as live commands, converging the running
+        // keyspace without a restart (a full resync would only stage a
+        // checkpoint / send an empty in-memory RDB).
+        replication_split_brain_buffer_size: Some(100_000),
+        ..Default::default()
+    })
+    .await;
+
+    // Interpose the throttling proxy and point the replica at it (not directly
+    // at the primary), so we control the primary→replica byte stream.
+    let proxy = LagProxy::spawn(primary.port()).await;
+    let mut replica_config = TestServerConfig {
+        persistence,
+        replication_self_fence_on_replica_loss: Some(false),
+        replication_replica_write_timeout_ms: Some(1000),
+        // ACK often so recovery (and WAIT) converge quickly.
+        replication_ack_interval_ms: Some(200),
+        ..Default::default()
+    };
+    replica_config.replication_primary_host = Some("127.0.0.1".to_string());
+    replica_config.replication_primary_port = Some(proxy.port());
+    let replica = TestServer::start_with_config(replica_config, ServerRole::Replica).await;
+
+    // Baseline: the replica reaches the Streaming phase through the proxy.
+    assert_eq!(
+        wait_connected_slaves(&primary, 1, Duration::from_secs(10)).await,
+        Some(1),
+        "replica should reach the streaming phase (connected_slaves:1) via the proxy"
+    );
+
+    // Seed a key and confirm it replicates end-to-end before we stall.
+    assert_ok(&primary.send("SET", &["seed_key", "seed_value"]).await);
+    let acked = parse_integer(&primary.send("WAIT", &["1", "3000"]).await).unwrap_or(0);
+    assert_eq!(
+        acked, 1,
+        "seed write should be acked by the healthy replica"
+    );
+    assert_eq!(
+        primary.send("DBSIZE", &[]).await,
+        replica.send("DBSIZE", &[]).await,
+        "keyspace sizes should match before the stall"
+    );
+
+    // ---- Stall the replica and flood the primary past the 10k broadcast cap.
+    proxy.stall();
+
+    // 20k frames: the stalled socket blocks the primary's per-replica write
+    // task, tripping the 1s write-timeout (the deterministic disconnect here),
+    // and the volume also overruns the 10_000-slot broadcast channel — either
+    // way the primary drops the replica for resync. The flood stays within the
+    // 100k-entry backlog, so the reconnect earns a partial resync.
+    const FLOOD: usize = 20_000;
+    let mut writer = primary.connect().await;
+    let mut i = 0usize;
+    while i < FLOOD {
+        let end = (i + 200).min(FLOOD);
+        for j in i..end {
+            let key = format!("flood_key_{j}");
+            let val = format!("flood_val_{j}");
+            writer.send_only(&["SET", &key, &val]).await;
+        }
+        for _ in i..end {
+            writer
+                .read_response(Duration::from_secs(10))
+                .await
+                .expect("primary should keep accepting writes while replica is stale");
+        }
+        i = end;
+    }
+    drop(writer);
+
+    // ---- Assert the primary disconnected the laggy replica.
+    assert_eq!(
+        wait_connected_slaves(&primary, 0, Duration::from_secs(10)).await,
+        Some(0),
+        "primary must disconnect the stalled replica (connected_slaves→0) once it exceeds \
+         the lag threshold"
+    );
+
+    // WAIT can find no streaming replica to ack while the replica is dropped.
+    let acked_stalled = parse_integer(&primary.send("WAIT", &["1", "500"]).await).unwrap_or(-1);
+    assert_eq!(
+        acked_stalled, 0,
+        "WAIT must return 0 while the replica is disconnected, got {acked_stalled}"
+    );
+
+    // ---- Recovery: unblock the link; the replica must reconnect on its own.
+    proxy.resume();
+
+    assert_eq!(
+        wait_connected_slaves(&primary, 1, Duration::from_secs(20)).await,
+        Some(1),
+        "replica must reconnect and return to the streaming phase after the link recovers \
+         (regression guard: a primary-initiated clean close must not strand the replica)"
+    );
+
+    // ---- Convergence: the resync must deliver the full keyspace, including
+    // every write the replica missed while stalled.
+    let acked_recovered = parse_integer(&primary.send("WAIT", &["1", "10000"]).await).unwrap_or(0);
+    assert_eq!(
+        acked_recovered, 1,
+        "WAIT must report the reconnected replica acking after recovery"
+    );
+
+    // Poll to full keyspace equality (WAIT acks the stream offset; the applier
+    // may trail it by a beat).
+    let primary_dbsize = parse_integer(&primary.send("DBSIZE", &[]).await).unwrap_or(-1);
+    let converged = {
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            let replica_dbsize = parse_integer(&replica.send("DBSIZE", &[]).await).unwrap_or(-2);
+            if replica_dbsize == primary_dbsize {
+                break true;
+            }
+            if std::time::Instant::now() >= deadline {
+                break false;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    };
+    assert!(
+        converged,
+        "replica keyspace must converge to the primary's {primary_dbsize} keys after resync"
+    );
+
+    // Spot-check a spread of the flood keys the replica missed during the stall
+    // plus the pre-stall seed — the resync must have delivered them.
+    for idx in [0usize, 1, FLOOD / 2, FLOOD - 2, FLOOD - 1] {
+        let key = format!("flood_key_{idx}");
+        let expected = format!("flood_val_{idx}");
+        let got = replica.send("GET", &[&key]).await;
+        assert_eq!(
+            got,
+            Response::Bulk(Some(Bytes::from(expected.clone()))),
+            "replica missing flood key {key} after resync (expected {expected})"
+        );
+    }
+    assert_eq!(
+        replica.send("GET", &["seed_key"]).await,
+        Response::Bulk(Some(Bytes::from("seed_value"))),
+        "replica missing the pre-stall seed key after resync"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+    drop(proxy);
+}
+
+// ============================================================================
+// Issue 46: registry-driven READONLY enforcement + monotonic replica reads
+//
+// `test_replica_readonly_enforcement` (above) only ever exercised SET/DEL/
+// ZADD by hand. That leaves the central READONLY enforcement — gated purely
+// on the `CommandFlags::WRITE` bit in `ConnectionHandler::run_pre_checks`
+// (connection/guards.rs) — unproven for the other ~170 WRITE-flagged
+// commands: a newly registered WRITE command with a flag-assignment bug, or a
+// future carve-out that special-cases some command name, could slip through
+// with only the hand-picked subset ever passing CI.
+//
+// The test below builds the *actual production* command registry (the same
+// `frogdb_server::register_commands` the real server calls at startup — see
+// `frogdb-server/crates/server/src/server/register.rs`) and walks every entry
+// whose flags contain WRITE, rather than a hand-maintained list. A command
+// newly flagged WRITE without READONLY enforcement fails this test the
+// moment it's registered — no test update required.
+// ============================================================================
+
+/// Realistic minimal argument shapes for WRITE commands whose natural
+/// minimum-arity invocation isn't just "N generic tokens" — subcommand-first
+/// commands (FT.*, XGROUP), numkeys-first commands (Z*STORE, CMS.MERGE,
+/// MSETEX), GEO's lon/lat, the hash-field-TTL `FIELDS numfields field...`
+/// family, and blocking commands' trailing timeout.
+///
+/// This table exists for readability/documentation — a real client would
+/// send something shaped like this — not for correctness: READONLY
+/// enforcement (`run_pre_checks`) runs *before* arity/type validation (see
+/// `PRE_DISPATCH_ORDER` in connection/dispatch.rs: `PreChecks` precedes
+/// `Arity`), so the exact argument values never affect this test's outcome.
+/// A WRITE command with **no entry here** still gets exercised: `minimal_args`
+/// falls back to `arity.min()` generic filler tokens, so the registry walk
+/// stays exhaustive without hand-maintenance for every future command.
+fn special_args_for(name: &str) -> Option<&'static [&'static str]> {
+    Some(match name {
+        "APPEND" => &["k", "v"],
+        "BF.ADD" => &["k", "item"],
+        "BF.INSERT" => &["k", "ITEMS", "item"],
+        "BF.LOADCHUNK" => &["k", "1", "chunk"],
+        "BF.MADD" => &["k", "item"],
+        "BF.RESERVE" => &["k", "0.01", "100"],
+        "BITFIELD" => &["k", "GET", "u8", "0"],
+        "BITOP" => &["AND", "dst", "src"],
+        "BLMOVE" => &["src", "dst", "LEFT", "RIGHT", "0.01"],
+        "BLMPOP" => &["0.01", "1", "k", "LEFT"],
+        "BLPOP" => &["k", "0.01"],
+        "BRPOP" => &["k", "0.01"],
+        "BRPOPLPUSH" => &["src", "dst", "0.01"],
+        "BZMPOP" => &["0.01", "1", "k", "MIN"],
+        "BZPOPMAX" => &["k", "0.01"],
+        "BZPOPMIN" => &["k", "0.01"],
+        "CF.ADD" => &["k", "item"],
+        "CF.ADDNX" => &["k", "item"],
+        "CF.DEL" => &["k", "item"],
+        "CF.INSERT" => &["k", "ITEMS", "item"],
+        "CF.INSERTNX" => &["k", "ITEMS", "item"],
+        "CF.LOADCHUNK" => &["k", "1", "chunk"],
+        "CF.RESERVE" => &["k", "100"],
+        "CMS.INCRBY" => &["k", "item", "1"],
+        "CMS.INITBYDIM" => &["k", "100", "5"],
+        "CMS.INITBYPROB" => &["k", "0.01", "0.01"],
+        "CMS.MERGE" => &["dst", "1", "src"],
+        "COPY" => &["src", "dst"],
+        "DECR" => &["k"],
+        "DECRBY" => &["k", "1"],
+        "DEL" => &["k"],
+        "DELEX" => &["k"],
+        "ES.APPEND" => &["k", "1", "event", "data"],
+        "ES.SNAPSHOT" => &["k", "1", "data"],
+        "EXPIRE" => &["k", "10"],
+        "EXPIREAT" => &["k", "9999999999"],
+        "FLUSHALL" => &[],
+        "FLUSHDB" => &[],
+        "FROGDB.FINALIZE" => &["1"],
+        "FT.ALIASADD" => &["alias", "idx"],
+        "FT.ALIASDEL" => &["alias"],
+        "FT.ALIASUPDATE" => &["alias", "idx"],
+        "FT.ALTER" => &["idx", "SCHEMA", "ADD", "f"],
+        "FT.CREATE" => &["idx", "SCHEMA", "f", "TEXT"],
+        "FT.DICTADD" => &["dict", "term"],
+        "FT.DICTDEL" => &["dict", "term"],
+        "FT.DROPINDEX" => &["idx"],
+        "FT.SUGADD" => &["k", "str", "1"],
+        "FT.SUGDEL" => &["k", "str"],
+        "FT.SYNUPDATE" => &["idx", "gid", "term"],
+        "GEOADD" => &["k", "13.361389", "38.115556", "Palermo"],
+        "GEORADIUS" => &["k", "15", "37", "200", "km"],
+        "GEORADIUSBYMEMBER" => &["k", "Palermo", "200", "km"],
+        "GEOSEARCHSTORE" => &["dst", "src", "FROMMEMBER", "m", "BYRADIUS", "10", "km"],
+        "GETDEL" => &["k"],
+        "GETEX" => &["k"],
+        "GETSET" => &["k", "v"],
+        "HDEL" => &["k", "f"],
+        "HEXPIRE" => &["k", "10", "FIELDS", "1", "f"],
+        "HEXPIREAT" => &["k", "9999999999", "FIELDS", "1", "f"],
+        "HGETDEL" => &["k", "FIELDS", "1", "f"],
+        "HGETEX" => &["k", "FIELDS", "1", "f"],
+        "HINCRBY" => &["k", "f", "1"],
+        "HINCRBYFLOAT" => &["k", "f", "1.0"],
+        "HMSET" => &["k", "f", "v"],
+        "HPERSIST" => &["k", "FIELDS", "1", "f"],
+        "HPEXPIRE" => &["k", "10000", "FIELDS", "1", "f"],
+        "HPEXPIREAT" => &["k", "9999999999000", "FIELDS", "1", "f"],
+        "HSET" => &["k", "f", "v"],
+        "HSETEX" => &["k", "10", "FIELDS", "1", "f", "v"],
+        "HSETNX" => &["k", "f", "v"],
+        "INCR" => &["k"],
+        "INCRBY" => &["k", "1"],
+        "INCRBYFLOAT" => &["k", "1.0"],
+        "JSON.ARRAPPEND" => &["k", "$", "1"],
+        "JSON.ARRINSERT" => &["k", "$", "0", "1"],
+        "JSON.ARRPOP" => &["k"],
+        "JSON.ARRTRIM" => &["k", "$", "0", "0"],
+        "JSON.CLEAR" => &["k"],
+        "JSON.DEL" => &["k"],
+        "JSON.MERGE" => &["k", "$", "1"],
+        "JSON.NUMINCRBY" => &["k", "$", "1"],
+        "JSON.NUMMULTBY" => &["k", "$", "1"],
+        "JSON.SET" => &["k", "$", "1"],
+        "JSON.STRAPPEND" => &["k", "$", "\"x\""],
+        "JSON.TOGGLE" => &["k"],
+        "LINSERT" => &["k", "BEFORE", "pivot", "v"],
+        "LMOVE" => &["src", "dst", "LEFT", "RIGHT"],
+        "LMPOP" => &["1", "k", "LEFT"],
+        "LPOP" => &["k"],
+        "LPUSH" => &["k", "v"],
+        "LPUSHX" => &["k", "v"],
+        "LREM" => &["k", "0", "v"],
+        "LSET" => &["k", "0", "v"],
+        "LTRIM" => &["k", "0", "-1"],
+        "MIGRATE" => &["127.0.0.1", "6379", "k", "0", "1000"],
+        "MOVE" => &["k", "1"],
+        "MSET" => &["k", "v"],
+        "MSETEX" => &["1", "k", "v"],
+        "MSETNX" => &["k", "v"],
+        "PERSIST" => &["k"],
+        "PEXPIRE" => &["k", "10000"],
+        "PEXPIREAT" => &["k", "9999999999000"],
+        "PFADD" => &["k", "m"],
+        "PFMERGE" => &["dst"],
+        "PSETEX" => &["k", "10000", "v"],
+        "RENAME" => &["src", "dst"],
+        "RENAMENX" => &["src", "dst"],
+        "RESTORE" => &["k", "0", "payload"],
+        "RPOP" => &["k"],
+        "RPOPLPUSH" => &["src", "dst"],
+        "RPUSH" => &["k", "v"],
+        "RPUSHX" => &["k", "v"],
+        "SADD" => &["k", "m"],
+        "SDIFFSTORE" => &["dst", "src"],
+        "SET" => &["k", "v"],
+        "SETBIT" => &["k", "0", "1"],
+        "SETEX" => &["k", "10", "v"],
+        "SETNX" => &["k", "v"],
+        "SETRANGE" => &["k", "0", "v"],
+        "SINTERSTORE" => &["dst", "src"],
+        "SMOVE" => &["src", "dst", "m"],
+        "SORT" => &["k"],
+        "SPOP" => &["k"],
+        "SREM" => &["k", "m"],
+        "SUNIONSTORE" => &["dst", "src"],
+        "SWAPDB" => &["0", "1"],
+        "TDIGEST.ADD" => &["k", "1"],
+        "TDIGEST.CREATE" => &["k"],
+        "TDIGEST.MERGE" => &["dst", "1", "src"],
+        "TDIGEST.RESET" => &["k"],
+        "TOPK.ADD" => &["k", "item"],
+        "TOPK.INCRBY" => &["k", "item", "1"],
+        "TOPK.RESERVE" => &["k", "10"],
+        "TS.ADD" => &["k", "*", "1"],
+        "TS.ALTER" => &["k"],
+        "TS.CREATE" => &["k"],
+        "TS.CREATERULE" => &["src", "dst", "AGGREGATION", "avg", "60000"],
+        "TS.DECRBY" => &["k", "1"],
+        "TS.DEL" => &["k", "-", "+"],
+        "TS.DELETERULE" => &["src", "dst"],
+        "TS.INCRBY" => &["k", "1"],
+        "TS.MADD" => &["k", "*", "1"],
+        "UNLINK" => &["k"],
+        "VADD" => &["k", "VALUES", "1", "1", "m"],
+        "VREM" => &["k", "m"],
+        "VSETATTR" => &["k", "m", "{}"],
+        "XACK" => &["k", "g", "1-1"],
+        "XACKDEL" => &["k", "g", "IDS", "1", "1-1"],
+        "XADD" => &["k", "*", "f", "v"],
+        "XAUTOCLAIM" => &["k", "g", "c", "0", "0-0"],
+        "XCLAIM" => &["k", "g", "c", "0", "1-1"],
+        "XDEL" => &["k", "1-1"],
+        "XDELEX" => &["k", "IDS", "1", "1-1"],
+        "XGROUP" => &["CREATE", "k", "g", "$"],
+        "XREADGROUP" => &["GROUP", "g", "c", "COUNT", "1", "STREAMS", "k", ">"],
+        "XSETID" => &["k", "1-1"],
+        "XTRIM" => &["k", "MAXLEN", "0"],
+        "ZADD" => &["k", "1", "m"],
+        "ZDIFFSTORE" => &["dst", "1", "k"],
+        "ZINCRBY" => &["k", "1", "m"],
+        "ZINTERSTORE" => &["dst", "1", "k"],
+        "ZMPOP" => &["1", "k", "MIN"],
+        "ZPOPMAX" => &["k"],
+        "ZPOPMIN" => &["k"],
+        "ZRANGESTORE" => &["dst", "src", "0", "-1"],
+        "ZREM" => &["k", "m"],
+        "ZREMRANGEBYLEX" => &["k", "[a", "[z"],
+        "ZREMRANGEBYRANK" => &["k", "0", "-1"],
+        "ZREMRANGEBYSCORE" => &["k", "0", "1"],
+        "ZUNIONSTORE" => &["dst", "1", "k"],
+        _ => return None,
+    })
+}
+
+/// Generic fallback: `min` placeholder tokens. Used only for a WRITE command
+/// with no `special_args_for` entry (i.e. registered after this test was
+/// written) — see that function's doc comment for why argument *validity*
+/// doesn't matter here.
+fn fallback_args(min: usize) -> Vec<String> {
+    (0..min).map(|i| format!("filler{i}")).collect()
+}
+
+/// Build the arguments to invoke `name` with, given its declared [`Arity`].
+fn minimal_args(name: &str, arity: Arity) -> Vec<String> {
+    match special_args_for(name) {
+        Some(args) => args.iter().map(|s| s.to_string()).collect(),
+        None => fallback_args(arity.min()),
+    }
+}
+
+/// Registry-driven READONLY enforcement: every WRITE-flagged command in the
+/// *production* registry, invoked against a replica, must be rejected with
+/// `-READONLY`. Walks `registry.iter()` rather than a hand-picked list, so a
+/// future WRITE command with no enforcement fails this test automatically.
+#[tokio::test]
+async fn test_replica_rejects_every_write_command() {
+    let mut registry = CommandRegistry::new();
+    frogdb_server::register_commands(&mut registry);
+
+    let mut write_commands: Vec<(String, Arity)> = registry
+        .iter()
+        .filter(|(_, entry)| entry.flags().contains(CommandFlags::WRITE))
+        .map(|(name, entry)| (name.to_string(), entry.arity()))
+        .collect();
+    write_commands.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // Sanity check on the walk itself: if `register_commands` stops
+    // registering commands (or the WRITE flag check breaks), this test would
+    // otherwise pass vacuously over an empty/tiny list.
+    assert!(
+        write_commands.len() >= 100,
+        "expected a large number of WRITE-flagged commands from the production \
+         registry, got {} ({:?}) — did `register_commands` or `CommandFlags::WRITE` change shape?",
+        write_commands.len(),
+        write_commands.iter().map(|(n, _)| n).collect::<Vec<_>>()
+    );
+
+    let (primary, replica) = start_primary_replica_pair(TestServerConfig::default()).await;
+
+    let mut failures = Vec::new();
+    for (name, arity) in &write_commands {
+        let owned_args = minimal_args(name, *arity);
+        let args: Vec<&str> = owned_args.iter().map(|s| s.as_str()).collect();
+
+        let resp = replica.send(name, &args).await;
+        if !is_error(&resp) {
+            failures.push(format!(
+                "{name}: expected an error on a replica, got {resp:?}"
+            ));
+            continue;
+        }
+        let msg = get_error_message(&resp).unwrap_or("<no message>");
+        if !msg.starts_with("READONLY") {
+            failures.push(format!("{name}: expected READONLY error, got: {msg}"));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "{} of {} WRITE-flagged commands did not enforce READONLY on a replica:\n{}",
+        failures.len(),
+        write_commands.len(),
+        failures.join("\n")
+    );
+
+    // Sanity check the harness itself: the primary must still accept writes.
+    let primary_set = primary.send("SET", &["sanity_key", "v"]).await;
+    assert_ok(&primary_set);
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// Monotonic-read regression (issue 46): a tight loop of replica reads must
+/// never observe a value regress to an earlier one, both while the primary
+/// is still issuing increasing writes and after `WAIT` has confirmed the
+/// final write reached the replica.
+///
+/// `consistency.md`'s monotonic-reads row (line 38) was [Design intent] only
+/// until this test; RYW (line 27) is exercised by the same WAIT-then-read
+/// pattern (a client observes its own committed write on the replica once
+/// WAIT acks it). Replica lazy-expiry-on-read is explicitly out of scope
+/// (task 32, `replica-expiry-ttl-drift`).
+#[tokio::test]
+async fn test_replica_read_monotonic_after_primary_writes() {
+    let (primary, replica) = start_primary_replica_pair(TestServerConfig::default()).await;
+    let key = "{mono}seq";
+    const WRITES: i64 = 100;
+
+    let mut observed: Vec<i64> = Vec::new();
+
+    // Primary writes a strictly increasing sequence; the replica is polled a
+    // few times per round without waiting for full propagation first — the
+    // property under test is that *whatever* the replica returns, it is
+    // never lower than the highest value already observed, even while later
+    // writes are still in flight.
+    for value in 1..=WRITES {
+        let set_resp = primary.send("SET", &[key, &value.to_string()]).await;
+        assert_ok(&set_resp);
+
+        for _ in 0..3 {
+            let resp = replica.send("GET", &[key]).await;
+            if let Response::Bulk(Some(b)) = &resp
+                && let Ok(v) = String::from_utf8_lossy(b).parse::<i64>()
+            {
+                if let Some(&last) = observed.last() {
+                    assert!(
+                        v >= last,
+                        "monotonic-read violation: replica returned {v} after previously \
+                         returning {last} (primary at write round {value})"
+                    );
+                }
+                observed.push(v);
+            }
+        }
+    }
+
+    // WAIT for the final write to be acknowledged, then keep polling: the
+    // replica must converge to WRITES and must not regress while doing so
+    // (the read-your-writes guarantee: once WAIT acks, a read must observe
+    // at least that write).
+    let acked = primary.send("WAIT", &["1", "5000"]).await;
+    assert!(
+        parse_integer(&acked).unwrap_or(0) >= 1,
+        "WAIT did not report the replica acking the final write, got: {acked:?}"
+    );
+
+    let mut converged = false;
+    for _ in 0..500 {
+        let resp = replica.send("GET", &[key]).await;
+        if let Response::Bulk(Some(b)) = &resp
+            && let Ok(v) = String::from_utf8_lossy(b).parse::<i64>()
+        {
+            if let Some(&last) = observed.last() {
+                assert!(
+                    v >= last,
+                    "monotonic-read violation after WAIT ack: replica returned {v} after \
+                     previously returning {last}"
+                );
+            }
+            observed.push(v);
+            if v == WRITES {
+                converged = true;
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    assert!(
+        converged,
+        "replica never converged to the final written value {WRITES} after a WAIT ack; \
+         last observed: {:?}",
+        observed.last()
+    );
+
+    // Whole-sequence check, in addition to the per-step asserts above: belt
+    // and suspenders against any point the per-step check could miss.
+    assert!(
+        observed.windows(2).all(|w| w[1] >= w[0]),
+        "replica read sequence was not monotonically non-decreasing: {observed:?}"
+    );
 
     replica.shutdown().await;
     primary.shutdown().await;

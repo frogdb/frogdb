@@ -12,7 +12,7 @@ use frogdb_core::{
     CommandRegistry, MetricsRecorder, ReplicationTrackerImpl, ShardSender, SharedFunctionRegistry,
     persistence::SnapshotCoordinator,
 };
-use frogdb_debug::{HotShardConfig, MemoryDiagConfig};
+use frogdb_debug::MemoryDiagConfig;
 use frogdb_telemetry::SharedTracer;
 
 use crate::config::TracingConfig;
@@ -255,11 +255,11 @@ pub fn standalone_config(num_shards: usize) -> ConnectionConfig {
         scatter_gather_timeout: Duration::from_millis(5000),
         is_admin: false,
         admin_enabled: false,
-        hotshards_config: HotShardConfig::default(),
         memory_diag_config: MemoryDiagConfig::default(),
         per_request_spans: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         is_replica: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         enable_debug_command: false,
+        pubsub_output_buffer_hard_limit: frogdb_core::DEFAULT_PUBSUB_OUTPUT_BUFFER_HARD_LIMIT,
         #[cfg(feature = "turmoil")]
         chaos_config: std::sync::Arc::new(crate::config::ChaosConfig::default()),
     }

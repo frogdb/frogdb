@@ -453,10 +453,12 @@ pub trait ConnStateMut: Send + Sync {
     /// EXEC/DISCARD). Read by WATCH to reject `WATCH inside MULTI`.
     fn is_in_multi(&self) -> bool;
 
-    /// Record a watched key with its watch-time version and owning shard (WATCH).
-    /// The watched shards are folded into the transaction target at EXEC time
-    /// (see `take_transaction`), from the live post-UNWATCH watch set.
-    fn watch_key(&mut self, key: Bytes, shard_id: usize, version: u64);
+    /// Record a watched key with its watch-time version, owning shard, and
+    /// liveness (WATCH). `live_at_watch` is the `wk->expired` inverse (present
+    /// and unexpired when watched), carried per key into EXEC. The watched
+    /// shards are folded into the transaction target at EXEC time (see
+    /// `take_transaction`), from the live post-UNWATCH watch set.
+    fn watch_key(&mut self, key: Bytes, shard_id: usize, version: u64, live_at_watch: bool);
 
     /// Forget all watched keys (UNWATCH).
     fn unwatch(&mut self);
@@ -573,6 +575,18 @@ pub trait DebugProvider: Send + Sync {
     /// DEBUG SET-ACTIVE-EXPIRE 0|1 — toggle active expiration across all shards,
     /// waiting for each shard's acknowledgment.
     fn set_active_expire<'a>(&'a self, enabled: bool) -> BoxFuture<'a, ()>;
+
+    /// DEBUG EXPIRE-BACKDATE <key> <ms> — rewrite `key`'s expiry deadline to lie
+    /// `ms` milliseconds in the past on the shard that owns it, making it
+    /// already-expired without a wall-clock wait. The executor resolved
+    /// `shard_id` from the key. Returns the fully-formed wire reply (`+OK`, or an
+    /// error for a missing key / a key with no TTL).
+    fn expire_backdate<'a>(
+        &'a self,
+        shard_id: usize,
+        key: Bytes,
+        ms: u64,
+    ) -> BoxFuture<'a, Response>;
 
     /// DEBUG KEYSIZES-HIST-ASSERT — the keysize histograms merged across every
     /// shard. The executor resolves the requested type/bin and compares.
@@ -1002,6 +1016,14 @@ mod tests {
             unimplemented!()
         }
         fn set_active_expire<'a>(&'a self, _enabled: bool) -> BoxFuture<'a, ()> {
+            unimplemented!()
+        }
+        fn expire_backdate<'a>(
+            &'a self,
+            _shard_id: usize,
+            _key: Bytes,
+            _ms: u64,
+        ) -> BoxFuture<'a, Response> {
             unimplemented!()
         }
         fn keysizes_snapshot<'a>(&'a self) -> BoxFuture<'a, crate::KeysizeHistograms> {

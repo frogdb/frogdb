@@ -227,6 +227,14 @@ impl ClusterTestNode {
         self.server.as_ref().is_some_and(|s| !s.is_finished())
     }
 
+    /// Return this node's current number of blocked clients (0 if not running).
+    pub fn blocked_client_count(&self) -> usize {
+        self.server
+            .as_ref()
+            .map(|s| s.blocked_client_count())
+            .unwrap_or(0)
+    }
+
     /// Get the Raft instance, if cluster mode is enabled.
     pub fn raft(&self) -> Option<&Arc<ClusterRaft>> {
         self.server.as_ref().and_then(|s| s.raft())

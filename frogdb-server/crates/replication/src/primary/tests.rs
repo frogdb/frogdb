@@ -1,7 +1,169 @@
-use super::parse_replconf_ack;
 use crate::primary::ring_buffer::ReplicationRingBuffer;
 use crate::replica_session::create_minimal_rdb;
 use bytes::Bytes;
+
+/// Build a primary handler with an enabled split-brain backlog for the
+/// divergence-record tests. No I/O beyond a temp state path; the handler's own
+/// `offsets` coordinator + `replay` backlog are the only inputs exercised.
+#[cfg(test)]
+fn divergence_handler(dir: &std::path::Path) -> crate::primary::PrimaryReplicationHandler {
+    use crate::primary::PrimaryReplicationHandler;
+    use crate::state::ReplicationState;
+    use crate::tracker::ReplicationTrackerImpl;
+    use crate::{LagThresholdConfig, SplitBrainBufferConfig};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    PrimaryReplicationHandler::new(
+        ReplicationState::new(),
+        dir.join("replication_state.json"),
+        Arc::new(ReplicationTrackerImpl::new()),
+        None,
+        dir.to_path_buf(),
+        LagThresholdConfig {
+            threshold_bytes: 0,
+            threshold_secs: 0,
+            cooldown: Duration::from_secs(0),
+        },
+        SplitBrainBufferConfig {
+            enabled: true,
+            max_entries: 1000,
+            max_bytes: 64 * 1024 * 1024,
+        },
+        0,
+    )
+}
+
+/// Broadcast one command through the primary path (advances the live offset AND
+/// records into the backlog, exactly as production writes do) and return the new
+/// live offset.
+#[cfg(test)]
+fn push_write(handler: &crate::primary::PrimaryReplicationHandler, key: &str, val: &str) -> u64 {
+    handler.broadcast_command(
+        "SET",
+        &[Bytes::from(key.to_string()), Bytes::from(val.to_string())],
+    )
+}
+
+/// Register a streaming replica and ack it at `acked`, so it contributes to
+/// `min_acked_offset`.
+#[cfg(test)]
+fn streaming_replica_acked_at(
+    handler: &crate::primary::PrimaryReplicationHandler,
+    addr: &str,
+    acked: u64,
+) {
+    use crate::replica_session::Phase;
+    let session = handler.tracker.register_replica(addr.parse().unwrap());
+    session.force_phase_for_test(Phase::Streaming);
+    handler.offsets.ingest_replica_ack(session.id(), acked);
+}
+
+/// `end == min_acked` ⇒ `None` (pins the `end > start` gate — `current > min_acked`
+/// today). A fully caught-up demoted primary diverged from nothing.
+#[test]
+fn divergence_record_none_when_caught_up() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let handler = divergence_handler(dir.path());
+
+    push_write(&handler, "k0", "v0");
+    let current = push_write(&handler, "k1", "v1");
+    // One streaming replica acked exactly at the live head.
+    streaming_replica_acked_at(&handler, "127.0.0.1:6380", current);
+
+    assert_eq!(handler.offsets.min_acked(), Some(current));
+    assert_eq!(handler.offsets.current(), current);
+    assert!(
+        handler.divergence_record().is_none(),
+        "a caught-up primary (end == start) did not diverge"
+    );
+}
+
+/// `end > start` but no backlog writes past `start` ⇒ `None` (pins the
+/// `!writes.is_empty()` gate). The live offset advanced without any recorded
+/// command past the acked point, so there is nothing to surrender.
+#[test]
+fn divergence_record_none_when_backlog_empty_past_start() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let handler = divergence_handler(dir.path());
+
+    // Advance the live offset directly (no backlog record), so `current` moves
+    // ahead of `min_acked` (0, no streaming replicas) but the backlog holds
+    // nothing with `offset > 0`.
+    let current = handler.offsets.advance(&Bytes::from(vec![b'x'; 64]));
+    assert_eq!(handler.offsets.min_acked(), None);
+    assert!(current > 0);
+    assert!(handler.replay.extract_divergent_writes(0).is_empty());
+
+    assert!(
+        handler.divergence_record().is_none(),
+        "no backlog write past start ⇒ nothing diverged"
+    );
+}
+
+/// Acks at `min_acked`, several writes past it ⇒
+/// `Some { start == min_acked, end == current, writes == (start, current] }`,
+/// offset-ordered — the exact fact no prior test covered.
+#[test]
+fn divergence_record_window_and_writes() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let handler = divergence_handler(dir.path());
+
+    // Writes the cluster had acknowledged.
+    push_write(&handler, "k0", "v0");
+    let acked = push_write(&handler, "k1", "v1");
+    // Two streaming replicas, both acked at `acked` — the min is `acked`.
+    streaming_replica_acked_at(&handler, "127.0.0.1:6380", acked);
+    streaming_replica_acked_at(&handler, "127.0.0.1:6381", acked);
+
+    // Divergent writes committed past the acked point.
+    let o2 = push_write(&handler, "k2", "v2");
+    let o3 = push_write(&handler, "k3", "v3");
+    let current = o3;
+
+    let record = handler
+        .divergence_record()
+        .expect("primary committed writes past the acked offset ⇒ diverged");
+    assert_eq!(record.start, acked, "lower bound is the min acked offset");
+    assert_eq!(
+        record.end, current,
+        "upper bound is the live write position"
+    );
+    let offsets: Vec<u64> = record.writes.iter().map(|(o, _)| *o).collect();
+    assert_eq!(
+        offsets,
+        vec![o2, o3],
+        "only writes with offset > start, in order"
+    );
+    assert!(offsets.windows(2).all(|w| w[0] < w[1]), "offset-ordered");
+    // The lower-bound write (== start) is excluded; the head (== end) is included.
+    assert!(record.writes.iter().all(|(o, _)| *o > acked));
+}
+
+/// `min_acked()` is `None` (no streaming replicas) ⇒ `start == 0`, the whole
+/// backlog is divergent (pins the `unwrap_or(0)` floor).
+#[test]
+fn divergence_record_no_streaming_replicas_uses_zero_floor() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let handler = divergence_handler(dir.path());
+
+    let o0 = push_write(&handler, "k0", "v0");
+    let o1 = push_write(&handler, "k1", "v1");
+    let current = push_write(&handler, "k2", "v2");
+    assert_eq!(handler.offsets.min_acked(), None);
+
+    let record = handler
+        .divergence_record()
+        .expect("no acked floor ⇒ the whole backlog is divergent");
+    assert_eq!(record.start, 0, "no streaming replicas ⇒ zero floor");
+    assert_eq!(record.end, current);
+    let offsets: Vec<u64> = record.writes.iter().map(|(o, _)| *o).collect();
+    assert_eq!(
+        offsets,
+        vec![o0, o1, current],
+        "entire backlog is divergent"
+    );
+}
 
 #[test]
 fn test_create_minimal_rdb() {
@@ -11,55 +173,8 @@ fn test_create_minimal_rdb() {
     assert!(rdb.contains(&0xFF));
 }
 
-#[test]
-fn test_parse_replconf_ack() {
-    let data = b"*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$5\r\n12345\r\n";
-    let (offset, consumed) = parse_replconf_ack(data).unwrap();
-    assert_eq!(offset, 12345);
-    assert_eq!(consumed, data.len());
-
-    let data = b"*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$10\r\n1234567890\r\n";
-    let (offset, consumed) = parse_replconf_ack(data).unwrap();
-    assert_eq!(offset, 1234567890);
-    assert_eq!(consumed, data.len());
-
-    assert_eq!(parse_replconf_ack(b"INVALID"), None);
-}
-
-#[test]
-fn test_parse_replconf_ack_incomplete() {
-    // Partial frame should return None, not panic
-    assert_eq!(parse_replconf_ack(b"*3\r\n$8\r\nREPLCONF\r\n"), None);
-    assert_eq!(
-        parse_replconf_ack(b"*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$5\r\n123"),
-        None
-    );
-}
-
-#[test]
-fn test_parse_replconf_ack_with_trailing_data() {
-    // Two frames concatenated — should parse the first and report consumed bytes
-    let frame1 = b"*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$3\r\n100\r\n";
-    let frame2 = b"*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$3\r\n200\r\n";
-    let mut combined = Vec::new();
-    combined.extend_from_slice(frame1);
-    combined.extend_from_slice(frame2);
-
-    let (offset, consumed) = parse_replconf_ack(&combined).unwrap();
-    assert_eq!(offset, 100);
-    assert_eq!(consumed, frame1.len());
-
-    // Parse second frame from remainder
-    let (offset2, _) = parse_replconf_ack(&combined[consumed..]).unwrap();
-    assert_eq!(offset2, 200);
-}
-
-#[test]
-fn test_parse_replconf_ack_wrong_command() {
-    // Valid RESP array but not a REPLCONF ACK
-    let data = b"*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n";
-    assert_eq!(parse_replconf_ack(data), None);
-}
+// The `parse_replconf_ack` unit tests moved to the `ReplconfCodec` golden
+// round-trip suite in `frame.rs` (the codec now owns the ACK/GETACK grammar).
 
 #[test]
 fn test_ring_buffer_push_and_extract() {
@@ -198,7 +313,7 @@ async fn save_state_persists_tracker_offset() {
     // A restart seeds the tracker from this file, so the offset must survive
     // and keep the same replication id.
     let reloaded = ReplicationState::load_or_create(&state_path).unwrap();
-    assert_eq!(reloaded.replication_offset, 987);
+    assert_eq!(reloaded.offset_at_save, 987);
     assert_eq!(reloaded.replication_id, replid);
 }
 

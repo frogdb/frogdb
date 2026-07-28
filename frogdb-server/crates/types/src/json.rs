@@ -177,6 +177,33 @@ impl JsonValue {
         &mut self.data
     }
 
+    /// Consume this value, returning the underlying JSON data.
+    pub fn into_data(self) -> JsonData {
+        self.data
+    }
+
+    /// Validate this document against the configured limits.
+    ///
+    /// Enforces the same invariants as [`JsonValue::parse_with_limits`] but on an
+    /// already-constructed value, so growth mutations (MERGE, ARRAPPEND, nested
+    /// SET, ...) can reject a result that pushes the stored document past the
+    /// caps. Depth is checked with a cheap traversal ([`json_depth`]); size uses
+    /// the serialized byte length so `max-size` means "max serialized size of any
+    /// stored document", matching the parse-time check on input. The error
+    /// variants ([`JsonError::SizeExceeded`] / [`JsonError::DepthExceeded`]) are
+    /// byte-identical to the parse-time path so callers surface one error family.
+    pub fn validate_limits(&self, limits: &JsonLimits) -> Result<(), JsonError> {
+        let size = self.to_bytes().len();
+        if size > limits.max_size {
+            return Err(JsonError::SizeExceeded(size, limits.max_size));
+        }
+        let depth = json_depth(&self.data);
+        if depth > limits.max_depth {
+            return Err(JsonError::DepthExceeded(depth, limits.max_depth));
+        }
+        Ok(())
+    }
+
     /// Get the memory size estimate.
     pub fn memory_size(&self) -> usize {
         self.cached_size + mem::size_of::<Self>()
@@ -1315,6 +1342,36 @@ mod tests {
         // Should fail with depth 3
         let result = JsonValue::parse_with_limits(br#"{"a": {"b": {"c": 1}}}"#, &limits);
         assert!(matches!(result, Err(JsonError::DepthExceeded(_, _))));
+    }
+
+    #[test]
+    fn test_validate_limits() {
+        let limits = JsonLimits {
+            max_depth: 2,
+            max_size: 1000,
+        };
+
+        // Within both limits.
+        let ok = JsonValue::parse(br#"{"a": {"b": 1}}"#).unwrap();
+        assert!(ok.validate_limits(&limits).is_ok());
+
+        // Over depth: same error variant the parse path returns.
+        let deep = JsonValue::parse(br#"{"a": {"b": {"c": 1}}}"#).unwrap();
+        assert!(matches!(
+            deep.validate_limits(&limits),
+            Err(JsonError::DepthExceeded(3, 2))
+        ));
+
+        // Over size (serialized byte length), depth is fine.
+        let tiny = JsonLimits {
+            max_depth: 128,
+            max_size: 5,
+        };
+        let big = JsonValue::parse(br#"{"a": 1}"#).unwrap();
+        assert!(matches!(
+            big.validate_limits(&tiny),
+            Err(JsonError::SizeExceeded(_, 5))
+        ));
     }
 
     #[test]

@@ -1249,6 +1249,126 @@ async fn tcl_xread_multiple_xadd_inside_transaction() {
 }
 
 // ---------------------------------------------------------------------------
+// 36d. XREAD: XTRIM must not wake a blocked reader (issue 53)
+// ---------------------------------------------------------------------------
+//
+// Pins the no-wake half of the property documented on
+// `try_satisfy_stream_waiters` (core/src/shard/blocking.rs): stream waiters
+// are only satisfied after XADD, DEL, UNLINK, SET, XGROUP DESTROY, and
+// RENAME — deliberately *not* after XTRIM. Trimming only removes existing
+// entries; it can never produce a new entry for a client blocked on
+// `XREAD ... STREAMS s $` to read, so the blocker must remain blocked. A
+// subsequent standalone XADD must still wake it, with exactly the newly
+// added entry (not a stale one from before the trim).
+
+#[tokio::test]
+async fn tcl_xread_xtrim_should_not_awake_client() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut writer = server.connect().await;
+
+    writer.command(&["DEL", "s1trim"]).await;
+    for i in 1..=5 {
+        writer
+            .command(&["XADD", "s1trim", &format!("{i}-1"), "item", &i.to_string()])
+            .await;
+    }
+
+    blocker
+        .send_only(&["XREAD", "BLOCK", "20000", "STREAMS", "s1trim", "$"])
+        .await;
+    server.wait_for_blocked_clients(1).await;
+
+    // XTRIM removes 4 of the 5 existing entries; it must not wake the
+    // blocker, since it produces no new entry.
+    let trim_resp = writer.command(&["XTRIM", "s1trim", "MAXLEN", "1"]).await;
+    assert_integer_eq(&trim_resp, 4);
+
+    let still_blocked = blocker.read_response(Duration::from_millis(200)).await;
+    assert!(
+        still_blocked.is_none(),
+        "blocker should still be blocked after XTRIM, got {still_blocked:?}"
+    );
+    assert_eq!(server.blocked_client_count(), 1);
+
+    // A fresh XADD should wake the blocker with exactly the new entry.
+    writer
+        .command(&["XADD", "s1trim", "*", "new", "abcd1234"])
+        .await;
+
+    let resp = blocker
+        .read_response(Duration::from_secs(5))
+        .await
+        .expect("blocker should unblock after post-trim XADD");
+
+    let streams = unwrap_array(resp);
+    assert_eq!(streams.len(), 1);
+    let stream_data = unwrap_array(streams[0].clone());
+    assert_bulk_eq(&stream_data[0], b"s1trim");
+    let entries = unwrap_array(stream_data[1].clone());
+    assert_eq!(entries.len(), 1);
+    let fields = entry_fields(&entries[0]);
+    assert_eq!(fields, vec!["new", "abcd1234"]);
+}
+
+// ---------------------------------------------------------------------------
+// 36e. XREAD: XDEL must not wake a blocked reader (issue 53)
+// ---------------------------------------------------------------------------
+//
+// Sibling of 36d for XDEL: deleting existing entries never produces a new
+// entry, so a blocker on `XREAD ... STREAMS s $` must stay blocked per the
+// documented wake-trigger list on `try_satisfy_stream_waiters`
+// (core/src/shard/blocking.rs) — XDEL is not in it. A follow-up standalone
+// XADD must still wake the blocker with exactly the newly added entry.
+
+#[tokio::test]
+async fn tcl_xread_xdel_should_not_awake_client() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut writer = server.connect().await;
+
+    writer.command(&["DEL", "s1del"]).await;
+    writer.command(&["XADD", "s1del", "1-1", "item", "1"]).await;
+    writer.command(&["XADD", "s1del", "1-2", "item", "2"]).await;
+    writer.command(&["XADD", "s1del", "1-3", "item", "3"]).await;
+
+    blocker
+        .send_only(&["XREAD", "BLOCK", "20000", "STREAMS", "s1del", "$"])
+        .await;
+    server.wait_for_blocked_clients(1).await;
+
+    // XDEL removes an existing entry; it must not wake the blocker.
+    let del_resp = writer.command(&["XDEL", "s1del", "1-2"]).await;
+    assert_integer_eq(&del_resp, 1);
+
+    let still_blocked = blocker.read_response(Duration::from_millis(200)).await;
+    assert!(
+        still_blocked.is_none(),
+        "blocker should still be blocked after XDEL, got {still_blocked:?}"
+    );
+    assert_eq!(server.blocked_client_count(), 1);
+
+    // A fresh XADD should wake the blocker with exactly the new entry.
+    writer
+        .command(&["XADD", "s1del", "*", "new", "abcd1234"])
+        .await;
+
+    let resp = blocker
+        .read_response(Duration::from_secs(5))
+        .await
+        .expect("blocker should unblock after post-XDEL XADD");
+
+    let streams = unwrap_array(resp);
+    assert_eq!(streams.len(), 1);
+    let stream_data = unwrap_array(streams[0].clone());
+    assert_bulk_eq(&stream_data[0], b"s1del");
+    let entries = unwrap_array(stream_data[1].clone());
+    assert_eq!(entries.len(), 1);
+    let fields = entry_fields(&entries[0]);
+    assert_eq!(fields, vec!["new", "abcd1234"]);
+}
+
+// ---------------------------------------------------------------------------
 // 37. XTRIM with MAXLEN option basic test (simplified)
 // ---------------------------------------------------------------------------
 

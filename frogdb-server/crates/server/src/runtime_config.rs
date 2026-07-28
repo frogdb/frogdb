@@ -139,6 +139,15 @@ impl ToTomlValue for Vec<u64> {
     }
 }
 
+impl ToTomlValue for Vec<String> {
+    /// Renders a TOML array of strings. Backs the immutable `tls-ciphersuites`
+    /// param (issue-14), whose file field `tls.ciphersuites` is a TOML string
+    /// array of rustls IANA ciphersuite names.
+    fn to_toml_value(&self) -> TomlValue {
+        self.iter().map(|s| s.as_str()).collect()
+    }
+}
+
 /// Extension of [`DynParam`] that additionally renders a parameter's live value
 /// as a genuinely-typed [`toml_edit::Value`] for CONFIG REWRITE.
 ///
@@ -390,6 +399,25 @@ pub struct StaticConfig {
     pub status_durability_lag_critical_ms: u64,
     /// Whether SLO latency-band tracking is enabled.
     pub latency_bands_enabled: bool,
+
+    // --- issue-14 wire pass: immutable (CONFIG GET-only) startup-consumed params ---
+    /// Whether metrics OTLP export is enabled.
+    pub metrics_otlp_enabled: bool,
+    /// Metrics OTLP export endpoint URL.
+    pub metrics_otlp_endpoint: String,
+    /// Metrics OTLP push interval in seconds.
+    pub metrics_otlp_interval_secs: u64,
+    /// Maximum JSON document nesting depth.
+    pub json_max_depth: usize,
+    /// Maximum JSON document size in bytes.
+    pub json_max_size: usize,
+    /// Replica -> primary ACK cadence in milliseconds.
+    pub repl_ack_interval_ms: u64,
+    /// Allowed TLS ciphersuites (rustls IANA names; empty = rustls defaults).
+    pub tls_ciphersuites: Vec<String>,
+    /// Hard limit (bytes) on the per-connection pub/sub output buffer for a slow
+    /// subscriber before messages are dropped and the connection is torn down.
+    pub pubsub_output_buffer_hard_limit: usize,
 }
 
 impl StaticConfig {
@@ -495,6 +523,15 @@ impl StaticConfig {
             status_durability_lag_warning_ms: config.status.durability_lag_warning_ms,
             status_durability_lag_critical_ms: config.status.durability_lag_critical_ms,
             latency_bands_enabled: config.latency_bands.enabled,
+            // --- issue-14 wire pass: immutable startup-consumed params ---
+            metrics_otlp_enabled: config.metrics.otlp_enabled,
+            metrics_otlp_endpoint: config.metrics.otlp_endpoint.clone(),
+            metrics_otlp_interval_secs: config.metrics.otlp_interval_secs,
+            json_max_depth: config.json.max_depth,
+            json_max_size: config.json.max_size,
+            repl_ack_interval_ms: config.replication.ack_interval_ms,
+            tls_ciphersuites: config.tls.ciphersuites.clone(),
+            pubsub_output_buffer_hard_limit: config.server.pubsub_output_buffer_hard_limit,
         }
     }
 }
@@ -1264,6 +1301,58 @@ impl ConfigManager {
                 name: id.name(),
                 getter: |mgr| yes_no(mgr.static_config.latency_bands_enabled),
                 toml_getter: |mgr| mgr.static_config.latency_bands_enabled.to_toml_value(),
+            },
+            // --- issue-14 wire pass: promote-immutable params (GET-only) ---
+            MetricsOtlpEnabled => ParamMeta {
+                name: id.name(),
+                getter: |mgr| yes_no(mgr.static_config.metrics_otlp_enabled),
+                toml_getter: |mgr| mgr.static_config.metrics_otlp_enabled.to_toml_value(),
+            },
+            MetricsOtlpEndpoint => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.metrics_otlp_endpoint.clone(),
+                toml_getter: |mgr| mgr.static_config.metrics_otlp_endpoint.to_toml_value(),
+            },
+            MetricsOtlpIntervalSecs => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.metrics_otlp_interval_secs.to_string(),
+                toml_getter: |mgr| mgr.static_config.metrics_otlp_interval_secs.to_toml_value(),
+            },
+            JsonMaxDepth => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.json_max_depth.to_string(),
+                toml_getter: |mgr| mgr.static_config.json_max_depth.to_toml_value(),
+            },
+            JsonMaxSize => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.json_max_size.to_string(),
+                toml_getter: |mgr| mgr.static_config.json_max_size.to_toml_value(),
+            },
+            ReplAckIntervalMs => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.repl_ack_interval_ms.to_string(),
+                toml_getter: |mgr| mgr.static_config.repl_ack_interval_ms.to_toml_value(),
+            },
+            TlsCiphersuites => ParamMeta {
+                name: id.name(),
+                // CONFIG GET renders the ciphersuite names space-joined (Redis-style,
+                // like `tls-protocols`); CONFIG REWRITE writes the file's own TOML
+                // string array via `Vec<String>::to_toml_value`.
+                getter: |mgr| mgr.static_config.tls_ciphersuites.join(" "),
+                toml_getter: |mgr| mgr.static_config.tls_ciphersuites.to_toml_value(),
+            },
+            PubsubOutputBufferHardLimit => ParamMeta {
+                name: id.name(),
+                getter: |mgr| {
+                    mgr.static_config
+                        .pubsub_output_buffer_hard_limit
+                        .to_string()
+                },
+                toml_getter: |mgr| {
+                    mgr.static_config
+                        .pubsub_output_buffer_hard_limit
+                        .to_toml_value()
+                },
             },
         }
     }
@@ -2263,6 +2352,20 @@ impl ConfigManager {
         self.runtime.read().unwrap().maxmemory_policy
     }
 
+    /// Minimum number of "good" replicas required before a write is accepted
+    /// (Redis `min-replicas-to-write`). `0` disables the gate. Read live on the
+    /// write path so `CONFIG SET min-replicas-to-write` takes effect at once.
+    pub fn min_replicas_to_write(&self) -> u32 {
+        self.runtime.read().unwrap().min_replicas_to_write
+    }
+
+    /// Maximum replica ACK lag (ms) for a replica to count as "good" toward
+    /// [`Self::min_replicas_to_write`] (Redis `min-replicas-max-lag`, kept in
+    /// ms internally).
+    pub fn min_replicas_timeout_ms(&self) -> u64 {
+        self.runtime.read().unwrap().min_replicas_timeout_ms
+    }
+
     /// Get the slowlog threshold in microseconds.
     /// Returns -1 if disabled, 0 to log all, or positive value for threshold.
     pub fn slowlog_log_slower_than(&self) -> i64 {
@@ -2697,6 +2800,51 @@ mod tests {
             );
             assert!(
                 immutable.contains(name),
+                "{name} should be listed among immutable params"
+            );
+        }
+    }
+
+    /// issue-14 wire pass: the 7 newly-wired config fields promoted to immutable
+    /// are CONFIG GET-visible (reporting their honest startup value) and reject
+    /// CONFIG SET with `ImmutableParameter`. Spans metrics OTLP, json limits,
+    /// replication ACK cadence, and TLS ciphersuites.
+    #[test]
+    fn test_config_get_wired_immutable_params_issue14() {
+        let config = test_config(); // Config::default()
+        let manager = ConfigManager::new(&config);
+
+        // (param name, expected CONFIG GET value at defaults).
+        let expected: &[(&str, &str)] = &[
+            ("metrics-otlp-enabled", "no"),                     // metrics (bool)
+            ("metrics-otlp-endpoint", "http://localhost:4317"), // metrics
+            ("metrics-otlp-interval-secs", "15"),               // metrics
+            ("json-max-depth", "128"),                          // json
+            ("json-max-size", "67108864"),                      // json (64 MiB)
+            ("repl-ack-interval-ms", "1000"),                   // replication
+            ("tls-ciphersuites", ""),                           // tls (empty = rustls defaults)
+        ];
+
+        for (name, want) in expected {
+            let got = manager.get(name);
+            assert_eq!(
+                got.len(),
+                1,
+                "CONFIG GET {name} should return exactly one row"
+            );
+            assert_eq!(&got[0].0, name, "CONFIG GET returned wrong key for {name}");
+            assert_eq!(&got[0].1, want, "CONFIG GET {name} value mismatch");
+
+            // Every promoted param is immutable: CONFIG SET must be rejected.
+            let set = manager.set(name, "1");
+            assert!(
+                matches!(set, Err(ConfigError::ImmutableParameter(_))),
+                "CONFIG SET {name} should be rejected as ImmutableParameter, got {set:?}"
+            );
+
+            // Reported under the immutable-name list, not the mutable one.
+            assert!(
+                manager.immutable_param_names().contains(name),
                 "{name} should be listed among immutable params"
             );
         }

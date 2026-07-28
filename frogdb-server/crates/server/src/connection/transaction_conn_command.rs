@@ -62,6 +62,7 @@ const fn transaction_spec(
         wakes: WaiterWake::None,
         event: EventSpec::NotApplicable,
         requires_same_slot: false,
+        reindex: frogdb_core::ReindexSpec::None,
         lookup: LookupSpec::None,
         mutation: frogdb_core::ConnMutation::Auth,
         strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Transaction),
@@ -314,18 +315,30 @@ async fn handle_watch(ctx: &mut ConnCtx<'_>, args: &[Bytes]) -> Response {
     {
         return Response::error("ERR shard unavailable");
     }
-    let version = match response_rx.await {
-        Ok(v) => v,
+    let (versions, live_flags) = match response_rx.await {
+        Ok(reply) => reply,
         Err(_) => return Response::error("ERR shard dropped request"),
     };
 
-    // Store watched keys with their versions. The shard is *not* folded into
-    // the transaction target here: WATCH always precedes MULTI (WATCH inside
-    // MULTI errors), and MULTI resets the accumulator, so any fold recorded now
-    // would be discarded. The watch set's shards are folded at EXEC time in
-    // `take_transaction`, from the live (post-UNWATCH) watch set.
-    for key in args {
-        state.watch_key(key.clone(), shard, version);
+    // Both reply vectors align with `args` (one entry per watched key, in
+    // order). `versions[i]` is key `i`'s per-slot WATCH version (proposal 18 —
+    // slot-granular, so distinct-slot keys get distinct versions rather than one
+    // shared shard version); `live_flags[i]` reports whether the key was live
+    // (present and unexpired) at watch time — the `wk->expired` inverse EXEC
+    // needs to distinguish a live-then-expired watch (must abort) from an
+    // already-stale one (must not). Enforce the length invariant: a shard reply
+    // whose vectors do not match the watched-key count is a protocol bug, not a
+    // watch we can safely record.
+    if versions.len() != args.len() || live_flags.len() != args.len() {
+        return Response::error("ERR shard returned malformed WATCH version reply");
+    }
+    // The shard is *not* folded into the transaction target here: WATCH always
+    // precedes MULTI (WATCH inside MULTI errors), and MULTI resets the
+    // accumulator, so any fold recorded now would be discarded. The watch set's
+    // shards are folded at EXEC time in `take_transaction`, from the live
+    // (post-UNWATCH) watch set.
+    for ((key, version), live_at_watch) in args.iter().zip(versions).zip(live_flags) {
+        state.watch_key(key.clone(), shard, version, live_at_watch);
     }
 
     Response::ok()
@@ -545,7 +558,7 @@ mod tests {
     #[tokio::test]
     async fn unwatch_is_ok_and_clears_watches() {
         let mut fx = Fixture::new();
-        fx.state.watch_key(Bytes::from_static(b"k"), 0, 7);
+        fx.state.watch_key(Bytes::from_static(b"k"), 0, 7, true);
         let resp = UnwatchConnCommand.execute(&mut fx.ctx_mut(), &[]).await;
         assert_eq!(resp, Response::ok());
         assert_eq!(

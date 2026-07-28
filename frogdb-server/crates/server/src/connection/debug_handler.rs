@@ -281,6 +281,39 @@ impl DebugProvider for ConnectionHandler {
         })
     }
 
+    /// DEBUG EXPIRE-BACKDATE <key> <ms> — rewrite the key's expiry deadline into
+    /// the past on the owning shard. Routes one keyed round-trip through the same
+    /// timed send/timeout helper the other single-shard probes use.
+    fn expire_backdate<'a>(
+        &'a self,
+        shard_id: usize,
+        key: Bytes,
+        ms: u64,
+    ) -> BoxFuture<'a, Response> {
+        Box::pin(async move {
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+            let msg = frogdb_core::shard::DebugIntrospectionMsg::ExpireBackdate {
+                key,
+                ms,
+                response_tx,
+            };
+            match self
+                .scatter_gather()
+                .query_one(shard_id, msg, response_rx)
+                .await
+            {
+                Ok(frogdb_core::store::BackdateExpiryResult::Backdated) => Response::ok(),
+                Ok(frogdb_core::store::BackdateExpiryResult::NoSuchKey) => {
+                    Response::error("ERR no such key")
+                }
+                Ok(frogdb_core::store::BackdateExpiryResult::NoExpiry) => {
+                    Response::error("ERR key has no expiry to backdate")
+                }
+                Err(err) => err,
+            }
+        })
+    }
+
     /// DEBUG KEYSIZES-HIST-ASSERT — merge keysize histograms across all shards.
     fn keysizes_snapshot<'a>(&'a self) -> BoxFuture<'a, KeysizeHistograms> {
         Box::pin(async move {

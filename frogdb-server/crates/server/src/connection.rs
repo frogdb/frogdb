@@ -75,16 +75,17 @@ use std::time::Duration;
 use anyhow::Result;
 use bytes::BytesMut;
 use codec::FrogDbResp2;
-use frogdb_core::{ClientHandle, PubSubMessage, PubSubMsg, PubSubSender};
+use frogdb_core::{ClientHandle, PubSubMsg, PubSubReceiver, PubSubSender};
 use frogdb_protocol::{ParsedCommand, Response, WireResponse};
 use futures::StreamExt;
 use lifecycle::TrackingIo;
-use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
 use tracing::{Instrument, debug, info, trace, warn};
 
+use crate::commands::replication::PsyncHandoff;
 #[cfg(feature = "turmoil")]
 use crate::config::ChaosConfigExt;
+use crate::connection::dispatch::Dispatched;
 use crate::net::ConnectionStream;
 // Re-export next_txid for the command-execution submodules
 pub use crate::server::next_txid;
@@ -137,7 +138,12 @@ pub struct ConnectionHandler {
 
     /// Receiver for pub/sub messages from shards.
     /// Lazily initialized on first pub/sub command.
-    pubsub_rx: Option<mpsc::UnboundedReceiver<PubSubMessage>>,
+    pubsub_rx: Option<PubSubReceiver>,
+
+    /// Hard limit (bytes) applied to this connection's pub/sub delivery queue
+    /// when it is lazily allocated. `0` disables the bound. A slow subscriber
+    /// that exceeds it has further messages dropped and is disconnected.
+    pubsub_output_buffer_hard_limit: usize,
 
     /// Client-tracking IO plumbing (invalidation channel + REDIRECT forwarding
     /// task). Grouped so the CLIENT executor can borrow it mutably as a
@@ -160,17 +166,16 @@ pub struct ConnectionHandler {
     /// Default false in production; test harness sets to true.
     enable_debug_command: bool,
 
-    /// Hot shard detection configuration.
-    _hotshards_config: frogdb_debug::HotShardConfig,
-
     /// Memory diagnostics provider (MEMORY DOCTOR), wrapping the configured
     /// [`frogdb_debug::MemoryDiagConfig`] behind the core `MemoryDiagProvider`
     /// seam so it can be exposed through [`ConnCtx::memory_diag`].
     memory_diag: crate::connection::observability_conn_command::MemoryDiag,
 
-    /// Pending PSYNC handoff parameters (replication_id, offset).
-    /// Set when PSYNC command returns PSYNC_HANDOFF, processed after the loop.
-    pending_psync_handoff: Option<(String, i64)>,
+    /// Pending PSYNC connection takeover. Set when `PsyncIntercept` yields a
+    /// typed [`Dispatched::Handoff`], carried out after the run loop (so any
+    /// buffered pipelined replies flush over the wire before the socket is
+    /// handed to the `PrimaryReplicationHandler`).
+    pending_psync_handoff: Option<PsyncHandoff>,
 
     /// Reusable buffer for RESP3 encoding to avoid per-response allocation.
     resp3_buf: BytesMut,
@@ -194,10 +199,14 @@ pub struct ConnectionHandler {
 enum FrameAction {
     /// Command processed normally, keep going.
     Continue,
-    /// Connection should close (QUIT, PSYNC handoff, disconnect).
+    /// Connection should close (QUIT, disconnect).
     Break,
     /// Response was skipped (ReplyMode::Off or skip_next_reply).
     SkipResponse,
+    /// PSYNC requested a raw-socket takeover. Carries the typed handoff out of
+    /// `process_one_command`; the run loop stashes it and breaks *after* the
+    /// shared flush so buffered pipelined replies still reach the wire.
+    Handoff(PsyncHandoff),
 }
 
 impl ConnectionHandler {
@@ -260,13 +269,13 @@ impl ConnectionHandler {
             scatter_gather_timeout: config.scatter_gather_timeout,
             pubsub_tx: None,
             pubsub_rx: None,
+            pubsub_output_buffer_hard_limit: config.pubsub_output_buffer_hard_limit,
             tracking_io: TrackingIo::default(),
             pending_track_reads: false,
             pending_no_touch: false,
             is_admin: config.is_admin,
             admin_enabled: config.admin_enabled,
             enable_debug_command: config.enable_debug_command,
-            _hotshards_config: config.hotshards_config,
             memory_diag: crate::connection::observability_conn_command::MemoryDiag(
                 config.memory_diag_config,
             ),
@@ -411,7 +420,7 @@ impl ConnectionHandler {
             .map(|t| t.start_request_span(&cmd_name, self.state.id));
 
         // Route and execute (with transaction and pub/sub handling)
-        let responses = if self
+        let dispatched = if self
             .per_request_spans
             .load(std::sync::atomic::Ordering::Relaxed)
         {
@@ -423,18 +432,22 @@ impl ConnectionHandler {
                 .await
         };
 
-        // Check for PSYNC_HANDOFF signal
-        if let Some(handoff_params) = Self::extract_psync_handoff(&responses) {
-            info!(
-                conn_id = self.state.id,
-                addr = %self.state.addr,
-                replication_id = %handoff_params.0,
-                offset = handoff_params.1,
-                "PSYNC handoff requested - will transfer connection to replication handler"
-            );
-            self.pending_psync_handoff = Some(handoff_params);
-            return FrameAction::Break;
-        }
+        // A PSYNC takeover is a typed control outcome, not a data reply: carry it
+        // out of this frame so the run loop can flush any buffered pipelined
+        // replies before handing the raw socket to the replication handler.
+        let responses = match dispatched {
+            Dispatched::Responses(responses) => responses,
+            Dispatched::Handoff(handoff) => {
+                info!(
+                    conn_id = self.state.id,
+                    addr = %self.state.addr,
+                    replication_id = %handoff.replication_id,
+                    offset = handoff.offset,
+                    "PSYNC handoff requested - will transfer connection to replication handler"
+                );
+                return FrameAction::Handoff(handoff);
+            }
+        };
 
         // Calculate elapsed time in microseconds for slowlog
         let elapsed_us = now.elapsed().as_micros() as u64;
@@ -519,6 +532,20 @@ impl ConnectionHandler {
         FrameAction::Continue
     }
 
+    /// Log and record the teardown of a subscriber whose pub/sub output buffer
+    /// exceeded the hard limit. The caller `break`s the delivery loop, dropping
+    /// the socket — matching Redis's `client-output-buffer-limit pubsub`.
+    fn disconnect_overflowed_subscriber(&self) {
+        let dropped = self.pubsub_rx.as_ref().map(|rx| rx.dropped()).unwrap_or(0);
+        warn!(
+            conn_id = self.state.id,
+            dropped, "pub/sub output buffer hard limit exceeded; disconnecting slow subscriber"
+        );
+        frogdb_telemetry::definitions::PubsubOutputBufferDisconnects::inc(
+            &*self.observability.metrics_recorder,
+        );
+    }
+
     /// Run the connection handling loop.
     pub async fn run(mut self) -> Result<()> {
         debug!(conn_id = self.state.id, "Connection handler started");
@@ -532,12 +559,22 @@ impl ConnectionHandler {
                 }
 
                 // Handle pub/sub messages from shards
-                Some(pubsub_msg) = async {
+                Some(drained) = async {
                     match self.pubsub_rx.as_mut() {
-                        Some(rx) => rx.recv().await,
+                        Some(rx) => rx.recv_or_overflow().await,
                         None => std::future::pending().await,
                     }
                 } => {
+                    // An overflow with an empty channel surfaces here directly:
+                    // the flood was dropped to keep memory bounded, so there is
+                    // no message to drain — tear the slow subscriber down.
+                    let pubsub_msg = match drained {
+                        frogdb_core::Drained::Message(msg) => msg,
+                        frogdb_core::Drained::Overflowed => {
+                            self.disconnect_overflowed_subscriber();
+                            break;
+                        }
+                    };
                     // Buffer the first pub/sub message
                     let response = pubsub_msg.to_response_with_protocol(self.state.protocol_version);
                     if self.feed_response(Self::narrow_to_wire(response)).await.is_err() {
@@ -560,6 +597,19 @@ impl ConnectionHandler {
                     // Single flush for all pub/sub messages
                     if self.flush_responses().await.is_err() {
                         debug!(conn_id = self.state.id, "Failed to flush pub/sub responses");
+                        break;
+                    }
+                    // If the per-connection pub/sub output buffer overflowed while
+                    // this subscriber was too slow to drain it, the server dropped
+                    // messages to keep memory bounded. Redis disconnects such a
+                    // client (client-output-buffer-limit pubsub). We do the same,
+                    // best-effort, on the next drain after a successful flush.
+                    if self
+                        .pubsub_rx
+                        .as_ref()
+                        .is_some_and(|rx| rx.has_overflowed())
+                    {
+                        self.disconnect_overflowed_subscriber();
                         break;
                     }
                 }
@@ -670,6 +720,13 @@ impl ConnectionHandler {
                     let mut should_break = false;
                     match self.process_one_command(frame).await {
                         FrameAction::Break => should_break = true,
+                        // Stash the handoff and break *after* the shared flush
+                        // below, so buffered pipelined replies reach the wire
+                        // before the socket is taken over.
+                        FrameAction::Handoff(handoff) => {
+                            self.pending_psync_handoff = Some(handoff);
+                            should_break = true;
+                        }
                         FrameAction::Continue | FrameAction::SkipResponse => {}
                     }
 
@@ -688,6 +745,11 @@ impl ConnectionHandler {
                             };
                             match self.process_one_command(frame).await {
                                 FrameAction::Break => {
+                                    should_break = true;
+                                    break;
+                                }
+                                FrameAction::Handoff(handoff) => {
+                                    self.pending_psync_handoff = Some(handoff);
                                     should_break = true;
                                     break;
                                 }
@@ -710,7 +772,11 @@ impl ConnectionHandler {
         }
 
         // Check if we need to do PSYNC handoff
-        if let Some((replication_id, offset)) = self.pending_psync_handoff.take() {
+        if let Some(PsyncHandoff {
+            replication_id,
+            offset,
+        }) = self.pending_psync_handoff.take()
+        {
             info!(
                 conn_id = self.state.id,
                 addr = %self.state.addr,
@@ -719,41 +785,38 @@ impl ConnectionHandler {
                 "Performing PSYNC handoff"
             );
 
-            // Get the primary replication handler
-            if let Some(handler) = &self.cluster.primary_replication_handler {
-                // Extract the ConnectionStream from the Framed codec, then get the raw TcpStream.
-                let connection_stream = self.framed.into_inner();
+            // A handoff is only ever stashed after `PsyncIntercept` passed the
+            // `primary_replication_handler.is_none()` gate, so the handler is
+            // present here by construction. The former no-handler `else` (a
+            // silent warn) is thus dead; this `expect` documents the invariant
+            // and would surface a dispatch-order regression loudly rather than
+            // silently dropping the replica.
+            let handler = self
+                .cluster
+                .primary_replication_handler
+                .as_ref()
+                .expect("PsyncIntercept gates handler presence before yielding a handoff");
 
-                #[cfg(not(feature = "turmoil"))]
-                {
-                    // Pass the stream as a boxed trait object, preserving TLS if active.
-                    let boxed_stream = connection_stream.into_boxed();
-                    if let Err(e) = handler
-                        .handle_psync(boxed_stream, self.state.addr, &replication_id, offset)
-                        .await
-                    {
-                        warn!(
-                            conn_id = self.state.id,
-                            error = %e,
-                            "PSYNC handoff failed"
-                        );
-                    }
-                }
+            // Extract the ConnectionStream from the Framed codec and type-erase
+            // it for the replication handler (`handle_psync` takes a
+            // `BoxedStream`). Non-turmoil: `into_boxed` preserves TLS if
+            // active; turmoil: the simulated `TcpStream` implements
+            // `AsyncRead`/`AsyncWrite` and boxes directly, so primary+replica
+            // pairs work under simulation too.
+            let connection_stream = self.framed.into_inner();
+            #[cfg(not(feature = "turmoil"))]
+            let boxed_stream = connection_stream.into_boxed();
+            #[cfg(feature = "turmoil")]
+            let boxed_stream: frogdb_replication::BoxedStream = Box::new(connection_stream);
 
-                #[cfg(feature = "turmoil")]
-                {
-                    // In turmoil mode, we can't directly pass the turmoil TcpStream
-                    // to the handler which expects tokio TcpStream.
-                    warn!(
-                        conn_id = self.state.id,
-                        "PSYNC handoff not supported in turmoil simulation mode"
-                    );
-                    let _ = (handler, connection_stream);
-                }
-            } else {
+            if let Err(e) = handler
+                .handle_psync(boxed_stream, self.state.addr, &replication_id, offset)
+                .await
+            {
                 warn!(
                     conn_id = self.state.id,
-                    "PSYNC handoff requested but no primary replication handler available"
+                    error = %e,
+                    "PSYNC handoff failed"
                 );
             }
 

@@ -32,6 +32,7 @@ static BGSAVE_SPEC: CommandSpec = CommandSpec {
     wakes: WaiterWake::None,
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
+    reindex: frogdb_core::ReindexSpec::None,
     lookup: LookupSpec::None,
     mutation: frogdb_core::ConnMutation::None,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Persistence),
@@ -51,6 +52,7 @@ static LASTSAVE_SPEC: CommandSpec = CommandSpec {
     wakes: WaiterWake::None,
     event: EventSpec::NotApplicable,
     requires_same_slot: false,
+    reindex: frogdb_core::ReindexSpec::None,
     lookup: LookupSpec::None,
     mutation: frogdb_core::ConnMutation::None,
     strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Persistence),
@@ -121,7 +123,18 @@ fn handle_bgsave(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
             Response::Simple(Bytes::from_static(b"Background saving scheduled"))
         }
         SnapshotRequest::AlreadyRunning => {
-            // Return a simple status like Redis does.
+            // KNOWN DIVERGENCE FROM REDIS (pinned by
+            // `bgsave_overlap_observes_already_running_on_real_coordinator` in
+            // `tests` below, testing-gap issue 45 / audit D#6): Redis 8.6 rejects
+            // an overlapping `BGSAVE` with a `-ERR` error reply
+            // ("Background save already in progress"). FrogDB instead replies
+            // with a `+` simple string here, so a RESP client that only treats
+            // `-`-prefixed replies as errors will read this as a successful
+            // acknowledgement rather than a rejected request. This is a real,
+            // tested deviation, not a deliberate compatibility choice — pinned
+            // as-is for now; switching to `Response::Error` to match Redis is a
+            // follow-up decision (it changes client-visible behavior), out of
+            // scope for this test-only pass.
             Response::Simple(Bytes::from_static(b"Background save already in progress"))
         }
     }
@@ -129,18 +142,25 @@ fn handle_bgsave(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
 
 /// LASTSAVE — return the Unix timestamp of the last successful save.
 fn handle_lastsave(ctx: &ConnCtx<'_>) -> Response {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     match ctx.snapshot_coordinator.last_save_time() {
         Some(instant) => {
             // Convert Instant to Unix timestamp: work out how long ago the save
-            // was and subtract from the current wall-clock time.
+            // was and subtract from the current wall-clock time. Subtract the
+            // full-precision `Duration`s first and truncate to whole seconds only
+            // once, at the end. The previous version truncated `elapsed` and
+            // `now` to whole seconds *separately* and then subtracted the
+            // truncated values, which double-truncates and can be off by up to
+            // 1s — e.g. now=100.1s, elapsed=10.9s (real save time 89.2s):
+            // floor(100.1) - floor(10.9) = 100 - 10 = 90, one second later than
+            // floor(89.2) = 89.
             let elapsed = instant.elapsed();
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default();
-            let save_time = now.as_secs().saturating_sub(elapsed.as_secs());
-            Response::Integer(save_time as i64)
+            let save_time = now.checked_sub(elapsed).unwrap_or(Duration::ZERO);
+            Response::Integer(save_time.as_secs() as i64)
         }
         None => {
             // No snapshot has been taken yet.
@@ -155,11 +175,16 @@ mod tests {
     use crate::connection::ClusterDeps;
     use crate::connection::observability_conn_command::MemoryDiag;
     use crate::cursor_store::AggregateCursorStore;
-    use frogdb_core::persistence::{NoopSnapshotCoordinator, SnapshotCoordinator};
+    use frogdb_core::persistence::{
+        NoopSnapshotCoordinator, RocksConfig, RocksSnapshotCoordinator, RocksStore, SnapshotConfig,
+        SnapshotCoordinator, SnapshotMode,
+    };
     use frogdb_core::{
         ClientRegistry, CommandLatencyHistograms, KeyspaceStats, NoopMetricsRecorder,
         SharedHotkeySession, new_shared_hotkey_session,
     };
+    use std::sync::Arc;
+    use std::time::Duration;
 
     /// Build a `ConnCtx` over fixture dependencies — no socket, no
     /// `ConnectionHandler`. Only the snapshot coordinator is exercised by these
@@ -237,32 +262,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bgsave_reports_already_in_progress() {
+    async fn bgsave_starts_each_time_under_instant_completion() {
+        // The no-op coordinator now completes instantly (proposal 21): a save
+        // releases the slot synchronously, so there is never a genuinely in-flight
+        // save to observe. A leaked handle no longer pins `in_progress` — the
+        // deliberate semantic flip — so back-to-back BGSAVEs each `Started`.
         let fx = Fixture::new();
-        // Leak a handle so the snapshot stays in progress.
-        let handle = fx.snapshot_coordinator.start_snapshot().unwrap();
-        std::mem::forget(handle);
-        let resp = BgsaveConnCommand.execute(&mut fx.ctx(), &[]).await;
+        let first = BgsaveConnCommand.execute(&mut fx.ctx(), &[]).await;
         assert_eq!(
-            resp,
-            Response::Simple(Bytes::from_static(b"Background save already in progress"))
+            first,
+            Response::Simple(Bytes::from_static(b"Background saving started"))
+        );
+        let second = BgsaveConnCommand.execute(&mut fx.ctx(), &[]).await;
+        assert_eq!(
+            second,
+            Response::Simple(Bytes::from_static(b"Background saving started"))
         );
     }
 
     #[tokio::test]
-    async fn bgsave_schedule_while_in_progress_schedules() {
+    async fn bgsave_schedule_starts_when_idle() {
+        // With instant completion there is no save in flight to coalesce with, so
+        // BGSAVE SCHEDULE `Started`s a fresh save (proposal 21). The mode split
+        // (`Immediate` no-queue vs `Schedule` coalesce) is pinned at the scheduler
+        // (`test_scheduler_request_mode_immediate_no_queue_vs_schedule_arms`).
         let fx = Fixture::new();
-        let handle = fx.snapshot_coordinator.start_snapshot().unwrap();
-        std::mem::forget(handle);
         let resp = BgsaveConnCommand
             .execute(&mut fx.ctx(), &[arg("SCHEDULE")])
             .await;
-        // The observable contract is the RESP response; the coalesce-arming
-        // invariant is asserted at the scheduler
-        // (`test_scheduler_request_mode_immediate_no_queue_vs_schedule_arms`).
         assert_eq!(
             resp,
-            Response::Simple(Bytes::from_static(b"Background saving scheduled"))
+            Response::Simple(Bytes::from_static(b"Background saving started"))
         );
     }
 
@@ -276,13 +306,264 @@ mod tests {
     #[tokio::test]
     async fn lastsave_returns_timestamp_after_save() {
         let fx = Fixture::new();
-        let handle = fx.snapshot_coordinator.start_snapshot().unwrap();
-        drop(handle);
+        // Instant completion: the save runs and stamps `last_save` synchronously
+        // (the handle is a bare epoch carrier — nothing to drop/await).
+        let _ = fx.snapshot_coordinator.start_snapshot().unwrap();
         let resp = LastsaveConnCommand.execute(&mut fx.ctx(), &[]).await;
         match resp {
             Response::Integer(ts) => assert!(ts > 0, "expected a positive last-save timestamp"),
             other => panic!("expected integer, got {other:?}"),
         }
+    }
+
+    // ========================================================================
+    // Real (non-`Noop`) coordinator tests — testing-gap issue 45 / audit D#6+D#7
+    //
+    // The tests above only ever exercise `NoopSnapshotCoordinator`, which
+    // completes a save synchronously: there is never a save genuinely in flight
+    // to overlap (`AlreadyRunning` never fires), and `last_save_time()` is always
+    // "just now" so the ±1s double-truncation bug in `handle_lastsave` can never
+    // be observed. `RealFixture` below wires the actual `RocksSnapshotCoordinator`
+    // (a real, temp-dir-backed RocksDB) through the same `ConnCtx` seam so
+    // `BgsaveConnCommand`/`LastsaveConnCommand` run unmodified against
+    // production persistence.
+    // ========================================================================
+
+    /// Fixture mirroring `Fixture` field-for-field, but with a real
+    /// `RocksSnapshotCoordinator` in place of `NoopSnapshotCoordinator`.
+    struct RealFixture {
+        // Kept alive for the fixture's lifetime (RAII cleanup on drop); never
+        // read directly, hence the leading underscores.
+        _db_dir: tempfile::TempDir,
+        snapshot_dir: tempfile::TempDir,
+        snapshot_coordinator: RocksSnapshotCoordinator,
+        client_registry: ClientRegistry,
+        latency_histograms: CommandLatencyHistograms,
+        keyspace_stats: KeyspaceStats,
+        config_manager: crate::runtime_config::ConfigManager,
+        hotkey_session: SharedHotkeySession,
+        cluster: ClusterDeps,
+        cursor_store: AggregateCursorStore,
+        metrics_recorder: NoopMetricsRecorder,
+        memory_diag: MemoryDiag,
+        acl_manager: std::sync::Arc<frogdb_core::AclManager>,
+        command_registry: frogdb_core::CommandRegistry,
+    }
+
+    impl RealFixture {
+        fn new() -> Self {
+            let db_dir = tempfile::tempdir().unwrap();
+            let snapshot_dir = tempfile::tempdir().unwrap();
+            let rocks_store = Arc::new(
+                RocksStore::open(db_dir.path(), 1, &RocksConfig::default())
+                    .expect("open a fresh RocksDB for the fixture"),
+            );
+            let snapshot_coordinator = RocksSnapshotCoordinator::new(
+                rocks_store,
+                SnapshotConfig {
+                    snapshot_dir: snapshot_dir.path().to_path_buf(),
+                    snapshot_interval_secs: 3600,
+                    max_snapshots: 5,
+                },
+                Arc::new(NoopMetricsRecorder::new()),
+                db_dir.path().to_path_buf(),
+            )
+            .expect("construct a coordinator over a fresh snapshot dir");
+            Self {
+                _db_dir: db_dir,
+                snapshot_dir,
+                snapshot_coordinator,
+                client_registry: ClientRegistry::new(),
+                latency_histograms: CommandLatencyHistograms::new(true),
+                keyspace_stats: KeyspaceStats::new(),
+                config_manager: crate::runtime_config::ConfigManager::new(
+                    &crate::config::Config::default(),
+                ),
+                hotkey_session: new_shared_hotkey_session(),
+                cluster: ClusterDeps::standalone(),
+                cursor_store: AggregateCursorStore::new(),
+                metrics_recorder: NoopMetricsRecorder::new(),
+                memory_diag: MemoryDiag(frogdb_debug::MemoryDiagConfig::default()),
+                acl_manager: frogdb_core::AclManager::new(Default::default()),
+                command_registry: frogdb_core::CommandRegistry::new(),
+            }
+        }
+
+        fn ctx(&self) -> ConnCtx<'_> {
+            ConnCtx::new(
+                &self.config_manager,
+                &self.client_registry,
+                &self.latency_histograms,
+                &self.keyspace_stats,
+                &[],
+                &self.snapshot_coordinator,
+                &self.hotkey_session,
+                &self.cluster,
+                &self.cursor_store,
+                &self.metrics_recorder,
+                &self.memory_diag,
+                self.acl_manager.as_ref(),
+                &self.command_registry,
+                0,
+                10000,
+                false,
+            )
+            .with_username("default")
+        }
+    }
+
+    /// Poll until the coordinator reports idle (a spawned save's background task
+    /// has run to completion, success or failure), or panic after a generous
+    /// bound — a hung save is a real test failure, not something to swallow.
+    async fn wait_for_coordinator_idle(c: &RocksSnapshotCoordinator) {
+        for _ in 0..500 {
+            if !c.in_progress() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("snapshot coordinator never returned to idle");
+    }
+
+    fn unix_now_secs() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+    }
+
+    /// D#6: overlap two real `BGSAVE`s so the second genuinely observes a save
+    /// in flight. `RocksSnapshotCoordinator`'s pre-snapshot hook is used as a
+    /// deterministic gate — the first save's background task blocks in the hook
+    /// until the test releases it, so the second `BGSAVE`, issued while the
+    /// first is parked there, is guaranteed (not just likely) to land on
+    /// `AlreadyRunning`. This also pins the current reply's Redis divergence
+    /// (see the comment on `SnapshotRequest::AlreadyRunning` in `handle_bgsave`).
+    #[tokio::test]
+    async fn bgsave_overlap_observes_already_running_on_real_coordinator() {
+        use tokio::sync::Notify;
+
+        let fx = RealFixture::new();
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        {
+            let entered = entered.clone();
+            let release = release.clone();
+            fx.snapshot_coordinator
+                .set_pre_snapshot_hook(Arc::new(move || {
+                    let entered = entered.clone();
+                    let release = release.clone();
+                    Box::pin(async move {
+                        entered.notify_one();
+                        release.notified().await;
+                    })
+                }));
+        }
+
+        let first = BgsaveConnCommand.execute(&mut fx.ctx(), &[]).await;
+        assert_eq!(
+            first,
+            Response::Simple(Bytes::from_static(b"Background saving started")),
+            "first BGSAVE must claim the idle slot and start"
+        );
+
+        // Block until the spawned save has actually entered (and is now parked
+        // in) the pre-snapshot hook, so the second call below unambiguously
+        // overlaps a save genuinely in flight rather than racing it.
+        entered.notified().await;
+        assert!(
+            fx.snapshot_coordinator.in_progress(),
+            "save must be in flight once the hook has been entered"
+        );
+
+        let second = BgsaveConnCommand.execute(&mut fx.ctx(), &[]).await;
+        assert_eq!(
+            second,
+            Response::Simple(Bytes::from_static(b"Background save already in progress")),
+            "overlapping BGSAVE must observe AlreadyRunning's pinned (Redis-diverging) reply"
+        );
+
+        // Release the first save so it completes cleanly; nothing should be
+        // left blocked in the background when the test exits.
+        release.notify_one();
+        wait_for_coordinator_idle(&fx.snapshot_coordinator).await;
+        assert!(
+            fx.snapshot_coordinator.last_save_time().is_some(),
+            "the released save should have completed and stamped last_save_time"
+        );
+    }
+
+    /// D#7: `LASTSAVE` against the real coordinator returns `0` before any save,
+    /// the actual last-save Unix time (within the ±1s the fixed single-truncation
+    /// conversion should now hold to) after a completed save, and does not
+    /// advance after a save that fails.
+    #[tokio::test]
+    async fn lastsave_tracks_real_bgsave_and_ignores_failed_saves() {
+        let fx = RealFixture::new();
+
+        // Before any save: the documented `0` sentinel.
+        let before = LastsaveConnCommand.execute(&mut fx.ctx(), &[]).await;
+        assert_eq!(before, Response::Integer(0));
+
+        // A real, successful BGSAVE (driven directly through the coordinator, as
+        // `lastsave_returns_timestamp_after_save` above does against the Noop
+        // one, so the assigned epoch is known for the sabotage step below).
+        let epoch1 = fx
+            .snapshot_coordinator
+            .request_snapshot(SnapshotMode::Immediate);
+        let epoch1 = match epoch1 {
+            frogdb_core::persistence::SnapshotRequest::Started(e) => e,
+            other => panic!("first request must start cleanly, got {other:?}"),
+        };
+        wait_for_coordinator_idle(&fx.snapshot_coordinator).await;
+        assert!(fx.snapshot_coordinator.last_save_time().is_some());
+
+        let now_secs = unix_now_secs();
+        let ts1 = match LastsaveConnCommand.execute(&mut fx.ctx(), &[]).await {
+            Response::Integer(ts) => ts,
+            other => panic!("expected integer LASTSAVE reply, got {other:?}"),
+        };
+        assert!(
+            (now_secs - ts1).abs() <= 1,
+            "LASTSAVE {ts1} should be within 1s of the real current time {now_secs}"
+        );
+
+        // Force the *next* save (epoch1 + 1) to fail before anything durable
+        // changes: plant a regular file at the exact staging path
+        // `SnapshotStager::run` will `create_dir_all` into.  `create_dir_all`
+        // errors when a path component already exists as a non-directory, so
+        // checkpoint creation aborts cleanly — the same trick
+        // `snapshot::tests::test_stager_checkpoint_failure_aborts_cleanly` uses.
+        // This is deliberately not permission-bit based (e.g. chmod 0): that
+        // approach silently no-ops under a root test runner, while a path
+        // collision fails `create_dir_all` unconditionally.
+        let epoch2 = epoch1 + 1;
+        let sabotage = fx
+            .snapshot_dir
+            .path()
+            .join(format!(".snapshot_{epoch2:05}.tmp"));
+        std::fs::write(&sabotage, b"blocking file, not a directory").unwrap();
+
+        let started2 = fx
+            .snapshot_coordinator
+            .request_snapshot(SnapshotMode::Immediate);
+        match started2 {
+            frogdb_core::persistence::SnapshotRequest::Started(e) => assert_eq!(
+                e, epoch2,
+                "sabotage must target the epoch the coordinator actually assigns next"
+            ),
+            other => {
+                panic!("second request must still be accepted; it fails asynchronously: {other:?}")
+            }
+        }
+        wait_for_coordinator_idle(&fx.snapshot_coordinator).await;
+
+        let after_failed = LastsaveConnCommand.execute(&mut fx.ctx(), &[]).await;
+        assert_eq!(
+            after_failed,
+            Response::Integer(ts1),
+            "a failed BGSAVE must not advance LASTSAVE"
+        );
     }
 
     #[test]

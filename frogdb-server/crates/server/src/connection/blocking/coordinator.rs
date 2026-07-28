@@ -74,7 +74,7 @@ impl BlockingWaitCoordinator {
     /// deadline, so a value that arrives exactly at the deadline is never lost
     /// to a spurious timeout.
     pub async fn wait_for_response(
-        response_rx: oneshot::Receiver<Response>,
+        response_rx: &mut oneshot::Receiver<Response>,
         deadline: Option<Instant>,
         unblock: &mut impl UnblockSignal,
     ) -> WaitOutcome {
@@ -90,8 +90,11 @@ impl BlockingWaitCoordinator {
 
         tokio::select! {
             biased;
-            // 1. Shard delivered a value (or the channel closed).
-            recv = response_rx => match recv {
+            // 1. Shard delivered a value (or the channel closed). Borrowed, not
+            // consumed, so the caller can drain a value the shard sends in the
+            // pop→deliver window *after* a timeout is chosen — see
+            // `cleanup_wait`'s `UnregisterAck::AlreadyServed` reconciliation.
+            recv = &mut *response_rx => match recv {
                 Ok(resp) => WaitOutcome::Response(resp),
                 Err(_) => WaitOutcome::Response(Response::Null),
             },
@@ -142,10 +145,10 @@ mod tests {
 
     #[tokio::test]
     async fn response_wins() {
-        let (tx, rx) = oneshot::channel();
+        let (tx, mut rx) = oneshot::channel();
         tx.send(Response::Integer(7)).unwrap();
         let mut unblock = MockUnblock::never();
-        let outcome = BlockingWaitCoordinator::wait_for_response(rx, None, &mut unblock).await;
+        let outcome = BlockingWaitCoordinator::wait_for_response(&mut rx, None, &mut unblock).await;
         assert!(matches!(
             outcome,
             WaitOutcome::Response(Response::Integer(7))
@@ -154,29 +157,29 @@ mod tests {
 
     #[tokio::test]
     async fn channel_drop_yields_null_response() {
-        let (tx, rx) = oneshot::channel::<Response>();
+        let (tx, mut rx) = oneshot::channel::<Response>();
         drop(tx);
         let mut unblock = MockUnblock::never();
-        let outcome = BlockingWaitCoordinator::wait_for_response(rx, None, &mut unblock).await;
+        let outcome = BlockingWaitCoordinator::wait_for_response(&mut rx, None, &mut unblock).await;
         assert!(matches!(outcome, WaitOutcome::Response(Response::Null)));
     }
 
     #[tokio::test]
     async fn timeout_wins_when_idle() {
         // Keep the sender alive but never send, so only the deadline can fire.
-        let (_tx, rx) = oneshot::channel::<Response>();
+        let (_tx, mut rx) = oneshot::channel::<Response>();
         let mut unblock = MockUnblock::never();
         let deadline = Instant::now() + Duration::from_millis(10);
         let outcome =
-            BlockingWaitCoordinator::wait_for_response(rx, Some(deadline), &mut unblock).await;
+            BlockingWaitCoordinator::wait_for_response(&mut rx, Some(deadline), &mut unblock).await;
         assert!(matches!(outcome, WaitOutcome::Timeout));
     }
 
     #[tokio::test]
     async fn unblock_wins_over_idle_wait() {
-        let (_tx, rx) = oneshot::channel::<Response>();
+        let (_tx, mut rx) = oneshot::channel::<Response>();
         let mut unblock = MockUnblock::fires(UnblockMode::Error);
-        let outcome = BlockingWaitCoordinator::wait_for_response(rx, None, &mut unblock).await;
+        let outcome = BlockingWaitCoordinator::wait_for_response(&mut rx, None, &mut unblock).await;
         assert!(matches!(
             outcome,
             WaitOutcome::Unblocked(UnblockMode::Error)
@@ -187,13 +190,13 @@ mod tests {
     async fn biased_response_beats_elapsed_deadline() {
         // Both the response and the deadline are ready: biased ordering must
         // pick the response so a value arriving at the deadline is not lost.
-        let (tx, rx) = oneshot::channel();
+        let (tx, mut rx) = oneshot::channel();
         tx.send(Response::Integer(1)).unwrap();
         let mut unblock = MockUnblock::never();
         // Deadline already in the past.
         let deadline = Instant::now() - Duration::from_millis(1);
         let outcome =
-            BlockingWaitCoordinator::wait_for_response(rx, Some(deadline), &mut unblock).await;
+            BlockingWaitCoordinator::wait_for_response(&mut rx, Some(deadline), &mut unblock).await;
         assert!(
             matches!(outcome, WaitOutcome::Response(Response::Integer(1))),
             "biased select must favour the response over a simultaneous timeout"

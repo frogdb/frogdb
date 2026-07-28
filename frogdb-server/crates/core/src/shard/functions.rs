@@ -72,7 +72,7 @@ impl ShardWorker {
         // unless the function has the ALLOW_OOM flag.
         if !effective_read_only
             && !function.flags.contains(FunctionFlags::ALLOW_OOM)
-            && let Err(err) = self.check_memory_for_write()
+            && let Err(err) = self.check_memory_for_write().await
         {
             return err.to_response();
         }

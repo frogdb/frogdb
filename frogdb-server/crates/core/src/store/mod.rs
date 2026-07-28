@@ -26,7 +26,7 @@ mod warm_tier;
 pub use typed::{StoreTypedExt, StoreTypedFamilyExt, TypedArc, WrongTypeError};
 
 // Re-export HashMapStore implementation
-pub use hashmap::{HashMapStore, SpillError};
+pub use hashmap::{BackdateExpiryResult, HashMapStore, SpillError};
 
 // Re-export the cohesive subsystems extracted out of HashMapStore so the
 // `Store` trait can expose them directly (`warm_tier()` / `ts_labels()`).
@@ -506,6 +506,72 @@ pub trait Store: Send {
     fn purge_if_expired(&mut self, key: &[u8]) -> bool {
         let _ = key;
         false
+    }
+
+    /// Drain the buffer of keys physically removed by **lazy** expiry
+    /// (`check_and_delete_expired` → `uninstall`) since the last drain.
+    ///
+    /// The store reports *which* keys it lazily removed; it does not act on the
+    /// report — it stays version- and wait-queue-ignorant. The worker drains
+    /// this after each command and applies the parity effects (shard-version
+    /// bump + XREADGROUP drain), exactly as active expiry applies them from
+    /// `ExpiryResult::deleted_keys`. Active expiry deletes via `delete`, not
+    /// `check_and_delete_expired`, so it never populates this buffer.
+    ///
+    /// Default: no lazy-purge reporting (stores that do not lazily purge).
+    fn take_lazily_purged(&mut self) -> Vec<Bytes> {
+        Vec::new()
+    }
+
+    /// Drain the buffer of keys removed because their **last hash field**
+    /// expired on a lazy read (`purge_expired_hash_fields` -> `delete`) since
+    /// the last drain.
+    ///
+    /// A distinct seam from [`Store::take_lazily_purged`]: the whole key never
+    /// had its own TTL elapse — the hash simply emptied via field TTL — so Redis
+    /// emits a generic `del` (not `expired`) for it, matching active expiry's
+    /// `ExpiryResult::emptied_keys`. The worker drains this after each command
+    /// and fires the `del` notification + tracking/search invalidation. The
+    /// active sweep shares `purge_expired_hash_fields` and so populates this
+    /// buffer too, but owns its reporting via `ExpiryResult` and discards the
+    /// buffer at the sweep seam, so it only ever fires for genuinely lazy reads.
+    ///
+    /// Default: no lazy-emptied reporting (stores without hash-field TTL).
+    fn take_lazily_emptied(&mut self) -> Vec<Bytes> {
+        Vec::new()
+    }
+
+    /// Drain the count of hash fields reaped by **lazy** reads
+    /// (`purge_expired_hash_fields`) since the last drain, whether or not the
+    /// reap emptied the key.
+    ///
+    /// The worker bumps `frogdb_fields_expired_total` by this, mirroring the
+    /// per-field parity active expiry applies from `ExpiryResult::fields_expired`.
+    /// The active sweep populates it through the shared `purge_expired_hash_fields`
+    /// but owns its own field counting and discards this at the sweep seam, so it
+    /// only ever counts genuine lazy reaps.
+    ///
+    /// Default: no lazy field-reap reporting (stores without hash-field TTL).
+    fn take_lazily_expired_fields(&mut self) -> u64 {
+        0
+    }
+
+    /// Drain the buffer of keys whose hash was **shrunk in place** by a lazy
+    /// field-TTL reap (`purge_expired_hash_fields` removed ≥1 field but the hash
+    /// still exists) since the last drain.
+    ///
+    /// The worker re-indexes each survivor so its search-index doc drops the
+    /// reaped field's stale value — the READONLY command that triggered the reap
+    /// carries no `ReindexSpec`, so this buffer is the only surface that reports
+    /// the in-place mutation to the search index. Distinct from
+    /// [`Store::take_lazily_emptied`] (the hash still holds surviving fields). The
+    /// active sweep shares `purge_expired_hash_fields` and populates this buffer
+    /// too, but drains and re-indexes it at its own seam, so it only ever fires
+    /// for genuinely lazy reads.
+    ///
+    /// Default: no lazy shrink reporting (stores without hash-field TTL).
+    fn take_lazily_shrunk(&mut self) -> Vec<Bytes> {
+        Vec::new()
     }
 
     /// Set a value with options (NX/XX, EX/PX, GET, KEEPTTL).

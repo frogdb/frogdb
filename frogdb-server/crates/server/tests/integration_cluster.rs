@@ -3591,10 +3591,158 @@ async fn test_migration_cancelled_midway() {
     harness.shutdown_all().await;
 }
 
-/// Test 19: Source dies during migration.
+/// Wait until every surviving node's replicated cluster state agrees on a single
+/// owner for `slot` and holds no lingering migration record for it, then return
+/// the converged owner. Panics if convergence is not reached within `timeout`.
 ///
-/// Scenario: Source node crashes mid-migration
-/// (Note: test_failover_during_migration_preserves_data already exists, this is an alternative)
+/// This is the core post-crash invariant for slot migration: after a crash the
+/// slot must never be left orphaned (assigned to nobody on some node), dual-owned
+/// (two nodes claim it), or stuck with a dangling migration record. The owner is
+/// read from each node's Raft-replicated [`ClusterState`], so this checks that the
+/// whole surviving cluster has converged on one consistent slot map, not just that
+/// a single node looks healthy.
+async fn assert_slot_converges_to_single_owner(
+    harness: &ClusterTestHarness,
+    surviving_ids: &[u64],
+    slot: u16,
+    timeout: Duration,
+) -> u64 {
+    let start = std::time::Instant::now();
+    loop {
+        let mut owners = std::collections::BTreeSet::new();
+        let mut lingering_migration = false;
+        let mut unassigned_on_some_node = false;
+        let mut observed = 0usize;
+
+        for &nid in surviving_ids {
+            let Some(node) = harness.node(nid) else {
+                continue;
+            };
+            if !node.is_running() {
+                continue;
+            }
+            let Some(cs) = node.cluster_state() else {
+                continue;
+            };
+            observed += 1;
+            if cs.is_slot_migrating(slot) {
+                lingering_migration = true;
+            }
+            match cs.get_slot_owner(slot) {
+                Some(owner) => {
+                    owners.insert(owner);
+                }
+                None => unassigned_on_some_node = true,
+            }
+        }
+
+        let converged =
+            observed > 0 && !lingering_migration && !unassigned_on_some_node && owners.len() == 1;
+        if converged {
+            return *owners.iter().next().unwrap();
+        }
+        if start.elapsed() >= timeout {
+            panic!(
+                "slot {slot} did not converge to a single owner within {timeout:?}: \
+                 distinct owners across {observed} surviving node(s) = {owners:?}, \
+                 lingering migration record = {lingering_migration}, \
+                 unassigned on some node = {unassigned_on_some_node}"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Assert `key` is served by exactly one running node among `running_ids`: that
+/// node answers the GET directly (no MOVED, no error) and every other running
+/// node redirects (MOVED) to that same node's address. Returns the serving node's
+/// harness id. Guards against both zero-owner (data loss — no node serves) and
+/// dual-owner (two nodes accept the same key) outcomes.
+async fn assert_key_served_by_exactly_one(
+    harness: &ClusterTestHarness,
+    running_ids: &[u64],
+    key: &str,
+) -> u64 {
+    let mut servers = Vec::new();
+    let mut moved_targets = std::collections::BTreeSet::new();
+
+    for &nid in running_ids {
+        let Some(node) = harness.node(nid) else {
+            continue;
+        };
+        if !node.is_running() {
+            continue;
+        }
+        let resp = node.send("GET", &[key]).await;
+        if let Some((_slot, addr)) = is_moved_redirect(&resp) {
+            moved_targets.insert(addr);
+        } else if !is_error(&resp) {
+            servers.push(nid);
+        } else {
+            panic!(
+                "GET {key} on node {nid} returned an unexpected error \
+                 (neither a value nor a MOVED redirect): {resp:?}"
+            );
+        }
+    }
+
+    assert_eq!(
+        servers.len(),
+        1,
+        "key {key} must be served by exactly one node (no data loss, no dual ownership): \
+         serving nodes = {servers:?}, MOVED targets = {moved_targets:?}"
+    );
+
+    let server = servers[0];
+    let server_addr = harness.node(server).unwrap().client_addr();
+    for addr in &moved_targets {
+        assert_eq!(
+            *addr, server_addr,
+            "MOVED redirect points at {addr}, but the sole serving node is at {server_addr}"
+        );
+    }
+    server
+}
+
+/// Assert that no running node among `running_ids` serves `key` directly — every
+/// node either redirects (MOVED) or reports an error. Used when the slot's sole
+/// owner has crashed with no replica: the data is genuinely unrecoverable, but the
+/// surviving nodes must not silently take ownership of the orphaned slot
+/// (dual-ownership / split-brain guard).
+async fn assert_key_served_by_no_running_node(
+    harness: &ClusterTestHarness,
+    running_ids: &[u64],
+    key: &str,
+) {
+    for &nid in running_ids {
+        let Some(node) = harness.node(nid) else {
+            continue;
+        };
+        if !node.is_running() {
+            continue;
+        }
+        let resp = node.send("GET", &[key]).await;
+        assert!(
+            is_error(&resp),
+            "node {nid} served key {key} directly after its owner crashed — \
+             a surviving node silently claimed the orphaned slot: {resp:?}"
+        );
+    }
+}
+
+/// Test 19: Source dies mid-migration and STAYS DEAD (no replica).
+///
+/// Crash phase: after `BeginSlotMigration` (SETSLOT MIGRATING/IMPORTING) but
+/// before any keys are handed off. An operator then cancels the migration on a
+/// surviving node. Because the crashed source owned the slot and had no replica,
+/// its data is unrecoverable — but the cluster *metadata* must still converge
+/// cleanly:
+///   (a) the slot resolves to exactly one owner (rolled back to the source),
+///   (b) no surviving node retains a lingering migration record, and
+///   (c) no surviving node silently takes ownership of the orphaned slot.
+///
+/// (Note: test_failover_during_migration_preserves_data already exists; this is an
+/// alternative that asserts convergence rather than only logging cluster info.)
 #[tokio::test]
 async fn test_source_dies_during_migration() {
     let mut harness = ClusterTestHarness::new();
@@ -3609,23 +3757,34 @@ async fn test_source_dies_during_migration() {
         .await
         .unwrap();
 
-    let node_ids = harness.node_ids();
-    let source_id = node_ids[0];
-    let target_id = node_ids[1];
-
-    // Get cluster node IDs via direct state access
+    // Use slot 950; source = whichever node actually owns it, target = another.
+    let test_slot = 950u16;
+    let test_key = key_for_slot(test_slot);
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
     let cluster_source_id = harness.get_node_id_str(source_id).unwrap();
     let cluster_target_id = harness.get_node_id_str(target_id).unwrap();
 
-    // Use slot 950
-    let test_slot = 950u16;
+    // Write a key into the slot before migration begins.
+    {
+        let source = harness.node(source_id).unwrap();
+        let set_resp = source
+            .send("SET", &[&test_key, "pre_migration_value"])
+            .await;
+        assert!(
+            !is_error(&set_resp),
+            "pre-migration SET failed: {set_resp:?}"
+        );
+    }
 
-    // Start migration
+    // Begin the migration (BeginSlotMigration via Raft), then crash the source
+    // before any keys are transferred.
     {
         let source = harness.node(source_id).unwrap();
         let target = harness.node(target_id).unwrap();
 
-        let _ = source
+        let mig = source
             .send(
                 "CLUSTER",
                 &[
@@ -3636,7 +3795,8 @@ async fn test_source_dies_during_migration() {
                 ],
             )
             .await;
-        let _ = target
+        assert!(!is_error(&mig), "SETSLOT MIGRATING failed: {mig:?}");
+        let imp = target
             .send(
                 "CLUSTER",
                 &[
@@ -3647,35 +3807,285 @@ async fn test_source_dies_during_migration() {
                 ],
             )
             .await;
+        assert!(!is_error(&imp), "SETSLOT IMPORTING failed: {imp:?}");
     }
 
-    eprintln!("Migration started, killing source node {}", source_id);
-
-    // Kill source mid-migration
+    eprintln!("Migration started, killing source node {source_id}");
     harness.kill_node(source_id).await;
 
-    // Wait for failure detection
+    // Let failure detection settle and a leader be (re-)elected.
     tokio::time::sleep(Duration::from_secs(2)).await;
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
 
-    // Verify cluster can handle the failure
-    let surviving_nodes: Vec<u64> = node_ids
-        .iter()
-        .filter(|&&id| id != source_id)
-        .copied()
+    let surviving_ids: Vec<u64> = harness
+        .node_ids()
+        .into_iter()
+        .filter(|&id| id != source_id)
         .collect();
 
-    for &node_id in &surviving_nodes {
-        if let Some(node) = harness.node(node_id)
+    // Operator cancels the migration on a surviving node.
+    for &nid in &surviving_ids {
+        if let Some(node) = harness.node(nid)
             && node.is_running()
         {
-            // Clean up migration state
             let _ = node
                 .send("CLUSTER", &["SETSLOT", &test_slot.to_string(), "STABLE"])
                 .await;
-
-            let info = harness.get_cluster_info(node_id);
-            eprintln!("Node {} after source death: {:?}", node_id, info);
         }
+    }
+
+    // (a) + (b): the surviving cluster converges to a single owner with no
+    // lingering migration record. The slot must roll back to the (now-dead)
+    // source, never silently reassign to the import target.
+    let owner = assert_slot_converges_to_single_owner(
+        &harness,
+        &surviving_ids,
+        test_slot,
+        Duration::from_secs(10),
+    )
+    .await;
+    assert_eq!(
+        owner, source_id,
+        "slot should roll back to the (now-dead) source, not silently reassign to the target"
+    );
+
+    // (c): with the sole owner dead and no replica, the key is unrecoverable —
+    // but no surviving node may silently start serving it.
+    assert_key_served_by_no_running_node(&harness, &surviving_ids, &test_key).await;
+
+    harness.shutdown_all().await;
+}
+
+/// Test 19b: Source dies mid-migration then RECOVERS (restarts and rejoins).
+///
+/// Crash phase: after `BeginSlotMigration`, before any key handoff. The source is
+/// restarted (persistence enabled) and the migration is cancelled. The cluster
+/// must converge with:
+///   (a) the slot rolled back to the recovered source (exactly one owner),
+///   (b) no lingering migration record on any node, and
+///   (c) the slot's key readable from exactly one node (the source).
+///
+/// Note: a hard crash may drop writes that were not yet fsynced, so the key's
+/// *value* survival is checked best-effort (logged); the routing invariant — that
+/// exactly one node serves the key — is asserted strictly.
+#[tokio::test]
+async fn test_source_dies_during_migration_source_recovers() {
+    let config = ClusterNodeConfig {
+        persistence: true,
+        ..Default::default()
+    };
+    let mut harness = ClusterTestHarness::with_config(config);
+    harness.start_cluster(3).await.unwrap();
+
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 950u16;
+    let test_key = key_for_slot(test_slot);
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+    let cluster_source_id = harness.get_node_id_str(source_id).unwrap();
+    let cluster_target_id = harness.get_node_id_str(target_id).unwrap();
+
+    // Write a key into the slot, then begin migration.
+    {
+        let source = harness.node(source_id).unwrap();
+        let set_resp = source
+            .send("SET", &[&test_key, "pre_migration_value"])
+            .await;
+        assert!(
+            !is_error(&set_resp),
+            "pre-migration SET failed: {set_resp:?}"
+        );
+
+        let mig = source
+            .send(
+                "CLUSTER",
+                &[
+                    "SETSLOT",
+                    &test_slot.to_string(),
+                    "MIGRATING",
+                    &cluster_target_id,
+                ],
+            )
+            .await;
+        assert!(!is_error(&mig), "SETSLOT MIGRATING failed: {mig:?}");
+        let target = harness.node(target_id).unwrap();
+        let imp = target
+            .send(
+                "CLUSTER",
+                &[
+                    "SETSLOT",
+                    &test_slot.to_string(),
+                    "IMPORTING",
+                    &cluster_source_id,
+                ],
+            )
+            .await;
+        assert!(!is_error(&imp), "SETSLOT IMPORTING failed: {imp:?}");
+    }
+
+    eprintln!("Migration started, killing source node {source_id}");
+    harness.kill_node(source_id).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // Bring the source back and let it rejoin the cluster.
+    eprintln!("Restarting source node {source_id}");
+    harness.restart_node(source_id).await.unwrap();
+    harness
+        .wait_for_node_recognized(source_id, Duration::from_secs(20))
+        .await
+        .unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // Operator cancels the migration (now that the source is back).
+    let cancel = harness
+        .node(source_id)
+        .unwrap()
+        .send("CLUSTER", &["SETSLOT", &test_slot.to_string(), "STABLE"])
+        .await;
+    eprintln!("SETSLOT STABLE on recovered source: {cancel:?}");
+
+    let all_ids = harness.node_ids();
+
+    // (a) + (b): converges across all three nodes, rolled back to the source.
+    let owner = assert_slot_converges_to_single_owner(
+        &harness,
+        &all_ids,
+        test_slot,
+        Duration::from_secs(15),
+    )
+    .await;
+    assert_eq!(
+        owner, source_id,
+        "slot should roll back to the recovered source after a cancelled migration"
+    );
+
+    // (c): the key is served by exactly one node — the source.
+    let server = assert_key_served_by_exactly_one(&harness, &all_ids, &test_key).await;
+    assert_eq!(
+        server, source_id,
+        "the migrating slot's key must be served by exactly one node (the recovered source)"
+    );
+
+    // Best-effort durability check — a hard crash may have dropped the write.
+    let val = harness
+        .node(source_id)
+        .unwrap()
+        .send("GET", &[&test_key])
+        .await;
+    eprintln!("recovered source GET {test_key} => {val:?}");
+
+    harness.shutdown_all().await;
+}
+
+/// Test 19c: Source dies AFTER the slot has been fully migrated to the target.
+///
+/// Crash phase: post-finalization (SETSLOT NODE committed, keys already on the
+/// target). Killing the old source must not disturb the converged topology:
+///   (a) the slot stays owned solely by the target,
+///   (b) no lingering migration record remains, and
+///   (c) the migrated keys remain readable from exactly one node (the target) —
+///       no data loss, no dual ownership.
+#[tokio::test]
+async fn test_source_dies_after_migration_complete() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 950u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+
+    // Write hash-tagged keys that all hash to the slot.
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let probe_key = format!("{tag}_k0");
+    {
+        let source = harness.node(source_id).unwrap();
+        for i in 0..5 {
+            let key = format!("{tag}_k{i}");
+            let value = format!("v{i}");
+            let resp = source.send("SET", &[&key, &value]).await;
+            assert!(!is_error(&resp), "SET failed: {resp:?}");
+        }
+    }
+
+    // Fully migrate the slot to the target (data + ownership handoff).
+    run_full_slot_migration(&harness, source_id, target_id, test_slot, 100)
+        .await
+        .expect("migration failed");
+
+    // Now crash the old source, which no longer owns the slot.
+    eprintln!("Migration complete, killing old source node {source_id}");
+    harness.kill_node(source_id).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    let surviving_ids: Vec<u64> = harness
+        .node_ids()
+        .into_iter()
+        .filter(|&id| id != source_id)
+        .collect();
+
+    // (a) + (b): slot owned solely by the target, no lingering migration record.
+    let owner = assert_slot_converges_to_single_owner(
+        &harness,
+        &surviving_ids,
+        test_slot,
+        Duration::from_secs(10),
+    )
+    .await;
+    assert_eq!(
+        owner, target_id,
+        "a completed migration should leave the slot owned by the target"
+    );
+
+    // (c): the migrated key is readable from exactly one node — the target — and
+    // its value survived the source crash.
+    let server = assert_key_served_by_exactly_one(&harness, &surviving_ids, &probe_key).await;
+    assert_eq!(
+        server, target_id,
+        "the migrated key must be served by exactly one node (the target)"
+    );
+    let val = harness
+        .node(target_id)
+        .unwrap()
+        .send("GET", &[&probe_key])
+        .await;
+    match val {
+        frogdb_protocol::Response::Bulk(Some(v)) => {
+            assert_eq!(&v[..], b"v0", "migrated value wrong on target");
+        }
+        other => panic!("expected migrated value on target, got: {other:?}"),
     }
 
     harness.shutdown_all().await;
@@ -6419,6 +6829,278 @@ async fn test_cluster_epoch_increases_after_failover() {
     harness.shutdown_all().await;
 }
 
+/// Pins the deliberate `CLUSTER INFO` `cluster_current_epoch` vs. `CLUSTER
+/// NODES` per-node `config_epoch` relationship after a pure Raft
+/// re-election with **no** cluster topology change (no `CLUSTER FAILOVER`,
+/// no `MarkNodeFailed`, no `IncrementEpoch` -- this test issues none of
+/// them; only a leader kill, which is a Raft-internal event).
+///
+/// Issue 47: the original audit proposed asserting
+/// `INFO epoch <= max(NODES config_epoch)` after such a re-election. **That
+/// assertion is wrong and must never be reintroduced.**
+/// `cluster_current_epoch` is `max(replicated config_epoch, local Raft
+/// term)` (`fold_current_epoch` in `commands/cluster/mod.rs`), and every
+/// Raft election bumps the term regardless of whether any topology command
+/// committed -- so a re-election alone can push `cluster_current_epoch`
+/// above every per-node `config_epoch`. Redis has the same shape of
+/// divergence: `currentEpoch` may legitimately exceed every `configEpoch`
+/// after an election that reassigns no slots, and `redis-cli --cluster
+/// check`-style tooling flags epoch *collisions* (two nodes sharing a
+/// `configEpoch`), never epoch drift/exceedance.
+///
+/// The relationship that DOES hold, and is pinned here instead, is the
+/// reverse bound: `cluster_current_epoch` is structurally `>=` every
+/// per-node `config_epoch` (a node's own `config_epoch` is only ever set to
+/// a value claimed from the very counter `cluster_current_epoch` folds in),
+/// and this test demonstrates the fold pushing it strictly above the
+/// (unchanged) per-node epochs.
+#[tokio::test]
+async fn test_cluster_info_epoch_vs_nodes_epoch_after_reelection_no_topology_change() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+
+    let original_leader = harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let non_leader = *harness
+        .node_ids()
+        .iter()
+        .find(|&&id| id != original_leader)
+        .unwrap();
+
+    // Capture both endpoints from the same node before the re-election. No
+    // topology command (CLUSTER FAILOVER / MEET / ADDSLOTS / SET-CONFIG-EPOCH
+    // / ...) runs anywhere in this test, so no per-node config_epoch and no
+    // cluster-wide config_epoch can change here -- only the Raft term does.
+    let pre_info = parse_cluster_info(
+        &harness
+            .node(non_leader)
+            .unwrap()
+            .send("CLUSTER", &["INFO"])
+            .await,
+    )
+    .unwrap();
+    let pre_nodes = parse_cluster_nodes(
+        &harness
+            .node(non_leader)
+            .unwrap()
+            .send("CLUSTER", &["NODES"])
+            .await,
+    )
+    .unwrap();
+    let pre_max_node_epoch = pre_nodes.iter().map(|n| n.config_epoch).max().unwrap_or(0);
+
+    assert!(
+        pre_info.cluster_current_epoch >= pre_max_node_epoch,
+        "deliberate invariant: INFO's cluster_current_epoch must never be \
+         less than max(NODES config_epoch); pre INFO={}, pre max NODES={}",
+        pre_info.cluster_current_epoch,
+        pre_max_node_epoch
+    );
+
+    // Trigger a pure Raft re-election: kill the leader. This is a
+    // Raft-internal event, not a `ClusterCommand` -- no topology command is
+    // proposed by this test at any point.
+    harness.kill_node(original_leader).await;
+    harness
+        .wait_for_new_leader(original_leader, Duration::from_secs(15))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let survivor = *harness
+        .node_ids()
+        .iter()
+        .find(|&&id| id != original_leader)
+        .unwrap();
+    let post_info = parse_cluster_info(
+        &harness
+            .node(survivor)
+            .unwrap()
+            .send("CLUSTER", &["INFO"])
+            .await,
+    )
+    .unwrap();
+    let post_nodes = parse_cluster_nodes(
+        &harness
+            .node(survivor)
+            .unwrap()
+            .send("CLUSTER", &["NODES"])
+            .await,
+    )
+    .unwrap();
+    let post_max_node_epoch = post_nodes.iter().map(|n| n.config_epoch).max().unwrap_or(0);
+
+    // No topology change occurred: the raw per-node config_epoch bound must
+    // be unchanged by the re-election alone.
+    assert_eq!(
+        post_max_node_epoch, pre_max_node_epoch,
+        "a pure Raft re-election with no topology command must not change \
+         any per-node config_epoch: pre max={}, post max={}",
+        pre_max_node_epoch, post_max_node_epoch
+    );
+
+    // The deliberate bound still holds post-election...
+    assert!(
+        post_info.cluster_current_epoch >= post_max_node_epoch,
+        "deliberate invariant: INFO's cluster_current_epoch must never be \
+         less than max(NODES config_epoch); post INFO={}, post max NODES={}",
+        post_info.cluster_current_epoch,
+        post_max_node_epoch
+    );
+
+    // ...and it is free to exceed the per-node epochs purely from the Raft
+    // term fold, with zero topology change. Every node starts at
+    // config_epoch 0 (no epoch-bumping command has run), so any elected
+    // term (>= 1) strictly exceeds it -- this is the exact shape the naive
+    // `<=` assertion from the original audit would have rejected as a false
+    // regression.
+    assert!(
+        post_info.cluster_current_epoch > post_max_node_epoch,
+        "the term fold should push INFO's epoch strictly above the \
+         per-node config_epoch bound after a re-election: post INFO={}, \
+         post max NODES={}",
+        post_info.cluster_current_epoch,
+        post_max_node_epoch
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Monotonicity of `CLUSTER INFO`'s `cluster_current_epoch` across a real
+/// epoch-bumping topology event (`CLUSTER FAILOVER`), with the `>=`
+/// per-node-epoch bound (see the re-election test above) holding through
+/// the transition too.
+///
+/// Reuses the harness pattern from issue 16's `test_cluster_epoch_persists`:
+/// a real primary/replica pair so the replica can run a graceful (non-FORCE)
+/// `CLUSTER FAILOVER`, the only path that assigns a node its own nonzero
+/// `config_epoch`.
+///
+/// **`cluster_current_epoch` is monotonic but NOT strictly increasing across
+/// a topology event.** Because the reported value is
+/// `max(config_epoch, raft_term)` (`fold_current_epoch`), a `config_epoch`
+/// bump is *invisible* whenever the Raft term already dominates -- and that
+/// is not a corner case: in a freshly bootstrapped cluster the first
+/// election takes `raft_term` to 1 while `config_epoch` is still 0, so the
+/// first failover (`config_epoch` 0 -> 1) leaves `cluster_current_epoch` at
+/// 1 both before and after. Those are the exact values observed here while
+/// this test was written. Anything that needs to *detect* a topology change
+/// must read the raw per-node `config_epoch` from `CLUSTER NODES` (as issue
+/// 16's `test_cluster_epoch_persists` does), not `CLUSTER INFO`'s folded
+/// epoch. The strict `>` bound is therefore deliberately not asserted
+/// below; only non-decrease is.
+#[tokio::test]
+async fn test_cluster_info_epoch_monotonic_across_failover() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(2).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let primary_id = harness.node_ids()[0];
+    let replica_id = harness.add_replica(primary_id).await.unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    let replica = harness.node(replica_id).unwrap();
+    let pre_info = parse_cluster_info(&replica.send("CLUSTER", &["INFO"]).await).unwrap();
+    let pre_nodes = parse_cluster_nodes(&replica.send("CLUSTER", &["NODES"]).await).unwrap();
+    let pre_max_node_epoch = pre_nodes.iter().map(|n| n.config_epoch).max().unwrap_or(0);
+
+    assert!(
+        pre_info.cluster_current_epoch >= pre_max_node_epoch,
+        "deliberate invariant must hold before the failover too: \
+         pre INFO={}, pre max NODES={}",
+        pre_info.cluster_current_epoch,
+        pre_max_node_epoch
+    );
+
+    // Promote the replica: this is the only path (Failover, commands.rs)
+    // that sets a node's *own* config_epoch to a nonzero value.
+    let failover_resp = replica.send("CLUSTER", &["FAILOVER"]).await;
+    assert!(
+        !is_error(&failover_resp),
+        "CLUSTER FAILOVER on a healthy replica should succeed, got: {:?}",
+        failover_resp
+    );
+
+    // Wait for the promotion to commit and this node's own config_epoch to
+    // reflect it (mirrors test_cluster_epoch_persists's poll).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let nodes = parse_cluster_nodes(&replica.send("CLUSTER", &["NODES"]).await).unwrap();
+        let myself = nodes.iter().find(|n| n.is_myself()).unwrap();
+        if myself.is_master() && myself.config_epoch > 0 {
+            break;
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!(
+                "Promoted replica never reported a nonzero config_epoch \
+                 (last seen: master={}, config_epoch={})",
+                myself.is_master(),
+                myself.config_epoch
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let post_info = parse_cluster_info(&replica.send("CLUSTER", &["INFO"]).await).unwrap();
+    let post_nodes = parse_cluster_nodes(&replica.send("CLUSTER", &["NODES"]).await).unwrap();
+    let post_max_node_epoch = post_nodes.iter().map(|n| n.config_epoch).max().unwrap_or(0);
+
+    // The raw per-node epoch is the signal that actually moves: the failover
+    // bumped the promoted node's own config_epoch. This is what an operator
+    // (or `redis-cli --cluster check`-style tooling) must read.
+    assert!(
+        post_max_node_epoch > pre_max_node_epoch,
+        "a graceful CLUSTER FAILOVER must bump the promoted node's raw \
+         config_epoch: pre max={}, post max={}",
+        pre_max_node_epoch,
+        post_max_node_epoch
+    );
+
+    // Monotonicity of the folded epoch: non-decreasing, never strictly
+    // increasing-by-construction. Both inputs to `max` are themselves
+    // monotonic (the replicated config_epoch counter and the Raft term), so
+    // the fold can only ever move forward.
+    assert!(
+        post_info.cluster_current_epoch >= pre_info.cluster_current_epoch,
+        "INFO's cluster_current_epoch must be monotonic (non-decreasing) \
+         across a failover: pre={}, post={}",
+        pre_info.cluster_current_epoch,
+        post_info.cluster_current_epoch
+    );
+
+    // ...but it is explicitly allowed to stay put while a config_epoch bump
+    // happens underneath it (see this test's doc comment). Asserting a
+    // strict `>` here would be asserting a guarantee the fold does not make;
+    // it fails on entirely correct behavior whenever raft_term >= the new
+    // config_epoch, which is the common case on a young cluster.
+    assert!(
+        post_info.cluster_current_epoch >= post_max_node_epoch,
+        "deliberate invariant must hold across the epoch-bumping event too: \
+         post INFO={}, post max NODES={}",
+        post_info.cluster_current_epoch,
+        post_max_node_epoch
+    );
+
+    harness.shutdown_all().await;
+}
+
 // ============================================================================
 // Tier 18: Writable Cluster Under Failover Stress
 // ============================================================================
@@ -7841,7 +8523,107 @@ async fn test_eval_cross_slot_returns_error() {
     harness.shutdown_all().await;
 }
 
-/// MULTI + mixed-slot commands returns error.
+// ---------------------------------------------------------------------------
+// Cluster cross-slot MULTI/EXEC contract (testing-gap issue #49, tightening
+// issue #19's cross-shard MULTI coverage to the *cluster*-mode queue-time
+// path). FrogDB has two independent, differently-shaped cross-slot rejections
+// for a MULTI transaction, and this section pins both exactly rather than
+// accepting "an error occurs somewhere":
+//
+// 1. Queue-time abort (`PreDispatchView::try_queue_in_transaction` ->
+//    `validate_cluster_slots`, guards.rs:454-461): fires when a SINGLE queued
+//    command's OWN keys already span two slots (e.g. RENAME src dst). The
+//    CROSSSLOT error is returned immediately as that command's reply (never
+//    `+QUEUED`), `abort_transaction` is set, and the subsequent EXEC returns
+//    `EXECABORT` without touching the shard.
+// 2. Deferred EXEC-time rejection (`TxnSlotAccumulator`/`TransactionTarget`,
+//    state.rs): fires when two *separate* single-key commands queue keys that
+//    individually validate fine but land in different slots. Both commands
+//    get `+QUEUED` (queuing never compares a command's keys against
+//    previously queued commands), and the mismatch is only caught when EXEC
+//    folds the queue and calls `TransactionTarget::resolve()`, which returns a
+//    plain `CROSSSLOT` reply -- NOT `EXECABORT` (`exec_abort` is never set on
+//    this path; nothing was aborted, EXEC itself declined to run).
+//
+// These are verified empirically (not inferred from reading the code): see
+// the two tests below. A regression that merged these two paths, or that
+// moved either detection point, will now fail a concrete assertion.
+// ---------------------------------------------------------------------------
+
+/// Find a node this harness can connect to directly, plus two distinct
+/// cluster slots that node owns (`(node_id, slot_a, slot_b)`). Locating an
+/// owning node up front (rather than connecting to `node_ids()[0]` and hoping
+/// for the best, as the original weak test did) means both `slot_a` and
+/// `slot_b` are guaranteed to be served locally: any CROSSSLOT this test
+/// observes is the slot-mismatch check, never a MOVED redirect in disguise.
+async fn owner_node_with_two_slots(harness: &ClusterTestHarness) -> (u64, u16, u16) {
+    let node_ids = harness.node_ids();
+    let first_node = harness.node(node_ids[0]).unwrap();
+    let nodes_response = first_node.send("CLUSTER", &["NODES"]).await;
+    let nodes = parse_cluster_nodes(&nodes_response).unwrap();
+    let owner = nodes
+        .iter()
+        .find(|n| !n.slots.is_empty() && n.slots[0].1 > n.slots[0].0 + 1)
+        .expect("expected some node to own a contiguous range of >= 2 slots");
+    let (start, _end) = owner.slots[0];
+    let (slot_a, slot_b) = (start, start + 1);
+
+    for &nid in &node_ids {
+        if harness.node(nid).unwrap().client_addr() == owner.addr {
+            return (nid, slot_a, slot_b);
+        }
+    }
+    panic!(
+        "could not match CLUSTER NODES owner addr {} to a harness node id",
+        owner.addr
+    );
+}
+
+/// Assert a response is the exact `CROSSSLOT` wire error (not merely an error,
+/// not a prefix match). Mirrors the `assert_crossslot` helper introduced in
+/// `integration_transactions.rs` (testing-gap issue #19); duplicated rather
+/// than shared because every `tests/*.rs` file compiles as its own
+/// independent test binary.
+fn assert_crossslot(response: &frogdb_protocol::Response, context: &str) {
+    assert_exact_error(
+        response,
+        b"CROSSSLOT Keys in request don't hash to the same slot",
+        context,
+    );
+}
+
+/// Assert a response is the exact `EXECABORT` wire error.
+fn assert_execabort(response: &frogdb_protocol::Response, context: &str) {
+    assert_exact_error(
+        response,
+        b"EXECABORT Transaction discarded because of previous errors.",
+        context,
+    );
+}
+
+fn assert_exact_error(response: &frogdb_protocol::Response, expected: &[u8], context: &str) {
+    match response {
+        frogdb_protocol::Response::Error(e) => assert_eq!(
+            e.as_ref(),
+            expected,
+            "{context}: expected exact error {:?}, got {:?}",
+            String::from_utf8_lossy(expected),
+            String::from_utf8_lossy(e)
+        ),
+        other => panic!(
+            "{context}: expected error {:?}, got {other:?}",
+            String::from_utf8_lossy(expected)
+        ),
+    }
+}
+
+/// Queue-time CROSSSLOT + EXECABORT: a command whose own two keys (RENAME's
+/// source/destination) span different slots is rejected immediately as its
+/// queue reply -- it never becomes `+QUEUED` -- and the transaction is marked
+/// aborted so EXEC returns `EXECABORT` without running anything. A same-slot
+/// command queued beforehand still gets a plain `+QUEUED` reply, proving the
+/// rejection is specifically about slot-crossing detection and not a blanket
+/// refusal of the whole transaction once one is open.
 #[tokio::test]
 async fn test_multi_exec_cross_slot_returns_error() {
     let mut harness = ClusterTestHarness::new();
@@ -7855,33 +8637,397 @@ async fn test_multi_exec_cross_slot_returns_error() {
         .await
         .unwrap();
 
-    let node = harness.node(harness.node_ids()[0]).unwrap();
+    let (node_id, slot_a, slot_b) = owner_node_with_two_slots(&harness).await;
+    let key_a = key_for_slot(slot_a);
+    let key_b = key_for_slot(slot_b);
+    assert_ne!(
+        slot_for_key(key_a.as_bytes()),
+        slot_for_key(key_b.as_bytes()),
+        "key_a/key_b must hash to different slots"
+    );
+
+    let node = harness.node(node_id).unwrap();
     let mut client = node.connect().await;
 
     let multi_resp = client.command(&["MULTI"]).await;
-    assert!(!is_error(&multi_resp), "MULTI should succeed");
+    assert_eq!(
+        multi_resp,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        "MULTI should succeed"
+    );
 
-    // Queue two commands for different slots
-    let set1_resp = client.command(&["SET", "txn_key_a", "v1"]).await;
-    let set2_resp = client.command(&["SET", "txn_key_b", "v2"]).await;
+    // Same-slot (trivially, against itself) command queues normally.
+    let set_resp = client.command(&["SET", key_a.as_str(), "v1"]).await;
+    assert_eq!(
+        set_resp,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        "the first, non-cross-slot command must be QUEUED"
+    );
 
+    // RENAME's own two keys span different slots -> rejected immediately as
+    // ITS OWN queue reply, at queue time, not deferred to EXEC.
+    let rename_resp = client
+        .command(&["RENAME", key_a.as_str(), key_b.as_str()])
+        .await;
+    assert_crossslot(
+        &rename_resp,
+        "cross-slot RENAME must CROSSSLOT at queue time, not return QUEUED",
+    );
+
+    // The transaction is now aborted: EXEC must EXECABORT, not run a partial
+    // transaction and not silently succeed.
     let exec_resp = client.command(&["EXEC"]).await;
+    assert_execabort(&exec_resp, "EXEC after a queue-time CROSSSLOT abort");
 
-    // Either the EXEC should fail, or the queued commands should have errors
-    // in the response array. The exact behavior depends on implementation.
-    let has_errors = is_error(&exec_resp)
-        || is_error(&set1_resp)
-        || is_error(&set2_resp)
-        || matches!(&exec_resp, frogdb_protocol::Response::Array(arr) if arr.iter().any(is_error));
+    // Nothing committed: the SET that did get QUEUED never ran either.
+    assert_eq!(
+        client.command(&["GET", key_a.as_str()]).await,
+        frogdb_protocol::Response::Bulk(None),
+        "EXECABORT must not partially apply the queued SET"
+    );
 
-    assert!(
-        has_errors,
-        "MULTI/EXEC with cross-slot keys should produce errors somewhere; \
-         MULTI={:?}, SET1={:?}, SET2={:?}, EXEC={:?}",
-        multi_resp, set1_resp, set2_resp, exec_resp
+    // DISCARD after a queue-time-aborted transaction clears connection state
+    // cleanly: a fresh MULTI immediately afterwards behaves normally.
+    let multi_resp = client.command(&["MULTI"]).await;
+    assert_eq!(
+        multi_resp,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK"))
+    );
+    let set_resp = client.command(&["SET", key_a.as_str(), "v1"]).await;
+    assert_eq!(
+        set_resp,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED"))
+    );
+    let rename_resp = client
+        .command(&["RENAME", key_a.as_str(), key_b.as_str()])
+        .await;
+    assert_crossslot(&rename_resp, "second cross-slot RENAME (pre-DISCARD)");
+    let discard_resp = client.command(&["DISCARD"]).await;
+    assert_eq!(
+        discard_resp,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        "DISCARD must succeed even after a queue-time-aborted transaction"
+    );
+
+    let multi_resp = client.command(&["MULTI"]).await;
+    assert_eq!(
+        multi_resp,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        "MULTI immediately after DISCARD must succeed (no lingering abort state)"
+    );
+    let get_resp = client.command(&["GET", key_a.as_str()]).await;
+    assert_eq!(
+        get_resp,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        "a plain queued command in the fresh MULTI must not inherit the prior abort"
+    );
+    let exec_resp = client.command(&["EXEC"]).await;
+    assert_eq!(
+        exec_resp,
+        frogdb_protocol::Response::Array(vec![frogdb_protocol::Response::Bulk(None)]),
+        "the fresh transaction must commit normally post-DISCARD"
     );
 
     harness.shutdown_all().await;
+}
+
+/// Deferred EXEC-time CROSSSLOT (distinct from the queue-time path above):
+/// two *separate* single-key commands, each individually valid, that target
+/// different slots both get `+QUEUED` -- queuing only validates a command's
+/// own keys, never compares against previously queued commands -- and the
+/// mismatch is caught only when EXEC folds the queue's keys into one
+/// transaction target. That EXEC-time rejection is a plain `CROSSSLOT` reply,
+/// not `EXECABORT`: nothing was marked aborted, EXEC itself declined to run.
+#[tokio::test]
+async fn test_multi_exec_two_single_key_commands_different_slots_defers_crossslot_to_exec() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let (node_id, slot_a, slot_b) = owner_node_with_two_slots(&harness).await;
+    let key_a = key_for_slot(slot_a);
+    let key_b = key_for_slot(slot_b);
+
+    let node = harness.node(node_id).unwrap();
+    let mut client = node.connect().await;
+
+    let multi_resp = client.command(&["MULTI"]).await;
+    assert_eq!(
+        multi_resp,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK"))
+    );
+
+    let set1_resp = client.command(&["SET", key_a.as_str(), "v1"]).await;
+    assert_eq!(
+        set1_resp,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        "first single-key command queues normally"
+    );
+
+    let set2_resp = client.command(&["SET", key_b.as_str(), "v2"]).await;
+    assert_eq!(
+        set2_resp,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        "second single-key command (different slot) ALSO queues normally -- \
+         each command's own keys validate independently of what's already queued"
+    );
+
+    let exec_resp = client.command(&["EXEC"]).await;
+    assert_crossslot(
+        &exec_resp,
+        "EXEC folding two different-slot queued keys must CROSSSLOT (not EXECABORT)",
+    );
+    assert_ne!(
+        exec_resp,
+        frogdb_protocol::Response::Error(bytes::Bytes::from_static(
+            b"EXECABORT Transaction discarded because of previous errors."
+        )),
+        "this path must NOT be EXECABORT -- nothing was aborted at queue time"
+    );
+
+    // Neither write landed (rejected atomically, not partially).
+    assert_eq!(
+        client.command(&["GET", key_a.as_str()]).await,
+        frogdb_protocol::Response::Bulk(None)
+    );
+    assert_eq!(
+        client.command(&["GET", key_b.as_str()]).await,
+        frogdb_protocol::Response::Bulk(None)
+    );
+
+    harness.shutdown_all().await;
+}
+
+// ---------------------------------------------------------------------------
+// Blocking multi-key CROSSSLOT rejection (testing-gap issue #31): the only
+// CROSSSLOT coverage above is for MSET/EVAL/MULTI -- nothing pinned that a
+// *blocking* multi-key command (BLPOP/BLMPOP/BZPOPMIN/BZPOPMAX/BZMPOP/BLMOVE/
+// BRPOPLPUSH) presented with keys in different slots is rejected immediately,
+// rather than entering the blocking wait path. A regression here is worse
+// than a wrong reply -- it hangs the client (or blocks against the wrong
+// node) instead of failing fast.
+//
+// Each case below sends the command with an effectively-infinite blocking
+// timeout ("0"). If CROSSSLOT rejection were ever skipped for the blocking
+// family, the command would sit in the wait queue forever instead of
+// replying -- so a bounded elapsed time on the reply is itself proof the
+// command never blocked, on top of the plain error-shape assertion. The
+// `blocked_client_count` check is the PUBSUB-style introspection asked for:
+// it is the same counter `INFO`'s `blocked_clients` field reports and that
+// `wait_for_blocked_clients` polls elsewhere in the suite, so it directly
+// observes whether a waiter was (even partially/transiently) registered. The
+// trailing PING confirms the connection itself is still in a clean state
+// (no stray out-of-band wake frame desyncing the RESP2 stream).
+// ---------------------------------------------------------------------------
+
+/// Shared body for the blocking-multikey-CROSSSLOT cases: stand up a 3-node
+/// cluster, pick two keys the same node owns in different slots (no
+/// hash-tag trick -- that's precisely the untested path), send the command
+/// built by `build_args(key_a, key_b)`, and assert it comes back as an
+/// immediate CROSSSLOT with no waiter ever registered.
+async fn assert_blocking_multikey_crossslot_no_block(
+    build_args: impl Fn(&str, &str) -> Vec<String>,
+    context: &str,
+) {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let (node_id, slot_a, slot_b) = owner_node_with_two_slots(&harness).await;
+    let key_a = key_for_slot(slot_a);
+    let key_b = key_for_slot(slot_b);
+    assert_ne!(
+        slot_for_key(key_a.as_bytes()),
+        slot_for_key(key_b.as_bytes()),
+        "{context}: key_a/key_b must hash to different slots"
+    );
+
+    let node = harness.node(node_id).unwrap();
+    let mut client = node.connect().await;
+
+    let args = build_args(&key_a, &key_b);
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+
+    let start = std::time::Instant::now();
+    client.send_only(&arg_refs).await;
+    let resp = client
+        .read_response(Duration::from_secs(3))
+        .await
+        .unwrap_or_else(|| {
+            panic!(
+                "{context}: no response within 3s -- looks like it entered the blocking wait \
+                 path instead of rejecting cross-slot keys immediately"
+            )
+        });
+    let elapsed = start.elapsed();
+
+    assert_crossslot(&resp, context);
+    assert!(
+        elapsed < Duration::from_millis(1500),
+        "{context}: CROSSSLOT reply took {elapsed:?}, expected an immediate (non-blocking) \
+         rejection well under the 3s bound"
+    );
+
+    assert_eq!(
+        node.blocked_client_count(),
+        0,
+        "{context}: a cross-slot blocking command must never register a waiter"
+    );
+
+    let ping = client.command(&["PING"]).await;
+    assert_eq!(
+        ping,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"PONG")),
+        "{context}: connection must still be clean (no stray frames) after the CROSSSLOT reply"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// `BLPOP key1{slotA} key2{slotB} 0` returns CROSSSLOT immediately, never
+/// blocking.
+#[tokio::test]
+async fn test_blpop_cross_slot_returns_crossslot_immediately() {
+    assert_blocking_multikey_crossslot_no_block(
+        |a, b| {
+            vec![
+                "BLPOP".to_string(),
+                a.to_string(),
+                b.to_string(),
+                "0".to_string(),
+            ]
+        },
+        "BLPOP with cross-slot keys",
+    )
+    .await;
+}
+
+/// `BLMPOP 0 2 key1{slotA} key2{slotB} LEFT` returns CROSSSLOT immediately,
+/// never blocking.
+#[tokio::test]
+async fn test_blmpop_cross_slot_returns_crossslot_immediately() {
+    assert_blocking_multikey_crossslot_no_block(
+        |a, b| {
+            vec![
+                "BLMPOP".to_string(),
+                "0".to_string(),
+                "2".to_string(),
+                a.to_string(),
+                b.to_string(),
+                "LEFT".to_string(),
+            ]
+        },
+        "BLMPOP with cross-slot keys",
+    )
+    .await;
+}
+
+/// `BZPOPMIN key1{slotA} key2{slotB} 0` returns CROSSSLOT immediately, never
+/// blocking.
+#[tokio::test]
+async fn test_bzpopmin_cross_slot_returns_crossslot_immediately() {
+    assert_blocking_multikey_crossslot_no_block(
+        |a, b| {
+            vec![
+                "BZPOPMIN".to_string(),
+                a.to_string(),
+                b.to_string(),
+                "0".to_string(),
+            ]
+        },
+        "BZPOPMIN with cross-slot keys",
+    )
+    .await;
+}
+
+/// `BZPOPMAX key1{slotA} key2{slotB} 0` returns CROSSSLOT immediately, never
+/// blocking.
+#[tokio::test]
+async fn test_bzpopmax_cross_slot_returns_crossslot_immediately() {
+    assert_blocking_multikey_crossslot_no_block(
+        |a, b| {
+            vec![
+                "BZPOPMAX".to_string(),
+                a.to_string(),
+                b.to_string(),
+                "0".to_string(),
+            ]
+        },
+        "BZPOPMAX with cross-slot keys",
+    )
+    .await;
+}
+
+/// `BZMPOP 0 2 key1{slotA} key2{slotB} MIN` returns CROSSSLOT immediately,
+/// never blocking.
+#[tokio::test]
+async fn test_bzmpop_cross_slot_returns_crossslot_immediately() {
+    assert_blocking_multikey_crossslot_no_block(
+        |a, b| {
+            vec![
+                "BZMPOP".to_string(),
+                "0".to_string(),
+                "2".to_string(),
+                a.to_string(),
+                b.to_string(),
+                "MIN".to_string(),
+            ]
+        },
+        "BZMPOP with cross-slot keys",
+    )
+    .await;
+}
+
+/// `BLMOVE src{slotA} dst{slotB} LEFT RIGHT 0` (cross-slot source/dest)
+/// returns CROSSSLOT immediately, never blocking.
+#[tokio::test]
+async fn test_blmove_cross_slot_returns_crossslot_immediately() {
+    assert_blocking_multikey_crossslot_no_block(
+        |a, b| {
+            vec![
+                "BLMOVE".to_string(),
+                a.to_string(),
+                b.to_string(),
+                "LEFT".to_string(),
+                "RIGHT".to_string(),
+                "0".to_string(),
+            ]
+        },
+        "BLMOVE with cross-slot source/destination",
+    )
+    .await;
+}
+
+/// `BRPOPLPUSH src{slotA} dst{slotB} 0` (cross-slot source/dest) returns
+/// CROSSSLOT immediately, never blocking.
+#[tokio::test]
+async fn test_brpoplpush_cross_slot_returns_crossslot_immediately() {
+    assert_blocking_multikey_crossslot_no_block(
+        |a, b| {
+            vec![
+                "BRPOPLPUSH".to_string(),
+                a.to_string(),
+                b.to_string(),
+                "0".to_string(),
+            ]
+        },
+        "BRPOPLPUSH with cross-slot source/destination",
+    )
+    .await;
 }
 
 // ============================================================================
@@ -8022,6 +9168,18 @@ async fn test_cluster_slot_assignment_persists() {
 }
 
 /// Config epoch persists across restart.
+///
+/// Strengthened per issue 16: the previous version only asserted `post >=
+/// pre` on `CLUSTER INFO`'s composite `cluster_current_epoch`. Every
+/// restart triggers a fresh Raft election, which bumps `raft_term`
+/// regardless of whether the persisted `config_epoch` survived — so that
+/// assertion passed even if the on-disk `config_epoch` had reset to 0. This
+/// version instead reads the raw per-node `config_epoch` from `CLUSTER
+/// NODES` (parse_cluster_nodes) and asserts strict equality across the
+/// restart. To make that assertion meaningful (a node that never leaves
+/// epoch 0 can't distinguish "persisted" from "reset to 0"), the target
+/// node is first promoted via a real `CLUSTER FAILOVER`, which is the only
+/// path that bumps a node's own `config_epoch` to a nonzero value.
 #[tokio::test]
 async fn test_cluster_epoch_persists() {
     let config = ClusterNodeConfig {
@@ -8029,7 +9187,12 @@ async fn test_cluster_epoch_persists() {
         ..Default::default()
     };
     let mut harness = ClusterTestHarness::with_config(config);
-    harness.start_cluster(3).await.unwrap();
+    // Two primaries plus one replica of the first: a real primary/replica
+    // pair so the replica can run a graceful (non-FORCE) `CLUSTER FAILOVER`
+    // that bumps its own `config_epoch`, without removing any node from the
+    // cluster (unlike the FORCE-on-a-primary path, which absorbs/evicts a
+    // peer and would confound this persistence-focused test).
+    harness.start_cluster(2).await.unwrap();
     harness
         .wait_for_leader(Duration::from_secs(10))
         .await
@@ -8039,32 +9202,92 @@ async fn test_cluster_epoch_persists() {
         .await
         .unwrap();
 
-    let leader = harness.get_leader().await.unwrap();
-    let follower = *harness.node_ids().iter().find(|&&id| id != leader).unwrap();
-
-    // Get epoch before restart
-    let pre_info = harness.get_cluster_info(follower).unwrap();
-    let pre_epoch = pre_info.cluster_current_epoch;
-
-    // Restart follower
-    harness.shutdown_node(follower).await;
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    harness.restart_node(follower).await.unwrap();
-
+    let primary_id = harness.node_ids()[0];
+    let replica_id = harness.add_replica(primary_id).await.unwrap();
     harness
-        .wait_for_node_recognized(follower, Duration::from_secs(15))
+        .wait_for_cluster_convergence(Duration::from_secs(10))
         .await
         .unwrap();
 
-    // Get epoch after restart
-    let post_info = harness.get_cluster_info(follower).unwrap();
-    let post_epoch = post_info.cluster_current_epoch;
-
+    // Promote the replica: this is the only path (Failover, commands.rs)
+    // that sets a node's *own* config_epoch to a nonzero value.
+    let replica = harness.node(replica_id).unwrap();
+    let failover_resp = replica.send("CLUSTER", &["FAILOVER"]).await;
     assert!(
-        post_epoch >= pre_epoch,
-        "Epoch should not decrease after restart: pre={}, post={}",
-        pre_epoch,
-        post_epoch
+        !is_error(&failover_resp),
+        "CLUSTER FAILOVER on a healthy replica should succeed, got: {:?}",
+        failover_resp
+    );
+
+    // Wait for the promotion to commit and this node's own config_epoch to
+    // reflect it.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let pre_epoch = loop {
+        let nodes = parse_cluster_nodes(&replica.send("CLUSTER", &["NODES"]).await).unwrap();
+        let myself = nodes.iter().find(|n| n.is_myself()).unwrap();
+        if myself.is_master() && myself.config_epoch > 0 {
+            break myself.config_epoch;
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!(
+                "Promoted replica never reported a nonzero config_epoch \
+                 (last seen: master={}, config_epoch={})",
+                myself.is_master(),
+                myself.config_epoch
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert!(
+        pre_epoch > 0,
+        "sanity: promotion must produce a nonzero config_epoch to make the \
+         persistence check meaningful"
+    );
+
+    // Restart the promoted node.
+    harness.shutdown_node(replica_id).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    harness.restart_node(replica_id).await.unwrap();
+    harness
+        .wait_for_node_recognized(replica_id, Duration::from_secs(15))
+        .await
+        .unwrap();
+
+    // Read the raw per-node config_epoch again, post-restart. This is
+    // polled (not a single read): `wait_for_node_recognized` above only
+    // confirms that *other* nodes have rediscovered this node -- it says
+    // nothing about the restarted node's own Raft replay. `Raft::new()`
+    // returns as soon as its background core task is spawned, and that
+    // task replays the persisted log (rebuilding `config_epoch` in the
+    // fresh state machine) asynchronously; the server can already be
+    // answering `CLUSTER NODES` while that replay is still in flight. A
+    // single immediate read can therefore observe a transient
+    // `config_epoch == 0` on a node that has not finished catching up,
+    // which is a test-timing race, not a persistence loss. Poll for the
+    // value to converge back to `pre_epoch` (or, if it genuinely never
+    // does, fall out of the loop after the deadline so the assertion
+    // below still fails loudly on a real regression).
+    let replica = harness.node(replica_id).unwrap();
+    let post_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut post_epoch;
+    loop {
+        let post_nodes = parse_cluster_nodes(&replica.send("CLUSTER", &["NODES"]).await).unwrap();
+        post_epoch = post_nodes
+            .iter()
+            .find(|n| n.is_myself())
+            .expect("restarted node must still report a myself entry")
+            .config_epoch;
+        if post_epoch == pre_epoch || tokio::time::Instant::now() > post_deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    assert_eq!(
+        post_epoch, pre_epoch,
+        "raw per-node config_epoch must be identical (not merely >=) across \
+         a restart: pre={}, post={}",
+        pre_epoch, post_epoch
     );
 
     harness.shutdown_all().await;
@@ -9800,6 +11023,1001 @@ async fn test_rapid_writes_across_all_nodes() {
         read_successes, total_written,
         "All written keys should be readable with correct values"
     );
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// WAIT in cluster mode (testing-gap issue 37)
+// ============================================================================
+//
+// Pinned contract (see the issue's `## Resolution` for the full write-up):
+//
+// FrogDB's `WAIT numreplicas timeout` is served by the connection-level
+// `WaitCoordinator`, which lives on the node's `PrimaryReplicationHandler`
+// (`server/src/connection/blocking.rs::handle_wait_command`). That handler is
+// constructed *only* when the node's replication role is the literal string
+// `"primary"` (`server/src/server/replication_init.rs:57`,
+// `config/src/replication.rs::is_primary`). A cluster node started by the test
+// harness keeps the default replication role `"standalone"` — cluster
+// membership and the *cluster* master/replica role are tracked separately, in
+// Raft-backed cluster state, and never set `replication.role = "primary"`.
+//
+// Consequences, all pinned below:
+//   * `handle_wait_command` finds `primary_replication_handler == None` and
+//     takes the standalone early-return, replying `Integer(0)` immediately for
+//     ANY `numreplicas`/`timeout` — it never blocks, never solicits acks, and
+//     never counts a shard's cluster replicas. Cluster-mode WAIT is, in effect,
+//     unwired: no replica ever counts toward the quorum.
+//   * A cluster *replica* node carries the data-path `is_replica` flag, so WAIT
+//     is rejected there with the standard replica error (before arg parsing).
+//   * Across a failover, WAIT still never hangs. A promoted node's data-path
+//     role is not re-installed (known findings 34/61: promoted nodes can't
+//     serve PSYNC / runtime resync staged-not-installed), so a replica promoted
+//     in *cluster state* keeps its `is_replica` data-path flag and continues to
+//     reject WAIT — while surviving cluster primaries keep returning 0.
+//
+// This is a deliberate, documented divergence from standalone WAIT (where the
+// coordinator blocks up to `timeout` and returns the real acked count) and from
+// Redis cluster WAIT (which counts the shard-local replica set). The tests pin
+// the *actual* behavior so a future wiring of cluster WAIT trips them loudly.
+
+/// Extract the integer from a `WAIT` reply, or panic with the actual response.
+fn wait_reply_count(resp: &frogdb_protocol::Response) -> i64 {
+    match resp {
+        frogdb_protocol::Response::Integer(n) => *n,
+        other => panic!("expected WAIT to reply with an integer, got {other:?}"),
+    }
+}
+
+/// WAIT on a cluster primary returns 0 immediately for every `numreplicas`,
+/// even with a live cluster replica attached to the shard being written.
+///
+/// Acceptance criteria (issue 37):
+///   * ack count matches the *actual counted* replica set — which in cluster
+///     mode is always 0 (no replica is wired into the WAIT coordinator), not
+///     the cluster-wide or shard-local replica count;
+///   * `WAIT 0` returns immediately;
+///   * `numreplicas` exceeding the counted replica set does not hang past the
+///     timeout — here it does not even reach the timeout, returning 0 at once.
+///
+/// The assertions bound each call *well under its own timeout* so a regression
+/// that actually engaged a blocking coordinator (returning the same 0 only
+/// after idling out the timeout) would be caught, not masked.
+#[tokio::test]
+async fn test_wait_in_cluster_returns_zero_immediately() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(2).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // Attach a real cluster replica to the first primary's shard.
+    let primary_id = harness.node_ids()[0];
+    let _replica_id = harness.add_replica(primary_id).await.unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // Write a key into a slot this primary owns (no MOVED), then let any
+    // replication settle so a *working* coordinator would have acks to count.
+    let primary = harness.node(primary_id).unwrap();
+    let nodes = parse_cluster_nodes(&primary.send("CLUSTER", &["NODES"]).await).unwrap();
+    let myself = nodes.iter().find(|n| n.is_myself()).unwrap();
+    assert!(
+        myself.is_master() && !myself.slots.is_empty(),
+        "test setup: node_ids()[0] must be a slot-owning primary, got {:?}",
+        myself.flags
+    );
+    let key = key_for_slot(myself.slots[0].0);
+    assert!(
+        !is_error(&primary.send("SET", &[&key, "wait-cluster"]).await),
+        "SET on the owning primary should succeed"
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Each case: (numreplicas, timeout_ms). A blocking implementation with 0
+    // counted replicas would idle for `timeout_ms` on the >0 cases; assert we
+    // return in well under half of it. Timeouts are kept generous enough that
+    // the half-timeout bound stays far above a debug-build round-trip, so the
+    // assertion measures "did not block", not scheduler noise.
+    for (num, timeout_ms) in [("0", 1000u64), ("1", 2000), ("2", 1500)] {
+        let start = std::time::Instant::now();
+        let resp = primary.send("WAIT", &[num, &timeout_ms.to_string()]).await;
+        let elapsed = start.elapsed();
+        assert_eq!(
+            wait_reply_count(&resp),
+            0,
+            "cluster WAIT {num} {timeout_ms}: no replica is wired into the WAIT \
+             coordinator, so the count is always 0"
+        );
+        assert!(
+            elapsed < Duration::from_millis(timeout_ms / 2),
+            "cluster WAIT {num} {timeout_ms} must return immediately (unwired \
+             fast-path), not block toward its timeout; took {elapsed:?}"
+        );
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// WAIT on a cluster *replica* node is rejected with the replica error, before
+/// argument parsing — the data-path `is_replica` flag gates it exactly as in
+/// standalone replica mode.
+#[tokio::test]
+async fn test_wait_rejected_on_cluster_replica() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(2).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let primary_id = harness.node_ids()[0];
+    let replica_id = harness.add_replica(primary_id).await.unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    let replica = harness.node(replica_id).unwrap();
+    // Even with obviously-invalid args, the replica rejection wins first.
+    let resp = replica.send("WAIT", &["0", "100"]).await;
+    assert!(
+        is_error(&resp),
+        "WAIT on a cluster replica must be rejected, got {resp:?}"
+    );
+    let msg = get_error_message(&resp).unwrap_or("");
+    assert!(
+        msg.contains("replica"),
+        "WAIT-on-replica error should mention 'replica', got: {msg}"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// WAIT never hangs across a failover of the shard being written to.
+///
+/// The owning primary is killed; the cluster promotes its replica in *cluster
+/// state* (CLUSTER NODES reports the replica as master). Pinned semantics:
+///   * WAIT on the promoted node still returns *immediately* — and, because a
+///     promotion is staged in cluster state but not re-installed on the data
+///     path (known findings 34/61), the node keeps its `is_replica` flag and so
+///     WAIT is still rejected there rather than served;
+///   * WAIT on the surviving sibling primary keeps returning 0 immediately.
+///
+/// Either way WAIT resolves in milliseconds, never hanging past the requested
+/// timeout — the core failover-safety property this test guards.
+#[tokio::test]
+async fn test_wait_in_cluster_does_not_hang_across_failover() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(2).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let primary_id = harness.node_ids()[0];
+    let replica_id = harness.add_replica(primary_id).await.unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // Write into a slot the doomed primary owns.
+    let primary = harness.node(primary_id).unwrap();
+    let nodes = parse_cluster_nodes(&primary.send("CLUSTER", &["NODES"]).await).unwrap();
+    let myself = nodes.iter().find(|n| n.is_myself()).unwrap();
+    let key = key_for_slot(myself.slots[0].0);
+    let _ = primary.send("SET", &[&key, "pre-failover"]).await;
+
+    // Kill the owning primary → the cluster reacts (leader election + the
+    // replica's cluster-state promotion).
+    harness.kill_node(primary_id).await;
+    let _ = harness
+        .wait_for_new_leader(primary_id, Duration::from_secs(20))
+        .await;
+
+    // Poll until the replica reports itself master in cluster state (bounded),
+    // so we exercise WAIT *after* the promotion is visible.
+    let replica = harness.node(replica_id).unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let nodes = parse_cluster_nodes(&replica.send("CLUSTER", &["NODES"]).await).unwrap();
+        let m = nodes.iter().find(|n| n.is_myself()).unwrap();
+        if m.is_master() || tokio::time::Instant::now() > deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // WAIT on the promoted node resolves immediately (does not hang), and is
+    // *still* the replica rejection: promotion is staged in cluster state but
+    // the data-path role is never re-installed (findings 34/61), so the node
+    // keeps `is_replica = true`. Pinning the rejection (rather than accepting
+    // either answer) is what makes this test notice a promotion that starts
+    // installing the data-path role — at which point this assertion should be
+    // updated to the served-WAIT contract.
+    let start = std::time::Instant::now();
+    let resp = replica.send("WAIT", &["1", "1500"]).await;
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(750),
+        "WAIT on the promoted node must not hang across failover; took {elapsed:?}"
+    );
+    assert!(
+        is_error(&resp),
+        "the promoted node keeps its data-path replica role, so WAIT is still \
+         rejected there; got {resp:?}"
+    );
+    assert!(
+        get_error_message(&resp).unwrap_or("").contains("replica"),
+        "post-failover WAIT rejection should still be the replica error, got: {:?}",
+        get_error_message(&resp)
+    );
+
+    // A surviving sibling primary keeps answering WAIT with 0, immediately.
+    let sibling = harness
+        .node_ids()
+        .into_iter()
+        .find(|&id| id != primary_id && id != replica_id)
+        .expect("2-primary cluster + 1 replica must leave a surviving sibling primary");
+    let start = std::time::Instant::now();
+    let resp = harness
+        .node(sibling)
+        .unwrap()
+        .send("WAIT", &["1", "1500"])
+        .await;
+    let elapsed = start.elapsed();
+    // The sibling is a cluster primary (standalone replication role) → 0.
+    assert_eq!(
+        wait_reply_count(&resp),
+        0,
+        "surviving cluster primary still serves WAIT from the unwired fast path"
+    );
+    assert!(
+        elapsed < Duration::from_millis(750),
+        "WAIT on the surviving primary must not hang; took {elapsed:?}"
+    );
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// Issue 58: keyspace notifications + SCAN in cluster mode
+// ============================================================================
+//
+// Pinned contract (also documented in the architecture "Node-Local Surfaces"
+// section of website/src/content/docs/architecture/clustering.md):
+//
+//   * **Keyspace notifications are node-local.** A write is executed by the
+//     slot-owning primary, and that node's shard worker publishes the
+//     `__keyspace@0__:<key>` / `__keyevent@0__:<event>` messages straight into
+//     its own subscription table
+//     (`core/src/shard/keyspace_notify.rs::emit_keyspace_notification` ->
+//     `KeyspaceNotificationCoordinator::publish`). That path never touches
+//     `ClusterPubSubForwarder`, so the event does not cross the cluster bus:
+//     only clients subscribed *on the owning primary* observe it. This matches
+//     Redis, where `notifyKeyspaceEvent` calls `pubsubPublishMessage` directly
+//     while only the `PUBLISH` command calls `clusterPropagatePublish`.
+//     Consequence for clients: a cluster-wide keyspace-notification consumer
+//     must hold one subscription per primary.
+//
+//   * **SCAN is per-node.** `SCAN` is a server-wide scatter over the node's own
+//     internal shards (`server/src/connection/scatter.rs::handle_scan`) with no
+//     cluster fan-out and no slot filtering — a node simply has no keys outside
+//     the slots it owns. A full-keyspace scan therefore requires client-side
+//     fan-out across every primary plus a union of the results. The union is
+//     duplicate-free because slot ownership is exclusive, which also means no
+//     key ever "bleeds" into a non-owning node's scan.
+
+/// Slot ranges each harness node owns, per `CLUSTER NODES`.
+///
+/// Returned in `harness.node_ids()` order; nodes owning no slots are omitted.
+async fn slot_ownership(harness: &ClusterTestHarness) -> Vec<(u64, Vec<(u16, u16)>)> {
+    let node_ids = harness.node_ids();
+    let first = harness.node(node_ids[0]).expect("node 0 must exist");
+    let nodes = parse_cluster_nodes(&first.send("CLUSTER", &["NODES"]).await)
+        .expect("CLUSTER NODES should parse");
+    let mut ownership = Vec::new();
+    for &id in &node_ids {
+        let addr = harness.node(id).expect("node must exist").client_addr();
+        if let Some(info) = nodes.iter().find(|n| n.addr == addr)
+            && !info.slots.is_empty()
+        {
+            ownership.push((id, info.slots.clone()));
+        }
+    }
+    ownership
+}
+
+/// The harness node id owning `slot`, if any.
+fn owner_of_slot(ownership: &[(u64, Vec<(u16, u16)>)], slot: u16) -> Option<u64> {
+    ownership
+        .iter()
+        .find(|(_, ranges)| ranges.iter().any(|(s, e)| slot >= *s && slot <= *e))
+        .map(|(id, _)| *id)
+}
+
+/// Drive `SCAN` to completion on one connection.
+///
+/// Returns every key yielded, in yield order and with duplicates preserved, so
+/// callers can assert on duplicates rather than have them silently folded away.
+async fn scan_to_completion(client: &mut frogdb_test_harness::server::TestClient) -> Vec<String> {
+    let mut cursor = "0".to_string();
+    let mut keys = Vec::new();
+    // Bounded so a cursor that never returns to 0 fails loudly rather than
+    // hanging the test. 48 keys at COUNT 64 needs a handful of round trips.
+    for _ in 0..1000 {
+        let resp = client.command(&["SCAN", &cursor, "COUNT", "64"]).await;
+        let frogdb_protocol::Response::Array(parts) = &resp else {
+            panic!("SCAN should reply with a 2-element array, got {resp:?}");
+        };
+        assert_eq!(parts.len(), 2, "SCAN reply shape: {resp:?}");
+        let frogdb_protocol::Response::Bulk(Some(next)) = &parts[0] else {
+            panic!("SCAN cursor should be a bulk string, got {:?}", parts[0]);
+        };
+        let frogdb_protocol::Response::Array(batch) = &parts[1] else {
+            panic!("SCAN keys should be an array, got {:?}", parts[1]);
+        };
+        for entry in batch {
+            match entry {
+                frogdb_protocol::Response::Bulk(Some(k)) => {
+                    keys.push(String::from_utf8_lossy(k).to_string())
+                }
+                other => panic!("SCAN key should be a bulk string, got {other:?}"),
+            }
+        }
+        cursor = String::from_utf8_lossy(next).to_string();
+        if cursor == "0" {
+            return keys;
+        }
+    }
+    panic!("SCAN never returned to cursor 0");
+}
+
+/// Read one pub/sub `message` frame as `(channel, payload)`.
+fn expect_pubsub_message(msg: Option<frogdb_protocol::Response>) -> (String, String) {
+    let Some(frogdb_protocol::Response::Array(arr)) = msg else {
+        panic!("expected a pub/sub message array, got {msg:?}");
+    };
+    assert_eq!(arr.len(), 3, "pub/sub message shape: {arr:?}");
+    assert_eq!(
+        arr[0],
+        frogdb_protocol::Response::Bulk(Some(bytes::Bytes::from_static(b"message"))),
+        "expected a `message` push, got {arr:?}"
+    );
+    let field = |r: &frogdb_protocol::Response| match r {
+        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
+        other => panic!("expected a bulk string, got {other:?}"),
+    };
+    (field(&arr[1]), field(&arr[2]))
+}
+
+/// A keyspace notification for a key write fires only on the slot-owning
+/// primary: subscribers attached to the other primaries never see it, even
+/// though ordinary `PUBLISH` on the same channel does reach them.
+///
+/// Acceptance criteria (issue 58): the event is observed exactly once, only via
+/// the owning primary's subscription, and not via any other primary's.
+///
+/// The trailing `PUBLISH` is the control that makes the negative assertion
+/// meaningful — it proves each non-owner subscription was live and that
+/// cross-node broadcast delivery works on this cluster, so the silence above it
+/// is genuinely "keyspace notifications do not cross the bus" and not a
+/// mis-registered subscriber.
+#[tokio::test]
+async fn test_cluster_keyspace_notification_fires_only_on_owning_primary() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    let ownership = slot_ownership(&harness).await;
+    assert!(
+        ownership.len() >= 2,
+        "test needs at least two slot-owning primaries, got {ownership:?}"
+    );
+
+    // A key whose slot is owned by a known node; every other node is a
+    // non-owner for it by construction (slot ownership is exclusive).
+    let owner_id = ownership[0].0;
+    let slot = ownership[0].1[0].0;
+    let key = key_for_slot(slot);
+    assert_eq!(slot_for_key(key.as_bytes()), slot);
+
+    // Notifications are configured per node (there is no cluster-wide CONFIG
+    // propagation), so enable them everywhere: a node that stayed silent purely
+    // because its own flags were unset would not prove anything.
+    for &id in &harness.node_ids() {
+        let resp = harness
+            .node(id)
+            .unwrap()
+            .send("CONFIG", &["SET", "notify-keyspace-events", "KEA"])
+            .await;
+        assert!(
+            !is_error(&resp),
+            "CONFIG SET notify-keyspace-events on node {id}: {resp:?}"
+        );
+    }
+
+    // One long-lived subscriber per node, on both the keyspace and the keyevent
+    // channel for this write.
+    let keyspace_channel = format!("__keyspace@0__:{key}");
+    let keyevent_channel = "__keyevent@0__:set".to_string();
+    let mut subscribers = Vec::new();
+    for &id in &harness.node_ids() {
+        let mut client = harness.node(id).unwrap().connect().await;
+        for channel in [keyspace_channel.as_str(), keyevent_channel.as_str()] {
+            let resp = client.command(&["SUBSCRIBE", channel]).await;
+            assert!(
+                matches!(&resp, frogdb_protocol::Response::Array(a) if a.len() == 3),
+                "SUBSCRIBE {channel} on node {id}: {resp:?}"
+            );
+        }
+        subscribers.push((id, client));
+    }
+    // Subscriptions register on the broadcast coordinator shard asynchronously.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // Write on the owning primary — no MOVED, this node owns the slot.
+    let resp = harness
+        .node(owner_id)
+        .unwrap()
+        .send("SET", &[&key, "notify-me"])
+        .await;
+    assert!(
+        !is_error(&resp),
+        "SET {key} on its owning primary {owner_id} should succeed, got {resp:?}"
+    );
+
+    // The owner's subscriber sees exactly the two events for this write.
+    let owner_index = subscribers
+        .iter()
+        .position(|(id, _)| *id == owner_id)
+        .expect("owner must have a subscriber");
+    let mut observed = Vec::new();
+    for _ in 0..2 {
+        let msg = subscribers[owner_index]
+            .1
+            .read_message(Duration::from_secs(2))
+            .await;
+        observed.push(expect_pubsub_message(msg));
+    }
+    observed.sort();
+    let mut want = vec![
+        (keyspace_channel.clone(), "set".to_string()),
+        (keyevent_channel.clone(), key.clone()),
+    ];
+    want.sort();
+    assert_eq!(
+        observed, want,
+        "the owning primary must emit exactly the keyspace + keyevent pair for its own write"
+    );
+    // Exactly once: nothing further arrives for this single SET.
+    let extra = subscribers[owner_index]
+        .1
+        .read_message(Duration::from_millis(400))
+        .await;
+    assert!(
+        extra.is_none(),
+        "one SET must produce one keyspace + one keyevent message, got extra {extra:?}"
+    );
+
+    // No other primary observes the event: emission never crosses the bus.
+    for (id, client) in subscribers.iter_mut() {
+        if *id == owner_id {
+            continue;
+        }
+        let msg = client.read_message(Duration::from_millis(600)).await;
+        assert!(
+            msg.is_none(),
+            "node {id} does not own slot {slot}; it must not deliver a keyspace \
+             notification for {key}, got {msg:?}"
+        );
+    }
+
+    // Control: ordinary PUBLISH on the same channel *does* reach every node,
+    // proving the subscriptions above were live.
+    let publisher = harness.node_ids()[0];
+    let resp = harness
+        .node(publisher)
+        .unwrap()
+        .send("PUBLISH", &[&keyevent_channel, "control"])
+        .await;
+    assert!(!is_error(&resp), "PUBLISH control message: {resp:?}");
+    for (id, client) in subscribers.iter_mut() {
+        let msg = client.read_message(Duration::from_secs(2)).await;
+        let (channel, payload) = expect_pubsub_message(msg);
+        assert_eq!(
+            (channel.as_str(), payload.as_str()),
+            (keyevent_channel.as_str(), "control"),
+            "node {id} must receive the cross-node PUBLISH control message"
+        );
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// `SCAN` on a cluster node iterates only that node's own keys; the union
+/// across every primary reconstructs the full keyspace exactly once.
+///
+/// Acceptance criteria (issue 58): scan each primary to completion, then assert
+/// the union equals everything written, with no duplicates (within a node or
+/// across nodes) and no cross-node bleed (every key a node yields hashes into a
+/// slot that node owns).
+#[tokio::test]
+async fn test_cluster_scan_is_per_node_and_unions_to_full_keyspace() {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    let ownership = slot_ownership(&harness).await;
+    assert!(
+        ownership.len() >= 2,
+        "test needs at least two slot-owning primaries, got {ownership:?}"
+    );
+
+    // Spread one key per slot across the whole ring so every primary receives
+    // some. Each key is written *directly* to its owning primary (never through
+    // a redirect) so the test pins ownership instead of tolerating it.
+    let mut expected: BTreeMap<String, u64> = BTreeMap::new();
+    for i in 0..48u16 {
+        let slot = i * 341;
+        let key = key_for_slot(slot);
+        assert_eq!(slot_for_key(key.as_bytes()), slot);
+        let owner = owner_of_slot(&ownership, slot)
+            .unwrap_or_else(|| panic!("slot {slot} has no owner in {ownership:?}"));
+        let resp = harness
+            .node(owner)
+            .unwrap()
+            .send("SET", &[&key, "scan-value"])
+            .await;
+        assert!(
+            !is_error(&resp),
+            "SET {key} (slot {slot}) on owning primary {owner}: {resp:?}"
+        );
+        assert!(
+            expected.insert(key.clone(), owner).is_none(),
+            "test bug: {key} written twice"
+        );
+    }
+
+    // Fan out SCAN across every node, to completion.
+    let mut per_node: Vec<(u64, Vec<String>)> = Vec::new();
+    for &id in &harness.node_ids() {
+        let mut client = harness.node(id).unwrap().connect().await;
+        per_node.push((id, scan_to_completion(&mut client).await));
+    }
+
+    let mut union: BTreeSet<String> = BTreeSet::new();
+    for (id, keys) in &per_node {
+        // No cross-node bleed: every key a node yields hashes into a slot that
+        // node owns.
+        for key in keys {
+            let slot = slot_for_key(key.as_bytes());
+            let owner = owner_of_slot(&ownership, slot);
+            assert_eq!(
+                owner,
+                Some(*id),
+                "SCAN on node {id} returned {key} (slot {slot}), which is owned by {owner:?}"
+            );
+        }
+        // No duplicates within a node: the keyspace is static for this scan.
+        let distinct: BTreeSet<&String> = keys.iter().collect();
+        assert_eq!(
+            distinct.len(),
+            keys.len(),
+            "SCAN on node {id} returned duplicate keys: {keys:?}"
+        );
+        // No duplicates across nodes: slot ownership is exclusive.
+        for key in keys {
+            assert!(
+                union.insert(key.clone()),
+                "{key} was returned by more than one node's SCAN"
+            );
+        }
+        // Per-node, not cluster-wide: a single node can never see the whole
+        // keyspace of a multi-primary cluster.
+        assert!(
+            keys.len() < expected.len(),
+            "SCAN on node {id} returned {} of {} keys — a node must iterate only \
+             its own slots, never the whole cluster",
+            keys.len(),
+            expected.len()
+        );
+    }
+
+    // Every slot-owning primary contributed something (otherwise "union equals
+    // the keyspace" could hold with a single node doing all the work).
+    for (id, _) in &ownership {
+        let scanned = &per_node
+            .iter()
+            .find(|(n, _)| n == id)
+            .expect("every node was scanned")
+            .1;
+        assert!(
+            !scanned.is_empty(),
+            "slot-owning primary {id} returned no keys; the write spread should \
+             have reached every primary"
+        );
+    }
+
+    // The union is the full keyspace.
+    let want: BTreeSet<String> = expected.keys().cloned().collect();
+    assert_eq!(
+        union, want,
+        "the union of per-node SCANs must equal the full written keyspace"
+    );
+}
+
+// ============================================================================
+// MULTI/EXEC across a slot-migration boundary (testing-gap issue 55)
+// ============================================================================
+//
+// PINNED CONTRACT — slot ownership is validated at *queue* time only; EXEC
+// never re-validates.
+//
+// FrogDB checks cluster slot ownership when a command is queued into an open
+// MULTI (`server/src/connection/guards.rs::try_queue_in_transaction` calls
+// `validate_cluster_slots`, and a MOVED/ASK/CROSSSLOT there aborts the
+// transaction so EXEC replies EXECABORT). EXEC itself
+// (`server/src/connection/transaction.rs::execute_transaction`) only folds the
+// queued keys into a *shard* target (`TransactionTarget::resolve`, which knows
+// about intra-node shards and CROSSSLOT, not about node ownership) and sends
+// the batch to that local shard. No MOVED / ASK / TRYAGAIN check runs between
+// `MULTI` and the shard round-trip. Consequently a slot that leaves this node
+// after queue time and before EXEC is *not* noticed: the queued commands
+// execute locally, against the node that no longer owns the slot.
+//
+// DIVERGENCE FROM REDIS — deliberate and currently accepted, not parity.
+// Redis (verified against `redis/unstable` sources, Redis 8.x) routes EXEC
+// through the exact same `getNodeByQuery` path as any other command, and
+// explicitly re-runs it over the whole queued transaction:
+//
+//     if (cmd->proc == execCommand) { ... ms = &c->mstate; }   /* cluster.c */
+//
+// so at EXEC time it recomputes slot/owner/migrating/importing/missing-keys for
+// every queued command. If the resolved node is no longer `myself`,
+// `processCommand` (server.c) does:
+//
+//     if (c->cmd->proc == execCommand) discardTransaction(c);
+//     clusterRedirectClient(c, n, c->slot, error_code);
+//
+// i.e. EXEC replies `-MOVED` (slot handed over), `-ASK` (slot MIGRATING and the
+// keys are already gone), `-TRYAGAIN` (keys split across the boundary) or
+// `-CROSSSLOT`, and *discards* the queue. FrogDB does none of that. The two
+// tests below pin FrogDB's actual behavior, including the observable damage:
+//
+//   1. Migration COMPLETED before EXEC -> EXEC succeeds on the former owner and
+//      the write is invisible to the cluster (the slot's real owner never sees
+//      it; the former owner keeps an orphan copy that its own routing now
+//      answers with MOVED). Redis would answer the EXEC with `-MOVED`.
+//   2. Migration IN FLIGHT (slot MIGRATING, key already MIGRATE'd away) at EXEC
+//      -> EXEC succeeds on the source and *resurrects* the key there, so the
+//      same key now exists on both sides of an open slot. Redis would answer
+//      the EXEC with `-ASK`.
+//
+// Why this is accepted rather than fixed here: the window is narrow (a slot has
+// to change hands between two commands on one connection), cluster-only, and
+// closing it means re-running the full redirect seam over the queued batch
+// inside `execute_transaction` — a behavior change, not a test. Issue 55's
+// acceptance criteria say to escalate that as a separate design task rather
+// than silently changing semantics from a test-only change. If EXEC is ever
+// taught to re-validate, these two tests are the ones that must be rewritten,
+// and the rewrite is the signal that the contract moved on purpose.
+// ---------------------------------------------------------------------------
+
+/// A slot migration that *completes* between queue time and EXEC time.
+///
+/// Pins: EXEC does not re-check slot ownership, so the transaction commits on
+/// the node that has just lost the slot, and the committed value is not visible
+/// anywhere the cluster would route a client to. Redis would reply `-MOVED` to
+/// the EXEC and discard the queue (see the contract comment above).
+#[tokio::test]
+async fn test_multi_exec_after_completed_slot_migration_commits_on_former_owner() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 1200u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find an owner for the test slot");
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key = format!("{tag}_tx");
+    assert_eq!(
+        slot_for_key(key.as_bytes()),
+        test_slot,
+        "the hash-tagged transaction key must land in the migrated slot"
+    );
+
+    // Seed a pre-migration value so the post-EXEC divergence is unambiguous:
+    // "v0" is what migrates, "v1" is what the doomed transaction writes.
+    let source = harness.node(source_id).unwrap();
+    assert_eq!(
+        source.send("SET", &[&key, "v0"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        "seeding the key on its owner must succeed"
+    );
+
+    // Queue against the current owner. A persistent connection is required —
+    // MULTI is session state, and `node.send` opens a fresh connection per call.
+    let mut client = source.connect().await;
+    assert_eq!(
+        client.command(&["MULTI"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        "MULTI should succeed"
+    );
+    assert_eq!(
+        client.command(&["SET", &key, "v1"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        "queue-time slot validation passes: this node still owns the slot"
+    );
+    assert_eq!(
+        client.command(&["GET", &key]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        "the read is queued for the same, still-owned slot"
+    );
+
+    // Hand the whole slot over while the transaction sits queued.
+    run_full_slot_migration(&harness, source_id, target_id, test_slot, 100)
+        .await
+        .expect("slot migration failed");
+    for &nid in &[source_id, target_id] {
+        assert_eq!(
+            harness
+                .node(nid)
+                .unwrap()
+                .cluster_state()
+                .unwrap()
+                .get_slot_owner(test_slot),
+            Some(target_id),
+            "node {nid} must agree the slot now belongs to the migration target \
+             before EXEC runs"
+        );
+    }
+
+    // THE PIN: EXEC commits anyway, on the node that no longer owns the slot.
+    // Both queued commands run locally; the GET even observes the SET, so this
+    // is a genuine local commit and not a partially-applied batch.
+    assert_eq!(
+        client.command(&["EXEC"]).await,
+        frogdb_protocol::Response::Array(vec![
+            frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+            frogdb_protocol::Response::Bulk(Some(bytes::Bytes::from_static(b"v1"))),
+        ]),
+        "EXEC does not re-validate slot ownership: the queued batch commits on \
+         the former owner (Redis would reply -MOVED and discard the queue)"
+    );
+
+    // The damage this contract accepts: the committed write is unreachable.
+    // The very next non-transactional command on the *same* connection is
+    // redirected away, which is exactly the check EXEC skipped.
+    let target_addr = harness.node(target_id).unwrap().client_addr();
+    let resp = client.command(&["GET", &key]).await;
+    assert_eq!(
+        is_moved_redirect(&resp),
+        Some((test_slot, target_addr.clone())),
+        "post-EXEC, an ordinary command on the same connection is MOVED to the \
+         new owner — proving the redirect check exists and EXEC simply skipped it"
+    );
+    let resp = harness.node(source_id).unwrap().send("GET", &[&key]).await;
+    assert_eq!(
+        is_moved_redirect(&resp),
+        Some((test_slot, target_addr)),
+        "the former owner redirects reads for the slot it no longer owns, so the \
+         value EXEC just wrote there is unreachable through normal routing"
+    );
+    assert_eq!(
+        harness.node(target_id).unwrap().send("GET", &[&key]).await,
+        frogdb_protocol::Response::Bulk(Some(bytes::Bytes::from_static(b"v0"))),
+        "the new owner still holds the pre-migration value: the transaction's \
+         write is lost from the cluster's point of view"
+    );
+
+    // Control, pinning the asymmetry: queue-time validation *does* fire. The
+    // same write, queued after the migration, is rejected with MOVED and aborts
+    // the transaction — so the gap really is EXEC-time-only.
+    assert_eq!(
+        client.command(&["MULTI"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        "the connection is usable again after EXEC"
+    );
+    let resp = client.command(&["SET", &key, "v2"]).await;
+    assert!(
+        is_moved_redirect(&resp).is_some(),
+        "queuing after the migration must be rejected with MOVED at queue time, \
+         got: {resp:?}"
+    );
+    assert_execabort(
+        &client.command(&["EXEC"]).await,
+        "EXEC after a queue-time MOVED abort",
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// A slot migration that is still *in flight* (slot MIGRATING, key already
+/// handed to the target) at EXEC time.
+///
+/// Pins: EXEC does not consult the MIGRATING state either, so the queued write
+/// recreates the key on the source and the same key exists on both sides of an
+/// open slot. Redis would reply `-ASK` to the EXEC (migrating slot + all keys
+/// missing locally) and discard the queue.
+#[tokio::test]
+async fn test_multi_exec_during_in_flight_slot_migration_commits_on_source() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 1210u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find an owner for the test slot");
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key = format!("{tag}_tx");
+    let slot_str = test_slot.to_string();
+
+    let source = harness.node(source_id).unwrap();
+    let target = harness.node(target_id).unwrap();
+    let source_cluster_id = harness
+        .get_node_id_str(source_id)
+        .expect("source cluster id");
+    let target_cluster_id = harness
+        .get_node_id_str(target_id)
+        .expect("target cluster id");
+
+    assert_eq!(
+        source.send("SET", &[&key, "v0"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        "seeding the key on its owner must succeed"
+    );
+
+    let mut client = source.connect().await;
+    assert_eq!(
+        client.command(&["MULTI"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        "MULTI should succeed"
+    );
+    assert_eq!(
+        client.command(&["SET", &key, "v1"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        "queue-time slot validation passes: the slot is still stable and local"
+    );
+
+    // Open the slot but stop short of handing it over — this is the
+    // MIGRATING/IMPORTING window, held open for the duration of the EXEC.
+    let resp = send_cluster_cmd(
+        &harness,
+        target_id,
+        &[
+            "SETSLOT",
+            &slot_str,
+            "IMPORTING",
+            &source_cluster_id,
+            &target_cluster_id,
+        ],
+    )
+    .await;
+    assert!(!is_error(&resp), "SETSLOT IMPORTING failed: {resp:?}");
+    let resp = send_cluster_cmd(
+        &harness,
+        source_id,
+        &[
+            "SETSLOT",
+            &slot_str,
+            "MIGRATING",
+            &target_cluster_id,
+            &source_cluster_id,
+        ],
+    )
+    .await;
+    assert!(!is_error(&resp), "SETSLOT MIGRATING failed: {resp:?}");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let source_state = harness.node(source_id).unwrap().cluster_state().unwrap();
+    assert!(
+        source_state.is_slot_migrating(test_slot),
+        "the slot must actually be in MIGRATING state at EXEC time"
+    );
+    assert_eq!(
+        source_state.get_slot_owner(test_slot),
+        Some(source_id),
+        "an in-flight migration must not have transferred ownership yet"
+    );
+
+    // Move the single key across, so at EXEC time it is absent locally — the
+    // state in which Redis answers a keyed command on a MIGRATING slot with ASK.
+    let target_addr = target.client_addr();
+    let (host, port) = split_addr(&target_addr);
+    let resp = source
+        .send(
+            "MIGRATE",
+            &[host, port, "", "0", "5000", "REPLACE", "KEYS", &key],
+        )
+        .await;
+    assert!(!is_error(&resp), "MIGRATE failed: {resp:?}");
+    let resp = harness.node(source_id).unwrap().send("GET", &[&key]).await;
+    assert!(
+        is_ask_redirect(&resp).is_some(),
+        "a plain read of the already-migrated key must ASK-redirect — this is \
+         precisely the check EXEC is about to skip; got: {resp:?}"
+    );
+
+    // THE PIN: EXEC commits on the source anyway, recreating the key there.
+    assert_eq!(
+        client.command(&["EXEC"]).await,
+        frogdb_protocol::Response::Array(vec![frogdb_protocol::Response::Simple(
+            bytes::Bytes::from_static(b"OK")
+        )]),
+        "EXEC does not consult the MIGRATING state: the queued write commits on \
+         the source (Redis would reply -ASK and discard the queue)"
+    );
+
+    assert_eq!(
+        harness.node(source_id).unwrap().send("GET", &[&key]).await,
+        frogdb_protocol::Response::Bulk(Some(bytes::Bytes::from_static(b"v1"))),
+        "the key is resurrected on the source: it now exists on both sides of \
+         the open slot, and the source no longer ASK-redirects for it"
+    );
+    let mut target_client = target.connect().await;
+    assert!(
+        !is_error(&target_client.command(&["ASKING"]).await),
+        "ASKING must succeed on the importing node"
+    );
+    assert_eq!(
+        target_client.command(&["GET", &key]).await,
+        frogdb_protocol::Response::Bulk(Some(bytes::Bytes::from_static(b"v0"))),
+        "the importing node still holds the migrated pre-EXEC value, so the two \
+         sides of the open slot now disagree about this key"
+    );
+
+    // Leave the slot stable for teardown.
+    let _ = send_cluster_cmd(&harness, source_id, &["SETSLOT", &slot_str, "STABLE"]).await;
 
     harness.shutdown_all().await;
 }

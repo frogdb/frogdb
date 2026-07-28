@@ -3,12 +3,14 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64};
 
 use bytes::Bytes;
 use frogdb_protocol::Response;
+use frogdb_types::metrics::definitions::{FieldsExpired, KeysExpired};
 use tokio::sync::mpsc;
 
 use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::command::QuorumChecker;
 use crate::eviction::EvictionConfig;
 use crate::functions::SharedFunctionRegistry;
+use crate::keyspace_event::KeyspaceEventFlags;
 use crate::persistence::{RocksStore, SnapshotCoordinator, WalConfig};
 use crate::pubsub::ShardSubscriptions;
 use crate::registry::CommandRegistry;
@@ -21,13 +23,84 @@ use super::active_expiry::ActiveExpiryCoordinator;
 use super::builder::ShardWorkerBuilder;
 use super::connection::NewConnection;
 use super::keyspace_coordinator::KeyspaceNotificationCoordinator;
-use super::message::{ShardReceiver, ShardSender};
+use super::message::{ShardReceiver, ShardSender, WatchEntry};
+use super::partition::slot_for_key;
 use super::search::lifecycle::IndexLifecycleManager;
 use super::types::{
     ShardCluster, ShardEviction, ShardIdentity, ShardObservability, ShardPersistence,
     ShardScripting, ShardTracking, ShardVll,
 };
 use super::wait_queue::ShardWaitQueue;
+
+/// Per-Internal-Shard WATCH version store, **slot-granular**.
+///
+/// Replaces the former single shard-wide `shard_version` counter. A watched key
+/// is validated against its Hash Slot's stamp, so a write to a key in a
+/// *different* slot on the same shard no longer over-aborts the watch (proposal
+/// 18). Bounded without GC: at most one `u64` per slot ever written on this
+/// shard (≤ 16384), and slots are permanent so entries never need reclaiming.
+///
+/// `global_epoch` is the honest coarse fallback for the write sources the
+/// `shard` module cannot localize to keys within its reach: a whole-DB flush
+/// (`FLUSHDB`/`FLUSHALL`, whose write record carries no keys) and any
+/// active-expiry cycle that reaped hash *fields* from a surviving hash (a field
+/// TTL that shrinks but does not remove the key, whose keys `ExpiryResult` does
+/// not carry — only a `fields_expired` count). Because that field information is
+/// not key-attributed, ANY cycle with `fields_expired > 0` bumps the epoch,
+/// independently of whether the same cycle also removed whole keys (those are
+/// slot-attributed separately). Folding the epoch into every key's effective
+/// version makes those events invalidate *all* watches — a safe over-abort that
+/// preserves the zero-false-negative invariant, exactly matching Redis's
+/// `touchAllWatchedKeysOnFlush`.
+#[derive(Debug, Default)]
+pub struct SlotVersions {
+    /// slot -> version; a slot absent from the map reads as 0 (never bumped).
+    versions: std::collections::HashMap<u16, u64>,
+    /// Shard-wide epoch folded into every key's effective version (see above).
+    global_epoch: u64,
+}
+
+impl SlotVersions {
+    /// The effective WATCH version for `slot`: its per-slot stamp plus the
+    /// shard-wide epoch. Both components are monotonic, so the sum is monotonic
+    /// from any snapshot — it changes iff the slot was bumped OR the epoch was.
+    pub(crate) fn version_for(&self, slot: u16) -> u64 {
+        self.versions
+            .get(&slot)
+            .copied()
+            .unwrap_or(0)
+            .wrapping_add(self.global_epoch)
+    }
+
+    /// Advance a single slot's stamp by one.
+    fn bump_slot(&mut self, slot: u16) {
+        let v = self.versions.entry(slot).or_insert(0);
+        *v = v.wrapping_add(1);
+    }
+
+    /// Advance the shard-wide epoch (invalidates every outstanding watch).
+    fn bump_global(&mut self) {
+        self.global_epoch = self.global_epoch.wrapping_add(1);
+    }
+
+    /// Advance the slots of the given keys, each distinct slot at most once per
+    /// call (so a write touching two keys in one slot bumps it once — mirroring
+    /// the former one-bump-per-effect semantics). An empty key set advances the
+    /// shard-wide epoch instead: a warranted bump that names no key (a whole-DB
+    /// flush) must invalidate all watches, never nothing.
+    fn bump_keys<'a>(&mut self, keys: impl IntoIterator<Item = &'a [u8]>) {
+        let mut slots: Vec<u16> = keys.into_iter().map(slot_for_key).collect();
+        if slots.is_empty() {
+            self.bump_global();
+            return;
+        }
+        slots.sort_unstable();
+        slots.dedup();
+        for slot in slots {
+            self.bump_slot(slot);
+        }
+    }
+}
 
 /// A shard worker that owns a partition of the data.
 pub struct ShardWorker {
@@ -49,8 +122,8 @@ pub struct ShardWorker {
     /// Command registry.
     pub(crate) registry: Arc<CommandRegistry>,
 
-    /// Monotonically increasing version for WATCH detection.
-    pub(crate) shard_version: u64,
+    /// Per-slot WATCH version store (slot-granular WATCH detection).
+    pub(crate) slot_versions: SlotVersions,
 
     /// Persistence: RocksDB, WAL, snapshots.
     pub(crate) persistence: ShardPersistence,
@@ -88,6 +161,19 @@ pub struct ShardWorker {
     /// Replication broadcaster for streaming writes to replicas.
     pub(crate) replication_broadcaster: SharedBroadcaster,
 
+    /// Deterministic pop commands synthesized while satisfying blocking waiters
+    /// (issue 02), pending broadcast to replicas.
+    ///
+    /// When a blocking pop (BLPOP/BZPOPMIN/BLMOVE/…) is served by a later write,
+    /// the store mutation happens at the `WaiterSatisfaction` effect but only
+    /// the *waking* write is broadcast — a replica re-executing it keeps the
+    /// element the primary's blocked client consumed. The satisfaction driver
+    /// records the equivalent deterministic command(s) here; the terminal
+    /// `ReplicationBroadcast` effect flushes them **after** the waking write's
+    /// own broadcast, so replicas apply push-then-pop and converge. Populated
+    /// and drained within a single `run_write_effects` call.
+    pub(crate) pending_serve_propagations: Vec<crate::command::SynthesizedCommand>,
+
     /// Whether per-request tracing spans are enabled.
     pub(crate) per_request_spans: Arc<AtomicBool>,
 
@@ -108,6 +194,11 @@ pub struct ShardWorker {
     /// sweep under a time budget). Side effects are applied shard-side from the
     /// returned `ExpiryResult`.
     pub(crate) expiry: ActiveExpiryCoordinator,
+
+    /// JSON document limits (max depth / max size) from the server's `[json]`
+    /// config, threaded into every [`CommandContext`](crate::command::CommandContext)
+    /// this worker builds so JSON handlers enforce the configured limits.
+    pub(crate) json_limits: crate::JsonLimits,
 }
 
 impl ShardWorker {
@@ -185,6 +276,13 @@ impl ShardWorker {
         self.observability.set_keyspace_stats(stats);
     }
 
+    /// Set the JSON document limits (max depth / max size) sourced from the
+    /// server's `[json]` config. Threaded into every [`CommandContext`] this
+    /// worker builds so JSON handlers enforce the configured limits.
+    pub fn set_json_limits(&mut self, limits: crate::JsonLimits) {
+        self.json_limits = limits;
+    }
+
     /// Build a fully-populated [`CommandContext`](crate::command::CommandContext)
     /// for executing a command against this shard's local store.
     ///
@@ -229,6 +327,7 @@ impl ShardWorker {
             master_host: self.identity.master_host(),
             master_port: self.identity.master_port(),
             master_link_up: self.identity.master_link_up(),
+            json_limits: self.json_limits,
             effects: Default::default(),
         }
     }
@@ -448,21 +547,62 @@ impl ShardWorker {
         self.persistence.snapshot_coordinator()
     }
 
-    /// Increment shard version (call on any write operation).
-    pub(crate) fn increment_version(&mut self) {
-        self.shard_version = self.shard_version.wrapping_add(1);
+    /// Bump the WATCH version for the slots of the given keys (each distinct
+    /// slot once). The load-bearing per-key bump: a write to key `b` no longer
+    /// dirties a watch on key `a` unless they share a Hash Slot. An empty key
+    /// set (a keyless-but-dirtying write, e.g. `FLUSHDB`) bumps the shard-wide
+    /// epoch, invalidating every watch.
+    pub(crate) fn bump_versions_for<'a>(&mut self, keys: impl IntoIterator<Item = &'a [u8]>) {
+        self.slot_versions.bump_keys(keys);
     }
 
-    /// Get version for a key.
-    pub(crate) fn get_key_version(&self, _key: &[u8]) -> u64 {
-        self.shard_version
+    /// Bump the WATCH version for a single key's slot.
+    pub(crate) fn bump_version_for_key(&mut self, key: &[u8]) {
+        self.slot_versions.bump_slot(slot_for_key(key));
+    }
+
+    /// Bump the shard-wide WATCH epoch, invalidating every outstanding watch on
+    /// the shard. The safe over-abort fallback for a dirtying event whose keys
+    /// the `shard` module cannot enumerate (a fields-only active-expiry cycle).
+    pub(crate) fn bump_version_global(&mut self) {
+        self.slot_versions.bump_global();
+    }
+
+    /// Get the WATCH version for a key — its Hash Slot's stamp (plus the
+    /// shard-wide epoch). Now load-bearing: the key selects the slot, so
+    /// `check_watches` discriminates keys by slot.
+    pub fn get_key_version(&self, key: &[u8]) -> u64 {
+        self.slot_versions.version_for(slot_for_key(key))
     }
 
     /// Check if watched keys have changed since they were watched.
-    pub(crate) fn check_watches(&self, watches: &[(Bytes, u64)]) -> bool {
-        watches
-            .iter()
-            .all(|(key, watched_ver)| self.get_key_version(key) == *watched_ver)
+    ///
+    /// A watch is satisfied iff the key's version is unchanged AND it did not
+    /// transition live -> expired/gone. The version compare catches every write
+    /// and every expiry that bumped (active sweep, lazy read-path purge). The
+    /// second clause catches the one death that does NOT bump for this watcher:
+    /// a key watched while live that another watcher's no-bump WATCH-time purge
+    /// (or its own already-elapsed TTL) removed — the gap-4 second-watcher case.
+    /// `live_at_watch == false` means a stale/nonexistent watch (Redis
+    /// `wk->expired`), which must NOT abort when the key stays gone. Uses the
+    /// non-destructive `exists_unexpired` probe (constraint 1 — `check_watches`
+    /// must not physically purge).
+    pub(crate) fn check_watches(&self, watches: &[WatchEntry]) -> bool {
+        watches.iter().all(
+            |WatchEntry {
+                 key,
+                 version,
+                 live_at_watch,
+             }| {
+                if self.get_key_version(key) != *version {
+                    return false; // changed via a version-bumping path
+                }
+                if *live_at_watch && !self.store.exists_unexpired(key) {
+                    return false; // watched live, now expired/gone with no bump (gap 4)
+                }
+                true
+            },
+        )
     }
 
     /// Lazily purge any watched keys whose TTL has elapsed, bumping the shard
@@ -478,15 +618,177 @@ impl ShardWorker {
     /// [`crate::store::Store::purge_if_expired`], the version bump lives here.
     /// One bump per call regardless of how many keys purge, mirroring active
     /// expiry's one-bump-per-cycle.
-    pub(crate) fn purge_expired_watches(&mut self, watches: &[(Bytes, u64)]) {
-        let mut purged = false;
-        for (key, _watched_ver) in watches {
-            if self.store.purge_if_expired(key) {
-                purged = true;
-            }
+    pub(crate) fn purge_expired_watches(&mut self, watches: &[WatchEntry]) {
+        for WatchEntry { key, .. } in watches {
+            self.store.purge_if_expired(key);
         }
-        if purged {
-            self.increment_version();
+        // Apply the bump + drain for any watched key that expired during the
+        // WATCH window — this must run before check_watches so the version
+        // change is visible (F3). Subsumes the previous explicit increment.
+        self.apply_lazy_purge_effects();
+    }
+
+    /// Drain the store's lazy-purge report and apply, for each physically
+    /// removed key, the **same effect set active expiry applies for its own
+    /// `deleted_keys`** (`apply_expiry_effects`, event_loop.rs): client-tracking
+    /// invalidation, search-index deletion, the `expired` keyspace notification,
+    /// the USDT key-expired probe, and an XREADGROUP-waiter drain — then a single
+    /// shard-version bump for the batch. A key that died via a lazy read is thus
+    /// indistinguishable from one the active sweep removed, matching
+    /// Redis/Valkey, which fire the `expired` event from `expireIfNeeded`
+    /// (lazy/on-access) and `activeExpireCycle` (sweep) alike.
+    ///
+    /// Also drains the sibling last-hash-field-death buffer (`take_lazily_emptied`)
+    /// and fires the generic `del` effect set for those keys — see
+    /// [`Self::drain_lazy_purge_effects`].
+    ///
+    /// Idempotency: every removal is pushed into the store's buffer exactly once
+    /// (whole-key TTL via `check_and_delete_expired`'s actual-removal branch;
+    /// last-hash-field death via `purge_expired_hash_fields`'s empty-and-delete
+    /// branch — a second purge of the same key finds it already absent) and
+    /// drained exactly once (`std::mem::take`). No key can be reported through two
+    /// seams, because the first physical removal makes it absent for every later
+    /// purge attempt. The active sweep shares `purge_expired_hash_fields` but
+    /// discards the lazily-emptied buffer at its own seam (event_loop.rs), so a
+    /// swept key never double-fires here. No guard is needed.
+    pub(crate) fn apply_lazy_purge_effects(&mut self) {
+        self.drain_lazy_purge_effects(true);
+    }
+
+    /// WATCH-time (`GetVersion`) variant: apply every physical-removal effect
+    /// (tracking / search / `expired` notification / probe / XREADGROUP drain)
+    /// but WITHHOLD the shard-version bump.
+    ///
+    /// A key purged here is genuinely gone, so the removal must still be
+    /// externally visible — Redis fires the `expired` notification on lazy
+    /// expiry regardless of which command triggered it, and a search index or a
+    /// tracking consumer would otherwise silently miss the death. Only the
+    /// version bump is withheld: the WATCH-time purge must stay no-bump (F3) so a
+    /// WATCH on an already-expired key records a "nonexistent" watch and does not
+    /// over-abort unrelated watchers on the shard. Splitting the drain here — fire
+    /// the physical-removal effects, skip only the version bump — is what keeps
+    /// the effect gap from silently persisting on the WATCH seam.
+    pub(crate) fn apply_lazy_purge_effects_no_version_bump(&mut self) {
+        self.drain_lazy_purge_effects(false);
+    }
+
+    /// Shared drain point (single-drain-point discipline): fire the per-key
+    /// active-expiry effect set for each lazily-removed key, optionally bumping
+    /// the shard version. Ordering mirrors `apply_expiry_effects`' `deleted_keys`
+    /// branch (tracking → search → notify → probe, then the waiter drain), with
+    /// the version bump applied once at the end for the whole batch.
+    fn drain_lazy_purge_effects(&mut self, bump_version: bool) {
+        // Fields reaped by this lazy read (whether or not they emptied a key).
+        // Counted first and unconditionally — a lazy reap that shrinks but does
+        // not empty a hash removes no key, so this is the only surface that sees
+        // it. Mirrors the active sweep's per-field `frogdb_fields_expired_total`
+        // increment (`ExpiryResult::fields_expired`, event_loop.rs).
+        let expired_fields = self.store.take_lazily_expired_fields();
+        if expired_fields > 0 {
+            FieldsExpired::inc_by(
+                self.observability.metrics(),
+                expired_fields,
+                &self.shard_id().to_string(),
+            );
+        }
+
+        let purged = self.store.take_lazily_purged();
+        // Keys removed because their last hash field expired on this lazy read.
+        // Distinct seam, distinct event: Redis emits a generic `del` (not
+        // `expired`) for a hash that empties via field TTL, matching active
+        // expiry's `ExpiryResult::emptied_keys` branch (event_loop.rs).
+        let emptied = self.store.take_lazily_emptied();
+        // Hashes shrunk in place by this lazy read (≥1 field reaped, key still a
+        // hash). They are not removed, so they carry no `del`/`expired` event and
+        // do not flow through the removal branches below — but their search-index
+        // doc now holds a stale reaped-field value, so re-index each survivor.
+        // This is the READONLY-command analogue of a WRITE command's
+        // `ReindexSpec` (a lazy reap on HGET/HGETALL/… has no such spec), and it
+        // converges on the same `reindex_shrunk_hash_keys` owner the active sweep
+        // uses (event_loop.rs).
+        let shrunk = self.store.take_lazily_shrunk();
+        self.reindex_shrunk_hash_keys(&shrunk);
+        if purged.is_empty() && emptied.is_empty() {
+            // A cycle that only shrank survivors still changed watched hashes:
+            // bump their per-slot versions so a WATCH observes the mutation,
+            // mirroring active expiry's field-expiry version bump.
+            if bump_version && !shrunk.is_empty() {
+                self.bump_versions_for(shrunk.iter().map(Bytes::as_ref));
+            }
+            return;
+        }
+        for key in &purged {
+            // Invalidate tracked clients for the expired key (gated on there
+            // being any — same guard active expiry uses).
+            if self.tracking.has_tracking_clients() {
+                self.tracking.invalidate_keys(&[key.as_ref()], 0);
+            }
+            // Remove the expired key from any search index it participated in.
+            self.delete_from_search_indexes(key);
+            // Emit the `expired` keyspace notification for the whole-key TTL
+            // death — the exact event active expiry emits for `deleted_keys`.
+            self.emit_keyspace_notification(key, "expired", KeyspaceEventFlags::EXPIRED);
+            // Fire the USDT key-expired probe so the lazy removal is not
+            // invisible to observers.
+            crate::probes::fire_key_expired(
+                std::str::from_utf8(key).unwrap_or("<binary>"),
+                self.shard_id() as u64,
+            );
+            // Drain blocked XREADGROUP waiters for a removed stream key,
+            // mirroring the DEL write path and the F1 active-expiry drain
+            // (drain_stream_waiters_with_error → NOGROUP; plain XREAD waiters
+            // stay blocked). No-op for non-stream keys.
+            self.drain_stream_waiters_with_error(key);
+        }
+        // Last-hash-field-death keys: same effect set as active expiry's
+        // `emptied_keys` branch — tracking + search invalidation, then a
+        // generic `del` notification and the key-expired probe. A hash key is
+        // never a stream, so the stream-waiter drain is a no-op, but keep it for
+        // structural parity with the whole-key branch above.
+        for key in &emptied {
+            if self.tracking.has_tracking_clients() {
+                self.tracking.invalidate_keys(&[key.as_ref()], 0);
+            }
+            self.delete_from_search_indexes(key);
+            self.emit_keyspace_notification(key, "del", KeyspaceEventFlags::GENERIC);
+            crate::probes::fire_key_expired(
+                std::str::from_utf8(key).unwrap_or("<binary>"),
+                self.shard_id() as u64,
+            );
+            self.drain_stream_waiters_with_error(key);
+        }
+        // Count each emptied key as one key expiration, on the same INFO stat
+        // (`expired_keys`) AND Prometheus (`frogdb_keys_expired_total`) surfaces
+        // the active sweep uses for its `emptied_keys` (event_loop.rs:
+        // add_expired_keys + KeysExpired::inc_by via keys_expired()). The
+        // whole-key `purged` keys already had the INFO stat bumped inside the
+        // store (`check_and_delete_expired`), so only the emptied batch is
+        // counted here. No double-count with the sweep: it discards the
+        // lazily-emptied buffer before its own counting path, so a swept key
+        // never reaches this drain.
+        if !emptied.is_empty() {
+            let n = emptied.len() as u64;
+            self.store.add_expired_keys(n);
+            KeysExpired::inc_by(
+                self.observability.metrics(),
+                n,
+                &self.shard_id().to_string(),
+            );
+        }
+        if bump_version {
+            // Per-slot bump for each lazily-removed key (both seams) and each
+            // shrunk survivor: a watched key that died lazily — whole-key TTL or
+            // last-hash-field death — or whose hash shrank via field TTL is now
+            // observed changed by check_watches (gap 3). Only the affected keys'
+            // own slots are dirtied, so an unrelated watch on a different slot
+            // survives.
+            self.bump_versions_for(
+                purged
+                    .iter()
+                    .chain(emptied.iter())
+                    .chain(shrunk.iter())
+                    .map(Bytes::as_ref),
+            );
         }
     }
 
@@ -499,6 +801,75 @@ impl ShardWorker {
             return Err(Response::error("ERR shard busy with continuation lock"));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod slot_versions_tests {
+    use super::SlotVersions;
+
+    #[test]
+    fn absent_slot_reads_zero() {
+        let sv = SlotVersions::default();
+        assert_eq!(sv.version_for(7), 0, "a never-bumped slot reads 0");
+        assert_eq!(sv.version_for(16383), 0);
+    }
+
+    #[test]
+    fn bump_is_slot_local_and_monotonic() {
+        let mut sv = SlotVersions::default();
+        sv.bump_slot(7);
+        assert_eq!(sv.version_for(7), 1, "bumped slot advances");
+        assert_eq!(sv.version_for(8), 0, "a different slot is untouched");
+        sv.bump_slot(7);
+        assert_eq!(sv.version_for(7), 2, "same-slot bump advances again");
+        assert_eq!(sv.version_for(8), 0);
+    }
+
+    #[test]
+    fn bump_keys_dedups_slots_per_call() {
+        let mut sv = SlotVersions::default();
+        // Two keys colocated on one slot via a hash tag advance it once.
+        sv.bump_keys([b"{t}a".as_slice(), b"{t}b".as_slice()]);
+        let slot = super::slot_for_key(b"{t}a");
+        assert_eq!(sv.version_for(slot), 1, "one bump for two same-slot keys");
+    }
+
+    #[test]
+    fn bump_keys_distinct_slots_are_independent() {
+        let mut sv = SlotVersions::default();
+        sv.bump_keys([b"a".as_slice(), b"b".as_slice()]);
+        assert_eq!(sv.version_for(super::slot_for_key(b"a")), 1);
+        assert_eq!(sv.version_for(super::slot_for_key(b"b")), 1);
+    }
+
+    #[test]
+    fn empty_key_set_bumps_global_epoch() {
+        let mut sv = SlotVersions::default();
+        let before_a = sv.version_for(super::slot_for_key(b"a"));
+        // A warranted bump that names no key (e.g. FLUSHDB) invalidates all.
+        sv.bump_keys(std::iter::empty::<&[u8]>());
+        assert_eq!(
+            sv.version_for(super::slot_for_key(b"a")),
+            before_a + 1,
+            "the global epoch folds into every slot's version"
+        );
+        assert_eq!(
+            sv.version_for(super::slot_for_key(b"zzz")),
+            1,
+            "even an absent slot reflects the epoch bump (0 + epoch)"
+        );
+    }
+
+    #[test]
+    fn global_epoch_and_slot_bumps_compose() {
+        let mut sv = SlotVersions::default();
+        let slot = super::slot_for_key(b"a");
+        sv.bump_slot(slot); // slot -> 1
+        sv.bump_global(); // epoch -> 1
+        assert_eq!(sv.version_for(slot), 2, "slot(1) + epoch(1)");
+        // A different slot only carries the epoch.
+        assert_eq!(sv.version_for(super::slot_for_key(b"b")), 1);
     }
 }
 

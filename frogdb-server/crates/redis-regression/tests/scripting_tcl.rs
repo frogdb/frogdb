@@ -16,14 +16,22 @@
 //!
 //! ## Intentional exclusions
 //!
-//! Strict-key-validation behavior diff (FrogDB errors immediately on undeclared
-//! keys; upstream tests rely on Redis's lazier validation that lets scripts
-//! rewrite/expand `client->argv` at runtime):
-//! - `SORT BY <constant> output gets ordered for scripting` — intentional-incompatibility:scripting — intentional behavioral diff (strict key validation)
-//! - `SORT BY <constant> with GET gets ordered for scripting` — intentional-incompatibility:scripting — intentional behavioral diff (strict key validation)
-//! - `SPOP: We can call scripts rewriting client->argv from Lua` — intentional-incompatibility:scripting — intentional behavioral diff (strict key validation)
-//! - `EXPIRE: We can call scripts rewriting client->argv from Lua` — intentional-incompatibility:scripting — intentional behavioral diff (strict key validation)
-//! - `INCRBYFLOAT: We can call scripts expanding client->argv from Lua` — intentional-incompatibility:scripting — intentional behavioral diff (strict key validation)
+//! Replication-stream / `client->argv` rewriting for propagation (these upstream
+//! tests `attach_to_replication_stream` and `assert_replication_stream` to pin
+//! how Redis rewrites a script's sub-commands for replication — SPOP→SREM,
+//! EXPIRE→PEXPIREAT, INCRBYFLOAT→SET, SORT-by-constant determinism). FrogDB uses
+//! effect-based replication and does not reproduce Redis's verbatim argv
+//! rewriting, so these are `needs:repl` propagation-model diffs (the SORT case
+//! is additionally `cluster:skip` upstream). NOTE: they are NOT about key
+//! declaration — FrogDB does not require scripts to declare keys in `KEYS[]`
+//! (the SPOP test itself calls `spop 'myset'` with numkeys=0 and expects
+//! success). The real script key-safety policy is slot-cohesion only: see
+//! `frogdb-server/crates/core/src/scripting/gate.rs` module docs.
+//! - `SORT BY <constant> output gets ordered for scripting` — intentional-incompatibility:replication — needs:repl (+cluster:skip upstream)
+//! - `SORT BY <constant> with GET gets ordered for scripting` — intentional-incompatibility:replication — needs:repl (+cluster:skip upstream)
+//! - `SPOP: We can call scripts rewriting client->argv from Lua` — intentional-incompatibility:replication — needs:repl (argv-rewrite propagation)
+//! - `EXPIRE: We can call scripts rewriting client->argv from Lua` — intentional-incompatibility:replication — needs:repl (argv-rewrite propagation)
+//! - `INCRBYFLOAT: We can call scripts expanding client->argv from Lua` — intentional-incompatibility:replication — needs:repl (argv-rewrite propagation)
 //!
 //! Script timeout / SCRIPT KILL (FrogDB has a different script-execution model):
 //! - `Timedout read-only scripts can be killed by SCRIPT KILL` — redis-specific — Redis-internal feature
@@ -556,6 +564,112 @@ async fn tcl_eval_scripts_do_not_block_on_bzpopmax() {
         ])
         .await;
     assert_nil(&resp);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tcl_eval_scripts_do_not_block_on_blmpop() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["LPUSH", "empty_list_mpop", "1"]).await;
+    client.command(&["LPOP", "empty_list_mpop"]).await;
+    let resp = client
+        .command(&[
+            "EVAL",
+            "return redis.pcall('blmpop','0','1',KEYS[1],'LEFT')",
+            "1",
+            "empty_list_mpop",
+        ])
+        .await;
+    assert_nil(&resp);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tcl_eval_scripts_do_not_block_on_bzmpop() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["ZADD", "empty_zset_mpop", "10", "foo"])
+        .await;
+    client
+        .command(&["ZMPOP", "1", "empty_zset_mpop", "MIN"])
+        .await;
+    let resp = client
+        .command(&[
+            "EVAL",
+            "return redis.pcall('bzmpop','0','1',KEYS[1],'MIN')",
+            "1",
+            "empty_zset_mpop",
+        ])
+        .await;
+    assert_nil(&resp);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tcl_eval_scripts_do_not_block_on_xread_block() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Create the stream so `$` resolves to its last id; a caught-up XREAD
+    // BLOCK would otherwise block forever waiting on new entries.
+    client
+        .command(&["XADD", "empty_stream", "*", "f", "v"])
+        .await;
+    let resp = client
+        .command(&[
+            "EVAL",
+            "return redis.pcall('xread','block','0','streams',KEYS[1],'$')",
+            "1",
+            "empty_stream",
+        ])
+        .await;
+    assert_nil(&resp);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tcl_eval_scripts_blmpop_bzmpop_return_data_when_available() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["RPUSH", "list_mpop_data", "a", "b"]).await;
+    client
+        .command(&["ZADD", "zset_mpop_data", "1", "one", "2", "two"])
+        .await;
+
+    // BLMPOP with data present pops immediately from a script: [key, [elements]]
+    let resp = client
+        .command(&[
+            "EVAL",
+            "return redis.pcall('blmpop','0','1',KEYS[1],'LEFT')",
+            "1",
+            "list_mpop_data",
+        ])
+        .await;
+    let blmpop = unwrap_array(resp);
+    assert_eq!(blmpop.len(), 2);
+    assert_bulk_eq(&blmpop[0], b"list_mpop_data");
+    let popped = unwrap_array(blmpop[1].clone());
+    assert_eq!(popped.len(), 1);
+    assert_bulk_eq(&popped[0], b"a");
+
+    // BZMPOP with data present pops immediately from a script: [key, [[member, score]]]
+    let resp = client
+        .command(&[
+            "EVAL",
+            "return redis.pcall('bzmpop','0','1',KEYS[1],'MIN')",
+            "1",
+            "zset_mpop_data",
+        ])
+        .await;
+    let bzmpop = unwrap_array(resp);
+    assert_eq!(bzmpop.len(), 2);
+    assert_bulk_eq(&bzmpop[0], b"zset_mpop_data");
+    let popped = unwrap_array(bzmpop[1].clone());
+    assert_eq!(popped.len(), 1);
+    let member = unwrap_array(popped[0].clone());
+    assert_bulk_eq(&member[0], b"one");
+    assert_bulk_eq(&member[1], b"1");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

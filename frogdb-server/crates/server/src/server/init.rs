@@ -12,6 +12,7 @@ use frogdb_core::{
     CommandRegistry, ExpiryIndex, HashMapStore, MetricsRecorder, SearchMsg, ShardReceiver,
     ShardSender,
 };
+use frogdb_telemetry::otlp::{CompositeRecorder, OtlpRecorder};
 use frogdb_telemetry::{HealthChecker, PrometheusRecorder, TaskMonitorRegistry};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -106,10 +107,11 @@ pub(super) async fn init_infrastructure(
 
     // Initialize metrics
     let health_checker = HealthChecker::new();
-    let (metrics_recorder, prometheus_recorder): (
-        Arc<dyn MetricsRecorder>,
-        Option<Arc<PrometheusRecorder>>,
-    ) = if config.http.enabled {
+
+    // Prometheus recorder: built only when the HTTP observability server is
+    // enabled, and kept as the concrete type so the `/metrics` scrape endpoint
+    // can read counters back.
+    let prometheus_recorder: Option<Arc<PrometheusRecorder>> = if config.http.enabled {
         let mut recorder = PrometheusRecorder::new();
         if config.latency_bands.enabled {
             recorder = recorder.with_latency_bands(config.latency_bands.bands.clone());
@@ -118,31 +120,38 @@ pub(super) async fn init_infrastructure(
                 "Latency band tracking enabled"
             );
         }
-        let recorder = Arc::new(recorder);
-        // Record server info
-        frogdb_telemetry::definitions::Info::set(
-            &*recorder,
-            1.0,
-            env!("CARGO_PKG_VERSION"),
-            "standalone",
-        );
-        // Record binary version metric (info gauge, always 1)
-        frogdb_telemetry::definitions::BinaryVersion::set(
-            &*recorder,
-            1.0,
-            env!("CARGO_PKG_VERSION"),
-        );
-        // Record maxmemory at startup
-        if config.memory.maxmemory > 0 {
-            frogdb_telemetry::definitions::MemoryMaxmemoryBytes::set(
-                &*recorder,
-                config.memory.maxmemory as f64,
-            );
-        }
-        (recorder.clone(), Some(recorder))
+        Some(Arc::new(recorder))
     } else {
-        (Arc::new(frogdb_core::NoopMetricsRecorder::new()), None)
+        None
     };
+
+    // OTLP recorder (optional): constructed from the `metrics` section when
+    // `otlp-enabled`. It has Drop-based shutdown that flushes on process exit,
+    // so it must live for the process lifetime — it does, held inside the
+    // `metrics_recorder` fan-out below which the `Server` retains.
+    let otlp_recorder = build_otlp_recorder(config);
+
+    // Whether at least one real metrics backend is present. This is exactly the
+    // condition under which `assemble_metrics_recorder` returns a non-noop
+    // recorder, so it gates the process-identity gauges below.
+    let has_metrics_backend = prometheus_recorder.is_some() || otlp_recorder.is_some();
+
+    // Fan-out recorder handed to the runtime. When both Prometheus and OTLP are
+    // present they are combined via `CompositeRecorder`; otherwise whichever
+    // exists is used directly, falling back to a no-op. When `otlp-enabled` is
+    // false this is byte-identical to the previous behavior.
+    let metrics_recorder: Arc<dyn MetricsRecorder> =
+        assemble_metrics_recorder(prometheus_recorder.clone(), otlp_recorder);
+
+    // Record process-identity gauges whenever any real backend is active, so both
+    // the Prometheus scrape endpoint and the OTLP exporter receive them — the
+    // latter matters in OTLP-only mode (`http.enabled = false` +
+    // `metrics.otlp-enabled = true`), where Prometheus is absent. When every
+    // backend is disabled this block is skipped, keeping the all-disabled path
+    // byte-identical.
+    if has_metrics_backend {
+        record_process_identity_gauges(&*metrics_recorder, config);
+    }
 
     // Process-wide keyspace hit/miss accumulator. Independent of the metrics
     // recorder so INFO reports correct values even when Prometheus is disabled;
@@ -236,7 +245,9 @@ pub(super) async fn init_infrastructure(
     // Run crash recovery through the orchestrator seam: install staged
     // checkpoint, open RocksDB, restore per-shard stores.
     let recovered = crate::recovery::recover(&crate::recovery::RecoveryInputs::from_config(
-        config, num_shards,
+        config,
+        num_shards,
+        metrics_recorder.clone(),
     ))?;
     let rocks_store = recovered.rocks;
     let recovered_stores = recovered.shards;
@@ -317,6 +328,22 @@ pub(super) async fn init_infrastructure(
                     receivers.push(rx);
                 }
                 for rx in receivers {
+                    let _ = rx.await;
+                }
+                // Drain every shard's WAL flush-engine into RocksDB so the
+                // checkpoint captures all acknowledged writes. Under non-`sync`
+                // durability a write is acked once staged in the flush engine and
+                // committed to RocksDB only on a later size/timeout trigger; without
+                // this drain, `BGSAVE` would snapshot a RocksDB missing the most
+                // recent writes — a silently-incomplete recovery artifact. Done
+                // after the search flush so any search_meta writes are drained too.
+                let mut wal_receivers = Vec::with_capacity(senders.len());
+                for sender in senders.iter() {
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    let _ = sender.send(SearchMsg::FlushWal { response_tx: tx }).await;
+                    wal_receivers.push(rx);
+                }
+                for rx in wal_receivers {
                     let _ = rx.await;
                 }
                 // Persist the replication offset that matches this snapshot's data.
@@ -417,4 +444,177 @@ pub(super) async fn init_infrastructure(
         tls_manager,
         tls_listener,
     })
+}
+
+/// Build the OTLP metrics recorder from the `metrics` config section.
+///
+/// Returns `None` when OTLP export is disabled (`otlp-enabled = false`) or when
+/// the exporter fails to initialize. The config-crate `MetricsConfig` is mapped
+/// onto the telemetry crate's own `MetricsConfig` (the two are intentionally
+/// decoupled — telemetry does not depend on the config crate).
+fn build_otlp_recorder(config: &Config) -> Option<Arc<dyn MetricsRecorder>> {
+    if !config.metrics.otlp_enabled {
+        return None;
+    }
+
+    let telemetry_config = frogdb_telemetry::MetricsConfig {
+        enabled: config.metrics.enabled,
+        port: config.metrics.port,
+        otlp_enabled: config.metrics.otlp_enabled,
+        otlp_endpoint: config.metrics.otlp_endpoint.clone(),
+        otlp_interval_secs: config.metrics.otlp_interval_secs,
+        ..Default::default()
+    };
+
+    OtlpRecorder::new(&telemetry_config)
+        .map(|recorder| Arc::new(recorder) as Arc<dyn MetricsRecorder>)
+}
+
+/// Record the process-identity gauges (server info, binary version, and the
+/// configured maxmemory) through the fan-out recorder. Called during init
+/// whenever at least one real metrics backend is present so every backend --
+/// Prometheus and/or OTLP -- receives them.
+fn record_process_identity_gauges(recorder: &dyn MetricsRecorder, config: &Config) {
+    // Record server info
+    frogdb_telemetry::definitions::Info::set(
+        recorder,
+        1.0,
+        env!("CARGO_PKG_VERSION"),
+        "standalone",
+    );
+    // Record binary version metric (info gauge, always 1)
+    frogdb_telemetry::definitions::BinaryVersion::set(recorder, 1.0, env!("CARGO_PKG_VERSION"));
+    // Record maxmemory at startup
+    if config.memory.maxmemory > 0 {
+        frogdb_telemetry::definitions::MemoryMaxmemoryBytes::set(
+            recorder,
+            config.memory.maxmemory as f64,
+        );
+    }
+}
+
+/// Combine the Prometheus recorder (if any) and the OTLP recorder (if any) into
+/// the single fan-out recorder handed to the runtime.
+///
+/// When both backends are present they are wrapped in a [`CompositeRecorder` so
+/// every sample reaches both. When only one is present it is used directly
+/// (preserving `Arc` identity with the Prometheus recorder in the
+/// Prometheus-only case). When neither is present a no-op recorder is returned.
+fn assemble_metrics_recorder(
+    prometheus: Option<Arc<PrometheusRecorder>>,
+    otlp: Option<Arc<dyn MetricsRecorder>>,
+) -> Arc<dyn MetricsRecorder> {
+    match (prometheus, otlp) {
+        (Some(prometheus), Some(otlp)) => Arc::new(CompositeRecorder::new(vec![prometheus, otlp])),
+        (Some(prometheus), None) => prometheus,
+        (None, Some(otlp)) => otlp,
+        (None, None) => Arc::new(frogdb_core::NoopMetricsRecorder::new()),
+    }
+}
+
+#[cfg(test)]
+mod metrics_recorder_tests {
+    use super::*;
+    use frogdb_core::MetricsRecorder;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Test recorder that counts the `increment_counter` and `record_gauge`
+    /// calls it receives, letting a test observe whether it was included in a
+    /// composite fan-out and whether the identity gauges reached it.
+    #[derive(Default)]
+    struct CountingRecorder {
+        increments: AtomicU64,
+        gauges: AtomicU64,
+    }
+
+    impl MetricsRecorder for CountingRecorder {
+        fn increment_counter(&self, _name: &str, value: u64, _labels: &[(&str, &str)]) {
+            self.increments.fetch_add(value, Ordering::Relaxed);
+        }
+        fn record_gauge(&self, _name: &str, _value: f64, _labels: &[(&str, &str)]) {
+            self.gauges.fetch_add(1, Ordering::Relaxed);
+        }
+        fn record_histogram(&self, _name: &str, _value: f64, _labels: &[(&str, &str)]) {}
+    }
+
+    #[test]
+    fn build_otlp_recorder_none_when_disabled() {
+        let mut config = Config::default();
+        config.metrics.otlp_enabled = false;
+        assert!(build_otlp_recorder(&config).is_none());
+    }
+
+    #[tokio::test]
+    async fn build_otlp_recorder_constructs_when_enabled() {
+        // Constructing the OTLP exporter builds a lazy tonic channel (no live
+        // collector required) and spawns a periodic reader, so it needs a Tokio
+        // runtime — hence `#[tokio::test]`.
+        let mut config = Config::default();
+        config.metrics.otlp_enabled = true;
+        let recorder = build_otlp_recorder(&config);
+        assert!(
+            recorder.is_some(),
+            "otlp-enabled = true must yield an OTLP recorder"
+        );
+    }
+
+    #[test]
+    fn assemble_fans_out_to_otlp_backend() {
+        // Prometheus present + OTLP present => composite that fans out to BOTH.
+        let prometheus = Arc::new(PrometheusRecorder::new());
+        let otlp_backend = Arc::new(CountingRecorder::default());
+        let otlp_dyn: Arc<dyn MetricsRecorder> = otlp_backend.clone();
+
+        let recorder = assemble_metrics_recorder(Some(prometheus.clone()), Some(otlp_dyn));
+        // UFCS: chokepoint lint targets method-call emission syntax
+        MetricsRecorder::increment_counter(recorder.as_ref(), "wired_total", 3, &[("k", "v")]);
+
+        // The OTLP-slot backend received the sample => it is in the composite.
+        assert_eq!(otlp_backend.increments.load(Ordering::Relaxed), 3);
+        // Prometheus also received it.
+        assert!(prometheus.encode().contains("wired_total"));
+    }
+
+    #[test]
+    fn assemble_prometheus_only_preserves_identity() {
+        // No OTLP => the Prometheus Arc is used directly (no composite wrapper).
+        let prometheus = Arc::new(PrometheusRecorder::new());
+        let recorder = assemble_metrics_recorder(Some(prometheus.clone()), None);
+        assert!(Arc::ptr_eq(
+            &(prometheus as Arc<dyn MetricsRecorder>),
+            &recorder
+        ));
+    }
+
+    #[test]
+    fn otlp_only_assembly_receives_identity_gauges() {
+        // Regression: in OTLP-only mode (no Prometheus / `http.enabled = false`)
+        // the process-identity gauges must still reach the OTLP backend. Assemble
+        // an OTLP-only recorder (None prometheus, Some otlp) and record the
+        // identity gauges through the fan-out; the OTLP-slot backend must observe
+        // them.
+        let otlp_backend = Arc::new(CountingRecorder::default());
+        let otlp_dyn: Arc<dyn MetricsRecorder> = otlp_backend.clone();
+        let recorder = assemble_metrics_recorder(None, Some(otlp_dyn));
+
+        let mut config = Config::default();
+        // Ensure the maxmemory gauge fires too: Info + BinaryVersion + maxmemory.
+        config.memory.maxmemory = 1024;
+        record_process_identity_gauges(&*recorder, &config);
+
+        assert_eq!(
+            otlp_backend.gauges.load(Ordering::Relaxed),
+            3,
+            "OTLP-only assembly must receive all three identity gauges"
+        );
+    }
+
+    #[test]
+    fn assemble_none_yields_noop() {
+        // Neither backend => a no-op recorder that cannot read counters back.
+        let recorder = assemble_metrics_recorder(None, None);
+        // UFCS: chokepoint lint targets method-call emission syntax
+        MetricsRecorder::increment_counter(recorder.as_ref(), "x", 1, &[]);
+        assert!(recorder.counter_value("x").is_none());
+    }
 }

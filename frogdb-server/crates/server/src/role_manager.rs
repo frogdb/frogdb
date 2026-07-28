@@ -291,6 +291,9 @@ pub struct RealReplicaStreamer {
     /// runtime-demoted Replica's offset exactly like a boot-configured one. `None`
     /// outside cluster mode.
     shared_offset: Option<Arc<std::sync::atomic::AtomicU64>>,
+    /// Spontaneous replica→primary ACK cadence (`replication.ack-interval-ms`),
+    /// stamped onto every runtime-demoted replica handler in `build_handler`.
+    ack_interval_ms: u64,
     #[cfg(not(feature = "turmoil"))]
     tls: Option<ReplicaTlsConfig>,
 }
@@ -337,6 +340,7 @@ impl RealReplicaStreamer {
             state_path,
             is_replica_flag,
             shared_offset,
+            ack_interval_ms: config.replication.ack_interval_ms,
             #[cfg(not(feature = "turmoil"))]
             tls,
         }
@@ -365,8 +369,8 @@ impl RealReplicaStreamer {
             self.data_dir.clone(),
         );
 
-        #[allow(unused_mut)]
         let mut handler = handler;
+        handler.set_ack_interval(self.ack_interval_ms);
 
         // Publish this stream's applied offset into the cluster-bus HealthProbe
         // atomic, mirroring the boot-time replica path in `init_replication`, so
@@ -374,6 +378,30 @@ impl RealReplicaStreamer {
         // as a boot-configured one.
         if let Some(offset) = &self.shared_offset {
             handler.set_shared_offset(offset.clone());
+        }
+
+        // Under turmoil the runtime-demoted replica must dial its new primary
+        // through the simulated network, exactly like the boot-time replica path
+        // in `replication_init.rs`. Without this the default factory's
+        // `tokio::net::TcpStream::connect` panics ("IO is disabled") inside a
+        // turmoil run, so a healed/demoted old primary could never re-attach.
+        #[cfg(feature = "turmoil")]
+        {
+            let factory: frogdb_replication::replica::ConnectFactory =
+                Arc::new(|addr: SocketAddr| {
+                    Box::pin(async move {
+                        let stream = turmoil::net::TcpStream::connect(addr).await?;
+                        Ok(Box::new(stream) as frogdb_replication::BoxedStream)
+                    })
+                        as std::pin::Pin<
+                            Box<
+                                dyn std::future::Future<
+                                        Output = std::io::Result<frogdb_replication::BoxedStream>,
+                                    > + Send,
+                            >,
+                        >
+                });
+            handler.set_connect_factory(factory);
         }
 
         // Wire TLS for the outgoing connection, mirroring `init_replication`.
@@ -621,6 +649,7 @@ mod tests {
             state_path: std::env::temp_dir().join("replication_state.json"),
             is_replica_flag: Arc::new(AtomicBool::new(false)),
             shared_offset,
+            ack_interval_ms: 1000,
             #[cfg(not(feature = "turmoil"))]
             tls: None,
         }

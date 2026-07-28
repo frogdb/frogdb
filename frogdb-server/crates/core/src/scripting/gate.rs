@@ -20,6 +20,28 @@
 //! The `call` and `pcall` closures in [`super::lua_vm`] shrink to "invoke the
 //! gate, then surface the `Result` in my dialect" — `call` raises, `pcall`
 //! returns a `{err = ...}` table.
+//!
+//! # Undeclared-key policy (Redis-parity)
+//!
+//! FrogDB does **not** require a script to declare every key it touches in
+//! `KEYS[]`. The single key-safety rule is slot cohesion, enforced by
+//! [`CrossSlotTracker`] and matching Redis's cluster behaviour:
+//!
+//! - **Standalone (non-cluster):** no enforcement at all. A script may
+//!   `redis.call` any key, declared or not, in any slot — it routes by that
+//!   sub-command's own key. This is why a `numkeys=0` `EVAL` that reads an
+//!   undeclared key succeeds (Redis allows the same; scripts are *expected* to
+//!   declare keys but it is not enforced).
+//! - **Cluster mode, shebang (`#!lua`) script without `allow-cross-slot-keys`:**
+//!   the tracker is seeded with the first *declared* key's slot (or, for
+//!   `numkeys=0`, the first *accessed* key's slot). Every subsequent key —
+//!   declared or undeclared — must hash to that same slot; a different slot is
+//!   rejected with "Script attempted to access keys that do not hash to the same
+//!   slot" (Redis's own message). The `allow-cross-slot-keys` shebang flag opts
+//!   out, exactly like Redis's `SCRIPT_ALLOW_CROSS_SLOT`.
+//!
+//! There is intentionally no "strict undeclared-key rejection" mode: it would
+//! break the standalone `numkeys=0` case above and has no Redis analogue.
 
 use std::cell::RefCell;
 use std::sync::atomic::AtomicBool;
@@ -45,7 +67,12 @@ use crate::sync::MutexExt;
 /// closures as `stc`/`stp`. It is seeded with the slot of the script's first
 /// declared key (when cross-slot enforcement is active) and then accumulates
 /// the slots of every key touched by `redis.call`/`redis.pcall`. If any two
-/// keys hash to different slots, the script is rejected with `CROSSSLOT`.
+/// keys hash to different slots, the sub-command is rejected with an error
+/// message ("...do not hash to the same slot") — mirroring Redis's cluster
+/// script slot check. This is the *only* script key-safety policy: an
+/// undeclared key is fine as long as it stays within the seeded slot; there is
+/// no separate "key must be declared in KEYS[]" enforcement (see the module
+/// docs for the full policy and its Redis-parity rationale).
 #[derive(Clone)]
 pub(crate) struct CrossSlotTracker {
     slot: Arc<Mutex<Option<u16>>>,
@@ -274,6 +301,10 @@ pub(crate) struct ScriptInvoker<'a> {
     master_host: Option<String>,
     master_port: Option<u16>,
     master_link_up: bool,
+    /// Configured JSON document limits (max depth / max size), propagated so a
+    /// `redis.call('JSON.SET', ...)` inside a script enforces the same caps as a
+    /// direct command instead of silently falling back to defaults.
+    json_limits: crate::JsonLimits,
     /// Effective local writes performed by this script's sub-commands, recorded
     /// so the shard worker can run the canonical write-effect pipeline
     /// (notifications, WATCH bump, tracking, waiter wake, WAL, replication)
@@ -304,6 +335,7 @@ impl<'a> ScriptInvoker<'a> {
             master_host: ctx.master_host.clone(),
             master_port: ctx.master_port,
             master_link_up: ctx.master_link_up,
+            json_limits: ctx.json_limits,
             // Reborrow last, after every scalar field is read, so the mutable
             // borrows of the two written-to fields do not shadow the disjoint
             // scalar reads. `store` and `effects.script_writes` are distinct
@@ -417,6 +449,10 @@ impl CommandInvoker for ScriptInvoker<'_> {
         ctx.master_host = self.master_host.clone();
         ctx.master_port = self.master_port;
         ctx.master_link_up = self.master_link_up;
+        // Propagate the configured JSON limits so scripted JSON writes enforce
+        // the same caps as direct commands (the fresh sub-command context would
+        // otherwise default them).
+        ctx.json_limits = self.json_limits;
 
         let result = handler.execute(&mut ctx, args);
 
@@ -580,6 +616,97 @@ mod tests {
         assert_eq!(plan, Plan::Local);
     }
 
+    // ---- Undeclared-key slot policy (the real key-safety contract) ----------
+    //
+    // These pin the policy the dead `validate_key_access` never enforced:
+    // undeclared key access is allowed as long as it stays within the seeded
+    // slot; a different slot is rejected. See the module-level policy docs.
+
+    /// Cluster enforcement seeded from a declared key's slot: an *undeclared*
+    /// key in the SAME slot (hash-tag `{tag}`) is allowed — no declaration
+    /// requirement, only slot cohesion.
+    #[test]
+    fn classify_undeclared_same_slot_key_allowed_when_seeded() {
+        let declared = part("{tag}a");
+        let gate = detached_gate(false, true, Some(slot_for_key(&declared)));
+        // GET of a DIFFERENT, undeclared key that shares the hash tag -> same slot.
+        let plan = gate
+            .classify(&[part("GET"), part("{tag}b")], 1, 0)
+            .expect("undeclared same-slot key access must be allowed");
+        assert_eq!(plan, Plan::Local);
+    }
+
+    /// Cluster enforcement seeded from a declared key's slot: an undeclared key
+    /// in a DIFFERENT slot is rejected with the same-slot error (Redis parity).
+    #[test]
+    fn classify_undeclared_different_slot_key_rejected_when_seeded() {
+        let declared = part("{tag}a");
+        let seed_slot = slot_for_key(&declared);
+        let gate = detached_gate(false, true, Some(seed_slot));
+        // Find an undeclared key whose slot differs from the seed.
+        let mut other = part("kx");
+        for i in 0u32..1_000_000 {
+            let cand = Bytes::from(format!("k{i}"));
+            if slot_for_key(&cand) != seed_slot {
+                other = cand;
+                break;
+            }
+        }
+        let err = gate
+            .classify(&[part("GET"), other], 1, 0)
+            .expect_err("undeclared different-slot key access must reject");
+        assert!(err.contains("do not hash to the same slot"), "got: {err}");
+    }
+
+    /// The `numkeys=0` case: with no declared keys the seed is `None`; the first
+    /// *accessed* key sets the slot, and a later different-slot access rejects.
+    #[test]
+    fn classify_numkeys0_first_accessed_key_seeds_slot() {
+        let gate = detached_gate(false, true, None);
+        // First access seeds the slot; must be allowed.
+        let first = part("{tag}a");
+        let first_slot = slot_for_key(&first);
+        gate.classify(&[part("GET"), first], 1, 0)
+            .expect("first accessed key seeds the slot and is allowed");
+        // A same-slot follow-up is still allowed.
+        gate.classify(&[part("GET"), part("{tag}b")], 1, 0)
+            .expect("same-slot follow-up allowed");
+        // A different-slot follow-up now rejects.
+        let mut other = part("kx");
+        for i in 0u32..1_000_000 {
+            let cand = Bytes::from(format!("k{i}"));
+            if slot_for_key(&cand) != first_slot {
+                other = cand;
+                break;
+            }
+        }
+        let err = gate
+            .classify(&[part("GET"), other], 1, 0)
+            .expect_err("different-slot access after seed must reject");
+        assert!(err.contains("do not hash to the same slot"), "got: {err}");
+    }
+
+    /// With enforcement OFF (standalone) an undeclared different-slot key is
+    /// never rejected — it simply routes by its own key. Pins the standalone
+    /// "undeclared access allowed" half of the policy.
+    #[test]
+    fn classify_undeclared_different_slot_allowed_when_not_enforced() {
+        let gate = detached_gate(false, false, None);
+        let a_slot = slot_for_key(&part("{tag}a"));
+        let mut other = part("kx");
+        for i in 0u32..1_000_000 {
+            let cand = Bytes::from(format!("k{i}"));
+            if slot_for_key(&cand) != a_slot {
+                other = cand;
+                break;
+            }
+        }
+        let plan = gate
+            .classify(&[part("GET"), other], 1, 0)
+            .expect("standalone undeclared access is never slot-rejected");
+        assert_eq!(plan, Plan::Local);
+    }
+
     #[test]
     fn classify_single_shard_is_always_local() {
         let gate = detached_gate(false, false, None);
@@ -650,6 +777,7 @@ mod tests {
             master_host: None,
             master_port: None,
             master_link_up: false,
+            json_limits: crate::JsonLimits::default(),
             store: RefCell::<&mut dyn Store>::new(store),
             script_writes: RefCell::new(writes),
         }
@@ -675,6 +803,7 @@ mod tests {
                 wakes: WaiterWake::None,
                 event: EventSpec::NotApplicable,
                 requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
                 lookup: LookupSpec::None,
                 mutation: crate::command::ConnMutation::None,
                 strategy: ExecutionStrategy::Standard,
@@ -710,6 +839,7 @@ mod tests {
                 wakes: WaiterWake::None,
                 event: EventSpec::Suppressed,
                 requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
                 lookup: LookupSpec::None,
                 mutation: crate::command::ConnMutation::None,
                 strategy: crate::command::ExecutionStrategy::Standard,
@@ -750,6 +880,7 @@ mod tests {
                 wakes: WaiterWake::None,
                 event: EventSpec::NotApplicable,
                 requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
                 lookup: LookupSpec::None,
                 mutation: crate::command::ConnMutation::None,
                 strategy: ExecutionStrategy::ServerWide(ServerWideOp::DbSize),
@@ -842,6 +973,7 @@ mod tests {
             master_host: Some("primary.example".to_string()),
             master_port: Some(6390),
             master_link_up: true,
+            json_limits: crate::JsonLimits::default(),
             store: RefCell::<&mut dyn Store>::new(&mut store),
             script_writes: RefCell::new(&mut writes),
         };

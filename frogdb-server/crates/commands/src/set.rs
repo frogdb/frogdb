@@ -54,6 +54,7 @@ impl Command for SaddCommand {
                 name: "sadd",
             },
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -97,6 +98,7 @@ impl Command for SremCommand {
                 name: "srem",
             },
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -145,6 +147,7 @@ impl Command for SmembersCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::FirstKey,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -193,6 +196,7 @@ impl Command for SismemberCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -235,6 +239,7 @@ impl Command for SmismemberCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -286,6 +291,7 @@ impl Command for ScardCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::FirstKey,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -321,6 +327,7 @@ impl Command for SunionCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -371,6 +378,7 @@ impl Command for SinterCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -433,6 +441,7 @@ impl Command for SdiffCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -499,6 +508,7 @@ impl Command for SunionstoreCommand {
                 key_index: 0,
             },
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -561,6 +571,7 @@ impl Command for SinterstoreCommand {
                 key_index: 0,
             },
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -635,6 +646,7 @@ impl Command for SdiffstoreCommand {
                 key_index: 0,
             },
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -703,6 +715,7 @@ impl Command for SintercardCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::EveryKey,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -790,6 +803,7 @@ impl Command for SrandmemberCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -864,7 +878,15 @@ impl Command for SpopCommand {
         static SPEC: CommandSpec = CommandSpec {
             name: "SPOP",
             arity: Arity::AtLeast(1),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            // NONDETERMINISTIC is a replication contract, not decoration: the
+            // broadcast path debug-asserts that a nondeterministic write never
+            // propagates verbatim, so `execute` must deposit a deterministic
+            // rewrite (SREM of the popped members / DEL on a full drain) —
+            // matching Redis, which never replicates SPOP itself.
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::RANDOM)
+                .union(CommandFlags::NONDETERMINISTIC),
             keys: KeySpec::First,
             access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistOrDeleteFirstKey,
@@ -874,6 +896,7 @@ impl Command for SpopCommand {
                 name: "spop",
             },
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -891,6 +914,9 @@ impl Command for SpopCommand {
         };
 
         let Some(set) = ctx.store.get_set_mut(key)? else {
+            // Nothing popped: like Redis, a missing-key SPOP is a pure read —
+            // no propagation, no keyspace event, no WATCH dirtying.
+            ctx.effects.write_was_noop = true;
             if count.is_some() {
                 return Ok(Response::Array(vec![]));
             } else {
@@ -901,13 +927,21 @@ impl Command for SpopCommand {
         match count {
             Some(c) => {
                 let members = set.pop_many(c);
-                let results: Vec<Response> = members.into_iter().map(Response::bulk).collect();
+                if members.is_empty() {
+                    // SPOP key 0: nothing popped (see the missing-key arm).
+                    ctx.effects.write_was_noop = true;
+                    return Ok(Response::Array(vec![]));
+                }
 
                 // Delete key if set is now empty
-                if set.is_empty() {
+                let drained = set.is_empty();
+                if drained {
                     ctx.store.delete(key);
                 }
 
+                self.rewrite_propagation(ctx, key, &members, drained);
+
+                let results: Vec<Response> = members.into_iter().map(Response::bulk).collect();
                 Ok(Response::Array(results))
             }
             None => {
@@ -915,14 +949,45 @@ impl Command for SpopCommand {
                 match set.pop() {
                     Some(member) => {
                         // Delete key if set is now empty
-                        if set.is_empty() {
+                        let drained = set.is_empty();
+                        if drained {
                             ctx.store.delete(key);
                         }
+
+                        self.rewrite_propagation(ctx, key, std::slice::from_ref(&member), drained);
+
                         Ok(Response::bulk(member))
                     }
-                    None => Ok(Response::null()),
+                    None => {
+                        ctx.effects.write_was_noop = true;
+                        Ok(Response::null())
+                    }
                 }
             }
+        }
+    }
+}
+
+impl SpopCommand {
+    /// Deposit the deterministic replication rewrite for a pop that removed
+    /// `members` from `key` — Redis parity (`t_set.c`): `SREM` of exactly the
+    /// popped members, or a single `DEL` when the pop drained the whole set
+    /// (the key is gone; `DEL` is smaller and unambiguous). Replicas replay
+    /// the primary's outcome instead of rolling their own RNG.
+    fn rewrite_propagation(
+        &self,
+        ctx: &mut CommandContext,
+        key: &Bytes,
+        members: &[Bytes],
+        drained: bool,
+    ) {
+        if drained {
+            ctx.rewrite_propagation("DEL", vec![key.clone()]);
+        } else {
+            let mut args = Vec::with_capacity(members.len() + 1);
+            args.push(key.clone());
+            args.extend_from_slice(members);
+            ctx.rewrite_propagation("SREM", args);
         }
     }
 }
@@ -949,6 +1014,7 @@ impl Command for SmoveCommand {
             // only when the member actually moved; a non-member no-op is silent.
             event: EventSpec::Dynamic,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -1032,6 +1098,7 @@ impl Command for SscanCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,

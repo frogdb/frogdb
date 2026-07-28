@@ -1543,3 +1543,1078 @@ async fn test_flushdb_clears_hll_delta_chain_before_readd() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// BGSAVE snapshot artifact -> fresh-directory restore (end-to-end)
+//
+// Unlike `test_bgsave_snapshot_survives_restart` (which reopens the *same live
+// directory* and so only exercises ordinary WAL replay), these tests recover a
+// server from the *actual `snapshot_NNNNN` artifact* a `BGSAVE` produces, using
+// the documented operator restore procedure: stage the snapshot's `checkpoint/`
+// contents as a `checkpoint_ready` sibling of a fresh data dir and let normal
+// startup recovery (`RocksStore::load_staged_checkpoint`) install it before the
+// DB is opened. See `website/src/content/docs/operations/backup-restore.md`
+// (`## Restore`).
+// ============================================================================
+
+/// Copy a directory tree (used to stage a snapshot's `checkpoint/` contents into
+/// a `checkpoint_ready` directory, mirroring the doc's `cp -a checkpoint/. dst/`).
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let target = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursive(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
+/// Poll `snapshot_dir` until a fully-promoted `snapshot_NNNNN` artifact appears,
+/// returning the path to its `checkpoint/` subdirectory (the RocksDB database).
+///
+/// "Fully promoted" = a `snapshot_NNNNN` directory (not the `.snapshot_*.tmp`
+/// staging dir) carrying both `metadata.json` and `checkpoint/CURRENT`. Picks the
+/// highest epoch, matching the `latest` symlink the stager repoints. Panics after
+/// the timeout so a broken/absent BGSAVE fails the test loudly.
+async fn wait_for_snapshot_checkpoint(snapshot_dir: &std::path::Path) -> std::path::PathBuf {
+    for _ in 0..100 {
+        let mut best: Option<(u64, std::path::PathBuf)> = None;
+        if let Ok(entries) = std::fs::read_dir(snapshot_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                let Some(epoch) = name
+                    .strip_prefix("snapshot_")
+                    .and_then(|s| s.parse::<u64>().ok())
+                else {
+                    continue; // skip `.snapshot_*.tmp`, `latest`, etc.
+                };
+                let checkpoint = entry.path().join("checkpoint");
+                let complete = entry.path().join("metadata.json").is_file()
+                    && checkpoint.join("CURRENT").is_file();
+                if complete && best.as_ref().is_none_or(|(e, _)| epoch > *e) {
+                    best = Some((epoch, checkpoint));
+                }
+            }
+        }
+        if let Some((_, checkpoint)) = best {
+            return checkpoint;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!(
+        "BGSAVE snapshot artifact never appeared under {}",
+        snapshot_dir.display()
+    );
+}
+
+/// End-to-end: populate a server, `BGSAVE`, then restore the produced snapshot
+/// artifact into a *fresh* data directory via the documented operator procedure
+/// and assert every key/type survives — while a key written *after* the snapshot
+/// (living only in the original dir's WAL) is correctly absent from the
+/// point-in-time image.
+#[tokio::test]
+async fn test_bgsave_snapshot_restores_into_fresh_data_dir() {
+    // Owned dirs: the snapshot dir must outlive the source server so the artifact
+    // is still on disk to copy from (the harness's auto snapshot dir is dropped
+    // when the server drops).
+    let src_root = tempfile::tempdir().unwrap();
+    let snapshot_root = tempfile::tempdir().unwrap();
+    let src_data = src_root.path().join("data");
+
+    let src_config = TestServerConfig {
+        persistence: true,
+        data_dir: Some(src_data.clone()),
+        snapshot_dir: Some(snapshot_root.path().to_path_buf()),
+        num_shards: Some(1),
+        // Disable the periodic snapshot task so the only artifact is the manual
+        // BGSAVE below. Otherwise its fire-immediately first tick writes an empty
+        // startup snapshot that races (and can be mistaken for) ours.
+        snapshot_interval_secs: Some(0),
+        ..Default::default()
+    };
+
+    // --- Source server: write a spread of types, then snapshot ---
+    let server = TestServer::start_standalone_with_config(src_config).await;
+    let mut client = server.connect().await;
+
+    assert_ok(&client.command(&["SET", "str_key", "str_val"]).await);
+    assert_ok(
+        &client
+            .command(&["SET", "ttl_key", "ttl_val", "EX", "3600"])
+            .await,
+    );
+    assert_eq!(
+        client.command(&["RPUSH", "list_key", "a", "b", "c"]).await,
+        Response::Integer(3)
+    );
+    assert_eq!(
+        client
+            .command(&["HSET", "hash_key", "f1", "v1", "f2", "v2"])
+            .await,
+        Response::Integer(2)
+    );
+    assert_eq!(
+        client.command(&["SADD", "set_key", "m1", "m2", "m3"]).await,
+        Response::Integer(3)
+    );
+    assert_eq!(
+        client
+            .command(&["ZADD", "zset_key", "1", "one", "2", "two"])
+            .await,
+        Response::Integer(2)
+    );
+
+    let bgsave_resp = client.command(&["BGSAVE"]).await;
+    assert!(
+        matches!(&bgsave_resp, Response::Simple(msg)
+            if String::from_utf8_lossy(msg).contains("Background saving started")),
+        "Unexpected BGSAVE response: {bgsave_resp:?}"
+    );
+
+    // Locate the produced artifact (proves the snapshot was actually written).
+    let checkpoint = wait_for_snapshot_checkpoint(snapshot_root.path()).await;
+
+    // Write a key AFTER the snapshot cut. It lives only in the source dir's WAL,
+    // never in the point-in-time checkpoint, so a fresh-dir restore must not see
+    // it — this is what makes the test exercise the artifact, not the live dir.
+    assert_ok(
+        &client
+            .command(&["SET", "post_snapshot_key", "post_val"])
+            .await,
+    );
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // --- Restore into a FRESH data dir via the documented procedure ---
+    // Stage the checkpoint's contents as `checkpoint_ready`, a sibling of the new
+    // (not-yet-existing) data dir; startup recovery installs it before opening.
+    let restore_root = tempfile::tempdir().unwrap();
+    let restore_data = restore_root.path().join("data");
+    let checkpoint_ready = restore_root.path().join("checkpoint_ready");
+    copy_dir_recursive(&checkpoint, &checkpoint_ready).unwrap();
+    assert!(
+        !restore_data.exists(),
+        "restore target must start as a fresh, empty data directory"
+    );
+
+    let restore_config = TestServerConfig {
+        persistence: true,
+        data_dir: Some(restore_data.clone()),
+        num_shards: Some(1),
+        ..Default::default()
+    };
+    let server = TestServer::start_standalone_with_config(restore_config).await;
+    let mut client = server.connect().await;
+
+    // The restore installed the checkpoint (consuming `checkpoint_ready`) rather
+    // than booting an empty fresh dir.
+    assert!(
+        !checkpoint_ready.exists(),
+        "startup recovery must consume checkpoint_ready by installing it"
+    );
+
+    // Every type from the snapshot must be intact.
+    assert_eq!(
+        client.command(&["GET", "str_key"]).await,
+        Response::Bulk(Some(Bytes::from("str_val")))
+    );
+    let ttl = unwrap_integer(&client.command(&["TTL", "ttl_key"]).await);
+    assert!(
+        ttl > 0 && ttl <= 3600,
+        "TTL should survive restore, got {ttl}"
+    );
+    let list = unwrap_array(client.command(&["LRANGE", "list_key", "0", "-1"]).await);
+    let vals: Vec<&[u8]> = list.iter().map(unwrap_bulk).collect();
+    assert_eq!(vals, vec![b"a", b"b", b"c"]);
+    assert_eq!(
+        client.command(&["HGET", "hash_key", "f2"]).await,
+        Response::Bulk(Some(Bytes::from("v2")))
+    );
+    let mut members: Vec<String> = unwrap_array(client.command(&["SMEMBERS", "set_key"]).await)
+        .iter()
+        .map(|r| String::from_utf8(unwrap_bulk(r).to_vec()).unwrap())
+        .collect();
+    members.sort();
+    assert_eq!(members, vec!["m1", "m2", "m3"]);
+    assert_eq!(
+        client.command(&["ZSCORE", "zset_key", "two"]).await,
+        Response::Bulk(Some(Bytes::from("2")))
+    );
+
+    // The post-snapshot key lived only in the source WAL — a point-in-time
+    // restore must not resurrect it.
+    assert_eq!(
+        client.command(&["GET", "post_snapshot_key"]).await,
+        Response::Bulk(None),
+        "a key written after the snapshot cut must not appear in a fresh-dir restore"
+    );
+
+    server.shutdown().await;
+}
+
+/// A server restored from a BGSAVE artifact must behave like any live server:
+/// subsequent writes are WAL-durable and replay on a later restart, layered on
+/// top of the installed checkpoint.
+#[tokio::test]
+async fn test_restored_snapshot_accepts_and_replays_new_writes() {
+    let src_root = tempfile::tempdir().unwrap();
+    let snapshot_root = tempfile::tempdir().unwrap();
+    let src_data = src_root.path().join("data");
+
+    let src_config = TestServerConfig {
+        persistence: true,
+        data_dir: Some(src_data.clone()),
+        snapshot_dir: Some(snapshot_root.path().to_path_buf()),
+        num_shards: Some(1),
+        // See the sibling test: disable periodic snapshots for a deterministic
+        // single BGSAVE artifact.
+        snapshot_interval_secs: Some(0),
+        ..Default::default()
+    };
+
+    let server = TestServer::start_standalone_with_config(src_config).await;
+    let mut client = server.connect().await;
+    assert_ok(&client.command(&["SET", "base_key", "base_val"]).await);
+    let bgsave_resp = client.command(&["BGSAVE"]).await;
+    assert!(
+        matches!(&bgsave_resp, Response::Simple(msg)
+            if String::from_utf8_lossy(msg).contains("Background saving started")),
+        "Unexpected BGSAVE response: {bgsave_resp:?}"
+    );
+    let checkpoint = wait_for_snapshot_checkpoint(snapshot_root.path()).await;
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Install the artifact into a fresh dir.
+    let restore_root = tempfile::tempdir().unwrap();
+    let restore_data = restore_root.path().join("data");
+    let checkpoint_ready = restore_root.path().join("checkpoint_ready");
+    copy_dir_recursive(&checkpoint, &checkpoint_ready).unwrap();
+
+    let restore_config = |data: &std::path::Path| TestServerConfig {
+        persistence: true,
+        data_dir: Some(data.to_path_buf()),
+        num_shards: Some(1),
+        ..Default::default()
+    };
+
+    // Boot from the restored checkpoint, then write a NEW key.
+    let server = TestServer::start_standalone_with_config(restore_config(&restore_data)).await;
+    let mut client = server.connect().await;
+    assert_eq!(
+        client.command(&["GET", "base_key"]).await,
+        Response::Bulk(Some(Bytes::from("base_val")))
+    );
+    assert_ok(
+        &client
+            .command(&["SET", "after_restore_key", "after_val"])
+            .await,
+    );
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Plain reopen of the restored dir: the checkpoint's data AND the write made
+    // against the restored server must both replay from the WAL.
+    let server = TestServer::start_standalone_with_config(restore_config(&restore_data)).await;
+    let mut client = server.connect().await;
+    assert_eq!(
+        client.command(&["GET", "base_key"]).await,
+        Response::Bulk(Some(Bytes::from("base_val"))),
+        "checkpoint data must survive a restart of the restored server"
+    );
+    assert_eq!(
+        client.command(&["GET", "after_restore_key"]).await,
+        Response::Bulk(Some(Bytes::from("after_val"))),
+        "writes to a restored server must be WAL-durable and replay on restart"
+    );
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// BGSAVE checkpoint cross-shard consistent-cut contract (issue 43)
+//
+// A BGSAVE checkpoint is a single RocksDB `Checkpoint` over one shared DB, so it
+// captures an atomic point-in-time image at one RocksDB sequence number across
+// every shard's column family. The pre-snapshot hook first drains every shard's
+// WAL flush engine into RocksDB (issue 13's `FlushWal` fan-out), so the cut
+// captures a prefix of each shard's committed history rather than a lossy
+// mid-flush state.
+//
+// The concern (audit D#5): per-shard writes go through *separate* per-shard
+// `WriteBatch`es and separate flush engines, so the cut could catch one shard's
+// half of a cross-shard write and not another's — a torn cross-shard cut.
+//
+// The intended contract, re-verified against current `main`:
+//
+//   * SINGLE-SHARD atomicity IS preserved in the cut (strong guarantee). A
+//     single-shard `MULTI`/`EXEC` is one shard event-loop message that enqueues
+//     all of its WAL writes before any later message (including the pre-snapshot
+//     `FlushWal`) is processed, and RocksDB commits in sequence order, so the
+//     cut captures either all of a transaction's writes or none — never a torn
+//     prefix. `test_checkpoint_preserves_single_shard_multi_atomicity_*` pins
+//     this. A regression that tore a single-shard transaction across the cut
+//     would be a real bug.
+//
+//   * CROSS-SHARD atomicity is NOT preserved in the cut (accepted limitation).
+//     A cross-shard `MSET`/scatter dispatches independent per-shard writes, and
+//     the pre-snapshot drain is likewise per-shard, so the cut can capture
+//     shard A's half of a cross-shard write and not shard B's. This matches
+//     FrogDB's documented cross-shard model — execution atomicity via locking,
+//     but not failure/durability atomicity (see
+//     `.scratch/concurrency-testing/issues/05-06`; the abort-on-recovery framing
+//     that would close it is deferred issue 06, not built). What IS preserved,
+//     and asserted, is *per-shard* atomicity: the subset of a cross-shard write
+//     that lands on any one shard is applied as one shard event-loop message, so
+//     that shard's subset is never itself torn.
+// ============================================================================
+
+/// Spawn `n` writer tasks that each own an independent client and loop until
+/// `stop` is set, invoking `body` with a fresh monotonic generation each
+/// iteration. Returns their join handles.
+async fn spawn_writers<F, Fut>(
+    server: &TestServer,
+    n: usize,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    body: F,
+) -> Vec<tokio::task::JoinHandle<()>>
+where
+    F: Fn(crate::common::test_server::TestClient, u64) -> Fut + Clone + Send + 'static,
+    Fut: std::future::Future<Output = crate::common::test_server::TestClient> + Send,
+{
+    use std::sync::atomic::Ordering;
+    let mut handles = Vec::with_capacity(n);
+    for _ in 0..n {
+        let mut client = server.connect().await;
+        let stop = stop.clone();
+        let generation = generation.clone();
+        let body = body.clone();
+        handles.push(tokio::spawn(async move {
+            while !stop.load(Ordering::Relaxed) {
+                let g = generation.fetch_add(1, Ordering::SeqCst);
+                client = body(client, g).await;
+            }
+        }));
+    }
+    handles
+}
+
+/// Pick `per_shard` distinct keys for each of `num_shards` internal shards, so
+/// an `MSET` over the returned keys is a genuine cross-shard write.
+fn keys_spanning_shards(num_shards: usize, per_shard: usize) -> Vec<String> {
+    let mut by_shard: Vec<Vec<String>> = vec![Vec::new(); num_shards];
+    let mut i = 0u64;
+    while by_shard.iter().any(|v| v.len() < per_shard) {
+        let key = format!("cs:{i}");
+        let s = frogdb_core::shard_for_key(key.as_bytes(), num_shards);
+        if by_shard[s].len() < per_shard {
+            by_shard[s].push(key);
+        }
+        i += 1;
+    }
+    by_shard.into_iter().flatten().collect()
+}
+
+/// Fire `count` `BGSAVE`s spaced by `gap`, asserting every reply is one of the
+/// accepted simple-string replies (never an error or a hang).
+async fn hammer_bgsave(
+    client: &mut crate::common::test_server::TestClient,
+    count: usize,
+    gap: Duration,
+) {
+    for _ in 0..count {
+        let resp = client.command(&["BGSAVE"]).await;
+        match &resp {
+            Response::Simple(msg) => {
+                let m = String::from_utf8_lossy(msg);
+                assert!(
+                    m.contains("Background saving started")
+                        || m.contains("Background saving scheduled")
+                        || m.contains("Background save already in progress"),
+                    "unexpected BGSAVE simple reply: {m}"
+                );
+            }
+            other => panic!("BGSAVE must reply with a simple string, got {other:?}"),
+        }
+        tokio::time::sleep(gap).await;
+    }
+}
+
+/// Concurrent single-shard `MULTI`/`EXEC` transactions while `BGSAVE` fires
+/// repeatedly. Each transaction rewrites every key of one hash-tag group to a
+/// single generation value; the restored checkpoint must show, for every group,
+/// that its keys are either all absent or all present and equal — a single-shard
+/// transaction is never torn across the cut.
+#[tokio::test]
+async fn test_checkpoint_preserves_single_shard_multi_atomicity_under_concurrent_bgsave() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    const NUM_SHARDS: usize = 4;
+    const NUM_TAGS: u64 = 12;
+    const KEYS_PER_TXN: usize = 5;
+    const NUM_WRITERS: usize = 4;
+
+    let src_root = tempfile::tempdir().unwrap();
+    let snapshot_root = tempfile::tempdir().unwrap();
+    let src_data = src_root.path().join("data");
+
+    let config = TestServerConfig {
+        persistence: true,
+        data_dir: Some(src_data.clone()),
+        snapshot_dir: Some(snapshot_root.path().to_path_buf()),
+        num_shards: Some(NUM_SHARDS),
+        snapshot_interval_secs: Some(0),
+        ..Default::default()
+    };
+    let server = TestServer::start_standalone_with_config(config).await;
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let generation = Arc::new(AtomicU64::new(1));
+    let writers = spawn_writers(
+        &server,
+        NUM_WRITERS,
+        stop.clone(),
+        generation.clone(),
+        |mut client, g| async move {
+            // All keys share one hash tag → one slot → one internal shard, so the
+            // whole transaction is single-shard and must be atomic in any cut.
+            let tag = format!("g{}", g % NUM_TAGS);
+            let gv = g.to_string();
+            let _ = client.command(&["MULTI"]).await;
+            for i in 0..KEYS_PER_TXN {
+                let key = format!("{{{tag}}}:k{i}");
+                let _ = client.command(&["SET", &key, &gv]).await;
+            }
+            let _ = client.command(&["EXEC"]).await;
+            client
+        },
+    )
+    .await;
+
+    // Fire BGSAVEs while writers stream transactions. wait_for_snapshot_checkpoint
+    // afterward confirms at least one artifact was promoted during active writes.
+    let mut driver = server.connect().await;
+    hammer_bgsave(&mut driver, 20, Duration::from_millis(25)).await;
+    let _ = wait_for_snapshot_checkpoint(snapshot_root.path()).await;
+    hammer_bgsave(&mut driver, 10, Duration::from_millis(25)).await;
+
+    stop.store(true, Ordering::Relaxed);
+    for h in writers {
+        h.await.unwrap();
+    }
+    drop(driver);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Restore the latest promoted checkpoint into a fresh dir.
+    let checkpoint = wait_for_snapshot_checkpoint(snapshot_root.path()).await;
+    let restore_root = tempfile::tempdir().unwrap();
+    let restore_data = restore_root.path().join("data");
+    let checkpoint_ready = restore_root.path().join("checkpoint_ready");
+    copy_dir_recursive(&checkpoint, &checkpoint_ready).unwrap();
+
+    let restore_config = TestServerConfig {
+        persistence: true,
+        data_dir: Some(restore_data.clone()),
+        num_shards: Some(NUM_SHARDS),
+        ..Default::default()
+    };
+    let server = TestServer::start_standalone_with_config(restore_config).await;
+    let mut client = server.connect().await;
+
+    // Every hash-tag group must be all-absent or all-present-with-one-value.
+    let mut groups_present = 0;
+    for tag_idx in 0..NUM_TAGS {
+        let tag = format!("g{tag_idx}");
+        let mut values: Vec<Option<String>> = Vec::with_capacity(KEYS_PER_TXN);
+        for i in 0..KEYS_PER_TXN {
+            let key = format!("{{{tag}}}:k{i}");
+            let v = match client.command(&["GET", &key]).await {
+                Response::Bulk(Some(b)) => Some(String::from_utf8(b.to_vec()).unwrap()),
+                Response::Bulk(None) => None,
+                other => panic!("unexpected GET reply for {key}: {other:?}"),
+            };
+            values.push(v);
+        }
+        let present = values.iter().filter(|v| v.is_some()).count();
+        assert!(
+            present == 0 || present == KEYS_PER_TXN,
+            "single-shard transaction torn across BGSAVE cut for tag {tag}: {values:?}"
+        );
+        if present == KEYS_PER_TXN {
+            groups_present += 1;
+            let first = values[0].clone();
+            assert!(
+                values.iter().all(|v| *v == first),
+                "single-shard transaction cut captured mixed generations for tag {tag}: {values:?}"
+            );
+        }
+    }
+    assert!(
+        groups_present > 0,
+        "checkpoint captured no transactions; test would be vacuous"
+    );
+
+    server.shutdown().await;
+}
+
+/// Concurrent cross-shard `MSET` while `BGSAVE` fires repeatedly. Each `MSET`
+/// rewrites the whole cross-shard key set to a single generation. Asserts the
+/// intended contract: per-shard atomicity holds (all present keys on any one
+/// shard share a generation), while cross-shard atomicity is an accepted
+/// limitation (different shards may show different generations — a torn cut).
+#[tokio::test]
+async fn test_checkpoint_cross_shard_mset_contract_under_concurrent_bgsave() {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    const NUM_SHARDS: usize = 4;
+    const PER_SHARD: usize = 3;
+    const NUM_WRITERS: usize = 4;
+
+    let keys = keys_spanning_shards(NUM_SHARDS, PER_SHARD);
+    // Sanity: the key set genuinely spans every shard.
+    let mut spanned = std::collections::BTreeSet::new();
+    for k in &keys {
+        spanned.insert(frogdb_core::shard_for_key(k.as_bytes(), NUM_SHARDS));
+    }
+    assert_eq!(spanned.len(), NUM_SHARDS, "key set must span all shards");
+
+    let src_root = tempfile::tempdir().unwrap();
+    let snapshot_root = tempfile::tempdir().unwrap();
+    let src_data = src_root.path().join("data");
+
+    let config = TestServerConfig {
+        persistence: true,
+        data_dir: Some(src_data.clone()),
+        snapshot_dir: Some(snapshot_root.path().to_path_buf()),
+        num_shards: Some(NUM_SHARDS),
+        snapshot_interval_secs: Some(0),
+        allow_cross_slot_standalone: true,
+        ..Default::default()
+    };
+    let server = TestServer::start_standalone_with_config(config).await;
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let generation = Arc::new(AtomicU64::new(1));
+    let keys_arc = Arc::new(keys.clone());
+    let writers = {
+        let keys_arc = keys_arc.clone();
+        spawn_writers(
+            &server,
+            NUM_WRITERS,
+            stop.clone(),
+            generation.clone(),
+            move |mut client, g| {
+                let keys_arc = keys_arc.clone();
+                async move {
+                    let gv = g.to_string();
+                    let mut args: Vec<&str> = Vec::with_capacity(1 + keys_arc.len() * 2);
+                    args.push("MSET");
+                    for k in keys_arc.iter() {
+                        args.push(k);
+                        args.push(&gv);
+                    }
+                    let _ = client.command(&args).await;
+                    client
+                }
+            },
+        )
+        .await
+    };
+
+    let mut driver = server.connect().await;
+    hammer_bgsave(&mut driver, 20, Duration::from_millis(25)).await;
+    let _ = wait_for_snapshot_checkpoint(snapshot_root.path()).await;
+    hammer_bgsave(&mut driver, 10, Duration::from_millis(25)).await;
+
+    stop.store(true, Ordering::Relaxed);
+    for h in writers {
+        h.await.unwrap();
+    }
+    let max_issued = generation.load(Ordering::SeqCst);
+    drop(driver);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let checkpoint = wait_for_snapshot_checkpoint(snapshot_root.path()).await;
+    let restore_root = tempfile::tempdir().unwrap();
+    let restore_data = restore_root.path().join("data");
+    let checkpoint_ready = restore_root.path().join("checkpoint_ready");
+    copy_dir_recursive(&checkpoint, &checkpoint_ready).unwrap();
+
+    let restore_config = TestServerConfig {
+        persistence: true,
+        data_dir: Some(restore_data.clone()),
+        num_shards: Some(NUM_SHARDS),
+        allow_cross_slot_standalone: true,
+        ..Default::default()
+    };
+    let server = TestServer::start_standalone_with_config(restore_config).await;
+    let mut client = server.connect().await;
+
+    // Collect the restored generation of each key, grouped by shard.
+    let mut per_shard_gens: BTreeMap<usize, Vec<Option<u64>>> = BTreeMap::new();
+    for k in &keys {
+        let shard = frogdb_core::shard_for_key(k.as_bytes(), NUM_SHARDS);
+        let v = match client.command(&["GET", k]).await {
+            Response::Bulk(Some(b)) => {
+                let s = String::from_utf8(b.to_vec()).unwrap();
+                let g: u64 = s
+                    .parse()
+                    .unwrap_or_else(|_| panic!("torn/garbage value for {k}: {s:?}"));
+                assert!(
+                    g >= 1 && g < max_issued.max(2),
+                    "restored value for {k} is not a generation actually issued: {g} (max {max_issued})"
+                );
+                Some(g)
+            }
+            Response::Bulk(None) => None,
+            other => panic!("unexpected GET reply for {k}: {other:?}"),
+        };
+        per_shard_gens.entry(shard).or_default().push(v);
+    }
+
+    // Per-shard atomicity (asserted): every present key on a shard shares one generation.
+    let mut observed_gens = std::collections::BTreeSet::new();
+    let mut shards_with_data = 0;
+    for (shard, gens) in &per_shard_gens {
+        let present: Vec<u64> = gens.iter().filter_map(|g| *g).collect();
+        if !present.is_empty() {
+            shards_with_data += 1;
+            let first = present[0];
+            assert!(
+                present.iter().all(|g| *g == first),
+                "per-shard atomicity violated on shard {shard}: cross-shard MSET subset torn, gens {present:?}"
+            );
+            observed_gens.insert(first);
+        }
+    }
+    assert!(
+        shards_with_data > 0,
+        "checkpoint captured no cross-shard writes; test would be vacuous"
+    );
+
+    // Cross-shard atomicity is NOT asserted: `observed_gens.len() > 1` means the
+    // checkpoint took a torn cross-shard cut, which is an accepted limitation
+    // (issues 05/06). Surface it for the record rather than failing on it.
+    eprintln!(
+        "cross-shard checkpoint cut observed {} distinct generation(s) across {} shard(s): {:?} \
+         (>1 == accepted torn cross-shard cut)",
+        observed_gens.len(),
+        shards_with_data,
+        observed_gens
+    );
+
+    server.shutdown().await;
+}
+
+/// Concurrent-BGSAVE stress: several clients spam `BGSAVE` while writers stream
+/// updates. Every reply must be an accepted simple string (no error, no hang),
+/// the server must stay responsive, and a baseline dataset written before the
+/// storm must restore intact from the resulting checkpoint.
+#[tokio::test]
+async fn test_concurrent_bgsave_stress_restores_cleanly() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    const NUM_SHARDS: usize = 4;
+    const NUM_BASELINE: usize = 50;
+    const NUM_SAVERS: usize = 4;
+    const NUM_WRITERS: usize = 3;
+
+    let src_root = tempfile::tempdir().unwrap();
+    let snapshot_root = tempfile::tempdir().unwrap();
+    let src_data = src_root.path().join("data");
+
+    let config = TestServerConfig {
+        persistence: true,
+        data_dir: Some(src_data.clone()),
+        snapshot_dir: Some(snapshot_root.path().to_path_buf()),
+        num_shards: Some(NUM_SHARDS),
+        snapshot_interval_secs: Some(0),
+        ..Default::default()
+    };
+    let server = TestServer::start_standalone_with_config(config).await;
+
+    // Baseline dataset (present in every subsequent checkpoint).
+    let mut setup = server.connect().await;
+    for i in 0..NUM_BASELINE {
+        assert_ok(
+            &setup
+                .command(&["SET", &format!("baseline:{i}"), &format!("v{i}")])
+                .await,
+        );
+    }
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let generation = Arc::new(AtomicU64::new(1));
+    // Writers churn unrelated keys during the BGSAVE storm.
+    let writers = spawn_writers(
+        &server,
+        NUM_WRITERS,
+        stop.clone(),
+        generation.clone(),
+        |mut client, g| async move {
+            let key = format!("churn:{}", g % 64);
+            let _ = client.command(&["SET", &key, &g.to_string()]).await;
+            client
+        },
+    )
+    .await;
+
+    // Overlapping BGSAVE spammers exercise the coordinator's already-running
+    // coalescing under real concurrency.
+    let mut savers = Vec::with_capacity(NUM_SAVERS);
+    for _ in 0..NUM_SAVERS {
+        let mut client = server.connect().await;
+        savers.push(tokio::spawn(async move {
+            hammer_bgsave(&mut client, 40, Duration::from_millis(5)).await;
+        }));
+    }
+    for s in savers {
+        s.await.unwrap();
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    for h in writers {
+        h.await.unwrap();
+    }
+
+    // Server is still responsive after the storm.
+    assert_eq!(
+        setup.command(&["PING"]).await,
+        Response::Simple(Bytes::from("PONG"))
+    );
+    // A final quiescent BGSAVE to guarantee a fresh, complete artifact.
+    let _ = setup.command(&["BGSAVE"]).await;
+    let _ = wait_for_snapshot_checkpoint(snapshot_root.path()).await;
+    drop(setup);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // The baseline dataset must restore intact from the checkpoint.
+    let checkpoint = wait_for_snapshot_checkpoint(snapshot_root.path()).await;
+    let restore_root = tempfile::tempdir().unwrap();
+    let restore_data = restore_root.path().join("data");
+    let checkpoint_ready = restore_root.path().join("checkpoint_ready");
+    copy_dir_recursive(&checkpoint, &checkpoint_ready).unwrap();
+
+    let restore_config = TestServerConfig {
+        persistence: true,
+        data_dir: Some(restore_data.clone()),
+        num_shards: Some(NUM_SHARDS),
+        ..Default::default()
+    };
+    let server = TestServer::start_standalone_with_config(restore_config).await;
+    let mut client = server.connect().await;
+    for i in 0..NUM_BASELINE {
+        assert_eq!(
+            client.command(&["GET", &format!("baseline:{i}")]).await,
+            Response::Bulk(Some(Bytes::from(format!("v{i}")))),
+            "baseline key {i} lost across concurrent-BGSAVE storm + restore"
+        );
+    }
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Tiered storage: real spill (hot→warm under memory pressure) survives restart
+// ============================================================================
+//
+// Gap closed (testing-gap issue 42, audit D#4): `recover_warm_shard_into` is
+// unit-tested against a hand-built warm CF, but nothing drove a *genuine* spill
+// — the hot tier overflowing to the RocksDB warm CF under real memory pressure —
+// through a full server restart. These tests fill enough data to trip the
+// `tiered-lru` spill trigger (asserting via `INFO tiered` that a real spill
+// actually happened, not a synthetic fixture), restart the server, and assert
+// every spilled key comes back with the correct value, type, and TTL.
+
+/// Persistence + two-tier storage with a small `maxmemory` and the `tiered-lru`
+/// policy, so cold values spill to the RocksDB warm tier under memory pressure.
+///
+/// `maxmemory` is generous relative to per-key metadata (which stays resident
+/// even for spilled keys) but far below the total value volume the tests write,
+/// so the store spills the bulk of values while never OOM-rejecting a write.
+fn tiered_config(data_dir: &std::path::Path) -> TestServerConfig {
+    TestServerConfig {
+        persistence: true,
+        data_dir: Some(data_dir.to_path_buf()),
+        num_shards: Some(1),
+        tiered_storage_enabled: true,
+        maxmemory: Some(256 * 1024),
+        maxmemory_policy: Some("tiered-lru".to_string()),
+        ..Default::default()
+    }
+}
+
+/// Value of an `INFO <section>` field parsed as `u64` (panics if absent).
+fn info_field_u64(info: &str, name: &str) -> u64 {
+    let prefix = format!("{name}:");
+    info.lines()
+        .map(|l| l.trim_end())
+        .find_map(|l| l.strip_prefix(prefix.as_str()))
+        .unwrap_or_else(|| panic!("field {name} missing from INFO:\n{info}"))
+        .parse()
+        .unwrap_or_else(|e| panic!("field {name} not numeric: {e:?}"))
+}
+
+/// A ~4 KiB value payload, distinct per index, big enough that a few hundred of
+/// them dwarf the `maxmemory` limit and force the store to spill.
+fn big_value(seed: &str, i: usize) -> String {
+    format!("{seed}:{i}:{}", "x".repeat(4096))
+}
+
+/// Real spill of many keys (multiple types) → restart → every key recovers with
+/// the correct value and type. Asserts `INFO tiered` proves a genuine spill
+/// happened before the restart (`tiered_spills > 0`, `tiered_warm_keys > 0`), so
+/// the warm CF holds real spilled artifacts — not a hand-constructed fixture.
+#[tokio::test]
+async fn test_tiered_spill_survives_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+    const NUM_STR: usize = 200;
+
+    // --- First boot: write enough to force real spills ---
+    let server = TestServer::start_standalone_with_config(tiered_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    // Typed keys (written first, so LRU treats them as the coldest and spills
+    // them ahead of the later filler). Each carries a distinct, verifiable shape.
+    assert_ok(
+        &client
+            .command(&["SET", "str:typed", &big_value("typed", 0)])
+            .await,
+    );
+    assert_eq!(
+        client
+            .command(&["RPUSH", "list:typed", "a", "b", "c", &big_value("l", 0)])
+            .await,
+        Response::Integer(4)
+    );
+    assert_eq!(
+        client
+            .command(&["HSET", "hash:typed", "f1", "v1", "f2", &big_value("h", 0)])
+            .await,
+        Response::Integer(2)
+    );
+    assert_eq!(
+        client
+            .command(&["SADD", "set:typed", "m1", "m2", &big_value("s", 0)])
+            .await,
+        Response::Integer(3)
+    );
+    assert_eq!(
+        client
+            .command(&["ZADD", "zset:typed", "1", "one", "2", &big_value("z", 0)])
+            .await,
+        Response::Integer(2)
+    );
+
+    // A typed key with a (long) TTL — its expiry must survive the spill+restart.
+    assert_ok(
+        &client
+            .command(&["SET", "str:ttl", &big_value("ttl", 0)])
+            .await,
+    );
+    assert_eq!(
+        client.command(&["PEXPIRE", "str:ttl", "100000000"]).await,
+        Response::Integer(1)
+    );
+
+    // Bulk string filler to drive the store well past `maxmemory`.
+    for i in 0..NUM_STR {
+        assert_ok(
+            &client
+                .command(&["SET", &format!("str:{i}"), &big_value("v", i)])
+                .await,
+        );
+    }
+
+    // Prove a real spill happened: the warm tier is non-empty and spills fired.
+    let info = client.command(&["INFO", "tiered"]).await;
+    let info = String::from_utf8(unwrap_bulk(&info).to_vec()).unwrap();
+    let spills = info_field_u64(&info, "tiered_spills");
+    let warm_keys = info_field_u64(&info, "tiered_warm_keys");
+    assert!(
+        spills > 0,
+        "expected a genuine hot→warm spill under memory pressure, got tiered_spills=0:\n{info}"
+    );
+    assert!(
+        warm_keys > 0,
+        "expected keys resident in the warm tier, got tiered_warm_keys=0:\n{info}"
+    );
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // --- Second boot: every spilled key must recover intact ---
+    let server = TestServer::start_standalone_with_config(tiered_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    // Typed values + types survive (GET/reads unspill from the warm tier).
+    assert_eq!(
+        client.command(&["GET", "str:typed"]).await,
+        Response::Bulk(Some(Bytes::from(big_value("typed", 0))))
+    );
+    assert_eq!(
+        client.command(&["TYPE", "str:typed"]).await,
+        Response::Simple("string".into())
+    );
+
+    let list = unwrap_array(client.command(&["LRANGE", "list:typed", "0", "-1"]).await);
+    let vals: Vec<&[u8]> = list.iter().map(unwrap_bulk).collect();
+    assert_eq!(
+        vals,
+        vec![b"a".as_ref(), b"b", b"c", big_value("l", 0).as_bytes()]
+    );
+    assert_eq!(
+        client.command(&["TYPE", "list:typed"]).await,
+        Response::Simple("list".into())
+    );
+
+    assert_eq!(
+        client.command(&["HGET", "hash:typed", "f2"]).await,
+        Response::Bulk(Some(Bytes::from(big_value("h", 0))))
+    );
+    assert_eq!(
+        client.command(&["TYPE", "hash:typed"]).await,
+        Response::Simple("hash".into())
+    );
+
+    assert_eq!(
+        client
+            .command(&["SISMEMBER", "set:typed", &big_value("s", 0)])
+            .await,
+        Response::Integer(1)
+    );
+    assert_eq!(
+        client.command(&["TYPE", "set:typed"]).await,
+        Response::Simple("set".into())
+    );
+
+    assert_eq!(
+        client
+            .command(&["ZSCORE", "zset:typed", &big_value("z", 0)])
+            .await,
+        Response::Bulk(Some(Bytes::from("2")))
+    );
+    assert_eq!(
+        client.command(&["TYPE", "zset:typed"]).await,
+        Response::Simple("zset".into())
+    );
+
+    // TTL survives the spill+restart: still present and still counting down.
+    assert_eq!(
+        client.command(&["GET", "str:ttl"]).await,
+        Response::Bulk(Some(Bytes::from(big_value("ttl", 0))))
+    );
+    let pttl = unwrap_integer(&client.command(&["PTTL", "str:ttl"]).await);
+    assert!(
+        pttl > 0 && pttl <= 100_000_000,
+        "TTL of a spilled key must survive restart, got PTTL={pttl}"
+    );
+
+    // Every filler string recovers with its exact value.
+    for i in 0..NUM_STR {
+        assert_eq!(
+            client.command(&["GET", &format!("str:{i}")]).await,
+            Response::Bulk(Some(Bytes::from(big_value("v", i)))),
+            "spilled filler key str:{i} lost or corrupted across restart"
+        );
+    }
+
+    // DBSIZE accounts for every key written (typed + ttl + filler), none lost.
+    assert_eq!(
+        unwrap_integer(&client.command(&["DBSIZE"]).await),
+        (NUM_STR + 6) as i64
+    );
+
+    server.shutdown().await;
+}
+
+/// A spilled key whose TTL has already elapsed by restart time must NOT
+/// resurrect: recovery filters it from both the warm CF and the hot CF. A
+/// non-expiring survivor written alongside it must still come back.
+#[tokio::test]
+async fn test_tiered_spilled_key_past_ttl_does_not_resurrect() {
+    let tmp = tempfile::tempdir().unwrap();
+    const NUM_FILLER: usize = 200;
+
+    let server = TestServer::start_standalone_with_config(tiered_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    // A survivor with no TTL and a victim with a short TTL, both written early so
+    // the later filler makes them the coldest candidates and spills them.
+    assert_ok(
+        &client
+            .command(&["SET", "survivor", &big_value("keep", 0)])
+            .await,
+    );
+    assert_ok(
+        &client
+            .command(&["SET", "victim", &big_value("doomed", 0)])
+            .await,
+    );
+    assert_eq!(
+        client.command(&["PEXPIRE", "victim", "2000"]).await,
+        Response::Integer(1)
+    );
+
+    // Filler to force spills (victim + survivor land in the warm tier).
+    for i in 0..NUM_FILLER {
+        assert_ok(
+            &client
+                .command(&["SET", &format!("f:{i}"), &big_value("f", i)])
+                .await,
+        );
+    }
+
+    let info = client.command(&["INFO", "tiered"]).await;
+    let info = String::from_utf8(unwrap_bulk(&info).to_vec()).unwrap();
+    assert!(
+        info_field_u64(&info, "tiered_warm_keys") > 0,
+        "expected a genuine spill into the warm tier:\n{info}"
+    );
+
+    drop(client);
+    server.shutdown().await;
+
+    // Let the victim's TTL elapse while the server is down.
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+
+    // --- Restart: the expired spilled key must be gone, survivor intact ---
+    let server = TestServer::start_standalone_with_config(tiered_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    assert_eq!(
+        client.command(&["EXISTS", "victim"]).await,
+        Response::Integer(0),
+        "a spilled key past its TTL must not resurrect on restart"
+    );
+    assert_eq!(
+        client.command(&["GET", "victim"]).await,
+        Response::Bulk(None),
+        "expired spilled key must read as nil after restart"
+    );
+    assert_eq!(
+        client.command(&["GET", "survivor"]).await,
+        Response::Bulk(Some(Bytes::from(big_value("keep", 0)))),
+        "non-expiring spilled key must survive the restart"
+    );
+
+    server.shutdown().await;
+}

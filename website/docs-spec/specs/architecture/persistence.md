@@ -9,8 +9,10 @@ cross-shard writes can be atomic via a WriteBatch), a compact per-value on-disk
 encoding with a fixed header, an in-memory-is-source-of-truth WAL discipline
 (the WAL provides durability, not correctness during normal operation — matching
 Redis AOF), configurable durability modes (Async / Periodic / Sync) and a
-configurable WAL-failure policy (continue vs rollback), corruption recovery by
-truncation, and forkless epoch-based snapshots whose COW buffer memory is
+configurable WAL-failure policy (continue vs rollback), an explicitly pinned
+point-in-time WAL recovery mode (recover the valid prefix, drop the suffix behind
+a mid-log corruption, and signal any dropped records via a durable-sync
+watermark), and forkless epoch-based snapshots whose COW buffer memory is
 explicitly tracked so maxmemory enforcement stays correct during a snapshot. The
 reader also learns how sequence numbers are assigned at WAL-append time to give
 replication a monotonic ordering.

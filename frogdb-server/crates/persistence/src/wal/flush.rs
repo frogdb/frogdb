@@ -189,6 +189,14 @@ impl WriteSink for RocksSink {
             self.rocks
                 .spawn_clear_reclamation(crate::rocks::CfTier::Main, self.shard_id, upper);
         }
+        // A successful `sync` commit has fsync'd the WAL through this batch's
+        // sequence, so advance the durable-sync watermark. This is the sequence
+        // point-in-time recovery must reach; landing below it on the next open
+        // signals a corrupt mid-log record dropped committed writes. Non-sync
+        // commits are not individually durable, so they must not advance it.
+        if result.is_ok() && sync {
+            self.rocks.record_wal_watermark();
+        }
         result
     }
 
@@ -650,8 +658,9 @@ pub fn spawn_periodic_sync(
         loop {
             ticker.tick().await;
             let _span = tracing::info_span!("wal_sync").entered();
-            if let Err(e) = rocks.flush() {
-                tracing::warn!(error = %e, "Failed to sync WAL");
+            match rocks.flush() {
+                Ok(()) => rocks.record_wal_watermark(),
+                Err(e) => tracing::warn!(error = %e, "Failed to sync WAL"),
             }
         }
     };

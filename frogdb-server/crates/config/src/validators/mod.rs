@@ -127,7 +127,6 @@ impl ValidationReport {
 pub fn run_all_validators(config: &Config) -> ValidationReport {
     let validators: Vec<Box<dyn ConfigValidator>> = vec![
         // Timeout validators
-        Box::new(timeouts::VllTimeoutOrderingValidator),
         Box::new(timeouts::ReplicationBackoffOrderingValidator),
         Box::new(timeouts::ReplicationTimeoutOrderingValidator),
         // Network validators

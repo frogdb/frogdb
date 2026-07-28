@@ -11,6 +11,7 @@ use frogdb_core::{ConnMutation, ExecutionStrategy, ServerWideOp};
 use frogdb_protocol::Response;
 use tracing::Instrument;
 
+use crate::commands::replication::PsyncHandoff;
 use crate::connection::ConnectionHandler;
 use crate::connection::conn_command::ConnectionCommand;
 
@@ -97,6 +98,23 @@ pub(crate) enum StageOutcome {
     Continue,
     /// End dispatch with these responses (one-or-many, as pub/sub returns).
     ShortCircuit(Vec<Response>),
+    /// End dispatch by handing the raw socket to the primary replication
+    /// handler (PSYNC). A *control* outcome, not data: the sole producer is
+    /// [`DispatchStage::PsyncIntercept`], after its presence gate, so the
+    /// takeover is a compiler-tracked value rather than a sentinel `Response`.
+    Handoff(PsyncHandoff),
+}
+
+/// What a fully-dispatched frame produced: either replies to write back to the
+/// client, or a connection takeover to perform. Replaces the bare
+/// `Vec<Response>` return of [`ConnectionHandler::route_and_execute_with_transaction`]
+/// so the PSYNC takeover is a first-class value the compiler forces every
+/// caller to consider, not a magic array the caller string-matches.
+pub(crate) enum Dispatched {
+    /// Ordinary command replies (one-or-many, as pub/sub returns).
+    Responses(Vec<Response>),
+    /// PSYNC socket takeover.
+    Handoff(PsyncHandoff),
 }
 
 impl ConnectionHandler {
@@ -281,11 +299,12 @@ impl ConnectionHandler {
         &mut self,
         cmd: &Arc<frogdb_protocol::ParsedCommand>,
         cmd_name: &str,
-    ) -> Vec<Response> {
+    ) -> Dispatched {
         for stage in PRE_DISPATCH_ORDER {
             match self.run_stage(stage, cmd, cmd_name).await {
                 StageOutcome::Continue => {}
-                StageOutcome::ShortCircuit(responses) => return responses,
+                StageOutcome::ShortCircuit(responses) => return Dispatched::Responses(responses),
+                StageOutcome::Handoff(handoff) => return Dispatched::Handoff(handoff),
             }
         }
         unreachable!("PRE_DISPATCH_ORDER ends in Execute, which never returns Continue")
@@ -439,21 +458,30 @@ impl ConnectionHandler {
                 }
             }
 
-            // Handle PSYNC command - validates args and returns handoff signal.
-            // The actual handoff happens in the run() loop when it detects
-            // PSYNC_HANDOFF.
+            // Handle PSYNC: this stage owns the entire takeover decision. It is
+            // the single site that presence-gates the primary replication
+            // handler *and* parses the args, yielding a typed
+            // `StageOutcome::Handoff` (carried out as a raw-socket takeover by
+            // the connection task) or a client error. It never runs the shard
+            // `PsyncCommand::execute` — parsing happens once, here.
             DispatchStage::PsyncIntercept => {
                 if cmd_name == "PSYNC" {
-                    // Check if we have a primary replication handler.
+                    // Presence gate: only a primary can hand off a replication
+                    // stream. This is now the *sole* place this check lives (the
+                    // post-loop `else` that duplicated it is gone).
                     if self.cluster.primary_replication_handler.is_none() {
                         return StageOutcome::ShortCircuit(vec![Response::error(
                             "ERR PSYNC not supported - server is not running as primary",
                         )]);
                     }
-                    // Execute PSYNC command which will return PSYNC_HANDOFF signal.
-                    return StageOutcome::ShortCircuit(vec![
-                        self.route_and_execute(cmd, cmd_name).await,
-                    ]);
+                    // Parse once into the typed handoff, or surface the arg error
+                    // exactly as the old `execute` did.
+                    return match PsyncHandoff::from_args(&cmd.args) {
+                        Ok(handoff) => StageOutcome::Handoff(handoff),
+                        Err(err) => {
+                            StageOutcome::ShortCircuit(vec![Response::Error(err.to_bytes())])
+                        }
+                    };
                 }
                 StageOutcome::Continue
             }

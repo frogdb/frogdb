@@ -1,10 +1,11 @@
 //! Cluster/Raft initialization and background tasks.
 
 use anyhow::Result;
+use frogdb_core::cluster::{ClusterWriter, Proposed};
 use frogdb_core::sync::Arc;
 use frogdb_core::{
     ClusterNetworkFactory, ClusterRaft, ClusterState, ClusterStateMachine, ClusterStorage,
-    MetricsRecorder, ReplicationTrackerImpl, ShardSender, SharedBroadcaster,
+    MetricsRecorder, ShardSender,
 };
 use std::time::Duration;
 use tracing::{info, warn};
@@ -56,9 +57,10 @@ pub(super) async fn init_cluster(
     cluster_bus_listener: &Option<TcpListener>,
     shard_senders: &Arc<Vec<ShardSender>>,
     num_shards: usize,
-    replication_broadcaster: &SharedBroadcaster,
+    // The primary handler now owns the whole split-brain divergence window
+    // (offsets + backlog), so the logger no longer needs the broadcaster or
+    // the tracker.
     primary_replication_handler: Option<&Arc<crate::replication::PrimaryReplicationHandler>>,
-    replication_tracker: &Option<Arc<ReplicationTrackerImpl>>,
     metrics_recorder: &Arc<dyn MetricsRecorder>,
     // The resolved `replicaof` primary address when this node boots as a
     // replica (`None` otherwise); resolved once by `init_replication` and
@@ -145,6 +147,67 @@ pub(super) async fn init_cluster(
         // Initialize Raft network factory
         #[allow(unused_mut)] // mut needed for set_connect_factory in non-turmoil builds
         let mut network_factory = ClusterNetworkFactory::new();
+
+        // Under turmoil the default `plain_tcp_connect_factory` dials with a real
+        // `tokio::net::TcpStream`, which is not routed through turmoil's simulated
+        // network. Inject a factory that dials via `turmoil::net::TcpStream` so
+        // outgoing Raft RPCs (vote / append-entries / snapshot) reach peers over
+        // the simulated fabric — the cluster twin of the replica connect factory
+        // in `replication_init.rs`.
+        //
+        // The dial is bounded by a connect timeout: the one-shot Raft RPC path
+        // (`send_rpc_oneshot`) does not time out the connect itself, and a
+        // turmoil network partition black-holes the SYN so a naked connect would
+        // hang forever. openraft would then never observe a failure to retry, so
+        // after the partition heals the surviving leader would never re-dial the
+        // recovered node and the cluster would not reconverge — the timeout is
+        // what lets a stuck dial fail and be retried on a fresh (now reachable)
+        // connection.
+        //
+        // The timeout must not be *too* short, though. turmoil 0.7.1 registers a
+        // connection's ephemeral port at dial time (`StreamSocket`, ref_ct=2) and
+        // only reclaims it when the `TcpStream`'s read/write halves drop — which
+        // are constructed *only after* SYN-ACK. A connect that is cancelled or
+        // times out before SYN-ACK (guaranteed while a peer is unreachable) leaks
+        // its port permanently. A very short timeout therefore turns openraft's
+        // retry loop into a rapid port-leak that exhausts the host's range within
+        // a sustained partition. 2s keeps the re-dial cadence low enough that the
+        // leak stays far under the (widened) port pool for the brief partition
+        // windows these sims inject, while still failing fast enough to retry
+        // promptly once the partition heals.
+        #[cfg(feature = "turmoil")]
+        {
+            use frogdb_core::cluster::network::{
+                BoxedStream as ClusterBoxedStream, ConnectFactory as ClusterConnectFactory,
+            };
+            const TURMOIL_CONNECT_TIMEOUT: std::time::Duration =
+                std::time::Duration::from_millis(2000);
+            let factory: ClusterConnectFactory =
+                std::sync::Arc::new(move |addr: std::net::SocketAddr| {
+                    Box::pin(async move {
+                        let stream = tokio::time::timeout(
+                            TURMOIL_CONNECT_TIMEOUT,
+                            turmoil::net::TcpStream::connect(addr),
+                        )
+                        .await
+                        .map_err(|_| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::TimedOut,
+                                "turmoil cluster-bus connect timed out",
+                            )
+                        })??;
+                        Ok(Box::new(stream) as ClusterBoxedStream)
+                    })
+                        as std::pin::Pin<
+                            Box<
+                                dyn std::future::Future<
+                                        Output = std::io::Result<ClusterBoxedStream>,
+                                    > + Send,
+                            >,
+                        >
+                });
+            network_factory.set_connect_factory(factory);
+        }
 
         // Wire up TLS connection factory for encrypted cluster bus.
         // Captures Arc<TlsManager> (not a snapshot connector) so that
@@ -335,30 +398,18 @@ pub(super) async fn init_cluster(
         // Only the bootstrap node assigns slots to avoid conflicts
         if should_bootstrap && !initial_members.is_empty() && !cluster.all_slots_assigned() {
             let node_ids: Vec<u64> = initial_members.keys().copied().collect();
-            let num_nodes = node_ids.len();
-            let slots_per_node = 16384 / num_nodes;
-
-            for (i, &nid) in node_ids.iter().enumerate() {
-                // Match the inclusive ranges used by the Raft replication path
-                // below so the bootstrap node and followers converge on the same
-                // slot ownership.
-                let start = (i * slots_per_node) as u16;
-                let end = if i == num_nodes - 1 {
-                    16383u16 // Last node gets remainder
-                } else {
-                    ((i + 1) * slots_per_node - 1) as u16
-                };
+            let assignments = frogdb_core::cluster::even_slot_ranges(&node_ids);
+            for (nid, range) in &assignments {
                 let cmd = frogdb_core::cluster::ClusterCommand::AssignSlots {
-                    node_id: nid,
-                    slots: vec![frogdb_core::cluster::SlotRange::new(start, end)],
+                    node_id: *nid,
+                    slots: vec![*range],
                 };
                 if let Err(e) = cluster.apply_local(cmd) {
-                    warn!(node_id = nid, error = %e, "Failed to seed slot assignment into cluster state");
+                    warn!(node_id = *nid, error = %e, "Failed to seed slot assignment into cluster state");
                 }
             }
             info!(
-                node_count = num_nodes,
-                slots_per_node = slots_per_node,
+                node_count = assignments.len(),
                 "Auto-assigned slots to cluster nodes"
             );
         }
@@ -372,8 +423,16 @@ pub(super) async fn init_cluster(
         // via Raft consensus to correct the cluster state.
         // Leaders propose directly; followers forward through the cluster bus.
         {
-            let raft_clone = raft.clone();
-            let network_factory = network_factory_clone.clone();
+            // The bootstrap spawns deliberately *drop* the redirect: on a
+            // non-leader they retry until a leader accepts the write (directly or
+            // via forward), so a `ProposeError` simply means "retry". The writer
+            // owns the propose → forward decision; this loop keeps only the
+            // retry-and-ignore policy.
+            let writer = ClusterWriter::new(
+                raft.clone(),
+                Arc::new(network_factory_clone.clone()),
+                Arc::new(cluster.clone()),
+            );
             let mut self_node =
                 frogdb_core::cluster::NodeInfo::new_primary(node_id, client_addr, cluster_bus_addr);
             self_node.replica_priority = config.cluster.replica_priority;
@@ -382,40 +441,25 @@ pub(super) async fn init_cluster(
                     let cmd = frogdb_core::cluster::ClusterCommand::AddNode {
                         node: self_node.clone(),
                     };
-                    match raft_clone.client_write(cmd).await {
-                        Ok(_) => {
+                    match writer.propose(cmd).await {
+                        Ok(Proposed::Committed(_)) => {
                             info!(
                                 node_id = node_id,
                                 "Registered self in cluster state via Raft"
                             );
                             return;
                         }
+                        Ok(Proposed::Forwarded) => {
+                            info!(node_id = node_id, "Registered self via leader forward");
+                            return;
+                        }
                         Err(e) => {
-                            // Check if this is a ForwardToLeader error
-                            use openraft::error::{ClientWriteError, RaftError};
-                            if let RaftError::APIError(ClientWriteError::ForwardToLeader(fwd)) = &e
-                                && let Some(leader_id) = fwd.leader_id
-                                && let Some(leader_addr) = network_factory.get_node_addr(leader_id)
-                            {
-                                let net = network_factory.connect(leader_id, leader_addr);
-                                let fwd_cmd = frogdb_core::cluster::ClusterCommand::AddNode {
-                                    node: self_node.clone(),
-                                };
-                                if net.forward_write(fwd_cmd).await.is_ok() {
-                                    info!(
-                                        node_id = node_id,
-                                        leader_id = leader_id,
-                                        "Registered self via leader forward"
-                                    );
-                                    return;
-                                }
-                            }
                             if attempt < 29 {
                                 tokio::time::sleep(Duration::from_millis(500)).await;
                             } else {
                                 warn!(
                                     node_id = node_id,
-                                    error = %e,
+                                    error = ?e,
                                     "Failed to self-register after 30 attempts"
                                 );
                             }
@@ -429,28 +473,25 @@ pub(super) async fn init_cluster(
         // The local assign_slots() above only updates the bootstrap node's ClusterState;
         // followers have separate ClusterState instances and need Raft log replication.
         if should_bootstrap && !initial_members.is_empty() {
-            let raft_clone = raft.clone();
-            let network_factory = network_factory_clone.clone();
+            // Same drop-the-redirect retry policy as the self-registration spawn;
+            // the writer owns the propose → forward decision.
+            let writer = ClusterWriter::new(
+                raft.clone(),
+                Arc::new(network_factory_clone.clone()),
+                Arc::new(cluster.clone()),
+            );
             let node_ids: Vec<u64> = initial_members.keys().copied().collect();
             tokio::spawn(async move {
-                let num_nodes = node_ids.len();
-                let slots_per_node = 16384 / num_nodes;
-
-                for (i, &nid) in node_ids.iter().enumerate() {
-                    let start = (i * slots_per_node) as u16;
-                    let end = if i == num_nodes - 1 {
-                        16383u16
-                    } else {
-                        ((i + 1) * slots_per_node - 1) as u16
-                    };
+                for (nid, range) in frogdb_core::cluster::even_slot_ranges(&node_ids) {
+                    let (start, end) = (range.start, range.end);
                     let cmd = frogdb_core::cluster::ClusterCommand::AssignSlots {
                         node_id: nid,
-                        slots: vec![frogdb_core::cluster::SlotRange::new(start, end)],
+                        slots: vec![range],
                     };
 
                     for attempt in 0..30 {
-                        match raft_clone.client_write(cmd.clone()).await {
-                            Ok(_) => {
+                        match writer.propose(cmd.clone()).await {
+                            Ok(Proposed::Committed(_)) => {
                                 info!(
                                     node_id = nid,
                                     start = start,
@@ -459,31 +500,22 @@ pub(super) async fn init_cluster(
                                 );
                                 break;
                             }
+                            Ok(Proposed::Forwarded) => {
+                                info!(
+                                    node_id = nid,
+                                    start = start,
+                                    end = end,
+                                    "Replicated slot assignment via leader forward"
+                                );
+                                break;
+                            }
                             Err(e) => {
-                                use openraft::error::{ClientWriteError, RaftError};
-                                if let RaftError::APIError(ClientWriteError::ForwardToLeader(fwd)) =
-                                    &e
-                                    && let Some(leader_id) = fwd.leader_id
-                                    && let Some(leader_addr) =
-                                        network_factory.get_node_addr(leader_id)
-                                {
-                                    let net = network_factory.connect(leader_id, leader_addr);
-                                    if net.forward_write(cmd.clone()).await.is_ok() {
-                                        info!(
-                                            node_id = nid,
-                                            start = start,
-                                            end = end,
-                                            "Replicated slot assignment via leader forward"
-                                        );
-                                        break;
-                                    }
-                                }
                                 if attempt < 29 {
                                     tokio::time::sleep(Duration::from_millis(500)).await;
                                 } else {
                                     warn!(
                                         node_id = nid,
-                                        error = %e,
+                                        error = ?e,
                                         "Failed to replicate slot assignment after 30 attempts"
                                     );
                                 }
@@ -504,13 +536,12 @@ pub(super) async fn init_cluster(
             let split_brain_logger = if config.replication.split_brain_log_enabled {
                 Some(SplitBrainLogger {
                     data_dir: config.persistence.data_dir.clone(),
-                    broadcaster: replication_broadcaster.clone(),
-                    // Backlog introspection lives on the concrete primary handler,
-                    // not the frame-emit broadcaster trait. Only a primary reaches
-                    // the demotion path with divergent writes to extract; a
-                    // replica's handler is `None` and yields nothing.
+                    // The primary handler owns the whole divergence window (offset
+                    // coordinator + Replication Backlog); the logger only formats
+                    // and writes the record it returns. Only a primary reaches the
+                    // demotion path with divergent writes; a replica's handler is
+                    // `None` and never diverges.
                     primary_handler: primary_replication_handler.cloned(),
-                    tracker: replication_tracker.clone(),
                     metrics: metrics_recorder.clone(),
                 })
             } else {
@@ -607,9 +638,7 @@ pub(super) async fn init_cluster(
 /// [`DemotionConsumer`] holds `None` here and the demotion still runs.
 struct SplitBrainLogger {
     data_dir: std::path::PathBuf,
-    broadcaster: SharedBroadcaster,
     primary_handler: Option<Arc<crate::replication::PrimaryReplicationHandler>>,
-    tracker: Option<Arc<ReplicationTrackerImpl>>,
     metrics: Arc<dyn MetricsRecorder>,
 }
 
@@ -624,62 +653,73 @@ impl SplitBrainLogger {
             "Split-brain demotion detected"
         );
 
-        // Determine divergence boundary.
-        let min_acked = self
-            .tracker
+        // The primary handler owns the divergence window: it computes
+        // `(start, end]` and the divergent writes from its own offset coordinator
+        // and Replication Backlog. `None` means this node did not diverge (caught
+        // up, or nothing in the backlog past the acked point) — the logger's only
+        // job is to format the record's header and write it. A replica's handler
+        // is `None` and never diverges.
+        let Some(record) = self
+            .primary_handler
             .as_ref()
-            .and_then(|t| t.min_acked_offset())
-            .unwrap_or(0);
-        let current = self.broadcaster.current_offset();
+            .and_then(|h| h.divergence_record())
+        else {
+            return;
+        };
 
-        if current > min_acked {
-            let divergent = self
-                .primary_handler
-                .as_ref()
-                .map(|h| h.extract_divergent_writes(min_acked))
-                .unwrap_or_default();
-            if !divergent.is_empty() {
-                let header = frogdb_replication::split_brain_log::SplitBrainLogHeader {
-                    timestamp: String::new(),
-                    old_primary: format!("{:x}", event.demoted_node_id),
-                    new_primary: event
-                        .new_primary_id
-                        .map(|id| format!("{:x}", id))
-                        .unwrap_or_else(|| "unknown".to_string()),
-                    epoch_old: event.epoch,
-                    epoch_new: event.epoch.saturating_add(1),
-                    seq_diverge_start: min_acked,
-                    seq_diverge_end: current,
-                    ops_discarded: divergent.len(),
-                };
+        let header = split_brain_header(event, &record);
 
-                match frogdb_replication::split_brain_log::write_log(
-                    &self.data_dir,
-                    header,
-                    &divergent,
-                ) {
-                    Ok(path) => {
-                        tracing::warn!(
-                            ops = divergent.len(),
-                            path = %path.display(),
-                            "Split-brain: {} divergent writes logged to {}",
-                            divergent.len(),
-                            path.display()
-                        );
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "Failed to write split-brain log");
-                    }
-                }
-
-                frogdb_telemetry::definitions::SplitBrainEventsTotal::inc(&*self.metrics);
-                frogdb_telemetry::definitions::SplitBrainOpsDiscardedTotal::inc_by(
-                    &*self.metrics,
-                    divergent.len() as u64,
+        match frogdb_replication::split_brain_log::write_log(&self.data_dir, header, &record.writes)
+        {
+            Ok(path) => {
+                tracing::warn!(
+                    ops = record.writes.len(),
+                    path = %path.display(),
+                    "Split-brain: {} divergent writes logged to {}",
+                    record.writes.len(),
+                    path.display()
                 );
-                frogdb_telemetry::definitions::SplitBrainRecoveryPending::set(&*self.metrics, 1.0);
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to write split-brain log");
             }
         }
+
+        frogdb_telemetry::definitions::SplitBrainEventsTotal::inc(&*self.metrics);
+        frogdb_telemetry::definitions::SplitBrainOpsDiscardedTotal::inc_by(
+            &*self.metrics,
+            record.writes.len() as u64,
+        );
+        frogdb_telemetry::definitions::SplitBrainRecoveryPending::set(&*self.metrics, 1.0);
+    }
+}
+
+/// Format the split-brain log header from the demotion event and the divergence
+/// record the primary handler computed.
+///
+/// The metadata-plane fields (`old_primary`/`new_primary`/`epoch_*`) come from
+/// the [`frogdb_core::DemotionEvent`]; the divergence-window fields are a direct
+/// mapping from the [`frogdb_replication::DivergenceRecord`]
+/// (`start → seq_diverge_start`, `end → seq_diverge_end`,
+/// `writes.len() → ops_discarded`). Extracted so this format contract is pinned
+/// by a unit test and cannot silently drift now that the window computation lives
+/// in the handler.
+fn split_brain_header(
+    event: &frogdb_core::DemotionEvent,
+    record: &frogdb_replication::DivergenceRecord,
+) -> frogdb_replication::split_brain_log::SplitBrainLogHeader {
+    frogdb_replication::split_brain_log::SplitBrainLogHeader {
+        timestamp: String::new(),
+        old_primary: format!("{:x}", event.demoted_node_id),
+        new_primary: event
+            .new_primary_id
+            .map(|id| format!("{:x}", id))
+            .unwrap_or_else(|| "unknown".to_string()),
+        epoch_old: event.epoch,
+        epoch_new: event.epoch.saturating_add(1),
+        seq_diverge_start: record.start,
+        seq_diverge_end: record.end,
+        ops_discarded: record.writes.len(),
     }
 }
 
@@ -810,16 +850,15 @@ mod tests {
         );
     }
 
-    /// A real `SplitBrainLogger` wired with no-op collaborators. Its `log()`
-    /// runs (emitting the split-brain log line) but, with a zero broadcaster
-    /// offset and no primary handler, takes the no-divergence fast path — so the
-    /// test exercises the logger-present arm without staging divergent writes.
+    /// A real `SplitBrainLogger` with no primary handler. Its `log()` runs
+    /// (emitting the split-brain log line) but, with `primary_handler: None`,
+    /// `divergence_record()` is never reached and it takes the no-divergence
+    /// fast path — so the test exercises the logger-present arm without staging
+    /// divergent writes.
     fn noop_logger() -> SplitBrainLogger {
         SplitBrainLogger {
             data_dir: std::env::temp_dir(),
-            broadcaster: Arc::new(frogdb_core::NoopBroadcaster),
             primary_handler: None,
-            tracker: None,
             metrics: Arc::new(frogdb_core::NoopMetricsRecorder),
         }
     }
@@ -856,6 +895,57 @@ mod tests {
         );
     }
 
+    /// Regression guard for the split-brain log format contract: the header must
+    /// map the divergence record's fields exactly (`start → seq_diverge_start`,
+    /// `end → seq_diverge_end`, `writes.len() → ops_discarded`) and derive the
+    /// metadata fields from the `DemotionEvent`. Pinned here so the mapping cannot
+    /// silently drift now that the window computation moved into the handler.
+    #[test]
+    fn split_brain_header_maps_record_and_event_fields() {
+        let event = DemotionEvent {
+            demoted_node_id: 0xabc,
+            new_primary_id: Some(0xdef),
+            epoch: 7,
+        };
+        let record = frogdb_replication::DivergenceRecord {
+            start: 100,
+            end: 250,
+            writes: vec![
+                (150, bytes::Bytes::from_static(b"a")),
+                (250, bytes::Bytes::from_static(b"b")),
+            ],
+        };
+
+        let header = split_brain_header(&event, &record);
+
+        // Divergence-window fields map straight from the record.
+        assert_eq!(header.seq_diverge_start, record.start);
+        assert_eq!(header.seq_diverge_end, record.end);
+        assert_eq!(header.ops_discarded, record.writes.len());
+        // Metadata-plane fields come from the event (hex-formatted).
+        assert_eq!(header.old_primary, "abc");
+        assert_eq!(header.new_primary, "def");
+        assert_eq!(header.epoch_old, 7);
+        assert_eq!(header.epoch_new, 8);
+    }
+
+    /// An unknown new primary formats as "unknown".
+    #[test]
+    fn split_brain_header_unknown_new_primary() {
+        let event = DemotionEvent {
+            demoted_node_id: 1,
+            new_primary_id: None,
+            epoch: 3,
+        };
+        let record = frogdb_replication::DivergenceRecord {
+            start: 0,
+            end: 10,
+            writes: vec![(10, bytes::Bytes::from_static(b"x"))],
+        };
+        let header = split_brain_header(&event, &record);
+        assert_eq!(header.new_primary, "unknown");
+    }
+
     /// A demotion event whose new primary is not yet in the committed topology
     /// cannot resolve an address, so no demotion is issued (and nothing panics).
     #[test]
@@ -872,6 +962,329 @@ mod tests {
         assert!(
             controller.demotes.lock().unwrap().is_empty(),
             "unknown new primary must not trigger a demotion"
+        );
+    }
+
+    // ========================================================================
+    // Split-brain divergence lifecycle (end-to-end through the real logger)
+    //
+    // Issue 15 (audit gap E#5): the individual mechanisms (`divergence_record`,
+    // `write_log`, `has_pending_logs`, the header mapping) are unit-tested, but
+    // nothing drove the full production glue — `SplitBrainLogger::log` on a real
+    // `PrimaryReplicationHandler` that actually diverged — end to end. The old
+    // `noop_logger()` (`primary_handler: None`) never reached `divergence_record`,
+    // so the log-file body, the `SplitBrainOpsDiscardedTotal` count, and the
+    // buffer-overflow truncation path were all unexercised.
+    //
+    // These tests stage a real divergence on a real handler and invoke the exact
+    // code the Raft `DemotionConsumer` runs in production (`logger.log` /
+    // `consumer.handle`), asserting the audit file contents, the telemetry, and
+    // that the demotion (which triggers discard-via-resync-from-the-new-primary)
+    // is still issued.
+    // ========================================================================
+
+    use frogdb_replication::{
+        LagThresholdConfig, Phase, PrimaryReplicationHandler, ReplicationBroadcaster,
+        ReplicationTrackerImpl, SplitBrainBufferConfig, state::ReplicationState,
+    };
+    use frogdb_telemetry::PrometheusRecorder;
+
+    /// Build a real primary handler with an enabled split-brain backlog of
+    /// `buffer_entries` capacity. No I/O beyond a temp state path.
+    fn split_brain_handler(
+        data_dir: &std::path::Path,
+        buffer_entries: usize,
+    ) -> Arc<PrimaryReplicationHandler> {
+        Arc::new(PrimaryReplicationHandler::new(
+            ReplicationState::new(),
+            data_dir.join("replication_state.json"),
+            Arc::new(ReplicationTrackerImpl::new()),
+            None,
+            data_dir.to_path_buf(),
+            LagThresholdConfig {
+                threshold_bytes: 0,
+                threshold_secs: 0,
+                cooldown: Duration::from_secs(0),
+            },
+            SplitBrainBufferConfig {
+                enabled: true,
+                max_entries: buffer_entries,
+                max_bytes: 64 * 1024 * 1024,
+            },
+            0,
+        ))
+    }
+
+    /// Broadcast a `SET key val` through the primary path (advances the live
+    /// offset AND records into the backlog, exactly as production writes do).
+    fn broadcast_set(handler: &PrimaryReplicationHandler, key: &str, val: &str) -> u64 {
+        handler.broadcast_command_on_shard(
+            0,
+            "SET",
+            &[
+                bytes::Bytes::from(key.to_string()),
+                bytes::Bytes::from(val.to_string()),
+            ],
+        )
+    }
+
+    /// Register a streaming replica and pin its acked offset at `acked`, so it
+    /// contributes to `min_acked` (the divergence lower bound).
+    fn streaming_replica_acked_at(handler: &PrimaryReplicationHandler, addr: &str, acked: u64) {
+        let session = handler.tracker().register_replica(addr.parse().unwrap());
+        session.force_phase_for_test(Phase::Streaming);
+        assert!(
+            session.seed_acked_position(acked),
+            "seed must advance the replica's acked offset"
+        );
+    }
+
+    /// Locate the single `split_brain_discarded_*.log` written into `dir` and
+    /// return its contents. Panics if there is not exactly one.
+    fn read_split_brain_log(dir: &std::path::Path) -> String {
+        let mut matches: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().starts_with("split_brain_discarded_"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "expected exactly one split-brain log, found {:?}",
+            matches
+        );
+        std::fs::read_to_string(matches.pop().unwrap()).unwrap()
+    }
+
+    /// Full split-brain lifecycle through the production `DemotionConsumer`:
+    ///
+    /// A primary accepts writes the cluster acknowledged (up to `acked`), then —
+    /// during the partition modelled here by the replica no longer advancing its
+    /// ACK — accepts further "divergent" writes past that acked point. On the
+    /// committed demotion the consumer must:
+    ///   1. capture exactly the divergent writes (offset > acked) into the audit
+    ///      log, excluding the acknowledged ones (which the new primary retains);
+    ///   2. stamp the divergence window (`seq_diverge_start`/`seq_diverge_end`)
+    ///      and `ops_discarded` to match the record;
+    ///   3. bump `SplitBrainOpsDiscardedTotal` / `SplitBrainEventsTotal` and raise
+    ///      the `SplitBrainRecoveryPending` gauge; and
+    ///   4. still issue the Role Demotion — the reconciliation step that discards
+    ///      the divergent writes by resyncing this node from the new primary.
+    ///
+    /// (4) only *initiates* the discard; the data-path replacement is the resync
+    /// path — see `test_broadcast_lag_disconnect_and_resync` in
+    /// `tests/integration_replication.rs`, which pins that a partial resync
+    /// converges the live keyspace while a full resync stages a checkpoint that
+    /// installs on the next boot. The Raft transport that would normally deliver
+    /// the `DemotionEvent` is stubbed by invoking `consumer.handle` directly with
+    /// the event the metadata plane commits.
+    #[test]
+    fn split_brain_lifecycle_captures_audit_and_initiates_discard() {
+        let dir = tempfile::tempdir().unwrap();
+        let handler = split_brain_handler(dir.path(), 1000);
+
+        // Writes the cluster acknowledged.
+        broadcast_set(&handler, "acked_key_a", "va");
+        let acked = broadcast_set(&handler, "acked_key_b", "vb");
+        // A streaming replica pinned at the acked head fixes the divergence floor.
+        streaming_replica_acked_at(&handler, "127.0.0.1:6390", acked);
+
+        // Divergent writes committed past the acked point (the "both sides keep
+        // writing" phase of the split).
+        let mut divergent_keys = Vec::new();
+        let mut last = acked;
+        for i in 0..5 {
+            let key = format!("div_key_{i}");
+            last = broadcast_set(&handler, &key, &format!("div_val_{i}"));
+            divergent_keys.push(key);
+        }
+        let current = last;
+
+        // Sanity: the handler agrees it diverged over exactly (acked, current].
+        let record = handler.divergence_record().expect("primary diverged");
+        assert_eq!(record.start, acked);
+        assert_eq!(record.end, current);
+        assert_eq!(record.writes.len(), divergent_keys.len());
+
+        // Drive the real production consumer with a committed demotion event.
+        let new_id = 0xB0Bu64;
+        let new_primary_addr = addr("127.0.0.1:7002");
+        let recorder = Arc::new(PrometheusRecorder::new());
+        let controller = Arc::new(RecordingController::default());
+        let consumer = DemotionConsumer {
+            split_brain_logger: Some(SplitBrainLogger {
+                data_dir: dir.path().to_path_buf(),
+                primary_handler: Some(handler.clone()),
+                metrics: recorder.clone(),
+            }),
+            cluster_state: cluster_with_primary(new_id, new_primary_addr),
+            role_controller: controller.clone(),
+        };
+
+        let event = DemotionEvent {
+            demoted_node_id: 0xA,
+            new_primary_id: Some(new_id),
+            epoch: 41,
+        };
+        consumer.handle(&event);
+
+        // ---- (1)+(2) audit file: exactly the divergent writes + the window.
+        assert!(
+            frogdb_replication::split_brain_log::has_pending_logs(dir.path()),
+            "a pending split-brain log must exist after a divergent demotion"
+        );
+        let body = read_split_brain_log(dir.path());
+        assert!(body.contains(&format!("seq_diverge_start={acked}")));
+        assert!(body.contains(&format!("seq_diverge_end={current}")));
+        assert!(body.contains(&format!("ops_discarded={}", divergent_keys.len())));
+        assert!(body.contains("old_primary=a")); // 0xA hex
+        assert!(body.contains("new_primary=b0b")); // 0xB0B hex
+        assert!(body.contains("epoch_old=41"));
+        assert!(body.contains("epoch_new=42"));
+        // The divergent writes are present...
+        for key in &divergent_keys {
+            assert!(
+                body.contains(key),
+                "audit log missing divergent write {key}"
+            );
+        }
+        // ...and the acknowledged writes are NOT surrendered (the new primary
+        // already holds them; only writes past the acked floor are discarded).
+        assert!(
+            !body.contains("acked_key_a") && !body.contains("acked_key_b"),
+            "acknowledged writes must not appear in the discard audit"
+        );
+
+        // ---- (3) telemetry matches the discard count exactly.
+        assert_eq!(
+            recorder.counter_value("frogdb_split_brain_ops_discarded_total"),
+            Some(divergent_keys.len() as u64),
+            "SplitBrainOpsDiscardedTotal must equal the number of discarded ops"
+        );
+        assert_eq!(
+            recorder.counter_value("frogdb_split_brain_events_total"),
+            Some(1),
+            "one split-brain event was recorded"
+        );
+        assert_eq!(
+            recorder.gauge_value("frogdb_split_brain_recovery_pending"),
+            Some(1.0),
+            "recovery-pending gauge must be raised while a log awaits processing"
+        );
+
+        // ---- (4) the demotion (discard-via-resync) is still issued.
+        assert_eq!(
+            *controller.demotes.lock().unwrap(),
+            vec![new_primary_addr],
+            "demotion to the new primary must fire so the divergent node resyncs \
+             (discarding its divergent writes)"
+        );
+    }
+
+    /// Buffer-overflow / truncation behavior (issue 15, audit gap E#5: "the
+    /// truncation path untested"). When the divergence exceeds
+    /// `split_brain_buffer_size`, the ring buffer evicts oldest-first (FIFO), so
+    /// the audit captures only the retained *tail* of the divergent writes.
+    ///
+    /// This test pins the *actual* designed behavior and its boundary honestly:
+    ///   - Well-defined, no corruption: every retained RESP entry is intact and
+    ///     the retained set is the newest `max_entries` writes, in order.
+    ///   - NOT fully observable: there is no truncation marker in the file, and
+    ///     `ops_discarded` counts only the *retained* entries — it undercounts
+    ///     the true divergence span `(seq_diverge_start, seq_diverge_end]`. The
+    ///     evicted oldest writes are silently absent from the audit.
+    ///
+    /// The observable signal that truncation occurred is indirect: the first
+    /// retained offset sits strictly above `seq_diverge_start`, leaving an
+    /// unaudited gap. Documented here rather than asserted as "correct" because
+    /// it is a real limitation of the current audit (a follow-up could emit a
+    /// truncation marker / dedicated metric).
+    #[test]
+    fn split_brain_buffer_overflow_truncates_audit_silently() {
+        let dir = tempfile::tempdir().unwrap();
+        const CAP: usize = 8;
+        let handler = split_brain_handler(dir.path(), CAP);
+
+        // No streaming replica ⇒ divergence floor is 0, so *every* write is
+        // divergent — but the buffer only retains the last CAP of them.
+        const TOTAL: usize = 20;
+        let mut last = 0u64;
+        for i in 0..TOTAL {
+            last = broadcast_set(
+                &handler,
+                &format!("of_key_{i:02}"),
+                &format!("of_val_{i:02}"),
+            );
+        }
+        let current = last;
+
+        let record = handler.divergence_record().expect("primary diverged");
+        assert_eq!(record.start, 0, "no acked replica ⇒ zero floor");
+        assert_eq!(record.end, current);
+        // The window spans all TOTAL writes, but only CAP survived the buffer.
+        assert_eq!(
+            record.writes.len(),
+            CAP,
+            "overflow retains exactly the newest max_entries writes"
+        );
+        // Truncation is silent: the oldest retained offset is strictly above the
+        // divergence start, so [start, oldest_retained) is an unaudited gap.
+        let oldest_retained = record.writes.first().map(|(o, _)| *o).unwrap();
+        assert!(
+            oldest_retained > record.start,
+            "overflow leaves an unaudited gap below the oldest retained write"
+        );
+
+        let recorder = Arc::new(PrometheusRecorder::new());
+        let logger = SplitBrainLogger {
+            data_dir: dir.path().to_path_buf(),
+            primary_handler: Some(handler.clone()),
+            metrics: recorder.clone(),
+        };
+        logger.log(&DemotionEvent {
+            demoted_node_id: 1,
+            new_primary_id: Some(2),
+            epoch: 5,
+        });
+
+        let body = read_split_brain_log(dir.path());
+
+        // The newest CAP writes are retained, intact and in order...
+        for i in (TOTAL - CAP)..TOTAL {
+            assert!(
+                body.contains(&format!("of_key_{i:02}")),
+                "retained tail must contain of_key_{i:02}"
+            );
+        }
+        // ...the evicted oldest writes are silently dropped (no truncation marker).
+        for i in 0..(TOTAL - CAP) {
+            assert!(
+                !body.contains(&format!("of_key_{i:02}")),
+                "evicted write of_key_{i:02} must be absent from the audit"
+            );
+        }
+        assert!(
+            !body.to_lowercase().contains("truncat"),
+            "current audit emits NO truncation marker (documented boundary)"
+        );
+
+        // The window header still reports the *true* span (start=0..current),
+        // while ops_discarded reflects only the retained tail — so the header
+        // and the body disagree on the true divergence size. This is the
+        // observability gap: ops_discarded undercounts the real divergence.
+        assert!(body.contains("seq_diverge_start=0"));
+        assert!(body.contains(&format!("seq_diverge_end={current}")));
+        assert!(body.contains(&format!("ops_discarded={CAP}")));
+        assert_eq!(
+            recorder.counter_value("frogdb_split_brain_ops_discarded_total"),
+            Some(CAP as u64),
+            "telemetry counts only the retained (audited) ops, not the true \
+             divergence span — the truncation is not separately observable"
         );
     }
 }

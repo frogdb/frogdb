@@ -16,7 +16,7 @@ use crate::net::{JoinHandle, spawn};
 use crate::observability_server::ObservabilityServer;
 use crate::replication::{ReplicaCommandExecutor, consume_frames};
 
-use crate::config::{HotShardsConfigExt, MemoryConfigExt, StatusConfigExt};
+use crate::config::{MemoryConfigExt, StatusConfigExt};
 
 use super::Server;
 
@@ -120,6 +120,9 @@ impl Server {
                 self.replication_tracker.clone(),
                 mode.clone(),
                 self.role_manager_handle.clone(),
+                self.raft
+                    .clone()
+                    .map(|r| r as Arc<dyn crate::debug_providers::LeaderReader>),
             ));
 
             let debug_state = DebugState::new(
@@ -445,8 +448,8 @@ impl Server {
             new_conn_senders: std::mem::take(&mut self.new_conn_senders),
             allow_cross_slot: self.config.server.allow_cross_slot_standalone,
             scatter_gather_timeout_ms: self.config.server.scatter_gather_timeout_ms,
+            pubsub_output_buffer_hard_limit: self.config.server.pubsub_output_buffer_hard_limit,
             admin_enabled,
-            hotshards_config: self.config.hotshards.to_collector_config(),
             memory_diag_config: self.config.memory.to_diag_config(),
             max_clients: self.config_manager.max_clients_flag(),
             is_replica: self.is_replica_flag.clone(),

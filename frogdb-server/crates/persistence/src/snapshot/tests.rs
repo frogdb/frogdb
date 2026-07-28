@@ -2,7 +2,6 @@ use super::stager::SnapshotStager;
 use super::*;
 use crate::rocks::{RocksConfig, RocksStore};
 use std::path::Path;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tempfile::TempDir;
 #[test]
@@ -10,43 +9,102 @@ fn test_noop_coordinator() {
     let c = NoopSnapshotCoordinator::new();
     assert!(c.last_save_time().is_none());
     assert!(!c.in_progress());
+    // Instant completion (proposal 21): the no-op is now backed by the real
+    // `SnapshotScheduler` and has no background loop, so a started save claims
+    // *and releases* the slot synchronously. `in_progress()` is therefore false
+    // the moment `start_snapshot` returns; the observable contract is the
+    // advancing epoch and the stamped `last_save`.
     let h = c.start_snapshot().unwrap();
-    assert!(c.in_progress());
-    assert!(c.last_save_time().is_some());
     assert_eq!(h.epoch(), 1);
-    drop(h);
+    assert!(c.last_save_time().is_some());
+    assert!(!c.in_progress());
+    // A second save advances the epoch again — no lingering in-progress window.
+    let h2 = c.start_snapshot().unwrap();
+    assert_eq!(h2.epoch(), 2);
     assert!(!c.in_progress());
 }
 #[test]
-fn test_noop_rejects_concurrent() {
+fn test_noop_start_advances_epoch_monotonically() {
+    // Deliberate semantic flip (proposal 21): under instant completion there is
+    // no genuinely concurrent in-flight save, so holding a handle no longer pins
+    // the slot. Back-to-back `start_snapshot`s each succeed with a monotonically
+    // advancing epoch — where the old copy returned `AlreadyInProgress`.
     let c = NoopSnapshotCoordinator::new();
-    let _h = c.start_snapshot().unwrap();
-    assert!(matches!(
-        c.start_snapshot(),
-        Err(SnapshotError::AlreadyInProgress)
-    ));
+    let h1 = c.start_snapshot().unwrap();
+    let h2 = c.start_snapshot().unwrap();
+    assert_eq!(h1.epoch(), 1);
+    assert_eq!(h2.epoch(), 2);
 }
 #[test]
-fn test_handle_drop_releases_flag() {
+fn test_noop_request_always_starts_when_quiescent() {
+    // Backing the no-op with the real scheduler + instant completion means a
+    // quiescent coordinator always `Started`s a fresh save (never `Coalesced`/
+    // `AlreadyRunning`), and the epoch advances every call. This is the
+    // observable face of the delegation: `complete_instantly` releases the slot
+    // before each call returns.
+    let c = NoopSnapshotCoordinator::new();
+    for expected in 1..=5 {
+        assert_eq!(
+            c.request_snapshot(SnapshotMode::Immediate),
+            SnapshotRequest::Started(expected)
+        );
+        assert!(!c.in_progress(), "instant completion releases the slot");
+    }
+    // Schedule mode behaves identically when idle: nothing to coalesce with.
+    assert_eq!(
+        c.request_snapshot(SnapshotMode::Schedule),
+        SnapshotRequest::Started(6)
+    );
+}
+#[test]
+fn test_noop_concurrent_request_storm_settles_idle() {
     use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
-    // Dropping a `completing` handle releases the flag: this is the RAII wiring
-    // the no-op coordinator actually relies on (production Rocks tracks
-    // completion via the scheduler instead — see
-    // `test_handle_production_drop_is_noop`).
-    let in_progress = Arc::new(AtomicBool::new(true));
-    let h = SnapshotHandle::completing(7, in_progress.clone());
-    assert!(in_progress.load(Ordering::SeqCst));
-    drop(h);
-    assert!(!in_progress.load(Ordering::SeqCst));
+    use std::thread;
+    // Concurrent BGSAVE SCHEDULE storm through the no-op coordinator. Because it
+    // now *is* the `SnapshotScheduler`, it inherits the closed lost-wakeup
+    // guarantee: whichever caller `Started`s owns the run and drains coalesced
+    // follow-ups inline (`complete_instantly`); at quiescence the slot is
+    // released and no follow-up is stranded. A non-draining `complete_instantly`
+    // would leave `in_progress == true` forever — the primary guard here.
+    for _ in 0..200 {
+        let c = Arc::new(NoopSnapshotCoordinator::new());
+        let threads: Vec<_> = (0..6)
+            .map(|_| {
+                let c = c.clone();
+                thread::spawn(move || {
+                    c.request_snapshot(SnapshotMode::Schedule);
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert!(
+            !c.in_progress(),
+            "no-op coordinator must settle idle at quiescence"
+        );
+        assert!(c.last_save_time().is_some(), "at least one save ran");
+        // No stranded follow-up: two quiescent starts advance the epoch by
+        // exactly 1 each. A dangling `scheduled` flag would drain into a phantom
+        // run and jump the counter further.
+        match (
+            c.request_snapshot(SnapshotMode::Immediate),
+            c.request_snapshot(SnapshotMode::Immediate),
+        ) {
+            (SnapshotRequest::Started(a), SnapshotRequest::Started(b)) => {
+                assert_eq!(b, a + 1, "quiescent starts must advance by exactly 1");
+            }
+            other => panic!("expected two Started results, got {other:?}"),
+        }
+    }
 }
 #[test]
-fn test_handle_production_drop_is_noop() {
-    // Production handles (`new`) carry no completion flag; Drop is a no-op and
-    // costs a single `Option` check — no inert closure on the hot path.
+fn test_handle_is_bare_epoch_carrier() {
+    // The handle is now always a bare epoch carrier (proposal 21): it holds no
+    // completion state and implements no `Drop`. Completion is owned by the
+    // coordinator's scheduler, not the handle.
     let h = SnapshotHandle::new(3);
     assert_eq!(h.epoch(), 3);
-    drop(h);
 }
 #[test]
 fn test_metadata_file_new() {
@@ -176,19 +234,53 @@ fn stager(
     }
 }
 
-/// Write a minimal `search/<index>/<shard>/<files>` sidecar under `data_dir`,
-/// matching the layout `copy_search_indexes` walks.
+/// Write a minimal `search/<index>/shard_<n>/<files>` sidecar under `data_dir`,
+/// matching the live layout `frogdb_core::IndexLifecycleManager::index_dir`
+/// produces. Used to prove the stager *excludes* this tree from a snapshot
+/// (proposal 23, DELETE branch): the checkpoint never copies the sidecar.
 fn write_search_sidecar(data_dir: &Path) {
-    let shard = data_dir.join("search").join("idx").join("0");
+    let shard = data_dir.join("search").join("idx").join("shard_0");
     std::fs::create_dir_all(&shard).unwrap();
     std::fs::write(shard.join("segment.dat"), b"index-bytes").unwrap();
     std::fs::write(shard.join("meta.json"), b"{}").unwrap();
 }
 
-/// Happy path: a complete `snapshot_NNNNN/{checkpoint,search,metadata.json}` is
+/// Happy path: a complete `snapshot_NNNNN/{checkpoint,metadata.json}` is
 /// promoted, the staging dir is gone, and `latest` points at the new snapshot.
 #[test]
 fn test_stager_happy_path() {
+    let db = TempDir::new().unwrap();
+    let store = make_store(db.path());
+    let snap = TempDir::new().unwrap();
+    let data = TempDir::new().unwrap();
+
+    let md = stager(snap.path(), data.path(), 1, 5).run(&store).unwrap();
+
+    assert!(md.is_complete());
+    let dir = snap.path().join("snapshot_00001");
+    assert!(dir.join("checkpoint").is_dir());
+    assert!(dir.join("metadata.json").exists());
+    assert!(
+        !snap.path().join(".snapshot_00001.tmp").exists(),
+        "staging dir must be gone after a successful promote"
+    );
+    assert!(md.size_bytes > 0, "size should reflect the checkpoint");
+    #[cfg(unix)]
+    assert_eq!(
+        std::fs::read_link(snap.path().join("latest")).unwrap(),
+        Path::new("snapshot_00001")
+    );
+}
+
+/// Decision guard (proposal 23, DELETE branch): a snapshot excludes the
+/// search-index sidecar. Even with a fully-populated `<data_dir>/search` tree
+/// present, the promoted `snapshot_NNNNN` contains the RocksDB checkpoint and
+/// `metadata.json` but **no** `search/` subtree. Pins the deletion so the copy
+/// cannot silently return; if a restore-from-sidecar consumer is ever added, this
+/// test is the deliberate red that says "re-add the copy" (see the note in
+/// `SnapshotStager::run`).
+#[test]
+fn test_stager_excludes_search_sidecar() {
     let db = TempDir::new().unwrap();
     let store = make_store(db.path());
     let snap = TempDir::new().unwrap();
@@ -200,23 +292,20 @@ fn test_stager_happy_path() {
     assert!(md.is_complete());
     let dir = snap.path().join("snapshot_00001");
     assert!(dir.join("checkpoint").is_dir());
-    assert!(
-        dir.join("search")
-            .join("idx")
-            .join("0")
-            .join("segment.dat")
-            .exists()
-    );
     assert!(dir.join("metadata.json").exists());
     assert!(
-        !snap.path().join(".snapshot_00001.tmp").exists(),
-        "staging dir must be gone after a successful promote"
+        !dir.join("search").exists(),
+        "the search sidecar must not be copied into a snapshot"
     );
-    assert!(md.size_bytes > 0, "size should reflect checkpoint + search");
-    #[cfg(unix)]
-    assert_eq!(
-        std::fs::read_link(snap.path().join("latest")).unwrap(),
-        Path::new("snapshot_00001")
+    // And the live sidecar under data_dir is left untouched (the writer owns it).
+    assert!(
+        data.path()
+            .join("search")
+            .join("idx")
+            .join("shard_0")
+            .join("segment.dat")
+            .exists(),
+        "the live sidecar must be untouched by snapshotting"
     );
 }
 
@@ -250,53 +339,12 @@ fn test_stager_checkpoint_failure_aborts_cleanly() {
     );
 }
 
-/// Search-copy failure aborts (flag 1 regression): a snapshot missing its search
-/// sidecar is never installed. The previous complete snapshot and its `latest`
-/// pointer are left untouched as the recovery source.
-#[test]
-fn test_stager_search_copy_failure_aborts_preserving_previous() {
-    let db = TempDir::new().unwrap();
-    let store = make_store(db.path());
-    let snap = TempDir::new().unwrap();
-    let data = TempDir::new().unwrap();
-
-    // First snapshot (no sidecar) succeeds and becomes the recovery source.
-    stager(snap.path(), data.path(), 1, 5).run(&store).unwrap();
-    assert!(
-        snap.path()
-            .join("snapshot_00001")
-            .join("metadata.json")
-            .exists()
-    );
-
-    // Make `data_dir/search` a *file* so `copy_search_indexes` fails.
-    std::fs::write(data.path().join("search"), b"not a dir").unwrap();
-
-    let res = stager(snap.path(), data.path(), 2, 5).run(&store);
-
-    assert!(res.is_err(), "search-copy failure must abort the snapshot");
-    assert!(
-        !snap.path().join("snapshot_00002").exists(),
-        "an incomplete snapshot must never be installed"
-    );
-    assert!(
-        !snap.path().join(".snapshot_00002.tmp").exists(),
-        "the staging dir must be reclaimed on abort"
-    );
-    assert!(
-        snap.path()
-            .join("snapshot_00001")
-            .join("metadata.json")
-            .exists(),
-        "the previous good snapshot must survive"
-    );
-    #[cfg(unix)]
-    assert_eq!(
-        std::fs::read_link(snap.path().join("latest")).unwrap(),
-        Path::new("snapshot_00001"),
-        "latest must still point at the previous good snapshot"
-    );
-}
+// (Removed `test_stager_search_copy_failure_aborts_preserving_previous`: the
+// search-copy stage it exercised was deleted in proposal 23's DELETE branch — a
+// snapshot no longer copies the sidecar, so a bad `<data_dir>/search` can no
+// longer abort a snapshot. The general abort-preserves-previous invariant is
+// still covered by `test_stager_checkpoint_failure_aborts_cleanly` and
+// `test_stager_promote_rename_failure_leaves_no_leak`.)
 
 /// Promote-rename failure leaves no leak (flag 2 regression): the final
 /// `tmp -> snapshot_NNNNN` rename fails onto a non-empty target, and the RAII

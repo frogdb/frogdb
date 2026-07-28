@@ -148,13 +148,17 @@ The `wal-failure-policy` (`WalFailurePolicy`) selects what happens when a WAL ap
 
 ### WAL Corruption Recovery
 
-| Corruption Type | Detection | Default Recovery |
-|-----------------|-----------|------------------|
-| **Truncated entry** | Entry length exceeds remaining file bytes | Truncate WAL at corruption point |
-| **Checksum mismatch** | Entry checksum does not match | Truncate WAL at corruption point |
-| **Invalid type marker** | Unknown operation type byte | Truncate WAL at corruption point |
+FrogDB **explicitly pins** the RocksDB WAL recovery mode to `PointInTime` (`rocksdb::DBRecoveryMode::PointInTime`, set in `frogdb-server/crates/persistence/src/rocks/mod.rs`). It is not left at RocksDB's implicit default — pinning it makes the recovery contract a deliberate, tested decision that a future RocksDB version cannot silently change.
 
-**Why truncation is the default:** a crash mid-write leaves a partial entry at the tail of the WAL. Truncating there is safe, the most recent snapshot provides a fallback, and this matches Redis AOF behavior.
+| Corruption Type | Detection | Recovery under `PointInTime` |
+|-----------------|-----------|------------------------------|
+| **Truncated entry** (torn tail) | Entry length exceeds remaining file bytes | Recover the valid prefix; drop the torn tail |
+| **Checksum mismatch** (mid-log) | Entry checksum does not match | Recover the valid prefix *up to the first bad record*, then stop — every record after the corruption is dropped, even if individually valid |
+| **Invalid type marker** | Unknown operation type byte | Same as checksum mismatch: stop at the first bad record |
+
+**Why `PointInTime`:** it recovers the longest uninterrupted prefix of valid records and stops at the first checksum failure — recovered state is therefore always a real *prefix* of history and never interleaves post-corruption records. This mirrors Redis point-in-time AOF loading (`aof-load-truncated`). The alternatives are worse for a database: `AbsoluteConsistency` would refuse to open at all on an ordinary torn tail, turning every unclean shutdown into a hard startup failure; `SkipAnyCorruptedRecord` keeps replaying *past* a corrupt record, which can resurrect stale values and reorder history.
+
+**The sharp edge — and the signal for it:** on a mid-log corruption, `PointInTime` silently drops the (possibly still-valid) suffix behind the first bad record. To keep that from being invisible, FrogDB persists a durable-sync sequence watermark next to the database (the `rocks::wal_watermark` module). Each fsync'd WAL batch advances the watermark; on the next open, recovery compares the sequence it actually reached against the watermark. Landing **below** it means committed records were dropped, so FrogDB emits the `frogdb_wal_recovery_dropped_records_total` counter and a WARN log carrying the exact number of lost sequence numbers. The watermark is written best-effort (it can only lag the true durable sequence after a crash, never lead it), so this signal never false-alarms on a clean recovery — it can only under-report. The most recent snapshot provides a fallback for the dropped suffix.
 
 ---
 

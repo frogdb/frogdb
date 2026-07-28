@@ -18,10 +18,6 @@ pub enum ScriptError {
     #[error("ERR script memory limit exceeded")]
     MemoryLimitExceeded,
 
-    /// Key not declared in KEYS array (strict mode).
-    #[error("ERR script tried to access undeclared key '{key}'")]
-    UndeclaredKey { key: String },
-
     /// Keys belong to different shards (CROSSSLOT).
     #[error("CROSSSLOT Keys in request don't hash to the same slot")]
     CrossSlot,
@@ -121,15 +117,6 @@ mod tests {
     fn test_noscript_error() {
         let err = ScriptError::NoScript;
         assert!(err.to_string().contains("NOSCRIPT"));
-    }
-
-    #[test]
-    fn test_undeclared_key_error() {
-        let err = ScriptError::UndeclaredKey {
-            key: "mykey".to_string(),
-        };
-        assert!(err.to_string().contains("mykey"));
-        assert!(err.to_string().contains("undeclared key"));
     }
 
     #[test]

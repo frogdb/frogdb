@@ -21,6 +21,31 @@ use frogdb_search::wire::{FtShardReply, ShardSearchHit};
 use crate::cursor_store::AggregateCursorStore;
 use crate::scatter::MergeStrategy;
 
+/// Turn a reply a search merge did not expect into an error to abort on, rather
+/// than silently dropping it (issue #15 item 4).
+///
+/// A search fan-out (FT.SEARCH / FT.HYBRID / FT.AGGREGATE) only ever expects a
+/// typed [`PartialResult::Ft`] reply. The one other shape it can legitimately
+/// receive is the Continuation-Lock conflict fallback: a shard whose keys are
+/// held by an in-flight MULTI/EXEC or Lua script rejects the scatter part with
+/// the conflict error carried inside a [`PartialResult::Keyed`] reply (see
+/// `dispatch_core::scatter_conflict_reply`). Surface that embedded error so the
+/// merge aborts and the client sees the failure — never a truncated result set
+/// returned as success. Any other shape is a dispatch bug and is surfaced
+/// loudly instead of swallowed.
+fn shard_conflict_or_bug(reply: PartialResult, cmd: &str) -> Response {
+    if let Some((_, resp)) = reply
+        .keyed_slice()
+        .iter()
+        .find(|(_, resp)| matches!(resp, Response::Error(_)))
+    {
+        return resp.clone();
+    }
+    Response::error(format!(
+        "ERR {cmd}: shard returned an unmergeable reply shape"
+    ))
+}
+
 /// Return the first embedded error from any shard, else `OK`.
 ///
 /// Shared by the FT admin broadcasts (FT.CREATE / FT.ALTER / FT.DROPINDEX /
@@ -42,7 +67,7 @@ impl MergeStrategy for OkOrFirstError {
         if self.error.is_some() {
             return;
         }
-        for (_, resp) in &reply.results {
+        for (_, resp) in reply.keyed_slice() {
             if let Response::Error(_) = resp {
                 self.error = Some(resp.clone());
                 break;
@@ -74,7 +99,7 @@ impl MergeStrategy for TagValsUnion {
         if self.error.is_some() {
             return;
         }
-        for (_, resp) in reply.results {
+        for (_, resp) in reply.into_keyed_results() {
             match resp {
                 Response::Error(_) => {
                     self.error = Some(resp);
@@ -112,6 +137,7 @@ impl MergeStrategy for TagValsUnion {
 /// Merge ES.ALL entries by `StreamId` ordering, applying COUNT after the merge.
 pub(crate) struct EsAllMerge {
     count: Option<usize>,
+    error: Option<Response>,
     entries: Vec<(StreamId, Response)>,
 }
 
@@ -119,6 +145,7 @@ impl EsAllMerge {
     pub(crate) fn new(count: Option<usize>) -> Self {
         Self {
             count,
+            error: None,
             entries: Vec::new(),
         }
     }
@@ -132,7 +159,18 @@ impl MergeStrategy for EsAllMerge {
     }
 
     fn absorb(&mut self, _shard_id: usize, reply: PartialResult) {
-        for (_, resp) in reply.results {
+        if self.error.is_some() {
+            return;
+        }
+        for (_, resp) in reply.into_keyed_results() {
+            // An embedded error is a real shard failure — surface it and abort,
+            // like every other merge, rather than sorting it into the stream as
+            // an unparseable data row (`StreamId::max()`) and returning it as a
+            // spurious ES.ALL entry.
+            if let Response::Error(_) = &resp {
+                self.error = Some(resp);
+                return;
+            }
             // Each entry is [stream_id_string, [fields...]]; parse the id to sort.
             if let Response::Array(ref parts) = resp
                 && let Some(Response::Bulk(Some(id_bytes))) = parts.first()
@@ -147,6 +185,9 @@ impl MergeStrategy for EsAllMerge {
     }
 
     fn finish(mut self: Box<Self>) -> Response {
+        if let Some(err) = self.error {
+            return err;
+        }
         self.entries.sort_by(|a, b| a.0.cmp(&b.0));
         if let Some(limit) = self.count {
             self.entries.truncate(limit);
@@ -175,7 +216,7 @@ impl MergeStrategy for SpellcheckMerge {
         if self.error.is_some() {
             return;
         }
-        for (_, resp) in reply.results {
+        for (_, resp) in reply.into_keyed_results() {
             if let Response::Error(_) = &resp {
                 self.error = Some(resp);
                 return;
@@ -342,8 +383,8 @@ impl MergeStrategy for FtSearchMerge {
         if self.error.is_some() {
             return;
         }
-        match reply.ft {
-            Some(FtShardReply::Search(Ok(shard_reply))) => {
+        match reply {
+            PartialResult::Ft(FtShardReply::Search(Ok(shard_reply))) => {
                 self.total += shard_reply.total;
                 for hit in shard_reply.hits {
                     let sort_key = if self.sortby_active {
@@ -358,10 +399,12 @@ impl MergeStrategy for FtSearchMerge {
                     self.all_hits.push((sort_key, hit));
                 }
             }
-            Some(FtShardReply::Search(Err(msg))) => {
+            PartialResult::Ft(FtShardReply::Search(Err(msg))) => {
                 self.error = Some(Response::error(msg));
             }
-            _ => {}
+            other => {
+                self.error = Some(shard_conflict_or_bug(other, "FT.SEARCH"));
+            }
         }
     }
 
@@ -442,8 +485,8 @@ impl MergeStrategy for FtHybridMerge {
         if self.error.is_some() {
             return;
         }
-        match reply.ft {
-            Some(FtShardReply::Search(Ok(shard_reply))) => {
+        match reply {
+            PartialResult::Ft(FtShardReply::Search(Ok(shard_reply))) => {
                 self.total += shard_reply.total;
                 for hit in shard_reply.hits {
                     let sort_key = if self.sortby_active {
@@ -454,10 +497,12 @@ impl MergeStrategy for FtHybridMerge {
                     self.all_hits.push((sort_key, hit));
                 }
             }
-            Some(FtShardReply::Search(Err(msg))) => {
+            PartialResult::Ft(FtShardReply::Search(Err(msg))) => {
                 self.error = Some(Response::error(msg));
             }
-            _ => {}
+            other => {
+                self.error = Some(shard_conflict_or_bug(other, "FT.HYBRID"));
+            }
         }
     }
 
@@ -525,14 +570,16 @@ impl MergeStrategy for FtAggregateMerge {
         if self.error.is_some() {
             return;
         }
-        match reply.ft {
+        match reply {
             // The typed partial aggregate crosses the shard boundary as-is —
             // no reducer-state decode.
-            Some(FtShardReply::Aggregate(Ok(partial))) => self.partials.push(partial),
-            Some(FtShardReply::Aggregate(Err(msg))) => {
+            PartialResult::Ft(FtShardReply::Aggregate(Ok(partial))) => self.partials.push(partial),
+            PartialResult::Ft(FtShardReply::Aggregate(Err(msg))) => {
                 self.error = Some(Response::error(msg));
             }
-            _ => {}
+            other => {
+                self.error = Some(shard_conflict_or_bug(other, "FT.AGGREGATE"));
+            }
         }
     }
 
@@ -634,7 +681,7 @@ mod tests {
     }
 
     fn search_reply(total: usize, hits: Vec<ShardSearchHit>) -> PartialResult {
-        PartialResult::from_ft(FtShardReply::Search(Ok(ShardSearchReply { total, hits })))
+        PartialResult::ft(FtShardReply::Search(Ok(ShardSearchReply { total, hits })))
     }
 
     fn parse_search(parts: &[&str]) -> FtSearchRequest {
@@ -812,7 +859,7 @@ mod tests {
         merge.absorb(0, search_reply(1, vec![hit("a", 1.0, None, Some(vec![]))]));
         merge.absorb(
             1,
-            PartialResult::from_ft(FtShardReply::Search(Err("idx: no such index".to_string()))),
+            PartialResult::ft(FtShardReply::Search(Err("idx: no such index".to_string()))),
         );
 
         match merge.finish() {
@@ -820,6 +867,119 @@ mod tests {
                 assert_eq!(&msg[..], b"idx: no such index");
             }
             other => panic!("expected error, got {other:?}"),
+        }
+    }
+
+    /// Regression for issue #15 item 4: a shard whose keys are held by a
+    /// Continuation Lock (MULTI/EXEC or Lua in flight) rejects the scatter part
+    /// with the conflict error carried inside a `Keyed` reply. The merge must
+    /// surface that error and abort — never silently drop it and return the
+    /// surviving shards' hits as a (truncated) success, which is silent data
+    /// loss to the client.
+    #[test]
+    fn test_search_merge_continuation_lock_error_not_swallowed() {
+        let mut merge = Box::new(FtSearchMerge::from_request(&parse_search(&["*"])));
+        merge.absorb(0, search_reply(1, vec![hit("a", 1.0, None, Some(vec![]))]));
+        merge.absorb(
+            1,
+            PartialResult::keyed(vec![(
+                Bytes::from_static(b"k"),
+                Response::error("ERR shard busy with continuation lock"),
+            )]),
+        );
+
+        match merge.finish() {
+            Response::Error(msg) => {
+                assert_eq!(&msg[..], b"ERR shard busy with continuation lock");
+            }
+            other => panic!("expected the conflict error to abort the merge, got {other:?}"),
+        }
+    }
+
+    /// A search merge must not silently swallow a wholly-unexpected reply shape
+    /// either: an empty/errorless non-`Ft` reply is a dispatch bug, and
+    /// returning a truncated result set as success would hide it. It must error
+    /// loudly instead.
+    #[test]
+    fn test_search_merge_unexpected_reply_shape_errors_loudly() {
+        let mut merge = Box::new(FtSearchMerge::from_request(&parse_search(&["*"])));
+        merge.absorb(0, search_reply(1, vec![hit("a", 1.0, None, Some(vec![]))]));
+        merge.absorb(1, PartialResult::Count(3));
+
+        assert!(
+            matches!(merge.finish(), Response::Error(_)),
+            "an unmergeable reply shape must surface as an error, not silent truncation"
+        );
+    }
+
+    /// A clean two-shard FT.SEARCH still merges to a success array (guards the
+    /// swallow fix from over-firing on the happy path).
+    #[test]
+    fn test_search_merge_clean_two_shards_regression() {
+        let mut merge = Box::new(FtSearchMerge::from_request(&parse_search(&[
+            "*",
+            "NOCONTENT",
+        ])));
+        merge.absorb(0, search_reply(1, vec![hit("a", 2.0, None, None)]));
+        merge.absorb(1, search_reply(1, vec![hit("b", 1.0, None, None)]));
+
+        let (total, items) = unwrap_reply(merge.finish());
+        assert_eq!(total, 2);
+        assert_eq!(key_at(&items, 0), "a");
+        assert_eq!(key_at(&items, 1), "b");
+    }
+
+    #[test]
+    fn test_hybrid_merge_continuation_lock_error_not_swallowed() {
+        let mut merge = Box::new(FtHybridMerge {
+            sortby_active: false,
+            sortby_desc: false,
+            sortby_numeric: false,
+            nosort: false,
+            global_offset: 0,
+            global_limit: 10,
+            error: None,
+            all_hits: Vec::new(),
+            total: 0,
+        });
+        merge.absorb(0, search_reply(1, vec![hit("low", 0.2, None, None)]));
+        merge.absorb(
+            1,
+            PartialResult::keyed(vec![(
+                Bytes::from_static(b"k"),
+                Response::error("ERR shard busy with continuation lock"),
+            )]),
+        );
+
+        match merge.finish() {
+            Response::Error(msg) => assert_eq!(&msg[..], b"ERR shard busy with continuation lock"),
+            other => panic!("expected the conflict error to abort the merge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_aggregate_merge_continuation_lock_error_not_swallowed() {
+        let mut merge = Box::new(FtAggregateMerge {
+            steps: Vec::new(),
+            withcursor: false,
+            cursor_count: 0,
+            cursor_maxidle_ms: 300_000,
+            index_name: Bytes::from_static(b"idx"),
+            cursor_store: Arc::new(AggregateCursorStore::new()),
+            error: None,
+            partials: Vec::new(),
+        });
+        merge.absorb(
+            0,
+            PartialResult::keyed(vec![(
+                Bytes::from_static(b"k"),
+                Response::error("ERR shard busy with continuation lock"),
+            )]),
+        );
+
+        match merge.finish() {
+            Response::Error(msg) => assert_eq!(&msg[..], b"ERR shard busy with continuation lock"),
+            other => panic!("expected the conflict error to abort the merge, got {other:?}"),
         }
     }
 
@@ -955,14 +1115,8 @@ mod tests {
             error: None,
             partials: Vec::new(),
         });
-        merge.absorb(
-            0,
-            PartialResult::from_ft(FtShardReply::Aggregate(Ok(partial1))),
-        );
-        merge.absorb(
-            1,
-            PartialResult::from_ft(FtShardReply::Aggregate(Ok(partial2))),
-        );
+        merge.absorb(0, PartialResult::ft(FtShardReply::Aggregate(Ok(partial1))));
+        merge.absorb(1, PartialResult::ft(FtShardReply::Aggregate(Ok(partial2))));
 
         let (total, items) = unwrap_reply(merge.finish());
         assert_eq!(total, 2); // two groups
@@ -998,6 +1152,38 @@ mod tests {
         );
     }
 
+    /// Finding 2: `EsAllMerge` must surface an embedded `Response::Error` rather
+    /// than pushing it as an unparseable data row sorted via `StreamId::max()`
+    /// (which would return the error string as a spurious ES.ALL stream entry).
+    #[test]
+    fn test_es_all_merge_surfaces_embedded_error() {
+        let mut merge = Box::new(EsAllMerge::new(None));
+        // A healthy shard contributes a well-formed entry...
+        merge.absorb(
+            0,
+            PartialResult::keyed(vec![(
+                Bytes::from_static(b"k"),
+                Response::Array(vec![
+                    Response::bulk(Bytes::from_static(b"1-0")),
+                    Response::Array(vec![]),
+                ]),
+            )]),
+        );
+        // ...another shard reports an error.
+        merge.absorb(
+            1,
+            PartialResult::keyed(vec![(
+                Bytes::from_static(b"k"),
+                Response::error("ERR es.all failed on shard"),
+            )]),
+        );
+
+        match merge.finish() {
+            Response::Error(msg) => assert_eq!(&msg[..], b"ERR es.all failed on shard"),
+            other => panic!("expected the embedded error to surface, got {other:?}"),
+        }
+    }
+
     #[test]
     fn test_aggregate_merge_shard_error_wins() {
         let mut merge = Box::new(FtAggregateMerge {
@@ -1012,7 +1198,7 @@ mod tests {
         });
         merge.absorb(
             0,
-            PartialResult::from_ft(FtShardReply::Aggregate(Err("ERR bad pipeline".to_string()))),
+            PartialResult::ft(FtShardReply::Aggregate(Err("ERR bad pipeline".to_string()))),
         );
         match merge.finish() {
             Response::Error(msg) => assert_eq!(&msg[..], b"ERR bad pipeline"),

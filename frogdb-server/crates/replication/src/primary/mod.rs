@@ -24,7 +24,7 @@ use tokio::sync::{RwLock, broadcast};
 
 use crate::BoxedStream;
 use crate::ReplicationBroadcaster;
-use crate::frame::{CONTROL_SHARD, ReplicationFrame, serialize_command_to_resp};
+use crate::frame::{CONTROL_SHARD, ReplconfCodec, ReplicationFrame, serialize_command_to_resp};
 use crate::offset_coordinator::OffsetCoordinator;
 use crate::replica_session::SyncKind;
 use crate::state::ReplicationState;
@@ -33,6 +33,26 @@ use crate::wait_coordinator::WaitCoordinator;
 
 pub use replay::{FullResyncReason, PartialSyncReplay, ReplayDecision, ReplayGrant};
 pub use ring_buffer::{ReplicationRingBuffer, SplitBrainBufferConfig};
+
+/// The split-brain divergence window this (demoted) Primary computed against the
+/// last offset the cluster had acknowledged — the writes it committed past that
+/// point and must surrender to the new Primary.
+///
+/// Constructed only when the node actually diverged: `end > start` AND `writes`
+/// is non-empty (see [`PrimaryReplicationHandler::divergence_record`]). A
+/// caught-up (or write-less) demotion yields `None`.
+#[derive(Debug)]
+pub struct DivergenceRecord {
+    /// Lower bound: the minimum acked offset across streaming replicas
+    /// (`min_acked().unwrap_or(0)` — `seq_diverge_start` in the split-brain log).
+    pub start: u64,
+    /// Upper bound: the live write position at demotion time
+    /// (`seq_diverge_end` in the split-brain log).
+    pub end: u64,
+    /// The divergent writes `(offset, RESP)` with `offset > start`, offset-ordered
+    /// (`writes.len()` is `ops_discarded`).
+    pub writes: Vec<(u64, Bytes)>,
+}
 
 /// Configuration for proactive lag-threshold disconnection.
 #[derive(Debug, Clone)]
@@ -75,7 +95,7 @@ pub struct PrimaryReplicationHandler {
     /// Single owner of the replication-offset contract (live write position,
     /// per-replica acked offsets, and the persisted offset). All offset reads
     /// and the broadcast advance route through this seam instead of reaching
-    /// into the tracker or `state.replication_offset` directly.
+    /// into the tracker or `state.offset_at_save` directly.
     pub(crate) offsets: Arc<OffsetCoordinator>,
     /// Single owner of the WAIT quorum decision (offset snapshot, immediate
     /// check, GETACK solicitation policy, quorum-or-deadline wait). The
@@ -135,7 +155,7 @@ impl PrimaryReplicationHandler {
     ///
     /// The durable offset is reconciled from the live write position by the
     /// [`OffsetCoordinator`] (the broadcast path advances only the live offset,
-    /// not `state.replication_offset`). This couples offset durability to
+    /// not `state.offset_at_save`). This couples offset durability to
     /// explicit save points (snapshot completion, graceful shutdown) rather than
     /// an fsync per write, mirroring Redis/Valkey, which persist repl-id +
     /// offset alongside the RDB instead of continuously.
@@ -221,14 +241,36 @@ impl PrimaryReplicationHandler {
         self.broadcast_tagged(CONTROL_SHARD, cmd_name, args)
     }
 
-    /// Extract commands with offset > `last_replicated_offset` from the backlog
-    /// ring buffer. Returns `(offset, RESP-encoded command)` pairs in order;
-    /// non-destructive. This is a backlog-introspection method — meaningful only
-    /// on the primary handler that owns the ring buffer — so it lives here
-    /// rather than on the frame-emit [`ReplicationBroadcaster`] trait. The
-    /// split-brain reconciliation on the demotion path is the only caller.
-    pub fn extract_divergent_writes(&self, last_replicated_offset: u64) -> Vec<(u64, Bytes)> {
-        self.replay.extract_divergent_writes(last_replicated_offset)
+    /// Compute the split-brain divergence window from this handler's own offset
+    /// coordinator and Replication Backlog. Pure read; no I/O, no telemetry, no
+    /// logging.
+    ///
+    /// The window is `(start, end]` where `start` is the minimum offset acked
+    /// across streaming replicas (`0` when there are none) and `end` is the live
+    /// write position. `writes` is the backlog tail with `offset > start`,
+    /// offset-ordered and non-destructive.
+    ///
+    /// Returns `None` when the node did not diverge — either it was caught up
+    /// (`end <= start`) or nothing in the backlog sits past `start`. This is the
+    /// one owner of the divergence predicate (`end > start && !writes.is_empty()`)
+    /// and the `unwrap_or(0)` lower-bound floor; a `server`-side logger only
+    /// formats and writes the record it returns.
+    ///
+    /// Both offset reads come from the one [`OffsetCoordinator`]; a concurrent
+    /// `advance` between them only widens `end`, never truncates the write set
+    /// below `start` (the extraction filter is `offset > start` against a
+    /// non-destructive backlog), so no lock spanning the two reads is warranted.
+    pub fn divergence_record(&self) -> Option<DivergenceRecord> {
+        let start = self.offsets.min_acked().unwrap_or(0);
+        let end = self.offsets.current();
+        if end <= start {
+            return None;
+        }
+        let writes = self.replay.extract_divergent_writes(start);
+        if writes.is_empty() {
+            return None;
+        }
+        Some(DivergenceRecord { start, end, writes })
     }
 
     /// Advance the offset, record into the backlog, and broadcast a single
@@ -257,10 +299,7 @@ impl PrimaryReplicationHandler {
     }
 
     pub async fn request_acks(&self) {
-        let resp_bytes = serialize_command_to_resp(
-            "REPLCONF",
-            &[Bytes::from_static(b"GETACK"), Bytes::from_static(b"*")],
-        );
+        let resp_bytes = ReplconfCodec::encode_getack();
         // GETACK is part of the command stream (Redis-compatible): it advances the
         // offset on both ends. The replica counts it via `frame_advance`, so the
         // primary must advance + stamp it too (and record it in the backlog like
@@ -317,33 +356,4 @@ impl ReplicationBroadcaster for PrimaryReplicationHandler {
     fn current_offset(&self) -> u64 {
         self.offsets.current()
     }
-}
-
-/// Parse a REPLCONF ACK response from a replica using proper RESP2 decoding.
-///
-/// Returns `Some((offset, consumed_bytes))` on success, or `None` if the buffer
-/// does not contain a complete, valid REPLCONF ACK frame.
-///
-/// Expected wire format: `*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$<len>\r\n<offset>\r\n`
-pub(crate) fn parse_replconf_ack(data: &[u8]) -> Option<(u64, usize)> {
-    use redis_protocol::resp2::decode::decode;
-    use redis_protocol::resp2::types::{OwnedFrame, Resp2Frame};
-
-    let (frame, consumed) = decode(data).ok()??;
-    if let OwnedFrame::Array(parts) = frame
-        && parts.len() >= 3
-    {
-        let is_replconf = parts[0]
-            .as_bytes()
-            .is_some_and(|b: &[u8]| b.eq_ignore_ascii_case(b"REPLCONF"));
-        let is_ack = parts[1]
-            .as_bytes()
-            .is_some_and(|b: &[u8]| b.eq_ignore_ascii_case(b"ACK"));
-        if is_replconf && is_ack {
-            let offset_str = std::str::from_utf8(parts[2].as_bytes()?).ok()?;
-            let offset = offset_str.parse::<u64>().ok()?;
-            return Some((offset, consumed));
-        }
-    }
-    None
 }

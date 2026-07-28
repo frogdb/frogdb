@@ -240,6 +240,13 @@
       (catch java.net.SocketTimeoutException e
         (assoc op :type :info :error :timeout))
 
+      (catch [:type :too-many-redirects] e
+        ;; A data op exhausted its MOVED/ASK redirect budget (cluster-client
+        ;; max-redirects). Surface it as a determinate :fail so the checker can
+        ;; assert on unresolved redirects, instead of letting it fall through to
+        ;; the generic Exception catch and be buried as an :info :unexpected.
+        (assoc op :type :fail :error :too-many-redirects))
+
       (catch [:type :crossslot] e
         (assoc op :type :fail :error :crossslot))
 
@@ -313,15 +320,22 @@
 
 (defn generator
   "Generator for slot migration testing.
-   Writes to keys during a migration scenario."
+   Writes to keys during a migration scenario.
+
+   Write values are drawn from a per-run monotonic counter so every value is
+   globally unique. That lets the checker validate data: a read returning a
+   value never written to the key (fabrication / cross-slot contamination) is
+   detectable, and the last acknowledged write is identifiable."
   [opts]
   (let [rate (get opts :rate 10)
         test-slot 1000  ; A slot in the middle of the range
-        test-key "{migration-test}:key"]  ; Hash-tagged to ensure same slot
+        test-key "{migration-test}:key"  ; Hash-tagged to ensure same slot
+        ctr (atom 0)
+        next-val (fn [] (swap! ctr inc))]
     (gen/phases
       ;; Phase 1: Initial reads/writes
       (gen/log "Initial data operations")
-      (->> (gen/mix [(fn [] (write-key test-key (rand-int 1000)))
+      (->> (gen/mix [(fn [] (write-key test-key (next-val)))
                      (fn [] (read-key test-key))])
            (gen/limit 20)
            (gen/stagger 0.1))
@@ -337,7 +351,7 @@
 
       ;; Phase 4: Operations during migration
       (gen/log "Operations during migration")
-      (->> (gen/mix [(fn [] (write-key test-key (rand-int 1000)))
+      (->> (gen/mix [(fn [] (write-key test-key (next-val)))
                      (fn [] (read-key test-key))])
            (gen/limit 50)
            (gen/stagger 0.05))
@@ -347,7 +361,7 @@
       (gen/once (migrate-keys))
 
       ;; Phase 6: More operations during key migration
-      (->> (gen/mix [(fn [] (write-key test-key (rand-int 1000)))
+      (->> (gen/mix [(fn [] (write-key test-key (next-val)))
                      (fn [] (read-key test-key))])
            (gen/limit 20)
            (gen/stagger 0.1))
@@ -363,7 +377,7 @@
 
       ;; Phase 9: Final operations
       (gen/log "Final operations")
-      (->> (gen/mix [(fn [] (write-key test-key (rand-int 1000)))
+      (->> (gen/mix [(fn [] (write-key test-key (next-val)))
                      (fn [] (read-key test-key))])
            (gen/limit 20)
            (gen/stagger 0.1)))))
@@ -372,43 +386,197 @@
 ;; Checker
 ;; ===========================================================================
 
-(defn checker
-  "Checker for slot migration workload.
+;; Number of trailing reads treated as the post-migration quiescent window.
+;; core.clj appends a final read phase (10 single-key reads issued AFTER the
+;; nemesis has healed and a 5s settle) to every workload that has no
+;; :final-generator of its own — so the last reads in the history are taken
+;; against a recovered, quiescent cluster with no concurrent writes. A nil or a
+;; value never written, observed there, is a real post-migration data fault.
+(def final-read-window 10)
 
-   Verifies:
-   - No data loss during migration
-   - Slot ownership correctly transferred
-   - Operations succeed (possibly after redirects)"
+(defn- redirect-leaked-as-info?
+  "True if op is an :info result caused by an unresolved MOVED/ASK/REDIRECT that
+   escaped invoke! and was downgraded to :info (either tagged by this workload's
+   own catch as [:unexpected msg] with a redirect message, or carrying an
+   :exception whose cause is a redirect reply). Determinate redirect exhaustion
+   now surfaces as :fail :too-many-redirects and is counted separately; this only
+   catches the residual indeterminate cases, for reporting."
+  [op]
+  (when (= :info (:type op))
+    (let [e (:error op)
+          tagged-msg (when (and (vector? e) (= :unexpected (first e))) (second e))
+          ex-msg (some-> op :exception :cause str)
+          redirect? (fn [m] (and m (or (str/starts-with? m "MOVED")
+                                       (str/starts-with? m "ASK")
+                                       (str/starts-with? m "REDIRECT"))))]
+      (boolean (or (redirect? tagged-msg) (redirect? ex-msg))))))
+
+(defn checker
+  "Checker for the slot-migration workload.
+
+   The workload writes a single hash-tagged register ({migration-test}:key)
+   through a slot migration (optionally under a partition nemesis). Write values
+   are globally unique per run (a monotonic counter), so a read can be correlated
+   with the writes that actually produced its value. Four properties gate
+   :valid? — the first three are the data/routing safety net that holds under any
+   fault schedule, the fourth confirms the migration's control-plane outcome:
+
+   - Durability (gates): every acknowledged write must remain readable. Asserted
+     on the post-migration quiescent read window (the trailing `final-read-window`
+     reads, which core.clj issues after the nemesis heals and the cluster settles
+     — every write has completed before them). A nil there is a lost acknowledged
+     write. Reads before the first acknowledged write are legally nil and are
+     excluded, so this is sound with no false positives. Note the Raft cluster's
+     shards are single-owner with no per-shard replication and these workloads use
+     no kill nemesis (slot-migration = none, slot-migration-partition =
+     partition), so a nil is genuine loss, not expected single-master kill loss.
+
+   - Value-correctness (gates): every successful non-nil read must return a value
+     that was actually written to that key. Values are globally unique, so a value
+     that was never written (fabrication) or one that leaked from another slot
+     (cross-slot contamination) is caught. Timing-independent — a GET must never
+     return bytes that were never SET — so it always gates.
+
+   - Unresolved redirects (gates): no data op may exhaust its MOVED/ASK redirect
+     budget (:too-many-redirects). During a single-slot migration a burst of
+     redirects is expected and the cluster client resolves them internally; a
+     redirect that survives the client's retry budget is a routing breakdown, and
+     on correct code there are none.
+
+   - Final ownership (gates when the migration completed): if a finish-migration
+     succeeded, the final slot-owner read must equal the migration's intended
+     destination node. When no migration completed (e.g. finish blocked under a
+     partition), ownership is reported but not asserted, so the partition variant
+     does not false-positive; durability/value-correctness still gate the run.
+
+   A migration must have started at all (sanity) for the run to be meaningful.
+
+   Not gated (reported only): whether the converged final value equals the last
+   acknowledged write. On a single register under concurrent writes, the settled
+   value is whichever write linearized last, which is not necessarily the highest
+   counter, so an exact match is not soundly assertable without a linearizability
+   model. It is surfaced as :final-read-matches-last-acked-write for visibility."
   []
   (reify checker/Checker
-    (check [this test history opts]
+    (check [_ test history opts]
       (let [completed (filter #(= :ok (:type %)) history)
-            failed (filter #(= :fail (:type %)) history)
+            failed    (filter #(= :fail (:type %)) history)
+            info-ops  (filter #(= :info (:type %)) history)
 
-            ;; Track writes and reads
             writes (filter #(= :write (:f %)) completed)
-            reads (filter #(= :read (:f %)) completed)
+            reads  (filter #(= :read (:f %)) completed)
 
-            ;; Check slot owner changes
-            owner-reads (filter #(= :read-slot-owner (:f %)) completed)
-            owners (map #(get-in % [:value :owner]) owner-reads)
+            ;; key -> set of acknowledged written values
+            acked (reduce (fn [m w]
+                            (let [k (get-in w [:value :key])
+                                  v (get-in w [:value :written])]
+                              (if (and (some? k) (some? v))
+                                (update m k (fnil conj #{}) v)
+                                m)))
+                          {} writes)
+            written-keys (set (keys acked))
+            ;; Value of the last acknowledged write in history order (reporting).
+            last-acked-write (get-in (last writes) [:value :written])
 
-            ;; Migration events
-            start-ops (filter #(= :start-migration (:f %)) completed)
+            ;; Durability window: reads that occur strictly after the first
+            ;; acknowledged write (so pre-write nil reads never count as loss),
+            ;; then the trailing quiescent window. On this single register those
+            ;; trailing reads are the post-heal, post-settle final reads.
+            reads-after-first-write (->> (drop-while #(not= :write (:f %)) completed)
+                                         rest
+                                         (filter #(= :read (:f %))))
+            final-reads (take-last final-read-window reads-after-first-write)
+            lost-writes (->> final-reads
+                             (filter (fn [r]
+                                       (let [k (get-in r [:value :key])]
+                                         (and (contains? written-keys k)
+                                              (nil? (get-in r [:value :value]))))))
+                             (map #(get-in % [:value :key]))
+                             distinct
+                             vec)
+            durable? (empty? lost-writes)
+
+            ;; Value-correctness across all reads (fabrication/contamination).
+            wrong-value-reads (->> reads
+                                   (keep (fn [r]
+                                           (let [k  (get-in r [:value :key])
+                                                 v  (get-in r [:value :value])
+                                                 ks (get acked k)]
+                                             (when (and (some? v) ks (not (contains? ks v)))
+                                               {:key k :read v}))))
+                                   vec)
+            values-correct? (empty? wrong-value-reads)
+
+            ;; Converged final register value(s) and the last-write match signal.
+            final-values (->> final-reads
+                              (map #(get-in % [:value :value]))
+                              (remove nil?)
+                              distinct
+                              vec)
+            final-reads-converged? (<= (count final-values) 1)
+            final-read-matches-last-acked-write?
+            (boolean (and (= 1 (count final-values))
+                          (= (first final-values) last-acked-write)))
+
+            ;; Unresolved redirects: data ops that exhausted the redirect budget.
+            too-many-redirect-fails (filter #(= :too-many-redirects (:error %)) failed)
+            redirect-count (count too-many-redirect-fails)
+            redirects-ok? (zero? redirect-count)
+            ;; Control-plane REDIRECT fails and info-leaked MOVED/ASK (reporting).
+            control-redirect-fails (filter #(let [e (:error %)]
+                                              (and (vector? e) (= :redirect (first e))))
+                                            failed)
+            info-redirects (filter redirect-leaked-as-info? info-ops)
+
+            ;; Migration control-plane outcome.
+            start-ops  (filter #(= :start-migration (:f %)) completed)
             finish-ops (filter #(= :finish-migration (:f %)) completed)
+            migration-started?   (seq start-ops)
+            migration-completed? (seq finish-ops)
+            intended-dest (get-in (last start-ops) [:value :dest])
 
-            ;; Check for data consistency
-            final-owner (get-in (last owner-reads) [:value :owner])]
+            owner-reads (filter #(= :read-slot-owner (:f %)) completed)
+            owners      (map #(get-in % [:value :owner]) owner-reads)
+            final-owner (get-in (last owner-reads) [:value :owner])
+            ;; Assert owner == destination only when a migration actually
+            ;; completed; otherwise ownership is reported, not gated.
+            final-owner-correct? (or (not migration-completed?)
+                                     (nil? intended-dest)
+                                     (= final-owner intended-dest))]
 
-        {:valid? true  ; Basic validity - more detailed checks can be added
+        {:valid? (boolean (and migration-started?
+                               durable?
+                               values-correct?
+                               redirects-ok?
+                               final-owner-correct?))
+         :migration-started?   (boolean migration-started?)
+         :migration-completed? (boolean migration-completed?)
+         :durable? durable?
+         :lost-write-keys lost-writes
+         :lost-write-count (count lost-writes)
+         :values-correct? values-correct?
+         :wrong-value-reads (vec (take 20 wrong-value-reads))
+         :wrong-value-count (count wrong-value-reads)
+         :final-owner-correct? final-owner-correct?
+         :intended-dest intended-dest
+         :final-owner final-owner
+         :redirects-ok? redirects-ok?
+         :too-many-redirect-count redirect-count
+         :control-redirect-fail-count (count control-redirect-fails)
+         :info-redirect-count (count info-redirects)
+         :final-reads-converged? final-reads-converged?
+         :final-values final-values
+         :last-acked-write last-acked-write
+         :final-read-matches-last-acked-write final-read-matches-last-acked-write?
+         :owners-seen (set owners)
+         :owner-changes (count (partition-by identity owners))
+         :migrations-started (count start-ops)
+         :migrations-completed (count finish-ops)
+         :written-keys (count written-keys)
          :total-writes (count writes)
          :total-reads (count reads)
-         :failed-ops (count failed)
-         :owner-changes (count (partition-by identity owners))
-         :owners-seen (set owners)
-         :final-owner final-owner
-         :migrations-started (count start-ops)
-         :migrations-completed (count finish-ops)}))))
+         :final-read-count (count final-reads)
+         :failed-ops (count failed)}))))
 
 ;; ===========================================================================
 ;; Workload

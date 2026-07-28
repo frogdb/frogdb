@@ -92,6 +92,68 @@
   (map->HashClient {}))
 
 ;; ===========================================================================
+;; Independent Client
+;; ===========================================================================
+;;
+;; The independent path splits the hash into one linearizable register per
+;; field (each field of the single `hash-key` is checked independently). The
+;; jepsen.independent generator wraps every op's :value in a MapEntry tuple
+;; [field sub-value] and jepsen.independent/checker groups the history by that
+;; tuple key. The plain HashClient replaces :value with a *vector* [field v],
+;; which `jepsen.independent/tuple?` does NOT recognise (it requires a
+;; clojure.lang.MapEntry) — so the linearizable subhistory grouping silently
+;; collapses. This dedicated client returns proper `independent/tuple` values
+;; (like register.clj's IndependentRegisterClient) so the per-field
+;; linearizable checker actually gets keyed subhistories.
+
+(defrecord IndependentHashClient [conn node docker-host?]
+  client/Client
+
+  (open! [this test node]
+    (let [docker? (:docker test)
+          base-port (get test :base-port frogdb/default-base-port)]
+      (info "Opening independent hash client to" node "(docker-host?:" docker? ")")
+      (assoc this
+             :conn (frogdb/conn-spec-single node frogdb/default-port docker? base-port)
+             :node node
+             :docker-host? docker?)))
+
+  (setup! [this test]
+    (info "Clearing hash key" hash-key)
+    (wcar conn (car/del hash-key))
+    this)
+
+  (invoke! [this test op]
+    (frogdb/with-error-handling op
+      (let [[field v] (:value op)]
+        (if (nil? field)
+          ;; Defensive: a value-less op (e.g. a bare {:f :read}) cannot be
+          ;; attributed to a field. Fail it rather than NPE on (name nil).
+          (assoc op :type :fail :error :no-field)
+          (let [field-name (name field)]
+            (case (:f op)
+              :read
+              (let [value (frogdb/hget conn hash-key field-name)]
+                (assoc op :type :ok :value (independent/tuple field value)))
+
+              :write
+              (do
+                (frogdb/hset! conn hash-key field-name v)
+                ;; Preserve the generator's MapEntry tuple in :value.
+                (assoc op :type :ok))))))))
+
+  (teardown! [this test]
+    nil)
+
+  (close! [this test]
+    (frogdb/close-conn! conn)))
+
+(defn create-independent-client
+  "Create a new independent hash client."
+  []
+  (map->IndependentHashClient {}))
+
+;; ===========================================================================
 ;; Generator
 ;; ===========================================================================
 
@@ -128,20 +190,43 @@
     (->> (gen/mix op-generators)
          (gen/stagger (/ 1 rate)))))
 
-(defn independent-generator
-  "Create a generator that tests each field independently.
+(defn ind-read-op
+  "Independent read op (value is added by the independent generator wrapper)."
+  [_ _]
+  {:type :invoke :f :read})
 
-   This allows for per-field linearizability checking."
+(defn ind-write-op
+  "Independent write op with a fresh random value each invocation."
+  [_ _]
+  {:type :invoke :f :write :value (rand-int 100)})
+
+(defn independent-generator
+  "Create a generator that tests each field independently for per-field
+   linearizability.
+
+   `:threads-per-field` (default 2) worker threads hammer each field
+   concurrently — genuine concurrency per key is required for the linearizable
+   checker to find anomalies. The enclosing test's :concurrency must be a
+   multiple of this value (see run.py hash-independent TestDefinition, which
+   sets --concurrency 10 for the 5-field pool)."
   [opts]
-  (let [rate (get opts :rate 10)]
-    (->> (independent/concurrent-generator
-           (count field-pool)
-           field-pool
-           (fn [field]
-             (->> (gen/mix [(gen/repeat {:f :read})
-                           (gen/repeat {:f :write :value (rand-int 100)})])
-                  (gen/stagger (/ 1 rate)))))
-         (gen/stagger (/ 1 rate)))))
+  (let [rate (get opts :rate 10)
+        threads-per-field (get opts :threads-per-field 2)]
+    (independent/concurrent-generator
+      threads-per-field
+      field-pool
+      (fn [_field]
+        (->> (gen/mix [ind-read-op ind-write-op])
+             (gen/stagger (/ 1 rate)))))))
+
+(defn independent-final-read-generator
+  "Final reads for the independent path, one per field, wrapped as proper
+   `independent/tuple` values so jepsen.independent/checker attributes them to
+   the right per-field subhistory (a bare {:f :read} would be un-keyed)."
+  []
+  (->> field-pool
+       (map (fn [f] {:type :invoke :f :read :value (independent/tuple f nil)}))
+       (gen/each-thread)))
 
 (defn final-read-generator
   "Generator for final reads of all fields."
@@ -223,8 +308,9 @@
    - :independent - use independent field testing with linearizability"
   [opts]
   (if (:independent opts)
-    {:client (create-client)
+    {:client (create-independent-client)
      :generator (independent-generator opts)
+     :final-generator (independent-final-read-generator)
      :checker (independent-checker)}
     {:client (create-client)
      :generator (gen/phases

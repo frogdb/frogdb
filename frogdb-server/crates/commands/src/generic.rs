@@ -35,6 +35,7 @@ impl Command for TypeCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::FirstKey,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -70,6 +71,7 @@ impl Command for RenameCommand {
             // (db.c renameGenericCommand:62-63). A no-op RENAMENX emits nothing.
             event: EventSpec::Dynamic,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::Rename,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -152,6 +154,7 @@ impl Command for RenamenxCommand {
             // (db.c renameGenericCommand:62-63). A no-op RENAMENX emits nothing.
             event: EventSpec::Dynamic,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::Rename,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -230,6 +233,7 @@ impl Command for TouchCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::EveryKey,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::ScatterGather(ScatterGatherOp::Touch),
@@ -270,6 +274,7 @@ impl Command for UnlinkCommand {
                 name: "del",
             },
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::DeleteKeys,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::ScatterGather(ScatterGatherOp::Unlink),
@@ -320,6 +325,7 @@ impl Command for ObjectCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -516,6 +522,12 @@ impl Command for CopyCommand {
                 key_index: 1,
             },
             requires_same_slot: false,
+            // Same-shard COPY writes the source value into the destination
+            // (args[1], with REPLACE clobbering it). Refresh the destination:
+            // index it when the copied value is a hash matching a prefix, else
+            // drop any stale doc. Cross-shard COPY reconstructs as RESTORE on the
+            // destination shard (execution.rs), which carries its own refresh.
+            reindex: frogdb_core::ReindexSpec::RefreshSecondKey,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::Standard,
@@ -557,15 +569,23 @@ impl Command for CopyCommand {
 
         // Same-shard copy: handle directly
 
-        // Check if destination exists (when not using REPLACE)
+        // Check if destination exists (when not using REPLACE). Nothing is
+        // copied, so declare the write a no-op: skip reindex (COPY is
+        // `RefreshSecondKey` — otherwise it would re-index the whole unchanged
+        // destination), WAL, replication, notification, and WATCH dirty.
         if !replace && ctx.store.contains(dest) {
+            ctx.effects.write_was_noop = true;
             return Ok(Response::Integer(0));
         }
 
         // Get source value
         let value = match ctx.store.get(source) {
             Some(v) => v,
-            None => return Ok(Response::Integer(0)), // Source doesn't exist
+            None => {
+                // Source doesn't exist: nothing copied — same no-op contract.
+                ctx.effects.write_was_noop = true;
+                return Ok(Response::Integer(0));
+            }
         };
 
         // Get source expiry
@@ -606,6 +626,7 @@ impl Command for RandomkeyCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            reindex: frogdb_core::ReindexSpec::None,
             lookup: LookupSpec::None,
             mutation: frogdb_core::ConnMutation::None,
             strategy: ExecutionStrategy::ServerWide(ServerWideOp::RandomKey),
@@ -623,5 +644,77 @@ impl Command for RandomkeyCommand {
         Err(CommandError::InvalidArgument {
             message: "RANDOMKEY should be handled by connection handler".to_string(),
         })
+    }
+}
+
+#[cfg(test)]
+mod copy_noop_tests {
+    //! COPY's no-op paths (Finding 3): a COPY that copies nothing must declare
+    //! the write a no-op so the effect pipeline is skipped. COPY is
+    //! `RefreshSecondKey`, so otherwise a no-op COPY would re-index the entire
+    //! (unchanged) destination — plus phantom WAL / replication / notification /
+    //! WATCH dirty.
+    use super::*;
+    use frogdb_core::HashMapStore;
+    use frogdb_protocol::ProtocolVersion;
+
+    fn ctx() -> CommandContext<'static> {
+        // Single shard so COPY's source/dest always land on the same shard.
+        let store = Box::leak(Box::new(HashMapStore::new()));
+        let shard_senders = Box::leak(Box::new(Arc::new(Vec::new())));
+        CommandContext::new(store, shard_senders, 0, 1, 0, ProtocolVersion::Resp2)
+    }
+
+    fn args(parts: &[&str]) -> Vec<Bytes> {
+        parts.iter().map(|s| Bytes::from(s.to_string())).collect()
+    }
+
+    /// A COPY that actually copies is a real write — not a no-op (positive
+    /// control).
+    #[test]
+    fn copy_success_is_not_noop() {
+        let mut c = ctx();
+        c.store.set(
+            Bytes::from_static(b"src"),
+            Value::string(Bytes::from_static(b"v")),
+        );
+        let r = CopyCommand.execute(&mut c, &args(&["src", "dst"])).unwrap();
+        assert_eq!(r, Response::Integer(1));
+        assert!(!c.effects.write_was_noop, "a real COPY is not a no-op");
+    }
+
+    /// COPY with the destination already present and no REPLACE copies nothing
+    /// (replies 0) — it must be a no-op write.
+    #[test]
+    fn copy_dest_exists_without_replace_is_noop() {
+        let mut c = ctx();
+        c.store.set(
+            Bytes::from_static(b"src"),
+            Value::string(Bytes::from_static(b"v")),
+        );
+        c.store.set(
+            Bytes::from_static(b"dst"),
+            Value::string(Bytes::from_static(b"old")),
+        );
+        let r = CopyCommand.execute(&mut c, &args(&["src", "dst"])).unwrap();
+        assert_eq!(r, Response::Integer(0));
+        assert!(
+            c.effects.write_was_noop,
+            "COPY that did not copy (dest exists, no REPLACE) must be a no-op write"
+        );
+    }
+
+    /// COPY from a missing source copies nothing (replies 0) — also a no-op.
+    #[test]
+    fn copy_missing_source_is_noop() {
+        let mut c = ctx();
+        let r = CopyCommand
+            .execute(&mut c, &args(&["absent", "dst"]))
+            .unwrap();
+        assert_eq!(r, Response::Integer(0));
+        assert!(
+            c.effects.write_was_noop,
+            "COPY from a missing source must be a no-op write"
+        );
     }
 }

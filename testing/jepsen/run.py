@@ -86,6 +86,11 @@ class TestDefinition:
     time_limit: int
     topology: Topology
     cluster_flag: bool = False
+    membership_changes: bool = False
+    independent: bool = False  # pass --independent (per-key linearizable checking)
+    replication_flag: bool = False  # pass --replication (3-node primary+replicas)
+    client_nodes: tuple[str, ...] = ()  # pin the client to a node subset (--node)
+    concurrency: int | None = None  # cap Jepsen worker threads (bounds Knossos search)
     suites: tuple[str, ...] = ()
 
 
@@ -108,6 +113,23 @@ TESTS: tuple[TestDefinition, ...] = (
     ),
     TestDefinition("set", "set", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")),
     TestDefinition("hash", "hash", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")),
+    # hash-independent: the STRONG per-field checker. --independent splits the
+    # single hash into one linearizable register per field and runs
+    # jepsen.independent/checker over Knossos-linearizable subhistories — the
+    # path the plain `hash` test never exercised (the weak default checker only
+    # asserts reads-were-written). --concurrency 10 = 5 fields x 2 threads/field
+    # (independent-generator's :threads-per-field default), so every field gets
+    # genuine concurrency for the linearizable checker to inspect.
+    TestDefinition(
+        "hash-independent",
+        "hash",
+        "none",
+        30,
+        Topology.SINGLE,
+        independent=True,
+        concurrency=10,
+        suites=("single", "crash", "all"),
+    ),
     TestDefinition(
         "sortedset", "sortedset", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")
     ),
@@ -116,6 +138,39 @@ TESTS: tuple[TestDefinition, ...] = (
     ),
     TestDefinition(
         "blocking", "blocking", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")
+    ),
+    # Consistency-guarantee workloads (consistency.md [Design intent] rows).
+    # ryw: read-your-writes on a SINGLE connection. Each worker holds a dedicated
+    # single-connection pool and a private key; a SET+GET pipelined on that one
+    # connection must read back exactly what it just wrote. Backs the
+    # "Read-Your-Writes (same connection, no failover)" row.
+    TestDefinition("ryw", "ryw", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")),
+    # wc-order: within-connection command ordering. Each op pipelines N ordered
+    # RPUSHes on one connection, then LRANGEs the list back: the server-observed
+    # execution order (list contents) and the response order (pipelined return
+    # values) must both match the send order. Backs the "Ordering -> Within a
+    # Single Connection" row.
+    TestDefinition(
+        "wc-order", "wc-order", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")
+    ),
+    # pubsub-order: pub/sub message ordering per channel. A dedicated subscriber
+    # records arrival order while a publisher publishes 0..N-1 in order on a
+    # private channel; delivery may drop messages (at-most-once) but must never
+    # reorder them. Includes a reconnect flavour (drop + re-subscribe mid-stream).
+    # Backs the "Ordering -> Pub/Sub Message Ordering" row. No crash variant: the
+    # workload already exercises subscriber disconnect via its reconnect op, and a
+    # kill nemesis would only add at-most-once message loss the checker tolerates.
+    TestDefinition(
+        "pubsub-order", "pubsub-order", "none", 30, Topology.SINGLE, suites=("single", "all")
+    ),
+    # Elle list-append baseline (single-node, no faults). RPUSH/LRANGE driven by
+    # jepsen.tests.cycle.append with the :strict-serializable consistency model —
+    # the strongest cycle-based anomaly detector in the harness (G0/G1a/G1b/G1c/G2).
+    # On a single node with no nemesis this establishes that the transactional
+    # RPUSH/LRANGE path is strict-serializable in the absence of faults; the raft
+    # fault variant below stresses the same checker under real fault injection.
+    TestDefinition(
+        "list-append", "list-append", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")
     ),
     # Single-node crash workloads
     TestDefinition("crash", "register", "kill", 60, Topology.SINGLE, suites=("crash", "all")),
@@ -136,11 +191,66 @@ TESTS: tuple[TestDefinition, ...] = (
     TestDefinition(
         "expiry-rapid", "expiry", "rapid-kill", 60, Topology.SINGLE, suites=("crash", "all")
     ),
+    # expiry-clock-skew: the expiry/TTL workload under the clock-skew nemesis.
+    # Expiry is the feature most sensitive to clock divergence, yet it had never
+    # run with any clock fault. The reworked expiry checker is server-time
+    # authoritative — it anchors on the server's own PTTL replies and projects
+    # them with elapsed control-node time (a duration, invariant under a constant
+    # offset between the control node and the DB node), and orders everything by
+    # Jepsen's single control-node clock. So an offset skew between the checker
+    # host and the server can no longer manufacture false premature-expiry /
+    # zombie-key verdicts, while the unconditional safety invariants (no
+    # resurrection, persisted keys don't expire) hold under any clock behaviour.
+    #
+    # The clock-skew nemesis skews via `date -s` where CAP_SYS_TIME is granted,
+    # else falls back to a /tmp/faketime offset file (nemesis.clj). The single
+    # compose grants neither (deliberately: `date -s` in a non-time-namespaced
+    # container would move the HOST clock), so here the nemesis exercises the
+    # skew machinery + workload resilience as an offset perturbation rather than
+    # a true server-clock jump — exactly the control-vs-server offset the checker
+    # is now robust to. 60s gives the 15s-interval skew/reset generator a couple
+    # of full cycles. Baseline: expected clean (:valid? true).
+    TestDefinition(
+        "expiry-clock-skew", "expiry", "clock-skew", 60, Topology.SINGLE, suites=("crash", "all")
+    ),
     TestDefinition(
         "blocking-crash", "blocking", "kill", 60, Topology.SINGLE, suites=("crash", "all")
     ),
-    # Single-node nemesis (standalone)
-    TestDefinition("nemesis-pause", "register", "pause", 60, Topology.SINGLE),
+    # Register linearizability (Knossos cas-register) under fault injection.
+    # register.clj's linearizable checker is the harness's canonical single-key
+    # linearizability check. Previously it ran only clean or under crash/kill on a
+    # single node; these variants extend it to pause, partition, and the composed
+    # single-node :all nemesis. All are bounded to a 60s time-limit + the default
+    # rate so the Knossos search stays tractable (the extended-fault suite swaps
+    # register for Elle at raft scale specifically because Knossos OOMs on the huge
+    # indeterminate histories those nemeses generate; 60s single-key keeps it small).
+    #
+    # register-pause: SIGSTOP/SIGCONT the sole node. Ops in-flight during a pause
+    # time out to :info (Knossos ignores indeterminate ops); linearizability of the
+    # register across pause/resume must still hold. (Formerly the unreachable
+    # `nemesis-pause` test — suites=() — now named for its workload and wired into
+    # the crash/all suites.)
+    TestDefinition(
+        "register-pause",
+        "register",
+        "pause",
+        60,
+        Topology.SINGLE,
+        suites=("crash", "all", "register-fault"),
+    ),
+    # register-all: the composed single-node :all nemesis (kill + pause interleaved)
+    # against the linearizable register — the harshest single-node fault schedule.
+    # Wires the previously-orphaned :all nemesis (nemesis.clj) which had no test.
+    # A lost acked write across a crash, or a non-linearizable read, is a real
+    # durability/consistency failure here.
+    TestDefinition(
+        "register-all",
+        "register",
+        "all",
+        60,
+        Topology.SINGLE,
+        suites=("crash", "all", "register-fault"),
+    ),
     # Replication workloads
     TestDefinition(
         "replication",
@@ -162,6 +272,39 @@ TESTS: tuple[TestDefinition, ...] = (
     TestDefinition(
         "zombie", "zombie", "partition", 60, Topology.REPLICATION, suites=("replication", "all")
     ),
+    # register-partition: the Knossos linearizable register on the 3-node replication
+    # topology, with the client PINNED to the primary (--node n1) while the partition
+    # nemesis isolates that primary from both replicas (:primary-isolated). Pinning is
+    # deliberate: the register's linearizable checker is only valid against a single
+    # authoritative node — an async replica serving stale reads is non-linearizable by
+    # design (consistency.md), which would make an unpinned 3-node register red-by-
+    # construction rather than a real finding. With the client on n1 only, the replicas
+    # stay reachable by the nemesis (partitioned by container IP) but never serve the
+    # client, so this asserts the real property: the primary keeps serving a
+    # linearizable single-key register even when cut off from all its replicas
+    # (availability + linearizability under replica isolation). Bounded to 30s to keep
+    # the Knossos search tractable. Runs in its own `register-fault` suite (sole
+    # replication-topology member -> executes standalone, never batched with the async
+    # replication workloads).
+    TestDefinition(
+        "register-partition",
+        "register",
+        "partition",
+        30,
+        Topology.REPLICATION,
+        replication_flag=True,
+        client_nodes=("n1",),
+        # concurrency=2 bounds the Knossos :linear search, which is exponential in
+        # concurrency. (The OOMs seen while developing this variant were primarily a
+        # harness bug -- CLUSTERDOWN rejections escaping uncaught and piling up as
+        # indeterminate :info ops; fixed in client.clj's with-error-handling. With that
+        # fixed, :info-count is 0, but the register's few distinct values (0-9) still
+        # make the linearization search costly, so the cap is kept as defense-in-depth.)
+        # Two client threads still exercise genuine concurrency; with the 30s limit this
+        # stays green (57 ok / 24 fail / 0 info, :valid? true).
+        concurrency=2,
+        suites=("register-fault",),
+    ),
     TestDefinition(
         "replication-chaos",
         "replication",
@@ -169,6 +312,63 @@ TESTS: tuple[TestDefinition, ...] = (
         120,
         Topology.REPLICATION,
         suites=("replication", "all"),
+    ),
+    # Replica catch-up after a network partition heals. The workload drives
+    # writes (some with WAIT) while the :partition nemesis isolates a replica,
+    # then asserts convergence + no value regression once healed.
+    TestDefinition(
+        "partition-recovery",
+        "partition-recovery",
+        "partition",
+        90,
+        Topology.REPLICATION,
+        suites=("replication", "all"),
+    ),
+    # replication-failover: the acked-write-durability-across-failover test. The
+    # workload is self-driven (runs with the "none" nemesis, like the raft
+    # membership/recovery workloads): it seeds tracked writes on the primary
+    # (durable ones with WAIT 2 = full replica count, plus async ones), then
+    # `docker stop`s the primary and promotes the freshest replica via
+    # `REPLICAOF NO ONE`, re-points the surviving replica, and continues traffic
+    # against the new primary. The checker asserts the documented strong bound
+    # (consistency.md, Replication -> failover durability): every write
+    # acknowledged by the full replica count MUST be readable on the promoted
+    # primary — an empty loss set. Async (unreplicated) writes MAY be lost and
+    # are reported informationally, never failing the verdict. This is the first
+    # test anywhere that exercises kill-primary -> promote-replica ->
+    # verify-acked-write-fate.
+    TestDefinition(
+        "replication-failover",
+        "replication-failover",
+        "none",
+        120,
+        Topology.REPLICATION,
+        suites=("replication", "all"),
+    ),
+    # Clock-skew and slow-network on the REPLICATION topology (previously these
+    # nemeses ran only under raft-extended). They drive the replication
+    # consistency workload (no-regression + convergence checker, robust to the
+    # lag/skew these faults induce) against the 3-node primary+replicas topology,
+    # so replication behaviour is exercised under realistic fault conditions, not
+    # just clean kill/restart. Grouped in a dedicated `replication-extended`
+    # suite — mirroring how `raft-extended` is kept out of the default `raft`
+    # suite — so the higher-fault, longer-feedback variants stay out of the
+    # per-PR `replication`/`all` suites while remaining runnable on a testbox/CI.
+    TestDefinition(
+        "replication-clock-skew",
+        "replication",
+        "clock-skew",
+        60,
+        Topology.REPLICATION,
+        suites=("replication-extended",),
+    ),
+    TestDefinition(
+        "replication-slow-network",
+        "replication",
+        "slow-network",
+        60,
+        Topology.REPLICATION,
+        suites=("replication-extended",),
     ),
     # Raft cluster core workloads
     TestDefinition(
@@ -203,6 +403,42 @@ TESTS: tuple[TestDefinition, ...] = (
         "cross-slot",
         "none",
         30,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    # cross-slot under fault injection. The cross-slot workload's conservation
+    # checker (balances are hash-tag co-located to a single shard, so every atomic
+    # transfer applies both legs or neither) is the strongest correctness checker
+    # in the harness — but it only ever observed a clean cluster. These variants
+    # subject it to real faults so an atomicity/durability regression that only
+    # manifests under partition/kill (the realistic failure mode for a
+    # single-owner shard commit) is no longer invisible.
+    #
+    # cross-slot-partition: a network partition never destroys committed data, so
+    # the checker enforces conservation AND the always-on safety invariants
+    # (hash-tag co-location, cross-slot-rejection) throughout the fault.
+    TestDefinition(
+        "cross-slot-partition",
+        "cross-slot",
+        "partition",
+        60,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    # cross-slot-kill: SIGKILLs a slot owner mid-run. FrogDB does not promise
+    # failure atomicity across a crash — single-owner shards can lose recent
+    # un-fsynced acked writes, and a cross-shard VLL EXEC may durably partial-commit
+    # by documented design (concurrency issue 05, option 4 fail-stop). The checker
+    # therefore kill-gates conservation: an imbalance under the kill is the
+    # accepted contract (surfaced loudly, not failed), while co-location and
+    # cross-slot-rejection safety still always gate.
+    TestDefinition(
+        "cross-slot-kill",
+        "cross-slot",
+        "kill",
+        60,
         Topology.RAFT,
         cluster_flag=True,
         suites=("raft", "all"),
@@ -243,6 +479,15 @@ TESTS: tuple[TestDefinition, ...] = (
         cluster_flag=True,
         suites=("raft", "all"),
     ),
+    # raft-chaos: the harshest composed nemesis (kills, pauses, partitions, slow
+    # network, disk, clock, memory on the slot-owning nodes) driven against the
+    # key-routing workload. The key-routing checker now validates DATA — every
+    # acknowledged write must stay readable (durability) and every read must
+    # return a value actually written to that key (value-correctness), on top of
+    # the redirect accounting — so a dropped write or wrong-value read under this
+    # fault schedule is a real data-safety failure rather than passing green.
+    # Un-tagged pool keys keep spreading across every shard, so routing coverage
+    # under chaos is preserved (an Elle workload would co-locate to one slot).
     TestDefinition(
         "raft-chaos",
         "key-routing",
@@ -250,6 +495,112 @@ TESTS: tuple[TestDefinition, ...] = (
         120,
         Topology.RAFT,
         cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    # list-append-raft: the Elle strict-serializable list-append workload driven
+    # against the raft-cluster composed nemesis (kills + pauses + partitions +
+    # slow-network + disk + clock + memory on the core nodes). All {elle} keys
+    # co-locate to a single hash slot (hash tag), so this does NOT exercise
+    # cross-shard routing coverage (raft-chaos/key-routing owns that) — instead it
+    # subjects the strongest anomaly detector in the harness to real fault
+    # injection: any G0/G1a/G1b/G1c/G2 cycle or strict-serializability violation
+    # surfacing on the co-located slot while its owner is repeatedly killed and
+    # partitioned is a genuine consistency failure. The cluster client downgrades
+    # unreachable/CLUSTERDOWN ops to :info (Elle ignores indeterminate ops) and
+    # follows MOVED redirects, so faults reduce throughput rather than manufacture
+    # false anomalies. Elle's :cycle-search-timeout is NOT a failure (skill docs).
+    TestDefinition(
+        "list-append-raft",
+        "list-append",
+        "raft-cluster",
+        120,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    # Raft cluster membership + recovery workloads.
+    # These workloads drive their own fault injection through operations
+    # (CLUSTER MEET, kill-leader, restart-node, slot migration), so they run
+    # with the "none" nemesis — the disruption is generated inside the workload.
+    #
+    # migration-recovery: kill the Raft leader mid-slot-migration and verify the
+    # cluster recovers, the orphaned migration is resolvable, and no data is lost.
+    TestDefinition(
+        "migration-recovery",
+        "migration-recovery",
+        "none",
+        120,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    # concurrent-migration: run 4 slot migrations in parallel and verify all
+    # converge to a consistent owner with no lost keys.
+    TestDefinition(
+        "concurrent-migration",
+        "concurrent-migration",
+        "none",
+        90,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    # membership-routing: add a node (CLUSTER MEET) and migrate a slot to it
+    # while traffic flows; verify MOVED handling, durability, and slot handoff.
+    TestDefinition(
+        "membership-routing",
+        "membership-routing",
+        "none",
+        120,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    # rolling-restart: SIGTERM + restart each node in sequence and verify the
+    # cluster stays available (>80%) with no data loss.
+    TestDefinition(
+        "rolling-restart",
+        "rolling-restart",
+        "none",
+        120,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    # Membership changes UNDER fault load.
+    #
+    # raft-membership: the membership-routing workload (add node + slot handoff
+    # with acked-write durability checking) driven concurrently against the
+    # raft-cluster-membership composed nemesis, which mixes process kills, pauses,
+    # and network partitions with node join/leave churn. Unlike the "none"-nemesis
+    # membership-routing test, here the add-node + slot-migration + traffic all run
+    # while faults are injected. The workload's durability checker asserts that
+    # every acknowledged write survives the membership change under fault, so a
+    # lost acked write here is a real data-safety violation. The nemesis churns
+    # only spare node n5 (see nemesis/raft-cluster-membership) so it never forgets
+    # the workload's data node n4.
+    TestDefinition(
+        "raft-membership",
+        "membership-routing",
+        "raft-cluster-membership",
+        120,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    # cluster-membership: the cluster-formation workload with --membership-changes
+    # (its generator drives node join/leave via CLUSTER MEET/FORGET) under the
+    # raft-cluster-membership composed nemesis. Exercises the membership-change CLI
+    # flag on an automated path and verifies the cluster returns to a consistent
+    # "ok" state after membership churn combined with kills/pauses/partitions.
+    TestDefinition(
+        "cluster-membership",
+        "cluster-formation",
+        "raft-cluster-membership",
+        120,
+        Topology.RAFT,
+        cluster_flag=True,
+        membership_changes=True,
         suites=("raft", "all"),
     ),
     # Raft extended nemesis tests
@@ -504,6 +855,16 @@ def run_test(
     ]
     if test.cluster_flag:
         cmd.append("--cluster")
+    if test.membership_changes:
+        cmd.append("--membership-changes")
+    if test.independent:
+        cmd.append("--independent")
+    if test.replication_flag:
+        cmd.append("--replication")
+    for node in test.client_nodes:
+        cmd.extend(["--node", node])
+    if test.concurrency is not None:
+        cmd.extend(["--concurrency", str(test.concurrency)])
     cmd.extend(extra_args)
 
     cwd = root / "testing" / "jepsen" / "frogdb"
@@ -565,6 +926,17 @@ def generate_batch_edn(
         ]
         if t.cluster_flag:
             pairs.append(":cluster true")
+        if t.membership_changes:
+            pairs.append(":membership-changes true")
+        if t.independent:
+            pairs.append(":independent true")
+        if t.replication_flag:
+            pairs.append(":replication true")
+        if t.client_nodes:
+            node_vec = " ".join(f'"{n}"' for n in t.client_nodes)
+            pairs.append(f":nodes [{node_vec}]")
+        if t.concurrency is not None:
+            pairs.append(f":concurrency {t.concurrency}")
         configs.append("{" + " ".join(pairs) + "}")
 
     edn = "[" + "\n ".join(configs) + "]"
