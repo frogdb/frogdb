@@ -70,7 +70,6 @@ pub fn generate_toml(config: &FrogDBConfigSpec) -> String {
             // old template omitted the section when disabled, which would have let
             // the server default `enabled = true` win — a semantic bug.)
             enabled: config.metrics.enabled,
-            bind: "0.0.0.0".to_string(),
             port: config.metrics.port,
             ..Default::default()
         },

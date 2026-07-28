@@ -524,8 +524,11 @@ deb-gen *args:
 workflow-gen *args:
     uv run --project .github/workflows/workflow_gen python -m workflow_gen {{args}}
 
-# Generate all derived files (Helm chart + dashboard + Debian + workflows)
-generate: helm-gen dashboard-gen deb-gen workflow-gen
+# Generate all derived files (dashboard + Helm chart + Debian + workflows).
+# dashboard-gen must precede helm-gen: the chart's bundled dashboard is a copy of
+# frogdb-server/ops/grafana/frogdb-overview.json, so running helm-gen first leaves
+# the copy a generation behind whenever the metric set changes.
+generate: dashboard-gen helm-gen deb-gen workflow-gen
 
 # Check all derived files are up to date (for CI)
 generate-check:
@@ -690,10 +693,11 @@ debug-assets:
 # Operator
 # =============================================================================
 
-# Generate FrogDB CRD YAML
+# Generate the FrogDB CRD manifest (JSON — `generate-crd` emits JSON, and
+# deploy/crd.json is the tracked artifact kustomize/helm reference)
 operator-crd:
-    {{dyld-env}} {{rocksdb-env}} cargo run --manifest-path frogdb-operator/Cargo.toml -- generate-crd > frogdb-operator/deploy/crd.yaml
-    @echo "CRD written to frogdb-operator/deploy/crd.yaml"
+    {{dyld-env}} {{rocksdb-env}} cargo run --manifest-path frogdb-operator/Cargo.toml -- generate-crd > frogdb-operator/deploy/crd.json
+    @echo "CRD written to frogdb-operator/deploy/crd.json"
 
 # Build the operator (debug)
 operator-build:

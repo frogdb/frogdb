@@ -1316,12 +1316,22 @@ name = "frogdb-config"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "frogdb-config-derive",
  "rand 0.10.0",
  "schemars",
  "serde",
  "serde_json",
  "toml 1.1.0+spec-1.1.0",
  "tracing",
+]
+
+[[package]]
+name = "frogdb-config-derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -1424,9 +1434,11 @@ dependencies = [
 name = "frogdb-persistence"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bitvec",
  "bytes",
  "flume",
+ "frogdb-config",
  "frogdb-types",
  "parking_lot",
  "rocksdb",
@@ -1547,6 +1559,7 @@ dependencies = [
  "tokio-metrics",
  "tokio-rustls",
  "tokio-util",
+ "toml 1.1.0+spec-1.1.0",
  "toml_edit 0.22.27",
  "tower",
  "tracing",
