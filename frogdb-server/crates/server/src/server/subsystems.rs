@@ -46,6 +46,34 @@ pub(super) struct SubsystemHandles {
 }
 
 impl Server {
+    /// The live handshake timeout to hand to accept loops and connect
+    /// factories.
+    ///
+    /// When TLS is enabled this is the [`crate::tls_runtime::TlsRuntimeHandle`]'s
+    /// shared handle, so a runtime change reaches every TLS path. When TLS is
+    /// off there is no handshake path to read it, but the acceptor context
+    /// still needs a value, so a detached one carrying the configured default
+    /// is used.
+    #[cfg(not(feature = "turmoil"))]
+    fn tls_handshake_timeout(&self) -> crate::tls_runtime::HandshakeTimeout {
+        match self.tls_runtime {
+            Some(ref tls_rt) => tls_rt.handshake_timeout(),
+            None => crate::tls_runtime::HandshakeTimeout::new(self.config.tls.handshake_timeout_ms),
+        }
+    }
+
+    /// The live dual-accept flag for the cluster bus; same fallback rationale
+    /// as [`Self::tls_handshake_timeout`].
+    #[cfg(not(feature = "turmoil"))]
+    fn tls_cluster_migration_flag(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        match self.tls_runtime {
+            Some(ref tls_rt) => tls_rt.cluster_migration_flag(),
+            None => Arc::new(std::sync::atomic::AtomicBool::new(
+                self.config.tls.tls_cluster_migration,
+            )),
+        }
+    }
+
     /// Start all subsystems and return handles for later shutdown.
     pub(super) fn start_subsystems(&mut self) -> Result<SubsystemHandles> {
         // Capture server start time
@@ -194,10 +222,7 @@ impl Server {
                 && !self.config.tls.no_tls_on_http
                 && let Some(ref tls_rt) = self.tls_runtime
             {
-                server = server.with_tls(
-                    tls_rt.manager().clone(),
-                    std::time::Duration::from_millis(self.config.tls.handshake_timeout_ms),
-                );
+                server = server.with_tls(tls_rt.manager().clone(), tls_rt.handshake_timeout());
             }
 
             let scheme = {
@@ -281,11 +306,9 @@ impl Server {
                     None
                 },
                 #[cfg(not(feature = "turmoil"))]
-                tls_cluster_migration: self.config.tls.tls_cluster_migration,
+                tls_cluster_migration: self.tls_cluster_migration_flag(),
                 #[cfg(not(feature = "turmoil"))]
-                tls_handshake_timeout: std::time::Duration::from_millis(
-                    self.config.tls.handshake_timeout_ms,
-                ),
+                tls_handshake_timeout: self.tls_handshake_timeout(),
             });
             Some(spawn(async move {
                 if let Err(e) = crate::cluster_bus::run(cluster_bus_listener, ctx).await {
@@ -460,9 +483,7 @@ impl Server {
             #[cfg(feature = "turmoil")]
             chaos_config: std::sync::Arc::new(self.config.chaos.clone()),
             #[cfg(not(feature = "turmoil"))]
-            tls_handshake_timeout: std::time::Duration::from_millis(
-                self.config.tls.handshake_timeout_ms,
-            ),
+            tls_handshake_timeout: self.tls_handshake_timeout(),
         };
 
         // Create main acceptor (regular client connections)

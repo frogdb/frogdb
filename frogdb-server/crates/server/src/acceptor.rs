@@ -73,9 +73,10 @@ pub struct Acceptor {
     #[cfg(not(feature = "turmoil"))]
     tls_manager: Option<Arc<crate::tls::TlsManager>>,
 
-    /// TLS handshake timeout duration.
+    /// Live TLS handshake timeout, read per handshake (see
+    /// [`crate::tls_runtime::HandshakeTimeout`]).
     #[cfg(not(feature = "turmoil"))]
-    tls_handshake_timeout: std::time::Duration,
+    tls_handshake_timeout: crate::tls_runtime::HandshakeTimeout,
 
     /// The five dependency groups, pre-assembled once at [`Acceptor::bind`] and
     /// cloned (Arc-cheap) per accepted connection to hand to the handler.
@@ -138,9 +139,10 @@ pub struct AcceptorContext {
     #[cfg(feature = "turmoil")]
     pub chaos_config: Arc<crate::config::ChaosConfig>,
 
-    /// TLS handshake timeout duration (shared across whichever ports enable TLS).
+    /// Live TLS handshake timeout, shared across whichever ports enable TLS
+    /// and read per handshake rather than snapshotted at bind time.
     #[cfg(not(feature = "turmoil"))]
-    pub tls_handshake_timeout: std::time::Duration,
+    pub tls_handshake_timeout: crate::tls_runtime::HandshakeTimeout,
 }
 
 /// Per-listener configuration: the pieces that actually differ between the
@@ -252,7 +254,7 @@ impl Acceptor {
                         if let Some(ref tls_mgr) = self.tls_manager {
                             let acceptor = tls_mgr.acceptor();
                             match tokio::time::timeout(
-                                self.tls_handshake_timeout,
+                                self.tls_handshake_timeout.get(),
                                 acceptor.accept(socket),
                             )
                             .await
@@ -416,7 +418,7 @@ mod tests {
             #[cfg(feature = "turmoil")]
             chaos_config: Arc::new(crate::config::ChaosConfig::default()),
             #[cfg(not(feature = "turmoil"))]
-            tls_handshake_timeout: std::time::Duration::from_millis(3000),
+            tls_handshake_timeout: crate::tls_runtime::HandshakeTimeout::new(3000),
         }
     }
 

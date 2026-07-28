@@ -17,11 +17,47 @@
 //! This module is only compiled in non-turmoil builds (see [`crate::tls`]).
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use frogdb_config::TlsConfig;
 
 use crate::tls::TlsManager;
+
+/// The TLS handshake timeout, shared with every accept loop and connect
+/// factory and read *per handshake*.
+///
+/// Connection code used to copy `tls.handshake-timeout-ms` into a `Duration` at
+/// startup, which pinned the value for the process lifetime. Handing out this
+/// handle instead keeps the read on the handshake path, so a change takes
+/// effect on the next connection without touching any established one.
+#[derive(Clone, Debug)]
+pub struct HandshakeTimeout(Arc<AtomicU64>);
+
+impl HandshakeTimeout {
+    /// A fresh, independent timeout. Used where TLS is off (the value is never
+    /// read) and in tests; live wiring goes through
+    /// [`TlsRuntimeHandle::handshake_timeout`].
+    pub fn new(ms: u64) -> Self {
+        Self(Arc::new(AtomicU64::new(ms)))
+    }
+
+    /// The current timeout. Call this at handshake time, not at startup.
+    pub fn get(&self) -> Duration {
+        Duration::from_millis(self.0.load(Ordering::Relaxed))
+    }
+
+    /// Milliseconds, for reporting.
+    pub fn millis(&self) -> u64 {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    /// Change the timeout for subsequent handshakes.
+    pub fn set_millis(&self, ms: u64) {
+        self.0.store(ms, Ordering::Relaxed);
+    }
+}
 
 /// Owns the live [`TlsManager`] and the TLS configuration it was last built
 /// from, and applies configuration changes to both atomically.
@@ -37,6 +73,15 @@ pub struct TlsRuntimeHandle {
     /// read-modify-write: two concurrent CONFIG SETs to different TLS fields
     /// must not lose one of the writes.
     config: Mutex<TlsConfig>,
+    /// Handshake timeout handed to accept loops and connect factories.
+    ///
+    /// Separate from `config` because it is read on the handshake path, where
+    /// taking a mutex per connection would be gratuitous; the copy in `config`
+    /// is kept in sync so [`Self::current_config`] stays truthful.
+    handshake_timeout: HandshakeTimeout,
+    /// Dual-accept (rolling TLS cluster migration) flag, read by the cluster
+    /// bus when a connection arrives. Same rationale as `handshake_timeout`.
+    cluster_migration: Arc<AtomicBool>,
 }
 
 impl TlsRuntimeHandle {
@@ -51,6 +96,8 @@ impl TlsRuntimeHandle {
     pub fn from_parts(manager: Arc<TlsManager>, config: TlsConfig) -> Self {
         Self {
             manager,
+            handshake_timeout: HandshakeTimeout::new(config.handshake_timeout_ms),
+            cluster_migration: Arc::new(AtomicBool::new(config.tls_cluster_migration)),
             config: Mutex::new(config),
         }
     }
@@ -123,6 +170,41 @@ impl TlsRuntimeHandle {
     /// Restrict the offered ciphersuites (empty = rustls defaults).
     pub fn set_ciphersuites(&self, suites: Vec<String>) -> anyhow::Result<()> {
         self.apply(|c| c.ciphersuites = suites)
+    }
+
+    /// The shared handshake timeout. Clone it into accept loops and connect
+    /// factories; never copy the `Duration` out at startup.
+    pub fn handshake_timeout(&self) -> HandshakeTimeout {
+        self.handshake_timeout.clone()
+    }
+
+    /// Change the handshake timeout applied to subsequent handshakes.
+    ///
+    /// No rustls rebuild is involved, so this cannot fail.
+    pub fn set_handshake_timeout_ms(&self, ms: u64) {
+        self.config.lock().unwrap().handshake_timeout_ms = ms;
+        self.handshake_timeout.set_millis(ms);
+    }
+
+    /// The shared dual-accept flag for rolling TLS cluster migration. The
+    /// cluster bus reads it per inbound connection.
+    pub fn cluster_migration_flag(&self) -> Arc<AtomicBool> {
+        self.cluster_migration.clone()
+    }
+
+    /// Whether the cluster bus currently accepts both plaintext and TLS.
+    pub fn cluster_migration(&self) -> bool {
+        self.cluster_migration.load(Ordering::Relaxed)
+    }
+
+    /// Turn dual-accept on or off for subsequent cluster-bus connections.
+    ///
+    /// Established connections are unaffected, which is exactly the rolling
+    /// migration story: flip it on, restart peers into TLS one at a time, flip
+    /// it off to become strict.
+    pub fn set_cluster_migration(&self, enabled: bool) {
+        self.config.lock().unwrap().tls_cluster_migration = enabled;
+        self.cluster_migration.store(enabled, Ordering::Relaxed);
     }
 
     /// Replace the extra server identities offered alongside the primary pair.
@@ -464,5 +546,105 @@ mod tests {
             .unwrap();
         assert_eq!(handle.current_config().client_cert_file, Some(client_cert));
         assert!(handle.manager().connector().is_some());
+    }
+
+    /// Accept-loop shape used by production code: the timeout is read from the
+    /// shared handle *per accept*, never copied out at startup.
+    async fn accept_with_live_timeout(
+        listener: &tokio::net::TcpListener,
+        handle: &TlsRuntimeHandle,
+        timeout: &HandshakeTimeout,
+    ) -> Result<(), tokio::time::error::Elapsed> {
+        let (stream, _) = listener.accept().await.unwrap();
+        let acceptor = handle.manager().acceptor();
+        tokio::time::timeout(timeout.get(), acceptor.accept(stream))
+            .await
+            .map(|_| ())
+    }
+
+    #[tokio::test]
+    async fn handshake_timeout_change_applies_to_the_next_accept() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_identity(dir.path(), "server");
+        let handle = handle_with(cert, key);
+        // Cloned once, before any change — exactly how the acceptor gets it.
+        let timeout = handle.handshake_timeout();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        // A client that connects and never sends a ClientHello, so the accept
+        // can only end by timing out.
+        handle.set_handshake_timeout_ms(50);
+        let stalled = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let started = std::time::Instant::now();
+        assert!(
+            accept_with_live_timeout(&listener, &handle, &timeout)
+                .await
+                .is_err(),
+            "the stalled handshake must hit the 50ms timeout"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "timed out far later than the configured 50ms: {:?}",
+            started.elapsed()
+        );
+        drop(stalled);
+
+        // Widen it: the next accept must now outlive the old 50ms value.
+        handle.set_handshake_timeout_ms(30_000);
+        assert_eq!(handle.current_config().handshake_timeout_ms, 30_000);
+        let stalled = tokio::net::TcpStream::connect(addr).await.unwrap();
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(300),
+                accept_with_live_timeout(&listener, &handle, &timeout),
+            )
+            .await
+            .is_err(),
+            "the accept gave up early, so it read a stale timeout"
+        );
+        drop(stalled);
+    }
+
+    #[test]
+    fn cluster_migration_flag_is_shared_and_mirrored_in_the_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_identity(dir.path(), "server");
+        let handle = handle_with(cert, key);
+        // Handed to the cluster bus at startup, before any change.
+        let flag = handle.cluster_migration_flag();
+        assert!(!flag.load(Ordering::Relaxed));
+
+        handle.set_cluster_migration(true);
+        assert!(
+            flag.load(Ordering::Relaxed),
+            "the cluster bus holds a stale copy of the flag"
+        );
+        assert!(handle.cluster_migration());
+        assert!(handle.current_config().tls_cluster_migration);
+
+        handle.set_cluster_migration(false);
+        assert!(!flag.load(Ordering::Relaxed));
+        assert!(!handle.current_config().tls_cluster_migration);
+    }
+
+    /// Neither atomic is disturbed by a certificate reload, and a reload does
+    /// not resurrect the config values they shadow.
+    #[test]
+    fn atomics_survive_a_certificate_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_identity(dir.path(), "server");
+        let handle = handle_with(cert, key);
+        let timeout = handle.handshake_timeout();
+
+        handle.set_handshake_timeout_ms(1234);
+        handle.set_cluster_migration(true);
+        handle.reload_current().unwrap();
+
+        assert_eq!(timeout.millis(), 1234);
+        assert!(handle.cluster_migration());
+        assert_eq!(handle.current_config().handshake_timeout_ms, 1234);
+        assert!(handle.current_config().tls_cluster_migration);
     }
 }

@@ -167,11 +167,12 @@ pub(super) fn init_replication(
             && let Some(handle) = tls_runtime
         {
             let mgr = handle.manager().clone();
-            let handshake_timeout =
-                std::time::Duration::from_millis(config.tls.handshake_timeout_ms);
+            let handshake_timeout = handle.handshake_timeout();
             let factory: frogdb_replication::replica::ConnectFactory =
                 Arc::new(move |addr: std::net::SocketAddr| {
                     let mgr = mgr.clone();
+                    // Timeout read per dial so a change applies without a restart.
+                    let handshake_timeout = handshake_timeout.get();
                     Box::pin(async move {
                         let connector = mgr.connector().ok_or_else(|| {
                             std::io::Error::other("TLS client connector not configured")
