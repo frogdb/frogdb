@@ -1137,12 +1137,11 @@ fn reopen_and_measure(db_dir: &Path) -> (usize, u64) {
     // one. This is the load-bearing `PointInTime` guarantee — recovered state is
     // always a real prefix of history, never an interleaving that resurrects a
     // record from beyond the corruption point.
-    for i in 0..CORRUPT_TEST_RECORDS {
+    for (i, key_present) in present.iter().enumerate() {
         assert_eq!(
-            present[i],
+            *key_present,
             i < survivors,
-            "survivors must be a contiguous prefix; key {i} present={} but survivor count={survivors}",
-            present[i],
+            "survivors must be a contiguous prefix; key {i} present={key_present} but survivor count={survivors}",
         );
     }
 
