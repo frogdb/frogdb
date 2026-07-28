@@ -34,6 +34,7 @@
 pub mod apply;
 pub mod frame;
 pub mod fullsync;
+pub mod identity;
 pub mod offset_coordinator;
 pub mod primary;
 pub mod replica;
@@ -49,6 +50,7 @@ pub use frame::{
     serialize_command_to_resp,
 };
 pub use fullsync::FullSyncMetadata;
+pub use identity::{ReplicationIdentity, SharedReplicationState};
 pub use offset_coordinator::OffsetCoordinator;
 pub use primary::{
     DivergenceRecord, LagThresholdConfig, LagThresholds, PrimaryReplicationHandler,
@@ -58,7 +60,7 @@ pub use replica::{ReplicaConnection, ReplicaReplicationHandler};
 pub use replica_session::{Phase, ReplicaCapabilities, ReplicaInfo, ReplicaSession, SyncKind};
 pub use state::{
     ReplicationState, StagedReplicationMetadata, consume_staged_replication_metadata,
-    read_staged_replication_metadata,
+    discard_staged_full_sync, read_staged_replication_metadata,
 };
 pub use tracker::ReplicationTrackerImpl;
 pub use wait_coordinator::{AckSolicitor, WaitCoordinator, WaitVerdict};

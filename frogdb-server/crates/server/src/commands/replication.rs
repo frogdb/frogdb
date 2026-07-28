@@ -74,15 +74,21 @@ impl Command for ReplicaofCommand {
         // Role Promotion: `REPLICAOF NO ONE` — become a standalone primary.
         if arg1.eq_ignore_ascii_case("no") && arg2.eq_ignore_ascii_case("one") {
             tracing::info!("REPLICAOF NO ONE - Role Promotion to primary");
-            ctx.is_replica = false;
             // The RoleManager owns the flag and the streaming lifecycle: it
-            // clears the replica flag and stops any inbound stream.
+            // clears the replica flag and stops any inbound stream. A promotion
+            // that could not mint or persist its identity returns an error and
+            // leaves the node a replica, so the local view is only updated after
+            // it succeeds.
             if let Some(ref controller) = ctx.role_controller {
-                controller.request_promote();
+                controller.request_promote()?;
+                ctx.is_replica = false;
             } else if let Some(ref flag) = ctx.is_replica_flag {
+                ctx.is_replica = false;
                 // No manager wired (e.g. a bare test harness): still reflect the
                 // new role rather than silently doing nothing.
                 flag.store(false, std::sync::atomic::Ordering::Release);
+            } else {
+                ctx.is_replica = false;
             }
             return Ok(Response::ok());
         }

@@ -284,7 +284,7 @@ impl PreDispatchView<'_> {
         // (shard commands only), so a connection-level command like CONFIG —
         // now a `CommandImpl::Connection` entry with no shard executor — is
         // still visible to these gates.
-        if self.is_replica.load(Ordering::Relaxed)
+        if self.is_replica.load(Ordering::Acquire)
             && let Some(cmd_impl) = self.registry.get_entry(cmd_name)
             && cmd_impl.flags().contains(CommandFlags::WRITE)
             && !self.write_defers_to_cluster_redirect(cmd_name, args)

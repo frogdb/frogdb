@@ -46,6 +46,48 @@ pub trait ReplicaStream: Send {
     fn link_up(&self) -> bool;
 }
 
+/// The replication half of a role transition.
+///
+/// A promotion is two things: a data-path flag flip (this module's job) and a
+/// replication-identity transition — mint a fresh `master_replid`, freeze the
+/// inherited one as the PSYNC2 failover window at the applied offset, arm the
+/// backlog there, and persist. A demotion is the mirror: close the window and
+/// drop the replicas that were following it. Injected as a trait so the
+/// ordering contract (identity first, flag last) can be asserted with a fake
+/// that records the flag's value at mutation time.
+pub trait PrimaryStintTarget: Send + Sync {
+    /// Mint the new identity, persist it, and open the backlog window. Returns
+    /// the frozen window boundary (the applied offset at promotion).
+    ///
+    /// Called with the role flag still set to replica and after the inbound
+    /// stream has been signalled to stop. Frames the stream decoded but never
+    /// applied are discarded here rather than claimed, so the boundary always
+    /// describes data this node holds.
+    ///
+    /// An `Err` means nothing was adopted: the identity is unchanged and the
+    /// caller must leave the node a replica.
+    fn begin_primary_stint(&self) -> std::io::Result<u64>;
+
+    /// Close the backlog window and disconnect downstream replicas, because
+    /// this node is about to follow someone else's history. Idempotent.
+    fn end_primary_stint(&self);
+}
+
+impl PrimaryStintTarget for crate::replication::PrimaryReplicationHandler {
+    fn begin_primary_stint(&self) -> std::io::Result<u64> {
+        // Persistence happens inside the stint (before the flag flips): a crash
+        // between the mint and the next save point would otherwise resurrect the
+        // node advertising the replication id it just replaced.
+        let (boundary, _snapshot) =
+            crate::replication::PrimaryReplicationHandler::begin_primary_stint(self)?;
+        Ok(boundary)
+    }
+
+    fn end_primary_stint(&self) {
+        crate::replication::PrimaryReplicationHandler::end_primary_stint(self);
+    }
+}
+
 /// Opens inbound replication streams to a primary.
 ///
 /// Injected into the [`RoleManager`] so unit tests can substitute a fake that
@@ -84,6 +126,10 @@ pub struct RoleManager {
     /// replica sessions that are no longer this node's. `None` only in unit
     /// tests that exercise the flag lifecycle without replication wiring.
     replication_self_fence: Option<Arc<crate::replication_quorum::ReplicationQuorumChecker>>,
+    /// The replication half of a role transition (see [`PrimaryStintTarget`]).
+    /// `None` only in unit tests that exercise the flag lifecycle without
+    /// replication wiring — production always wires the primary handler.
+    stint_target: Option<Arc<dyn PrimaryStintTarget>>,
 }
 
 impl RoleManager {
@@ -110,7 +156,14 @@ impl RoleManager {
             streamer,
             boot_replica_handler: None,
             replication_self_fence: None,
+            stint_target: None,
         }
+    }
+
+    /// Adopt the replication seam role transitions run through. Called once,
+    /// during cluster init, with the always-constructed primary handler.
+    pub fn set_stint_target(&mut self, target: Arc<dyn PrimaryStintTarget>) {
+        self.stint_target = Some(target);
     }
 
     /// Adopt the replication self-fence checker so Role Demotion can un-latch
@@ -134,6 +187,27 @@ impl RoleManager {
     ) {
         self.boot_replica_handler = Some(handler);
         self.primary_target = Some(primary);
+    }
+
+    /// Stop the boot-spawned replica connection. The frame consumer behind it
+    /// is *not* aborted: it is retired through the applied offset's gate — by
+    /// the promotion's freeze, or by the new stream's stint — so it can never be
+    /// cancelled part-way through applying a group (see
+    /// [`frogdb_replication::AppliedOffset`]).
+    ///
+    /// A retired consumer applies nothing (every claim is refused), but it only
+    /// *ends* when its frame channel closes, which happens when the last
+    /// `Arc<ReplicaReplicationHandler>` — the sender's owner — drops. There are
+    /// exactly two long-lived clones: the one taken here, and the one moved into
+    /// the connection task spawned beside it in `Server::start_subsystems`,
+    /// which drops as `handler.stop()` breaks its reconnect loop. So the
+    /// consumer parks on `recv()` only until that task unwinds. Anything that
+    /// holds a third clone past this point keeps an idle task alive for the life
+    /// of the process; keep the handler's ownership to those two.
+    fn stop_boot_replica(&mut self) {
+        if let Some(handler) = self.boot_replica_handler.take() {
+            handler.stop();
+        }
     }
 
     /// A clone of the data-path role flag, for the write guard / `ROLE` / `INFO`
@@ -175,34 +249,76 @@ impl RoleManager {
     }
 
     /// Role Promotion: become a writable primary. Stops any inbound stream
-    /// (runtime-demotion or boot-spawned) and clears the flag. Idempotent.
+    /// (runtime-demotion or boot-spawned), mints a fresh replication identity,
+    /// and clears the flag. Idempotent.
     ///
-    /// Clearing the flag is all a promotion has to do to acquire the
-    /// primary-side replication seams: the tracker, the
-    /// `PrimaryReplicationHandler` and the `ReplicationQuorumChecker` are built
-    /// for every role at boot and gate their *behavior* on this flag (see
-    /// `server::replication_init`), so a promoted node broadcasts, serves PSYNC,
-    /// and enforces `self-fence-on-replica-loss` / `min-replicas-to-write` /
+    /// Clearing the flag is what acquires the primary-side replication seams:
+    /// the tracker, the `PrimaryReplicationHandler` and the
+    /// `ReplicationQuorumChecker` are built for every role at boot and gate
+    /// their *behavior* on this flag (see `server::replication_init`), so a
+    /// promoted node broadcasts, serves PSYNC, and enforces
+    /// `self-fence-on-replica-loss` / `min-replicas-to-write` /
     /// `replication-lag-threshold-*` — including values a `CONFIG SET` applied
     /// while it was still a replica.
-    pub fn promote(&mut self) {
+    ///
+    /// # Ordering is load-bearing
+    ///
+    /// 1. Stop the inbound stream, so no further frames are decoded.
+    /// 2. Mint the new `master_replid`, freezing the inherited one as the
+    ///    failover window at the applied offset, persist it, and arm the backlog
+    ///    there ([`PrimaryStintTarget`]). The freeze also closes the applier's
+    ///    gate: the frame consumer finishes the group it has already claimed
+    ///    (which is inside the boundary) and applies nothing after it.
+    /// 3. Clear the flag — **last**. It is the fence that opens writes and
+    ///    un-gates PSYNC; flipping it first would let a client write be
+    ///    stamped under the *inherited* replication id at an offset above the
+    ///    window, which is exactly the state that makes a peer's `+CONTINUE`
+    ///    silently diverge.
+    ///
+    /// # Failure
+    ///
+    /// If step 2 fails the flag is **not** cleared and `Err` is returned. The
+    /// node stays read-only under its inherited identity, with the inbound
+    /// stream already torn down (step 1 is not reversible — the socket is gone)
+    /// and its applier frozen, so it follows nobody and applies nothing until an
+    /// operator retries `REPLICAOF NO ONE` or re-points it with
+    /// `REPLICAOF host port` (a fresh stream opens a fresh applying stint). That is the coherent choice: a
+    /// node whose promotion could not be persisted must not start taking writes
+    /// under an identity that would vanish on restart.
+    pub fn promote(&mut self) -> std::io::Result<()> {
         // Dropping the handle stops a runtime-demotion stream.
         self.stream = None;
         // Stop the boot-spawned reconnect loop too: it was started by
-        // `Server::start_subsystems` before this manager existed, so it
-        // lives outside `stream` and needs its own teardown.
-        if let Some(handler) = self.boot_replica_handler.take() {
-            handler.stop();
-        }
+        // `Server::start_subsystems` before this manager existed, so it lives
+        // outside `stream`. Its frame consumer is stopped by the mint's freeze,
+        // not from here — see `stop_boot_replica`.
+        self.stop_boot_replica();
         self.primary_target = None;
+        // Already a primary: nothing to mint. Re-minting would move the
+        // failover window forward over history this node did serve under the
+        // current id, so every replica following it would be told to full
+        // resync for no reason.
+        if !self.is_replica() {
+            tracing::debug!("Role Promotion no-op: node is already a primary");
+            return Ok(());
+        }
+        if let Some(target) = &self.stint_target {
+            let boundary = target.begin_primary_stint()?;
+            tracing::info!(
+                boundary,
+                "Replication identity minted for new primary stint"
+            );
+        }
         self.is_replica.store(false, Ordering::Release);
         tracing::info!("Role Promotion complete: node is now a primary");
+        Ok(())
     }
 
     /// Role Demotion: become a replica of `primary`. Sets the read-only flag
     /// (fenced *before* the stream starts so no client write races the
-    /// transition), tears down any existing stream, and opens a new one.
-    /// Idempotent per target: re-demoting to the same primary is a no-op.
+    /// transition), ends any primary stint, tears down any existing stream, and
+    /// opens a new one. Idempotent per target: re-demoting to the same primary
+    /// is a no-op.
     pub fn demote(&mut self, primary: SocketAddr) {
         if self.is_replica() && self.primary_target == Some(primary) {
             tracing::debug!(primary = %primary, "Role Demotion no-op: already replicating");
@@ -210,14 +326,25 @@ impl RoleManager {
         }
         // Fence: flip to read-only before opening the stream.
         self.is_replica.store(true, Ordering::Release);
-        // Stop any prior stream before starting the new one.
+        // End the primary stint: drop the buffered history and the replicas
+        // following it. Anything this node buffered describes a history it no
+        // longer heads, and the stream it is about to follow may rewind its
+        // offset below those entries entirely (see
+        // [`PrimaryStintTarget::end_primary_stint`]). Runs *after* the fence, so
+        // no write can be stamped into a backlog that was just cleared, and
+        // after the cluster's split-brain capture, which reads the buffer before
+        // requesting the demotion.
+        if let Some(target) = &self.stint_target {
+            target.end_primary_stint();
+        }
+        // Stop any prior stream before starting the new one. Its applier was
+        // already retired by `end_primary_stint` above, so nothing it decoded
+        // under the old history can land on the resync that follows.
         self.stream = None;
         // A boot-spawned handler being superseded by a fresh runtime target
         // must stop too, or it would keep dialing its original primary
         // alongside the new stream.
-        if let Some(handler) = self.boot_replica_handler.take() {
-            handler.stop();
-        }
+        self.stop_boot_replica();
         // Un-latch self-fence arming: the replica sessions that armed it belong
         // to the stint as a primary that just ended. Leaving it armed would make
         // a later re-promotion reject writes from its very first command (no
@@ -284,8 +411,11 @@ impl RoleManagerHandle {
 }
 
 impl frogdb_core::RoleController for RoleManagerHandle {
-    fn request_promote(&self) {
-        self.with_lock(RoleManager::promote);
+    fn request_promote(&self) -> Result<(), frogdb_core::CommandError> {
+        self.with_lock(RoleManager::promote)
+            .map_err(|e| frogdb_core::CommandError::Internal {
+                message: format!("promotion failed: {e}"),
+            })
     }
 
     fn request_demote(&self, primary: SocketAddr) {
@@ -310,10 +440,17 @@ impl frogdb_core::RoleController for RoleManagerHandle {
 /// and frame consumer — the exact pair `init_replication` and `subsystems`
 /// spawn at boot — for a runtime `REPLICAOF`/failover-driven demotion.
 ///
-/// A runtime demotion always targets a *new* primary (a fresh replication
-/// identity), so it starts from a fresh [`ReplicationState`] and full-resyncs,
-/// which is the correct behaviour for adopting a new primary.
+/// The handler is built over the node's shared
+/// [`ReplicationIdentity`](crate::replication::ReplicationIdentity), not a
+/// freshly minted state: the identity belongs to the node, so a demoted
+/// ex-primary keeps the id and offset it reached and can attempt a partial
+/// resync (Redis caches the master using itself for exactly this,
+/// `replicationCacheMasterUsingMyself`). A mismatch or an out-of-window offset
+/// still falls back to a full resync, which is what adopting an unrelated
+/// primary produces.
 pub struct RealReplicaStreamer {
+    /// The node's replication identity, shared with the primary handler.
+    identity: crate::replication::ReplicationIdentity,
     shard_senders: Arc<Vec<frogdb_core::ShardSender>>,
     num_shards: usize,
     listening_port: u16,
@@ -349,6 +486,7 @@ impl RealReplicaStreamer {
     /// Assemble the streamer from server configuration and shared collaborators.
     pub fn new(
         config: &crate::config::Config,
+        identity: crate::replication::ReplicationIdentity,
         shard_senders: Arc<Vec<frogdb_core::ShardSender>>,
         num_shards: usize,
         is_replica_flag: Arc<AtomicBool>,
@@ -377,6 +515,7 @@ impl RealReplicaStreamer {
             crate::replication::LiveCheckpointInstaller::for_config(config, shard_senders.clone());
 
         Self {
+            identity,
             shard_senders,
             num_shards,
             listening_port: config.server.port,
@@ -393,10 +532,10 @@ impl RealReplicaStreamer {
 }
 
 impl RealReplicaStreamer {
-    /// Build (but do not spawn) the replica handler for `primary`: fresh
-    /// replication identity, HealthProbe offset wiring, and TLS connect factory.
-    /// Extracted from [`ReplicaStreamer::start`] so the offset-probe wiring can be
-    /// asserted at a seam without opening a socket.
+    /// Build (but do not spawn) the replica handler for `primary`: the node's
+    /// shared replication identity, HealthProbe offset wiring, and TLS connect
+    /// factory. Extracted from [`ReplicaStreamer::start`] so the offset-probe
+    /// wiring can be asserted at a seam without opening a socket.
     fn build_handler(
         &self,
         primary: SocketAddr,
@@ -409,7 +548,7 @@ impl RealReplicaStreamer {
         let (handler, frame_rx) = ReplicaReplicationHandler::new(
             primary,
             self.listening_port,
-            frogdb_replication::ReplicationState::new(),
+            self.identity.clone(),
             self.state_path.clone(),
             self.data_dir.clone(),
         );
@@ -489,6 +628,13 @@ impl ReplicaStreamer for RealReplicaStreamer {
         let handler = Arc::new(handler);
         let replication_state = Some(handler.shared_state());
 
+        // Open this stream's applying stint *before* anything runs under it, so
+        // stints are ordered by stream rather than by task scheduling, and every
+        // connection this handler builds is captured under this stint (a
+        // connection outlived by its stream is then refused its offset resets).
+        // Opening it also retires the applier of the stream this one replaces.
+        let stint = handler.applied_offset().begin_replica_stint();
+
         // Connection task: connects to the primary and receives frames.
         let handler_clone = handler.clone();
         let conn = crate::net::spawn(async move {
@@ -498,11 +644,12 @@ impl ReplicaStreamer for RealReplicaStreamer {
         });
 
         // Frame consumer task: applies replicated commands to the shards. Stops
-        // itself when the role flag flips back to primary.
+        // itself when the role flag flips back to primary, or when its stint is
+        // frozen/retired through the applied offset.
         let executor = ReplicaCommandExecutor::new(self.shard_senders.clone(), self.num_shards);
         let flag = self.is_replica_flag.clone();
         let consumer = crate::net::spawn(async move {
-            consume_frames(frame_rx, executor, flag, replication_state).await;
+            consume_frames(frame_rx, executor, flag, replication_state, stint).await;
         });
 
         tracing::info!(primary = %primary, "Runtime replica stream started");
@@ -530,15 +677,18 @@ impl ReplicaStream for RealReplicaStream {
 
 impl Drop for RealReplicaStream {
     fn drop(&mut self) {
-        // Signal the connection loop, then abort both tasks so the stream stops
-        // promptly on promotion / re-demotion.
+        // Signal the connection loop and abort its task so the stream stops
+        // promptly on promotion / re-demotion. The consumer is deliberately NOT
+        // aborted: an abort can land inside `apply_group().await` with the write
+        // already on its way to a shard, which would leave applied data the node
+        // never counted. It stops instead when its stint is frozen (promotion)
+        // or retired (a new stream), having finished whatever it claimed, and
+        // its task ends as the frame channel closes behind the connection.
         self.handler.stop();
         if let Some(h) = self.conn.take() {
             h.abort();
         }
-        if let Some(h) = self.consumer.take() {
-            h.abort();
-        }
+        self.consumer.take();
     }
 }
 
@@ -586,6 +736,195 @@ mod tests {
         let streamer = Arc::new(FakeStreamer::default());
         let flag = Arc::new(AtomicBool::new(replica_at_boot));
         (RoleManager::new(flag, streamer.clone(), None), streamer)
+    }
+
+    /// A fake promotion target that records, for every mint, the value of the
+    /// role flag *at the moment the identity was mutated*. The whole point of
+    /// the promotion sequence is that this is still `true` (replica) — the flag
+    /// is the fence that opens writes, and it must not drop until the new
+    /// identity exists.
+    struct RecordingTarget {
+        flag: Arc<AtomicBool>,
+        /// One entry per `begin_primary_stint` call: the flag's value then.
+        mints: Mutex<Vec<bool>>,
+        /// One entry per `end_primary_stint` call: the flag's value then.
+        ends: Mutex<Vec<bool>>,
+        /// When set, minting fails — a promotion that cannot persist.
+        mint_fails: AtomicBool,
+    }
+    impl PrimaryStintTarget for RecordingTarget {
+        fn begin_primary_stint(&self) -> std::io::Result<u64> {
+            self.mints
+                .lock()
+                .unwrap()
+                .push(self.flag.load(Ordering::Acquire));
+            if self.mint_fails.load(Ordering::SeqCst) {
+                return Err(std::io::Error::other("state file is read-only"));
+            }
+            Ok(4096)
+        }
+        fn end_primary_stint(&self) {
+            self.ends
+                .lock()
+                .unwrap()
+                .push(self.flag.load(Ordering::Acquire));
+        }
+    }
+
+    fn manager_with_target(replica_at_boot: bool) -> (RoleManager, Arc<RecordingTarget>) {
+        let streamer = Arc::new(FakeStreamer::default());
+        let flag = Arc::new(AtomicBool::new(replica_at_boot));
+        let target = Arc::new(RecordingTarget {
+            flag: flag.clone(),
+            mints: Mutex::new(Vec::new()),
+            ends: Mutex::new(Vec::new()),
+            mint_fails: AtomicBool::new(false),
+        });
+        let mut mgr = RoleManager::new(flag, streamer, None);
+        mgr.set_stint_target(target.clone());
+        (mgr, target)
+    }
+
+    #[test]
+    fn promote_mints_identity_before_clearing_the_replica_flag() {
+        let (mut mgr, target) = manager_with_target(true);
+
+        mgr.promote().unwrap();
+
+        assert_eq!(
+            *target.mints.lock().unwrap(),
+            vec![true],
+            "the identity must be minted while the node is still fenced as a \
+             replica: flipping first lets a client write be stamped under the \
+             inherited replication id above the failover window"
+        );
+        assert!(!mgr.is_replica(), "promotion must end with the fence open");
+    }
+
+    #[test]
+    fn promote_is_idempotent_and_does_not_remint() {
+        let (mut mgr, target) = manager_with_target(true);
+
+        mgr.promote().unwrap();
+        mgr.promote().unwrap();
+        mgr.promote().unwrap();
+
+        assert_eq!(
+            target.mints.lock().unwrap().len(),
+            1,
+            "re-promoting an already-promoted node must not move the failover \
+             window forward over history it served under the current id"
+        );
+    }
+
+    #[test]
+    fn promoting_a_node_that_booted_primary_mints_nothing() {
+        let (mut mgr, target) = manager_with_target(false);
+
+        mgr.promote().unwrap();
+
+        assert!(target.mints.lock().unwrap().is_empty());
+        assert!(!mgr.is_replica());
+    }
+
+    #[test]
+    fn promote_stops_the_inbound_stream_before_minting() {
+        // The frozen window boundary is only meaningful if the applied offset
+        // has stopped moving, so the stream teardown must precede the mint.
+        struct StopObservingTarget {
+            stops: Arc<AtomicUsize>,
+            stops_at_mint: Mutex<Vec<usize>>,
+        }
+        impl PrimaryStintTarget for StopObservingTarget {
+            fn begin_primary_stint(&self) -> std::io::Result<u64> {
+                self.stops_at_mint
+                    .lock()
+                    .unwrap()
+                    .push(self.stops.load(Ordering::SeqCst));
+                Ok(0)
+            }
+            fn end_primary_stint(&self) {}
+        }
+        let streamer = Arc::new(FakeStreamer::default());
+        let flag = Arc::new(AtomicBool::new(true));
+        let target = Arc::new(StopObservingTarget {
+            stops: streamer.stops.clone(),
+            stops_at_mint: Mutex::new(Vec::new()),
+        });
+        let mut mgr = RoleManager::new(flag, streamer.clone(), None);
+        mgr.set_stint_target(target.clone());
+        mgr.demote(addr("127.0.0.1:7000"));
+
+        mgr.promote().unwrap();
+
+        assert_eq!(
+            *target.stops_at_mint.lock().unwrap(),
+            vec![1],
+            "the inbound stream must be torn down before the window boundary is frozen"
+        );
+    }
+
+    #[test]
+    fn a_promotion_that_cannot_mint_leaves_the_node_a_replica() {
+        // The flag is the fence that opens writes. If the replication identity
+        // could not be minted and persisted, opening it would let the node take
+        // writes under an identity that vanishes on restart.
+        let (mut mgr, target) = manager_with_target(true);
+        target.mint_fails.store(true, Ordering::SeqCst);
+
+        let err = mgr.promote().unwrap_err();
+
+        assert_eq!(err.to_string(), "state file is read-only");
+        assert!(
+            mgr.is_replica(),
+            "a failed promotion must leave the write fence closed"
+        );
+        assert_eq!(target.mints.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn demote_ends_the_primary_stint_while_the_node_is_already_fenced() {
+        // The backlog reset and the downstream disconnect happen behind the
+        // read-only fence, so no write can land in a backlog that is about to
+        // be cleared.
+        let (mut mgr, target) = manager_with_target(false);
+
+        mgr.demote(addr("127.0.0.1:7000"));
+
+        assert_eq!(
+            *target.ends.lock().unwrap(),
+            vec![true],
+            "the stint must end after the node is fenced as a replica"
+        );
+        assert!(target.mints.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_no_op_demotion_does_not_end_the_stint_again() {
+        let (mut mgr, target) = manager_with_target(true);
+        let a = addr("127.0.0.1:7000");
+
+        mgr.demote(a);
+        mgr.demote(a);
+
+        assert_eq!(
+            target.ends.lock().unwrap().len(),
+            1,
+            "re-demoting to the same primary must not disconnect replicas twice"
+        );
+    }
+
+    #[test]
+    fn re_promotion_after_a_demotion_mints_again() {
+        // A full round-trip is a new stint under a new primary's history, so it
+        // gets its own replication id and window.
+        let (mut mgr, target) = manager_with_target(true);
+
+        mgr.promote().unwrap();
+        mgr.demote(addr("127.0.0.1:7000"));
+        mgr.promote().unwrap();
+
+        assert_eq!(target.mints.lock().unwrap().len(), 2);
     }
 
     #[test]
@@ -637,7 +976,7 @@ mod tests {
         mgr.demote(addr("127.0.0.1:7000"));
         assert_eq!(streamer.stops.load(Ordering::SeqCst), 0);
 
-        mgr.promote();
+        mgr.promote().unwrap();
 
         assert!(!mgr.is_replica(), "promote must clear the role flag");
         assert_eq!(mgr.primary_target(), None);
@@ -655,7 +994,7 @@ mod tests {
 
         mgr.demote(a);
         assert!(mgr.is_replica());
-        mgr.promote();
+        mgr.promote().unwrap();
         assert!(!mgr.is_replica());
         mgr.demote(a);
         assert!(mgr.is_replica());
@@ -701,7 +1040,7 @@ mod tests {
         );
         // A promotion right after therefore starts from the
         // never-had-a-replica state instead of an inherited fence.
-        mgr.promote();
+        mgr.promote().unwrap();
         assert!(checker.has_quorum());
     }
 
@@ -729,6 +1068,9 @@ mod tests {
         shared_offset: Option<Arc<std::sync::atomic::AtomicU64>>,
     ) -> RealReplicaStreamer {
         RealReplicaStreamer {
+            identity: crate::replication::ReplicationIdentity::detached(
+                frogdb_replication::ReplicationState::new(),
+            ),
             shard_senders: Arc::new(Vec::new()),
             num_shards: 1,
             listening_port: 0,
@@ -801,7 +1143,7 @@ mod tests {
         assert_eq!(handle.primary_target(), Some(a));
         assert_eq!(*streamer.started.lock().unwrap(), vec![a]);
 
-        <RoleManagerHandle as RoleController>::request_promote(&handle);
+        <RoleManagerHandle as RoleController>::request_promote(&handle).unwrap();
         assert!(!flag.load(Ordering::Acquire));
         assert_eq!(handle.primary_target(), None);
     }
@@ -885,7 +1227,7 @@ mod tests {
         let mut mgr = RoleManager::new(flag, Arc::new(FixedLinkStreamer(true)), None);
         mgr.demote(addr("127.0.0.1:7000"));
         assert!(mgr.link_up());
-        mgr.promote();
+        mgr.promote().unwrap();
         assert!(
             !mgr.link_up(),
             "promote() drops the stream, so link_up must fall back to false"
@@ -909,7 +1251,9 @@ mod tests {
         let (handler, _rx) = ReplicaReplicationHandler::new(
             primary,
             6380,
-            frogdb_replication::ReplicationState::new(),
+            crate::replication::ReplicationIdentity::detached(
+                frogdb_replication::ReplicationState::new(),
+            ),
             state_path,
             data_dir,
         );
@@ -979,7 +1323,9 @@ mod tests {
         let (mut handler, _rx) = ReplicaReplicationHandler::new(
             primary,
             6380,
-            frogdb_replication::ReplicationState::new(),
+            crate::replication::ReplicationIdentity::detached(
+                frogdb_replication::ReplicationState::new(),
+            ),
             state_path,
             data_dir,
         );
@@ -1000,7 +1346,7 @@ mod tests {
         mgr.register_boot_replica_handler(handler, primary);
         assert_eq!(mgr.primary_target(), Some(primary));
 
-        mgr.promote();
+        mgr.promote().unwrap();
 
         assert!(
             !mgr.is_replica(),

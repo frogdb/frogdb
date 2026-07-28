@@ -373,26 +373,17 @@ impl Server {
             None
         };
 
-        // Capture the live replication state (replication id + offset) so INFO
-        // can report the real `master_replid` for both roles. Primary: the
-        // primary handler's state; replica: the replica handler's state (which
-        // adopts the primary's id on FULLRESYNC). Must be read before the
-        // replica handler is `take()`n below. `None` in standalone/cluster mode,
-        // where there is no PSYNC replication identity.
-        // The replica handler wins when this node booted as a replica: it is the
-        // state that adopts the primary's replication id on FULLRESYNC, whereas
-        // the (now always-constructed) primary handler holds this node's own
-        // boot-recovered copy. A promoted node keeps reporting the adopted id —
-        // FrogDB does not rotate the replid on promotion (documented divergence).
+        // The live replication state (replication id + failover window +
+        // offset) INFO reports. Both role handlers hold the *same*
+        // `ReplicationIdentity` cell, so either one answers for the node: a
+        // replica's FULLRESYNC adoption, a promotion's freshly minted
+        // `master_replid`, and a demotion's inherited id are all visible here
+        // without re-reading whichever handler happens to exist. Taken from the
+        // primary handler because it is the one built on every role.
         let info_replication_state = self
-            .replica_handler
+            .primary_replication_handler
             .as_ref()
-            .map(|h| h.shared_state())
-            .or_else(|| {
-                self.primary_replication_handler
-                    .as_ref()
-                    .map(|h| h.shared_state())
-            });
+            .map(|h| h.shared_state());
 
         // Start replica replication if running as replica
         let replica_handle = if let (Some(handler), Some(frame_rx)) =
@@ -413,6 +404,14 @@ impl Server {
             // Get shared replication state for the frame consumer to update active_version
             let replication_state = Some(handler.shared_state());
 
+            // This stream's applying stint, opened *before* the connection task
+            // so every connection it builds is captured under it. Every group is
+            // claimed against the stint before it reaches a shard, so a
+            // promotion can freeze the boundary without waiting for — or
+            // cancelling — an apply in flight, and a connection retired
+            // mid-full-sync can no longer reset the offsets.
+            let stint = handler.applied_offset().begin_replica_stint();
+
             // Spawn replication connection task (connects to primary and receives frames)
             let handler_clone = handler.clone();
             let repl_conn_handle = spawn(async move {
@@ -430,6 +429,7 @@ impl Server {
                     executor,
                     is_replica_for_consumer,
                     replication_state,
+                    stint,
                 )
                 .await;
             });
@@ -739,7 +739,7 @@ impl Server {
             .load(std::sync::atomic::Ordering::Relaxed)
             && let Some(ref handler) = self.primary_replication_handler
         {
-            match handler.save_state().await {
+            match handler.save_state() {
                 Ok(()) => info!("Replication state persisted on shutdown"),
                 Err(e) => error!(error = %e, "Failed to persist replication state on shutdown"),
             }

@@ -26,11 +26,28 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::BytesMut;
 use frogdb_protocol::ParsedCommand;
+use parking_lot::RwLock;
 use redis_protocol::resp2::decode::decode_bytes_mut;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::mpsc;
 
 use crate::frame::ReplicationFrame;
+use crate::replica::ReplicaApplyStint;
 use crate::state::ReplicationState;
+
+/// Claim `bytes` of consumed stream — directly when no transaction is open, or
+/// onto the open group so the whole span is claimed together at `EXEC`.
+///
+/// `false` means the stint may no longer move the applied offset (a promotion
+/// froze it, or a newer stream retired it) and the consume loop must stop.
+fn claim(stint: &ReplicaApplyStint, pending: &mut Option<PendingTxn>, bytes: u64) -> bool {
+    match pending {
+        Some(txn) => {
+            txn.bytes += bytes;
+            true
+        }
+        None => stint.claim(bytes),
+    }
+}
 
 /// Error returned by a [`ReplicaApplier`] when a replicated group cannot be
 /// applied — a divergence signal the consume loop surfaces rather than drops.
@@ -85,6 +102,11 @@ pub fn parse_frame_payload(payload: &[u8]) -> Result<ParsedCommand, String> {
 struct PendingTxn {
     shard_id: u16,
     commands: Vec<ParsedCommand>,
+    /// Stream bytes consumed by the group so far (the `MULTI` frame plus every
+    /// buffered command). Claimed against the applied offset only at `EXEC`, as
+    /// the group goes to its shard — an interrupted group must never leave the
+    /// applied offset claiming data no shard ever saw.
+    bytes: u64,
 }
 
 /// Consume replication frames from the primary and apply them, honoring the
@@ -97,12 +119,47 @@ struct PendingTxn {
 ///    updates the replica's `active_version` — never shard-routed);
 /// 4. reconstructs `MULTI … EXEC` into one atomic [`ReplicaApplier::apply_group`]
 ///    on the frame's tagged shard; a bare command is a group of one;
-/// 5. surfaces any apply/parse error as a divergence signal (logged + counted).
+/// 5. surfaces any apply/parse error as a divergence signal (logged + counted);
+/// 6. claims the frame's stream bytes against `stint` — the offset of the data
+///    this node holds — and stops when the claim is refused.
+///
+/// ## Why the claim comes first, and why refusing it is the stop signal
+///
+/// The claim is taken *before* the group reaches its shard, and a promotion
+/// freezes the counter under the same lock ([`crate::replica::AppliedOffset`]).
+/// That makes the promotion boundary exact: a group is either claimed before
+/// the freeze — inside the boundary, and this loop finishes applying it — or
+/// refused after it and never applied at all. Nothing lands above the boundary.
+///
+/// Which is also why this loop is stopped by *refusing its claims* rather than
+/// by `abort()`. An abort takes effect at this task's next poll, and that may
+/// be inside `apply_group().await` with the shard message already dispatched:
+/// the write reaches the keyspace and its bytes are never counted, leaving data
+/// above the offset the node vouches for, in no backlog and outside every
+/// replication-id window — the same silent divergence the received/applied
+/// split exists to prevent, one group wide.
+///
+/// ## Why `applied` moves here and not at decode time
+///
+/// The streaming path advances the *received* head as soon as a frame is decoded
+/// off the socket, then queues the frame here. Between the two sits a
+/// 10k-deep channel. A promotion freezes its replication-id window and backlog
+/// floor on `applied`, so it must count only frames that reached the keyspace:
+/// anything still queued (or dropped when this loop stops on promotion) is
+/// deliberately left uncounted. Freezing the boundary too low costs a sibling a
+/// full resync; freezing it too high grants `+CONTINUE` over a hole.
+///
+/// Errors still advance the offset. A parse/apply failure means this node has
+/// already diverged for that write (surfaced above as a divergence signal) —
+/// stalling the offset on top of that would desynchronise the node's stream
+/// position from the primary's for every later frame, which is how Redis treats
+/// it too (the replica's offset counts stream bytes consumed).
 pub async fn consume_frames<A: ReplicaApplier>(
     mut frame_rx: mpsc::Receiver<ReplicationFrame>,
     applier: A,
     is_replica_flag: Arc<AtomicBool>,
     replication_state: Option<Arc<RwLock<ReplicationState>>>,
+    stint: ReplicaApplyStint,
 ) {
     tracing::info!("Replica frame consumer started");
 
@@ -111,11 +168,17 @@ pub async fn consume_frames<A: ReplicaApplier>(
     let mut pending: Option<PendingTxn> = None;
 
     while let Some(frame) = frame_rx.recv().await {
-        // Stop consuming frames if we've been promoted to primary.
-        if !is_replica_flag.load(Ordering::Relaxed) {
+        // Stop consuming frames if we've been promoted to primary. Acquire pairs
+        // with the promotion's Release store, so a consumer that sees the flip
+        // also sees the minted identity behind it.
+        if !is_replica_flag.load(Ordering::Acquire) {
             tracing::info!("Replica promoted to primary, stopping frame consumer");
             break;
         }
+
+        // Stream bytes this frame accounts for, claimed before it touches the
+        // keyspace (or, inside a MULTI, when the group EXECs).
+        let frame_bytes = frame.stream_advance();
 
         let cmd = match parse_frame_payload(&frame.payload) {
             Ok(cmd) => cmd,
@@ -127,6 +190,9 @@ pub async fn consume_frames<A: ReplicaApplier>(
                     "Failed to parse replication frame"
                 );
                 errors += 1;
+                if !claim(&stint, &mut pending, frame_bytes) {
+                    break;
+                }
                 continue;
             }
         };
@@ -135,8 +201,12 @@ pub async fn consume_frames<A: ReplicaApplier>(
 
         // --- Control commands: handled inline, never shard-routed. ---
 
-        // REPLCONF GETACK is a control message, not a data command.
+        // REPLCONF GETACK is a control message, not a data command. It still
+        // occupies stream bytes the primary counted, so it advances the offset.
         if cmd_name == "REPLCONF" {
+            if !claim(&stint, &mut pending, frame_bytes) {
+                break;
+            }
             continue;
         }
 
@@ -152,9 +222,12 @@ pub async fn consume_frames<A: ReplicaApplier>(
                     version = %version,
                     "Applying replicated FROGDB.FINALIZE — active version updated"
                 );
-                state.write().await.active_version = Some(version);
+                state.write().active_version = Some(version);
             }
             frames_processed += 1;
+            if !claim(&stint, &mut pending, frame_bytes) {
+                break;
+            }
             continue;
         }
 
@@ -162,20 +235,36 @@ pub async fn consume_frames<A: ReplicaApplier>(
 
         match cmd_name.as_str() {
             "MULTI" => {
-                if pending.is_some() {
+                if let Some(abandoned) = pending.take() {
                     tracing::warn!("Nested MULTI in replication stream; resetting group");
                     errors += 1;
+                    // The abandoned group never applied, but its bytes were
+                    // consumed from the stream: claim them so the offset keeps
+                    // tracking the primary's.
+                    if !stint.claim(abandoned.bytes) {
+                        break;
+                    }
                 }
                 // The whole group runs on the shard the MULTI frame is tagged
                 // with (all frames of a group carry the same origin shard).
                 pending = Some(PendingTxn {
                     shard_id: frame.shard_id,
                     commands: Vec::new(),
+                    // The MULTI frame's own bytes ride with the group and are
+                    // claimed with it at EXEC.
+                    bytes: frame_bytes,
                 });
             }
             "EXEC" => match pending.take() {
                 Some(txn) => {
                     let n = txn.commands.len();
+                    // The group's whole byte span (MULTI + inner commands + this
+                    // EXEC) is claimed as it goes to the shard, never after: an
+                    // apply this loop has started always completes, but the
+                    // promotion boundary is frozen without waiting for it.
+                    if !stint.claim(txn.bytes + frame_bytes) {
+                        break;
+                    }
                     if let Err(e) = applier.apply_group(txn.shard_id, txn.commands).await {
                         tracing::error!(
                             error = %e,
@@ -192,14 +281,23 @@ pub async fn consume_frames<A: ReplicaApplier>(
                 None => {
                     tracing::warn!("EXEC without MULTI in replication stream; ignoring");
                     errors += 1;
+                    if !stint.claim(frame_bytes) {
+                        break;
+                    }
                 }
             },
             _ => {
                 if let Some(txn) = pending.as_mut() {
-                    // Inside a MULTI/EXEC: buffer for the atomic apply.
+                    // Inside a MULTI/EXEC: buffer for the atomic apply. The
+                    // bytes ride with the group until EXEC.
                     txn.commands.push(cmd);
+                    txn.bytes += frame_bytes;
                 } else {
-                    // Bare command: a group of one on its tagged shard.
+                    // Bare command: a group of one on its tagged shard, claimed
+                    // on the way in for the same reason as a transaction.
+                    if !stint.claim(frame_bytes) {
+                        break;
+                    }
                     if let Err(e) = applier.apply_group(frame.shard_id, vec![cmd]).await {
                         tracing::error!(
                             error = %e,
@@ -228,6 +326,7 @@ pub async fn consume_frames<A: ReplicaApplier>(
 mod tests {
     use super::*;
     use crate::frame::serialize_command_to_resp;
+    use crate::replica::AppliedOffset;
     use bytes::Bytes;
     use std::sync::Mutex;
 
@@ -237,6 +336,12 @@ mod tests {
     struct MockApplier {
         groups: Mutex<Vec<(u16, Vec<String>)>>,
         reject: Option<String>,
+        /// When set, every apply parks on this gate until the test opens it —
+        /// the "apply in flight" state a promotion has to be exact about.
+        gate: Option<Arc<tokio::sync::Semaphore>>,
+        /// Signalled as an apply enters the gate, so a test can promote at
+        /// exactly the moment a group is mid-flight.
+        entered: Option<Arc<tokio::sync::Notify>>,
     }
 
     impl ReplicaApplier for MockApplier {
@@ -246,6 +351,12 @@ mod tests {
             commands: Vec<ParsedCommand>,
         ) -> Result<(), ApplyError> {
             let names: Vec<String> = commands.iter().map(|c| c.name_uppercase_string()).collect();
+            if let Some(ref entered) = self.entered {
+                entered.notify_one();
+            }
+            if let Some(ref gate) = self.gate {
+                gate.acquire().await.expect("gate closed").forget();
+            }
             if let Some(ref bad) = self.reject
                 && names.iter().any(|n| n == bad)
             {
@@ -282,14 +393,19 @@ mod tests {
         }
     }
 
-    async fn drive(frames: Vec<ReplicationFrame>, applier: Arc<MockApplier>) {
+    /// Drive the consume loop over `frames` and return the applied offset it
+    /// reached (the frames' total stream bytes when everything applies).
+    async fn drive(frames: Vec<ReplicationFrame>, applier: Arc<MockApplier>) -> u64 {
         let (tx, rx) = mpsc::channel(64);
         for f in frames {
             tx.send(f).await.unwrap();
         }
         drop(tx);
         let flag = Arc::new(AtomicBool::new(true));
-        consume_frames(rx, SharedApplier(applier), flag, None).await;
+        let applied = AppliedOffset::detached(0);
+        let stint = applied.begin_replica_stint();
+        consume_frames(rx, SharedApplier(applier), flag, None, stint).await;
+        applied.current()
     }
 
     #[tokio::test]
@@ -302,8 +418,11 @@ mod tests {
             frame_on(3, 4, "EXEC", &[]),
             frame_on(1, 5, "SET", &["c", "3"]),
         ];
+        let total: u64 = frames.iter().map(|f| f.stream_advance()).sum();
         let applier = Arc::new(MockApplier::default());
-        drive(frames, applier.clone()).await;
+        let applied = drive(frames, applier.clone()).await;
+        // Every frame is behind us, transaction framing included.
+        assert_eq!(applied, total);
 
         let groups = applier.groups.lock().unwrap();
         // The transaction is ONE atomic group on shard 3 (MULTI/EXEC stripped),
@@ -324,8 +443,11 @@ mod tests {
             frame_on(crate::frame::CONTROL_SHARD, 1, "REPLCONF", &["GETACK", "*"]),
             frame_on(0, 2, "SET", &["k", "v"]),
         ];
+        let total: u64 = frames.iter().map(|f| f.stream_advance()).sum();
         let applier = Arc::new(MockApplier::default());
-        drive(frames, applier.clone()).await;
+        let applied = drive(frames, applier.clone()).await;
+        // A skipped control frame is still stream bytes the primary counted.
+        assert_eq!(applied, total);
         let groups = applier.groups.lock().unwrap();
         assert_eq!(*groups, vec![(0, vec!["SET".to_string()])]);
     }
@@ -334,14 +456,176 @@ mod tests {
     async fn failed_apply_is_surfaced_not_silently_dropped() {
         // The applier rejects DEL; the group must NOT be recorded as applied.
         let frames = vec![frame_on(2, 1, "DEL", &["k"])];
+        let total: u64 = frames.iter().map(|f| f.stream_advance()).sum();
         let applier = Arc::new(MockApplier {
             reject: Some("DEL".to_string()),
             ..Default::default()
         });
-        drive(frames, applier.clone()).await;
+        let applied = drive(frames, applier.clone()).await;
         assert!(
             applier.groups.lock().unwrap().is_empty(),
             "a rejected apply must not be counted as applied"
         );
+        // The offset still advances: the divergence is surfaced separately, and
+        // stalling here would desynchronise every later frame's position.
+        assert_eq!(applied, total);
+    }
+
+    #[tokio::test]
+    async fn promotion_stops_the_consumer_and_leaves_queued_frames_uncounted() {
+        // The CRITICAL failure this split exists to prevent: frames decoded off
+        // the socket (received offset already advanced) but never applied must
+        // NOT be counted, or a promotion freezes its window over a hole.
+        let (tx, rx) = mpsc::channel(64);
+        let applied_frame = frame_on(0, 1, "SET", &["a", "1"]);
+        let applied_bytes = applied_frame.stream_advance();
+
+        let flag = Arc::new(AtomicBool::new(true));
+        let applier = Arc::new(MockApplier::default());
+        let applied = AppliedOffset::detached(0);
+        let flip = flag.clone();
+        let recorded = applier.clone();
+        let stint = applied.begin_replica_stint();
+        let consumer = tokio::spawn(async move {
+            consume_frames(rx, SharedApplier(recorded), flip, None, stint).await;
+        });
+
+        // Frame 1 is applied while the node is still a replica.
+        tx.send(applied_frame).await.unwrap();
+        while applier.groups.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+        // Promote, THEN hand over frame 2: the loop sees the flipped flag and
+        // stops with that frame consumed but never applied — exactly the state a
+        // real promotion leaves the 10k-deep frame channel in.
+        flag.store(false, Ordering::Release);
+        tx.send(frame_on(0, 2, "SET", &["b", "2"])).await.unwrap();
+        drop(tx);
+        consumer.await.unwrap();
+
+        assert_eq!(
+            applier.groups.lock().unwrap().len(),
+            1,
+            "only the pre-promotion frame applied"
+        );
+        assert_eq!(
+            applied.current(),
+            applied_bytes,
+            "the queued, never-applied frame must not move the applied offset"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_interrupted_transaction_credits_nothing() {
+        // A MULTI group whose EXEC never arrives applied nothing, so none of its
+        // bytes may reach the applied offset.
+        let frames = vec![
+            frame_on(1, 1, "MULTI", &[]),
+            frame_on(1, 2, "SET", &["a", "1"]),
+        ];
+        let applier = Arc::new(MockApplier::default());
+        let applied = drive(frames, applier.clone()).await;
+        assert!(applier.groups.lock().unwrap().is_empty());
+        assert_eq!(applied, 0, "an unfinished group claims no applied data");
+    }
+
+    /// Spawn a consumer over `applied` whose applies park until the returned
+    /// gate is released, plus a notifier that fires as each apply parks.
+    #[allow(clippy::type_complexity)]
+    fn parked_consumer(
+        applied: &AppliedOffset,
+    ) -> (
+        mpsc::Sender<ReplicationFrame>,
+        Arc<MockApplier>,
+        Arc<tokio::sync::Semaphore>,
+        Arc<tokio::sync::Notify>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (tx, rx) = mpsc::channel(64);
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let applier = Arc::new(MockApplier {
+            gate: Some(gate.clone()),
+            entered: Some(entered.clone()),
+            ..Default::default()
+        });
+        let stint = applied.begin_replica_stint();
+        let flag = Arc::new(AtomicBool::new(true));
+        let recorded = applier.clone();
+        let consumer = tokio::spawn(async move {
+            consume_frames(rx, SharedApplier(recorded), flag, None, stint).await
+        });
+        (tx, applier, gate, entered, consumer)
+    }
+
+    #[tokio::test]
+    async fn a_freeze_during_an_in_flight_apply_covers_that_group_and_refuses_the_next() {
+        // The narrowed race: the promotion lands while a group is inside
+        // `apply_group().await`. The write WILL reach the keyspace, so the
+        // frozen boundary must already cover it — and nothing after it may be
+        // applied, since those bytes would sit above the boundary in no backlog
+        // and outside every replication-id window.
+        let applied = AppliedOffset::detached(0);
+        let (tx, applier, gate, entered, consumer) = parked_consumer(&applied);
+
+        let in_flight = frame_on(0, 1, "SET", &["a", "1"]);
+        let in_flight_bytes = in_flight.stream_advance();
+        tx.send(in_flight).await.unwrap();
+        // Wait until the apply is genuinely in flight (parked inside the gate).
+        entered.notified().await;
+
+        // Promote *now*, mid-apply.
+        let boundary = applied.freeze();
+        assert_eq!(
+            boundary, in_flight_bytes,
+            "the boundary must cover the group already on its way to the shard"
+        );
+
+        // Let the in-flight apply finish, then offer another frame.
+        gate.add_permits(1);
+        tx.send(frame_on(0, 2, "SET", &["b", "2"])).await.unwrap();
+        drop(tx);
+        consumer.await.unwrap();
+
+        assert_eq!(
+            *applier.groups.lock().unwrap(),
+            vec![(0, vec!["SET".to_string()])],
+            "the in-flight group lands; the post-freeze frame never applies"
+        );
+        assert_eq!(
+            applied.current(),
+            boundary,
+            "no claim may move the offset past a frozen boundary"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_newer_stint_retires_the_previous_consumer() {
+        // The demotion mirror: a new inbound stream retires the applier behind
+        // the old one, so stale frames still queued from the previous primary
+        // are not applied on top of the new history — and the old consumer stops
+        // on its own rather than being cancelled mid-apply.
+        let applied = AppliedOffset::detached(0);
+        let (tx, applier, gate, entered, consumer) = parked_consumer(&applied);
+
+        let in_flight = frame_on(0, 1, "SET", &["a", "1"]);
+        let in_flight_bytes = in_flight.stream_advance();
+        tx.send(in_flight).await.unwrap();
+        entered.notified().await;
+
+        // A new stream opens while the old consumer is mid-apply.
+        let _next = applied.begin_replica_stint();
+
+        gate.add_permits(1);
+        tx.send(frame_on(0, 2, "SET", &["b", "2"])).await.unwrap();
+        drop(tx);
+        consumer.await.unwrap();
+
+        assert_eq!(
+            applier.groups.lock().unwrap().len(),
+            1,
+            "the retired consumer applies nothing after the stint changed"
+        );
+        assert_eq!(applied.current(), in_flight_bytes);
     }
 }

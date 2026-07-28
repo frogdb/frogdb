@@ -12,7 +12,7 @@ FrogDB implements asynchronous primary-replica replication using the Redis PSYNC
 - **SHA256 integrity verification.** The checkpoint payload carries a SHA256 checksum that the replica verifies on receipt.
 - **Replicas do not evict independently.** Eviction decisions are made on the primary and applied on replicas through the replicated write stream, not recomputed locally.
 - **Memory-aware full sync.** A full resync is bounded by a fixed internal buffering cap; a `FULLRESYNC` is rejected when the buffered payload would exceed that limit rather than risking an out-of-memory condition.
-- **No chained replication (replica-of-replica).** Redis allows `REPLICAOF` to target another replica, fanning the write stream out transitively. FrogDB does not support this: `PSYNC` is served only by a node whose live role is primary (booted, standalone, or promoted). Pointing `REPLICAOF` at a node that is currently a replica is accepted at the command layer — the sub-replica's role flips and it keeps retrying — but every `PSYNC` attempt against that target is rejected with `-ERR PSYNC not supported - server is not running as primary`, so `master_link_status` never reaches `up` and no data flows. Promoting the middle node (`REPLICAOF NO ONE`) does make it serve `PSYNC` immediately, but it is then no longer a replica of anything, so this is a promotion rather than a chain. Point every replica directly at the primary.
+- **No chained replication (replica-of-replica).** Redis allows `REPLICAOF` to target another replica, fanning the write stream out transitively. FrogDB does not support this: `PSYNC` is served only by a node whose live role is primary, whether it booted as one, runs standalone, or was promoted. Pointing `REPLICAOF` at a node that is currently a replica is accepted at the command layer — the sub-replica's role flips and it keeps retrying — but every `PSYNC` attempt against that target is rejected with `-ERR PSYNC not supported - server is not running as primary`, so `master_link_status` never reaches `up` and no data flows. This keeps every replica's write stream one hop from the authoritative history, so a mid-chain node cannot stall or reorder replication for the nodes behind it. Promoting the middle node with `REPLICAOF NO ONE` makes it serve `PSYNC` immediately (see [Failover](#failover)), but it stops following anything at that point, so the result is a second primary rather than a chain. Point every replica directly at the primary.
 
 ## Configuration
 
@@ -75,7 +75,13 @@ A replica that cannot resume from its saved offset performs a **full sync**. The
 
 A replica that is only briefly behind performs a **partial sync**: it sends `PSYNC <replication-id> <offset>`, and if the primary still holds the required history it replies `CONTINUE` and resumes streaming write frames from that offset. The replication ID and offset are persisted in `state-file` so a replica can attempt partial sync across a restart.
 
-On promotion a new primary begins a new replication history and other replicas re-synchronize against it. FrogDB tracks a secondary replication ID field for compatibility, but the promotion hand-off should be treated qualitatively — do not rely on a specific secondary-ID continuation behavior.
+### Replication IDs across a promotion
+
+A promoted node mints a fresh `master_replid` and keeps the history it inherited in `master_replid2`, with `second_repl_offset` recording the offset at which the hand-off happened. A replica that was following the old primary can therefore present the *old* ID in its `PSYNC`, and the promoted node still answers `CONTINUE` as long as the requested offset falls inside the inherited window and its backlog still holds the bytes. Without that window every surviving replica would have to full-sync after a failover, which is exactly the load spike a failover can least afford.
+
+The window is closed on the offset itself: an offset up to and including `second_repl_offset` is served from the inherited history, and anything past it is a diverged position that gets `FULLRESYNC`. (Redis stores this field as the first offset of the *new* history — one greater — so compare the two values with that off-by-one in mind when reading `INFO` from a mixed fleet.)
+
+A node drops its own secondary window the moment it adopts someone else's history — on a `FULLRESYNC` or a checkpoint install — because at that point it no longer holds the old stream's data and a `CONTINUE` against the old ID would ship a tail from the new history. `master_replid2` therefore never outlives the history it describes; when there is no window, `INFO` reports an all-zero `master_replid2` and `second_repl_offset:-1`.
 
 ## Failover
 
@@ -84,7 +90,7 @@ FrogDB does not ship an external failover controller. Promotion happens one of t
 - **Raft-coordinated** — in cluster mode with `auto-failover = true`, the Raft leader promotes a replica after a primary is marked failed, choosing among candidates by `replica-priority`. See [Clustering](/operations/clustering/) for the control-plane configuration and failure-mode details.
 - **Manual** — `CLUSTER FAILOVER` promotes a replica on demand.
 
-In both cases the promoted node becomes a primary with a fresh replication history, and surviving replicas reconnect to it via PSYNC.
+In both cases the promoted node becomes a primary with a fresh replication history and serves `PSYNC` to the surviving replicas. Point them at it with `REPLICAOF <new-primary-host> <new-primary-port>`; each one is resumed with `CONTINUE` when it is still inside the inherited window described in [Replication IDs across a promotion](#replication-ids-across-a-promotion), and falls back to a full sync when it is not — because it was ahead of the promoted node, or because the bytes it needs have already aged out of the backlog. The fallback is automatic; no operator step distinguishes the two paths.
 
 ## Monitoring
 

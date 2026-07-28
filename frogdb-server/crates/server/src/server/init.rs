@@ -388,9 +388,9 @@ pub(super) async fn init_infrastructure(
                 // with this node's boot-time snapshot of it, forcing a full
                 // resync after restart. Read live, so the first snapshot after
                 // a promotion does persist the promoted primary's offset.
-                if !saver_is_replica.load(std::sync::atomic::Ordering::Relaxed)
+                if !saver_is_replica.load(std::sync::atomic::Ordering::Acquire)
                     && let Some(handler) = saver.get()
-                    && let Err(e) = handler.save_state().await
+                    && let Err(e) = handler.save_state()
                 {
                     warn!(error = %e, "Failed to persist replication state before snapshot");
                 }

@@ -276,8 +276,6 @@ pub struct ReplicaLine {
 pub struct PrimarySnapshot {
     /// Streaming replicas, one per `slaveN:` line.
     pub replicas: Vec<ReplicaLine>,
-    /// Current replication offset.
-    pub repl_offset: u64,
 }
 
 /// Live replication identity, materialized once per INFO request.
@@ -293,6 +291,15 @@ pub struct ReplicationSnapshot {
     pub replication_id: Option<String>,
     /// Primary-role state (replica tracking); `None` for replica/standalone.
     pub primary: Option<PrimarySnapshot>,
+    /// Live replication offset of this node, whatever role it is running.
+    ///
+    /// Rendered as `master_repl_offset`. On a primary this is the last offset
+    /// stamped into the stream; on a replica it is the last offset applied from
+    /// the primary — the same value the replica sends in `PSYNC`/`REPLCONF ACK`,
+    /// and the value that becomes the failover boundary if it is promoted.
+    /// Redis reports the same single counter (`server.master_repl_offset`) in
+    /// both roles.
+    pub repl_offset: u64,
     /// Primary host when running as a replica.
     pub master_host: Option<String>,
     /// Primary port when running as a replica.

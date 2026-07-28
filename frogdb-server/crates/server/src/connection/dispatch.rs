@@ -549,7 +549,7 @@ impl ConnectionHandler {
                     // what decides. A replica refusing PSYNC here is what keeps
                     // chained replication unsupported rather than silently
                     // half-working. This is the sole place this check lives.
-                    if self.is_replica.load(std::sync::atomic::Ordering::Relaxed)
+                    if self.is_replica.load(std::sync::atomic::Ordering::Acquire)
                         || self.cluster.primary_replication_handler.is_none()
                     {
                         return StageOutcome::ShortCircuit(vec![Response::error(

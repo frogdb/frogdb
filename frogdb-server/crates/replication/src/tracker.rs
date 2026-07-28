@@ -103,6 +103,21 @@ impl ReplicationTrackerImpl {
         }
     }
 
+    /// Ask every registered session to tear down — Redis's `disconnectSlaves`.
+    ///
+    /// Called when this node stops being a primary (see
+    /// [`crate::primary::PrimaryReplicationHandler::end_primary_stint`]). Only
+    /// signals; each session unregisters itself through its own exit handler, so
+    /// the registry is not mutated here and a session that is already exiting is
+    /// harmless to signal. Returns how many were signalled.
+    pub fn disconnect_all_replicas(&self) -> usize {
+        let sessions: Vec<Arc<ReplicaSession>> = self.replicas.read().values().cloned().collect();
+        for session in &sessions {
+            session.request_disconnect();
+        }
+        sessions.len()
+    }
+
     /// Look up the session for a given replica id, if it's still registered.
     pub fn get_session(&self, replica_id: u64) -> Option<Arc<ReplicaSession>> {
         self.replicas.read().get(&replica_id).cloned()

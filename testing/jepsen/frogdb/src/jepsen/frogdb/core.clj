@@ -89,6 +89,7 @@
    ;; Replication workloads
    :replication replication/workload
    :replication-failover replication-failover/workload
+   :replication-failover-chain replication-failover/chain-workload
    :split-brain split-brain/workload
    :zombie zombie/workload
    :lag lag/workload
@@ -146,6 +147,7 @@
         cluster-node-count (get opts :cluster-nodes 3)
         ;; Replication workloads default to multi-node
         replication-workload? (contains? #{:replication :replication-failover
+                                           :replication-failover-chain
                                            :split-brain :zombie :lag
                                            :partition-recovery}
                                          (keyword (:workload opts)))

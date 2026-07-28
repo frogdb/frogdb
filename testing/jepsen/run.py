@@ -345,6 +345,24 @@ TESTS: tuple[TestDefinition, ...] = (
         Topology.REPLICATION,
         suites=("replication", "all"),
     ),
+    # replication-failover-chain: the same failover, but the surviving replica must
+    # re-form the replica set against the PROMOTED node at runtime — which requires
+    # the promoted node to serve PSYNC (a CONTINUE inside the inherited history
+    # window, or a full resync). On top of the base workload's acked-write
+    # durability verdict the checker requires the replica to link up, at least one
+    # post-failover write to be replica-acknowledged (WAIT 1), and the replica's
+    # copy of the durable keys to agree with the promoted node's — a partial-resync
+    # window granted one byte too wide shows up here as a replica holding a value
+    # the new history never contained. Nightly tier: it waits on a checkpoint
+    # transfer, so it is slower and noisier than the per-PR replication suite.
+    TestDefinition(
+        "replication-failover-chain",
+        "replication-failover-chain",
+        "none",
+        180,
+        Topology.REPLICATION,
+        suites=("replication-extended",),
+    ),
     # Clock-skew and slow-network on the REPLICATION topology (previously these
     # nemeses ran only under raft-extended). They drive the replication
     # consistency workload (no-regression + convergence checker, robust to the

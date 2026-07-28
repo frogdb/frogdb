@@ -165,7 +165,6 @@ mod tests {
     use bytes::Bytes;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
-    use tokio::sync::RwLock;
 
     /// Mock solicitor: records how many GETACK rounds were requested.
     struct MockSolicitor {
@@ -191,8 +190,9 @@ mod tests {
 
     fn coordinator() -> (WaitCoordinator, Arc<ReplicationTrackerImpl>) {
         let tracker = ReplicationTrackerImpl::new_arc();
-        let state = Arc::new(RwLock::new(ReplicationState::new()));
-        let offsets = Arc::new(OffsetCoordinator::new(tracker.clone(), state));
+        let identity =
+            crate::identity::ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
+        let offsets = Arc::new(OffsetCoordinator::new(tracker.clone(), &identity));
         (WaitCoordinator::new(offsets, tracker.clone()), tracker)
     }
 

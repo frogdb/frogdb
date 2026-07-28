@@ -6,6 +6,7 @@ mod streaming;
 #[cfg(test)]
 mod tests;
 
+use parking_lot::RwLock;
 use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
@@ -15,16 +16,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::net::TcpStream;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 use crate::BoxedStream;
 use crate::frame::ReplicationFrame;
+use crate::identity::ReplicationIdentity;
 use crate::state::ReplicationState;
 
 use connection::SyncType;
 pub use connection::{ConnectionState, ReplicaConnection};
 use offset::ReplicaOffset;
+pub use offset::{AppliedOffset, ReplicaApplyStint};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -80,6 +83,12 @@ pub struct ReplicaReplicationHandler {
     /// `offset_at_save` at construction; in cluster mode this same atomic becomes
     /// the cluster-bus HealthProbe handle (see [`Self::set_shared_offset`]).
     live: Arc<AtomicU64>,
+    /// The node's **applied** offset — how far the received stream has actually
+    /// been applied (see [`AppliedOffset`]). Handed to the frame consumer, which
+    /// is the only thing that advances it, and read by the promotion path as the
+    /// boundary this node can vouch for. Never swapped by
+    /// [`Self::set_shared_offset`]: the cluster bus tracks the received head.
+    applied: AppliedOffset,
     /// `Some` iff the live atomic is also wired to the cluster-bus HealthProbe;
     /// when set it is the SAME `Arc` as [`Self::live`]. `None` outside cluster
     /// mode. Preserves the vend-only-when-wired contract INFO/the failure
@@ -113,29 +122,43 @@ pub struct ReplicaReplicationHandler {
 const DEFAULT_ACK_INTERVAL: Duration = Duration::from_secs(1);
 
 impl ReplicaReplicationHandler {
+    /// Build the replica-side handler over the node's shared
+    /// [`ReplicationIdentity`].
+    ///
+    /// The identity is the node's, not this handler's: taking it (rather than
+    /// minting a fresh `ReplicationState` + offset atomic) is what lets a
+    /// demoted primary keep the history and offset it already reached, and what
+    /// makes INFO report one value regardless of which role is running.
     pub fn new(
         primary_addr: SocketAddr,
         listening_port: u16,
-        mut state: ReplicationState,
+        identity: ReplicationIdentity,
         state_path: PathBuf,
         data_dir: PathBuf,
     ) -> (Self, mpsc::Receiver<ReplicationFrame>) {
         let (frame_tx, frame_rx) = mpsc::channel(10000);
         let (shutdown, _) = tokio::sync::watch::channel(false);
-        state.master_host = Some(primary_addr.ip().to_string());
-        state.master_port = Some(primary_addr.port());
-        // Seed the live offset from the persisted save-point offset so a clean
-        // restart resumes from where it left off rather than rewinding to 0.
-        let live = Arc::new(AtomicU64::new(state.offset_at_save));
+        let state = identity.state();
+        {
+            let mut guard = state.write();
+            guard.master_host = Some(primary_addr.ip().to_string());
+            guard.master_port = Some(primary_addr.port());
+        }
+        // The live offset is the node's, already seeded from the persisted
+        // save-point offset, so a clean restart resumes from where it left off
+        // rather than rewinding to 0.
+        let live = identity.live();
+        let applied = identity.applied();
         let handler = Self {
             primary_addr,
             listening_port,
-            state: Arc::new(RwLock::new(state)),
+            state,
             state_path,
             frame_tx,
             shutdown,
             data_dir,
             live,
+            applied,
             shared_offset: None,
             connect_factory: plain_tcp_connect_factory(),
             link_up: Arc::new(AtomicBool::new(false)),
@@ -180,9 +203,17 @@ impl ReplicaReplicationHandler {
     /// clean restart resume from the right offset and attempt a partial resync
     /// instead of rewinding to the boot value.
     pub async fn save_state(&self) -> std::io::Result<()> {
-        let offsets = ReplicaOffset::new(self.state.clone(), self.live.clone());
+        let offsets =
+            ReplicaOffset::new(self.state.clone(), self.live.clone(), self.applied.clone());
         let snapshot = offsets.reconcile_for_persist().await;
         snapshot.save(&self.state_path)
+    }
+
+    /// The applied-offset counter to hand to this handler's frame consumer
+    /// ([`crate::consume_frames`]). One counter per node: the consumer advances
+    /// it, and the promotion path freezes its boundary on it.
+    pub fn applied_offset(&self) -> AppliedOffset {
+        self.applied.clone()
     }
 
     /// Set a custom connection factory (e.g. for TLS connections).
@@ -298,7 +329,8 @@ impl ReplicaReplicationHandler {
         // Adopt the handler-owned live atomic (already holds the applied offset,
         // seeded once at construction), so a reconnect never rewinds the live
         // head to the lagging persisted field.
-        let offsets = ReplicaOffset::new(self.state.clone(), self.live.clone());
+        let offsets =
+            ReplicaOffset::new(self.state.clone(), self.live.clone(), self.applied.clone());
         let mut conn = ReplicaConnection {
             stream,
             _primary_addr: self.primary_addr,
@@ -341,6 +373,12 @@ impl ReplicaReplicationHandler {
     /// `subscribe()`. `send_replace` always stores the value, so a `stop()`
     /// that races ahead of `start()` is still observed once `start()` does
     /// subscribe, instead of being silently lost.
+    ///
+    /// **Signal only — it does not wait.** The reconnect loop notices at its
+    /// next `select!` poll and the frame consumer is a separate task entirely.
+    /// A caller that needs the applied offset to have stopped moving (the
+    /// promotion path) must also stop the consumer: see
+    /// `RoleManager::promote`, which aborts it before freezing its boundary.
     pub fn stop(&self) {
         self.shutdown.send_replace(true);
     }
@@ -351,7 +389,7 @@ impl ReplicaReplicationHandler {
     }
 
     pub async fn state(&self) -> ReplicationState {
-        self.state.read().await.clone()
+        self.state.read().clone()
     }
 
     /// Get a shared reference to the replication state for use by the frame consumer.

@@ -177,6 +177,11 @@ pub struct ReplicaSession {
     acked_offset: AtomicU64,
     sync_bytes_transferred: AtomicU64,
 
+    /// Primary-initiated teardown signal (see [`Self::request_disconnect`]).
+    /// `notify_one`, not `notify_waiters`, so a request that races ahead of the
+    /// streaming loop's `notified()` is stored as a permit rather than lost.
+    disconnect: tokio::sync::Notify,
+
     inner: RwLock<SessionInner>,
 }
 
@@ -190,6 +195,7 @@ impl ReplicaSession {
             connected_at: now,
             acked_offset: AtomicU64::new(0),
             sync_bytes_transferred: AtomicU64::new(0),
+            disconnect: tokio::sync::Notify::new(),
             inner: RwLock::new(SessionInner {
                 phase: Phase::Connecting,
                 last_ack_time: now,
@@ -232,6 +238,22 @@ impl ReplicaSession {
     }
     pub fn replica_version(&self) -> Option<String> {
         self.inner.read().replica_version.clone()
+    }
+
+    /// Ask this session's streaming loop to tear itself down.
+    ///
+    /// Redis's `replicationSetMaster` calls `disconnectSlaves` when a primary
+    /// becomes a replica: the stream this node was serving describes a history
+    /// it no longer heads, so the downstream replicas must resync against
+    /// whoever does. The session ends as if the socket had closed — the replica
+    /// reconnects and PSYNCs afresh.
+    pub fn request_disconnect(&self) {
+        self.disconnect.notify_one();
+    }
+
+    /// Resolves once [`Self::request_disconnect`] has been called.
+    async fn disconnect_requested(&self) {
+        self.disconnect.notified().await;
     }
 
     /// Build a snapshot for read-only consumers (INFO, ROLE, cluster bus).
@@ -397,7 +419,7 @@ impl ReplicaSession {
         replay_from: u64,
         handler: &Arc<PrimaryReplicationHandler>,
     ) -> io::Result<()> {
-        let replication_id = handler.state.read().await.replication_id.clone();
+        let replication_id = handler.state.read().replication_id.clone();
         let response = format!("+CONTINUE {}\r\n", replication_id);
         stream.write_all(response.as_bytes()).await?;
         self.start_streaming(stream, handler, replay_from).await
@@ -750,11 +772,21 @@ impl ReplicaSession {
         // tasks: a detached read task would otherwise keep its half alive after
         // a lag-disconnect, leaving the replica in a zombie half-open link
         // (unregistered here, but never sent a FIN, so it never resyncs).
+        // The third exit is primary-initiated: a demotion asks every downstream
+        // session to end so the replicas resync against the new primary.
         let mut read_task = read_task;
         let mut write_task = write_task;
         tokio::select! {
             _ = &mut read_task => { write_task.abort(); }
             _ = &mut write_task => { read_task.abort(); }
+            _ = self.disconnect_requested() => {
+                tracing::info!(
+                    replica_id = self.id,
+                    "Disconnecting replica session on role change"
+                );
+                read_task.abort();
+                write_task.abort();
+            }
         }
         Ok(())
     }
@@ -957,8 +989,10 @@ mod tests {
         data_dir: PathBuf,
     ) -> Arc<PrimaryReplicationHandler> {
         let state_path = data_dir.join("replication_state.json");
+        let identity =
+            crate::identity::ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
         Arc::new(PrimaryReplicationHandler::new(
-            ReplicationState::new(),
+            identity,
             state_path,
             tracker,
             rocks,
@@ -985,8 +1019,10 @@ mod tests {
         data_dir: PathBuf,
     ) -> Arc<PrimaryReplicationHandler> {
         let state_path = data_dir.join("replication_state.json");
+        let identity =
+            crate::identity::ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
         Arc::new(PrimaryReplicationHandler::new(
-            ReplicationState::new(),
+            identity,
             state_path,
             tracker,
             rocks,
@@ -1094,7 +1130,7 @@ mod tests {
         // No rocks store -> minimal-RDB full sync; backlog enabled so the
         // handoff window can be replayed.
         let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
-        let repl_id = handler.state.read().await.replication_id.clone();
+        let repl_id = handler.state.read().replication_id.clone();
 
         // Tiny buffer forces the session to block writing the RDB, giving us a
         // window to broadcast "during" the handoff.
@@ -1300,7 +1336,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let tracker = Arc::new(ReplicationTrackerImpl::new());
         let handler = make_handler(tracker.clone(), None, dir.path().to_path_buf());
-        let repl_id = handler.state.read().await.replication_id.clone();
+        let repl_id = handler.state.read().replication_id.clone();
 
         let (mut client, server) = tokio::io::duplex(64 * 1024);
         let session = tracker.register_replica(addr());
@@ -1374,7 +1410,7 @@ mod tests {
             Some(store.clone()),
             dir.path().to_path_buf(),
         );
-        let repl_id = handler.state.read().await.replication_id.clone();
+        let repl_id = handler.state.read().replication_id.clone();
 
         let (client, server) = tokio::io::duplex(64);
         let session = tracker.register_replica(addr());
@@ -1474,7 +1510,7 @@ mod tests {
             Some(store.clone()),
             dir.path().to_path_buf(),
         );
-        let repl_id = handler.state.read().await.replication_id.clone();
+        let repl_id = handler.state.read().replication_id.clone();
 
         let (client, server) = tokio::io::duplex(1024 * 1024);
         let session = tracker.register_replica(addr());
@@ -1570,7 +1606,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let tracker = Arc::new(ReplicationTrackerImpl::new());
         let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
-        let repl_id = handler.state.read().await.replication_id.clone();
+        let repl_id = handler.state.read().replication_id.clone();
 
         // Advance the live offset and populate the backlog with real commands.
         let resume_point = handler.broadcast_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
@@ -1615,7 +1651,7 @@ mod tests {
 
         // make_handler disables the backlog; no rocks → minimal-RDB FULLRESYNC.
         let handler = make_handler(tracker.clone(), None, dir.path().to_path_buf());
-        let repl_id = handler.state.read().await.replication_id.clone();
+        let repl_id = handler.state.read().replication_id.clone();
 
         let (mut client, server) = tokio::io::duplex(64 * 1024);
         let server: BoxedStream = Box::new(server);
@@ -1654,7 +1690,7 @@ mod tests {
         let tracker = Arc::new(ReplicationTrackerImpl::new());
         // Tiny backlog (3 entries) so the early resume point is evicted.
         let handler = Arc::new(PrimaryReplicationHandler::new(
-            ReplicationState::new(),
+            crate::identity::ReplicationIdentity::adopting(ReplicationState::new(), &tracker),
             dir.path().join("replication_state.json"),
             tracker.clone(),
             None,
@@ -1671,7 +1707,7 @@ mod tests {
             },
             0,
         ));
-        let repl_id = handler.state.read().await.replication_id.clone();
+        let repl_id = handler.state.read().replication_id.clone();
 
         // First command's offset is the replica's resume point; later writes
         // evict it from the 3-entry backlog.

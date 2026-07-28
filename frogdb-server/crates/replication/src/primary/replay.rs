@@ -128,21 +128,57 @@ impl PartialSyncReplay {
         self.backlog.extract_backlog(start, end)
     }
 
-    /// Oldest offset the backlog can still serve (Redis `repl_backlog_off`).
+    /// End offset of the oldest *retained entry*. Informational (tests, logs);
+    /// the resume bound is [`Self::backlog_start`].
     pub fn oldest_offset(&self) -> Option<u64> {
         self.backlog.oldest_offset()
     }
 
-    /// Whether the backlog currently holds a resume point a reconnecting replica
-    /// could be continued from — Redis's "the replication backlog exists".
+    /// Lowest offset a `+CONTINUE` may resume from (Redis `repl_backlog_off`),
+    /// or `None` while this node claims no replication history at all.
+    pub fn backlog_start(&self) -> Option<u64> {
+        self.enabled.then(|| self.backlog.start_offset()).flatten()
+    }
+
+    /// Open the backlog window at `offset` — this node starts claiming history
+    /// from here. Called when a primary stint begins (boot recovery, promotion).
+    /// See [`crate::primary::ring_buffer::ReplicationRingBuffer::arm_start`].
+    pub fn arm_backlog_floor(&self, offset: u64) {
+        if self.enabled {
+            self.backlog.arm_start(offset);
+        }
+    }
+
+    /// Throw away the backlog and close the window — this node claims no
+    /// replayable history until a stint arms it again.
     ///
-    /// The primary must keep stamping offsets and recording writes for as long
-    /// as this holds, even with zero connected replicas: a write that skips the
-    /// backlog while a replica is away leaves a hole no later `+CONTINUE` can
-    /// fill, so the replica would resume at a stale offset and silently diverge.
-    /// See [`crate::ReplicationBroadcaster::is_active`].
+    /// Called at both ends of a primary stint: on demotion (the buffered
+    /// commands belong to a stint that just ended, and a node that is following
+    /// someone else must not keep a window it could serve on re-promotion) and
+    /// again when the next stint begins (belt and braces: between the two the
+    /// node may have full-resynced to an offset *below* those entries, and a
+    /// `fetch_max` floor cannot follow an offset rewind down).
+    ///
+    /// The split-brain audit reads the backlog through
+    /// [`Self::extract_divergent_writes`] as part of the demotion itself, so the
+    /// reset must run after that capture — see `RoleManager::demote`.
+    pub fn reset_backlog(&self) {
+        self.backlog.reset();
+    }
+
+    /// Whether this node holds a resume point a reconnecting replica could be
+    /// continued from — Redis's "the replication backlog exists".
+    ///
+    /// True from the moment the window is armed, not from the first buffered
+    /// write: an armed-but-empty backlog is exactly the state a just-promoted (or
+    /// just-restarted) primary is in, and it *can* serve a caught-up replica an
+    /// empty tail. The primary must keep stamping offsets and recording writes
+    /// for as long as this holds, even with zero connected replicas: a write that
+    /// skips the backlog while a replica is away leaves a hole no later
+    /// `+CONTINUE` can fill, so the replica would resume at a stale offset and
+    /// silently diverge. See [`crate::ReplicationBroadcaster::is_active`].
     pub fn has_resume_history(&self) -> bool {
-        self.enabled && self.backlog.oldest_offset().is_some()
+        self.backlog_start().is_some()
     }
 
     /// The single entry point. A pure decision over `(state, req_offset, current)`
@@ -195,20 +231,20 @@ impl PartialSyncReplay {
             return Err(FullResyncReason::OffsetAhead);
         }
         // Lower bound: the check `window_contains` documents but cannot make.
-        match self.oldest_offset() {
-            // The backlog still holds the resume point.
-            Some(oldest) if req_offset >= oldest => Ok(()),
-            // The resume point was evicted — replaying would silently truncate.
+        //
+        // The floor is the single authority — deliberately NOT "empty backlog ⇒
+        // grant when `req == current`". That shortcut is safe only at offset 0
+        // (nothing to miss); at any nonzero offset it hands a `+CONTINUE` to a
+        // replica whose gap was never buffered, and the replica silently resumes
+        // on a divergent dataset. An armed floor already covers the legitimate
+        // caught-up case (`req == current >= floor`) without the hazard.
+        match self.backlog_start() {
+            // The window is open and still holds the resume point.
+            Some(floor) if req_offset >= floor => Ok(()),
+            // The resume point predates the window — replaying would truncate.
             Some(_) => Err(FullResyncReason::BacklogEvicted),
-            // Empty backlog: a fully caught-up replica (req == current) needs an
-            // empty tail, which we can serve; anything older was evicted.
-            None => {
-                if req_offset == current_offset {
-                    Ok(())
-                } else {
-                    Err(FullResyncReason::BacklogEvicted)
-                }
-            }
+            // No window armed: this node claims no replayable history.
+            None => Err(FullResyncReason::BacklogEvicted),
         }
     }
 }
@@ -321,15 +357,47 @@ mod tests {
     fn secondary_id_within_window_continues() {
         let replay = enabled_replay();
         let mut state = ReplicationState::new();
-        // Establish a failover boundary: rotate the id, freezing secondary at 0
-        // (the live offset here). Seed the backlog so the lower bound holds.
+        // A promotion at offset 4096: the id rotates, the old id becomes the
+        // failover window frozen at the live offset, and the backlog floor is
+        // armed at the same boundary. A sibling replica that had applied exactly
+        // up to the boundary resumes with an empty tail.
+        let boundary = 4096u64;
         let old_id = state.replication_id.clone();
-        state.new_replication_id(0);
-        // Backlog must cover the requested offset; an empty backlog with req==0
-        // and current==0 still grants an empty tail.
-        let grant = assert_continue(replay.handle_partial_sync_request(&state, &old_id, 0, 0));
-        assert_eq!(grant.replay_from, 0);
+        state.new_replication_id(boundary);
+        replay.arm_backlog_floor(boundary);
+        let grant = assert_continue(
+            replay.handle_partial_sync_request(&state, &old_id, boundary, boundary),
+        );
+        assert_eq!(grant.replay_from, boundary);
+        assert_eq!(grant.resume_offset, boundary);
         assert!(grant.frames.is_empty());
+    }
+
+    #[test]
+    fn unarmed_backlog_at_nonzero_offset_falls_back_to_full() {
+        // The floor is the sole authority for the lower bound. Without it, an
+        // empty backlog at a nonzero head would hand out a `+CONTINUE` for a gap
+        // that was never buffered — the replica would resume on a divergent
+        // dataset. No floor => no partial sync, whatever the requested offset.
+        let replay = enabled_replay();
+        let state = ReplicationState::new();
+        assert!(replay.backlog_start().is_none());
+        assert_full(
+            replay.handle_partial_sync_request(&state, &state.replication_id, 4096, 4096),
+            FullResyncReason::BacklogEvicted,
+        );
+    }
+
+    #[test]
+    fn request_below_armed_floor_falls_back_to_full() {
+        let replay = enabled_replay();
+        let state = ReplicationState::new();
+        replay.arm_backlog_floor(4096);
+        assert_eq!(replay.backlog_start(), Some(4096));
+        assert_full(
+            replay.handle_partial_sync_request(&state, &state.replication_id, 4095, 4096),
+            FullResyncReason::BacklogEvicted,
+        );
     }
 
     #[test]

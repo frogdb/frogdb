@@ -214,7 +214,7 @@ impl ConnectionHandler {
     /// unreachable by construction.
     pub(crate) async fn handle_wait_command(&mut self, args: &[Bytes]) -> Response {
         // Redis rejects WAIT on replicas before looking at the arguments.
-        if self.is_replica.load(std::sync::atomic::Ordering::Relaxed) {
+        if self.is_replica.load(std::sync::atomic::Ordering::Acquire) {
             return Response::error(crate::commands::replication::WAIT_ON_REPLICA_ERR);
         }
 

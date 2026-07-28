@@ -285,7 +285,7 @@ mod tests {
         assert_eq!(view.master_port, Some(7000));
 
         // Promotion clears both back to the primary shape.
-        handle.request_promote();
+        handle.request_promote().unwrap();
         let view = provider.replication();
         assert_eq!(view.role, "primary");
         assert!(view.master_host.is_none());

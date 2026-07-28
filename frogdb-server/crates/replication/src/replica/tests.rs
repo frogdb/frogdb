@@ -1,13 +1,14 @@
+use crate::identity::ReplicationIdentity;
 use crate::replica::connection::ConnectionState;
 use crate::replica::offset::ReplicaOffset;
 use crate::replica::{ConnectFactory, ReplicaReplicationHandler};
 use crate::state::ReplicationState;
+use parking_lot::RwLock;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
-use tokio::sync::RwLock;
 
 #[test]
 fn test_connection_state_display() {
@@ -21,7 +22,13 @@ async fn test_replica_handler_creation() {
     let state = ReplicationState::new();
     let data_dir = PathBuf::from("/tmp/frogdb-test");
     let state_path = data_dir.join("replication_state.json");
-    let (handler, _rx) = ReplicaReplicationHandler::new(addr, 6380, state, state_path, data_dir);
+    let (handler, _rx) = ReplicaReplicationHandler::new(
+        addr,
+        6380,
+        ReplicationIdentity::detached(state),
+        state_path,
+        data_dir,
+    );
     let current_state = handler.state().await;
     assert!(!current_state.replication_id.is_empty());
 }
@@ -36,8 +43,13 @@ fn ack_interval_reflects_injected_config_value() {
     let state = ReplicationState::new();
     let data_dir = PathBuf::from("/tmp/frogdb-test");
     let state_path = data_dir.join("replication_state.json");
-    let (mut handler, _rx) =
-        ReplicaReplicationHandler::new(addr, 6380, state, state_path, data_dir);
+    let (mut handler, _rx) = ReplicaReplicationHandler::new(
+        addr,
+        6380,
+        ReplicationIdentity::detached(state),
+        state_path,
+        data_dir,
+    );
 
     // Default when config supplies nothing: 1s.
     assert_eq!(handler.ack_interval(), Duration::from_secs(1));
@@ -84,8 +96,13 @@ async fn test_stop_terminates_reconnect_loop_without_abort() {
         std::process::id(),
         line!()
     ));
-    let (mut handler, _rx) =
-        ReplicaReplicationHandler::new(addr, 6380, state, state_path, data_dir);
+    let (mut handler, _rx) = ReplicaReplicationHandler::new(
+        addr,
+        6380,
+        ReplicationIdentity::detached(state),
+        state_path,
+        data_dir,
+    );
     let (factory, attempts) = counting_failing_factory();
     handler.set_connect_factory(factory);
     let handler = Arc::new(handler);
@@ -176,8 +193,13 @@ async fn test_demotion_stamps_zero_then_fullresync_offset_into_shared_probe() {
         std::process::id(),
         line!()
     ));
-    let (mut handler, _rx) =
-        ReplicaReplicationHandler::new(addr, 6380, state, state_path, data_dir);
+    let (mut handler, _rx) = ReplicaReplicationHandler::new(
+        addr,
+        6380,
+        ReplicationIdentity::detached(state),
+        state_path,
+        data_dir,
+    );
 
     // Stage 2: wire the fresh handler to the SAME probe atomic. It stamps its own
     // live offset (0) in before adopting — so the detector sees the transient 0,
@@ -203,8 +225,9 @@ async fn test_demotion_stamps_zero_then_fullresync_offset_into_shared_probe() {
     let offsets = ReplicaOffset::new(
         Arc::new(RwLock::new(handler.state().await)),
         adopted.clone(),
+        handler.applied_offset(),
     );
-    offsets.reset_to(FULLRESYNC_OFFSET);
+    assert!(offsets.reset_to(FULLRESYNC_OFFSET));
     assert_eq!(
         health_probe.load(Ordering::Acquire),
         FULLRESYNC_OFFSET,
@@ -224,8 +247,13 @@ async fn test_stop_before_start_prevents_any_connection_attempt() {
         std::process::id(),
         line!()
     ));
-    let (mut handler, _rx) =
-        ReplicaReplicationHandler::new(addr, 6380, state, state_path, data_dir);
+    let (mut handler, _rx) = ReplicaReplicationHandler::new(
+        addr,
+        6380,
+        ReplicationIdentity::detached(state),
+        state_path,
+        data_dir,
+    );
     let (factory, attempts) = counting_failing_factory();
     handler.set_connect_factory(factory);
 

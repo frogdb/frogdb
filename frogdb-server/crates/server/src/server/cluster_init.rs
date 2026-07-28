@@ -67,6 +67,10 @@ pub(super) async fn init_cluster(
     // threaded here to seed the `RoleManager`'s `primary_target` — the
     // single source `ROLE`/INFO read, live, for the whole process lifetime.
     boot_primary_addr: Option<std::net::SocketAddr>,
+    // The node's replication identity, built once in `init_replication`. The
+    // runtime replica streamer builds every demotion handler over it, so a role
+    // round-trip keeps one replication id and one live offset.
+    replication_identity: crate::replication::ReplicationIdentity,
     shared_replication_offset: Option<Arc<frogdb_core::sync::AtomicU64>>,
     // Live `[cluster]` decision flags (auto-failover, self-fence, replica
     // priority), owned by the ConfigManager. The failure detector reads them at
@@ -103,6 +107,7 @@ pub(super) async fn init_cluster(
     let streamer: Arc<dyn crate::role_manager::ReplicaStreamer> =
         Arc::new(crate::role_manager::RealReplicaStreamer::new(
             config,
+            replication_identity,
             shard_senders.clone(),
             num_shards,
             is_replica_flag.clone(),
@@ -114,6 +119,12 @@ pub(super) async fn init_cluster(
         crate::role_manager::RoleManager::new(is_replica_flag.clone(), streamer, boot_primary_addr);
     if let Some(checker) = replication_self_fence {
         role_manager.set_replication_self_fence(checker);
+    }
+    // The replication half of a promotion: minting the new `master_replid`,
+    // freezing the inherited one as the failover window, and arming the backlog
+    // all live on the primary handler, which exists on every role.
+    if let Some(handler) = primary_replication_handler {
+        role_manager.set_stint_target(handler.clone());
     }
     let role_handle = crate::role_manager::RoleManagerHandle::new(role_manager);
     let role_controller: Arc<dyn frogdb_core::RoleController> = Arc::new(role_handle.clone());
@@ -802,8 +813,9 @@ mod tests {
         promotes: AtomicUsize,
     }
     impl RoleController for RecordingController {
-        fn request_promote(&self) {
+        fn request_promote(&self) -> Result<(), frogdb_core::CommandError> {
             self.promotes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
         }
         fn request_demote(&self, primary: SocketAddr) {
             self.demotes.lock().unwrap().push(primary);
@@ -1007,7 +1019,7 @@ mod tests {
         buffer_entries: usize,
     ) -> Arc<PrimaryReplicationHandler> {
         Arc::new(PrimaryReplicationHandler::new(
-            ReplicationState::new(),
+            crate::replication::ReplicationIdentity::detached(ReplicationState::new()),
             data_dir.join("replication_state.json"),
             Arc::new(ReplicationTrackerImpl::new()),
             None,

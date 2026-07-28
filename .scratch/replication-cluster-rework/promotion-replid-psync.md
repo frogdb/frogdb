@@ -1,6 +1,6 @@
 # PRD: Promotion mints a replication ID and a promoted node can head a replication chain
 
-Status: draft
+Status: implemented (review rounds 1-3 applied)
 Type: AFK (design + implementation)
 Area: replication (area E)
 Origin: testing-gap issue 34 Resolution (2026-07-27) — divergence pinned, follow-up "not filed"
@@ -618,3 +618,317 @@ T1 and T3 are independently safe and can go first to shrink the risky middle.
 - Chained replication (issue 48 contract stands).
 - Any change to the full-sync checkpoint wire format or the `FULLRESYNC` cooldown / lag-threshold
   disconnection policy (`primary/mod.rs:57-69`).
+
+---
+
+## 11. Implementation notes (2026-07-28)
+
+Branch: `worktree-agent-a72fe8c910e34a858`. Landed as five commits (identity/backlog seam →
+promotion contract + integration tests → turmoil → docs → jepsen).
+
+### Task status
+
+| Task | Status |
+|------|--------|
+| T1 `clear_secondary_window()` + adoption points | done (`state.rs`; `adopt_replication_history` funnels every replica-side adoption through the clear) |
+| T2 shared identity cell | done (`replication/src/identity.rs`, threaded through both handlers, `ClusterDeps`, `RoleManager`) |
+| T3 backlog floor | done (`primary/replay.rs` + `ring_buffer.rs`; empty-backlog special case folded away, `has_resume_history` extended) |
+| T4 always-construct primary machinery + role-gated broadcaster | **pre-existing on main** — landed with arch-deepening issue 18 (`server/replication_init.rs`, `RoleGatedBroadcaster`). This branch only verified it and wired the new `PrimaryStintTarget` into it |
+| T5 role-gate PSYNC/WAIT/INFO on `!is_replica` | **pre-existing on main** — same origin (`dispatch.rs`, `blocking.rs`, `info_handler.rs`). This branch only changed the flag loads to `Acquire` so they pair with the promotion's `Release` store |
+| T6 promotion sequence | done (`role_manager.rs`: stop stream **and its frame consumer** → mint at the *applied* offset → arm floor → persist → clear `is_replica` last) |
+| T7 unit tests §7.1-4 | done (`state.rs`, `primary/replay.rs`, `role_manager.rs`, `info/sections.rs`) |
+| T8 integration tests §7.5-10, issue-34 pins rewritten | done (`tests/integration_replication.rs`) |
+| T9 turmoil | done (`tests/simulation.rs::run_replication_failover_chain`, seeds 1/7/42; the `:6095-6105` workaround comment is gone) |
+| T10 docs | done (`operations/replication.md`; `just docs-link-check` green) |
+| T11 jepsen | done as `replication-failover-chain` (`testing/jepsen/.../replication_failover.clj`, `run.py`, nightly `replication-extended` suite). See deviation (e) — it is a durability/convergence variant, not an Elle/Knossos register run |
+| T12 replica-side backlog (Phase 2) | skipped — explicitly out of scope for this change set (follow-up issue) |
+| T13 cluster-mode promotion consumer | skipped — explicitly out of scope for this change set (follow-up issue) |
+
+### Deviations
+
+a. **`+CONTINUE` with a new replid does a full `shiftReplicationId`, not an id overwrite.** The PRD
+   only required adopting the new id. Redis demotes the old id into the window at the resume offset,
+   and doing the same keeps a node that was itself continued able to answer its own downstream
+   `PSYNC`. `state.rs::shift_replication_id` is now shared by promotion and `+CONTINUE`.
+b. **Chained replication stays rejected** (§4.1/§6.5/§7.8). The issue-48 pin was re-run unchanged,
+   not rewritten. A promoted node serves `PSYNC`; a node whose live role is still replica does not.
+c. **`second_repl_offset` stays inclusive** (open question 4) — pinned by test rather than changed,
+   and the divergence from Redis's `+1` is now documented on the operations page as well as in
+   `info/mod.rs`.
+d. **Open question 2 (disconnect downstream sessions on promotion) answered "no", but *demotion*
+   does disconnect them**: on a *promoted* node the downstream session set is empty by construction,
+   so `disconnectSlaves()` there would be a no-op. The mirror case is not — a node that is demoted
+   was serving replicas under a history it no longer heads, so `end_primary_stint` drops them
+   (Redis `replicationSetMaster` → `disconnectSlaves`). Added in the review round below.
+e. **T11 scope.** The jepsen variant asserts re-attachment (`master_link_status:up` +
+   `connected_slaves`), replica-acknowledged post-failover writes (`WAIT 1`), and replica/primary
+   agreement on the acked durable keys. It does not run Elle/Knossos across the transition — the
+   deterministic WGL check in `simulation.rs` covers linearizability, and a register checker over a
+   docker failover would mostly measure indeterminate ops. A replica read of `nil` for an acked key
+   is reported but not fatal, so the workload does not go red on issue 66 (data-less minimal-RDB
+   fullsync).
+
+### Two fixes beyond the plan
+
+1. **INFO `master_repl_offset` on a replica was hardcoded to `0`** (`info/sections.rs`). With one
+   identity/offset source per node, both role arms now render the tracker's live offset — which is
+   also what Redis does (one `server.master_repl_offset` counter). The stale `0` was making the
+   failover tests read a pre-promotion offset of 0 and mint the window at the wrong boundary.
+2. **A staged full-sync checkpoint survived promotion** and was re-installed on the next restart,
+   moving the promoted node's own database aside and resurrecting the deposed primary's replid.
+   `begin_primary_stint` now calls `discard_staged_full_sync` (new, `state.rs`), and
+   `test_promoted_identity_survives_restart` pins both the identity and the post-promotion data
+   across a restart.
+
+### Test results (local, targeted)
+
+- `just test frogdb-server "chained_replication|psync|promot|failover"` → **58/58 passed**
+- `just test frogdb-replication "staged"` → 9/9 passed
+- `cargo nextest run -p frogdb-server --features turmoil -E 'test(/test_replication_failover/)'` →
+  2/2 passed (`test_replication_failover_chain_wgl_linearizable`, `test_replication_failover_wgl_linearizable`)
+- `just lint-turmoil` → clean; `just fmt` applied; `just lint-py` / `just fmt-py` clean
+- `just docs-link-check` → exit 0
+- `lein check` (jepsen) → the new namespace compiles clean
+- Full workspace suite, workspace clippy and any jepsen/testbox run are left to the gating step.
+
+## 12. Review round (2026-07-28)
+
+Adversarial review of §11 returned FIX-FIRST. The chaining-pin call (deviation b) was upheld. The
+rest is fixed on the same branch; commit `98d83a90` carries the code, `273e734c` a test deflake the
+verification run exposed.
+
+### Findings and fixes
+
+1. **CRITICAL — the window was frozen at the *received* offset, not the applied one.** The replica's
+   single offset counter advanced when a frame was *decoded off the socket*; the frame then sat in a
+   10k-deep channel before reaching the keyspace. A promotion minted its replid, `second_repl_offset`
+   and backlog floor at that head, so a sibling resuming at an offset the promoted node had received
+   but never applied was granted `+CONTINUE` over a hole — silent divergence.
+
+   Fixed by splitting the heads. `AppliedOffset` (`replication/src/replica/offset.rs`) is advanced by
+   the frame consumer *after* a frame is handled; a `MULTI` group credits its whole byte span at
+   `EXEC`, so an interrupted group claims nothing. The received head still drives ACK, lag and the
+   cluster bus. `OffsetCoordinator::settle_at_applied` rewinds the live counter onto the applied one
+   at promotion, and the mint/floor/window all read that value.
+
+   Making the boundary real also required stopping the *applier*, not just the connection:
+   `ReplicaReplicationHandler::stop` is signal-only (its doc comment said otherwise and now says so),
+   and the boot-spawned frame consumer lives outside the `ReplicaStream` handle. This round stopped
+   it with a task `AbortHandle` held by `RoleManager`; §13 finding 1 replaced that with an admission
+   gate, because an abort can land *inside* `apply_group().await`.
+
+   Pinned by `apply.rs::promotion_stops_the_consumer_and_leaves_queued_frames_uncounted`,
+   `apply.rs::an_interrupted_transaction_credits_nothing` and
+   `primary/tests.rs::promotion_freezes_the_window_at_the_applied_offset_not_the_received_head`
+   (boundary 100 with a received head of 140; a downstream `PSYNC` at 140 gets `FullResync`, at 100
+   gets `Continue`).
+
+2. **MAJOR — the backlog and its floor survived a demotion.** The floor arms with `fetch_max` and so
+   cannot follow an offset rewind *down*, and the buffered entries describe a history the node no
+   longer heads. `ReplicationRingBuffer::reset` (via `PartialSyncReplay::reset_backlog`) now runs at
+   both ends of a stint, and `end_primary_stint` also disconnects downstream replica sessions
+   (`ReplicationTrackerImpl::disconnect_all_replicas` → `ReplicaSession::request_disconnect`, a
+   `Notify` arm in the session's `select!`). Ordering: the reset runs *after* the read-only fence and
+   after the cluster's split-brain capture, which reads the buffer before requesting the demotion.
+   Pinned by `a_re_promotion_at_a_lower_offset_re_arms_the_floor_from_scratch`,
+   `ending_a_stint_disconnects_downstream_replicas` and the `role_manager` demotion tests.
+
+3. **MAJOR — `discard_staged_full_sync` deleted before disarming.** A crash midway through
+   `remove_dir_all` left a partially deleted checkpoint that still looked armed. It now renames the
+   staging directory to `*.discarded` first (atomic), deletes best-effort after, and consumes the
+   metadata only if the rename succeeded; a rename failure propagates to the caller and aborts the
+   promotion. Pinned by `discard_staged_full_sync_disarms_before_deleting` and
+   `..._keeps_the_metadata_when_disarming_fails`.
+
+4. **MEDIUM — role-flag loads were `Relaxed` against a `Release` store.** Swept to `Acquire` at every
+   site that gates behavior on the role: `RoleGatedBroadcaster::is_primary`, `dispatch.rs`,
+   `guards.rs`, `blocking.rs`, `info_handler.rs`, `init.rs`, `core/shard/types.rs`, and the frame
+   consumer's own check.
+
+5. **MEDIUM — a promotion that could not persist flipped the flag anyway.** `begin_primary_stint`
+   now restores the previous identity and returns `Err`; `RoleManager::promote` propagates it and
+   leaves `is_replica` set. Chosen coherent state: the node stays read-only under its inherited
+   identity with the inbound stream already gone (step 1 is not reversible), so it follows nobody
+   until an operator retries `REPLICAOF NO ONE` / re-points it — documented on `promote()`. Taking
+   writes under an id that would vanish on restart is the alternative, and is worse.
+   `RoleController::request_promote` is fallible accordingly (`CommandError::Internal`). Pinned by
+   `a_promotion_that_cannot_mint_leaves_the_node_a_replica` and
+   `a_promotion_that_cannot_persist_leaves_the_identity_untouched`.
+
+6. **LOW — `ring_buffer::push` plain-stored the floor** when opening an unarmed window; now
+   `fetch_max`, so it cannot race an `arm_floor` backwards. Pinned by
+   `ring_buffer_push_into_an_unarmed_buffer_opens_the_window_at_the_entry_start`.
+
+7. **LOW — `PartialSyncReplay::new` arms the floor whenever `recovered_offset > 0` — left as is.**
+   A node recovering a non-zero offset has, by construction, an empty in-memory backlog, and the
+   floor is what stops it from claiming resume history it does not hold. Arming it at the recovered
+   offset is the conservative direction: it makes `has_resume_history` reject every resume below the
+   recovered point, which is exactly right after a restart. Un-arming it would make an empty buffer
+   look like "no window", which the folded-away special case (T3) exists to prevent.
+
+### Residual risk
+
+Superseded by §13 finding 1 — the abort-based teardown described here was replaced by an admission
+gate, and the residual risk it described no longer exists in that form.
+
+### Test results (review round, local, targeted)
+
+- `just test frogdb-replication` → **183/183 passed**
+- `just test frogdb-server "replication|cluster_init|replica|promot|demot"` → **268/268 passed**
+  (before the deflake in `273e734c`, `test_broadcast_lag_disconnect_and_resync::case_2_with_persistence`
+  failed under parallel load — reproduced on the pre-change base `272cbe27`, so pre-existing)
+- `just test frogdb-server role_manager` → 26/26 passed
+- `just lint frogdb-server`, `just lint frogdb-replication`, `just lint-turmoil` → clean;
+  `just fmt` applied
+
+## 13. Review round 2 (2026-07-28)
+
+Re-review returned MERGE on §12 with one narrowed correctness gap and filing work. Code fix commit:
+see the branch log.
+
+### Findings and fixes
+
+1. **CRITICAL (narrowed from §12 finding 1) — the freeze was not mutually exclusive with the
+   consumer's apply-then-credit pair.** §12 stopped the applier by aborting its task, which leaves
+   two interleavings that apply data *above* the frozen boundary:
+
+   - the consumer is inside `apply_group().await` when the abort lands. `AbortHandle::abort()` is a
+     cross-task cancellation that takes effect at the **consumer's** next poll, not before the
+     caller's next await — the consumer is dropped at that await with the shard message already
+     dispatched, so the write lands and is never credited;
+   - `apply_group` completes and the freeze lands between the apply and the credit.
+
+   Either way the node holds writes at stream positions above the boundary, in no backlog and
+   outside every replication-id window. (§12's residual-risk paragraph called this "safe" on the
+   grounds that the extra data merely costs a sibling a full resync. That was wrong on both counts:
+   the abort timing claim, and the outcome — a sibling resuming *below* the boundary is granted
+   `+CONTINUE` and then never receives those writes, which is divergence.)
+
+   Fixed by making the credit an **admission gate taken before the apply**, which removes
+   cancellation from the design instead of trying to time it. `AppliedOffset` now owns
+   `ApplyGate { frozen, stint }` behind a `parking_lot::Mutex`:
+
+   - a consumer runs under a `ReplicaApplyStint` token (`AppliedOffset::begin_replica_stint`, one
+     per inbound stream) and must `claim(bytes)` **before** dispatching to a shard. The claim takes
+     the gate lock, refuses if the gate is frozen or the stint is stale, and otherwise credits the
+     bytes and returns `true`;
+   - `AppliedOffset::freeze()` takes the same lock, sets `frozen`, and returns the applied value.
+     Because claim and freeze are mutually exclusive, a claimed group is always inside the boundary
+     and an unclaimed one never reaches a shard;
+   - a refused claim is the consumer's stop signal: it breaks its loop and its task ends as the
+     frame channel closes. Nothing aborts it, so no apply is ever cancelled mid-flight.
+     `retire_replica_applies()` (bumping the stint) is the demotion mirror, called by
+     `end_primary_stint` before disconnecting downstream replicas.
+
+   A `MULTI` group claims its whole byte span once, at `EXEC`, before `apply_group` — an interrupted
+   group still claims nothing. The primary's own writes go through the ungated `advance_by`, so a
+   promoted node keeps advancing `applied` past its own boundary as it should.
+
+   Consequences elsewhere: `RoleManager::register_boot_frame_consumer` and its stored `AbortHandle`
+   are deleted (the boot consumer is stopped by the freeze, like every other one), and
+   `RealReplicaStream::drop` no longer aborts its consumer — it signals the handler and aborts only
+   the connection task.
+
+   Pinned by `apply.rs::a_freeze_during_an_in_flight_apply_covers_that_group_and_refuses_the_next`
+   (freeze fires while an apply is parked inside a semaphore gate: the boundary covers the in-flight
+   group, the next frame never applies) and `apply.rs::a_newer_stint_retires_the_previous_consumer`.
+
+   Rejected alternatives: a plain mutex around apply+credit still loses the credit when cancellation
+   drops the guard at the await; a watch-channel + blocking wait would stall the single-threaded
+   turmoil runtime, since `promote()` is synchronous and runs under a `std::sync::Mutex`.
+
+2. **The frame channel and an open MULTI group survive a reconnect/FULLRESYNC** — filed as
+   [issue 06](issues/06-replica-frame-channel-survives-resync.md), not fixed here. Pre-existing,
+   orthogonal to the promotion boundary, and the fix belongs at the reconnect seam.
+
+3. **MEDIUM — the mint/persist/rollback triple was not atomic.** All three now run inside one
+   `self.state.write()` scope, so the minted id is never observable (`INFO replication`, a PSYNC
+   window check) on a node that is about to roll it back and stay a replica. Holding the lock across
+   one small file write is deliberate and commented. `discard_staged_full_sync` deliberately stays
+   *before* the mint: it is the one step that must be able to abort the promotion, and it must not
+   run after the point of no return — an inherited staged checkpoint re-installed under the new
+   identity would overwrite the keyspace the boundary describes.
+
+4. **LOW — `OffsetCoordinator::advance` credited applied before live.** Reversed: the live head is
+   credited first, so a reader catching the pair mid-advance sees `live >= applied`, never the
+   inverted order (which would briefly claim more data applied than received).
+
+5. **The backlog has no TTL** — filed as [issue 07](issues/07-repl-backlog-ttl.md). This is the cost
+   side of §12 finding 7 (arming the floor at a recovered non-zero offset), which stands: a
+   restarted primary with a non-zero recovered offset ring-buffers every write forever even with
+   zero replicas. Redis bounds this with `repl-backlog-ttl`; the issue proposes the analogue.
+
+### Residual risk
+
+None known on the promotion boundary itself: the gate makes freeze and credit mutually exclusive, so
+the frozen offset is exactly the data the node holds, and no applier is ever cancelled mid-apply.
+What remains is the reconnect seam of finding 2 (issue 06), which is about which *stint's* frames
+get applied rather than about where the boundary sits.
+
+### Test results (round 2, local, targeted)
+
+- `just test frogdb-replication` → **188/188 passed** (3 new gate unit tests in `replica/offset.rs`,
+  2 new consume-loop tests in `apply.rs`)
+- `just test frogdb-server "replication|cluster_init|replica|promot|demot|role_manager"` →
+  **276/276 passed**
+- `just check` (workspace, all targets) → clean
+- `just lint frogdb-replication`, `just lint frogdb-server`, `just lint-turmoil` → clean;
+  `just fmt` applied
+
+## 14. Review round 3 (2026-07-28)
+
+Round 3 returned MERGE on the `ApplyGate` design, with two mechanical fixes and residual filing.
+
+### Findings and fixes
+
+1. **NEW-5 — `ReplicaOffset::reset_to` was the last applied-offset mutator outside the gate.** Its
+   callers run on the *connection* task (`replica/connection.rs`: the FULLRESYNC header, the
+   checkpoint install, and the rewind when an install fails), and `handler.stop()` is signal-only —
+   so a connection mid-full-sync could reset both heads *after* a promotion froze the boundary,
+   overwriting the head a freshly minted window and backlog floor had just been built around
+   (`master_repl_offset` misreported; PSYNC window arithmetic against a head unrelated to the
+   backlog).
+
+   `reset_to` now goes through the gate: `AppliedOffset::reset_pair` takes the gate lock, refuses
+   when frozen or stint-stale, and stores the live and applied heads as one operation while holding
+   it. `ReplicaOffset` captures its stream's stint number at construction, so a connection outlived
+   by its stream is refused too. The method is `#[must_use]` and returns `bool`; both full-sync
+   callers abandon the sync with an error on refusal (the reconnect then re-syncs under whatever
+   identity the node ended up with), and the install-failure rewind is best-effort.
+
+   This makes stint ordering load-bearing at both spawn sites: `Server::start_subsystems` and
+   `RealReplicaStreamer::start` now open the stream's stint **before** spawning the connection task,
+   so every connection the handler builds is captured under it. Pinned by
+   `replica/offset.rs::a_frozen_gate_refuses_a_full_resync_reset` and
+   `..::a_stale_stream_cannot_reset_the_heads`.
+
+2. **NEW-6 — a retired boot consumer parks on `recv()` until its channel closes.** Documented on
+   `RoleManager::stop_boot_replica` rather than re-engineered: the retired consumer applies nothing
+   (every claim is refused) and ends when the last `Arc<ReplicaReplicationHandler>` drops. There are
+   exactly two long-lived clones — the one `stop_boot_replica` takes, and the one moved into the
+   connection task, which drops as `stop()` breaks the reconnect loop — so the note states that
+   invariant and warns against a third.
+
+3. **Residuals filed.**
+   [Issue 08](issues/08-divergence-retires-nothing.md) covers (a) `apply_group` returning `Err`
+   crediting the claim and continuing — an admitted divergence should retire the stint and force a
+   full resync, which is pre-existing and unchanged by this work, and (b) the crash window between a
+   claim and its shard write, with the `98d83a90`-vs-`1eebf6ca` trade written out (credit-after has
+   no crash window but diverges on a *normal* failover; credit-before is exact for failover and
+   leaves a microsecond-wide, one-group crash hole). `identity.rs`'s "the boundary is exactly what
+   the applier has claimed" doc claim is softened to name both cases and point at the issue.
+   [Issue 06](issues/06-replica-frame-channel-survives-resync.md) gained a note that the stint bump
+   at the reconnect seam is now nearly free given this machinery.
+
+### Test results (round 3, local, targeted)
+
+- `just test frogdb-replication` → **190/190 passed** (2 new gate-reset tests)
+- `just test frogdb-server "replication|cluster_init|replica|promot|demot|role_manager"` →
+  **276/276 passed**
+- `just check` (workspace, all targets) → clean
+- `just lint frogdb-replication`, `just lint frogdb-server`, `just lint-turmoil` → clean;
+  `just fmt` applied
+
+`primary/tests.rs::a_re_promotion_at_a_lower_offset_re_arms_the_floor_from_scratch` needed updating
+for the new rule and is more faithful for it: it now opens a fresh applying stint after the demotion
+and builds its connection heads under it, which is exactly what `RealReplicaStreamer::start` does.
