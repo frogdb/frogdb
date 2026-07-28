@@ -11678,6 +11678,9 @@ async fn test_cluster_scan_is_per_node_and_unions_to_full_keyspace() {
         union, want,
         "the union of per-node SCANs must equal the full written keyspace"
     );
+}
+
+// ============================================================================
 // MULTI/EXEC across a slot-migration boundary (testing-gap issue 55)
 // ============================================================================
 //
