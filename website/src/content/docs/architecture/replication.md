@@ -122,6 +122,13 @@ Two independent mechanisms let a primary care about replica acknowledgment:
 
 **Quorum fencing** is separate. `ReplicationQuorumChecker` (`frogdb-server/crates/server/src/replication_quorum.rs`) arms the first time a replica reaches the streaming phase and stays armed thereafter. Once armed, if no fresh streaming replica has acked within the freshness window, writes are rejected with `-CLUSTERDOWN` ("quorum lost, writes rejected"). This is gated by `self-fence-on-replica-loss` (default `true`). There is no `-NOREPL` error in FrogDB.
 
+Both knobs are live: the toggle and `replica-freshness-timeout-ms` are atomics read at each write pre-check, so `CONFIG SET` applies from the next command without a restart. Two consequences worth planning around:
+
+- **Enabling fences immediately, not after a grace period.** Arming is latched independently of the toggle, so a primary that has already served a replica and since lost it starts rejecting writes on the *next* command after `CONFIG SET replication-self-fence-on-replica-loss yes` — the same immediacy `min-replicas-to-write` has. The transition logs a `warn!` naming the reason when it fences on the spot.
+- **An engaged fence is attributable.** While writes are being fenced, `/status` (and `STATUS`) report `cluster.write_fence` — `"replica quorum lost"` for this fence, `"cluster quorum lost"` for the Raft-mode `cluster-self-fence-on-quorum-loss` gate. The field is absent whenever writes are not fenced, so it never has to be interpreted against a healthy node.
+
+Demoting a primary (`REPLICAOF host port`) un-latches arming, so a later re-promotion does not inherit a fence from replica sessions that are no longer this node's.
+
 ---
 
 ## Split-Brain Handling

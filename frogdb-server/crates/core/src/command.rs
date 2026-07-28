@@ -290,9 +290,6 @@ pub trait RoleController: Send + Sync {
 pub trait QuorumChecker: Send + Sync {
     /// Check if this node can form a quorum with reachable nodes.
     fn has_quorum(&self) -> bool;
-
-    /// Count the number of nodes reachable from this node's perspective.
-    fn count_reachable_nodes(&self) -> usize;
 }
 
 /// What kind of blocking waiter a write command may satisfy.

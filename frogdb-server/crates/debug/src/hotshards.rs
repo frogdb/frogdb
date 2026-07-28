@@ -321,83 +321,6 @@ fn generate_recommendations(
     recommendations
 }
 
-/// Format a hot shard snapshot as the human-readable operator table.
-pub fn format_hotshards_report(report: &HotShardSnapshot) -> String {
-    let mut output = String::new();
-
-    output.push_str(&format!(
-        "# Hot Shard Report (period: {}s)\n",
-        report.period_secs
-    ));
-    output.push_str(&format!(
-        "# Total: {:.0} ops/sec across {} shards\n",
-        report.total_ops_per_sec,
-        report.shards.len()
-    ));
-    output.push_str(&format!(
-        "# Imbalance ratio: {:.1}x (max/avg)\n",
-        report.imbalance_ratio
-    ));
-    output.push('\n');
-
-    output.push_str("shard  ops/sec  reads/sec  writes/sec  pct    queue  status\n");
-    output.push_str("-----  -------  ---------  ----------  -----  -----  ------\n");
-
-    for shard in &report.shards {
-        output.push_str(&format!(
-            "{:<5}  {:>7.0}  {:>9.0}  {:>10.0}  {:>5.1}%  {:>5}  {}\n",
-            shard.shard_id,
-            shard.ops_per_sec,
-            shard.reads_per_sec,
-            shard.writes_per_sec,
-            shard.percentage,
-            shard.queue_depth,
-            shard.class.as_str()
-        ));
-    }
-
-    if !report.recommendations.is_empty() {
-        output.push('\n');
-        output.push_str("# Recommendations:\n");
-        for rec in &report.recommendations {
-            output.push_str(&format!("# - {}\n", rec));
-        }
-    }
-
-    output
-}
-
-/// Format a hot shard snapshot as an INFO-style `# Hotshards` section.
-pub fn format_hotshards_info(report: &HotShardSnapshot) -> String {
-    let hottest_shard = report.shards.first().map(|s| s.shard_id).unwrap_or(0);
-    let max_ops_per_sec = report.shards.first().map(|s| s.ops_per_sec).unwrap_or(0.0);
-    let avg_ops_per_sec = if report.shards.is_empty() {
-        0.0
-    } else {
-        report.total_ops_per_sec / report.shards.len() as f64
-    };
-
-    format!(
-        "# Hotshards\r\n\
-         num_shards:{}\r\n\
-         hot_shards:{}\r\n\
-         warm_shards:{}\r\n\
-         total_ops_sec:{:.0}\r\n\
-         max_ops_sec:{:.0}\r\n\
-         avg_ops_sec:{:.0}\r\n\
-         imbalance_ratio:{:.2}\r\n\
-         hottest_shard:{}\r\n",
-        report.shards.len(),
-        report.hot_count,
-        report.warm_count,
-        report.total_ops_per_sec,
-        max_ops_per_sec,
-        avg_ops_per_sec,
-        report.imbalance_ratio,
-        hottest_shard
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,50 +387,6 @@ mod tests {
         assert_eq!(collector.collect(None).await.period_secs, 45);
         // An explicit period still wins over the configured default.
         assert_eq!(collector.collect(Some(5)).await.period_secs, 5);
-    }
-
-    #[test]
-    fn format_info_reports_fleet_summary() {
-        let report = HotShardSnapshot {
-            period_secs: 10,
-            total_ops_per_sec: 1000.0,
-            imbalance_ratio: 1.0,
-            hot_count: 1,
-            warm_count: 0,
-            shards: vec![
-                load(0, 500.0, 50.0, ShardLoadClass::Hot),
-                load(1, 500.0, 50.0, ShardLoadClass::Ok),
-            ],
-            recommendations: vec![],
-        };
-
-        let info = format_hotshards_info(&report);
-        assert!(info.contains("num_shards:2"));
-        assert!(info.contains("hot_shards:1"));
-        assert!(info.contains("total_ops_sec:1000"));
-        assert!(info.contains("hottest_shard:0"));
-    }
-
-    #[test]
-    fn format_report_renders_a_row_per_shard() {
-        let report = HotShardSnapshot {
-            period_secs: 10,
-            total_ops_per_sec: 1000.0,
-            imbalance_ratio: 1.6,
-            hot_count: 1,
-            warm_count: 0,
-            shards: vec![
-                load(0, 800.0, 80.0, ShardLoadClass::Hot),
-                load(1, 200.0, 20.0, ShardLoadClass::Ok),
-            ],
-            recommendations: vec!["something".to_string()],
-        };
-
-        let text = format_hotshards_report(&report);
-        assert!(text.contains("Hot Shard Report (period: 10s)"));
-        assert!(text.contains("HOT"));
-        assert!(text.contains("OK"));
-        assert!(text.contains("# Recommendations:"));
     }
 
     #[test]

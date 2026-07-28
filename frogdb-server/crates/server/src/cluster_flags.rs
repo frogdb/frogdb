@@ -128,9 +128,13 @@ impl QuorumChecker for SelfFenceGate {
         // fence": the caller's only use of this verdict is the write gate.
         !self.flags.self_fence_on_quorum_loss() || self.inner.has_quorum()
     }
+}
 
-    fn count_reachable_nodes(&self) -> usize {
-        self.inner.count_reachable_nodes()
+impl frogdb_core::metrics::WriteFenceReporter for SelfFenceGate {
+    /// Derived from the same call the write gate makes, so `/status` cannot
+    /// disagree with the gate about whether writes are fenced.
+    fn write_fence_reason(&self) -> Option<&'static str> {
+        (!self.has_quorum()).then_some("cluster quorum lost")
     }
 }
 
@@ -145,9 +149,6 @@ mod tests {
     impl QuorumChecker for FixedChecker {
         fn has_quorum(&self) -> bool {
             self.has_quorum
-        }
-        fn count_reachable_nodes(&self) -> usize {
-            1
         }
     }
 
@@ -181,9 +182,6 @@ mod tests {
         // Re-enable => fenced again.
         flags.set_self_fence_on_quorum_loss(true);
         assert!(!gate.has_quorum());
-
-        // The gate never invents reachability.
-        assert_eq!(gate.count_reachable_nodes(), 1);
     }
 
     /// A healthy inner checker is reported as healthy regardless of the flag.

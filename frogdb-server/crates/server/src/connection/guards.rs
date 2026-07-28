@@ -769,9 +769,6 @@ mod tests {
         fn has_quorum(&self) -> bool {
             self.has_quorum
         }
-        fn count_reachable_nodes(&self) -> usize {
-            if self.has_quorum { 2 } else { 1 }
-        }
     }
 
     /// Socketless fixtures for exercising [`PreDispatchView`] guard predicates.

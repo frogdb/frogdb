@@ -113,27 +113,61 @@ impl Server {
                 .with_hot_shards(hot_shard_collector.clone()),
         );
 
+        // Create quorum checker for self-fencing (write rejection on quorum loss)
+        // Prefer failure_detector (Raft mode), fallback to replication_quorum_checker.
+        //
+        // In Raft mode the checker is always installed and wrapped in a
+        // `SelfFenceGate`, which consults the live `self-fence-on-quorum-loss`
+        // flag at each write pre-check. Gating installation instead would freeze
+        // the decision at startup.
+        //
+        // Built before the status collector so `/status` can report the fence
+        // reason from *this* object: the write gate's verdict and the reported
+        // reason are then the same evaluation, not two that can drift.
+        let self_fence_gate = self.failure_detector.as_ref().map(|fd| {
+            Arc::new(crate::cluster_flags::SelfFenceGate::new(
+                fd.clone() as Arc<dyn frogdb_core::command::QuorumChecker>,
+                self.config_manager.cluster_flags(),
+            ))
+        });
+        let quorum_checker: Option<Arc<dyn frogdb_core::command::QuorumChecker>> =
+            match &self_fence_gate {
+                Some(gate) => Some(gate.clone()),
+                None => self.replication_quorum_checker.clone().map(|c| c as _),
+            };
+        // Same selection, as the observability seam: whichever object the write
+        // gate consults is the one that explains a rejection.
+        let write_fence: Option<Arc<dyn frogdb_core::WriteFenceReporter>> = match &self_fence_gate {
+            Some(gate) => Some(gate.clone()),
+            // `replication_self_fence` is the same object as
+            // `replication_quorum_checker`, un-erased (a `dyn QuorumChecker`
+            // cannot be re-cast to another trait).
+            None => self.replication_self_fence.clone().map(|c| c as _),
+        };
+
         // Single status collector shared by the HTTP `/status` endpoint and the
         // STATUS JSON connection command, so the two surfaces can never disagree.
         // Built unconditionally over the object-safe metrics recorder so STATUS
         // JSON works even when the HTTP server is disabled (the no-op recorder
         // reports absent counters as 0, never faked).
-        let status_collector = Arc::new(
-            StatusCollector::new(
-                self.config_manager.status_thresholds(),
-                self.health_checker.clone(),
-                self.shard_senders.clone(),
-                self.client_registry.clone(),
-                self.metrics_recorder.clone(),
-                start_time,
-                self.config_manager.max_clients_flag(),
-                self.config.memory.maxmemory,
-                self.config.persistence.enabled,
-                self.config.persistence.durability_mode.clone(),
-                mode.clone(),
-            )
-            .with_hot_shards(hot_shard_collector.clone()),
-        );
+        let mut status_collector = StatusCollector::new(
+            self.config_manager.status_thresholds(),
+            self.health_checker.clone(),
+            self.shard_senders.clone(),
+            self.client_registry.clone(),
+            self.metrics_recorder.clone(),
+            start_time,
+            self.config_manager.max_clients_flag(),
+            self.config.memory.maxmemory,
+            self.config.persistence.enabled,
+            self.config.persistence.durability_mode.clone(),
+            mode.clone(),
+        )
+        .with_hot_shards(hot_shard_collector.clone());
+        if let Some(reporter) = write_fence {
+            status_collector = status_collector.with_write_fence(reporter);
+        }
+        let status_collector = Arc::new(status_collector);
 
         // Start HTTP server if enabled (metrics, health, debug, admin REST)
         let http_server_handle = if let Some(ref prometheus) = self.prometheus_recorder {
@@ -397,23 +431,6 @@ impl Server {
         } else {
             None
         };
-
-        // Create quorum checker for self-fencing (write rejection on quorum loss)
-        // Prefer failure_detector (Raft mode), fallback to replication_quorum_checker.
-        //
-        // In Raft mode the checker is always installed and wrapped in a
-        // `SelfFenceGate`, which consults the live `self-fence-on-quorum-loss`
-        // flag at each write pre-check. Gating installation instead would freeze
-        // the decision at startup.
-        let quorum_checker: Option<Arc<dyn frogdb_core::command::QuorumChecker>> =
-            if let Some(ref fd) = self.failure_detector {
-                Some(Arc::new(crate::cluster_flags::SelfFenceGate::new(
-                    fd.clone() as Arc<dyn frogdb_core::command::QuorumChecker>,
-                    self.config_manager.cluster_flags(),
-                )))
-            } else {
-                self.replication_quorum_checker.clone()
-            };
 
         // Create cluster pub/sub forwarder (None in standalone mode)
         let pubsub_forwarder: Option<Arc<crate::cluster_pubsub::ClusterPubSubForwarder>> =

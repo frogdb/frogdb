@@ -359,20 +359,11 @@ pub struct StaticConfig {
     // Each is copied once from `Config` at startup; CONFIG GET reports that
     // startup value (honest — it is what the server runs with), but they carry
     // no runtime-SET seam, so they live here rather than in the mutable registry.
+    // Params that *did* grow a live seam (WAL batch size, snapshot interval,
+    // replication lag thresholds, self-fence + replica freshness) are served from
+    // `ConfigManager`'s atomics instead and must not be duplicated here.
     /// RocksDB background-compaction rate limit in MB/s (0 = unlimited).
     pub compaction_rate_limit_mb: u64,
-    /// WAL flush batch-size threshold in KB.
-    pub batch_size_threshold_kb: usize,
-    /// Periodic snapshot interval in seconds (0 = disabled).
-    pub snapshot_interval_secs: u64,
-    /// Replica byte-lag disconnect threshold.
-    pub replication_lag_threshold_bytes: u64,
-    /// Replica time-lag disconnect threshold in seconds.
-    pub replication_lag_threshold_secs: u64,
-    /// Whether the primary self-fences (refuses writes) on replica loss.
-    pub self_fence_on_replica_loss: bool,
-    /// Replica freshness window in ms used by self-fencing.
-    pub replica_freshness_timeout_ms: u64,
     /// Whether dual-accept TLS cluster migration mode is enabled.
     pub tls_cluster_migration: bool,
     /// Outgoing (replication/cluster) client certificate path (empty when unset).
@@ -484,12 +475,6 @@ impl StaticConfig {
                 .unwrap_or_default(),
             // --- 13-01 Pass 2b: immutable startup-consumed params ---
             compaction_rate_limit_mb: config.persistence.compaction_rate_limit_mb,
-            batch_size_threshold_kb: config.persistence.batch_size_threshold_kb,
-            snapshot_interval_secs: config.snapshot.snapshot_interval_secs,
-            replication_lag_threshold_bytes: config.replication.replication_lag_threshold_bytes,
-            replication_lag_threshold_secs: config.replication.replication_lag_threshold_secs,
-            self_fence_on_replica_loss: config.replication.self_fence_on_replica_loss,
-            replica_freshness_timeout_ms: config.replication.replica_freshness_timeout_ms,
             tls_cluster_migration: config.tls.tls_cluster_migration,
             tls_client_cert_file: config
                 .tls
