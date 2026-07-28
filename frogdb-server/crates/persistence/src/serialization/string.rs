@@ -6,17 +6,12 @@ use super::*;
 
 /// Serialize a string value.
 pub(super) fn serialize_string(sv: &StringValue) -> (TypeMarker, Vec<u8>) {
-    // Check if it's integer-encoded by trying to parse as integer
-    if let Some(i) = sv.as_integer() {
-        // Verify it's actually stored as integer (not a string that happens to parse as int)
-        let bytes = sv.as_bytes();
-        if let Ok(s) = std::str::from_utf8(&bytes)
-            && let Ok(parsed) = s.parse::<i64>()
-            && parsed == i
-        {
-            // It's integer-encoded
-            return (TypeMarker::StringInt, i.to_le_bytes().to_vec());
-        }
+    // Only values actually stored integer-encoded take the StringInt marker.
+    // Raw bytes that merely parse as an integer ("00", "+5", "-0") must stay
+    // raw: StringInt decodes to the canonical rendering, which would drop the
+    // original bytes.
+    if let Some(i) = sv.stored_integer() {
+        return (TypeMarker::StringInt, i.to_le_bytes().to_vec());
     }
 
     // Raw bytes

@@ -59,6 +59,18 @@ impl StringValue {
         }
     }
 
+    /// The stored integer, only when this value is actually integer-encoded.
+    ///
+    /// Unlike [`Self::as_integer`], a `Raw` value that merely parses as an
+    /// integer returns `None`: raw bytes like `"00"` or `"+5"` are not
+    /// canonical decimal renderings, so treating them as integers loses bytes.
+    pub fn stored_integer(&self) -> Option<i64> {
+        match &self.data {
+            StringData::Integer(i) => Some(*i),
+            StringData::Raw(_) => None,
+        }
+    }
+
     /// Calculate memory size.
     pub fn memory_size(&self) -> usize {
         match &self.data {

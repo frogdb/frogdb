@@ -449,6 +449,31 @@ mod unit_tests {
         assert_eq!(value2.as_string().unwrap().as_integer(), Some(42));
     }
 
+    /// Raw strings that parse as integers but are not canonical decimal
+    /// renderings ("00", "+5", "-0") must round-trip byte-for-byte, not
+    /// collapse to the canonical integer form.
+    #[test]
+    fn test_non_canonical_integer_strings_roundtrip_raw() {
+        for raw in [&b"00"[..], b"+5", b"-0", b"007", b" 1"] {
+            let value = Value::String(StringValue::new(Bytes::copy_from_slice(raw)));
+            let metadata = KeyMetadata::new(raw.len());
+
+            let data = serialize(&value, &metadata);
+            assert_eq!(
+                data[0],
+                TypeMarker::StringRaw.as_byte(),
+                "{raw:?} must serialize raw"
+            );
+
+            let (value2, _) = deserialize(&data).unwrap();
+            assert_eq!(
+                value2.as_string().unwrap().as_bytes().as_ref(),
+                raw,
+                "{raw:?} must round-trip byte-for-byte"
+            );
+        }
+    }
+
     #[test]
     fn test_serialize_deserialize_sorted_set() {
         let mut zset = SortedSetValue::new();
