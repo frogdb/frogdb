@@ -621,6 +621,40 @@ TESTS: tuple[TestDefinition, ...] = (
         membership_changes=True,
         suites=("raft", "all"),
     ),
+    # cluster-replication: the cluster-mode twin of replication-failover. Raft is a
+    # metadata plane only (ADR-0001), so key data inside a cluster travels the same
+    # per-node PSYNC link as in standalone mode — this test is what proves that link
+    # exists and carries data. Self-driven (nemesis "none"): the workload hash-tags
+    # every key into one slot, CLUSTER REPLICATEs a second node onto that slot's
+    # owner, seeds WAIT-acked and async writes, `docker stop`s the primary, promotes
+    # the replica with CLUSTER FAILOVER TAKEOVER, then reads every tracked key back.
+    # The checker requires acked writes to survive at least as often as unacked ones
+    # and to clear a survival floor; see the workload's checker docstring for why
+    # this is an ordering property rather than an empty-loss-set assertion.
+    TestDefinition(
+        "cluster-replication",
+        "cluster-replication",
+        "none",
+        120,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    # cluster-lag: the lag workload against the raft topology. Measures
+    # write-to-visible lag over a cluster-mode replication link and samples
+    # replication offsets off both ends. Unlike the standalone `lag` test this one
+    # can fail: the offsets are assertions that the link is a real replication
+    # stream (advancing, monotone, replica never ahead, counted in
+    # connected_slaves) rather than the pre-rework counters that never moved.
+    TestDefinition(
+        "cluster-lag",
+        "cluster-lag",
+        "none",
+        60,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
     # Raft extended nemesis tests
     # Uses elle-rw-register instead of register: Elle's cycle-based checker
     # scales to large histories, whereas Knossos OOMs on the indeterminate

@@ -19,7 +19,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::broadcast;
 
@@ -156,6 +156,11 @@ pub struct PrimaryReplicationHandler {
     /// connection handler asks this seam instead of assembling WAIT from
     /// tracker primitives.
     pub(crate) wait: WaitCoordinator,
+    /// Set once [`Self::shutdown_downstream_sessions`] starts draining. A
+    /// connection that was accepted just before the acceptors were aborted can
+    /// still reach PSYNC afterwards; without this latch it would register a
+    /// fresh session behind the drain and keep the storage engine open.
+    pub(crate) draining: AtomicBool,
 }
 
 impl PrimaryReplicationHandler {
@@ -202,6 +207,7 @@ impl PrimaryReplicationHandler {
             write_timeout_ms,
             offsets,
             wait,
+            draining: AtomicBool::new(false),
         }
     }
 
@@ -299,7 +305,13 @@ impl PrimaryReplicationHandler {
     /// offset below what it already handed out. Replicas must come back and
     /// PSYNC against the history this node ends up on. Returns how many sessions
     /// were signalled.
+    ///
+    /// Clients parked in WAIT are released here too, for the same reason and in
+    /// the same breath: they are waiting for acknowledgments on the stream that
+    /// is being torn down, so any count they could still reach would describe a
+    /// history this node no longer heads.
     pub fn end_primary_stint(&self) -> usize {
+        self.wait.fence_role_change();
         self.replay.reset_backlog();
         // Retire whatever applier the previous inbound stream left running, so
         // frames decoded under the old history cannot land on top of the
@@ -313,6 +325,50 @@ impl PrimaryReplicationHandler {
         );
         disconnected
     }
+
+    /// End every downstream replica session and wait for them to unregister.
+    ///
+    /// A PSYNC connection is served inline by the connection task that accepted
+    /// it, and a streaming session only ends when its peer closes the socket or
+    /// this node stops being a primary. Neither happens on shutdown: aborting
+    /// the acceptors leaves established sessions streaming, so this node keeps
+    /// writing frames after its shards have stopped and keeps its handle on the
+    /// storage engine — which blocks a restart in the same process (the RocksDB
+    /// LOCK is still held) and, in a cluster, delays the downstream replica's
+    /// resync against whoever takes over.
+    ///
+    /// The drain latches first: aborting the acceptors stops *new* connections,
+    /// but one accepted a moment earlier can still reach PSYNC while the drain
+    /// runs, and a session registered behind the drain would outlive it. From
+    /// here on [`Self::handle_psync`] refuses.
+    ///
+    /// Returns how many sessions were signalled. Waits up to `drain_timeout`
+    /// for the registry to empty; a session that ignores the signal is logged
+    /// rather than waited on forever.
+    pub async fn shutdown_downstream_sessions(&self, drain_timeout: Duration) -> usize {
+        self.draining.store(true, Ordering::Release);
+        let signalled = self.tracker.disconnect_all_replicas();
+        if signalled == 0 {
+            return 0;
+        }
+        let deadline = tokio::time::Instant::now() + drain_timeout;
+        while !self.tracker.get_all_replicas().is_empty() {
+            if tokio::time::Instant::now() >= deadline {
+                tracing::warn!(
+                    remaining = self.tracker.get_all_replicas().len(),
+                    "Replica sessions still registered after disconnect signal"
+                );
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tracing::info!(
+            signalled,
+            "Downstream replica sessions torn down on shutdown"
+        );
+        signalled
+    }
+
     pub fn tracker(&self) -> Arc<ReplicationTrackerImpl> {
         self.tracker.clone()
     }
@@ -370,6 +426,14 @@ impl PrimaryReplicationHandler {
         replication_id: &str,
         offset: i64,
     ) -> io::Result<()> {
+        // Refuse once the shutdown drain has started: a session opened now
+        // would stream past the drain that was meant to end them all.
+        if self.draining.load(Ordering::Acquire) {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "primary is shutting down",
+            ));
+        }
         // One call resolves the whole PSYNC decision. [`PartialSyncReplay`] owns
         // both bounds of the continuable window — the upper bound + replid match
         // ([`ReplicationState::window_contains`]) and the lower bound (the

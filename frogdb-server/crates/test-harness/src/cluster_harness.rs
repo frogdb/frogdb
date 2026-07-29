@@ -7,7 +7,7 @@
 
 #![allow(dead_code)]
 
-use crate::cluster_helpers::{ClusterError, ClusterInfo, parse_cluster_info};
+use crate::cluster_helpers::{ClusterError, ClusterInfo, connected_slaves, parse_cluster_info};
 use crate::server::{TestClient, TestServer, TestServerConfig};
 use frogdb_core::ClusterState;
 use frogdb_core::cluster::{CLUSTER_SLOTS, ClusterRaft};
@@ -1272,6 +1272,41 @@ impl ClusterTestHarness {
             .filter(|id| self.replica_map.contains_key(id))
             .copied()
             .collect()
+    }
+
+    /// Wait until `primary_id` reports at least `expected` attached PSYNC
+    /// replicas in `INFO replication`.
+    ///
+    /// [`Self::wait_for_role_propagation`] only waits for the *cluster-state*
+    /// role to converge, which says nothing about whether the replica's data
+    /// path ever opened a replication stream. Cluster data replication is a
+    /// per-node PSYNC link (the same mechanism standalone replication uses), so
+    /// `connected_slaves` on the primary is the observable that the link is
+    /// actually up. Tests that assert replicated *data* must wait on this, not
+    /// on role propagation alone.
+    pub async fn wait_for_replication_link(
+        &self,
+        primary_id: u64,
+        expected: usize,
+        timeout: Duration,
+    ) -> Result<(), ClusterError> {
+        let start = std::time::Instant::now();
+        let mut last = 0usize;
+        while start.elapsed() < timeout {
+            if let Some(node) = self.nodes.get(&primary_id)
+                && let Ok(resp) = node.try_send("INFO", &["replication"]).await
+            {
+                last = connected_slaves(&resp).unwrap_or(0);
+                if last >= expected {
+                    return Ok(());
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        Err(ClusterError::new(format!(
+            "Timeout waiting for node {primary_id} to report {expected} connected replicas \
+             (last seen {last})"
+        )))
     }
 
     /// Get replicas of a specific primary.

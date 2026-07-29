@@ -422,7 +422,7 @@ async fn wait_with_lagging_replica_broadcasts_a_stamped_getack() {
     use crate::wait_coordinator::WaitVerdict;
     use crate::{LagThresholdConfig, SplitBrainBufferConfig};
     use std::sync::Arc;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     use tempfile::TempDir;
 
     let dir = TempDir::new().unwrap();
@@ -456,9 +456,10 @@ async fn wait_with_lagging_replica_broadcasts_a_stamped_getack() {
     let wait = handler.wait_coordinator();
     let verdict = wait
         .wait_for_replicas(
+            wait.role_fence(),
             target,
             1,
-            Some(Instant::now() + Duration::from_millis(30)),
+            Some(tokio::time::Instant::now() + Duration::from_millis(30)),
             &handler,
         )
         .await;

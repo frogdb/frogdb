@@ -19,4 +19,5 @@ pub use frogdb_replication::{ApplyError, ReplicaApplier, consume_frames};
 pub use frogdb_replication::{
     LagThresholdConfig, LagThresholds, PrimaryReplicationHandler, ReplicaConnection,
     ReplicaReplicationHandler, ReplicationIdentity, SharedReplicationState, SplitBrainBufferConfig,
+    WaitVerdict,
 };

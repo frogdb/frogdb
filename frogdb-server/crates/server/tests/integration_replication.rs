@@ -2161,6 +2161,102 @@ async fn test_promoted_replica_enforces_write_gates_set_before_promotion() {
     primary.shutdown().await;
 }
 
+/// The demotion half of the same contract: a node that *stops* being a primary
+/// stops being a replication source, in the same breath.
+///
+/// The primary-side handler is never torn down (it exists on every role), so
+/// the transition has to be carried by behavior rather than by construction:
+/// `RoleManager::demote` calls `end_primary_stint`, which closes the backlog
+/// window and disconnects the downstream replicas, and the live role flag makes
+/// the next `PSYNC` attempt fail the `PsyncIntercept` gate. Together those give
+/// the invariant a sub-replica depends on — there is no window in which a node
+/// is a replica of one node while still serving a resync to another.
+#[tokio::test]
+async fn test_demoted_primary_stops_serving_psync_to_its_downstream() {
+    let config = TestServerConfig::default();
+
+    let primary = TestServer::start_primary_with_config(config.clone()).await;
+    // `node` boots writable, takes a downstream of its own, and is then demoted
+    // under that downstream's feet.
+    let node = TestServer::start_primary_with_config(config.clone()).await;
+    let downstream = TestServer::start_primary_with_config(config).await;
+
+    assert_ok(
+        &downstream
+            .send("REPLICAOF", &["127.0.0.1", &node.port().to_string()])
+            .await,
+    );
+    let acked = parse_integer(&node.send("WAIT", &["1", "10000"]).await).unwrap_or(0);
+    assert_eq!(
+        acked, 1,
+        "downstream must attach to the writable node first"
+    );
+
+    assert_ok(&node.send("SET", &["pre-demote", "1"]).await);
+    let _ = node.send("WAIT", &["1", "5000"]).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        matches!(&downstream.send("GET", &["pre-demote"]).await, Response::Bulk(Some(v)) if v.as_ref() == b"1"),
+        "sanity: the link must be live before the demotion under test"
+    );
+
+    // Demote. The downstream's link is severed by `end_primary_stint` and its
+    // reconnect attempts are refused by the role gate from here on.
+    assert_ok(
+        &node
+            .send("REPLICAOF", &["127.0.0.1", &primary.port().to_string()])
+            .await,
+    );
+
+    let mut link_down = false;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let info =
+            parse_info_replication(&downstream.send("INFO", &["replication"]).await).unwrap();
+        if info.get("master_link_status").map(String::as_str) == Some("down") {
+            link_down = true;
+            break;
+        }
+    }
+    assert!(
+        link_down,
+        "a downstream of a demoted node must lose its link, not keep streaming from a replica"
+    );
+
+    // The refusal is explicit, not just a dropped connection.
+    let (replid, offset) = get_replication_state(&downstream)
+        .await
+        .expect("downstream INFO replication");
+    let resp = node
+        .send_raw(&encode_resp_command(&[
+            "PSYNC",
+            &replid,
+            &offset.to_string(),
+        ]))
+        .await;
+    let head = String::from_utf8_lossy(&resp);
+    assert!(
+        head.starts_with("-ERR") && head.contains("not running as primary"),
+        "a demoted node must reject downstream PSYNC outright, got: {head:?}"
+    );
+
+    // And a write that lands on the new primary does not reach the orphan.
+    assert_ok(&primary.send("SET", &["post-demote", "1"]).await);
+    wait_for_replication(&primary, 2000).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        matches!(
+            downstream.send("GET", &["post-demote"]).await,
+            Response::Bulk(None)
+        ),
+        "the orphaned downstream must not receive writes relayed through a demoted node"
+    );
+
+    downstream.shutdown().await;
+    node.shutdown().await;
+    primary.shutdown().await;
+}
+
 /// Chained replication (replica-of-replica) contract, pinned (testing-gap
 /// issue 48): FrogDB does **not** implement transitive replication, and this
 /// covers the more common real-world trigger than the manual-promotion case
@@ -3355,6 +3451,57 @@ async fn test_wait_zero_timeout_blocks_without_quorum() {
         .expect("unblocked WAIT must reply");
     assert_eq!(parse_integer(&resp), Some(0));
 
+    primary.shutdown().await;
+}
+
+/// A WAIT parked across a demotion is released with `-UNBLOCKED`, not with a
+/// count.
+///
+/// Redis unblocks every blocked client from `replicationSetMaster` for the same
+/// reason: the wait was counting acknowledgments on a replication stream that
+/// the demotion tears down, so any number it could still produce would describe
+/// a history the node no longer heads. The release happens inside
+/// `end_primary_stint`, next to the downstream disconnect it belongs with.
+#[tokio::test]
+async fn test_wait_unblocked_on_demotion() {
+    let config = TestServerConfig::default();
+    let primary = TestServer::start_primary_with_config(config.clone()).await;
+    let new_primary = TestServer::start_primary_with_config(config).await;
+
+    let mut blocked = primary.connect().await;
+    // No replicas, so a quorum of 5 is unreachable and `timeout 0` parks
+    // forever — the demotion is the only thing that can release it.
+    blocked.send_only(&["WAIT", "5", "0"]).await;
+    primary.wait_for_blocked_clients(1).await;
+    assert!(
+        blocked
+            .read_response(Duration::from_millis(300))
+            .await
+            .is_none(),
+        "WAIT 5 0 must still be parked before the demotion"
+    );
+
+    assert_ok(
+        &primary
+            .send("REPLICAOF", &["127.0.0.1", &new_primary.port().to_string()])
+            .await,
+    );
+
+    let resp = blocked
+        .read_response(Duration::from_secs(5))
+        .await
+        .expect("a demotion must release the parked WAIT, not leave it hanging");
+    let msg = get_error_message(&resp).unwrap_or_default();
+    assert!(
+        msg.starts_with("UNBLOCKED"),
+        "a WAIT released by a demotion must be an -UNBLOCKED error, got: {resp:?}"
+    );
+    assert!(
+        msg.contains("master -> replica"),
+        "the error must name the cause the way Redis does, got: {msg}"
+    );
+
+    new_primary.shutdown().await;
     primary.shutdown().await;
 }
 

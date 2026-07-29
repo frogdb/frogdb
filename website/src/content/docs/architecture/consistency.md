@@ -89,6 +89,11 @@ During failover, writes accepted by the old primary but not yet replicated may b
 | Write acknowledged but not replicated | Lost (bounded only by replication lag) — [Design intent] |
 | Write to an isolated old primary during split-brain | Discarded and audit-logged — [Tested] |
 
+### `WAIT` scope — [Tested]
+`WAIT` is **per-node in cluster mode, not cluster-wide**: it counts the replicas of the node that received it (one shard) and never redirects, matching Redis, Valkey and Dragonfly. A cluster-wide durability barrier is a client-side fan-out — `WAIT` every shard primary and take the minimum. The full contract is in [Clustering Internals](/architecture/clustering/#wait-semantics).
+
+Acknowledgment raises the odds an acknowledged write survives a failover; it does not guarantee it, because the election ranks candidates by lag but does not require the acknowledging replica to win — Redis's documented caveat. The Jepsen `cluster-replication` workload asserts the ordering property this implies (acknowledged writes survive a kill-and-promote at least as often as unacknowledged ones, above a survival floor), not an empty loss set.
+
 ### Reads from a Replica — [Design intent]
 A replica may return a value older than the primary's; staleness is bounded only by replication lag. The magnitude of that lag is untested, but the *ordering* of what a replica returns over time is — see [Monotonic Reads](#monotonic-reads--tested) above.
 

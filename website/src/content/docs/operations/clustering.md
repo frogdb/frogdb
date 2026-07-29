@@ -53,6 +53,10 @@ Multi-key operations whose keys span more than one slot are rejected. See [Redis
 
 **Replica** — holds a full copy of its primary's dataset, serves reads only when the client opts in with `READONLY`, and is a candidate for promotion during failover.
 
+`CLUSTER REPLICATE <node-id>` makes a node a replica of the given primary. It changes the node's **role only** — it does not move slots. A node that already owns slots keeps owning them after being made a replica, and those slots then have an owner that refuses writes, so assign the slot layout before attaching replicas. Data reaches the replica over the ordinary PSYNC link, not through Raft: watch `connected_slaves` and the per-slave lines in the primary's `INFO replication` to confirm the link came up.
+
+`WAIT numreplicas timeout` is **per-node**: it counts the replicas of the node that received it, so it is a durability barrier for one shard. For a cluster-wide barrier, `WAIT` every shard primary you wrote to and take the smallest answer. On a replica `WAIT` is an error, and a `WAIT` still blocked when its node is demoted returns `-UNBLOCKED … (master -> replica?)` rather than a count.
+
 ## Bootstrapping a cluster
 
 Cluster mode is off by default. Each node enables it under `[cluster]`, sets a `node-id`, exposes a `cluster-bus-addr` for Raft traffic, and lists the initial members in `initial-nodes`:

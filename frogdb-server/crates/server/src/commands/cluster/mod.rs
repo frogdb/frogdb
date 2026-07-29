@@ -61,20 +61,23 @@ fn count_slot_health(snapshot: &frogdb_cluster::ClusterSnapshot) -> SlotHealthCo
     counts
 }
 
-/// Get the local node's replication offset from Raft metrics or replication tracker.
+/// The local node's replication offset, as `CLUSTER SHARDS` / `CLUSTER SLOTS`
+/// report it.
+///
+/// This is the *data* replication offset — the same number `INFO replication`
+/// publishes as `master_repl_offset` and the same one a replica ACKs — read
+/// from the replication tracker in every mode.
+///
+/// It used to be the Raft last-applied log index whenever Raft was running,
+/// which was a different quantity wearing this one's name: Raft carries cluster
+/// metadata only (ADR-0001), so that index counted membership and slot-map
+/// entries, not bytes of client writes. A client comparing a primary's
+/// `replication-offset` against its replica's would have been comparing two
+/// numbers from unrelated planes.
 fn local_replication_offset(ctx: &CommandContext) -> i64 {
-    if let Some(raft) = ctx.raft {
-        return raft
-            .metrics()
-            .borrow()
-            .last_applied
-            .map(|log_id| log_id.index as i64)
-            .unwrap_or(0);
-    }
-    if let Some(tracker) = ctx.replication_tracker {
-        return tracker.current_offset() as i64;
-    }
-    0
+    ctx.replication_tracker
+        .map(|tracker| tracker.current_offset() as i64)
+        .unwrap_or(0)
 }
 
 pub struct ClusterCommand;
@@ -539,16 +542,24 @@ fn cluster_shards(ctx: &mut CommandContext) -> Result<Response, CommandError> {
 }
 
 /// Map grouped [`wire::ShardView`]s to the `CLUSTER SHARDS` RESP array,
-/// overlaying `my_offset` as the `replication-offset` of the node whose id equals
-/// `my_id` (every other node reports 0).
+/// reporting `my_offset` as the `replication-offset` of the node whose id equals
+/// `my_id`.
+///
+/// Peers get **no** `replication-offset` field at all. The metadata plane
+/// carries topology, not stream positions, so this node does not know how far
+/// any peer has replicated; rendering the 0 it would otherwise have to invent
+/// would read as "that node is infinitely behind" and drive exactly the
+/// failover/lag decisions the field exists to inform. An absent field is the
+/// truthful answer, and the client asks the node itself (`INFO replication`,
+/// or `CLUSTER SHARDS` against that node) for the real one. Redis fills this in
+/// from gossip, which FrogDB's Raft plane deliberately does not carry.
 fn map_shards_response(
     views: &[wire::ShardView<'_>],
     my_id: Option<frogdb_cluster::NodeId>,
     my_offset: i64,
 ) -> Response {
     let node_entry = |view: &wire::NodeView<'_>, role: &'static str| -> Response {
-        let offset = if Some(view.id) == my_id { my_offset } else { 0 };
-        Response::Array(vec![
+        let mut entry = vec![
             Response::bulk(Bytes::from("id")),
             Response::bulk(Bytes::from(wire::format_node_id(view.id))),
             Response::bulk(Bytes::from("port")),
@@ -559,11 +570,14 @@ fn map_shards_response(
             Response::bulk(Bytes::from(view.node.addr.ip().to_string())),
             Response::bulk(Bytes::from("role")),
             Response::bulk(Bytes::from(role)),
-            Response::bulk(Bytes::from("replication-offset")),
-            Response::Integer(offset),
-            Response::bulk(Bytes::from("health")),
-            Response::bulk(Bytes::from(view.health)),
-        ])
+        ];
+        if Some(view.id) == my_id {
+            entry.push(Response::bulk(Bytes::from("replication-offset")));
+            entry.push(Response::Integer(my_offset));
+        }
+        entry.push(Response::bulk(Bytes::from("health")));
+        entry.push(Response::bulk(Bytes::from(view.health)));
+        Response::Array(entry)
     };
 
     let mut shards = Vec::new();
@@ -749,12 +763,15 @@ mod tests {
     }
 
     /// Look up a value in a flat `[k1, v1, k2, v2, ...]` bulk-keyed node entry.
-    fn field<'a>(entry: &'a [Response], key: &str) -> &'a Response {
+    fn opt_field<'a>(entry: &'a [Response], key: &str) -> Option<&'a Response> {
         entry
             .chunks_exact(2)
             .find(|pair| as_bulk(&pair[0]) == key)
             .map(|pair| &pair[1])
-            .unwrap_or_else(|| panic!("field {key} not found"))
+    }
+
+    fn field<'a>(entry: &'a [Response], key: &str) -> &'a Response {
+        opt_field(entry, key).unwrap_or_else(|| panic!("field {key} not found"))
     }
 
     /// Primary 1 owns slots 0-9 with replica 3; primary 2 owns zero slots.
@@ -806,11 +823,12 @@ mod tests {
     }
 
     #[test]
-    fn test_map_shards_response_overlays_offset_for_local_node_only() {
+    fn test_map_shards_response_reports_offset_for_local_node_only() {
         let snap = fixture();
-        // Local node is the primary (id 1); its offset must be overlaid, every
-        // other node reports 0. Zero-slot primary 2 is still present (SHARDS keeps
-        // it, unlike SLOTS).
+        // Local node is the primary (id 1); its offset is reported. Peers get no
+        // `replication-offset` field at all: this node does not know theirs, and
+        // a rendered 0 would read as "infinitely behind". Zero-slot primary 2 is
+        // still present (SHARDS keeps it, unlike SLOTS).
         let resp = map_shards_response(&wire::shard_views(&snap), Some(1), 42);
         let shards = as_arr(&resp);
         assert_eq!(shards.len(), 2);
@@ -827,13 +845,21 @@ mod tests {
 
         let replica = as_arr(&nodes0[1]);
         assert_eq!(as_bulk(field(replica, "role")), "slave");
-        assert_eq!(as_int(field(replica, "replication-offset")), 0);
+        assert!(
+            opt_field(replica, "replication-offset").is_none(),
+            "a peer's replication offset is unknown here, so the field is omitted"
+        );
+        assert_eq!(
+            as_bulk(field(replica, "health")),
+            "online",
+            "omitting one field must not disturb the pairs after it"
+        );
 
-        // Shard 1 = zero-slot primary 2: present, empty slots, offset 0.
+        // Shard 1 = zero-slot primary 2: present, empty slots, no offset.
         let shard1 = as_arr(&shards[1]);
         assert!(as_arr(field(shard1, "slots")).is_empty());
         let p2 = as_arr(&as_arr(field(shard1, "nodes"))[0]);
-        assert_eq!(as_int(field(p2, "replication-offset")), 0);
+        assert!(opt_field(p2, "replication-offset").is_none());
     }
 
     // ------------------------------------------------------------------

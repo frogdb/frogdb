@@ -20,11 +20,21 @@
 //!
 //! `RoleManager` *reflects* role onto the local data path; it does not own
 //! cluster-topology consensus. In cluster mode the flow is one-directional:
-//! Raft decides the topology change and emits a demotion/promotion event, and
-//! the event consumer calls [`RoleManagerHandle::request_demote`] to make the
-//! local data path match the committed decision. `RoleManager` never writes
-//! `NodeRole` and never initiates a topology change. In standalone replication
-//! mode `REPLICAOF` is the sole driver and `RoleManager` is the role authority.
+//! Raft decides the topology change and emits a
+//! [`frogdb_core::RoleChangeEvent`], and the single consumer of that channel
+//! (`server::cluster_init::RoleChangeConsumer`) calls
+//! [`RoleManagerHandle::request_demote`] or
+//! [`RoleManagerHandle::request_promote`] to make the local data path match the
+//! committed decision. Both directions go through one ordered channel, so a
+//! failover flap is replayed in Raft apply order rather than raced.
+//! `RoleManager` never writes `NodeRole` and never initiates a topology change.
+//! In standalone replication mode `REPLICAOF` is the sole driver and
+//! `RoleManager` is the role authority.
+//!
+//! There is exactly one replication plane. A cluster node's data replication is
+//! the same per-node PSYNC link a standalone replica uses (ADR-0001: Raft is a
+//! metadata plane and no `ClusterCommand` carries a key or value), so the role
+//! transitions here are the *only* ones either mode needs.
 
 use std::net::SocketAddr;
 use std::sync::Arc;

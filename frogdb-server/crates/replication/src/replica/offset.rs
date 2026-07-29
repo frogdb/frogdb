@@ -45,6 +45,9 @@ struct ApplyGate {
 pub struct AppliedOffset {
     applied: Arc<AtomicU64>,
     gate: Arc<Mutex<ApplyGate>>,
+    /// Woken every time the counter moves, so [`Self::wait_until_applied`] does
+    /// not have to poll it.
+    progress: Arc<tokio::sync::Notify>,
 }
 
 impl AppliedOffset {
@@ -57,6 +60,7 @@ impl AppliedOffset {
                 frozen: false,
                 stint: 0,
             })),
+            progress: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -76,7 +80,37 @@ impl AppliedOffset {
     /// writes must keep advancing it, or the persisted offset would freeze at
     /// the promotion point and a restart would resume below its own data.
     pub fn advance_by(&self, n: u64) -> u64 {
-        self.applied.fetch_add(n, Ordering::Release) + n
+        let advanced = self.applied.fetch_add(n, Ordering::Release) + n;
+        self.progress.notify_waiters();
+        advanced
+    }
+
+    /// Wait until the applied head reaches `target`, giving up after `timeout`.
+    /// Returns the applied offset either way.
+    ///
+    /// Used by the ACK path: the replica ACKs what it has *applied*, and the
+    /// bytes a solicited ACK is asked about are already decoded, so they only
+    /// have to drain the frame channel. Bounded because the applier can also
+    /// stop for good — a promotion freezes the gate, a newer stream retires it
+    /// — and an ACK that never went out would be worse than a truthful low one.
+    pub async fn wait_until_applied(&self, target: u64, timeout: std::time::Duration) -> u64 {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            // Register before re-reading: an advance between the read and the
+            // registration would otherwise be missed, and this wait would sit
+            // out the full timeout with its target already met.
+            let notified = self.progress.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
+            let applied = self.current();
+            if applied >= target {
+                return applied;
+            }
+            if tokio::time::timeout_at(deadline, notified).await.is_err() {
+                return self.current();
+            }
+        }
     }
 
     /// Advance by one applied frame's payload unit.
@@ -142,6 +176,7 @@ impl AppliedOffset {
         }
         live.store(offset, Ordering::Release);
         self.applied.store(offset, Ordering::Release);
+        self.progress.notify_waiters();
         true
     }
 
@@ -183,6 +218,7 @@ impl ReplicaApplyStint {
             return false;
         }
         self.offset.applied.fetch_add(bytes, Ordering::Release);
+        self.offset.progress.notify_waiters();
         true
     }
 
@@ -195,14 +231,13 @@ impl ReplicaApplyStint {
 /// The Replica-side live **received** offset — the mirror of the Primary's
 /// [`OffsetCoordinator`]'s `live` atomic: the single home of "how far this
 /// Replica has read the stream", advanced per ingested frame, and the single
-/// vendor of the shared handle the cluster bus (HealthProbe) / INFO read. It is
-/// what the Replica ACKs, so it stays directly comparable to the Primary's live
-/// head for WAIT and lag.
+/// vendor of the shared handle the cluster bus (HealthProbe) / INFO read.
 ///
 /// Pairs with [`AppliedOffset`], the offset of the data actually applied; the
 /// received head may run ahead of it by the depth of the frame channel. Reads
 /// that describe *held* data go through [`Self::applied`], never
-/// [`Self::current`].
+/// [`Self::current`] — including the ACK, which is what WAIT counts and must
+/// therefore describe data this node would still hold if it were promoted.
 ///
 /// The owner does **not** mint a second atomic: it takes over maintenance of the
 /// `shared_offset` atomic the scattered call sites updated before, so the
@@ -253,9 +288,14 @@ impl ReplicaOffset {
     }
 
     /// The live *received* position. Replaces `state.offset_at_save` reads on the
-    /// Replica ingest / ACK / reconnect-PSYNC path.
+    /// Replica ingest / reconnect-PSYNC path.
     pub fn current(&self) -> u64 {
         self.live.load(Ordering::Acquire)
+    }
+
+    /// The applied head this stream feeds — what the replica ACKs.
+    pub fn applied(&self) -> &AppliedOffset {
+        &self.applied
     }
 
     /// Adopt a fresh stream position on FULLRESYNC / staged-checkpoint install.
@@ -299,6 +339,7 @@ impl ReplicaOffset {
 mod tests {
     use super::*;
     use bytes::Bytes;
+    use std::time::Duration;
 
     fn state_with_save(offset_at_save: u64) -> Arc<RwLock<ReplicationState>> {
         let mut s = ReplicationState::new();
@@ -348,7 +389,8 @@ mod tests {
     #[tokio::test]
     async fn received_head_runs_ahead_of_applied_until_the_frame_is_applied() {
         // The whole reason the two counters exist: decoding a frame moves the
-        // received head (what the replica ACKs) but claims nothing about data.
+        // received head but claims nothing about data; the replica ACKs the
+        // applied counter, which advances only when the frame is applied.
         let (offsets, applied) = offsets_at(state_with_save(0), 0);
         let frame = frame_of(b"hello");
         assert_eq!(offsets.frame_advance(&frame), 5);
@@ -407,6 +449,58 @@ mod tests {
         st.write().offset_at_save = 5000;
         let snapshot = offsets.reconcile_for_persist().await;
         assert_eq!(snapshot.offset_at_save, 5000);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wait_until_applied_returns_as_soon_as_the_applier_catches_up() {
+        // The solicited-ACK path: the bytes are decoded, the applier just has
+        // not drained them yet. The wait must end on the advance, not on the
+        // timeout, or a solicited ACK would cost the whole ack interval.
+        let applied = AppliedOffset::detached(0);
+        let stint = applied.begin_replica_stint();
+        let applier = {
+            let stint = stint.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                assert!(stint.claim(100));
+            })
+        };
+
+        let started = tokio::time::Instant::now();
+        let reached = applied
+            .wait_until_applied(100, Duration::from_secs(30))
+            .await;
+        applier.await.unwrap();
+
+        assert_eq!(reached, 100);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the wait must end on the advance, not the timeout"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wait_until_applied_gives_up_and_reports_what_was_applied() {
+        // A promotion froze the gate (or the applier is wedged): the ACK still
+        // has to go out, carrying the truthful, lower offset.
+        let applied = AppliedOffset::detached(0);
+        let stint = applied.begin_replica_stint();
+        assert!(stint.claim(40));
+        applied.freeze();
+
+        let reached = applied
+            .wait_until_applied(100, Duration::from_millis(50))
+            .await;
+        assert_eq!(reached, 40);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wait_until_applied_returns_immediately_when_already_caught_up() {
+        let applied = AppliedOffset::detached(500);
+        let reached = applied
+            .wait_until_applied(500, Duration::from_secs(30))
+            .await;
+        assert_eq!(reached, 500);
     }
 
     #[test]

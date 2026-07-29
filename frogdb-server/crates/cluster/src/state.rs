@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use crate::storage::{ClusterSnapshotStore, StoredClusterSnapshot};
 use crate::types::{
     CLUSTER_SLOTS, ClusterCommand, ClusterError, ClusterEvent, ClusterResponse, ClusterSnapshot,
-    ConfigEpoch, NodeId, NodeInfo, SlotMigration, SlotRange, TypeConfig,
+    ConfigEpoch, NodeId, NodeInfo, NodeRole, SlotMigration, SlotRange, TypeConfig,
 };
 
 /// The cluster state, protected by a read-write lock for concurrent access.
@@ -321,6 +321,31 @@ pub struct DemotionEvent {
     pub epoch: u64,
 }
 
+/// Event emitted when this node is promoted from replica to primary.
+#[derive(Debug, Clone)]
+pub struct PromotionEvent {
+    /// The node ID that was promoted.
+    pub promoted_node_id: NodeId,
+    /// The configuration epoch at the time of promotion.
+    pub epoch: u64,
+}
+
+/// A change to *this* node's cluster-state role, in Raft apply order.
+///
+/// Demotions and promotions share one channel on purpose. A failover round can
+/// flip a node primary → replica → primary within a few log entries, and the
+/// data-path transition each event drives is not commutative: applying them out
+/// of order leaves the node fenced as a replica while cluster state calls it a
+/// primary (or the reverse). One channel and one consumer make the data-path
+/// role a faithful replay of the metadata plane's ordering.
+#[derive(Debug, Clone)]
+pub enum RoleChangeEvent {
+    /// This node lost its primary role.
+    Demoted(DemotionEvent),
+    /// This node gained the primary role.
+    Promoted(PromotionEvent),
+}
+
 /// Event emitted when a slot migration completes (fires on ALL nodes).
 #[derive(Debug, Clone)]
 pub struct SlotMigrationCompleteEvent {
@@ -332,10 +357,10 @@ pub struct SlotMigrationCompleteEvent {
 /// Raft state machine for cluster coordination.
 pub struct ClusterStateMachine {
     state: ClusterState,
-    /// This node's ID, used to detect self-demotion events.
+    /// This node's ID, used to detect role changes that concern this node.
     self_node_id: Option<NodeId>,
-    /// Channel to notify when this node is demoted from primary to replica.
-    demotion_tx: Option<mpsc::UnboundedSender<DemotionEvent>>,
+    /// Channel carrying this node's own role changes in Raft apply order.
+    role_change_tx: Option<mpsc::UnboundedSender<RoleChangeEvent>>,
     /// Channel to notify when a slot migration completes.
     migration_complete_tx: Option<mpsc::UnboundedSender<SlotMigrationCompleteEvent>>,
     /// Durable home for snapshots. When absent the state machine is purely
@@ -349,7 +374,7 @@ impl ClusterStateMachine {
         Self {
             state: ClusterState::new(),
             self_node_id: None,
-            demotion_tx: None,
+            role_change_tx: None,
             migration_complete_tx: None,
             snapshot_store: None,
         }
@@ -360,7 +385,7 @@ impl ClusterStateMachine {
         Self {
             state,
             self_node_id: None,
-            demotion_tx: None,
+            role_change_tx: None,
             migration_complete_tx: None,
             snapshot_store: None,
         }
@@ -420,17 +445,21 @@ impl ClusterStateMachine {
         })
     }
 
-    /// Configure self-demotion detection.
+    /// Configure detection of *this* node's own cluster-state role changes.
     ///
-    /// When a `SetRole { role: Replica }` command is applied for `self_node_id`,
-    /// a `DemotionEvent` is sent through the returned receiver.
-    pub fn enable_demotion_detection(
+    /// Every applied command that demotes or promotes `self_node_id` sends the
+    /// matching [`RoleChangeEvent`] through the returned receiver, in apply
+    /// order. This is the metadata plane's only outbound edge to the data path:
+    /// Raft owns the cluster-state role, and the consumer of this receiver is
+    /// what turns that into an actual promotion or demotion of the node's
+    /// replication role.
+    pub fn enable_role_change_detection(
         &mut self,
         self_node_id: NodeId,
-    ) -> mpsc::UnboundedReceiver<DemotionEvent> {
+    ) -> mpsc::UnboundedReceiver<RoleChangeEvent> {
         let (tx, rx) = mpsc::unbounded_channel();
         self.self_node_id = Some(self_node_id);
-        self.demotion_tx = Some(tx);
+        self.role_change_tx = Some(tx);
         rx
     }
 
@@ -449,6 +478,155 @@ impl ClusterStateMachine {
     /// Get a reference to the cluster state.
     pub fn state(&self) -> &ClusterState {
         &self.state
+    }
+
+    /// This node's cluster-state role, or `None` when role-change detection is
+    /// off or this node is not (yet) in the cluster.
+    fn self_role(&self) -> Option<NodeRole> {
+        let self_id = self.self_node_id?;
+        self.state.get_node(self_id).map(|n| n.role)
+    }
+
+    /// Reconcile the data path with this node's *restored* cluster-state role.
+    ///
+    /// Boot has two independent sources for this node's role: the cluster state
+    /// restored by [`Self::attach_snapshot_store`], and the data path's live
+    /// replica flag, which starts from local config. Log-tail replay emits a
+    /// role change for every entry it applies, but a role folded into the
+    /// snapshot produces no entry to replay — so a node that was a replica when
+    /// the snapshot was taken would come back up reading `role:master` on the
+    /// data path while the cluster still lists it as a replica.
+    ///
+    /// Call this once at boot, after role-change detection is enabled, and then
+    /// periodically at runtime (see [`SelfRoleReconciler`]). It emits the one
+    /// event that closes the gap and returns the role it reconciled to, or
+    /// `None` when the two views already agree (the common case, where emitting
+    /// would churn the replication identity for nothing).
+    pub fn reconcile_self_role(&self, data_path_is_replica: bool) -> Option<NodeRole> {
+        match self.self_role_reconciler()?.reconcile(data_path_is_replica) {
+            RoleReconcile::ReDriven(role) => Some(role),
+            RoleReconcile::Agreed | RoleReconcile::Detached => None,
+        }
+    }
+
+    /// A standalone handle onto the same reconciliation, for callers that
+    /// cannot hold the state machine itself.
+    ///
+    /// `None` until role-change detection is enabled — without the channel and
+    /// this node's id there is nothing to reconcile against.
+    pub fn self_role_reconciler(&self) -> Option<SelfRoleReconciler> {
+        Some(SelfRoleReconciler {
+            state: self.state.clone(),
+            self_node_id: self.self_node_id?,
+            // Weak on purpose — see [`SelfRoleReconciler`]: a long-lived
+            // reconciler must not be what keeps the role-change channel (and
+            // therefore its consumer, and everything the consumer holds) alive
+            // past shutdown.
+            role_change_tx: self.role_change_tx.as_ref()?.downgrade(),
+        })
+    }
+
+    /// Send the [`RoleChangeEvent`] matching a freshly-observed role for this
+    /// node. Used by paths that change the role without producing a
+    /// [`ClusterEvent`], i.e. snapshot installs.
+    fn emit_self_role_change(&self, role: Option<NodeRole>) {
+        let (Some(role), Some(reconciler)) = (role, self.self_role_reconciler()) else {
+            return;
+        };
+        reconciler.emit(role);
+    }
+}
+
+/// The metadata plane's outbound "what role is *this* node" edge, as a
+/// cloneable handle.
+///
+/// [`ClusterStateMachine`] is moved into `openraft::Raft::new` at startup, so
+/// anything that needs to re-check this node's role at runtime cannot hold the
+/// state machine. This carries exactly what the check needs — the live cluster
+/// state, this node's id, and the role-change channel — and every one of them
+/// is shared, so a clone observes the same state the state machine applies
+/// into and emits onto the same channel the consumer drains.
+///
+/// Runtime reconciliation is what makes role convergence *eventual* rather than
+/// best-effort: a data-path promotion or demotion can fail (a promotion has to
+/// persist a replication identity first, a demotion needs the new primary's
+/// address to be known), and a failure that nothing re-drives leaves the node
+/// serving one role while the cluster believes the other until it restarts.
+///
+/// The channel end is **weak**. The role-change consumer owns the data path's
+/// role controller — and through it the storage engine — and it stops when the
+/// channel closes, which is how a shutting-down node lets go of both. A
+/// reconciler holding a strong sender would keep that channel open for the
+/// life of its task, so the consumer would never see the close, the store
+/// would stay open, and restarting the node in the same process would fail on
+/// the RocksDB lock. Losing the upgrade is therefore not an error: it means
+/// the data path this reconciler exists to correct is gone
+/// ([`RoleReconcile::Detached`]).
+#[derive(Clone)]
+pub struct SelfRoleReconciler {
+    state: ClusterState,
+    self_node_id: NodeId,
+    role_change_tx: mpsc::WeakUnboundedSender<RoleChangeEvent>,
+}
+
+/// The outcome of one [`SelfRoleReconciler::reconcile`] pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoleReconcile {
+    /// The two role views agree (or this node is not a cluster member yet).
+    /// The steady state: nothing was emitted.
+    Agreed,
+    /// The views disagreed; a role change was emitted to re-drive the data
+    /// path to this cluster-state role.
+    ReDriven(NodeRole),
+    /// The role-change consumer is gone — the node is shutting down. A caller
+    /// looping on this must stop.
+    Detached,
+}
+
+impl SelfRoleReconciler {
+    /// This node's cluster-state role, or `None` when it is not (yet) a member.
+    pub fn self_role(&self) -> Option<NodeRole> {
+        self.state.get_node(self.self_node_id).map(|n| n.role)
+    }
+
+    /// Emit a role change when the data path disagrees with cluster state.
+    pub fn reconcile(&self, data_path_is_replica: bool) -> RoleReconcile {
+        let Some(role) = self.self_role() else {
+            return RoleReconcile::Agreed;
+        };
+        if (role == NodeRole::Replica) == data_path_is_replica {
+            return RoleReconcile::Agreed;
+        }
+        if self.emit(role) {
+            RoleReconcile::ReDriven(role)
+        } else {
+            RoleReconcile::Detached
+        }
+    }
+
+    /// Send the [`RoleChangeEvent`] matching `role` for this node. Returns
+    /// false once the consumer is gone.
+    fn emit(&self, role: NodeRole) -> bool {
+        let Some(tx) = self.role_change_tx.upgrade() else {
+            return false;
+        };
+        let self_id = self.self_node_id;
+        let epoch = self.state.config_epoch();
+        tx.send(match role {
+            NodeRole::Primary => RoleChangeEvent::Promoted(PromotionEvent {
+                promoted_node_id: self_id,
+                epoch,
+            }),
+            NodeRole::Replica => RoleChangeEvent::Demoted(DemotionEvent {
+                demoted_node_id: self_id,
+                // A snapshot carries the topology but not the causal story of
+                // how it changed; the consumer resolves the primary from live
+                // cluster state rather than trusting a reconstructed id.
+                new_primary_id: self.state.get_node(self_id).and_then(|n| n.primary_id),
+                epoch,
+            }),
+        })
+        .is_ok()
     }
 }
 
@@ -504,18 +682,31 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
 
                     for event in events {
                         match event {
-                            // Demotion is only relevant when *this* node is demoted.
+                            // Role changes are only relevant when they name
+                            // *this* node, and both kinds share one channel so
+                            // the data path replays them in apply order.
                             ClusterEvent::NodeDemoted {
                                 demoted_node_id,
                                 new_primary_id,
                                 epoch,
                             } if Some(demoted_node_id) == self.self_node_id => {
-                                if let Some(ref tx) = self.demotion_tx {
-                                    let _ = tx.send(DemotionEvent {
+                                if let Some(ref tx) = self.role_change_tx {
+                                    let _ = tx.send(RoleChangeEvent::Demoted(DemotionEvent {
                                         demoted_node_id,
                                         new_primary_id,
                                         epoch,
-                                    });
+                                    }));
+                                }
+                            }
+                            ClusterEvent::NodePromoted {
+                                promoted_node_id,
+                                epoch,
+                            } if Some(promoted_node_id) == self.self_node_id => {
+                                if let Some(ref tx) = self.role_change_tx {
+                                    let _ = tx.send(RoleChangeEvent::Promoted(PromotionEvent {
+                                        promoted_node_id,
+                                        epoch,
+                                    }));
                                 }
                             }
                             // Migration-complete fires on ALL nodes (no self-filter).
@@ -532,8 +723,9 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
                                     });
                                 }
                             }
-                            // A demotion of another node: nothing to route here.
-                            ClusterEvent::NodeDemoted { .. } => {}
+                            // A role change of another node: nothing to route here.
+                            ClusterEvent::NodeDemoted { .. }
+                            | ClusterEvent::NodePromoted { .. } => {}
                         }
                     }
 
@@ -557,7 +749,7 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
         ClusterStateMachine {
             state: self.state.clone(),
             self_node_id: None,
-            demotion_tx: None,
+            role_change_tx: None,
             migration_complete_tx: None,
             // The builder must keep the store: it is the component that actually
             // produces snapshots, and an unpersisted snapshot is exactly what
@@ -586,13 +778,28 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
             )
         })?;
 
+        // A snapshot install replaces the whole state without replaying the
+        // entries that produced it, so the role changes folded into it emit no
+        // events. Diff this node's own role across the install and synthesize
+        // the one event that reconciles the data path — otherwise a node that
+        // fell far enough behind to need a snapshot silently keeps the role it
+        // had before it fell behind.
+        let role_before = self.self_role();
+
         // Persist before applying: a snapshot visible in memory but absent from
         // disk is the durability gap this store exists to close.
         self.persist_snapshot(meta, &data)?;
         self.state.restore_from_snapshot(snapshot_state, meta);
 
+        let role_after = self.self_role();
+        if role_before != role_after {
+            self.emit_self_role_change(role_after);
+        }
+
         tracing::info!(
             last_log_id = ?meta.last_log_id,
+            ?role_before,
+            ?role_after,
             "Installed cluster state snapshot"
         );
         Ok(())
@@ -668,6 +875,22 @@ mod tests {
         format!("127.0.0.1:{}", port).parse().unwrap()
     }
 
+    /// Take the next role change, requiring it to be a demotion.
+    fn expect_demotion(rx: &mut mpsc::UnboundedReceiver<RoleChangeEvent>) -> DemotionEvent {
+        match rx.try_recv().expect("expected a role-change event") {
+            RoleChangeEvent::Demoted(e) => e,
+            other => panic!("expected a demotion, got {other:?}"),
+        }
+    }
+
+    /// Take the next role change, requiring it to be a promotion.
+    fn expect_promotion(rx: &mut mpsc::UnboundedReceiver<RoleChangeEvent>) -> PromotionEvent {
+        match rx.try_recv().expect("expected a role-change event") {
+            RoleChangeEvent::Promoted(e) => e,
+            other => panic!("expected a promotion, got {other:?}"),
+        }
+    }
+
     #[test]
     fn test_add_node() {
         let state = ClusterState::new();
@@ -740,6 +963,46 @@ mod tests {
         let info = state.get_node(1).unwrap();
         assert_eq!(info.addr, test_addr(6380));
         assert_eq!(info.cluster_addr, test_addr(16380));
+    }
+
+    #[test]
+    fn test_add_node_reregistration_keeps_recorded_role() {
+        // A node re-registers itself on every boot with the only role it can
+        // know unaided — primary. If `AddNode` took that at face value, a
+        // restarted replica would demote-by-restart into a slotless primary and
+        // its primary would lose a replica. Re-registration refreshes the
+        // address; `SetRole`/`Failover` own the role.
+        let state = ClusterState::new();
+        state
+            .apply_command(ClusterCommand::AddNode {
+                node: NodeInfo::new_primary(1, test_addr(6379), test_addr(16379)),
+            })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode {
+                node: NodeInfo::new_primary(2, test_addr(6380), test_addr(16380)),
+            })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::SetRole {
+                node_id: 2,
+                role: NodeRole::Replica,
+                primary_id: Some(1),
+            })
+            .unwrap();
+
+        // Node 2 restarts and re-registers, claiming primary on a new address.
+        state
+            .apply_command(ClusterCommand::AddNode {
+                node: NodeInfo::new_primary(2, test_addr(6390), test_addr(16390)),
+            })
+            .unwrap();
+
+        let info = state.get_node(2).unwrap();
+        assert_eq!(info.role, NodeRole::Replica, "recorded role must survive");
+        assert_eq!(info.primary_id, Some(1), "its primary must survive too");
+        assert_eq!(info.addr, test_addr(6390), "the address still refreshes");
+        assert_eq!(info.cluster_addr, test_addr(16390));
     }
 
     #[test]
@@ -868,7 +1131,7 @@ mod tests {
     async fn test_demotion_detection_fires_for_self() {
         let cluster = ClusterState::new();
         let mut sm = ClusterStateMachine::with_state(cluster);
-        let mut rx = sm.enable_demotion_detection(2);
+        let mut rx = sm.enable_role_change_detection(2);
 
         // Add two nodes
         let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
@@ -895,7 +1158,7 @@ mod tests {
 
         sm.apply(vec![entry]).await.unwrap();
 
-        let event = rx.try_recv().unwrap();
+        let event = expect_demotion(&mut rx);
         assert_eq!(event.demoted_node_id, 2);
         assert_eq!(event.new_primary_id, Some(1));
     }
@@ -904,7 +1167,7 @@ mod tests {
     async fn test_demotion_detection_ignores_other_nodes() {
         let cluster = ClusterState::new();
         let mut sm = ClusterStateMachine::with_state(cluster);
-        let mut rx = sm.enable_demotion_detection(1); // Watching node 1
+        let mut rx = sm.enable_role_change_detection(1); // Watching node 1
 
         let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
         let node2 = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
@@ -938,7 +1201,7 @@ mod tests {
     async fn test_demotion_detection_not_fired_for_rejected_set_role() {
         let cluster = ClusterState::new();
         let mut sm = ClusterStateMachine::with_state(cluster);
-        let mut rx = sm.enable_demotion_detection(2); // self = node 2
+        let mut rx = sm.enable_role_change_detection(2); // self = node 2
 
         // Only node 1 exists; node 2 (self) was never added to the topology.
         let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
@@ -2337,7 +2600,7 @@ mod tests {
     async fn test_demotion_detection_fires_for_graceful_failover_of_self() {
         let cluster = failover_fixture();
         let mut sm = ClusterStateMachine::with_state(cluster);
-        let mut rx = sm.enable_demotion_detection(1); // self = old primary
+        let mut rx = sm.enable_role_change_detection(1); // self = old primary
 
         let entry = openraft::Entry::<TypeConfig> {
             log_id: openraft::LogId {
@@ -2352,16 +2615,371 @@ mod tests {
         };
         sm.apply(vec![entry]).await.unwrap();
 
-        let event = rx.try_recv().unwrap();
+        let event = expect_demotion(&mut rx);
         assert_eq!(event.demoted_node_id, 1);
         assert_eq!(event.new_primary_id, Some(2));
+    }
+
+    #[tokio::test]
+    async fn test_promotion_detection_fires_for_failover_successor() {
+        let cluster = failover_fixture();
+        let mut sm = ClusterStateMachine::with_state(cluster);
+        let mut rx = sm.enable_role_change_detection(2); // self = the successor
+
+        let entry = openraft::Entry::<TypeConfig> {
+            log_id: openraft::LogId {
+                leader_id: openraft::CommittedLeaderId::new(1, 1),
+                index: 1,
+            },
+            payload: EntryPayload::Normal(ClusterCommand::Failover {
+                old_primary_id: 1,
+                new_primary_id: 2,
+                force: false,
+            }),
+        };
+        sm.apply(vec![entry]).await.unwrap();
+
+        let event = expect_promotion(&mut rx);
+        assert_eq!(event.promoted_node_id, 2);
+        // The failover bumps the epoch and the successor claims it, so the
+        // promotion carries the epoch the node now owns, not the previous one.
+        assert_eq!(event.epoch, sm.state().get_node(2).unwrap().config_epoch);
+    }
+
+    #[tokio::test]
+    async fn test_force_failover_still_promotes_the_successor() {
+        // Force failover emits no demotion (the old primary is removed, not
+        // demoted) but the successor's promotion is a real transition.
+        let cluster = failover_fixture();
+        let mut sm = ClusterStateMachine::with_state(cluster);
+        let mut rx = sm.enable_role_change_detection(2);
+
+        let entry = openraft::Entry::<TypeConfig> {
+            log_id: openraft::LogId {
+                leader_id: openraft::CommittedLeaderId::new(1, 1),
+                index: 1,
+            },
+            payload: EntryPayload::Normal(ClusterCommand::Failover {
+                old_primary_id: 1,
+                new_primary_id: 2,
+                force: true,
+            }),
+        };
+        sm.apply(vec![entry]).await.unwrap();
+
+        assert_eq!(expect_promotion(&mut rx).promoted_node_id, 2);
+    }
+
+    #[tokio::test]
+    async fn test_promotion_detection_fires_for_self_set_role() {
+        let cluster = failover_fixture();
+        let mut sm = ClusterStateMachine::with_state(cluster);
+        let mut rx = sm.enable_role_change_detection(2); // self = a replica
+
+        let entry = openraft::Entry::<TypeConfig> {
+            log_id: openraft::LogId {
+                leader_id: openraft::CommittedLeaderId::new(1, 1),
+                index: 1,
+            },
+            payload: EntryPayload::Normal(ClusterCommand::SetRole {
+                node_id: 2,
+                role: NodeRole::Primary,
+                primary_id: None,
+            }),
+        };
+        sm.apply(vec![entry]).await.unwrap();
+
+        assert_eq!(expect_promotion(&mut rx).promoted_node_id, 2);
+    }
+
+    /// Re-applying `SetRole { Primary }` on a node that is already a primary
+    /// must stay silent. A data-path promotion mints a new replication ID and
+    /// forces every attached replica into a full resync, so a replayed or
+    /// duplicated log entry has to be inert.
+    #[tokio::test]
+    async fn test_promotion_detection_silent_when_already_primary() {
+        let cluster = failover_fixture();
+        let mut sm = ClusterStateMachine::with_state(cluster);
+        let mut rx = sm.enable_role_change_detection(1); // self = the primary
+
+        let entry = openraft::Entry::<TypeConfig> {
+            log_id: openraft::LogId {
+                leader_id: openraft::CommittedLeaderId::new(1, 1),
+                index: 1,
+            },
+            payload: EntryPayload::Normal(ClusterCommand::SetRole {
+                node_id: 1,
+                role: NodeRole::Primary,
+                primary_id: None,
+            }),
+        };
+        sm.apply(vec![entry]).await.unwrap();
+
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// Demotions and promotions travel one channel, so a flap arrives in apply
+    /// order. Two channels would let the consumer settle on the wrong terminal
+    /// role.
+    #[tokio::test]
+    async fn test_role_changes_preserve_apply_order() {
+        let cluster = failover_fixture();
+        let mut sm = ClusterStateMachine::with_state(cluster);
+        let mut rx = sm.enable_role_change_detection(1); // self = the primary
+
+        let entries: Vec<_> = [
+            ClusterCommand::SetRole {
+                node_id: 1,
+                role: NodeRole::Replica,
+                primary_id: Some(2),
+            },
+            ClusterCommand::SetRole {
+                node_id: 1,
+                role: NodeRole::Primary,
+                primary_id: None,
+            },
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, cmd)| openraft::Entry::<TypeConfig> {
+            log_id: openraft::LogId {
+                leader_id: openraft::CommittedLeaderId::new(1, 1),
+                index: i as u64 + 1,
+            },
+            payload: EntryPayload::Normal(cmd),
+        })
+        .collect();
+        sm.apply(entries).await.unwrap();
+
+        assert_eq!(expect_demotion(&mut rx).demoted_node_id, 1);
+        assert_eq!(expect_promotion(&mut rx).promoted_node_id, 1);
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// Serialize `state` as a snapshot body plus matching metadata.
+    fn snapshot_payload(
+        state: &ClusterState,
+    ) -> (SnapshotMeta<NodeId, openraft::BasicNode>, Vec<u8>) {
+        let data = serde_json::to_vec(&*state.inner.read()).unwrap();
+        let meta = SnapshotMeta {
+            last_log_id: Some(openraft::LogId {
+                leader_id: openraft::CommittedLeaderId::new(1, 1),
+                index: 7,
+            }),
+            last_membership: Default::default(),
+            snapshot_id: "test-snapshot".to_string(),
+        };
+        (meta, data)
+    }
+
+    /// A snapshot install skips the entries that produced it, so the role
+    /// changes folded into it emit no `ClusterEvent`. The install has to
+    /// reconcile this node's role itself, or a node that fell far enough behind
+    /// to need a snapshot keeps serving in the role it had before it fell
+    /// behind.
+    #[tokio::test]
+    async fn test_install_snapshot_emits_promotion_when_self_role_flipped() {
+        let mut sm = ClusterStateMachine::with_state(failover_fixture());
+        let mut rx = sm.enable_role_change_detection(2); // self = a replica
+
+        // Build the post-failover topology in a separate state, then ship it.
+        let promoted = failover_fixture();
+        promoted
+            .apply_command(ClusterCommand::Failover {
+                old_primary_id: 1,
+                new_primary_id: 2,
+                force: false,
+            })
+            .unwrap();
+        let (meta, data) = snapshot_payload(&promoted);
+
+        sm.install_snapshot(&meta, Box::new(Cursor::new(data)))
+            .await
+            .unwrap();
+
+        assert_eq!(expect_promotion(&mut rx).promoted_node_id, 2);
+    }
+
+    #[tokio::test]
+    async fn test_install_snapshot_emits_demotion_when_self_role_flipped() {
+        let mut sm = ClusterStateMachine::with_state(failover_fixture());
+        let mut rx = sm.enable_role_change_detection(1); // self = the primary
+
+        let demoted = failover_fixture();
+        demoted
+            .apply_command(ClusterCommand::Failover {
+                old_primary_id: 1,
+                new_primary_id: 2,
+                force: false,
+            })
+            .unwrap();
+        let (meta, data) = snapshot_payload(&demoted);
+
+        sm.install_snapshot(&meta, Box::new(Cursor::new(data)))
+            .await
+            .unwrap();
+
+        let event = expect_demotion(&mut rx);
+        assert_eq!(event.demoted_node_id, 1);
+        assert_eq!(event.new_primary_id, Some(2));
+    }
+
+    /// An install that does not change this node's role must stay silent, so
+    /// routine snapshot catch-up never churns the data path.
+    #[tokio::test]
+    async fn test_install_snapshot_silent_when_self_role_unchanged() {
+        let mut sm = ClusterStateMachine::with_state(failover_fixture());
+        let mut rx = sm.enable_role_change_detection(3); // self = an untouched replica
+
+        let after = failover_fixture();
+        after
+            .apply_command(ClusterCommand::Failover {
+                old_primary_id: 1,
+                new_primary_id: 2,
+                force: false,
+            })
+            .unwrap();
+        let (meta, data) = snapshot_payload(&after);
+
+        sm.install_snapshot(&meta, Box::new(Cursor::new(data)))
+            .await
+            .unwrap();
+
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// Boot restore is the third way a role reaches this node without an entry
+    /// to replay: the state came off disk, not out of the log. A node that was
+    /// a replica when the snapshot was cut boots with a data path that still
+    /// believes it is a primary, so the reconciliation has to demote it.
+    #[test]
+    fn test_reconcile_self_role_demotes_a_restored_replica() {
+        let mut sm = ClusterStateMachine::with_state(failover_fixture());
+        let mut rx = sm.enable_role_change_detection(2); // self = a replica of 1
+
+        // The data path booted as a primary (no `replicaof` in config).
+        assert_eq!(sm.reconcile_self_role(false), Some(NodeRole::Replica));
+
+        let event = expect_demotion(&mut rx);
+        assert_eq!(event.demoted_node_id, 2);
+        assert_eq!(event.new_primary_id, Some(1));
+    }
+
+    #[test]
+    fn test_reconcile_self_role_promotes_a_restored_primary() {
+        let mut sm = ClusterStateMachine::with_state(failover_fixture());
+        let mut rx = sm.enable_role_change_detection(1); // self = the primary
+
+        // The data path booted as a replica (a stale `replicaof` in config).
+        assert_eq!(sm.reconcile_self_role(true), Some(NodeRole::Primary));
+
+        assert_eq!(expect_promotion(&mut rx).promoted_node_id, 1);
+    }
+
+    /// The common boot: both views already agree. Emitting anyway would mint a
+    /// fresh replication identity on every restart of a healthy primary and
+    /// force its replicas into a full resync.
+    #[test]
+    fn test_reconcile_self_role_silent_when_views_agree() {
+        let mut sm = ClusterStateMachine::with_state(failover_fixture());
+        let mut rx = sm.enable_role_change_detection(1);
+        assert_eq!(sm.reconcile_self_role(false), None);
+        assert!(rx.try_recv().is_err());
+
+        let mut sm = ClusterStateMachine::with_state(failover_fixture());
+        let mut rx = sm.enable_role_change_detection(2);
+        assert_eq!(sm.reconcile_self_role(true), None);
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// The reconciler is the *repeat* half of role convergence: while the data
+    /// path is still stuck on the wrong role — a promotion whose identity
+    /// persist keeps failing, a demotion that never found its new primary — it
+    /// must keep emitting, and it must stop the moment the data path catches
+    /// up. A one-shot boot-time reconcile would leave a failed role change
+    /// stranded until the process restarted.
+    #[test]
+    fn test_reconciler_re_emits_while_the_views_disagree() {
+        let mut sm = ClusterStateMachine::with_state(failover_fixture());
+        let mut rx = sm.enable_role_change_detection(1);
+        let reconciler = sm
+            .self_role_reconciler()
+            .expect("detection is enabled, so the handle exists");
+
+        // Data path still reports replica across three ticks: three events.
+        for _ in 0..3 {
+            assert_eq!(
+                reconciler.reconcile(true),
+                RoleReconcile::ReDriven(NodeRole::Primary)
+            );
+            assert_eq!(expect_promotion(&mut rx).promoted_node_id, 1);
+        }
+
+        // The promotion finally lands and the re-drive stops.
+        assert_eq!(reconciler.reconcile(false), RoleReconcile::Agreed);
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// A reconciler outlives the node it reconciles: it is held by a task, and
+    /// the shutdown that drops the role-change consumer is what ends that task.
+    /// It must therefore never *keep* the consumer alive — the consumer owns
+    /// the data path's role controller and, through it, the storage engine, so
+    /// a strong sender here left a shut-down node holding its RocksDB lock and
+    /// broke restart-in-process. Dropping the receiver stands in for that
+    /// shutdown: the next tick reports `Detached` instead of emitting.
+    #[test]
+    fn test_reconciler_detaches_once_the_consumer_is_gone() {
+        let mut sm = ClusterStateMachine::with_state(failover_fixture());
+        let mut rx = sm.enable_role_change_detection(1);
+        let reconciler = sm
+            .self_role_reconciler()
+            .expect("detection is enabled, so the handle exists");
+        assert_eq!(
+            reconciler.reconcile(true),
+            RoleReconcile::ReDriven(NodeRole::Primary),
+            "a live data path still gets re-drives"
+        );
+        assert_eq!(expect_promotion(&mut rx).promoted_node_id, 1);
+
+        // Shutdown: the state machine goes down with the node, leaving only the
+        // task-held reconciler.
+        drop(sm);
+        assert_eq!(
+            reconciler.reconcile(true),
+            RoleReconcile::Detached,
+            "with the node gone the reconciler must report detachment, not emit"
+        );
+        assert!(
+            matches!(rx.try_recv(), Err(mpsc::error::TryRecvError::Disconnected)),
+            "the consumer's channel must close so its loop ends and it drops the role controller"
+        );
+    }
+
+    /// The handle exists only once role-change detection is enabled — without
+    /// this node's id and the channel there is nothing to reconcile against.
+    #[test]
+    fn test_self_role_reconciler_absent_until_detection_is_enabled() {
+        let mut sm = ClusterStateMachine::with_state(failover_fixture());
+        assert!(sm.self_role_reconciler().is_none());
+        let _rx = sm.enable_role_change_detection(1);
+        assert!(sm.self_role_reconciler().is_some());
+    }
+
+    /// A node not (yet) in the restored state has no cluster-state role to
+    /// reconcile against — first boot, before self-registration commits.
+    #[test]
+    fn test_reconcile_self_role_noop_when_self_absent() {
+        let mut sm = ClusterStateMachine::with_state(failover_fixture());
+        let mut rx = sm.enable_role_change_detection(99);
+        assert_eq!(sm.reconcile_self_role(false), None);
+        assert!(rx.try_recv().is_err());
     }
 
     #[tokio::test]
     async fn test_demotion_detection_not_fired_for_failed_failover() {
         let cluster = failover_fixture();
         let mut sm = ClusterStateMachine::with_state(cluster);
-        let mut rx = sm.enable_demotion_detection(1);
+        let mut rx = sm.enable_role_change_detection(1);
 
         // Invalid target — apply fails, so no demotion event.
         let entry = openraft::Entry::<TypeConfig> {
@@ -2385,7 +3003,7 @@ mod tests {
         // Force failover removes the old primary; that is not a demotion.
         let cluster = failover_fixture();
         let mut sm = ClusterStateMachine::with_state(cluster);
-        let mut rx = sm.enable_demotion_detection(1);
+        let mut rx = sm.enable_role_change_detection(1);
 
         let entry = openraft::Entry::<TypeConfig> {
             log_id: openraft::LogId {
@@ -2532,13 +3150,22 @@ mod tests {
             })
             .unwrap();
         assert!(matches!(resp, ClusterResponse::Epoch(_)));
+        // Demotion of the old primary first, then promotion of the successor:
+        // one failover is two role changes, and the order is the one a node
+        // that watches both would have to replay.
         assert_eq!(
             events,
-            vec![ClusterEvent::NodeDemoted {
-                demoted_node_id: 1,
-                new_primary_id: Some(2),
-                epoch: state.config_epoch(),
-            }]
+            vec![
+                ClusterEvent::NodeDemoted {
+                    demoted_node_id: 1,
+                    new_primary_id: Some(2),
+                    epoch: state.config_epoch(),
+                },
+                ClusterEvent::NodePromoted {
+                    promoted_node_id: 2,
+                    epoch: state.config_epoch(),
+                }
+            ]
         );
     }
 
@@ -2555,8 +3182,9 @@ mod tests {
     }
 
     #[test]
-    fn force_failover_emits_no_event() {
-        // Force failover removes the old primary; that is not a demotion.
+    fn force_failover_emits_promotion_only() {
+        // Force failover removes the old primary; that is not a demotion. The
+        // successor's replica -> primary transition is still real.
         let state = failover_fixture();
         let (_, events) = state
             .apply_command(ClusterCommand::Failover {
@@ -2565,7 +3193,13 @@ mod tests {
                 force: true,
             })
             .unwrap();
-        assert!(events.is_empty());
+        assert_eq!(
+            events,
+            vec![ClusterEvent::NodePromoted {
+                promoted_node_id: 2,
+                epoch: state.config_epoch(),
+            }]
+        );
     }
 
     #[test]

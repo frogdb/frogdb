@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## Unreleased
+
+### Breaking Changes
+
+* **`WAIT` now blocks when the requested replica count is unreachable.** Previously a node whose
+  role was `standalone` answered `WAIT <n> <timeout>` with `0` immediately, and a node in cluster
+  mode answered `0` unconditionally. Both shortcuts are gone: `WAIT` counts the replicas attached to
+  the node that received it and blocks until the count is reached or the timeout expires, in every
+  mode. This is Redis/Valkey parity — a replica may be mid-attach, so an unreachable count is a
+  reason to wait, not to give up. Clients that used `WAIT 1 5000` as a cheap no-op on a
+  replica-less node will now block for the full timeout; pass `timeout` values you are willing to
+  wait for.
+* **`WAIT` can now return an error.** A `WAIT` parked across a demotion is released with
+  `-UNBLOCKED force unblock from blocking operation, instance state changed (master -> replica?)`
+  instead of an acknowledgment count (Redis's `disconnectAllBlockedClients` behavior).
+
+### Features
+
+* Cluster-mode data replication is served by the same PSYNC plane as standalone replication, and a
+  Raft-driven promotion or demotion now reaches the data path — a promoted cluster node accepts
+  writes and serves `PSYNC` to its own replicas. `CLUSTER SHARDS` reports the real data-plane
+  replication offset instead of the Raft last-applied index.
+
 ## 0.1.0 (2026-04-02)
 
 

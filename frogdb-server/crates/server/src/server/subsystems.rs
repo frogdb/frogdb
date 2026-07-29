@@ -665,6 +665,18 @@ impl Server {
         // Mark server as not ready during shutdown
         self.health_checker.shutdown();
 
+        // Abort the acceptors first: nothing below this point is prepared to
+        // serve a fresh connection, and a PSYNC accepted later would register a
+        // downstream session behind the drain that exists to end them all.
+        handles.acceptor.abort();
+        if let Some(handle) = handles.admin_acceptor {
+            handle.abort();
+        }
+        #[cfg(not(feature = "turmoil"))]
+        if let Some(handle) = handles.tls_acceptor {
+            handle.abort();
+        }
+
         // Send shutdown to all shards
         for sender in self.shard_senders.iter() {
             let _ = sender.send(ShardMessage::Shutdown).await;
@@ -715,6 +727,17 @@ impl Server {
             consumer_handle.abort();
         }
 
+        // Tear down downstream replica sessions. Aborting the acceptors above
+        // only stops new connections; established sessions keep streaming past
+        // this shutdown and keep the storage engine open behind it. The drain
+        // also latches the handler, so a connection accepted just before the
+        // abort cannot open a new session while this runs.
+        if let Some(ref handler) = self.primary_replication_handler {
+            handler
+                .shutdown_downstream_sessions(Duration::from_secs(2))
+                .await;
+        }
+
         // Stop failure detector task if running
         if let Some(handle) = handles.failure_detector {
             handle.abort();
@@ -761,16 +784,6 @@ impl Server {
             } else {
                 info!("RocksDB flushed successfully");
             }
-        }
-
-        // Abort acceptors
-        handles.acceptor.abort();
-        if let Some(handle) = handles.admin_acceptor {
-            handle.abort();
-        }
-        #[cfg(not(feature = "turmoil"))]
-        if let Some(handle) = handles.tls_acceptor {
-            handle.abort();
         }
 
         // Stop the certificate watcher

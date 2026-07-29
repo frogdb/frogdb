@@ -392,9 +392,22 @@ ownerless — either the whole topology change commits or none of it does. (Auto
 `client_write` a few times to survive transient leadership churn, since the `FAIL` latch would
 otherwise not re-trigger it.)
 
-A node that finds itself demoted (via `SetRole { role: Replica }` or a graceful `Failover`)
-receives a `DemotionEvent` carrying the new primary's id, and switches to streaming from the new
-primary via PSYNC.
+A node that finds itself demoted (via `SetRole { role: Replica }` or a graceful `Failover`) and a
+node that finds itself promoted (via `SetRole { role: Primary }` or the successor half of a
+`Failover`) both receive a `RoleChangeEvent` on one ordered channel, and apply it to the data path —
+the demoted node starts streaming from the new primary via PSYNC, the promoted node stops its
+upstream stream, mints a new replication identity, and begins serving. See
+[Data replication and `WAIT`](#data-replication-and-wait) for why both halves travel the same
+channel.
+
+**Graceful and forced failover differ in the old primary's fate**, and the difference is visible on
+the data path. `CLUSTER FAILOVER` commits `force: false`, which *demotes* the old primary — it gets
+a `RoleChangeEvent`, drops its data-path primary role, disconnects its downstream replicas, and
+releases any parked `WAIT`s. `CLUSTER FAILOVER FORCE` / `TAKEOVER` commits `force: true`, which
+*removes* the old primary from cluster state instead; no event reaches it, so a node that is
+partitioned or dead when it is taken over still believes it is a primary if it comes back. That is
+the intended shape (the takeover path exists for when the old primary cannot be talked to at all),
+but it means a takeover is not a way to demote a reachable node.
 
 ### Asymmetric partitions and false positives
 
@@ -455,6 +468,82 @@ begin reporting real counts if a suspicion phase were ever introduced.
 
 ---
 
+## Data Replication and `WAIT`
+
+There is **one replication plane**, not two. A cluster replica attaches to its primary over the
+same PSYNC link, streams the same frames, and ACKs into the same tracker as a standalone replica
+does — Raft carries no key data (ADR 0001). Everything in
+[Replication Internals](/architecture/replication/) applies verbatim inside a cluster; the only
+difference is how a node is told to become a replica.
+
+| | Standalone | Cluster |
+|---|---|---|
+| Attach a replica | `REPLICAOF <host> <port>` | `CLUSTER REPLICATE <node-id>` (committed through Raft) |
+| Promote | `REPLICAOF NO ONE` | `CLUSTER FAILOVER` on the replica, or auto-failover |
+| Data transport | PSYNC checkpoint + command stream | identical |
+| `WAIT` | counts this node's replicas | identical |
+
+`CLUSTER REPLICATE` changes the target's **role**; it does not move slots. A node that already
+owns slots and is then made a replica keeps owning them (and can no longer be written), so a
+deliberate shard layout assigns the slots first.
+
+### The PSYNC gate is the live data-path role
+
+Two role views exist and must not be confused: the cluster-state role in the Raft state machine,
+and the data-path role — one process-wide atomic owned by `RoleManager`. The Raft view is the
+*decision*; the atomic is the *effect*. A `RoleChangeEvent` bridges them, so a raft-driven
+promotion or demotion reaches the data path (see [Failover](#failover)). Promotion and demotion
+share one ordered channel deliberately: a failover round can flip a node
+primary → replica → primary within a few log entries, and applying those out of order would leave
+the node permanently fenced.
+
+`PSYNC` is refused by any node whose live data-path role is replica, and served by any node whose
+role is primary — whether it booted as one or was promoted a moment ago. That single rule gives
+both halves of the contract: a promoted cluster node immediately serves its own downstream
+replicas, and
+[chained replication stays rejected](/operations/replication/#how-frogdb-differs-from-redis-replication)
+because a node that is still following someone else never serves.
+
+### `WAIT` semantics
+
+`WAIT` has **no cluster-specific path at all** — the same code serves both modes, which is what
+Redis, Valkey and Dragonfly do:
+
+- **Per-node, not cluster-wide.** `WAIT numreplicas timeout` counts the replicas attached to *the
+  node the client is talking to* — that is, the replicas of one shard. It says nothing about any
+  other shard.
+- **Never redirects.** `WAIT` takes no key, so it has no slot and can never answer `-MOVED`. The
+  node that receives it answers it.
+- **Rejected on a replica**, before argument parsing, exactly like Redis.
+- **An unreachable `numreplicas` blocks to the deadline** rather than early-returning — a replica
+  may still be mid-attach. `timeout 0` blocks indefinitely; `CLIENT UNBLOCK` is the escape hatch.
+- **A demotion releases parked waits** with
+  `-UNBLOCKED force unblock from blocking operation, instance state changed (master -> replica?)`.
+  A count would be the worse answer: the replication history it counted acks against is no longer
+  this node's.
+- **Cluster-wide durability is a client-side fan-out** — issue `WAIT` against every shard primary
+  (`ALL_SHARDS` + `AGG_MIN` in Redis's routing vocabulary) and take the minimum.
+- **Best-effort even at `≥1`.** Failover ranks candidate replicas by lag, but does not *require*
+  that a specific acknowledging replica win the election, so `WAIT` raises the probability that an
+  acknowledged write survives a failover without making it a guarantee. This is Redis's documented
+  caveat and it holds here too.
+
+Slot migration does not interact with the count: a migration target is not a replica of the source,
+so it never contributes an ack.
+
+### Offsets
+
+The replication offset is a data-plane quantity and is reported as one. `INFO replication`
+(`master_repl_offset`, `connected_slaves`, the per-slave lines) is live in cluster mode, and
+`CLUSTER SHARDS` reports the same counter for the node answering the command — *not* the Raft
+last-applied index, which counts membership and slot-map entries and would make a node that has
+never taken a write look healthy. Peer nodes' `replication-offset` in `CLUSTER SHARDS` is omitted
+entirely: a node knows its own stream position, nothing in the metadata plane carries anyone
+else's, and reporting `0` for a healthy peer would read as a lag alarm. Ask each node for its
+own offset.
+
+---
+
 ## Node-to-Node Communication
 
 Nodes do NOT gossip topology. They connect directly for:
@@ -463,7 +552,7 @@ Nodes do NOT gossip topology. They connect directly for:
 |---------|-----------|-----------|
 | Raft consensus (metadata) | Leader <-> members | Cluster bus (`cluster_addr`) |
 | Failure detection | Leader -> members | TCP connect probe |
-| Replication | Replica -> Primary | PSYNC checkpoint + command stream |
+| Replication | Replica -> Primary | PSYNC checkpoint + command stream (see [Data Replication and `WAIT`](#data-replication-and-wait)) |
 | Slot key-transfer | Source -> Target | `MIGRATE` protocol |
 
 Only the first row is Raft; the rest are data-path or health-probe connections that never pass

@@ -4344,8 +4344,21 @@ impl RespConn {
 
     /// Send one command and read its complete reply.
     async fn cmd(&mut self, parts: &[&[u8]]) -> std::io::Result<RespValue> {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        self.stream.write_all(&encode_command(parts)).await?;
+        self.send_only(parts).await?;
+        self.read_reply().await
+    }
+
+    /// Write a command without reading its reply — the half of [`Self::cmd`]
+    /// that a blocking command needs, so the driver can park a `WAIT` and go on
+    /// to do the thing that is supposed to release it.
+    async fn send_only(&mut self, parts: &[&[u8]]) -> std::io::Result<()> {
+        use tokio::io::AsyncWriteExt;
+        self.stream.write_all(&encode_command(parts)).await
+    }
+
+    /// Read the next complete reply from the stream.
+    async fn read_reply(&mut self) -> std::io::Result<RespValue> {
+        use tokio::io::AsyncReadExt;
         loop {
             if let Some((value, consumed)) = parse_resp_value(&self.buf) {
                 self.buf.drain(..consumed);
@@ -5740,6 +5753,434 @@ fn run_cluster_asymmetric_partition_false_failover(seed: u64) {
 fn test_cluster_asymmetric_partition_false_failover() {
     for seed in [1u64, 2, 3, 7, 42] {
         run_cluster_asymmetric_partition_false_failover(seed);
+    }
+}
+
+/// Attach `replica_host` to `primary_id` with `CLUSTER REPLICATE` and wait until
+/// the primary reports the PSYNC link up (`connected_slaves >= 1`).
+///
+/// Role propagation through Raft and the data-path link coming up are separate
+/// events: the cluster view can say "replica" long before any stream exists, and
+/// WAIT counts streams, not views.
+async fn attach_cluster_replica(
+    replica_host: &str,
+    primary_host: &str,
+    primary_id: u64,
+) -> std::io::Result<()> {
+    let replica_ip = turmoil::lookup(replica_host);
+    let mut replica = RespConn::connect((replica_ip, SERVER_PORT)).await?;
+    let primary_hex = format!("{primary_id:040x}");
+    let reply = replica
+        .cmd(&[b"CLUSTER", b"REPLICATE", primary_hex.as_bytes()])
+        .await?;
+    assert!(
+        matches!(&reply, RespValue::Simple(s) if s == "OK"),
+        "CLUSTER REPLICATE did not return OK: {reply:?}"
+    );
+
+    let primary_ip = turmoil::lookup(primary_host);
+    let mut primary = RespConn::connect((primary_ip, SERVER_PORT)).await?;
+    for _ in 0..600 {
+        let info = primary.cmd(&[b"INFO", b"replication"]).await?;
+        let attached = info_replication_field(&info, "connected_slaves")
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0);
+        if attached >= 1 {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Err(std::io::Error::other(
+        "cluster primary never reported an attached replica",
+    ))
+}
+
+/// One seeded run: WAIT against a cluster primary whose only replica is
+/// partitioned away.
+///
+/// The contract under deterministic scheduling: WAIT in cluster mode counts
+/// *this node's* PSYNC replicas, exactly as in standalone mode, so a partition
+/// must degrade it — return the reduced count at the deadline — and never hang
+/// past that deadline nor report a replica that cannot possibly have acked. On
+/// heal the same call must go back to the full count without operator action.
+///
+/// The primary is chosen off the Raft leader and only the primary↔replica edge
+/// is held, so both nodes keep Raft quorum through the leader: nothing about the
+/// cluster's *metadata* plane changes during the window. What breaks is the data
+/// plane alone, which is the point — the two are independent by ADR-0001.
+fn run_cluster_wait_partitioned_replica(seed: u64) {
+    use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+
+    let mut sim = Builder::new()
+        .simulation_duration(Duration::from_secs(120))
+        // Same turmoil-0.7.1 port-budget rationale as the other cluster sims:
+        // dials dropped while an edge is held leak an ephemeral port each.
+        .ephemeral_ports(2048..=65535)
+        .tcp_capacity(65536)
+        .rng_seed(seed)
+        .enable_random_order()
+        .build();
+
+    let dirs = spawn_cluster_hosts(&mut sim, false);
+
+    // phase 0 = healthy, 1 = hold primary↔replica, 2 = heal.
+    let phase = std::sync::Arc::new(AtomicU8::new(0));
+    let primary_idx = std::sync::Arc::new(AtomicUsize::new(usize::MAX));
+    let replica_idx = std::sync::Arc::new(AtomicUsize::new(usize::MAX));
+    let phase_c = phase.clone();
+    let primary_idx_c = primary_idx.clone();
+    let replica_idx_c = replica_idx.clone();
+
+    sim.client("driver", async move {
+        let entry = turmoil::lookup(CLUSTER_HOSTS[0]);
+        wait_cluster_ready(entry).await?;
+
+        let mut ids: Vec<(usize, u64)> = Vec::new();
+        for (idx, host) in CLUSTER_HOSTS.iter().enumerate() {
+            ids.push((idx, node_id_of(host).await?));
+        }
+        let (leader, _) = *ids.iter().min_by_key(|(_, id)| *id).unwrap();
+
+        // A key owned by a non-leader primary, so holding its replica edge never
+        // touches the leader's Raft path.
+        let candidate_keys: [&[u8]; 8] = [
+            b"alpha", b"bravo", b"charlie", b"delta", b"echo", b"foxtrot", b"golf", b"hotel",
+        ];
+        let mut chosen: Option<(&[u8], usize)> = None;
+        for k in candidate_keys {
+            if let Some(owner) = owner_host_of(k).await?
+                && owner != leader
+            {
+                chosen = Some((k, owner));
+                break;
+            }
+        }
+        let (key, primary) = chosen.expect("a non-leader primary must own some probe key");
+        let replica = (0..CLUSTER_HOSTS.len())
+            .find(|&i| i != leader && i != primary)
+            .expect("a third node must exist");
+
+        attach_cluster_replica(
+            CLUSTER_HOSTS[replica],
+            CLUSTER_HOSTS[primary],
+            ids[primary].1,
+        )
+        .await?;
+
+        let primary_ip = turmoil::lookup(CLUSTER_HOSTS[primary]);
+        let mut conn = RespConn::connect((primary_ip, SERVER_PORT)).await?;
+
+        // Healthy: the write is acked by the one attached replica.
+        let set = conn.cmd(&[b"SET", key, b"healthy"]).await?;
+        assert!(
+            matches!(&set, RespValue::Simple(s) if s == "OK"),
+            "seed {seed}: SET on the cluster primary failed: {set:?}"
+        );
+        let mut acked = RespValue::Bulk(None);
+        for _ in 0..60 {
+            acked = conn.cmd(&[b"WAIT", b"1", b"2000"]).await?;
+            if matches!(acked, RespValue::Int(n) if n >= 1) {
+                break;
+            }
+        }
+        assert!(
+            matches!(acked, RespValue::Int(n) if n >= 1),
+            "seed {seed}: WAIT 1 on a healthy cluster primary must count its replica, got {acked:?}"
+        );
+
+        // Partition the data link only.
+        primary_idx_c.store(primary, Ordering::Release);
+        replica_idx_c.store(replica, Ordering::Release);
+        phase_c.store(1, Ordering::Release);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let set = conn.cmd(&[b"SET", key, b"partitioned"]).await?;
+        assert!(
+            matches!(&set, RespValue::Simple(s) if s == "OK"),
+            "seed {seed}: a cluster primary holding Raft quorum must still accept writes \
+             while its replica link is down: {set:?}"
+        );
+        let started = tokio::time::Instant::now();
+        let degraded = conn.cmd(&[b"WAIT", b"1", b"500"]).await?;
+        assert_eq!(
+            degraded,
+            RespValue::Int(0),
+            "seed {seed}: a write the partitioned replica cannot have received must not \
+             be reported as acked"
+        );
+        assert!(
+            started.elapsed() >= Duration::from_millis(500),
+            "seed {seed}: WAIT returned before its deadline ({:?}) — the unreachable \
+             quorum must block for the full timeout, not early-exit",
+            started.elapsed()
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "seed {seed}: WAIT hung well past its 500ms deadline ({:?})",
+            started.elapsed()
+        );
+
+        // Heal: the link re-establishes and the same call recovers on its own.
+        phase_c.store(2, Ordering::Release);
+        let mut recovered = RespValue::Bulk(None);
+        for _ in 0..120 {
+            recovered = conn.cmd(&[b"WAIT", b"1", b"1000"]).await?;
+            if matches!(recovered, RespValue::Int(n) if n >= 1) {
+                break;
+            }
+        }
+        assert!(
+            matches!(recovered, RespValue::Int(n) if n >= 1),
+            "seed {seed}: WAIT never recovered after the partition healed, last {recovered:?}"
+        );
+
+        Ok(())
+    });
+
+    let mut held = false;
+    let mut released = false;
+    let mut held_at = Duration::ZERO;
+    let mut steps: u64 = 0;
+    loop {
+        let finished = sim.step().unwrap();
+
+        if !held && phase.load(Ordering::Acquire) >= 1 {
+            let p = primary_idx.load(Ordering::Acquire);
+            let r = replica_idx.load(Ordering::Acquire);
+            if p != usize::MAX && r != usize::MAX {
+                sim.hold(CLUSTER_HOSTS[p], CLUSTER_HOSTS[r]);
+                held = true;
+                held_at = sim.elapsed();
+            }
+        }
+
+        if held
+            && !released
+            && (phase.load(Ordering::Acquire) >= 2
+                || sim.elapsed().saturating_sub(held_at) >= Duration::from_secs(10))
+        {
+            let p = primary_idx.load(Ordering::Acquire);
+            let r = replica_idx.load(Ordering::Acquire);
+            sim.release(CLUSTER_HOSTS[p], CLUSTER_HOSTS[r]);
+            released = true;
+        }
+
+        if finished {
+            break;
+        }
+        steps += 1;
+        assert!(steps < 5_000_000, "seed {seed}: cluster sim did not finish");
+    }
+
+    drop(dirs);
+}
+
+/// Cluster WAIT degrades and recovers across a data-plane partition: it counts
+/// the shard's attached replica while healthy, returns the reduced count at the
+/// deadline while the replica is unreachable (never early, never hanging), and
+/// returns to the full count after the heal. Deterministic across several seeds.
+#[test]
+fn test_cluster_wait_degrades_under_partition() {
+    for seed in [1u64, 7, 42] {
+        run_cluster_wait_partitioned_replica(seed);
+    }
+}
+
+/// One seeded run: a WAIT parked on a cluster primary across a failover.
+///
+/// `WAIT 2 0` on a shard with one replica can never be satisfied and never times
+/// out, so the only thing that can resolve it is the role change. The documented
+/// answer is Redis's (`disconnectAllBlockedClients` from `replicationSetMaster`):
+/// `-UNBLOCKED ... instance state changed (master -> replica?)`, not a count —
+/// the count would describe a history the node no longer heads.
+///
+/// The failover is a real one: the replica's edge to its primary is held (the
+/// partition that motivates the failover), then a graceful `CLUSTER FAILOVER`
+/// moves the slots and demotes the old primary through Raft, whose path to the
+/// leader stays open. Under turmoil's deterministic scheduling the parked WAIT
+/// is guaranteed to still be parked when the demotion lands.
+///
+/// Graceful, not `TAKEOVER`, deliberately: `FORCE`/`TAKEOVER` commit
+/// `ClusterCommand::Failover { force: true }`, which *removes* the old primary
+/// from the cluster instead of demoting it (`cluster/src/commands.rs`), so no
+/// `NodeDemoted` event reaches it and its data-path role never changes. The
+/// `-UNBLOCKED` contract belongs to the demotion path; the forced path is the
+/// "old primary is gone" case exercised by
+/// `test_promoted_replica_has_all_data`.
+fn run_cluster_wait_across_failover(seed: u64) {
+    use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+
+    let mut sim = Builder::new()
+        .simulation_duration(Duration::from_secs(120))
+        .ephemeral_ports(2048..=65535)
+        .tcp_capacity(65536)
+        .rng_seed(seed)
+        .enable_random_order()
+        .build();
+
+    let dirs = spawn_cluster_hosts(&mut sim, false);
+
+    let phase = std::sync::Arc::new(AtomicU8::new(0));
+    let primary_idx = std::sync::Arc::new(AtomicUsize::new(usize::MAX));
+    let replica_idx = std::sync::Arc::new(AtomicUsize::new(usize::MAX));
+    let phase_c = phase.clone();
+    let primary_idx_c = primary_idx.clone();
+    let replica_idx_c = replica_idx.clone();
+
+    sim.client("driver", async move {
+        let entry = turmoil::lookup(CLUSTER_HOSTS[0]);
+        wait_cluster_ready(entry).await?;
+
+        let mut ids: Vec<(usize, u64)> = Vec::new();
+        for (idx, host) in CLUSTER_HOSTS.iter().enumerate() {
+            ids.push((idx, node_id_of(host).await?));
+        }
+        let (leader, _) = *ids.iter().min_by_key(|(_, id)| *id).unwrap();
+
+        let candidate_keys: [&[u8]; 8] = [
+            b"alpha", b"bravo", b"charlie", b"delta", b"echo", b"foxtrot", b"golf", b"hotel",
+        ];
+        let mut chosen: Option<(&[u8], usize)> = None;
+        for k in candidate_keys {
+            if let Some(owner) = owner_host_of(k).await?
+                && owner != leader
+            {
+                chosen = Some((k, owner));
+                break;
+            }
+        }
+        let (key, primary) = chosen.expect("a non-leader primary must own some probe key");
+        let replica = (0..CLUSTER_HOSTS.len())
+            .find(|&i| i != leader && i != primary)
+            .expect("a third node must exist");
+
+        attach_cluster_replica(
+            CLUSTER_HOSTS[replica],
+            CLUSTER_HOSTS[primary],
+            ids[primary].1,
+        )
+        .await?;
+
+        let primary_ip = turmoil::lookup(CLUSTER_HOSTS[primary]);
+        let replica_ip = turmoil::lookup(CLUSTER_HOSTS[replica]);
+        let mut conn = RespConn::connect((primary_ip, SERVER_PORT)).await?;
+        let set = conn.cmd(&[b"SET", key, b"pre_failover"]).await?;
+        assert!(
+            matches!(&set, RespValue::Simple(s) if s == "OK"),
+            "seed {seed}: SET on the cluster primary failed: {set:?}"
+        );
+
+        // Park a WAIT that only a role change can resolve: two replicas are
+        // required, one exists, and the timeout is infinite.
+        let mut parked = RespConn::connect((primary_ip, SERVER_PORT)).await?;
+        parked.send_only(&[b"WAIT", b"2", b"0"]).await?;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // The partition that motivates the takeover: data link down, Raft up.
+        primary_idx_c.store(primary, Ordering::Release);
+        replica_idx_c.store(replica, Ordering::Release);
+        phase_c.store(1, Ordering::Release);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let mut replica_conn = RespConn::connect((replica_ip, SERVER_PORT)).await?;
+        let failover = replica_conn.cmd(&[b"CLUSTER", b"FAILOVER"]).await?;
+        assert!(
+            !matches!(&failover, RespValue::Error(_)),
+            "seed {seed}: CLUSTER FAILOVER failed: {failover:?}"
+        );
+
+        // The parked WAIT resolves with the role-change error, not a count.
+        let unblocked = parked.read_reply().await?;
+        match &unblocked {
+            RespValue::Error(e) => {
+                assert!(
+                    e.starts_with("UNBLOCKED"),
+                    "seed {seed}: a WAIT parked across a demotion must return -UNBLOCKED, \
+                     got {e:?}"
+                );
+                assert!(
+                    e.contains("master -> replica"),
+                    "seed {seed}: the -UNBLOCKED message must name the role change, got {e:?}"
+                );
+            }
+            other => panic!(
+                "seed {seed}: a WAIT parked across a demotion must not return a count \
+                 describing a history the node no longer heads, got {other:?}"
+            ),
+        }
+
+        // The demoted node now refuses WAIT outright, as any replica does.
+        let refused = conn.cmd(&[b"WAIT", b"0", b"0"]).await?;
+        assert!(
+            matches!(&refused, RespValue::Error(e)
+                if e.contains("WAIT cannot be used with replica instances")),
+            "seed {seed}: the demoted node must reject WAIT like any replica, got {refused:?}"
+        );
+
+        // ...and the promoted node serves WAIT as the shard's new primary.
+        phase_c.store(2, Ordering::Release);
+        let mut served = RespValue::Bulk(None);
+        for _ in 0..120 {
+            served = replica_conn.cmd(&[b"WAIT", b"0", b"100"]).await?;
+            if matches!(served, RespValue::Int(_)) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(
+            matches!(served, RespValue::Int(_)),
+            "seed {seed}: the promoted cluster primary must serve WAIT, got {served:?}"
+        );
+
+        Ok(())
+    });
+
+    let mut held = false;
+    let mut released = false;
+    let mut held_at = Duration::ZERO;
+    let mut steps: u64 = 0;
+    loop {
+        let finished = sim.step().unwrap();
+
+        if !held && phase.load(Ordering::Acquire) >= 1 {
+            let p = primary_idx.load(Ordering::Acquire);
+            let r = replica_idx.load(Ordering::Acquire);
+            if p != usize::MAX && r != usize::MAX {
+                sim.hold(CLUSTER_HOSTS[p], CLUSTER_HOSTS[r]);
+                held = true;
+                held_at = sim.elapsed();
+            }
+        }
+
+        if held
+            && !released
+            && (phase.load(Ordering::Acquire) >= 2
+                || sim.elapsed().saturating_sub(held_at) >= Duration::from_secs(10))
+        {
+            let p = primary_idx.load(Ordering::Acquire);
+            let r = replica_idx.load(Ordering::Acquire);
+            sim.release(CLUSTER_HOSTS[p], CLUSTER_HOSTS[r]);
+            released = true;
+        }
+
+        if finished {
+            break;
+        }
+        steps += 1;
+        assert!(steps < 5_000_000, "seed {seed}: cluster sim did not finish");
+    }
+
+    drop(dirs);
+}
+
+/// A WAIT parked on a cluster primary across a graceful `CLUSTER FAILOVER`
+/// resolves to the documented `-UNBLOCKED` role-change error; the demoted node
+/// then rejects WAIT as a replica and the promoted node serves it as the shard's
+/// new primary. Deterministic across several seeds.
+#[test]
+fn test_cluster_wait_unblocked_across_failover() {
+    for seed in [1u64, 7, 42] {
+        run_cluster_wait_across_failover(seed);
     }
 }
 

@@ -364,9 +364,6 @@ impl ReplicaSession {
         // Single exit handler — runs regardless of which `?` returned.
         self.set_phase(Phase::Disconnecting);
 
-        // Drop the session from the registry.
-        handler.tracker.unregister_replica(self.id);
-
         // Best-effort checkpoint dir cleanup. Only set when a checkpoint was
         // actually created, so NotFound shouldn't occur in practice.
         let path = self.inner.read().sync_checkpoint_path.clone();
@@ -379,6 +376,13 @@ impl ReplicaSession {
                 "Failed to clean up checkpoint directory"
             );
         }
+
+        // Drop the session from the registry, last: leaving the registry is
+        // what tells a waiting
+        // [`PrimaryReplicationHandler::shutdown_downstream_sessions`] that this
+        // session is done with its per-sync resources, so the removal must
+        // follow the cleanup above rather than precede it.
+        handler.tracker.unregister_replica(self.id);
 
         tracing::info!(
             replica_id = self.id,
@@ -1638,6 +1642,81 @@ mod tests {
 
         drop(client);
         let _ = task.await.unwrap();
+    }
+
+    /// Shutdown must end a streaming session even though its peer keeps the
+    /// socket open: the session is served inline by the accepting connection
+    /// task, so nothing else would ever release it — and it holds the storage
+    /// engine open behind the shutdown.
+    #[tokio::test]
+    async fn shutdown_downstream_sessions_ends_a_streaming_session() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
+        let repl_id = handler.state.read().replication_id.clone();
+
+        let resume_point = handler.broadcast_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
+
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let server: BoxedStream = Box::new(server);
+        let task = tokio::spawn({
+            let handler = handler.clone();
+            let repl_id = repl_id.clone();
+            async move {
+                handler
+                    .handle_psync(server, addr(), &repl_id, resume_point as i64)
+                    .await
+            }
+        });
+
+        // Streaming: the session is registered and parked on the WAL stream.
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+CONTINUE"), "got: {line:?}");
+        assert_eq!(tracker.get_all_replicas().len(), 1);
+
+        // The peer never closes — only the shutdown signal can end this.
+        let signalled = handler
+            .shutdown_downstream_sessions(Duration::from_secs(5))
+            .await;
+        assert_eq!(signalled, 1, "the streaming session must be signalled");
+        assert!(
+            tracker.get_all_replicas().is_empty(),
+            "shutdown must return only once every session has left the registry"
+        );
+        task.await.unwrap().unwrap();
+    }
+
+    /// A connection accepted a moment before the acceptors were aborted can
+    /// still reach PSYNC while the drain runs. It must be refused: a session
+    /// registered behind the drain would stream past the shutdown that was
+    /// meant to end them all, holding the storage engine open.
+    #[tokio::test]
+    async fn psync_after_the_shutdown_drain_is_refused() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
+        let repl_id = handler.state.read().replication_id.clone();
+        let resume_point = handler.broadcast_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
+
+        // No sessions yet, so the drain returns immediately — it still latches.
+        assert_eq!(
+            handler
+                .shutdown_downstream_sessions(Duration::from_secs(5))
+                .await,
+            0
+        );
+
+        let (_client, server) = tokio::io::duplex(64 * 1024);
+        let server: BoxedStream = Box::new(server);
+        let err = handler
+            .handle_psync(server, addr(), &repl_id, resume_point as i64)
+            .await
+            .expect_err("PSYNC must not be served once the drain has started");
+        assert_eq!(err.kind(), std::io::ErrorKind::ConnectionAborted);
+        assert!(
+            tracker.get_all_replicas().is_empty(),
+            "a refused PSYNC must not register a session"
+        );
     }
 
     /// With the backlog disabled there is nothing to replay, so even a matching

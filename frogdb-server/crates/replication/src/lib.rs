@@ -63,7 +63,7 @@ pub use state::{
     discard_staged_full_sync, read_staged_replication_metadata,
 };
 pub use tracker::ReplicationTrackerImpl;
-pub use wait_coordinator::{AckSolicitor, WaitCoordinator, WaitVerdict};
+pub use wait_coordinator::{AckSolicitor, RoleFence, WaitCoordinator, WaitVerdict};
 
 use bytes::Bytes;
 use std::sync::Arc;

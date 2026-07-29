@@ -208,10 +208,20 @@ impl ConnectionHandler {
     ///   escape hatch (TIMEOUT mode returns the current count, ERROR mode the
     ///   `-UNBLOCKED` error).
     ///
-    /// Documented divergence: with no replication configured (standalone —
-    /// no primary handler, so no replica can ever attach), WAIT returns the
-    /// count (0) immediately instead of idling out the timeout; the quorum is
-    /// unreachable by construction.
+    /// There is no cluster-mode special case. Cluster replicas attach over the
+    /// same PSYNC link and ACK into the same tracker as standalone ones (Raft
+    /// carries metadata only, ADR-0001), so WAIT counts *this node's* replicas
+    /// in both modes — the per-node contract Redis, Valkey and Dragonfly all
+    /// implement. A cluster-wide guarantee is a client-side fan-out
+    /// (`ALL_SHARDS` + `AGG_MIN`), not a server-side one; WAIT never redirects,
+    /// because it takes no key.
+    ///
+    /// An unreachable `numreplicas` blocks to the deadline rather than
+    /// early-returning (Redis parity; a replica may still be mid-attach). The
+    /// only shortcut left is structural: with no primary handler wired at all
+    /// no replica can ever attach, so the quorum is decided immediately. A real
+    /// server always has one — the handler is built on every role — so that
+    /// path is reachable only from deps that carry no replication wiring.
     pub(crate) async fn handle_wait_command(&mut self, args: &[Bytes]) -> Response {
         // Redis rejects WAIT on replicas before looking at the arguments.
         if self.is_replica.load(std::sync::atomic::Ordering::Acquire) {
@@ -223,23 +233,27 @@ impl ConnectionHandler {
             Err(err) => return err.to_response(),
         };
 
-        // Cluster mode: the WAIT coordinator is deliberately unwired — cluster
-        // replicas replicate through the cluster machinery, but their acks are
-        // not yet a per-slot durability signal a keyed WAIT could honestly
-        // count (see the WAIT-cluster-mode PRD). Return 0 immediately, the
-        // pinned divergence, rather than counting full-stream acks that don't
-        // carry that meaning.
-        if self.cluster.cluster_state.is_some() {
-            return Response::Integer(0);
-        }
-
-        // Standalone: no primary replication handler means no replica can ever
-        // attach, so the quorum is decided now.
+        // No primary replication handler means no replica can ever attach, so
+        // the quorum is decided now. Not a role decision: the handler is built
+        // on every role, so this is the "replication is not wired at all" case.
         let Some(primary) = self.cluster.primary_replication_handler.clone() else {
             return Response::Integer(0);
         };
 
         let wait = primary.wait_coordinator();
+
+        // Subscribe to the role fence *before* concluding that this node is
+        // still a primary. A demotion publishes the replica flag first and
+        // bumps the fence second, so with the fence in hand one of the two
+        // observations below is guaranteed to see a demotion that races this
+        // WAIT — without it, a demotion landing between the check above and
+        // the subscription inside the coordinator would park this wait on a
+        // node that has already rejected every later WAIT.
+        let fence = wait.role_fence();
+        if self.is_replica.load(std::sync::atomic::Ordering::Acquire) {
+            return Response::error(crate::commands::replication::WAIT_ROLE_CHANGED_ERR);
+        }
+
         let target = wait.target_offset();
 
         // Fast path (Redis: `replicationCountAcksByOffset` before blocking).
@@ -248,7 +262,10 @@ impl ConnectionHandler {
             return Response::Integer(count as i64);
         }
 
-        let deadline = (timeout_ms > 0).then(|| Instant::now() + Duration::from_millis(timeout_ms));
+        // Timer clock, not wall clock: the coordinator hands this to
+        // `tokio::time::timeout_at` (see the import note in `wait_coordinator`).
+        let deadline = (timeout_ms > 0)
+            .then(|| tokio::time::Instant::now() + Duration::from_millis(timeout_ms));
 
         // Mark the connection blocked in the registry so CLIENT UNBLOCK can
         // target this wait, clearing any stale signal first (same bookkeeping
@@ -260,12 +277,22 @@ impl ConnectionHandler {
 
         // Race the coordinator (which owns the single timeout authority via its
         // internal deadline) against CLIENT UNBLOCK.
-        let wait_fut = wait.wait_for_replicas(target, num_replicas, deadline, primary.as_ref());
+        let wait_fut =
+            wait.wait_for_replicas(fence, target, num_replicas, deadline, primary.as_ref());
         tokio::pin!(wait_fut);
 
         let response = tokio::select! {
             biased;
-            verdict = &mut wait_fut => Response::Integer(verdict.count() as i64),
+            verdict = &mut wait_fut => match verdict {
+                // A demotion tore down the stream this wait was parked on.
+                // Redis replies with an error from `disconnectAllBlockedClients`
+                // rather than a count, because the count would describe a
+                // history the node no longer heads.
+                crate::replication::WaitVerdict::RoleChanged(_) => {
+                    Response::error(crate::commands::replication::WAIT_ROLE_CHANGED_ERR)
+                }
+                other => Response::Integer(other.count() as i64),
+            },
             mode = self.client_handle.unblocked() => match mode {
                 Some(UnblockMode::Error) => {
                     Response::error("UNBLOCKED client unblocked via CLIENT UNBLOCK")
