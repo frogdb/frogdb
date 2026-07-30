@@ -53,8 +53,8 @@ pub use fullsync::FullSyncMetadata;
 pub use identity::{ReplicationIdentity, SharedReplicationState};
 pub use offset_coordinator::OffsetCoordinator;
 pub use primary::{
-    DivergenceRecord, LagThresholdConfig, LagThresholds, PrimaryReplicationHandler,
-    SplitBrainBufferConfig,
+    DivergenceRecord, LagThresholdConfig, LagThresholds, PreCheckpointHook,
+    PrimaryReplicationHandler, SplitBrainBufferConfig,
 };
 pub use replica::{ReplicaConnection, ReplicaReplicationHandler};
 pub use replica_session::{Phase, ReplicaCapabilities, ReplicaInfo, ReplicaSession, SyncKind};

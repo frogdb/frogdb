@@ -1,5 +1,6 @@
 //! Main server implementation.
 
+mod checkpoint_quiesce;
 mod cluster_init;
 mod init;
 mod listeners;

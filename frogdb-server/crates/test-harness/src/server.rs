@@ -64,6 +64,13 @@ pub struct TestServerConfig {
     /// writing an empty startup snapshot. Tests that assert on a specific
     /// `BGSAVE` artifact must disable it for determinism.
     pub snapshot_interval_secs: Option<u64>,
+    /// Override `persistence.batch-timeout-ms` (how long a shard's WAL
+    /// flush-engine may hold acknowledged writes before committing them to
+    /// RocksDB). `None` keeps the server default (10ms). Raising it far past a
+    /// test's runtime makes "acked but not yet in RocksDB" the *steady* state, so
+    /// a test that asserts a checkpoint captured every acknowledged write fails
+    /// deterministically on every platform instead of racing the flush timer.
+    pub persistence_batch_timeout_ms: Option<u64>,
 
     // --- Logging ---
     /// Log level (default: "warn" to reduce test noise).
@@ -213,6 +220,7 @@ impl Clone for TestServerConfig {
             data_dir: self.data_dir.clone(),
             snapshot_dir: self.snapshot_dir.clone(),
             snapshot_interval_secs: self.snapshot_interval_secs,
+            persistence_batch_timeout_ms: self.persistence_batch_timeout_ms,
             log_level: self.log_level.clone(),
             requirepass: self.requirepass.clone(),
             admin_enabled: self.admin_enabled,
@@ -445,6 +453,10 @@ impl TestServer {
 
         if let Some(secs) = test_config.snapshot_interval_secs {
             config.snapshot.snapshot_interval_secs = secs;
+        }
+
+        if let Some(ms) = test_config.persistence_batch_timeout_ms {
+            config.persistence.batch_timeout_ms = ms;
         }
 
         config.server.allow_cross_slot_standalone = test_config.allow_cross_slot_standalone;

@@ -36,6 +36,15 @@ use crate::wait_coordinator::WaitCoordinator;
 pub use replay::{FullResyncReason, PartialSyncReplay, ReplayDecision, ReplayGrant};
 pub use ring_buffer::{ReplicationRingBuffer, SplitBrainBufferConfig};
 
+/// Injected work that must complete before a `FULLRESYNC` checkpoint is cut.
+///
+/// The replication crate owns no shards, so it cannot itself make the primary's
+/// storage engine hold every acknowledged write — the owner of the shards
+/// installs this hook (see `checkpoint_quiesce` in the server crate) and the
+/// full-sync path awaits it immediately before `create_checkpoint`.
+pub type PreCheckpointHook =
+    Arc<dyn Fn() -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+
 /// The split-brain divergence window this (demoted) Primary computed against the
 /// last offset the cluster had acknowledged — the writes it committed past that
 /// point and must surrender to the new Primary.
@@ -133,6 +142,12 @@ pub struct PrimaryReplicationHandler {
     pub(crate) wal_broadcast: broadcast::Sender<ReplicationFrame>,
     /// Optional RocksDB store for FULLRESYNC checkpoint streaming.
     pub(crate) rocks_store: Option<Arc<RocksStore>>,
+    /// Work that must finish before a FULLRESYNC checkpoint is cut — in
+    /// production, draining every shard's WAL flush-engine into
+    /// [`Self::rocks_store`] (see [`PreCheckpointHook`]). Installed after
+    /// construction because the shards are wired up later; a handler without one
+    /// cuts the checkpoint straight from whatever RocksDB currently holds.
+    pre_checkpoint_hook: RwLock<Option<PreCheckpointHook>>,
     /// Directory for storing temporary checkpoint data.
     pub(crate) data_dir: PathBuf,
     /// Live proactive lag-disconnect thresholds, shared with every streaming
@@ -200,6 +215,7 @@ impl PrimaryReplicationHandler {
             tracker,
             wal_broadcast,
             rocks_store,
+            pre_checkpoint_hook: RwLock::new(None),
             data_dir,
             lag_thresholds,
             lag_cooldown: lag_config.cooldown,
@@ -209,6 +225,19 @@ impl PrimaryReplicationHandler {
             wait,
             draining: AtomicBool::new(false),
         }
+    }
+
+    /// Install the work that must complete before a FULLRESYNC checkpoint is
+    /// cut (see [`PreCheckpointHook`]). Set once during wiring; replacing it is
+    /// allowed and simply supersedes the previous hook.
+    pub fn set_pre_checkpoint_hook(&self, hook: PreCheckpointHook) {
+        *self.pre_checkpoint_hook.write() = Some(hook);
+    }
+
+    /// The installed pre-checkpoint hook, cloned out so no lock is held while it
+    /// runs.
+    pub(crate) fn pre_checkpoint_hook(&self) -> Option<PreCheckpointHook> {
+        self.pre_checkpoint_hook.read().clone()
     }
 
     /// The WAIT quorum seam. The handler itself is the production

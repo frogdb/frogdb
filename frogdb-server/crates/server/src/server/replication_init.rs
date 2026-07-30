@@ -125,6 +125,20 @@ pub(super) fn init_replication(
         },
         config.replication.replica_write_timeout_ms,
     ));
+    // A FULLRESYNC checkpoint must contain every write this node has already
+    // acknowledged: it is the sole carrier of the writes made before the replica
+    // attached (nothing was broadcast then, so no backlog tail can replay them).
+    // The replication crate owns no shards, so the drain is injected here — the
+    // same quiesce the snapshot coordinator's pre-snapshot hook performs.
+    {
+        let senders = shard_senders.clone();
+        primary_handler.set_pre_checkpoint_hook(Arc::new(move || {
+            let senders = senders.clone();
+            Box::pin(async move {
+                super::checkpoint_quiesce::quiesce_shards_for_checkpoint(&senders).await;
+            })
+        }));
+    }
     let replication_broadcaster: SharedBroadcaster = Arc::new(RoleGatedBroadcaster {
         inner: primary_handler.clone(),
         is_replica: is_replica_flag.clone(),

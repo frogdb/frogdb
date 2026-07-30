@@ -1257,16 +1257,24 @@ async fn test_runtime_full_resync_installs_snapshot_into_live_store() {
         "master's snapshot must be installed into the live keyspace without a restart"
     );
 
+    // Per key, not one wait then instant reads: the install is documented as
+    // atomic *per shard* only (`LiveCheckpointInstaller::install`), so seeing
+    // `m0` proves only that `m0`'s shard has swapped. Every other key gets its
+    // own bounded wait.
     for i in 0..5 {
+        let key = format!("m{i}");
         assert_eq!(
-            string_value(&node.send("GET", &[&format!("m{i}")]).await).as_deref(),
+            wait_for_value(&node, &key, Some("from-master"), Duration::from_secs(10))
+                .await
+                .as_deref(),
             Some("from-master"),
-            "master's key m{i} must be live on the demoted node"
+            "master's key {key} must be live on the demoted node"
         );
+        let forked = format!("p{i}");
         assert_eq!(
-            string_value(&node.send("GET", &[&format!("p{i}")]).await),
+            wait_for_value(&node, &forked, None, Duration::from_secs(10)).await,
             None,
-            "forked key p{i} must be gone from the demoted node's live keyspace"
+            "forked key {forked} must be gone from the demoted node's live keyspace"
         );
     }
     assert_eq!(
@@ -1284,6 +1292,62 @@ async fn test_runtime_full_resync_installs_snapshot_into_live_store() {
         Some("streamed"),
         "streaming must resume from the installed snapshot's offset"
     );
+
+    node.shutdown().await;
+    master.shutdown().await;
+}
+
+/// A `FULLRESYNC` checkpoint must contain every write the primary has already
+/// acknowledged — including those still sitting in a shard's WAL flush-engine.
+///
+/// A write is acked once staged in the flush engine; the engine commits it to
+/// RocksDB on a later size/timeout trigger. The checkpoint snapshots what
+/// RocksDB *holds*, so cutting one without first draining the engines omits the
+/// primary's most recent writes. For a full resync that hole is permanent: with
+/// no replica attached when those writes were made, nothing was broadcast, so no
+/// backlog tail can replay them — the replica is simply missing them forever.
+///
+/// The batch timeout is parked far beyond the test's runtime, which makes "acked
+/// but not yet in RocksDB" the steady state instead of a millisecond race: with
+/// no drain on the full-sync path *none* of the keys below reach the replica, on
+/// every platform. (The bug this pins was originally a coin-flip that only came
+/// up heads on macOS, where the checkpoint was cut inside the default 10ms
+/// window — a green run elsewhere proved nothing.)
+#[tokio::test]
+async fn test_full_resync_checkpoint_carries_writes_still_pending_in_the_wal() {
+    let config = || TestServerConfig {
+        persistence: true,
+        // No background flush can rescue the checkpoint during this test...
+        persistence_batch_timeout_ms: Some(600_000),
+        // ...and no periodic snapshot can drain the engines behind our back
+        // (its pre-snapshot hook performs the very drain under test).
+        snapshot_interval_secs: Some(0),
+        ..Default::default()
+    };
+    let master = TestServer::start_primary_with_config(config()).await;
+    let node = TestServer::start_primary_with_config(config()).await;
+
+    // Enough keys to cover every shard several times over, so the assertion does
+    // not depend on which shard a key routes to.
+    const KEYS: usize = 20;
+    for i in 0..KEYS {
+        assert_ok(&master.send("SET", &[&format!("k{i}"), "acked"]).await);
+    }
+
+    let master_port = master.port().to_string();
+    assert_ok(&node.send("REPLICAOF", &["127.0.0.1", &master_port]).await);
+
+    for i in 0..KEYS {
+        let key = format!("k{i}");
+        assert_eq!(
+            wait_for_value(&node, &key, Some("acked"), Duration::from_secs(10))
+                .await
+                .as_deref(),
+            Some("acked"),
+            "{key} was acknowledged by the primary, so the full-resync checkpoint \
+             must carry it — an unflushed WAL entry is not an excuse to lose it"
+        );
+    }
 
     node.shutdown().await;
     master.shutdown().await;

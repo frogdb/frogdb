@@ -9,8 +9,7 @@ use frogdb_core::persistence::{
 };
 use frogdb_core::sync::{Arc, AtomicU64};
 use frogdb_core::{
-    CommandRegistry, ExpiryIndex, HashMapStore, MetricsRecorder, SearchMsg, ShardReceiver,
-    ShardSender,
+    CommandRegistry, ExpiryIndex, HashMapStore, MetricsRecorder, ShardReceiver, ShardSender,
 };
 use frogdb_telemetry::otlp::{CompositeRecorder, OtlpRecorder};
 use frogdb_telemetry::{HealthChecker, PrometheusRecorder, TaskMonitorRegistry};
@@ -352,33 +351,12 @@ pub(super) async fn init_infrastructure(
             let saver = saver.clone();
             let saver_is_replica = saver_is_replica.clone();
             Box::pin(async move {
-                let mut receivers = Vec::with_capacity(senders.len());
-                for sender in senders.iter() {
-                    let (tx, rx) = tokio::sync::oneshot::channel();
-                    let _ = sender
-                        .send(SearchMsg::FlushSearchIndexes { response_tx: tx })
-                        .await;
-                    receivers.push(rx);
-                }
-                for rx in receivers {
-                    let _ = rx.await;
-                }
-                // Drain every shard's WAL flush-engine into RocksDB so the
-                // checkpoint captures all acknowledged writes. Under non-`sync`
-                // durability a write is acked once staged in the flush engine and
-                // committed to RocksDB only on a later size/timeout trigger; without
-                // this drain, `BGSAVE` would snapshot a RocksDB missing the most
-                // recent writes — a silently-incomplete recovery artifact. Done
-                // after the search flush so any search_meta writes are drained too.
-                let mut wal_receivers = Vec::with_capacity(senders.len());
-                for sender in senders.iter() {
-                    let (tx, rx) = tokio::sync::oneshot::channel();
-                    let _ = sender.send(SearchMsg::FlushWal { response_tx: tx }).await;
-                    wal_receivers.push(rx);
-                }
-                for rx in wal_receivers {
-                    let _ = rx.await;
-                }
+                // Commit the search indexes and drain every shard's WAL
+                // flush-engine into RocksDB, so this snapshot captures every
+                // acknowledged write instead of being a silently-incomplete
+                // recovery artifact (issue 13). Shared with the FULLRESYNC
+                // checkpoint path — see [`super::checkpoint_quiesce`].
+                super::checkpoint_quiesce::quiesce_shards_for_checkpoint(&senders).await;
                 // Persist the replication offset that matches this snapshot's
                 // data — but only while this node is actually a primary. The
                 // handler is constructed on every role (so a promotion has live
