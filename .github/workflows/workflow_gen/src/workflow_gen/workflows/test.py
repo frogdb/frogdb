@@ -58,6 +58,7 @@ def test_workflow() -> Workflow:
             outputs=omap(
                 rust="${{ steps.filter.outputs.rust }}",
                 operator="${{ steps.filter.outputs.operator }}",
+                operator_config="${{ steps.filter.outputs.operator_config }}",
                 workflows="${{ steps.filter.outputs.workflows }}",
                 grafana="${{ steps.filter.outputs.grafana }}",
                 helm="${{ steps.filter.outputs.helm }}",
@@ -87,6 +88,10 @@ def test_workflow() -> Workflow:
                               - 'frogdb-operator/**'
                               - 'rust-toolchain.toml'
                               - '.mise.toml'
+                            operator_config:
+                              - 'frogdb-server/crates/config/**'
+                              - 'frogdb-server/crates/config-derive/**'
+                              - 'frogdb-operator/Cargo.lock'
                             workflows:
                               - '.github/**'
                             grafana:
@@ -239,16 +244,22 @@ def test_workflow() -> Workflow:
     )
 
     # The operator is a separate cargo workspace with its own lockfile and no
-    # coverage under `cargo nextest run --all`. It depends on frogdb-config, so
-    # a server-side schema change (rust filter) must also re-run these tests to
-    # catch config-generation drift — hence the `rust || operator` gate.
+    # coverage under `cargo nextest run --all`, so ordinary server changes
+    # (rust filter) don't need to re-run it. The one real coupling (ADR-0001)
+    # is that frogdb-operator imports the frogdb-config crate — only changes
+    # to that config schema (or the operator's own lockfile, which pins it)
+    # can cause config-generation drift, hence the narrower
+    # `operator || operator_config` gate instead of the broad `rust` one.
     operator_tests = w.job(
         "operator-tests",
         Job(
             name="Operator Tests",
             runs_on=RUNS_ON,
             needs="changes",
-            if_="needs.changes.outputs.rust == 'true' || needs.changes.outputs.operator == 'true'",
+            if_=(
+                "needs.changes.outputs.operator == 'true' || "
+                "needs.changes.outputs.operator_config == 'true'"
+            ),
             steps=[
                 checkout_step(),
                 mise_setup_step(install_args=MISE_JUST_NEXTEST),

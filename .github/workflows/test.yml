@@ -23,6 +23,7 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       operator: ${{ steps.filter.outputs.operator }}
+      operator_config: ${{ steps.filter.outputs.operator_config }}
       workflows: ${{ steps.filter.outputs.workflows }}
       grafana: ${{ steps.filter.outputs.grafana }}
       helm: ${{ steps.filter.outputs.helm }}
@@ -51,6 +52,10 @@ jobs:
             - 'frogdb-operator/**'
             - 'rust-toolchain.toml'
             - '.mise.toml'
+          operator_config:
+            - 'frogdb-server/crates/config/**'
+            - 'frogdb-server/crates/config-derive/**'
+            - 'frogdb-operator/Cargo.lock'
           workflows:
             - '.github/**'
           grafana:
@@ -192,7 +197,7 @@ jobs:
       run: cargo nextest run -p frogdb-server --features turmoil -E 'test(/seed_sweep_txheavy/)'
   operator-tests:
     needs: changes
-    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.operator == 'true'
+    if: needs.changes.outputs.operator == 'true' || needs.changes.outputs.operator_config == 'true'
     name: Operator Tests
     runs-on: ubuntu-latest
     steps:
