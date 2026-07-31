@@ -216,6 +216,7 @@ pub fn schedule_strategy(
     proptest::collection::vec(choice, 0..max_len)
 }
 
+#[cfg(test)]
 mod generator_tests {
     use super::*;
 

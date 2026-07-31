@@ -12,6 +12,7 @@ members = [
     "frogdb-server/crates/replication",
     "frogdb-server/crates/commands",
     "frogdb-server/crates/core",
+    "frogdb-server/crates/shard-harness",
     "frogdb-server/crates/server",
     "frogdb-server/crates/debug",
     "frogdb-server/crates/telemetry",

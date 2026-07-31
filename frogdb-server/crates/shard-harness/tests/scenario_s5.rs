@@ -13,8 +13,8 @@ use std::time::Duration;
 use bytes::Bytes;
 use frogdb_protocol::Response;
 
-use super::harness::ShardDriver;
 use frogdb_core::types::BlockingOp;
+use frogdb_shard_harness::harness::ShardDriver;
 
 /// Register a blocked XREADGROUP waiter on `st` for group `g`, consumer `c`.
 async fn block_xreadgroup(

@@ -1693,8 +1693,6 @@ dependencies = [
  "dashmap",
  "frogdb-acl",
  "frogdb-cluster",
- "frogdb-commands",
- "frogdb-core",
  "frogdb-persistence",
  "frogdb-protocol",
  "frogdb-replication",
@@ -1933,6 +1931,19 @@ dependencies = [
  "webpki-roots",
  "x509-parser",
  "zip",
+]
+
+[[package]]
+name = "frogdb-shard-harness"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "frogdb-commands",
+ "frogdb-core",
+ "frogdb-protocol",
+ "frogdb-vll",
+ "proptest",
+ "tokio",
 ]
 
 [[package]]

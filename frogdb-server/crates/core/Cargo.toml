@@ -18,10 +18,10 @@ test-utils = ["frogdb-cluster/test-utils"]
 # Compile the deterministic FakeWalSink builder arm + fake-WAL registry. Enabled
 # by the server's `turmoil` feature for simulation tests; never in production.
 fake-wal = []
-# Test-only public seam surface for the shard-driver harness. Feature-gates the
-# public `drive*` wrapper methods on `ShardWorker` (and `ShardReceiver::try_recv`)
-# so the integration harness under `tests/` can pump a worker deterministically;
-# never enabled in production.
+# Test-only public seam surface for the frogdb-shard-harness crate's driver.
+# Feature-gates the public `drive*` wrapper methods on `ShardWorker` (and
+# `ShardReceiver::try_recv`) so an out-of-crate harness can pump a worker
+# deterministically; never enabled in production.
 shard-driver = []
 
 [dependencies]
@@ -64,11 +64,7 @@ shuttle.workspace = true
 proptest.workspace = true
 tempfile.workspace = true
 serde_json.workspace = true
-frogdb-commands.workspace = true
 # Enable RocksStore's test-only seam (put_opt/delete/sync_wal + commit_raw_batch)
 # for the crash-recovery suite under src/persistence/. Dev-dep only so the
 # feature never reaches a production build (proposal 20).
 frogdb-persistence = { workspace = true, features = ["test-support"] }
-# Self-dev-dep enabling the test-only seam features for integration harnesses
-# (mirrors frogdb-telemetry's `features = ["testing"]` self-dev-dep precedent).
-frogdb-core = { path = ".", features = ["shard-driver", "fake-wal"] }

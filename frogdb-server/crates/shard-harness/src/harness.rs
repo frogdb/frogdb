@@ -1,14 +1,17 @@
-//! Shard-driver harness core (Phase 4b), integration-test tree.
+//! Shard-driver harness core (Phase 4b).
 //!
 //! Drives a real [`ShardWorker`] (and, in pumped mode, a real
-//! `VllCoordinator`) directly with controlled `ShardMessage` ordering. Lives
-//! under `crates/core/tests/shard_driver/` rather than as an in-crate
-//! `#[cfg(test)]` module: the harness populates a real `CommandRegistry` via the
-//! `frogdb-commands` dev-dependency, whose dep on `frogdb-core` forms a dev-dep
-//! cycle that compiles `frogdb-core` twice — unit-test code touching both copies
-//! trips E0308. Integration tests link the single normal build and reach the
-//! seams through the feature-gated public `drive*` wrappers (`shard-driver`
-//! feature, enabled by the self-dev-dep) (brief D1).
+//! `VllCoordinator`) directly with controlled `ShardMessage` ordering. Lives in
+//! this out-of-`frogdb-core` crate rather than as an in-crate `#[cfg(test)]`
+//! module: the harness populates a real `CommandRegistry` via the
+//! `frogdb-commands` dependency, whose dep on `frogdb-core` would form a
+//! dev-dep cycle (compiling `frogdb-core` twice, tripping E0308 on unit-test
+//! code touching both copies) if pulled into `frogdb-core`'s own
+//! `[dev-dependencies]`. Living one level up avoids the cycle entirely: this
+//! crate is a normal, single, non-cyclic dependent of both `frogdb-core` (with
+//! `shard-driver`/`fake-wal` features enabled) and `frogdb-commands`, and
+//! reaches the seams through the feature-gated public `drive*` wrappers (brief
+//! D1).
 //!
 //! Two driving styles (brief D3):
 //! - **Direct**: [`ShardDriver::dispatch`] → `worker.drive` — used when the test
@@ -337,6 +340,7 @@ pub fn cmd(name: &str, args: &[&str]) -> ParsedCommand {
     )
 }
 
+#[cfg(test)]
 mod driver_tests {
     use super::*;
 

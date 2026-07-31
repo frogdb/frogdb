@@ -1,29 +1,20 @@
-//! Shard-driver integration harness.
+//! Shard-driver integration harness smoke tests.
 //!
-//! Proves the seam architecture end to end: an out-of-crate consumer builds a
-//! real [`frogdb_core::ShardWorker`] via the public [`ShardWorkerBuilder`],
-//! populates its registry with the *real* command set through
-//! `frogdb_commands::register_all` (a dev-dependency cycle that only resolves
-//! for integration tests, which link the single normal build of `frogdb-core`
-//! that `frogdb-commands` also links), and drives commands + ticks through the
-//! feature-gated `drive*` seams. Those seams are reachable here because the
-//! crate's own `[dev-dependencies]` self-dep enables the `shard-driver` and
-//! `fake-wal` features (mirroring `frogdb-telemetry`'s `features = ["testing"]`
-//! precedent).
-
-mod generator;
-mod harness;
-mod notify_capture;
-mod sink;
-
-// Scenario submodules (one per targeted scenario; S7 is turmoil-level, server crate).
-mod scenario_s1;
-mod scenario_s2;
-mod scenario_s3;
-mod scenario_s4;
-mod scenario_s5;
-mod scenario_s6;
-mod scenario_s8;
+//! Proves the seam architecture end to end: an out-of-crate consumer (this
+//! crate, `frogdb-shard-harness`) builds a real [`frogdb_core::ShardWorker`]
+//! via the public [`ShardWorkerBuilder`], populates its registry with the
+//! *real* command set through `frogdb_commands::register_all`, and drives
+//! commands + ticks through the feature-gated `drive*` seams. Those seams are
+//! reachable here because this crate's own `[dependencies]` enable the
+//! `shard-driver` and `fake-wal` features on `frogdb-core` (see the crate-level
+//! doc on `frogdb_shard_harness` for why the harness lives in its own crate
+//! rather than as a `frogdb-core` dev-dependency).
+//!
+//! The reusable harness (`ShardDriver`, sinks, notification capture, the
+//! schedule generator) lives in this crate's `src/`; the scenario tests
+//! (`scenario_s1`..`scenario_s8`, one per targeted concurrency scenario — S7 is
+//! turmoil-level, in the server crate) are declared alongside this file in
+//! `tests/main.rs`.
 
 use std::sync::Arc;
 

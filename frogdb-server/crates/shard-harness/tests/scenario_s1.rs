@@ -9,8 +9,8 @@ use bytes::Bytes;
 use frogdb_protocol::Response;
 use proptest::prelude::*;
 
-use super::harness::ShardDriver;
 use frogdb_core::types::BlockingOp;
+use frogdb_shard_harness::harness::ShardDriver;
 
 /// Run one permutation. `deadline_elapsed` selects A's deadline variant;
 /// `drop_receiver` models A giving up (receiver-drop before UnregisterWait);

@@ -138,6 +138,7 @@ pub fn assert_keyevents_consistent(
     }
 }
 
+#[cfg(test)]
 mod capture_tests {
     use super::*;
 

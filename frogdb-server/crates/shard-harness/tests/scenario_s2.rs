@@ -20,11 +20,11 @@ use std::time::Duration;
 
 use bytes::Bytes;
 
-use super::harness::{ShardDriver, cmd};
 use frogdb_core::shard::WatchEntry;
 use frogdb_core::shard::types::TransactionResult;
 use frogdb_core::store::Store;
 use frogdb_core::types::BlockingOp;
+use frogdb_shard_harness::harness::{ShardDriver, cmd};
 
 /// What happens in the WATCH→EXEC gap.
 #[derive(Debug, Clone, Copy)]

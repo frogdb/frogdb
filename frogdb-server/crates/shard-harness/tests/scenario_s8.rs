@@ -11,11 +11,11 @@ use bytes::Bytes;
 use frogdb_protocol::Response;
 use proptest::prelude::*;
 
-use super::generator::{Choice, Sender, Step, Tick, replay, schedule_strategy};
-use super::harness::{ShardDriver, cmd};
-use super::notify_capture::{all_keyevents_mask, assert_keyevents_consistent};
 use frogdb_core::shard::WatchEntry;
 use frogdb_core::shard::types::TransactionResult;
+use frogdb_shard_harness::generator::{Choice, Sender, Step, Tick, replay, schedule_strategy};
+use frogdb_shard_harness::harness::{ShardDriver, cmd};
+use frogdb_shard_harness::notify_capture::{all_keyevents_mask, assert_keyevents_consistent};
 
 /// Deterministic pin: a multi-write EXEC is atomic even with an expiry tick and
 /// an unrelated write permuted around it. Under slot-granular WATCH (proposal

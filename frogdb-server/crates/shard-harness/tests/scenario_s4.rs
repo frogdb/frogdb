@@ -9,8 +9,8 @@ use std::time::Duration;
 use frogdb_protocol::Response;
 use frogdb_vll::{NoopMetricsSink, VllCoordinator};
 
-use super::harness::ShardDriver;
-use super::sink::ChannelSink;
+use frogdb_shard_harness::harness::ShardDriver;
+use frogdb_shard_harness::sink::ChannelSink;
 
 const SHARDS: [usize; 2] = [0, 1];
 

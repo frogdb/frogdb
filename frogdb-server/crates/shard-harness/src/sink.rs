@@ -181,6 +181,7 @@ impl ShardSink for FaultSink {
     }
 }
 
+#[cfg(test)]
 mod sink_tests {
     use std::time::Duration;
 

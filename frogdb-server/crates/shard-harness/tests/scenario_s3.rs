@@ -12,9 +12,9 @@ use bytes::Bytes;
 use frogdb_protocol::Response;
 use frogdb_vll::{LockMode, NoopMetricsSink, ScatterParticipant, ScatterRequest, VllCoordinator};
 
-use super::harness::ShardDriver;
-use super::sink::FaultSink;
 use frogdb_core::shard::ScatterOp;
+use frogdb_shard_harness::harness::ShardDriver;
+use frogdb_shard_harness::sink::FaultSink;
 
 const PARTICIPANTS: [usize; 3] = [2, 5, 7];
 const NUM_SHARDS: usize = 8;
@@ -196,7 +196,7 @@ async fn s3_withheld_service_forces_lock_timeout() {
 #[tokio::test]
 async fn s3_clean_run_commits_on_all_participants() {
     let mut driver = ShardDriver::new(NUM_SHARDS);
-    let sink = super::sink::ChannelSink::new(driver.senders());
+    let sink = frogdb_shard_harness::sink::ChannelSink::new(driver.senders());
     let coordinator = Arc::new(VllCoordinator::new(sink, NoopMetricsSink));
     let coord = coordinator.clone();
     let handle = tokio::spawn(async move { coord.scatter(mset_request(1)).await });
