@@ -77,7 +77,7 @@ def concurrency_nightly_workflow() -> Workflow:
             # see Justfile `concurrency-nightly` / concurrency_workload.rs
             # `seed_sweep_nightly`): ~3.5-4.6s per seed x profile combo across the
             # ops_per_client range bisected in
-            # .scratch/concurrency-testing/issues/11-nightly-smoke-findings.md.
+            # .scratch/concurrency-testing/issues/11.
             # At the default 250 seeds x 4 profiles = 1000 combos, that's roughly
             # an hour end to end; this ceiling leaves ~6x margin for CI-runner
             # variance (and remains a safety net rather than the expected runtime

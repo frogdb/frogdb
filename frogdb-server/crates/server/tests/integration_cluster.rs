@@ -12079,7 +12079,7 @@ async fn test_cluster_scan_is_per_node_and_unions_to_full_keyspace() {
 // arm has no integration coverage: driving it needs a CLIENT PAUSE WRITE on the
 // source that outlives a slot handover, and the handover itself runs MIGRATE
 // through a client connection on that same paused node. See
-// `.scratch/replication-cluster-rework/issues/02-migration-finalization-pause-barrier.md`.
+// `.scratch/replication-cluster-rework/issues/02`.
 //
 // The CROSSSLOT arm of the same batch decision is pinned separately by
 // `test_multi_exec_two_single_key_commands_different_slots_defers_crossslot_to_exec`

@@ -1,7 +1,7 @@
 # Shard-worker fail-stop supervision — implementation report
 
 Implements the accepted decision of
-`.scratch/concurrency-testing/issues/05-vll-phase3-partial-commit-decision.md`:
+`.scratch/concurrency-testing/issues/05`:
 **Option 4 = 4a supervision + 4c abort with shutdown guard** (4b fence subsumed while 4c is
 unconditional; 2b txn-framing/abort-on-recovery deferred to the durability phase; no VLL
 coordinator changes).

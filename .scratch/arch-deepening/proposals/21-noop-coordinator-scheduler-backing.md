@@ -7,7 +7,7 @@
 state machine that `SnapshotScheduler` (`scheduler.rs`) already owns for the Rocks coordinator. The
 copy is not merely redundant: its `request_snapshot` (`noop.rs:78-82`) is the *exact* naive body
 `if in_progress { scheduled.store(true) }` that `scheduler.rs:72` documents as the lost-wakeup bug
-and that [issue 08](../issues/08-snapshot-coalesce-lost-wakeup.md) closed **in the scheduler on
+and that [issue 08](../issues/) closed **in the scheduler on
 2026-07-20** — a fix that never reached the copy. The correctness-critical handshake now exists in
 two places, one fixed and one not, kept in sync by nobody.
 
@@ -73,7 +73,7 @@ the bug:
 > consuming nothing. It then exits with `in_progress == false`, and our `scheduled == true` arms no
 > follow-up: a lost wakeup.
 
-[Issue 08](../issues/08-snapshot-coalesce-lost-wakeup.md) (implemented 2026-07-20, all acceptance
+[Issue 08](../issues/) (implemented 2026-07-20, all acceptance
 criteria met) closed this window in `SnapshotScheduler::request` / `arm_follow_up`
 (`scheduler.rs:99-146`) with the double-check protocol and pinned it with
 `test_scheduler_arm_follow_up_after_runner_exit_starts` (`tests.rs:571-592`) plus the strengthened
@@ -368,7 +368,7 @@ persistence + two `server`-crate test edits, not persistence-only.
   proposal makes the Noop consume; its Risks section explicitly flagged "`Noop` coordinator
   alignment … could share `SnapshotScheduler`, which would also let it drop its completion stash" as
   deferred scope. This is that follow-up.
-- [Issue 08 — Close the SnapshotScheduler coalesce lost-wakeup window](../issues/08-snapshot-coalesce-lost-wakeup.md):
+- [Issue 08 — Close the SnapshotScheduler coalesce lost-wakeup window](../issues/):
   fixed the handshake in the scheduler (2026-07-20) but not in the Noop copy — the concrete
   divergence this proposal eliminates.
 - [Proposal 12 — Trim the SnapshotCoordinator surface](12-snapshot-coordinator-surface-trim.md):

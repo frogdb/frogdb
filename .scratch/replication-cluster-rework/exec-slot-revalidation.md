@@ -6,9 +6,9 @@ Area: Transactions / Cluster
 Author: planning pass 2026-07-28
 Originating issues:
 
-- [`issues/55-multi-exec-migration-boundary.md`](../testing-improvements/issues/55-multi-exec-migration-boundary.md)
+- [`issues/55`](../testing-improvements/issues/)
   — pinned the current (broken) contract and escalated the fix per its acceptance criterion 3.
-- [`issues/33-fence-min-replicas-e2e.md`](../testing-improvements/issues/33-fence-min-replicas-e2e.md) — documented the
+- [`issues/33`](../testing-improvements/issues/) — documented the
   sibling divergence: MULTI queue-time rejections do not poison the transaction, so EXEC returns a
   short/empty array instead of `EXECABORT`. This PRD subsumes that fix.
 
@@ -684,7 +684,7 @@ Implemented 2026-07-28 on branch `worktree-agent-a62ab6b4fde7fcca5`. All ten tas
 | T7 Issue-33 subsumption (`EXECABORT`) | done | `connection/dispatch.rs`, `connection/guards.rs`, `tests/integration_replication.rs` |
 | T8 Docs | done | `website/.../clustering.md` (canonical) + 3 linking pages |
 | T9 Jepsen `:queued-txn` + orphan checker | done | `testing/jepsen/.../slot_migration.clj`, `transaction.clj` |
-| T10 Follow-ups filed | done | [`issues/01`](issues/01-exec-slot-table-version-fast-path.md), [`issues/02`](issues/02-migration-finalization-pause-barrier.md), [`issues/03`](issues/03-lua-internal-write-validation.md) |
+| T10 Follow-ups filed | done | [`issues/01`](issues/), [`issues/02`](issues/), [`issues/03`](issues/) |
 
 ### Ordering invariant, as built
 
@@ -770,7 +770,7 @@ so the wider fix is contained.
 F4 has no integration coverage: driving it needs a `CLIENT PAUSE WRITE` on the source that outlives
 a slot handover, and the handover's own `MIGRATE` runs through a client connection on that same
 paused node. Documented in the test banner and in
-[issue 02](issues/02-migration-finalization-pause-barrier.md), which gains a natural hook for it.
+[issue 02](issues/), which gains a natural hook for it.
 
 Review-round test results (all targeted, local):
 
@@ -788,7 +788,7 @@ Review-round test results (all targeted, local):
 ### Known gaps
 
 - The residual Raft-apply-latency window (risk 7) is unchanged and is now documented in
-  `clustering.md`; closing it needs [issue 02](issues/02-migration-finalization-pause-barrier.md).
-- Lua's "validate once, write later" shape is untouched — [issue 03](issues/03-lua-internal-write-validation.md).
+  `clustering.md`; closing it needs [issue 02](issues/).
+- Lua's "validate once, write later" shape is untouched — [issue 03](issues/).
 - Validation is unconditional; the `slot_table_version` fast path is
-  [issue 01](issues/01-exec-slot-table-version-fast-path.md).
+  [issue 01](issues/).

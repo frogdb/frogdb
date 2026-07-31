@@ -42,7 +42,7 @@ you must read `shards.rs` (it is hardcoded there) and cross-check `config.rs` (i
 owner. Its failure mode is silent drift: change `RocksConfig::default()`'s
 `target_file_size_base` and every test keeps passing (they use `default()`), but the production
 Store still opens with the stale `shards.rs` literal — the default and the real deployment diverge
-with no compiler complaint. This is the exact honesty gap [proposal 19](19-config-defaults-honesty.md)
+with no compiler complaint. This is the exact honesty gap [proposal 19](19-dead-persistence-config-knobs.md)
 flags for config-vs-runtime skew, localized to the RocksDB tuning surface.
 
 ## Evidence (verified file:line)
@@ -259,7 +259,7 @@ changes, and the load-bearing `Default` impl is untouched.
 
 ## Related
 
-- [Proposal 19 — config defaults honesty](19-config-defaults-honesty.md): the drift-guard test here is
+- [Proposal 19 — dead persistence config knobs](19-dead-persistence-config-knobs.md): the drift-guard test here is
   a concrete instance of the config-vs-runtime honesty invariant, localized to RocksDB tuning.
 - [Proposal 13 — single config-param registry](13-config-param-single-registry.md): both attack
   "the same configuration fact is written in N places, kept consistent by hand"; 13 targets the

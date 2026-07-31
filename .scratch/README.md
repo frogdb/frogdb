@@ -1,0 +1,44 @@
+# `.scratch/` — feature workspaces
+
+Working directories for multi-session efforts: PRDs, proposals, and the issue tracker. Every
+subdirectory has a `README.md` with a `State:` line; every issue has a `Status:` line and lives
+under `issues/open/` or `issues/done/`.
+
+**This directory is git-tracked.** It is the record of what was decided and why, not a
+temp dir. Several files here are load-bearing — `scripts/coverage-depth.py` writes into
+`testing-improvements/audit/`, and ~20 tracked files across the repo cite issues here.
+
+## Directories
+
+| directory | state | open | done | what |
+|---|---|--:|--:|---|
+| [testing-improvements-round2](testing-improvements-round2/) | active | — | — | round-2 testing-gap audit; 249 findings, **proposal stage, no issues filed yet** |
+| [arch-deepening](arch-deepening/) | active | 15 | 5 | architecture deepening rounds; proposals backlog empty, issues backlog is not |
+| [concurrency-testing](concurrency-testing/) | active | 4 | 7 | concurrency invariant testing; phases 1–5 shipped, incl. one **real un-root-caused bug** (issue 11) |
+| [replication-cluster-rework](replication-cluster-rework/) | active | 4 | 0 | four rework PRDs, all merged 2026-07-30; follow-ups outstanding |
+| [naming-cleanup](naming-cleanup/) | active | 1 | 7 | canonical terminology; decisions now canon in `CONTEXT.md` files |
+| [testing-improvements](testing-improvements/) | archive-of-record | 4 | 63 | round-1 testing-gap audit. **Do not delete** — live write target + 10 inbound refs |
+
+Totals: **28 open, 82 done** across 110 issues.
+
+## Conventions
+
+Full rules live in [`docs/agents/issue-tracker.md`](../docs/agents/issue-tracker.md). The
+three that bite most often:
+
+1. **Status lives in two places and they must agree.** The `Status:` line and the
+   `open/`|`done/` subdirectory. `Status: done` → `done/`; anything else → `open/`. Enforced
+   by `just scratch-check`.
+
+2. **Cite issues by number + directory, never by filename.** Write
+   ``` `.scratch/testing-improvements/issues/40` ``` — not the full
+   `40-fuzzing-continuous-corpus.md` path. Filenames move between `open/` and `done/` and
+   get renumbered; number + directory does not. Markdown links point at the directory:
+   `[issue 66](../../.scratch/testing-improvements/issues/)`.
+
+3. **A `## Resolution` heading does not mean closed.** `concurrency-testing/issues/open/11`
+   has `## Resolution shipped in phase 5 (CI wiring)` — a scoped resolution of one sub-part
+   while its findings stay live. Only the `Status:` line is authoritative.
+
+Sub-issue numbers (`13-01`, `13-02`, `13-03` under `arch-deepening`) are distinct issues.
+Cite the full number.

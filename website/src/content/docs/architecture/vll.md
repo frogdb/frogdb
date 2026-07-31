@@ -194,7 +194,7 @@ already run") but are different failure classes and must not be conflated:
   against in-progress shutdown) the instant one dies unexpectedly, so this
   partial-commit window is not something a live node keeps serving reads
   against. The design decision is recorded in the concurrency-testing issue
-  tracker (`.scratch/concurrency-testing/issues/05-vll-phase3-partial-commit-decision.md`);
+  tracker (`.scratch/concurrency-testing/issues/05`);
   the durability-phase follow-up that keeps WAL replay from resurrecting the
   partial commit after restart (txn framing + abort-on-recovery) is filed as
   issue 06 in the same directory.

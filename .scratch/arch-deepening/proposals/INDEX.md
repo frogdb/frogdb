@@ -37,11 +37,11 @@ Post-merge review fix: 65966195 — WATCH false-negative when field-only hash ex
 with a whole-key removal in one expiry cycle (14×18 interaction; global-epoch bump now
 unconditional on fields_expired > 0).
 
-Follow-ups: issues/15-round10-followups.md — ALL 7 landed 2026-07-22 (spill effects, dead
+Follow-ups: issues/15 — ALL 7 landed 2026-07-22 (spill effects, dead
 params, lazy-purge + cross-type reindex hooks, keyless-scatter conflict propagation via
 PartialResult::ShardError/FatalReply, RocksStore put/get gating, demotion test). Review-fix
 extras: EsAllMerge error surfacing, no-op SET NX/COPY write_was_noop. Tail smalls:
-issues/16-post-followup-smalls.md.
+issues/16.
 
 ## Mutability round (issues 14-candidates + 17 + 18) — landed 2026-07-28
 - Config-mutability: 26 params promoted live-mutable (golden 111→118, MutableParamId 46→73)

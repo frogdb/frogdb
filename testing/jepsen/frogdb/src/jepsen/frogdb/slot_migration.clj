@@ -775,7 +775,7 @@
             ;; Gate only on keys the straddling transaction touched. The
             ;; ordinary :write generator runs straight through finalization as
             ;; well, and the documented raft-apply window (see
-            ;; .scratch/replication-cluster-rework/issues/02-...) can leave one
+            ;; .scratch/replication-cluster-rework/issues/02) can leave one
             ;; of its keys on the former owner for a bounded interval — a known,
             ;; accepted race with nothing to do with transactions. Every orphan
             ;; is still reported; only a transactional one fails the run.

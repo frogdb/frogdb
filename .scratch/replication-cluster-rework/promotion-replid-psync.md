@@ -8,14 +8,14 @@ Author: planning agent, 2026-07-28
 
 ## Links
 
-- Originating issue: `.scratch/testing-improvements/issues/34-promotion-replid-asserts.md`
+- Originating issue: `.scratch/testing-improvements/issues/34`
   (Resolution §"Candidate follow-up (not filed)")
-- Sibling boundary: `.scratch/testing-improvements/issues/61-runtime-resync-staged-not-installed.md`
+- Sibling boundary: `.scratch/testing-improvements/issues/61`
   (runtime full-resync stages but does not install; **being implemented in parallel — this PRD
   assumes it lands**)
-- Sim that had to route around this: `.scratch/testing-improvements/issues/23-turmoil-replication-topology.md`
+- Sim that had to route around this: `.scratch/testing-improvements/issues/23`
   (§Boundaries), test at `frogdb-server/crates/server/tests/simulation.rs:6095-6105`
-- Adjacent contract that must NOT regress: `.scratch/testing-improvements/issues/48-chained-replication-contract.md`
+- Adjacent contract that must NOT regress: `.scratch/testing-improvements/issues/48`
   (chained replication is **rejected**, deliberately)
 - Docs page whose stated behavior is currently false:
   `website/src/content/docs/operations/replication.md:15,78,87`

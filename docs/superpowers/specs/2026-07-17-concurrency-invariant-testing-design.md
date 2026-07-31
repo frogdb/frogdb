@@ -227,7 +227,7 @@ Each a named test, proptest-permuted around its critical window:
    `tests/shard_driver/notify_capture.rs`) and `scenario_s8` asserts the `expired`/`set`
    keyevent stream matches the chosen serialization order in both the sweep→EXEC and
    EXEC→sweep orderings. Broader rollout to S2/F3 lazy-expiry arms is a follow-up
-   (`.scratch/concurrency-testing/issues/10-notify-capture-broader-scenario-rollout.md`).
+   (`.scratch/concurrency-testing/issues/10`).
 
 ## Bug workflow
 
@@ -337,7 +337,7 @@ Each phase lands independently:
    `ops_per_client` are env-var overridable. Plumbing validated on a testbox
    smoke run; that validation also surfaced real, pre-existing invariant
    violations at higher seed counts and `ops_per_client` (tracked as
-   `.scratch/concurrency-testing/issues/11-nightly-smoke-findings.md`),
+   `.scratch/concurrency-testing/issues/11`),
    including a near-deterministic MultiWaiter exactly-once-delivery bug once
    `ops_per_client` crosses roughly 90 — so the nightly default (both the
    harness's `env_override` fallback and the `Justfile` recipe's `OPS`
@@ -393,7 +393,7 @@ shard replicates through its own async journal/replication flow, so a
 multi-shard transaction that commits atomically on the primary can in
 principle become visible to replica reads shard-by-shard rather than
 atomically — a distinct hazard from the primary-side partial-commit
-question in [issue 05](../../../.scratch/concurrency-testing/issues/05-vll-phase3-partial-commit-decision.md).
+question in [issue 05](../../../.scratch/concurrency-testing/issues/).
 Precedent: Dragonfly shipped this as a dedicated fix, v0.13.0
 ["feat(replica): atomicity for multi shard commands"](https://github.com/dragonflydb/dragonfly/pull/598),
 specifically to keep per-shard async journal flows from exposing partial

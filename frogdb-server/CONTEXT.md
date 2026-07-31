@@ -83,7 +83,7 @@ The per-shard RocksDB column family holding values spilled out of RAM.
 **Spill / Unspill**:
 Moving a value hot→warm (spill) or warm→hot (unspill). Canonical terms; code uses
 `spill_key`/`unspill_key` (renamed from `demote_key`/"promotion" per
-`.scratch/naming-cleanup/issues/01-warm-tier-spill-rename.md`).
+`.scratch/naming-cleanup/issues/01`).
 _Avoid_: demote/promote for tiering (reserved for cluster roles)
 
 **Durability Mode**:

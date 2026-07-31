@@ -240,7 +240,7 @@ fn seed_sweep_nightly() {
     let seeds_per_profile = env_override("FROGDB_CONCURRENCY_SEEDS", 250u64);
     // 75, not e.g. 150: at ops_per_client >= ~90 the MultiWaiter "exactly-once delivery"
     // invariant fails on nearly every seed (see
-    // .scratch/concurrency-testing/issues/11-nightly-smoke-findings.md, Finding A) — a real bug,
+    // .scratch/concurrency-testing/issues/11, Finding A) — a real bug,
     // but one that would make this job permanently red instead of surfacing new findings. Raise
     // this default only after that issue is resolved.
     let ops_per_client = env_override("FROGDB_CONCURRENCY_OPS_PER_CLIENT", 75usize);

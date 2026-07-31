@@ -93,7 +93,7 @@ every report.
   same function always show the same test count.
 - **Neither tier proves a test asserts anything.** A test can execute a function 500
   times and check nothing. Closing that gap needs mutation testing — tracked as
-  [issue 66](../../.scratch/testing-improvements/issues/66-mutation-testing.md).
+  [issue 66](../../.scratch/testing-improvements/issues/).
 - **HTML embeds a bounded number of sources.** The page is self-contained (no CDN, opens
   offline), so it embeds source only for the highest-signal files; the count is stated on
   the page and `depth.json` always holds the complete, untruncated data.

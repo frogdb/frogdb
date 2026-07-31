@@ -40,7 +40,7 @@ use frogdb_protocol::Response;
 /// `cluster_slots_pfail` therefore reports a *derived* 0 rather than a
 /// hardcoded one: it is accurate because no node is ever PFAIL, and it will
 /// start reporting real counts for free if a suspicion phase is ever added.
-/// See `.scratch/testing-improvements/issues/36-cluster-slots-fail-accounting.md`.
+/// See `.scratch/testing-improvements/issues/36`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct SlotHealthCounts {
     ok: u16,
@@ -245,7 +245,7 @@ impl Command for ClusterCommand {
 ///    monotonic but not a reliable change-detector -- read the raw per-node
 ///    `config_epoch` from `CLUSTER NODES` for that.
 ///
-/// See `.scratch/testing-improvements/issues/47-epoch-fold-observability.md`
+/// See `.scratch/testing-improvements/issues/47`
 /// and the "current epoch folds in the Raft term" section of
 /// `website/src/content/docs/architecture/clustering.md`.
 fn fold_current_epoch(config_epoch: frogdb_cluster::ConfigEpoch, raft_term: u64) -> u64 {

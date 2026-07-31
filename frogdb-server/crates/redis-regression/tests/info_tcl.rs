@@ -58,7 +58,7 @@
 //! EVALSHA errors invisible, and that unknown-command/OOM errors landed on the
 //! wrong side of the rejected/failed split; the tests below pinned those gaps
 //! until issue 63 closed them. See
-//! `.scratch/testing-improvements/issues/63-errorstats-dispatch-stage-coverage-gap.md`.
+//! `.scratch/testing-improvements/issues/63`.
 //!
 //! Each upstream scenario, and how it maps onto FrogDB:
 //!

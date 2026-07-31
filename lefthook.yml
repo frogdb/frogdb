@@ -52,3 +52,7 @@ pre-commit:
       glob:
         - "frogdb-server/crates/core/src/scripting/**/*.rs"
       run: just lint-script-gate
+    - name: scratch-tracker
+      glob:
+        - ".scratch/**/*.md"
+      run: just scratch-check

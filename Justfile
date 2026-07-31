@@ -107,7 +107,7 @@ concurrency-turmoil PATTERN='seed_sweep':
 # Run the nightly (1000+ seed) generated-workload sweep across all profiles (CI nightly
 # tier, not part of `just concurrency`/`just test-all`). SEEDS overrides seeds-per-profile
 # (default 250 x 4 profiles = 1000). OPS overrides ops-per-client and defaults to 75, NOT the
-# harness's coded default of 150 — see .scratch/concurrency-testing/issues/11-nightly-smoke-findings.md:
+# harness's coded default of 150 — see .scratch/concurrency-testing/issues/11:
 # ops_per_client >= ~90 makes the MultiWaiter "exactly-once delivery" invariant fail on nearly
 # every seed (a real, tracked bug), which would make this job permanently red rather than
 # surfacing new findings. Raise OPS only after that issue is resolved. clients/shards keep the
@@ -854,6 +854,13 @@ lint-script-gate:
     fi
     echo "OK: script sub-command routing stays behind ScriptCommandGate"
 
+# Verify the .scratch/ issue tracker is internally consistent: legal Status:
+# values, Status: agrees with the open/|done/ subdirectory, every feature dir has
+# a README.md with a State: line, no duplicate issue numbers.
+# See docs/agents/issue-tracker.md.
+scratch-check:
+    ./scripts/scratch-check.py
+
 # Pub/sub subscribe/unsubscribe confirmations and the array-null wire shape each
 # have exactly one owner (proposal 26):
 #   1. Confirmations must be built through frogdb_core::PubSubConfirmation, the
@@ -1030,10 +1037,10 @@ tb-list:
 # =============================================================================
 
 # Fast pre-commit checks (format + lint only)
-pre-commit: fmt-check fmt-py-check lint lint-py sync-toolchain-check lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate
+pre-commit: fmt-check fmt-py-check lint lint-py sync-toolchain-check lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate scratch-check
 
 # Run all checks (CI)
-check-all: fmt-check fmt-py-check lint lint-py sync-toolchain-check lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate deny test-all generate-check
+check-all: fmt-check fmt-py-check lint lint-py sync-toolchain-check lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate scratch-check deny test-all generate-check
 
 # Alias: CI
 alias ci := check-all

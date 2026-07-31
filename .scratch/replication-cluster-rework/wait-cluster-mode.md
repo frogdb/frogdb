@@ -2,21 +2,21 @@
 
 Status: draft
 Area: Cluster / Replication
-Origin: follow-up to issue 37 (`.scratch/testing-improvements/issues/37-wait-in-cluster.md`, done —
+Origin: follow-up to issue 37 (`.scratch/testing-improvements/issues/37`, done —
 the divergence was *pinned*, not fixed). Written 2026-07-28.
 
 Related issues:
 
-- [37 — WAIT has zero coverage in cluster mode](../testing-improvements/issues/37-wait-in-cluster.md) (done; three pinning
+- [37 — WAIT has zero coverage in cluster mode](../testing-improvements/issues/) (done; three pinning
   tests added to `integration_cluster.rs`, root cause traced, follow-ups deferred here)
-- [34 — Promotion replid asserts](../testing-improvements/issues/34-promotion-replid-asserts.md) (done; documented that a
+- [34 — Promotion replid asserts](../testing-improvements/issues/) (done; documented that a
   runtime-promoted node never establishes a `PrimaryReplicationHandler` and rejects downstream PSYNC)
-- [61 — Runtime resync staged-not-installed](../testing-improvements/issues/61-runtime-resync-staged-not-installed.md)
+- [61 — Runtime resync staged-not-installed](../testing-improvements/issues/)
   (open; a full-sync checkpoint is staged but not installed until reboot — a hard prerequisite here)
-- [48 — Chained-replication rejection contract](../testing-improvements/issues/48-chained-replication-contract.md) (done;
+- [48 — Chained-replication rejection contract](../testing-improvements/issues/) (done;
   pins "FrogDB does not implement transitive replication" — Task 5 would flip it, see risk R4b)
-- [23 — Turmoil replication topology](../testing-improvements/issues/23-turmoil-replication-topology.md)
-- [11 — Turmoil cluster raft topology](../testing-improvements/issues/11-turmoil-cluster-raft-topology.md)
+- [23 — Turmoil replication topology](../testing-improvements/issues/)
+- [11 — Turmoil cluster raft topology](../testing-improvements/issues/)
 
 ---
 
@@ -129,7 +129,7 @@ Consequences, in order of severity:
 
 Issue 37's empirical probe corroborates: on a 2-primary + 1-replica cluster after a `SET`,
 `INFO replication` on the owning primary reported `connected_slaves:0` and `master_repl_offset:0`
-(`.scratch/testing-improvements/issues/37-wait-in-cluster.md:74-79`).
+(`.scratch/testing-improvements/issues/37:74-79`).
 
 > **Premise to re-verify before implementation (Task 0).** The "cluster data replication is inert"
 > conclusion is a code-path deduction plus issue 37's INFO probe; no test asserts that a

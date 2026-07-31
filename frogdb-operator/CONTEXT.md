@@ -56,7 +56,7 @@ The two deployment paths for FrogDB: via the CR + reconciler, or directly via th
 **Debug Bundle**:
 The server support archive, fetched by `frogdb-admin`. Canonical term per the context map;
 `frogdb-admin`'s "diagnostic bundle" wording is a deprecated alias
-(`.scratch/naming-cleanup/issues/07-debug-bundle-alias.md`).
+(`.scratch/naming-cleanup/issues/07`).
 
 ## Relationships
 
