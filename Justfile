@@ -163,6 +163,18 @@ mutants-diff crate:
 mutants-gate crate threshold:
     ./scripts/mutants-gate.py target/mutants/{{crate}}/mutants.out/outcomes.json --min-score {{threshold}}
 
+# Run the frozen Redis compat suite (nightly / on-demand only during the campaign)
+regression pattern="":
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-redis-regression --features regression {{ if pattern != "" { "-E 'test(/" + pattern + "/)'" } else { "" } }}
+
+# Type-check the frozen suite without running it — the anti-rot guard
+regression-check:
+    {{dyld-env}} {{rocksdb-env}} cargo check -p frogdb-redis-regression --features regression --all-targets
+
+# Run frogctl's tests (excluded from the default suite during the campaign)
+frogctl-test:
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogctl --features cli-tests --ignore-default-filter
+
 # =============================================================================
 # Rust: Format & Lint
 # =============================================================================

@@ -6,9 +6,15 @@ license.workspace = true
 publish = false
 autotests = false
 
+[features]
+# Campaign freeze: the compat suite runs nightly/on-demand only.
+# See docs/agents/hardening-campaign.md.
+regression = []
+
 [[test]]
 name = "main"
 path = "tests/main.rs"
+required-features = ["regression"]
 
 [dev-dependencies]
 frogdb-test-harness.workspace = true

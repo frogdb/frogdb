@@ -15,9 +15,14 @@ path = "src/lib.rs"
 name = "frogctl"
 path = "src/main.rs"
 
+[features]
+# Excluded from the default test run during the hardening campaign.
+cli-tests = []
+
 [[test]]
 name = "integration"
 path = "tests/main.rs"
+required-features = ["cli-tests"]
 
 [dependencies]
 clap.workspace = true
