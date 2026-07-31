@@ -1,0 +1,28 @@
+# cargo-mutants configuration for the hardening campaign
+# (docs/agents/hardening-campaign.md). Run via `just mutants <crate>` /
+# `just mutants-diff <crate>`; scores enforced by `just mutants-gate`.
+
+test_tool = "nextest"
+
+# Cluster/replication integration tests are legitimately slow; give mutant
+# test runs generous headroom so slow-but-caught mutants don't count as
+# timeouts (a rising timeout share means this multiplier is wrong, not that
+# the tests are bad — see scripts/mutants-gate.py).
+timeout_multiplier = 4.0
+minimum_test_timeout = 60.0
+
+exclude_globs = [
+    "**/tests/**",
+    "**/benches/**",
+    "frogdb-server/crates/redis-regression/**",
+    "frogctl/**",
+]
+
+# Never mutate observability plumbing: a survivor there is noise, not a
+# correctness gap.
+exclude_re = [
+    "fn record_",
+    "fn metric_label",
+    "impl Debug",
+    "impl Display",
+]

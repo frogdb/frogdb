@@ -143,6 +143,27 @@ bench:
     {{dyld-env}} {{rocksdb-env}} cargo bench -p frogdb-benches
 
 # =============================================================================
+# Hardening campaign (see docs/agents/hardening-campaign.md)
+# =============================================================================
+
+# Record an area's warm inner-loop cost (check + test-binary build medians)
+loop-cost area:
+    RUSTC_WRAPPER="" ./scripts/loop-cost.py {{area}}
+
+# Mutation-test one crate (testbox-class workload; config in .cargo/mutants.toml)
+mutants crate *args:
+    {{dyld-env}} {{rocksdb-env}} cargo mutants -p {{crate}} --output target/mutants/{{crate}} {{args}}
+
+# Mutate only this branch's diff vs origin/main (PR-viable cost)
+mutants-diff crate:
+    git diff $(git merge-base origin/main HEAD) > target/mutants-diff.patch
+    {{dyld-env}} {{rocksdb-env}} cargo mutants -p {{crate}} --in-diff target/mutants-diff.patch --output target/mutants/{{crate}}-diff
+
+# Enforce an area's mutation score from a completed run (threshold e.g. 0.90)
+mutants-gate crate threshold:
+    ./scripts/mutants-gate.py target/mutants/{{crate}}/mutants.out/outcomes.json --min-score {{threshold}}
+
+# =============================================================================
 # Rust: Format & Lint
 # =============================================================================
 
