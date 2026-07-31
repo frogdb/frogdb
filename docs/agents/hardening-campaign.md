@@ -30,8 +30,7 @@ fill gaps → lock**. Areas are strictly serial, one PR per step.
 
 | Command | Purpose |
 |---|---|
-| `just core-check <crate>` | Type-check one crate on the core command profile |
-| `just core-test <area>` | Run one area's tests (`txn` \| `persistence` \| `replication` \| `cluster`) |
+| `just core-test <area> [pattern]` | Run one area's crate tests (`txn` \| `persistence` \| `replication` \| `cluster`) |
 | `just core-test-e2e <area>` | Area's end-to-end tests against the real server, core profile |
 | `just regression [pattern]` | Run the frozen compat suite (on demand / nightly only) |
 | `just regression-check` | Compile-only anti-rot check of the frozen suite |
@@ -40,8 +39,11 @@ fill gaps → lock**. Areas are strictly serial, one PR per step.
 | `just mutants-gate <crate> <threshold>` | Enforce an area's mutation score from a completed run |
 | `just loop-cost <area>` | Record the area's warm inner-loop cost to the metrics file |
 
-The inner loop pins one feature set (`--no-default-features --features core-profile` via the
-`core-*` recipes). Do not alternate feature sets between commands — it thrashes the build cache.
+Targeted `-p` builds (`just check <crate>`, `just test <crate>`, the `core-*` recipes) already use
+the core command profile — it is the default feature set. Workspace-wide builds unify to the full
+surface (docs-gen and the frozen regression suite pin `cmd-full`), which is expected. Avoid
+alternating extra feature flags between commands in an iteration loop — it thrashes the build
+cache.
 
 ## Conventions
 

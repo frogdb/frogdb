@@ -150,6 +150,33 @@ bench:
 loop-cost area:
     RUSTC_WRAPPER="" ./scripts/loop-cost.py {{area}}
 
+# Run one hardening area's crate tests (core command profile).
+# Crate lists grow as extraction phases land (frogdb-txn, frogdb-recovery, ...).
+core-test area pattern="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{area}}" in
+      txn)         crates="-p frogdb-vll" ;;
+      persistence) crates="-p frogdb-persistence" ;;
+      replication) crates="-p frogdb-replication" ;;
+      cluster)     crates="-p frogdb-cluster" ;;
+      *) echo "unknown area: {{area}} (txn|persistence|replication|cluster)" >&2; exit 2 ;;
+    esac
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run $crates {{ if pattern != "" { "-E 'test(/" + pattern + "/)'" } else { "" } }}
+
+# Run one hardening area's end-to-end server tests (core command profile)
+core-test-e2e area:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{area}}" in
+      txn)         filter="test(integration_transactions::)" ;;
+      persistence) filter="test(integration_persistence::)" ;;
+      replication) filter="test(integration_replication::)" ;;
+      cluster)     filter="test(integration_cluster::)" ;;
+      *) echo "unknown area: {{area}} (txn|persistence|replication|cluster)" >&2; exit 2 ;;
+    esac
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-server -E "$filter"
+
 # Mutation-test one crate (testbox-class workload; config in .cargo/mutants.toml)
 mutants crate *args:
     {{dyld-env}} {{rocksdb-env}} cargo mutants -p {{crate}} --output target/mutants/{{crate}} {{args}}
