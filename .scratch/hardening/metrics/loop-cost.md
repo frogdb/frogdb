@@ -8,3 +8,7 @@ Warm incremental medians after touching the area's primary file: `check` = `carg
 | 2026-07-31 | 1b6b5166 | persistence | frogdb-server | 8.4 | 11.6 | 2130 |
 | 2026-07-31 | 1b6b5166 | replication | frogdb-server | 8.9 | 14.7 | 2130 |
 | 2026-07-31 | 1b6b5166 | cluster | frogdb-server | 9.2 | 12.4 | 2130 |
+| 2026-07-31 | 0a42c374 | txn | frogdb-server | 9.1 | 10.9 | 1915 |
+| 2026-07-31 | 0a42c374 | persistence | frogdb-server | 11.4 | 12.9 | 1915 |
+| 2026-07-31 | 0a42c374 | replication | frogdb-server | 11.8 | 13.6 | 1915 |
+| 2026-07-31 | 0a42c374 | cluster | frogdb-server | 11.2 | 12.9 | 1915 |
