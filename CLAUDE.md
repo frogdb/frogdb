@@ -99,6 +99,13 @@ ensure they are still progressing and not stuck.
 
 ## Agent skills
 
+### Hardening campaign (ACTIVE)
+
+Foundation-hardening campaign is in progress: core areas (transactions, persistence, replication,
+cluster) are being extracted, specced, and mutation-tested; the redis-regression suite is frozen
+and operator/frogctl are out of scope. **Read `docs/agents/hardening-campaign.md` before working
+on core-area code.**
+
 ### Issue tracker
 
 Issues + PRDs live as markdown under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
