@@ -18,7 +18,10 @@ required-features = ["regression"]
 
 [dev-dependencies]
 frogdb-test-harness.workspace = true
-frogdb-server = { path = "../server" }
+# The frozen compat suite replays upstream Redis TCL coverage across every
+# command family, so it always builds the server with the full command surface
+# rather than gating each `*_tcl.rs` module on a `cmd-*` feature.
+frogdb-server = { path = "../server", features = ["cmd-full"] }
 frogdb-core = { path = "../core" }
 frogdb-protocol = { path = "../protocol" }
 redis-protocol = { workspace = true }

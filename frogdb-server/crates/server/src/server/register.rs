@@ -345,7 +345,8 @@ mod spec_exhaustiveness {
     /// LREM/RPOPLPUSH/LMOVE/ZINCRBY were all silent omissions before the spec.
     #[test]
     fn data_adding_commands_wake_blocked_clients() {
-        let expected: &[(&str, WaiterKind)] = &[
+        #[allow(unused_mut)]
+        let mut expected: Vec<(&str, WaiterKind)> = vec![
             ("LPUSH", WaiterKind::List),
             ("RPUSH", WaiterKind::List),
             ("LINSERT", WaiterKind::List),
@@ -353,10 +354,11 @@ mod spec_exhaustiveness {
             ("LMOVE", WaiterKind::List),
             ("ZADD", WaiterKind::SortedSet),
             ("ZINCRBY", WaiterKind::SortedSet),
-            ("XADD", WaiterKind::Stream),
         ];
+        #[cfg(feature = "cmd-stream")]
+        expected.push(("XADD", WaiterKind::Stream));
         let r = full_registry();
-        for (name, kind) in expected {
+        for (name, kind) in &expected {
             let entry = r
                 .get_entry(name)
                 .unwrap_or_else(|| panic!("{name} not registered"));
@@ -379,7 +381,8 @@ mod spec_exhaustiveness {
     #[test]
     fn multi_key_commands_declare_accurate_events() {
         // (command, destination index into the extracted key list)
-        let emits_at: &[(&str, usize)] = &[
+        #[allow(unused_mut)]
+        let mut emits_at: Vec<(&str, usize)> = vec![
             ("ZRANGESTORE", 0),
             ("ZUNIONSTORE", 0),
             ("ZINTERSTORE", 0),
@@ -388,10 +391,13 @@ mod spec_exhaustiveness {
             ("SINTERSTORE", 0),
             ("SDIFFSTORE", 0),
             ("COPY", 1),
-            // Phase 2: former Suppressed under-emitters with a static dest.
-            ("PFMERGE", 0),
         ];
-        let dynamic: &[&str] = &[
+        // Phase 2: former Suppressed under-emitters with a static dest.
+        #[cfg(feature = "cmd-hyperloglog")]
+        emits_at.push(("PFMERGE", 0));
+
+        #[allow(unused_mut)]
+        let mut dynamic: Vec<&str> = vec![
             "RENAME",
             "RENAMENX",
             "SMOVE",
@@ -403,24 +409,25 @@ mod spec_exhaustiveness {
             "BLMOVE",
             "BZPOPMIN",
             "BZPOPMAX",
-            // Phase 2: set-or-del (GEOSEARCHSTORE, BITOP) and popped-key-only
-            // (LMPOP) are runtime-dependent.
-            "GEOSEARCHSTORE",
+            // Phase 2: set-or-del (BITOP) and popped-key-only (LMPOP) are
+            // runtime-dependent.
             "BITOP",
             "LMPOP",
             // Phase 4: dynamic-key STORE commands (dest present only with STORE,
             // set-or-del), the last Suppressed blocking-pop members, and the
             // blocking multi-pops.
             "SORT",
-            "GEORADIUS",
-            "GEORADIUSBYMEMBER",
             "BRPOPLPUSH",
             "BLMPOP",
             "BZMPOP",
         ];
+        // GEOSEARCHSTORE is set-or-del; GEORADIUS/GEORADIUSBYMEMBER only have a
+        // destination when invoked with STORE.
+        #[cfg(feature = "cmd-geo")]
+        dynamic.extend_from_slice(&["GEOSEARCHSTORE", "GEORADIUS", "GEORADIUSBYMEMBER"]);
 
         let r = full_registry();
-        for (name, dest_index) in emits_at {
+        for (name, dest_index) in &emits_at {
             let entry = r
                 .get_entry(name)
                 .unwrap_or_else(|| panic!("{name} not registered"));
@@ -431,7 +438,7 @@ mod spec_exhaustiveness {
                 spec.event
             );
         }
-        for name in dynamic {
+        for name in &dynamic {
             let entry = r
                 .get_entry(name)
                 .unwrap_or_else(|| panic!("{name} not registered"));
@@ -462,9 +469,11 @@ mod spec_exhaustiveness {
     #[test]
     fn reindex_facts_declared_for_hash_and_json_writes() {
         let hash = IndexKind::Hash;
+        #[cfg(feature = "cmd-json")]
         let json = IndexKind::Json;
         // (command, expected ReindexSpec)
-        let expected: &[(&str, ReindexSpec)] = &[
+        #[allow(unused_mut)]
+        let mut expected: Vec<(&str, ReindexSpec)> = vec![
             // Hash writes whose key survives — reindex the first key.
             ("HSET", ReindexSpec::FirstKey { kind: hash }),
             ("HSETNX", ReindexSpec::FirstKey { kind: hash }),
@@ -481,20 +490,6 @@ mod spec_exhaustiveness {
             ("HEXPIREAT", ReindexSpec::FirstKeyOrDelete { kind: hash }),
             ("HPEXPIREAT", ReindexSpec::FirstKeyOrDelete { kind: hash }),
             ("HGETEX", ReindexSpec::FirstKeyOrDelete { kind: hash }),
-            // JSON writes whose key survives.
-            ("JSON.SET", ReindexSpec::FirstKey { kind: json }),
-            ("JSON.MERGE", ReindexSpec::FirstKey { kind: json }),
-            ("JSON.STRAPPEND", ReindexSpec::FirstKey { kind: json }),
-            ("JSON.TOGGLE", ReindexSpec::FirstKey { kind: json }),
-            ("JSON.ARRAPPEND", ReindexSpec::FirstKey { kind: json }),
-            ("JSON.ARRINSERT", ReindexSpec::FirstKey { kind: json }),
-            ("JSON.ARRPOP", ReindexSpec::FirstKey { kind: json }),
-            ("JSON.ARRTRIM", ReindexSpec::FirstKey { kind: json }),
-            ("JSON.NUMINCRBY", ReindexSpec::FirstKey { kind: json }),
-            ("JSON.NUMMULTBY", ReindexSpec::FirstKey { kind: json }),
-            // JSON writes that may drop the key.
-            ("JSON.DEL", ReindexSpec::FirstKeyOrDelete { kind: json }),
-            ("JSON.CLEAR", ReindexSpec::FirstKeyOrDelete { kind: json }),
             // Key-set writers.
             ("DEL", ReindexSpec::DeleteKeys),
             ("UNLINK", ReindexSpec::DeleteKeys),
@@ -510,12 +505,29 @@ mod spec_exhaustiveness {
             ("RESTORE", ReindexSpec::RefreshFirstKey),
             ("COPY", ReindexSpec::RefreshSecondKey),
         ];
+        #[cfg(feature = "cmd-json")]
+        expected.extend([
+            // JSON writes whose key survives.
+            ("JSON.SET", ReindexSpec::FirstKey { kind: json }),
+            ("JSON.MERGE", ReindexSpec::FirstKey { kind: json }),
+            ("JSON.STRAPPEND", ReindexSpec::FirstKey { kind: json }),
+            ("JSON.TOGGLE", ReindexSpec::FirstKey { kind: json }),
+            ("JSON.ARRAPPEND", ReindexSpec::FirstKey { kind: json }),
+            ("JSON.ARRINSERT", ReindexSpec::FirstKey { kind: json }),
+            ("JSON.ARRPOP", ReindexSpec::FirstKey { kind: json }),
+            ("JSON.ARRTRIM", ReindexSpec::FirstKey { kind: json }),
+            ("JSON.NUMINCRBY", ReindexSpec::FirstKey { kind: json }),
+            ("JSON.NUMMULTBY", ReindexSpec::FirstKey { kind: json }),
+            // JSON writes that may drop the key.
+            ("JSON.DEL", ReindexSpec::FirstKeyOrDelete { kind: json }),
+            ("JSON.CLEAR", ReindexSpec::FirstKeyOrDelete { kind: json }),
+        ]);
         // Explicit carve-outs: WRITE hash commands that change no indexable value
         // and so legitimately declare `None` (they must NOT reindex).
         let carve_outs: &[&str] = &["HPERSIST"];
 
         let r = full_registry();
-        for (name, want) in expected {
+        for (name, want) in &expected {
             let entry = r
                 .get_entry(name)
                 .unwrap_or_else(|| panic!("{name} not registered"));

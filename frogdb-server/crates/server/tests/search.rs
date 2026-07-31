@@ -5800,6 +5800,7 @@ async fn test_ft_search_timeout_and_dialect() {
 // ON JSON support in FT.CREATE
 // ============================================================================
 
+#[cfg(feature = "cmd-json")]
 #[tokio::test]
 async fn test_ft_create_json() {
     let server = start_server_no_persist().await;
@@ -5854,6 +5855,7 @@ async fn test_ft_create_json() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-json")]
 #[tokio::test]
 async fn test_ft_create_json_update_triggers_reindex() {
     let server = start_server_no_persist().await;
@@ -5907,6 +5909,7 @@ async fn test_ft_create_json_update_triggers_reindex() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-json")]
 #[tokio::test]
 async fn test_ft_create_json_delete_removes_from_index() {
     let server = start_server_no_persist().await;
@@ -6098,6 +6101,7 @@ async fn test_ft_cursor_del() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-json")]
 #[tokio::test]
 async fn test_ft_create_json_tag_with_array() {
     let server = start_server_no_persist().await;
@@ -6662,6 +6666,7 @@ async fn test_ft_aggregate_timefmt() {
 
 /// Helper to set up an index with TEXT + VECTOR fields and insert docs.
 /// Returns the server and client ready for hybrid queries.
+#[cfg(feature = "cmd-vectorset")]
 async fn setup_hybrid_index() -> (TestServer, crate::common::test_server::TestClient) {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;
@@ -6762,6 +6767,7 @@ async fn setup_hybrid_index() -> (TestServer, crate::common::test_server::TestCl
     (server, client)
 }
 
+#[cfg(feature = "cmd-vectorset")]
 #[tokio::test]
 async fn test_ft_hybrid_basic_rrf() {
     let (server, mut client) = setup_hybrid_index().await;
@@ -6804,6 +6810,7 @@ async fn test_ft_hybrid_basic_rrf() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-vectorset")]
 #[tokio::test]
 async fn test_ft_hybrid_linear_fusion() {
     let (server, mut client) = setup_hybrid_index().await;
@@ -6847,6 +6854,7 @@ async fn test_ft_hybrid_linear_fusion() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-vectorset")]
 #[tokio::test]
 async fn test_ft_hybrid_yield_score_as() {
     let (server, mut client) = setup_hybrid_index().await;
@@ -6911,6 +6919,7 @@ async fn test_ft_hybrid_yield_score_as() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-vectorset")]
 #[tokio::test]
 async fn test_ft_hybrid_limit() {
     let (server, mut client) = setup_hybrid_index().await;
@@ -6950,6 +6959,7 @@ async fn test_ft_hybrid_limit() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-vectorset")]
 #[tokio::test]
 async fn test_ft_hybrid_disjoint_results() {
     let (server, mut client) = setup_hybrid_index().await;
@@ -6997,6 +7007,7 @@ async fn test_ft_hybrid_disjoint_results() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-vectorset")]
 #[tokio::test]
 async fn test_ft_hybrid_missing_param() {
     let (server, mut client) = setup_hybrid_index().await;
@@ -7028,6 +7039,7 @@ async fn test_ft_hybrid_missing_param() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-vectorset")]
 #[tokio::test]
 async fn test_ft_hybrid_missing_index() {
     let server = start_server_no_persist().await;
@@ -7059,6 +7071,7 @@ async fn test_ft_hybrid_missing_index() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-vectorset")]
 #[tokio::test]
 async fn test_ft_hybrid_nocontent() {
     let (server, mut client) = setup_hybrid_index().await;
@@ -7402,6 +7415,7 @@ async fn regression_rename_nonhash_over_indexed_hash_removes_doc() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-json")]
 /// Issue 16 item 2: same-shard `COPY` of a JSON document INTO a JSON-index
 /// prefix key must index the destination. `ReindexSpec::RefreshSecondKey`
 /// reconciles `args[1]` (the destination); the Refresh index path must handle
@@ -7456,6 +7470,7 @@ async fn regression_copy_json_into_index_prefix_indexes_destination() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-json")]
 /// Issue 16 item 2: `RESTORE` of a JSON payload INTO a JSON-index prefix key
 /// must index the destination. RESTORE reconciles `args[0]` via
 /// `ReindexSpec::RefreshFirstKey` (this also covers cross-shard COPY, which
@@ -7511,6 +7526,7 @@ async fn regression_restore_json_into_index_prefix_indexes_destination() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-json")]
 /// Issue 16 item 2: `RENAME` of a JSON document INTO a JSON-index prefix key
 /// must index the destination. RENAME reconciles the destination via
 /// `ReindexSpec::Rename` (Delete(old) + Refresh(new)); the Refresh index path
@@ -7561,6 +7577,7 @@ async fn regression_rename_json_into_index_prefix_indexes_destination() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-json")]
 /// Cross-source Refresh regression: a JSON value overwriting a key still present
 /// in a HASH-source index must drop the stale hash doc. `refresh_key` used to
 /// dispatch a JSON value straight to `reindex_json_key`, which only visits
@@ -7614,6 +7631,7 @@ async fn regression_copy_json_over_hash_indexed_key_removes_stale_hash_doc() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-json")]
 /// Cross-source Refresh regression (RENAME): renaming a JSON value onto a key
 /// present in a HASH-source index must drop the stale hash doc.
 #[tokio::test]
@@ -7659,6 +7677,7 @@ async fn regression_rename_json_over_hash_indexed_key_removes_stale_hash_doc() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-json")]
 /// Cross-source Refresh regression (RESTORE): restoring a JSON payload over a
 /// key present in a HASH-source index must drop the stale hash doc.
 #[tokio::test]
@@ -7717,6 +7736,7 @@ async fn regression_restore_json_over_hash_indexed_key_removes_stale_hash_doc() 
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-json")]
 /// Symmetric cross-source Refresh regression: a hash value overwriting a key
 /// present in a JSON-source index must NOT pollute the JSON index. Predates this
 /// branch — `reindex_hash_key` lacked the `source == Hash` guard its JSON twin

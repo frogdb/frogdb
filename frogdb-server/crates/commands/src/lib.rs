@@ -6,31 +6,57 @@
 //!
 //! Server-specific commands (cluster, replication, config, client, ACL,
 //! scripting, transactions, migration, persistence) remain in `frogdb-server`.
+//!
+//! # Feature gating
+//!
+//! The families above split into two tiers. The **core profile** (`basic`,
+//! `string`, `bitmap`, `list`, `hash`, `set`, `sorted_set`, `expiry`,
+//! `blocking`, `scan`, `generic`, `sort`, `utils`) is always compiled. Every
+//! other family sits behind a cargo feature of the same name so a targeted
+//! core-area build can skip it; `full` turns them all back on and is what any
+//! consumer that enumerates the registry must depend on.
+//!
+//! Gated families are leaves: none of them is referenced by another module in
+//! this crate, and the only shared helper they reach for (`utils`) lives in the
+//! core profile. `frogdb-core`/`frogdb-types` are untouched — the `Value`
+//! variants for every family exist regardless of which commands are compiled.
 
 pub mod basic;
 pub mod bitmap;
 pub mod blocking;
+#[cfg(feature = "bloom")]
 pub mod bloom;
+#[cfg(feature = "cms")]
 pub mod cms;
+#[cfg(feature = "cuckoo")]
 pub mod cuckoo;
+#[cfg(feature = "event-sourcing")]
 pub mod event_sourcing;
 pub mod expiry;
 pub mod generic;
+#[cfg(feature = "geo")]
 pub mod geo;
 pub mod hash;
+#[cfg(feature = "hyperloglog")]
 pub mod hyperloglog;
+#[cfg(feature = "json")]
 pub mod json;
 pub mod list;
 pub mod scan;
 pub mod set;
 pub mod sort;
 pub mod sorted_set;
+#[cfg(feature = "stream")]
 pub mod stream;
 pub mod string;
+#[cfg(feature = "tdigest")]
 pub mod tdigest;
+#[cfg(feature = "timeseries")]
 pub mod timeseries;
+#[cfg(feature = "topk")]
 pub mod topk;
 pub mod utils;
+#[cfg(feature = "vectorset")]
 pub mod vectorset;
 
 /// Register all data-structure commands with the given registry.
@@ -234,24 +260,27 @@ pub fn register_all(registry: &mut frogdb_core::CommandRegistry) {
     registry.register(scan::ScanCommand);
     registry.register(scan::KeysCommand);
 
-    // Stream commands
-    registry.register(stream::XaddCommand);
-    registry.register(stream::XlenCommand);
-    registry.register(stream::XrangeCommand);
-    registry.register(stream::XrevrangeCommand);
-    registry.register(stream::XdelCommand);
-    registry.register(stream::XtrimCommand);
-    registry.register(stream::XreadCommand);
-    registry.register(stream::XgroupCommand);
-    registry.register(stream::XreadgroupCommand);
-    registry.register(stream::XackCommand);
-    registry.register(stream::XpendingCommand);
-    registry.register(stream::XclaimCommand);
-    registry.register(stream::XautoclaimCommand);
-    registry.register(stream::XinfoCommand);
-    registry.register(stream::XsetidCommand);
-    registry.register(stream::XdelexCommand);
-    registry.register(stream::XackdelCommand);
+    #[cfg(feature = "stream")]
+    {
+        // Stream commands
+        registry.register(stream::XaddCommand);
+        registry.register(stream::XlenCommand);
+        registry.register(stream::XrangeCommand);
+        registry.register(stream::XrevrangeCommand);
+        registry.register(stream::XdelCommand);
+        registry.register(stream::XtrimCommand);
+        registry.register(stream::XreadCommand);
+        registry.register(stream::XgroupCommand);
+        registry.register(stream::XreadgroupCommand);
+        registry.register(stream::XackCommand);
+        registry.register(stream::XpendingCommand);
+        registry.register(stream::XclaimCommand);
+        registry.register(stream::XautoclaimCommand);
+        registry.register(stream::XinfoCommand);
+        registry.register(stream::XsetidCommand);
+        registry.register(stream::XdelexCommand);
+        registry.register(stream::XackdelCommand);
+    }
 
     // Bitmap commands
     registry.register(bitmap::SetbitCommand);
@@ -262,64 +291,79 @@ pub fn register_all(registry: &mut frogdb_core::CommandRegistry) {
     registry.register(bitmap::BitfieldCommand);
     registry.register(bitmap::BitfieldRoCommand);
 
-    // Geo commands
-    registry.register(geo::GeoaddCommand);
-    registry.register(geo::GeodistCommand);
-    registry.register(geo::GeohashCommand);
-    registry.register(geo::GeoposCommand);
-    registry.register(geo::GeosearchCommand);
-    registry.register(geo::GeosearchstoreCommand);
-    registry.register(geo::GeoradiusCommand);
-    registry.register(geo::GeoradiusbymemberCommand);
-    registry.register(geo::GeoradiusRoCommand);
-    registry.register(geo::GeoradiusbymemberRoCommand);
+    #[cfg(feature = "geo")]
+    {
+        // Geo commands
+        registry.register(geo::GeoaddCommand);
+        registry.register(geo::GeodistCommand);
+        registry.register(geo::GeohashCommand);
+        registry.register(geo::GeoposCommand);
+        registry.register(geo::GeosearchCommand);
+        registry.register(geo::GeosearchstoreCommand);
+        registry.register(geo::GeoradiusCommand);
+        registry.register(geo::GeoradiusbymemberCommand);
+        registry.register(geo::GeoradiusRoCommand);
+        registry.register(geo::GeoradiusbymemberRoCommand);
+    }
 
-    // Bloom filter commands
-    registry.register(bloom::BfReserve);
-    registry.register(bloom::BfAdd);
-    registry.register(bloom::BfMadd);
-    registry.register(bloom::BfExists);
-    registry.register(bloom::BfMexists);
-    registry.register(bloom::BfInsert);
-    registry.register(bloom::BfInfo);
-    registry.register(bloom::BfCard);
-    registry.register(bloom::BfScandump);
-    registry.register(bloom::BfLoadchunk);
+    #[cfg(feature = "bloom")]
+    {
+        // Bloom filter commands
+        registry.register(bloom::BfReserve);
+        registry.register(bloom::BfAdd);
+        registry.register(bloom::BfMadd);
+        registry.register(bloom::BfExists);
+        registry.register(bloom::BfMexists);
+        registry.register(bloom::BfInsert);
+        registry.register(bloom::BfInfo);
+        registry.register(bloom::BfCard);
+        registry.register(bloom::BfScandump);
+        registry.register(bloom::BfLoadchunk);
+    }
 
-    // Cuckoo filter commands
-    registry.register(cuckoo::CfReserve);
-    registry.register(cuckoo::CfAdd);
-    registry.register(cuckoo::CfAddnx);
-    registry.register(cuckoo::CfInsert);
-    registry.register(cuckoo::CfInsertnx);
-    registry.register(cuckoo::CfExists);
-    registry.register(cuckoo::CfMexists);
-    registry.register(cuckoo::CfDel);
-    registry.register(cuckoo::CfCount);
-    registry.register(cuckoo::CfInfo);
-    registry.register(cuckoo::CfScandump);
-    registry.register(cuckoo::CfLoadchunk);
+    #[cfg(feature = "cuckoo")]
+    {
+        // Cuckoo filter commands
+        registry.register(cuckoo::CfReserve);
+        registry.register(cuckoo::CfAdd);
+        registry.register(cuckoo::CfAddnx);
+        registry.register(cuckoo::CfInsert);
+        registry.register(cuckoo::CfInsertnx);
+        registry.register(cuckoo::CfExists);
+        registry.register(cuckoo::CfMexists);
+        registry.register(cuckoo::CfDel);
+        registry.register(cuckoo::CfCount);
+        registry.register(cuckoo::CfInfo);
+        registry.register(cuckoo::CfScandump);
+        registry.register(cuckoo::CfLoadchunk);
+    }
 
-    // T-Digest commands
-    registry.register(tdigest::TdCreate);
-    registry.register(tdigest::TdAdd);
-    registry.register(tdigest::TdMerge);
-    registry.register(tdigest::TdReset);
-    registry.register(tdigest::TdQuantile);
-    registry.register(tdigest::TdCdf);
-    registry.register(tdigest::TdRank);
-    registry.register(tdigest::TdRevrank);
-    registry.register(tdigest::TdMin);
-    registry.register(tdigest::TdMax);
-    registry.register(tdigest::TdInfo);
-    registry.register(tdigest::TdTrimmedMean);
+    #[cfg(feature = "tdigest")]
+    {
+        // T-Digest commands
+        registry.register(tdigest::TdCreate);
+        registry.register(tdigest::TdAdd);
+        registry.register(tdigest::TdMerge);
+        registry.register(tdigest::TdReset);
+        registry.register(tdigest::TdQuantile);
+        registry.register(tdigest::TdCdf);
+        registry.register(tdigest::TdRank);
+        registry.register(tdigest::TdRevrank);
+        registry.register(tdigest::TdMin);
+        registry.register(tdigest::TdMax);
+        registry.register(tdigest::TdInfo);
+        registry.register(tdigest::TdTrimmedMean);
+    }
 
-    // HyperLogLog commands
-    registry.register(hyperloglog::PfaddCommand);
-    registry.register(hyperloglog::PfcountCommand);
-    registry.register(hyperloglog::PfmergeCommand);
-    registry.register(hyperloglog::PfdebugCommand);
-    registry.register(hyperloglog::PfselftestCommand);
+    #[cfg(feature = "hyperloglog")]
+    {
+        // HyperLogLog commands
+        registry.register(hyperloglog::PfaddCommand);
+        registry.register(hyperloglog::PfcountCommand);
+        registry.register(hyperloglog::PfmergeCommand);
+        registry.register(hyperloglog::PfdebugCommand);
+        registry.register(hyperloglog::PfselftestCommand);
+    }
 
     // Sort commands
     registry.register(sort::SortCommand);
@@ -328,84 +372,102 @@ pub fn register_all(registry: &mut frogdb_core::CommandRegistry) {
     // String (LCS)
     registry.register(string::LcsCommand);
 
-    // TimeSeries commands
-    registry.register(timeseries::TsCreateCommand);
-    registry.register(timeseries::TsAlterCommand);
-    registry.register(timeseries::TsAddCommand);
-    registry.register(timeseries::TsMaddCommand);
-    registry.register(timeseries::TsIncrbyCommand);
-    registry.register(timeseries::TsDecrbyCommand);
-    registry.register(timeseries::TsDelCommand);
-    registry.register(timeseries::TsGetCommand);
-    registry.register(timeseries::TsRangeCommand);
-    registry.register(timeseries::TsRevrangeCommand);
-    registry.register(timeseries::TsInfoCommand);
-    registry.register(timeseries::TsQueryIndexCommand);
-    registry.register(timeseries::TsMgetCommand);
-    registry.register(timeseries::TsMrangeCommand);
-    registry.register(timeseries::TsMrevrangeCommand);
-    registry.register(timeseries::TsCreateRuleCommand);
-    registry.register(timeseries::TsDeleteRuleCommand);
+    #[cfg(feature = "timeseries")]
+    {
+        // TimeSeries commands
+        registry.register(timeseries::TsCreateCommand);
+        registry.register(timeseries::TsAlterCommand);
+        registry.register(timeseries::TsAddCommand);
+        registry.register(timeseries::TsMaddCommand);
+        registry.register(timeseries::TsIncrbyCommand);
+        registry.register(timeseries::TsDecrbyCommand);
+        registry.register(timeseries::TsDelCommand);
+        registry.register(timeseries::TsGetCommand);
+        registry.register(timeseries::TsRangeCommand);
+        registry.register(timeseries::TsRevrangeCommand);
+        registry.register(timeseries::TsInfoCommand);
+        registry.register(timeseries::TsQueryIndexCommand);
+        registry.register(timeseries::TsMgetCommand);
+        registry.register(timeseries::TsMrangeCommand);
+        registry.register(timeseries::TsMrevrangeCommand);
+        registry.register(timeseries::TsCreateRuleCommand);
+        registry.register(timeseries::TsDeleteRuleCommand);
+    }
 
-    // JSON commands
-    registry.register(json::JsonSetCommand);
-    registry.register(json::JsonGetCommand);
-    registry.register(json::JsonDelCommand);
-    registry.register(json::JsonMgetCommand);
-    registry.register(json::JsonTypeCommand);
-    registry.register(json::JsonNumIncrByCommand);
-    registry.register(json::JsonNumMultByCommand);
-    registry.register(json::JsonStrAppendCommand);
-    registry.register(json::JsonStrLenCommand);
-    registry.register(json::JsonArrAppendCommand);
-    registry.register(json::JsonArrIndexCommand);
-    registry.register(json::JsonArrInsertCommand);
-    registry.register(json::JsonArrLenCommand);
-    registry.register(json::JsonArrPopCommand);
-    registry.register(json::JsonArrTrimCommand);
-    registry.register(json::JsonObjKeysCommand);
-    registry.register(json::JsonObjLenCommand);
-    registry.register(json::JsonClearCommand);
-    registry.register(json::JsonToggleCommand);
-    registry.register(json::JsonMergeCommand);
-    registry.register(json::JsonDebugCommand);
+    #[cfg(feature = "json")]
+    {
+        // JSON commands
+        registry.register(json::JsonSetCommand);
+        registry.register(json::JsonGetCommand);
+        registry.register(json::JsonDelCommand);
+        registry.register(json::JsonMgetCommand);
+        registry.register(json::JsonTypeCommand);
+        registry.register(json::JsonNumIncrByCommand);
+        registry.register(json::JsonNumMultByCommand);
+        registry.register(json::JsonStrAppendCommand);
+        registry.register(json::JsonStrLenCommand);
+        registry.register(json::JsonArrAppendCommand);
+        registry.register(json::JsonArrIndexCommand);
+        registry.register(json::JsonArrInsertCommand);
+        registry.register(json::JsonArrLenCommand);
+        registry.register(json::JsonArrPopCommand);
+        registry.register(json::JsonArrTrimCommand);
+        registry.register(json::JsonObjKeysCommand);
+        registry.register(json::JsonObjLenCommand);
+        registry.register(json::JsonClearCommand);
+        registry.register(json::JsonToggleCommand);
+        registry.register(json::JsonMergeCommand);
+        registry.register(json::JsonDebugCommand);
+    }
 
-    // Count-Min Sketch commands
-    registry.register(cms::CmsInitByDim);
-    registry.register(cms::CmsInitByProb);
-    registry.register(cms::CmsIncrBy);
-    registry.register(cms::CmsQuery);
-    registry.register(cms::CmsMerge);
-    registry.register(cms::CmsInfo);
+    #[cfg(feature = "cms")]
+    {
+        // Count-Min Sketch commands
+        registry.register(cms::CmsInitByDim);
+        registry.register(cms::CmsInitByProb);
+        registry.register(cms::CmsIncrBy);
+        registry.register(cms::CmsQuery);
+        registry.register(cms::CmsMerge);
+        registry.register(cms::CmsInfo);
+    }
 
-    // Top-K commands
-    registry.register(topk::TopkReserve);
-    registry.register(topk::TopkAdd);
-    registry.register(topk::TopkIncrby);
-    registry.register(topk::TopkQuery);
-    registry.register(topk::TopkCount);
-    registry.register(topk::TopkList);
-    registry.register(topk::TopkInfo);
+    #[cfg(feature = "topk")]
+    {
+        // Top-K commands
+        registry.register(topk::TopkReserve);
+        registry.register(topk::TopkAdd);
+        registry.register(topk::TopkIncrby);
+        registry.register(topk::TopkQuery);
+        registry.register(topk::TopkCount);
+        registry.register(topk::TopkList);
+        registry.register(topk::TopkInfo);
+    }
 
-    // Vector set commands
-    registry.register(vectorset::VaddCommand);
-    registry.register(vectorset::VsimCommand);
-    registry.register(vectorset::VcardCommand);
-    registry.register(vectorset::VdimCommand);
-    registry.register(vectorset::VembCommand);
-    registry.register(vectorset::VremCommand);
-    registry.register(vectorset::VgetattrCommand);
-    registry.register(vectorset::VsetattrCommand);
-    registry.register(vectorset::VinfoCommand);
-    registry.register(vectorset::VlinksCommand);
-    registry.register(vectorset::VrandmemberCommand);
-    registry.register(vectorset::VrangeCommand);
+    #[cfg(feature = "vectorset")]
+    {
+        // Vector set commands
+        registry.register(vectorset::VaddCommand);
+        registry.register(vectorset::VsimCommand);
+        registry.register(vectorset::VcardCommand);
+        registry.register(vectorset::VdimCommand);
+        registry.register(vectorset::VembCommand);
+        registry.register(vectorset::VremCommand);
+        registry.register(vectorset::VgetattrCommand);
+        registry.register(vectorset::VsetattrCommand);
+        registry.register(vectorset::VinfoCommand);
+        registry.register(vectorset::VlinksCommand);
+        registry.register(vectorset::VrandmemberCommand);
+        registry.register(vectorset::VrangeCommand);
+    }
 
-    // Event Sourcing commands (FrogDB extensions)
-    registry.register(event_sourcing::EsAppendCommand);
-    registry.register(event_sourcing::EsReadCommand);
-    registry.register(event_sourcing::EsReplayCommand);
-    registry.register(event_sourcing::EsInfoCommand);
-    registry.register(event_sourcing::EsSnapshotCommand);
-    registry.register(event_sourcing::EsAllCommand);
+    #[cfg(feature = "event-sourcing")]
+    {
+        // Event Sourcing commands (FrogDB extensions)
+        registry.register(event_sourcing::EsAppendCommand);
+        registry.register(event_sourcing::EsReadCommand);
+        registry.register(event_sourcing::EsReplayCommand);
+        registry.register(event_sourcing::EsInfoCommand);
+        registry.register(event_sourcing::EsSnapshotCommand);
+        registry.register(event_sourcing::EsAllCommand);
+    }
 }

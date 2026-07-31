@@ -99,6 +99,7 @@ async fn test_lrem_emits_keyspace_notification() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-hyperloglog")]
 /// PFADD fires a `pfadd` keyevent when the HyperLogLog is actually modified.
 /// Redis emits `pfadd` under the STRING class for effective PFADD writes; a
 /// no-op PFADD (no register moved) emits nothing — see
@@ -146,6 +147,7 @@ async fn test_pfadd_emits_keyspace_notification() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-hyperloglog")]
 /// A no-op PFADD (element already present, no register moved) must emit no
 /// keyspace notification. Task 1's `write_was_noop` gate skips the entire
 /// write-effect pipeline — including keyspace events — for unchanged HLLs.
@@ -3076,6 +3078,7 @@ async fn test_blpop_immediate_notifies_popped_key_only() {
 // (both set-or-del) and LMPOP (popped-key only) deposit at runtime (Dynamic).
 // ===========================================================================
 
+#[cfg(feature = "cmd-hyperloglog")]
 /// PFMERGE emits `pfadd` on the destination only (Redis parity,
 /// hyperloglog.c:1872) — the read-only source HLLs stay silent. Also covers the
 /// missing-destination creation path (dest did not exist beforehand).
@@ -3106,6 +3109,7 @@ async fn test_pfmerge_notifies_destination_only() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-hyperloglog")]
 /// A PFMERGE whose destination already contains every source register changes
 /// nothing (write_was_noop) and must emit no `pfadd` — the effect pipeline is
 /// skipped, same contract as a no-op PFADD.
@@ -3226,6 +3230,7 @@ async fn test_bitop_empty_missing_dest_silent() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-geo")]
 /// GEOADD emits `zadd` (class ZSET) on its key when a member is added — Redis
 /// parity: geo.c geoaddCommand routes through zaddGenericCommand, which fires
 /// `zadd` on an effective add/update.
@@ -3251,6 +3256,7 @@ async fn test_geoadd_emits_zadd() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-geo")]
 /// A no-op GEOADD (re-adding an identical member — nothing added or changed)
 /// emits nothing: execute() sets `write_was_noop`, skipping the whole
 /// write-effect pipeline including the `zadd` notification. Matches Redis, which
@@ -3288,6 +3294,7 @@ async fn test_geoadd_noop_emits_nothing() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-geo")]
 /// GEOSEARCHSTORE emits `geosearchstore` on the destination (Redis parity,
 /// geo.c:834, class ZSET) when the search returns members.
 #[tokio::test]
@@ -3339,6 +3346,7 @@ async fn test_geosearchstore_notifies_destination() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-geo")]
 /// GEOSEARCHSTORE with an empty result deletes a pre-existing destination and
 /// emits `del` on it (Redis parity, geo.c:839, class GENERIC) — never
 /// `geosearchstore`. FrogDB deletes the dest on empty, matching Redis.
@@ -3381,6 +3389,7 @@ async fn test_geosearchstore_empty_result_emits_del() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-geo")]
 /// GEOSEARCHSTORE with an empty result and a destination that never existed
 /// deletes nothing, so it emits neither `geosearchstore` nor `del`.
 #[tokio::test]
@@ -3557,6 +3566,7 @@ async fn test_sort_store_empty_missing_dest_silent() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-geo")]
 /// GEORADIUS ... STORE emits `georadiusstore` on the destination (geo.c
 /// NOTIFY_ZSET) — distinct from GEOSEARCHSTORE's `geosearchstore`.
 #[tokio::test]
@@ -3594,6 +3604,7 @@ async fn test_georadius_store_notifies_georadiusstore() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-geo")]
 /// GEORADIUS ... STORE with an empty result deletes a pre-existing destination
 /// and emits `del`.
 #[tokio::test]
@@ -4172,6 +4183,7 @@ async fn test_eval_scripted_lpush_wakes_blocked_blpop() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-hyperloglog")]
 /// A scripted no-op write (duplicate PFADD: no register moved, write_was_noop)
 /// stays silent — the seam records only effective writes.
 #[tokio::test]
@@ -5126,6 +5138,7 @@ async fn test_pubsub_mode_resp3_gate_is_unconditional_allow() {
 // of those emission sites were removed.
 // ===========================================================================
 
+#[cfg(feature = "cmd-stream")]
 /// XADD fires `xadd` unconditionally on success (basic.rs, unchanged
 /// pre-existing behavior — establishes the baseline the rest of this section
 /// builds on).
@@ -5151,6 +5164,7 @@ async fn test_xadd_notifies_xadd_event() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// Regression (issue 27): XADD's own trailing MAXLEN/MINID clause fires a
 /// second, conditional `xtrim` event (shared with the standalone XTRIM
 /// command) only when that trim actually removed an entry — previously,
@@ -5180,6 +5194,7 @@ async fn test_xadd_notifies_xtrim_event_when_own_trim_removes_entries() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// XADD with a MAXLEN clause that removes nothing does not fire `xtrim`.
 #[tokio::test]
 async fn test_xadd_not_fired_xtrim_when_own_trim_removes_nothing() {
@@ -5204,6 +5219,7 @@ async fn test_xadd_not_fired_xtrim_when_own_trim_removes_nothing() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// The stream class is gated behind the `t` flag: with only the generic
 /// class (`g`) enabled, XADD notifies nothing; switching to `t` (or `A`,
 /// which includes it) delivers the same command's `xadd` event.
@@ -5244,6 +5260,7 @@ async fn test_stream_events_gated_behind_t_class() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// XTRIM fires `xtrim` only when it actually removes an entry (t_stream.c
 /// `xtrimCommand`, `if (deleted)`).
 #[tokio::test]
@@ -5268,6 +5285,7 @@ async fn test_xtrim_notifies_xtrim_event_when_entries_removed() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// XTRIM notifies nothing when there was nothing to remove.
 #[tokio::test]
 async fn test_xtrim_not_fired_when_nothing_removed() {
@@ -5289,6 +5307,7 @@ async fn test_xtrim_not_fired_when_nothing_removed() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// XDEL fires `xdel` only for a call that actually removes an entry.
 #[tokio::test]
 async fn test_xdel_notifies_xdel_event_when_entry_removed() {
@@ -5310,6 +5329,7 @@ async fn test_xdel_notifies_xdel_event_when_entry_removed() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// XDEL of an absent ID deletes nothing and notifies nothing.
 #[tokio::test]
 async fn test_xdel_not_fired_when_id_absent() {
@@ -5331,6 +5351,7 @@ async fn test_xdel_not_fired_when_id_absent() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// Regression (issue 27): XDELEX previously had `EventSpec::Suppressed` and
 /// never notified. It shares XDEL's `xdel` event and fires only when at
 /// least one ID was actually deleted (t_stream.c `xdelexCommand`).
@@ -5361,6 +5382,7 @@ async fn test_xdelex_notifies_xdel_event_when_entry_deleted() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// XDELEX notifies nothing when it deletes nothing (all IDs absent).
 #[tokio::test]
 async fn test_xdelex_not_fired_when_nothing_deleted() {
@@ -5382,6 +5404,7 @@ async fn test_xdelex_not_fired_when_nothing_deleted() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// Regression (issue 27): XACKDEL previously had `EventSpec::Suppressed`.
 /// Like XDELEX, it shares the `xdel` event and fires only when at least one
 /// ID was acked *and* deleted (t_stream.c `xackdelCommand`).
@@ -5421,6 +5444,7 @@ async fn test_xackdel_notifies_xdel_event_when_entry_deleted() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// XACKDEL notifies nothing when nothing was acked/deleted (ID unknown to
 /// the stream entirely).
 #[tokio::test]
@@ -5449,6 +5473,7 @@ async fn test_xackdel_not_fired_when_nothing_deleted() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// Regression (issue 27): XSETID previously had `EventSpec::Suppressed` and
 /// never notified. Redis fires `xsetid` unconditionally on success
 /// (t_stream.c `xsetidCommand`).
@@ -5472,6 +5497,7 @@ async fn test_xsetid_notifies_xsetid_event() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// XGROUP CREATE fires `xgroup-create` on success.
 #[tokio::test]
 async fn test_xgroup_create_notifies_xgroup_create_event() {
@@ -5493,6 +5519,7 @@ async fn test_xgroup_create_notifies_xgroup_create_event() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// Regression (issue 27): before this fix, `XgroupCommand`'s spec used one
 /// static `Emits{name: "xgroup-create"}` for *every* subcommand, so
 /// XGROUP SETID would have mislabeled its event as `xgroup-create` instead
@@ -5522,6 +5549,7 @@ async fn test_xgroup_setid_notifies_xgroup_setid_event_not_xgroup_create() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// Regression (issue 27): XGROUP DESTROY previously mislabeled its event as
 /// `xgroup-create` (see above) and fired unconditionally. Redis's
 /// `xgroupCommand` DESTROY only notifies `xgroup-destroy` when the group
@@ -5547,6 +5575,7 @@ async fn test_xgroup_destroy_notifies_xgroup_destroy_event_when_group_existed() 
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// XGROUP DESTROY of a nonexistent group notifies nothing.
 #[tokio::test]
 async fn test_xgroup_destroy_not_fired_when_group_absent() {
@@ -5570,6 +5599,7 @@ async fn test_xgroup_destroy_not_fired_when_group_absent() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// Regression (issue 27): XGROUP CREATECONSUMER previously mislabeled its
 /// event as `xgroup-create` and fired unconditionally. It should fire
 /// `xgroup-createconsumer` only when the consumer is newly created, not on a
@@ -5603,6 +5633,7 @@ async fn test_xgroup_createconsumer_notifies_only_when_consumer_is_new() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// Regression (issue 27): XGROUP DELCONSUMER previously mislabeled its event
 /// as `xgroup-create` and fired unconditionally, even for a consumer that
 /// never existed. It should fire `xgroup-delconsumer` only when the consumer
@@ -5639,6 +5670,7 @@ async fn test_xgroup_delconsumer_notifies_only_when_consumer_existed() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// Regression (issue 27): XCLAIM has no dedicated event, but it always
 /// ensures its target consumer exists (creating it when FORCE is used and
 /// the entry isn't pending). It previously never notified that implicit
@@ -5667,6 +5699,7 @@ async fn test_xclaim_notifies_xgroup_createconsumer_when_consumer_is_new() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// XCLAIM notifies nothing when its target consumer already exists.
 #[tokio::test]
 async fn test_xclaim_not_fired_when_consumer_already_exists() {
@@ -5694,6 +5727,7 @@ async fn test_xclaim_not_fired_when_consumer_already_exists() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// Regression (issue 27): XAUTOCLAIM has the same implicit
 /// consumer-creation behavior as XCLAIM, and previously never notified it.
 #[tokio::test]
@@ -5732,6 +5766,7 @@ async fn test_xautoclaim_notifies_xgroup_createconsumer_when_consumer_is_new() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// XAUTOCLAIM notifies nothing when its target consumer already exists.
 #[tokio::test]
 async fn test_xautoclaim_not_fired_when_consumer_already_exists() {
@@ -5759,6 +5794,7 @@ async fn test_xautoclaim_not_fired_when_consumer_already_exists() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// Regression (issue 27): XREADGROUP auto-creates its named consumer as a
 /// side effect (before deciding whether to block), and previously never
 /// notified that creation.
@@ -5785,6 +5821,7 @@ async fn test_xreadgroup_notifies_xgroup_createconsumer_when_consumer_is_new() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// XREADGROUP notifies nothing when its named consumer already exists —
 /// including on a no-new-entries call (the consumer lookup happens before
 /// the entries check, so this also exercises that ordering).
@@ -5816,6 +5853,7 @@ async fn test_xreadgroup_not_fired_when_consumer_already_exists() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// Upstream Redis parity port of `tests/unit/pubsub.tcl`'s "Keyspace
 /// notifications: stream events test" (see the exclusion note in
 /// `pubsub_tcl.rs` — the original is skipped because it depends on runtime

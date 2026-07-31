@@ -141,6 +141,37 @@ jobs:
         shared-key: stable
     - name: Run unit tests
       run: cargo nextest run --all
+  cmd-full-build:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    name: Command Feature Profiles Build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      with:
+        install: 'true'
+        install_args: just
+        cache: 'true'
+        experimental: 'true'
+    - name: Install Rust 1.92.0
+      uses: dtolnay/rust-toolchain@1.92.0
+    - name: Install libclang
+      run: sudo apt-get install -y libclang-dev
+    - name: Cache Rust build artifacts
+      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      with:
+        shared-key: stable
+    - name: Check commands crate (core profile only)
+      run: cargo check -p frogdb-commands --no-default-features --features core-profile --all-targets
+    - name: Check commands crate (full command surface)
+      run: cargo check -p frogdb-commands --features full --all-targets
+    - name: Check server (core profile only)
+      run: cargo check -p frogdb-server --all-targets
+    - name: Check server (full command surface)
+      run: cargo check -p frogdb-server --features cmd-full --all-targets
   shuttle-tests:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
@@ -438,6 +469,7 @@ jobs:
     - actionlint
     - lint
     - unit-tests
+    - cmd-full-build
     - shuttle-tests
     - turmoil-tests
     - operator-tests

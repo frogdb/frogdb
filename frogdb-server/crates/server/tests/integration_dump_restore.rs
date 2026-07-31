@@ -158,6 +158,7 @@ async fn test_dump_restore_sorted_set_round_trip() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-hyperloglog")]
 #[tokio::test]
 async fn test_dump_restore_hll_round_trip() {
     let server = TestServer::start_standalone().await;
@@ -183,6 +184,7 @@ async fn test_dump_restore_hll_round_trip() {
 // Module-type round-trips (Stream / BloomFilter / TimeSeries)
 // ============================================================================
 
+#[cfg(feature = "cmd-stream")]
 #[tokio::test]
 async fn test_dump_restore_stream_round_trip() {
     let server = TestServer::start_standalone().await;
@@ -203,6 +205,7 @@ async fn test_dump_restore_stream_round_trip() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-bloom")]
 #[tokio::test]
 async fn test_dump_restore_bloom_filter_round_trip() {
     let server = TestServer::start_standalone().await;
@@ -222,6 +225,7 @@ async fn test_dump_restore_bloom_filter_round_trip() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-timeseries")]
 #[tokio::test]
 async fn test_dump_restore_timeseries_round_trip() {
     let server = TestServer::start_standalone().await;
@@ -634,17 +638,21 @@ async fn seed_value(server: &TestServer, key: &str, kind: &str) {
 /// The set of value kinds exercised by the corruption matrix. Covers the minimum set
 /// required by the acceptance criteria (string, list, hash, set, zset, stream) plus
 /// integer-encoded string, HLL, and JSON for breadth.
-const CORRUPT_KINDS: &[&str] = &[
-    "string",
-    "int-string",
-    "list",
-    "hash",
-    "set",
-    "zset",
-    "stream",
-    "hll",
-    "json",
-];
+///
+/// The last three kinds are only reachable when their command family is compiled
+/// in — under the core profile they drop out of the matrix rather than failing
+/// against an unregistered command.
+fn corrupt_kinds() -> Vec<&'static str> {
+    #[allow(unused_mut)]
+    let mut kinds = vec!["string", "int-string", "list", "hash", "set", "zset"];
+    #[cfg(feature = "cmd-stream")]
+    kinds.push("stream");
+    #[cfg(feature = "cmd-hyperloglog")]
+    kinds.push("hll");
+    #[cfg(feature = "cmd-json")]
+    kinds.push("json");
+    kinds
+}
 
 /// Kinds whose body is *unstructured* — a raw byte string that any truncation or
 /// byte substitution still parses as a (shorter/different) valid value. For these,
@@ -667,7 +675,7 @@ fn is_raw_unstructured_body(kind: &str) -> bool {
 async fn test_restore_truncated_payload_fails_closed_per_type() {
     let server = TestServer::start_standalone().await;
 
-    for kind in CORRUPT_KINDS {
+    for kind in &corrupt_kinds() {
         let key = format!("{{dr-trunc}}{kind}");
         seed_value(&server, &key, kind).await;
         let payload = dump_then_delete(&server, &key).await;
@@ -697,7 +705,7 @@ async fn test_restore_type_flip_invariant_per_type() {
     let server = TestServer::start_standalone().await;
 
     let mut silent_flips: Vec<String> = Vec::new();
-    for kind in CORRUPT_KINDS {
+    for kind in &corrupt_kinds() {
         let key = format!("{{dr-flip}}{kind}");
         seed_value(&server, &key, kind).await;
         let payload = dump_then_delete(&server, &key).await;
@@ -734,7 +742,7 @@ async fn test_restore_type_flip_invariant_per_type() {
 async fn test_restore_corrupt_length_field_fails_closed_per_type() {
     let server = TestServer::start_standalone().await;
 
-    for kind in CORRUPT_KINDS {
+    for kind in &corrupt_kinds() {
         let key = format!("{{dr-len}}{kind}");
         seed_value(&server, &key, kind).await;
         let payload = dump_then_delete(&server, &key).await;
@@ -755,7 +763,7 @@ async fn test_restore_corrupt_length_field_fails_closed_per_type() {
 async fn test_restore_garbage_body_no_panic_per_type() {
     let server = TestServer::start_standalone().await;
 
-    for kind in CORRUPT_KINDS {
+    for kind in &corrupt_kinds() {
         let key = format!("{{dr-garbage}}{kind}");
         seed_value(&server, &key, kind).await;
         let payload = dump_then_delete(&server, &key).await;

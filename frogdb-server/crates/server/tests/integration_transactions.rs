@@ -228,6 +228,7 @@ async fn test_watch_exec_abort() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-hyperloglog")]
 /// A duplicate PFADD moves no register (no-op write), so it must not bump the
 /// watched key's version: a WATCH over it must survive and EXEC must succeed.
 #[tokio::test]
@@ -269,6 +270,7 @@ async fn test_noop_pfadd_does_not_bump_watch_version() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-hyperloglog")]
 /// Positive control: a PFADD that DOES move a register bumps the watched key's
 /// version, so a WATCH over it is invalidated and EXEC aborts (nil).
 #[tokio::test]

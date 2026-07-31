@@ -6902,6 +6902,7 @@ async fn test_readwrite_restores_moved_redirects() {
 // Tier 14: Migration Type Coverage — Known-Gap Documentation
 // ============================================================================
 
+#[cfg(feature = "cmd-stream")]
 /// Verifies that stream data survives slot migration.
 #[tokio::test]
 async fn test_e2e_migration_stream() {
@@ -6949,6 +6950,7 @@ async fn test_e2e_migration_stream() {
     harness.shutdown_all().await;
 }
 
+#[cfg(feature = "cmd-bloom")]
 /// Verifies that bloom filter data survives slot migration.
 #[tokio::test]
 async fn test_e2e_migration_bloom_filter() {
@@ -6992,6 +6994,7 @@ async fn test_e2e_migration_bloom_filter() {
     harness.shutdown_all().await;
 }
 
+#[cfg(feature = "cmd-timeseries")]
 /// Verifies that timeseries data survives slot migration.
 #[tokio::test]
 async fn test_e2e_migration_timeseries() {

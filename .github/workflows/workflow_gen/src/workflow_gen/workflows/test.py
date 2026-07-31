@@ -178,6 +178,47 @@ def test_workflow() -> Workflow:
         ),
     )
 
+    # Compile-only guard for the command-family cargo features (see
+    # frogdb-server/crates/commands/Cargo.toml). `unit-tests` runs
+    # `cargo nextest run --all`, whose workspace-wide feature unification pulls
+    # `cmd-full` in through docs-gen/redis-regression/shard-harness — so neither
+    # the reduced core profile nor an individually-selected family is ever built
+    # by the rest of CI. Both directions are checked here so a gated family (or
+    # a core-profile-only build) cannot rot unnoticed.
+    cmd_full_build = w.job(
+        "cmd-full-build",
+        Job(
+            name="Command Feature Profiles Build",
+            runs_on=RUNS_ON,
+            needs="changes",
+            if_="needs.changes.outputs.rust == 'true'",
+            steps=[
+                checkout_step(),
+                mise_setup_step(install_args=MISE_JUST),
+                rust_toolchain_step(),
+                libclang_step(),
+                cargo_cache_step(shared_key="stable"),
+                run_step(
+                    name="Check commands crate (core profile only)",
+                    run="cargo check -p frogdb-commands --no-default-features"
+                    " --features core-profile --all-targets",
+                ),
+                run_step(
+                    name="Check commands crate (full command surface)",
+                    run="cargo check -p frogdb-commands --features full --all-targets",
+                ),
+                run_step(
+                    name="Check server (core profile only)",
+                    run="cargo check -p frogdb-server --all-targets",
+                ),
+                run_step(
+                    name="Check server (full command surface)",
+                    run="cargo check -p frogdb-server --features cmd-full --all-targets",
+                ),
+            ],
+        ),
+    )
+
     # Coverage tracking lives entirely in the dedicated nightly workflow
     # (coverage_nightly.py -> coverage-nightly.yml, issue 59): a scheduled,
     # non-PR-gating job so a red/slow coverage run never blocks a merge. See that
@@ -512,6 +553,7 @@ def test_workflow() -> Workflow:
                 actionlint,
                 lint,
                 unit_tests,
+                cmd_full_build,
                 shuttle_tests,
                 turmoil_tests,
                 operator_tests,

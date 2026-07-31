@@ -372,6 +372,7 @@ async fn test_shard_count_mismatch_fails_startup() {
 // Dynamic STORE-destination WAL persistence (CommandSpec WAL-gap fix)
 // ============================================================================
 
+#[cfg(feature = "cmd-geo")]
 /// GEORADIUS ... STORE writes its destination at a *dynamic* argument position.
 /// Before the declarative-spec migration the index-based WAL strategy never
 /// captured it, so the stored zset was lost on restart. WalStrategy::Dynamic
@@ -587,6 +588,7 @@ async fn test_smove_destination_survives_restart_with_existing_members() {
 /// Parse the value of a no-label Prometheus counter/gauge from the metrics text.
 /// Returns 0.0 if the metric is absent (a counter is only exported once it has
 /// been incremented at least once).
+#[cfg(feature = "cmd-hyperloglog")]
 fn metric_value(metrics: &str, name: &str) -> f64 {
     metrics
         .lines()
@@ -603,6 +605,7 @@ fn metric_value(metrics: &str, name: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
+#[cfg(feature = "cmd-hyperloglog")]
 #[tokio::test]
 async fn test_hll_delta_persistence_survives_restart() {
     let tmp = tempfile::tempdir().unwrap();
@@ -686,6 +689,7 @@ async fn test_hll_delta_persistence_survives_restart() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-hyperloglog")]
 /// PFADD `count` distinct elements to `key` (prefix-namespaced) in batches of
 /// 500, forcing the HLL toward dense encoding via the client.
 async fn pfadd_distinct(
@@ -716,6 +720,7 @@ async fn pfadd_distinct(
 // ONLY the post-delete add (== 1), never the stale operand chain.
 // ============================================================================
 
+#[cfg(feature = "cmd-hyperloglog")]
 #[tokio::test]
 async fn test_hll_delete_then_readd_clears_delta_chain() {
     let tmp = tempfile::tempdir().unwrap();
@@ -775,6 +780,7 @@ async fn test_hll_delete_then_readd_clears_delta_chain() {
 // suite uses for HLL estimates.
 // ============================================================================
 
+#[cfg(feature = "cmd-hyperloglog")]
 #[tokio::test]
 async fn test_hll_pfmerge_delta_source_survives_restart() {
     let tmp = tempfile::tempdir().unwrap();
@@ -838,6 +844,7 @@ async fn test_hll_pfmerge_delta_source_survives_restart() {
 // a full value, so recovery is exact, not merely within tolerance.
 // ============================================================================
 
+#[cfg(feature = "cmd-hyperloglog")]
 #[tokio::test]
 async fn test_hll_sparse_to_dense_promotion_survives_restart() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1039,6 +1046,7 @@ async fn test_bitop_empty_result_deletion_survives_restart() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// XGROUP CREATE must persist the target stream key (args[1] after the
 /// subcommand) so the consumer group exists after a restart. The historical
 /// defect persisted the wrong argument (e.g. the CREATE subcommand token).
@@ -1089,6 +1097,7 @@ async fn test_xgroup_create_survives_restart() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// XREADGROUP is a write: reading with `>` advances the group's last-delivered
 /// id and adds the delivered entry to the consumer's PEL. Those effects must
 /// survive a restart. The historical defect persisted the wrong argument, so
@@ -1152,6 +1161,7 @@ async fn test_xreadgroup_pending_survives_restart() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// Extract the summary count (first element) from an XPENDING reply.
 fn pending_count(response: &Response) -> i64 {
     match response {
@@ -1160,6 +1170,7 @@ fn pending_count(response: &Response) -> i64 {
     }
 }
 
+#[cfg(feature = "cmd-stream")]
 /// Extract `(id, consumer, idle_ms, delivery_count)` rows from a detailed
 /// (`start end count`) XPENDING reply.
 fn pending_details(response: &Response) -> Vec<(Bytes, Bytes, i64, i64)> {
@@ -1183,6 +1194,7 @@ fn pending_details(response: &Response) -> Vec<(Bytes, Bytes, i64, i64)> {
         .collect()
 }
 
+#[cfg(feature = "cmd-stream")]
 /// Full consumer-group durability flow (proposal 45): XADD two entries,
 /// XREADGROUP pends both, XACK one, restart. After the restart XPENDING must
 /// show exactly the one unacked entry with its delivery count intact, XCLAIM
@@ -1282,6 +1294,7 @@ async fn test_consumer_group_full_state_survives_restart() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// Idle-time continuity (proposal 45): a pending entry's idle time must resume
 /// from its persisted wall-clock delivery time after a restart — never reset to
 /// zero. Uses the ClaimClock unix-ms mapping in the stream codec.
@@ -1358,6 +1371,7 @@ async fn test_pending_idle_time_survives_restart() {
 // keyspace from RocksDB.
 // ============================================================================
 
+#[cfg(feature = "cmd-hyperloglog")]
 /// Test 1 — Resurrection regression (the bug): a persisted String + dense HLL
 /// must be gone after FLUSHDB + restart.
 #[tokio::test]
@@ -1450,6 +1464,7 @@ async fn test_flushdb_preserves_post_flush_writes_across_restart() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-hyperloglog")]
 /// Test 4 — FLUSHALL parity: FLUSHALL clears persisted data exactly like
 /// FLUSHDB (single logical DB; both take the ClearShard path).
 #[tokio::test]
@@ -1490,6 +1505,7 @@ async fn test_flushall_clears_persisted_data_across_restart() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "cmd-hyperloglog")]
 /// Test 5 — Merge-operand interaction across a clear: an outstanding dense-PFADD
 /// delta chain must not fold into a same-key PFADD issued after FLUSHDB. The
 /// range tombstone clears the base and every operand, and recovery must reflect

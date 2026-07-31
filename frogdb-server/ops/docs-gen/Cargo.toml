@@ -14,7 +14,10 @@ path = "src/main.rs"
 frogctl = { path = "../../../frogctl" }
 frogdb-config.workspace = true
 frogdb-core.workspace = true
-frogdb-server = { path = "../../crates/server" }
+# docs-gen enumerates the production command registry to emit the website's
+# commands.json (and, downstream, the compat matrix). A core-profile build would
+# silently truncate that list, so it always asks for the full command surface.
+frogdb-server = { path = "../../crates/server", features = ["cmd-full"] }
 frogdb-telemetry = { path = "../../crates/telemetry" }
 frogdb-types.workspace = true
 schemars.workspace = true

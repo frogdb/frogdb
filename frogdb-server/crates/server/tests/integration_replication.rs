@@ -322,6 +322,7 @@ async fn test_write_propagation(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
+#[cfg(feature = "cmd-hyperloglog")]
 /// A PFADD that moves no register is a no-op write: it must not produce a
 /// replication frame, so the primary's `master_repl_offset` must not advance.
 #[rstest]
@@ -383,6 +384,7 @@ async fn test_noop_pfadd_not_propagated(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
+#[cfg(feature = "cmd-hyperloglog")]
 /// A PFMERGE that adds no new register to an existing destination is a no-op
 /// write: it must not produce a replication frame (offset must not advance).
 /// Creating the destination — even when the merged result is empty — is a real
@@ -4870,6 +4872,7 @@ async fn test_incr_decr_replicates(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// Stream XADD replicates to replica (XLEN matches).
 #[rstest]
 #[case::in_memory(false)]

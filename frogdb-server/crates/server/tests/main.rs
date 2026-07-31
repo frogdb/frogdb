@@ -18,7 +18,7 @@ mod integration_basic;
 mod integration_client;
 #[cfg(not(feature = "turmoil"))]
 mod integration_cluster;
-#[cfg(not(feature = "turmoil"))]
+#[cfg(all(not(feature = "turmoil"), feature = "cmd-cms"))]
 mod integration_cms;
 #[cfg(not(feature = "turmoil"))]
 mod integration_copy;
@@ -32,7 +32,7 @@ mod integration_debug_http;
 mod integration_debug_introspection;
 #[cfg(not(feature = "turmoil"))]
 mod integration_dump_restore;
-#[cfg(not(feature = "turmoil"))]
+#[cfg(all(not(feature = "turmoil"), feature = "cmd-event-sourcing"))]
 mod integration_event_sourcing;
 #[cfg(not(feature = "turmoil"))]
 mod integration_hashes;
@@ -42,7 +42,7 @@ mod integration_hotkeys;
 mod integration_hotshards;
 #[cfg(not(feature = "turmoil"))]
 mod integration_info;
-#[cfg(not(feature = "turmoil"))]
+#[cfg(all(not(feature = "turmoil"), feature = "cmd-json"))]
 mod integration_json;
 #[cfg(not(feature = "turmoil"))]
 mod integration_lists;
@@ -64,7 +64,7 @@ mod integration_scripting;
 mod integration_sets;
 #[cfg(not(feature = "turmoil"))]
 mod integration_sorted_sets;
-#[cfg(not(feature = "turmoil"))]
+#[cfg(all(not(feature = "turmoil"), feature = "cmd-stream"))]
 mod integration_streams;
 #[cfg(not(feature = "turmoil"))]
 mod integration_strings;
@@ -72,7 +72,7 @@ mod integration_strings;
 mod integration_tls;
 #[cfg(not(feature = "turmoil"))]
 mod integration_tls_extended;
-#[cfg(not(feature = "turmoil"))]
+#[cfg(all(not(feature = "turmoil"), feature = "cmd-topk"))]
 mod integration_topk;
 #[cfg(not(feature = "turmoil"))]
 mod integration_transactions;
@@ -84,5 +84,5 @@ mod resp3;
 #[cfg(not(feature = "turmoil"))]
 mod search;
 mod simulation;
-#[cfg(not(feature = "turmoil"))]
+#[cfg(all(not(feature = "turmoil"), feature = "cmd-timeseries"))]
 mod timeseries;
