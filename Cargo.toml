@@ -13,6 +13,7 @@ members = [
     "frogdb-server/crates/commands",
     "frogdb-server/crates/core",
     "frogdb-server/crates/shard-harness",
+    "frogdb-server/crates/net",
     "frogdb-server/crates/server",
     "frogdb-server/crates/debug",
     "frogdb-server/crates/telemetry",
@@ -47,6 +48,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros",
 tokio-util = { version = "0.7", features = ["codec"] }
 futures = "0.3"
 async-trait = "0.1"
+socket2 = "0.6"
 
 # Protocol
 bytes = "1"
@@ -142,6 +144,7 @@ frogdb-core = { path = "frogdb-server/crates/core" }
 frogdb-debug = { path = "frogdb-server/crates/debug" }
 frogdb-telemetry = { path = "frogdb-server/crates/telemetry" }
 frogdb-metrics-derive = { path = "frogdb-server/crates/metrics-derive" }
+frogdb-net = { path = "frogdb-server/crates/net" }
 frogdb-search = { path = "frogdb-server/crates/search" }
 frogdb-testing = { path = "frogdb-server/crates/testing" }
 frogdb-test-harness = { path = "frogdb-server/crates/test-harness" }

@@ -1759,6 +1759,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "frogdb-net"
+version = "0.1.0"
+dependencies = [
+ "socket2",
+ "tokio",
+ "turmoil",
+]
+
+[[package]]
 name = "frogdb-persistence"
 version = "0.1.0"
 dependencies = [
@@ -1880,6 +1889,7 @@ dependencies = [
  "frogdb-core",
  "frogdb-debug",
  "frogdb-macros",
+ "frogdb-net",
  "frogdb-persistence",
  "frogdb-protocol",
  "frogdb-replication",

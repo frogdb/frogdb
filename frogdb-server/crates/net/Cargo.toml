@@ -1,0 +1,21 @@
+[package]
+name = "frogdb-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+authors.workspace = true
+repository.workspace = true
+description = "Turmoil-swappable network primitives for FrogDB"
+
+[features]
+default = []
+# Swap the TCP primitives for turmoil's simulated network. Enabled through
+# frogdb-server's `turmoil` feature (which must forward `frogdb-net/turmoil` —
+# `just lint-turmoil-features` enforces that); never in production.
+turmoil = ["dep:turmoil"]
+
+[dependencies]
+tokio.workspace = true
+socket2.workspace = true
+turmoil = { workspace = true, optional = true }

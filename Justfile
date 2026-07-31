@@ -215,7 +215,7 @@ fmt-check crate="":
     cargo fmt {{ if crate != "" { "-p " + crate } else { "--all" } }} -- --check
 
 # Run clippy lints (optionally for a specific crate)
-lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-turmoil
+lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-turmoil-features lint-turmoil
     {{dyld-env}} {{rocksdb-env}} cargo clippy {{ if crate != "" { "-p " + crate } else { "--all-targets" } }} -- -D warnings
 
 # Gate: turmoil-featured test bodies (frogdb-server/crates/server/tests/simulation.rs)
@@ -224,6 +224,87 @@ lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam l
 # rustc warnings via the nextest build. Lint them explicitly with the feature on.
 lint-turmoil:
     {{dyld-env}} {{rocksdb-env}} cargo clippy -p frogdb-server --features turmoil --tests -- -D warnings
+
+# Gate: the turmoil network swap is a cargo feature, so every crate in the
+# dependency chain has to forward it. A missing forward compiles the production
+# tokio stack into the "simulation" — the sims still pass, they just stop
+# simulating. Enforced in the manifests:
+#   1. a crate depending on frogdb-net must declare a `turmoil` feature;
+#   2. a crate that has a `turmoil` feature must forward `<dep>/turmoil` for
+#      every internal dependency that offers one (frogdb-net, frogdb-config, …).
+# The compile-time counterpart lives in crates/server/src/net.rs (a type-identity
+# assertion against turmoil::net) — this gate catches the wiring, that one
+# catches the types.
+lint-turmoil-features:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    status=0
+
+    # --others picks up manifests of crates added but not yet committed;
+    # --exclude-standard keeps target/ and friends out.
+    manifests=$(git ls-files --cached --others --exclude-standard -- '*Cargo.toml')
+
+    # Print a manifest's `turmoil = [...]` feature declaration (empty if absent).
+    turmoil_feature() {
+        awk '
+            /^\[features\]/ { in_features = 1; next }
+            /^\[/           { in_features = 0 }
+            in_features && /^turmoil[[:space:]]*=/ { found = 1 }
+            found { print }
+            found && /\]/ { exit }
+        ' "$1"
+    }
+
+    # Print a manifest's dependency names (normal/dev/build/target, never
+    # [workspace.dependencies] — that section is not a dependency edge).
+    deps_of() {
+        awk '
+            /^\[/ { in_deps = ($0 ~ /dependencies\]$/ && $0 !~ /^\[workspace/); next }
+            in_deps && /^[A-Za-z0-9_-]+[[:space:]]*[=.]/ {
+                name = $0
+                sub(/[[:space:]]*[=.].*$/, "", name)
+                print name
+            }
+        ' "$1"
+    }
+
+    package_name() { awk -F'"' '/^name[[:space:]]*=/ { print $2; exit }' "$1"; }
+
+    # Internal crates that offer a `turmoil` feature.
+    providers=""
+    for m in $manifests; do
+        [ -n "$(turmoil_feature "$m")" ] || continue
+        providers="$providers $(package_name "$m")"
+    done
+
+    for m in $manifests; do
+        decl=$(turmoil_feature "$m")
+        deps=$(deps_of "$m")
+        if [ -z "$decl" ]; then
+            if echo "$deps" | grep -qx 'frogdb-net'; then
+                echo "ERROR: $m depends on frogdb-net but declares no 'turmoil' feature," >&2
+                echo "       so the simulation swap can never reach it." >&2
+                status=1
+            fi
+            continue
+        fi
+        self=$(package_name "$m")
+        for p in $providers; do
+            [ "$p" = "$self" ] && continue
+            echo "$deps" | grep -qx "$p" || continue
+            case "$decl" in *"\"$p/turmoil\""*) continue ;; esac
+            echo "ERROR: $m: the 'turmoil' feature does not forward \"$p/turmoil\"." >&2
+            status=1
+        done
+    done
+
+    if [ "$status" -ne 0 ]; then
+        echo >&2
+        echo "       Add the missing forward to the crate's 'turmoil' feature, e.g." >&2
+        echo '       turmoil = ["dep:turmoil", "frogdb-net/turmoil", ...]' >&2
+        exit 1
+    fi
+    echo "OK: turmoil feature forwarding is wired through every dependent crate"
 
 # Gate: INFO section content must come from a renderer (crates/server/src/info),
 # never a post-hoc string patch. Rejects placeholder-anchor rewrites in the

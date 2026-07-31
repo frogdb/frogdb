@@ -22,7 +22,7 @@ shuttle = ["dep:shuttle", "frogdb-core/shuttle"]
 # through `common::sim_harness`'s canonicalizer and `simulation.rs`'s
 # round-trip cases, so the stream family has to be compiled in whenever the
 # simulation tests are built. No other exotic family appears in the sim suite.
-turmoil = ["dep:turmoil", "frogdb-config/turmoil", "frogdb-core/fake-wal", "cmd-stream"]
+turmoil = ["dep:turmoil", "frogdb-config/turmoil", "frogdb-net/turmoil", "frogdb-core/fake-wal", "cmd-stream"]
 causal-profile = ["dep:tokio-coz"]
 profiling = ["dep:tracing-flame"]
 
@@ -75,6 +75,7 @@ frogdb-replication.workspace = true
 frogdb-commands.workspace = true
 frogdb-search.workspace = true
 frogdb-telemetry.workspace = true
+frogdb-net.workspace = true
 frogdb-macros = { path = "../frogdb-macros" }
 bytes.workspace = true
 rand.workspace = true
@@ -107,7 +108,6 @@ openraft.workspace = true
 axum.workspace = true
 tower.workspace = true
 schemars.workspace = true
-socket2 = "0.6"
 rustls.workspace = true
 tokio-rustls.workspace = true
 arc-swap.workspace = true
@@ -125,6 +125,7 @@ http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
 
 [dev-dependencies]
+socket2.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 # test-support exposes RocksStore's single-key put/get accessors to the recovery
 # seam tests (crates/server/src/recovery/tests.rs); dev-only, kept out of the
