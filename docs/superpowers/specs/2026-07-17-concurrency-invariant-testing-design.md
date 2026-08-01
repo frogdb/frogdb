@@ -316,9 +316,12 @@ Each phase lands independently:
 5. CI wiring (per-PR + nightly). **Done** (2026-07-22): `test.yml`'s
    `shuttle-tests`/`turmoil-tests` jobs already ran the shuttle suite and the
    turmoil `simulation` tests per PR, but not the `just concurrency`
-   generated-workload seed sweeps (`seed_sweep_short_workloads`,
-   `seed_sweep_txheavy`) — added those as extra steps on `turmoil-tests`, so
-   per-PR now matches `just concurrency` exactly (part of `just test-all`).
+   generated-workload tests — added those as an extra step on `turmoil-tests`,
+   so per-PR now matches `just concurrency` exactly (part of `just test-all`).
+   That step filters the whole `concurrency_workload` module rather than the
+   `seed_sweep_*` entry points by name (corrected 2026-07-31): the by-name
+   filters skipped `mod regressions`, so every pinned reproducer in that file
+   had been running nowhere.
    Added the nightly tier: a new generated workflow
    (`concurrency-nightly.yml`, source `workflow_gen/workflows/concurrency_nightly.py`)
    on a `03:14 UTC` cron + `workflow_dispatch` (with a `seeds` input), running
@@ -337,13 +340,19 @@ Each phase lands independently:
    `ops_per_client` are env-var overridable. Plumbing validated on a testbox
    smoke run; that validation also surfaced real, pre-existing invariant
    violations at higher seed counts and `ops_per_client` (tracked as
-   `.scratch/concurrency-testing/issues/11-nightly-smoke-findings.md`),
-   including a near-deterministic MultiWaiter exactly-once-delivery bug once
-   `ops_per_client` crosses roughly 90 — so the nightly default (both the
-   harness's `env_override` fallback and the `Justfile` recipe's `OPS`
-   parameter) is set to 75, not the originally-planned larger value, so the
-   job doesn't go permanently red on that known, tracked bug. It may still
-   occasionally surface the tier's rarer findings, which is expected.
+   `.scratch/concurrency-testing/issues/11-nightly-smoke-findings.md`).
+   One of them — a near-deterministic MultiWaiter exactly-once-delivery
+   failure once `ops_per_client` crossed roughly 90 (Finding A) — turned out
+   to be a defect in this harness, not the product: `workload_runner`'s
+   final-state readback slept a fixed 30 sim-seconds from sim start, so once
+   the client scripts ran longer than that the "final state" was captured
+   mid-workload and every later push looked lost. The readback is now latched
+   to actual client completion, and the nightly default (both the harness's
+   `env_override` fallback and the `Justfile` recipe's `OPS` parameter) is
+   back at 150 rather than the interim 75. The tier's rarer findings (B/C:
+   TxHeavy WATCH false-negatives, MultiWaiter FIFO wake order, ZSet
+   non-linearizability) are still open and may surface on any run, which is
+   expected and is what the tier is for.
 6. Replication & cluster in-process testing (see next section).
 
 Future phases (accommodated, not built): durability/crash-injection via the persistence

@@ -1,6 +1,6 @@
 # 11 — Nightly-tier smoke testing surfaced real concurrency invariant violations
 
-Status: needs-triage
+Status: needs-triage (Finding A **done** — see "Finding A — root cause found and fixed"; Findings B and C still open)
 Type: bug
 Origin: Phase 5 (CI wiring) plumbing validation, 2026-07-22 — testbox smoke runs of the new
 `seed_sweep_nightly` harness (`just concurrency-nightly`), not the 1000-seed sweep itself.
@@ -89,7 +89,7 @@ be triaged as real product bugs.
 
 ## Acceptance criteria
 
-- [ ] Root-cause Finding A (MultiWaiter exactly-once-delivery loss under sustained load) — likely in
+- [x] Root-cause Finding A (MultiWaiter exactly-once-delivery loss under sustained load) — likely in
       the blocking-pop wake/consume path (`frogdb-server/crates/core` blocking-list waiter
       machinery). Given how reliably it reproduces (`FROGDB_CONCURRENCY_OPS_PER_CLIENT=110
       FROGDB_CONCURRENCY_SEEDS=5 just concurrency-nightly`, or replay any of the repro files
@@ -106,11 +106,17 @@ be triaged as real product bugs.
       `ops_per_client=30` seed 1 and `ops_per_client=60` seed 19, and `ops_per_client=150` regime
       too). Given it reproduces at the per-PR-vetted `ops_per_client=30`, this is reachable with a
       comparatively short/cheap repro and should be prioritized for root-causing.
-- [ ] Once Finding A is fixed, revisit whether `concurrency-nightly`'s default `ops_per_client`
+- [x] Once Finding A is fixed, revisit whether `concurrency-nightly`'s default `ops_per_client`
       (see "Resolution" below) can be safely raised back toward the harness's original coded
-      default, to get longer per-history coverage in the nightly tier.
+      default, to get longer per-history coverage in the nightly tier. **Done** — raised 75 → 150
+      (the harness's coded default) in both places, 2026-07-31.
 
-## Resolution shipped in phase 5 (CI wiring)
+## Resolution shipped in phase 5 (CI wiring) — SUPERSEDED 2026-07-31
+
+> Superseded: the `ops_per_client = 75` cap described below was a workaround for what turned out to
+> be a harness defect, not a product bug. Both defaults are back at 150. See
+> "Finding A — root cause found and fixed" at the end of this file.
+
 
 To avoid shipping a nightly job that is *guaranteed* red every run (which trains reviewers to
 ignore it, defeating the point), `ops_per_client = 75` — not 150 — is baked in as the default in
@@ -194,3 +200,76 @@ that removes `"dt"` without recording a delivery is still unidentified.
   internal path) that removes an element without recording a delivery. The nondeterministic final
   length is the strongest lead — confirm whether it is a genuine loss or a drainer-readback timing
   artifact (`DRAIN_SETTLE_MS`) at high op counts before assuming a product bug.
+
+## Finding A — root cause found and fixed (2026-07-31)
+
+**Finding A is not a product bug. It is a defect in the turmoil workload harness's final-state
+readback.** Fixed; nightly `ops_per_client` restored to 150 in both places.
+
+### Root cause
+
+`frogdb-server/crates/server/tests/common/workload_runner.rs` — the `"drainer"` sim client slept a
+fixed `DRAIN_SETTLE_MS = 30_000` sim-ms **from sim start** and then `LRANGE`d every key, treating
+the result as the workload's *final* state. The `WAITQUEUE` prober was on the same wall-clock
+budget.
+
+A `MultiWaiter` client script spends `producer_think(rng) = 120..400` sim-ms before each producer
+push and ~45% of its ops are producers, so a script's duration grows roughly **0.26 sim-s per op**.
+Past `ops_per_client ≈ 90` (`90 × 0.26 ≈ 23s` plus consumer blocking waits) the scripts run past
+the 30 s mark, so the readback happened **mid-workload**. Every element RPUSH'd after the readback
+was therefore neither delivered (never popped) nor present in the captured "final state" — which
+`check_exactly_once_delivery` correctly reported as `LostElement`.
+
+This explains every previously-unexplained observation in the 2026-07-23 update:
+
+- the sharp threshold at ~90 ops and the near-determinism above it — it is a duration threshold,
+  not an interleaving one, and the bisection table (30 pass, 75 pass, 90 → 4/5, 110 → 5/5, 150 →
+  3/3) is exactly the shape of "scripts crossing a fixed wall-clock";
+- the lost element traversing **zero** deferred-serve events — the deferred path was never involved
+  because nothing had consumed the element yet;
+- the **nondeterministic final list length across identical-seed runs** — the `LRANGE` raced
+  in-flight pushes.
+
+Direct proof, seed 0 / OPS=110, instrumented: `DBG_DRAIN_READ t=30000ms` followed by ~40 further
+`DBG_LATE_OP ... rpush` lines, with `DBG_CLIENT_DONE` at t=32672 ms, t=33401 ms and later.
+
+### Fix
+
+`workload_runner.rs`: the drainer and the `WAITQUEUE` prober now key off an `AtomicUsize`
+client-completion latch instead of a wall-clock deadline. The readback is taken
+`DRAIN_SETTLE_MS = 500` sim-ms after the **last client script finishes**; a `DRAIN_DEADLINE_MS =
+240_000` ceiling makes a wedged run fail loudly with an actionable assert instead of silently
+capturing early. `SimConfig` gained a `simulation_duration` field so the workload runner can raise
+turmoil's virtual-time ceiling to 300 s (virtual time, so an unused ceiling costs no wall-clock).
+
+Side effects: runs no longer pad out to 30 sim-seconds (the prober stops when clients do), and the
+final-state capture is now deterministic across identical-seed runs.
+
+### Regression guard
+
+`regressions::regression_drain_capture_race_multiwaiter_ops_110_seed_0` in
+`frogdb-server/crates/server/tests/concurrency_workload.rs` — seed 0, `MultiWaiter`, 4 clients,
+`ops_per_client = 110` (load-bearing; at the per-PR tier's 30 the bug is invisible). Verified to
+**fail** with the harness fix stashed:
+`"exactly-once delivery: element [118] (pushed by op 234) was neither delivered nor in final state"`.
+
+### Sweep results after the fix (local)
+
+| config | exactly-once violations | remaining failures |
+|---|---|---|
+| OPS=110, SEEDS=25 (100 runs) | **0** | seed 3 + seed 10 TxHeavy WATCH false-negative, seed 6 MultiWaiter FIFO wake order (Finding B) |
+| OPS=150, SEEDS=25 (100 runs) | **0** | seed 7 BlockingHeavy, seed 3 + seed 13 MultiWaiter ZSet non-linearizable (Finding C); WGL downgrade ratio 0.0178 |
+| OPS=75, SEEDS=25 (baseline, the old shipped cap) | 0 | seed 3 TxHeavy WATCH false-negative (Finding B) |
+
+The OPS=75 baseline is the important control: the nightly tier was **already** red on Finding B at
+the capped value, so the cap was buying nothing.
+
+### Consequences
+
+- `seed_sweep_nightly`'s `env_override("FROGDB_CONCURRENCY_OPS_PER_CLIENT", …)` and the `just
+  concurrency-nightly` `OPS` default are both back at **150**; the workaround comments are
+  condensed to a one-liner pointing at this fix and the pinned regression.
+- Findings B and C remain open and are expected to keep surfacing in nightly — that is the tier
+  working as designed.
+- Blocking-path failure modes are now specced in
+  `.scratch/hardening/specs/blocking-failure-modes.md` (FM-BLOCKING-001..005).

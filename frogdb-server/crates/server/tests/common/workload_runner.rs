@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -54,13 +55,50 @@ pub struct CapturedRun {
 
 /// Prober cadence: how often (sim-ms) the prober samples `DEBUG WAITQUEUE`.
 /// Well under the multi-waiter blocking timeout so every concurrent waiter's
-/// registration ordinal is observed while it is parked.
+/// registration ordinal is observed while it is parked. Doubles as the poll
+/// cadence of the workload-completion latch below.
 const PROBE_INTERVAL_MS: u64 = 50;
 
-/// Sim-time (ms) the drainer waits before reading final list state — long
-/// enough for every client script (short think delays + sub-second blocking
-/// timeouts) to finish, well under the 60s sim duration cap.
-const DRAIN_SETTLE_MS: u64 = 30_000;
+/// Sim-time (ms) the drainer waits *after every workload client has finished*
+/// before reading final list state, so an in-flight deferred blocking serve has
+/// landed before the readback.
+///
+/// This used to be a fixed 30s sleep from sim start, on the assumption that
+/// every client script finishes inside it. That assumption silently broke as
+/// `ops_per_client` grew: a `MultiWaiter` client spends 120–400 sim-ms of think
+/// time before each producer push, so at ~90 ops/client the scripts run past
+/// 30s and the "final state" readback happened *mid-workload* — every element
+/// pushed after the readback was neither delivered nor in final state, which
+/// the conservation checker correctly reported as lost. That was the whole of
+/// `.scratch/concurrency-testing/issues/11-nightly-smoke-findings.md` Finding A;
+/// the readback is now latched to actual client completion instead.
+const DRAIN_SETTLE_MS: u64 = 500;
+
+/// Hard ceiling (sim-ms) on how long the drainer/prober will wait for the
+/// workload clients to finish. Reaching it means a client is wedged (or the
+/// workload genuinely outgrew the sim window); the run fails loudly rather than
+/// reading a half-finished store and reporting phantom element loss.
+const DRAIN_DEADLINE_MS: u64 = 240_000;
+
+/// Sim-duration cap for workload runs. Generous relative to `DRAIN_DEADLINE_MS`
+/// so the deadline above (which reports an actionable message) trips before
+/// turmoil's own opaque duration error. Virtual time, so an unused ceiling
+/// costs no wall-clock.
+const WORKLOAD_SIM_DURATION: Duration = Duration::from_secs(300);
+
+/// Poll the workload-completion latch until every client script has finished.
+/// Returns `false` if [`DRAIN_DEADLINE_MS`] elapsed first.
+async fn await_clients_finished(finished: &AtomicUsize, expected: usize) -> bool {
+    let mut waited = 0u64;
+    while finished.load(Ordering::SeqCst) < expected {
+        if waited >= DRAIN_DEADLINE_MS {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(PROBE_INTERVAL_MS)).await;
+        waited += PROBE_INTERVAL_MS;
+    }
+    true
+}
 
 /// Like [`run_workload`], but also captures the final list contents (via
 /// LRANGE readback after all clients finish) as `final_elements` for the
@@ -77,6 +115,7 @@ pub fn run_workload_capturing(
     let mut sim = build_sim(&SimConfig {
         seed: workload.seed,
         num_shards,
+        simulation_duration: WORKLOAD_SIM_DURATION,
         ..SimConfig::default()
     });
 
@@ -129,11 +168,19 @@ pub fn run_workload_capturing(
     // connections_responsive` (see quiescence_probe.rs).
     let connections_responsive: Arc<Mutex<bool>> = Arc::new(Mutex::new(true));
 
+    // Workload-completion latch: each client bumps this once its scripted ops
+    // (and trailing PING) are done. The prober and the drainer key off it
+    // instead of a fixed wall-clock deadline, so the final-state readback can
+    // never race a still-running client script (see `DRAIN_SETTLE_MS`).
+    let clients_finished: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+    let num_client_scripts = workload.clients.len();
+
     for script in &workload.clients {
         let h = history.clone();
         let script = script.clone();
         let client_ids = client_ids.clone();
         let connections_responsive = connections_responsive.clone();
+        let clients_finished = clients_finished.clone();
         let client_name = format!("client{}", script.client_id);
         sim.client(client_name, async move {
             let addr = turmoil::lookup(SERVER_HOST);
@@ -163,23 +210,30 @@ pub fn run_workload_capturing(
                 *connections_responsive.lock().unwrap() = false;
             }
 
+            clients_finished.fetch_add(1, Ordering::SeqCst);
             Ok::<(), Box<dyn std::error::Error>>(())
         });
     }
 
     // Prober: a dedicated read-only client that polls `DEBUG WAITQUEUE` every
-    // ~50 sim-ms until the drain settles, folding every observed waiter's
-    // registration ordinal into `waiter_obs`. Long-timeout multi-waiter pops
-    // stay parked far longer than the cadence, so each concurrent waiter is
-    // captured while blocked.
+    // ~50 sim-ms for as long as any workload client is still running, folding
+    // every observed waiter's registration ordinal into `waiter_obs`.
+    // Long-timeout multi-waiter pops stay parked far longer than the cadence,
+    // so each concurrent waiter is captured while blocked. Keying the loop off
+    // the completion latch (rather than a fixed deadline) means it covers the
+    // *whole* workload however long the scripts run, and stops immediately once
+    // they are done instead of padding every run to a fixed sim duration.
     let obs_out = waiter_obs.clone();
+    let prober_finished = clients_finished.clone();
     sim.client("prober", async move {
         let addr = turmoil::lookup(SERVER_HOST);
         let mut stream = connect_with_retry(addr).await?;
         let mut buf = vec![0u8; 65536];
         let mut acc: Vec<u8> = Vec::with_capacity(4096);
         let mut elapsed = 0u64;
-        while elapsed < DRAIN_SETTLE_MS {
+        while prober_finished.load(Ordering::SeqCst) < num_client_scripts
+            && elapsed < DRAIN_DEADLINE_MS
+        {
             tokio::time::sleep(Duration::from_millis(PROBE_INTERVAL_MS)).await;
             elapsed += PROBE_INTERVAL_MS;
             let waitqueue = debug_probe(&mut stream, &mut buf, &mut acc, b"WAITQUEUE").await?;
@@ -204,7 +258,16 @@ pub fn run_workload_capturing(
     let drain_out = final_elements.clone();
     let quiescence_out = quiescence.clone();
     let keys = Workload::key_space(workload.seed);
+    let drain_finished = clients_finished.clone();
+    let drain_raced = Arc::new(Mutex::new(false));
+    let drain_raced_out = drain_raced.clone();
     sim.client("drainer", async move {
+        // Wait for actual client completion, not a fixed wall-clock deadline:
+        // a readback taken while a client is still pushing would report every
+        // later push as a lost element (issue 11 Finding A).
+        if !await_clients_finished(&drain_finished, num_client_scripts).await {
+            *drain_raced_out.lock().unwrap() = true;
+        }
         tokio::time::sleep(Duration::from_millis(DRAIN_SETTLE_MS)).await;
         let addr = turmoil::lookup(SERVER_HOST);
         let mut stream = connect_with_retry(addr).await?;
@@ -241,6 +304,17 @@ pub fn run_workload_capturing(
     });
 
     sim.run().expect("turmoil sim run failed");
+
+    // A raced drain silently manufactures conservation violations (every push
+    // after the readback looks lost), so it must never be reported as a product
+    // bug — fail here, naming the knob to turn.
+    assert!(
+        !*drain_raced.lock().unwrap(),
+        "final-state readback timed out after {DRAIN_DEADLINE_MS}ms with {}/{num_client_scripts} \
+         client script(s) finished — the capture would be taken mid-workload and report phantom \
+         element loss. Either a client is wedged, or the workload outgrew DRAIN_DEADLINE_MS.",
+        clients_finished.load(Ordering::SeqCst),
+    );
 
     let history = history.lock().unwrap().to_testing_history();
     let final_elements = final_elements.lock().unwrap().clone();

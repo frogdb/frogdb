@@ -275,15 +275,14 @@ def test_workflow() -> Workflow:
                     name="Run Turmoil simulation tests",
                     run="cargo nextest run -p frogdb-server --features turmoil -E 'test(/simulation/)'",
                 ),
+                # Filter the whole `concurrency_workload` module rather than its
+                # `seed_sweep_*` entry points individually: `mod regressions`'s
+                # pinned reproducers live in the same file and were silently
+                # never executed under the narrower filters.
                 run_step(
-                    name="Run generated-workload seed sweep (short workloads)",
+                    name="Run generated-workload tests (seed sweeps + pinned regressions)",
                     run="cargo nextest run -p frogdb-server --features turmoil"
-                    " -E 'test(/seed_sweep_short_workloads/)'",
-                ),
-                run_step(
-                    name="Run generated-workload seed sweep (TxHeavy)",
-                    run="cargo nextest run -p frogdb-server --features turmoil"
-                    " -E 'test(/seed_sweep_txheavy/)'",
+                    " -E 'test(/concurrency_workload/)'",
                 ),
             ],
         ),

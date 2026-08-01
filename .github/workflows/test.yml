@@ -217,10 +217,8 @@ jobs:
         shared-key: turmoil
     - name: Run Turmoil simulation tests
       run: cargo nextest run -p frogdb-server --features turmoil -E 'test(/simulation/)'
-    - name: Run generated-workload seed sweep (short workloads)
-      run: cargo nextest run -p frogdb-server --features turmoil -E 'test(/seed_sweep_short_workloads/)'
-    - name: Run generated-workload seed sweep (TxHeavy)
-      run: cargo nextest run -p frogdb-server --features turmoil -E 'test(/seed_sweep_txheavy/)'
+    - name: Run generated-workload tests (seed sweeps + pinned regressions)
+      run: cargo nextest run -p frogdb-server --features turmoil -E 'test(/concurrency_workload/)'
   operator-tests:
     needs: changes
     if: needs.changes.outputs.operator == 'true' || needs.changes.outputs.operator_config == 'true'

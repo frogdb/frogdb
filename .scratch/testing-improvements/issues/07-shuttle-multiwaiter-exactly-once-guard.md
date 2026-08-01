@@ -44,9 +44,10 @@ permanent regression guard on a hard-to-hit interleaving bug).
       shuttle-explored interleavings for N overlapping-key waiters + concurrent pushes
 - [ ] Test is red against current code (reproduces concurrency-testing issue 11's failure mode) or,
       if issue 11 is fixed first, demonstrably would have caught it
-- [ ] Nightly `ops_per_client` cap revisited/raised once this guard plus the issue-11 fix are both
+- [x] Nightly `ops_per_client` cap revisited/raised once this guard plus the issue-11 fix are both
       green (coordinate with the "Resolution" note in
-      `.scratch/concurrency-testing/issues/11-nightly-smoke-findings.md`)
+      `.scratch/concurrency-testing/issues/11-nightly-smoke-findings.md`) — **satisfied 2026-07-31**,
+      cap raised 75 → 150; see the addendum below
 
 ## Blocked by
 
@@ -132,3 +133,25 @@ Net: the deterministic conservation guard asked for is delivered and green, and 
 nightly-cap raise are deliberately deferred with documented rationale; the MultiWaiter data-loss
 bug that motivated this issue (Finding A) is confirmed to be a separate, still-open defect tracked
 in issue 11.
+
+## Addendum (2026-07-31) — deferred criterion 4 now satisfied
+
+Issue 11 Finding A was root-caused: it is **not a product bug**, it is a defect in the turmoil
+harness's final-state readback (`workload_runner.rs` slept a fixed 30 sim-seconds from sim start
+and then read back list state, so at `ops_per_client >= ~90` the capture landed mid-workload and
+every element pushed afterwards looked "lost"). Deviation 3 above was therefore right that this
+shuttle guard does not reproduce Finding A — for the stronger reason that there was no product bug
+to reproduce.
+
+With the harness fixed (readback latched to client completion), sweeps at OPS=110 and OPS=150 over
+25 seeds x 4 profiles show **zero** exactly-once violations, so acceptance criterion 4 is met: the
+nightly `ops_per_client` cap is raised 75 -> 150 in both `seed_sweep_nightly` and the `just
+concurrency-nightly` recipe. The harness defect itself is pinned by
+`regressions::regression_drain_capture_race_multiwaiter_ops_110_seed_0`.
+
+Deviations 1 and 2 stand unchanged: the shuttle model remains a faithful model rather than a
+literal `ShardWorker` drive, and FIFO wake order is still guarded at the turmoil level only
+(issue 11 Finding B remains open). The connection-side blocking failure modes this guard's product
+fix implements are now specced as FM-BLOCKING-001..005 in
+`.scratch/hardening/specs/blocking-failure-modes.md`, with FM-BLOCKING-005 (serve races the chosen
+timeout) forced by new unit tests over the extracted `reconcile_ack`.

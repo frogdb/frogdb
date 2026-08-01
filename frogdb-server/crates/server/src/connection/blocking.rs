@@ -185,10 +185,7 @@ impl ConnectionHandler {
             return None;
         }
 
-        match ack_rx.await {
-            Ok(UnregisterAck::AlreadyServed) => response_rx.await.ok(),
-            Ok(UnregisterAck::Unregistered) | Err(_) => None,
-        }
+        reconcile_ack(ack_rx.await, response_rx).await
     }
 
     /// Handle the WAIT command at the connection level.
@@ -309,5 +306,87 @@ impl ConnectionHandler {
         self.admin.client_registry.reset_unblock(self.state.id);
 
         response
+    }
+}
+
+/// Decide the reply from the shard's `UnregisterWait` ack and whatever the
+/// (still open) response channel holds.
+///
+/// Split out of [`ConnectionHandler::reconcile_unregister`] for the same reason
+/// [`BlockingWaitCoordinator`] is split out of `handle_blocking_wait`: this is
+/// the whole serve-vs-timeout decision, and as a free function over two
+/// in-memory channels it is unit-testable without a live shard or a whole
+/// `ConnectionHandler`. `Some` means a raced serve was drained and must be
+/// delivered; `None` means fall back to the op-aware timeout/unblock reply.
+async fn reconcile_ack(
+    ack: Result<UnregisterAck, oneshot::error::RecvError>,
+    response_rx: &mut oneshot::Receiver<Response>,
+) -> Option<Response> {
+    match ack {
+        // The shard says a serve already removed this waiter and sent on the
+        // response channel. Draining it is what keeps the popped element from
+        // being delivered to nobody.
+        Ok(UnregisterAck::AlreadyServed) => response_rx.await.ok(),
+        Ok(UnregisterAck::Unregistered) | Err(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod reconcile_tests {
+    use super::*;
+
+    /// FM-BLOCKING-005
+    ///
+    /// `AlreadyServed` means the shard popped an element for this waiter after
+    /// the coordinator had already chosen a timeout. The value must be drained
+    /// off the still-open receiver and delivered — dropping it is exactly the
+    /// "neither delivered nor in final state" loss the conservation checkers
+    /// report.
+    #[tokio::test]
+    async fn already_served_drains_the_raced_value() {
+        let (tx, mut rx) = oneshot::channel();
+        tx.send(Response::Integer(42)).unwrap();
+        let out = reconcile_ack(Ok(UnregisterAck::AlreadyServed), &mut rx).await;
+        assert!(
+            matches!(out, Some(Response::Integer(42))),
+            "a serve that raced the timeout must be delivered, not dropped"
+        );
+    }
+
+    /// FM-BLOCKING-005
+    ///
+    /// `Unregistered` is the shard's authoritative "the timeout won, nothing was
+    /// consumed" — the caller keeps its op-aware timeout reply.
+    #[tokio::test]
+    async fn unregistered_keeps_the_timeout_reply() {
+        let (_tx, mut rx) = oneshot::channel::<Response>();
+        let out = reconcile_ack(Ok(UnregisterAck::Unregistered), &mut rx).await;
+        assert!(out.is_none());
+    }
+
+    /// FM-BLOCKING-005
+    ///
+    /// A closed ack channel (shard gone) is not an excuse to hang or to
+    /// fabricate a delivery: fall back to the timeout reply.
+    #[tokio::test]
+    async fn closed_ack_channel_keeps_the_timeout_reply() {
+        let (ack_tx, ack_rx) = oneshot::channel::<UnregisterAck>();
+        drop(ack_tx);
+        let (_tx, mut rx) = oneshot::channel::<Response>();
+        let out = reconcile_ack(ack_rx.await, &mut rx).await;
+        assert!(out.is_none());
+    }
+
+    /// FM-BLOCKING-005
+    ///
+    /// `AlreadyServed` with a response channel that closed without a value
+    /// (shard teardown between ack and send) must degrade to the timeout reply
+    /// rather than blocking forever on a dead channel.
+    #[tokio::test]
+    async fn already_served_with_closed_response_channel_falls_back() {
+        let (tx, mut rx) = oneshot::channel::<Response>();
+        drop(tx);
+        let out = reconcile_ack(Ok(UnregisterAck::AlreadyServed), &mut rx).await;
+        assert!(out.is_none());
     }
 }
