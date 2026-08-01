@@ -10,12 +10,6 @@ env:
   CARGO_TERM_COLOR: always
 'on':
   workflow_dispatch: {}
-  push:
-    branches:
-    - main
-  pull_request:
-    branches:
-    - main
 jobs:
   changes:
     name: Detect Changes
@@ -38,6 +32,7 @@ jobs:
       name: Check changed paths
       uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d
       with:
+        base: main
         filters: |
           rust:
             - 'frogdb-server/**'

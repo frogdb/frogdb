@@ -19,7 +19,7 @@ from workflow_gen.helpers import (
     rust_toolchain_step,
     script,
 )
-from workflow_gen.schema import Job, PullRequestTrigger, PushTrigger, Step, Trigger, Workflow
+from workflow_gen.schema import Job, Step, Trigger, Workflow
 
 # Runner label — GitHub-hosted standard runners, which are free and unmetered on
 # public repositories. This previously routed trusted actors to a `self-hosted`
@@ -43,10 +43,9 @@ MISE_HELM = "helm"
 def test_workflow() -> Workflow:
     w = Workflow(
         name="Test",
-        on=Trigger(
-            push=PushTrigger(branches=["main"]),
-            pull_request=PullRequestTrigger(branches=["main"]),
-        ),
+        # CI is manual-dispatch-only during the hardening campaign (push/pull_request
+        # triggers removed; see the sibling nightly workflows for the same pattern).
+        on=Trigger(),
         env=omap(CARGO_TERM_COLOR="always"),
     )
 
@@ -74,6 +73,12 @@ def test_workflow() -> Workflow:
                     name="Check changed paths",
                     uses=PATHS_FILTER,
                     with_=omap(
+                        # dorny/paths-filter infers a base automatically for push/
+                        # pull_request events, but workflow_dispatch has no event-implied
+                        # base commit — without this it errors out. `main` matches what
+                        # push/pull_request compared against anyway, since this workflow
+                        # only ever ran on that branch.
+                        base="main",
                         filters=script("""\
                             rust:
                               - 'frogdb-server/**'

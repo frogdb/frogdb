@@ -19,10 +19,11 @@ tiers (`concurrency_nightly.py` / `jepsen_nightly.py` / `coverage_nightly.py`):
 
 Unlike the campaign's other nightly tiers (concurrency/coverage/jepsen), whose crons were
 removed because they are expensive, unwatched, and gate nothing, this suite's whole purpose
-is to keep a working (if frozen) regression signal alive while it's out of the PR path, so
-it keeps a real nightly cron in addition to `workflow_dispatch`. No other workflow in this
-repo currently runs on a schedule, so there is nothing to stagger against; 03:00 UTC is
-picked simply as an off-peak hour.
+is to keep a working (if frozen) regression signal alive while it's out of the PR path — so
+it originally kept a real nightly cron in addition to `workflow_dispatch`, unlike every
+other workflow in the repo. CI is manual-dispatch-only during the hardening campaign,
+though, so that cron is off too for now; re-add `ScheduleTrigger` here once the campaign
+ends if a standing nightly signal is still wanted.
 """
 
 from workflow_gen.helpers import (
@@ -33,7 +34,7 @@ from workflow_gen.helpers import (
     run_step,
     rust_toolchain_step,
 )
-from workflow_gen.schema import Job, ScheduleTrigger, Trigger, Workflow
+from workflow_gen.schema import Job, Trigger, Workflow
 
 MISE_JUST_NEXTEST = "just cargo:cargo-nextest"
 
@@ -41,16 +42,16 @@ MISE_JUST_NEXTEST = "just cargo:cargo-nextest"
 # other on-demand nightly tiers. Blacksmith is reserved for the testbox workflow.
 RUNS_ON = "ubuntu-latest"
 
-# Nightly at 03:00 UTC. No other workflow in this repo currently has an active cron (the
-# other nightly tiers deliberately removed theirs — see their module docstrings), so there
-# is nothing to stagger against; this is just an off-peak hour.
-CRON_SCHEDULE = "0 3 * * *"
+# Was "0 3 * * *" (nightly at 03:00 UTC) before the hardening campaign turned every
+# schedule trigger off in favor of workflow_dispatch-only. Re-add a `ScheduleTrigger(
+# cron=[...])` to the Trigger below to bring the cron back once the campaign ends.
 
 
 def regression_nightly_workflow() -> Workflow:
     w = Workflow(
         name="Regression Nightly",
-        on=Trigger(schedule=ScheduleTrigger(cron=[CRON_SCHEDULE])),
+        # CI is manual-dispatch-only during the hardening campaign.
+        on=Trigger(),
     )
 
     w.job(

@@ -16,12 +16,8 @@ env:
         required: false
         default: '180'
         type: string
-  pull_request:
-    branches:
-    - main
 jobs:
   fuzz-campaign:
-    if: github.event_name != 'pull_request'
     name: Fuzz Campaign
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -72,7 +68,6 @@ jobs:
         retention-days: '7'
         if-no-files-found: error
   corpus-replay:
-    if: github.event_name == 'pull_request'
     name: Corpus Replay
     runs-on: ubuntu-latest
     timeout-minutes: 60
