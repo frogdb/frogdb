@@ -25,9 +25,9 @@ raises its nuisance value and makes it cheap to iterate on locally.
 
 ## Context
 
-Same load-dependent signature as `.scratch/testing-improvements/issues/65-checkpoint-multi-
-atomicity-testbox-flake.md`, which already cross-references this test's failure pattern. The
-assertion is a WAIT-ack count against a healthy replica while a LagProxy throttles the other —
+Same load-dependent signature as `.scratch/testing-improvements/issues/65`, which already
+cross-references this test's failure pattern. The assertion is a WAIT-ack count against a
+healthy replica while a LagProxy throttles the other —
 a 1s write timeout that presumably starves under CPU contention.
 
 ## Next steps
