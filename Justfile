@@ -208,6 +208,13 @@ regression pattern="":
 regression-check:
     {{dyld-env}} {{rocksdb-env}} cargo check -p frogdb-redis-regression --features regression --all-targets
 
+# Gate: failure-mode specs and the tests that force them must agree, both ways.
+# Every `Forced by` test in .scratch/hardening/specs/*-failure-modes.md must
+# exist and carry a `// FM-<AREA>-NNN` tag; every tag must name a spec row.
+# Builds the listed crates' test binaries (~15-25s warm, no test execution).
+lint-failure-modes:
+    {{dyld-env}} {{rocksdb-env}} RUSTC_WRAPPER="" ./scripts/failure-modes.py
+
 # Run frogctl's tests (excluded from the default suite during the campaign)
 frogctl-test:
     {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogctl --features cli-tests --ignore-default-filter
@@ -225,7 +232,7 @@ fmt-check crate="":
     cargo fmt {{ if crate != "" { "-p " + crate } else { "--all" } }} -- --check
 
 # Run clippy lints (optionally for a specific crate)
-lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-turmoil-features lint-turmoil
+lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-turmoil-features lint-turmoil lint-failure-modes
     {{dyld-env}} {{rocksdb-env}} cargo clippy {{ if crate != "" { "-p " + crate } else { "--all-targets" } }} -- -D warnings
 
 # Gate: turmoil-featured test bodies (frogdb-server/crates/server/tests/simulation.rs)

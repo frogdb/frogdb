@@ -2037,6 +2037,7 @@ async fn test_empty_unsubscribe_null_channel_shape() {
     server.shutdown().await;
 }
 
+// FM-TXN-043
 /// Inside MULTI/EXEC, RESP2 confirmations stay `Array` — nested in the EXEC
 /// reply array.
 #[tokio::test]
@@ -2068,6 +2069,7 @@ async fn test_subscribe_confirmation_in_multi_exec_resp2() {
     server.shutdown().await;
 }
 
+// FM-TXN-043
 /// Inside MULTI/EXEC, RESP3 confirmations are `Push` frames delivered
 /// out-of-band after the EXEC array — the same shape as the direct path.
 #[tokio::test]
@@ -2098,6 +2100,7 @@ async fn test_subscribe_confirmation_in_multi_exec_resp3() {
     server.shutdown().await;
 }
 
+// FM-TXN-043
 /// SSUBSCRIBE inside MULTI is rejected — pinned against Redis 8.6.4 source
 /// (`pubsub.c: ssubscribeCommand`), which guards on bare `CLIENT_DENY_BLOCKING`
 /// with no `!CLIENT_MULTI` carve-out (unlike SUBSCRIBE/PSUBSCRIBE, which are
@@ -2142,6 +2145,7 @@ async fn test_ssubscribe_inside_multi_rejected() {
 // dropping the queue and returning `+RESET`, which that test already pins.
 // ============================================================================
 
+// FM-TXN-043
 /// SUBSCRIBE queued in MULTI genuinely subscribes at EXEC time (Redis-exempt,
 /// not rejected). Pinned here as the reference case for the matrix even though
 /// `test_subscribe_confirmation_in_multi_exec_resp2` covers it too.
@@ -2203,6 +2207,7 @@ async fn test_psubscribe_inside_multi_executes() {
     server.shutdown().await;
 }
 
+// FM-TXN-043
 /// UNSUBSCRIBE carries no DENY_BLOCKING guard at all in Redis, so it executes
 /// unconditionally inside MULTI too. With no active subscriptions this yields
 /// the same null-channel confirmation shape as the direct path.
@@ -2303,6 +2308,7 @@ async fn test_sunsubscribe_inside_multi_executes() {
     server.shutdown().await;
 }
 
+// FM-TXN-043
 /// PUBSUB carries no DENY_BLOCKING guard in Redis either — it executes inside
 /// MULTI exactly like the direct path, folding its single reply into the EXEC
 /// array slot (same framing as PUBLISH/SPUBLISH). This is the other residue

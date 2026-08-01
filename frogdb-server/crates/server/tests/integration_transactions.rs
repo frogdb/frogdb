@@ -22,6 +22,7 @@ fn cross_shard_key_pair(num_shards: usize) -> (String, String) {
     panic!("could not find a cross-shard key pair for {num_shards} shards");
 }
 
+// FM-TXN-035
 #[tokio::test]
 async fn test_multi_exec_basic() {
     let server = TestServer::start_standalone().await;
@@ -63,6 +64,7 @@ async fn test_multi_exec_basic() {
     server.shutdown().await;
 }
 
+// FM-TXN-018
 #[tokio::test]
 async fn test_multi_exec_empty() {
     let server = TestServer::start_standalone().await;
@@ -79,6 +81,7 @@ async fn test_multi_exec_empty() {
     server.shutdown().await;
 }
 
+// FM-TXN-004
 #[tokio::test]
 async fn test_multi_discard() {
     let server = TestServer::start_standalone().await;
@@ -106,6 +109,7 @@ async fn test_multi_discard() {
     server.shutdown().await;
 }
 
+// FM-TXN-002
 #[tokio::test]
 async fn test_exec_without_multi() {
     let server = TestServer::start_standalone().await;
@@ -117,6 +121,7 @@ async fn test_exec_without_multi() {
     server.shutdown().await;
 }
 
+// FM-TXN-003
 #[tokio::test]
 async fn test_discard_without_multi() {
     let server = TestServer::start_standalone().await;
@@ -128,6 +133,7 @@ async fn test_discard_without_multi() {
     server.shutdown().await;
 }
 
+// FM-TXN-001
 #[tokio::test]
 async fn test_nested_multi() {
     let server = TestServer::start_standalone().await;
@@ -149,6 +155,7 @@ async fn test_nested_multi() {
     server.shutdown().await;
 }
 
+// FM-TXN-033
 #[tokio::test]
 async fn test_watch_exec_success() {
     let server = TestServer::start_standalone().await;
@@ -186,6 +193,7 @@ async fn test_watch_exec_success() {
     server.shutdown().await;
 }
 
+// FM-TXN-033
 #[tokio::test]
 async fn test_watch_exec_abort() {
     let server = TestServer::start_standalone().await;
@@ -304,6 +312,7 @@ async fn test_changing_pfadd_aborts_watch() {
     server.shutdown().await;
 }
 
+// FM-TXN-011
 #[tokio::test]
 async fn test_watch_inside_multi_error() {
     let server = TestServer::start_standalone().await;
@@ -325,6 +334,7 @@ async fn test_watch_inside_multi_error() {
     server.shutdown().await;
 }
 
+// FM-TXN-013
 #[tokio::test]
 async fn test_unwatch() {
     let server = TestServer::start_standalone().await;
@@ -368,6 +378,7 @@ async fn test_unwatch() {
     server.shutdown().await;
 }
 
+// FM-TXN-013
 // Regression (reviewer, fix round 2): UNWATCH inside MULTI clears the live watch
 // set, so it must leave no stale cross-shard watch fold that would spuriously
 // CROSSSLOT-reject an otherwise single-shard EXEC. The watch shards are folded at
@@ -425,6 +436,7 @@ async fn test_unwatch_in_multi_clears_stale_cross_shard_watch_fold() {
     server.shutdown().await;
 }
 
+// FM-TXN-036
 #[tokio::test]
 async fn test_transaction_with_error() {
     let server = TestServer::start_standalone().await;
@@ -471,6 +483,42 @@ async fn test_transaction_with_error() {
     server.shutdown().await;
 }
 
+// FM-TXN-005
+/// An unknown command inside MULTI poisons the queue exactly like a bad arity
+/// does: the reply is the unknown-command error rather than `+QUEUED`, and EXEC
+/// answers EXECABORT without running the commands that did queue. Redis calls
+/// this `flagTransaction`; the queue is never "best effort".
+#[tokio::test]
+async fn test_unknown_command_in_multi_aborts_the_transaction() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    let response = client.command(&["SET", "unknowncmdkey", "bar"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+
+    let response = client.command(&["NOSUCHCOMMAND", "a", "b"]).await;
+    assert!(
+        matches!(&response, Response::Error(e) if e.starts_with(b"ERR unknown command")),
+        "an unknown command inside MULTI must fail as unknown, got {response:?}"
+    );
+
+    let response = client.command(&["EXEC"]).await;
+    assert!(
+        matches!(&response, Response::Error(e) if e.starts_with(b"EXECABORT")),
+        "a poisoned queue must abort at EXEC, got {response:?}"
+    );
+
+    // The queued SET must not have run.
+    let response = client.command(&["GET", "unknowncmdkey"]).await;
+    assert_eq!(response, Response::Bulk(None));
+
+    server.shutdown().await;
+}
+
+// FM-TXN-006
 #[tokio::test]
 async fn test_transaction_syntax_error_aborts() {
     let server = TestServer::start_standalone().await;
@@ -501,6 +549,7 @@ async fn test_transaction_syntax_error_aborts() {
     server.shutdown().await;
 }
 
+// FM-TXN-037
 /// Connection-level commands (CONFIG, INFO, ...) are deferred out of the shard
 /// transaction and merged back afterwards. Their results must land at their
 /// original queue positions — first, middle, and last.
@@ -545,6 +594,7 @@ async fn test_transaction_connection_level_merge_order() {
     server.shutdown().await;
 }
 
+// FM-TXN-034
 /// A transaction whose queue is entirely connection-level still checks watches
 /// via an empty shard round-trip: success yields the merged results...
 #[tokio::test]
@@ -573,6 +623,7 @@ async fn test_watch_with_only_connection_level_commands_success() {
     server.shutdown().await;
 }
 
+// FM-TXN-034
 /// ...and a modified watched key still aborts the transaction with nil.
 #[tokio::test]
 async fn test_watch_with_only_connection_level_commands_abort() {
@@ -614,6 +665,7 @@ fn resp2_flat_keys(resp: &Response) -> Vec<Vec<u8>> {
     }
 }
 
+// FM-TXN-037
 /// Regression: connection-level commands `HOTKEYS` and `FT.CURSOR` must be
 /// deferred out of the shard transaction and *really executed* by the
 /// registry-union EXEC path — not silently treated as a no-op (their old
@@ -685,6 +737,7 @@ async fn test_transaction_conn_command_hotkeys_ftcursor_execute() {
     server.shutdown().await;
 }
 
+// FM-TXN-035
 #[tokio::test]
 async fn test_transaction_increments() {
     let server = TestServer::start_standalone().await;
@@ -724,6 +777,7 @@ async fn test_transaction_increments() {
     server.shutdown().await;
 }
 
+// FM-TXN-033
 /// A write performed inside an EVAL script bumps the WATCH version exactly
 /// like a direct write: a transaction watching the key must abort after a
 /// scripted SET modifies it (proposal 46 item 2 — the scripting seam used to
@@ -781,6 +835,7 @@ async fn test_scripted_write_dirties_watch() {
 // (FLUSHDB), or replying from a do-nothing stub (FT.*).
 // ============================================================================
 
+// FM-TXN-039
 /// `MULTI; KEYS *; EXEC` must return keys from ALL shards. The test server
 /// runs 4 shards; 20 distinct keys deterministically hash across several of
 /// them, so a single-shard execution could only ever see a strict subset.
@@ -819,6 +874,7 @@ async fn test_multi_exec_keys_spans_all_shards() {
     server.shutdown().await;
 }
 
+// FM-TXN-039
 /// `MULTI; FLUSHDB; EXEC` must clear ALL shards, not just the transaction's
 /// target shard. Verified via DBSIZE == 0 afterwards.
 #[tokio::test]
@@ -857,6 +913,7 @@ async fn test_multi_exec_flushdb_clears_all_shards() {
     server.shutdown().await;
 }
 
+// FM-TXN-039
 /// `MULTI; SCAN 0; EXEC` must return a proper `[cursor, [keys...]]` reply that
 /// walks the whole (multi-shard) keyspace, not a single shard's slice.
 #[tokio::test]
@@ -923,6 +980,7 @@ async fn test_multi_exec_scan_returns_full_cursor_reply() {
     server.shutdown().await;
 }
 
+// FM-TXN-036
 /// `MULTI; FT.SEARCH <nonexistent>; EXEC` must run the real server-wide
 /// FT.SEARCH (which errors on an unknown index), not the shard-side stub
 /// (which used to fabricate an empty result).
@@ -958,6 +1016,7 @@ async fn test_multi_exec_ft_search_unknown_index_errors() {
     server.shutdown().await;
 }
 
+// FM-TXN-039
 /// EXEC replies must appear at their queued positions when shard, server-wide,
 /// and shard commands interleave: `SET k v; KEYS k*; GET k` → `[OK, [k], v]`.
 #[tokio::test]
@@ -994,6 +1053,7 @@ async fn test_multi_exec_server_wide_reply_ordering() {
     server.shutdown().await;
 }
 
+// FM-TXN-045
 /// Regression: a nested `Response::NullArray` inside an EXEC reply array must
 /// encode over RESP2 as a nested null (`$-1\r\n`), not panic the encoder.
 ///
@@ -1056,6 +1116,7 @@ fn assert_crossslot(response: &Response, context: &str) {
     }
 }
 
+// FM-TXN-019
 /// Baseline (default config: `allow_cross_slot_standalone=false`): a plain-key,
 /// no-WATCH MULTI over keys on different internal shards CROSSSLOTs at EXEC.
 /// Previously the only standalone cross-shard-MULTI CROSSSLOT coverage was the
@@ -1093,6 +1154,7 @@ async fn test_multi_cross_shard_plain_keys_crossslot_default_config() {
     server.shutdown().await;
 }
 
+// FM-TXN-021
 /// Core invariant: with `allow_cross_slot_standalone=true`, single multi-key
 /// commands scatter across shards (proven here by an out-of-transaction MSET
 /// returning OK), yet a MULTI spanning the same two shards STILL CROSSSLOTs at
@@ -1146,6 +1208,7 @@ async fn test_multi_cross_shard_crossslot_with_allow_cross_slot_standalone() {
     server.shutdown().await;
 }
 
+// FM-TXN-021
 /// Regression baseline mirror: `allow_cross_slot_standalone=false` (explicit)
 /// also CROSSSLOTs a cross-shard MULTI. Together with the `true` case above,
 /// this proves the fold path is config-independent.
@@ -1175,6 +1238,7 @@ async fn test_multi_cross_shard_crossslot_with_flag_disabled() {
     server.shutdown().await;
 }
 
+// FM-TXN-021
 /// Boundary: enabling `allow_cross_slot_standalone` must NOT break a legitimate
 /// single-shard transaction. Two distinct keys sharing a hash tag are colocated
 /// on one slot/shard, so the MULTI commits normally with the flag on.

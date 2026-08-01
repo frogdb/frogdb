@@ -315,6 +315,7 @@ fn batch_reply_text(route: BatchRoute) -> String {
     }
 }
 
+// FM-TXN-029
 #[test]
 fn batch_with_no_keyed_command_serves_locally() {
     // A MULTI of PING/INFO/… touches no slot. Redis's `getNodeByQuery` returns
@@ -337,6 +338,7 @@ fn batch_on_owned_stable_slot_serves_locally() {
     );
 }
 
+// FM-TXN-019
 #[test]
 fn batch_spanning_two_slots_is_crossslot() {
     // Individually valid commands whose slots diverged (one slot migrated)
@@ -356,6 +358,7 @@ fn batch_spanning_two_slots_is_crossslot() {
     );
 }
 
+// FM-TXN-022
 #[test]
 fn batch_on_foreign_slot_is_moved_to_the_owner() {
     let (batch, slot) = tagged_batch();
@@ -384,6 +387,7 @@ fn batch_on_import_target_with_asking_probes_importing() {
     );
 }
 
+// FM-TXN-015
 #[test]
 fn batch_on_import_target_without_asking_is_moved() {
     // Sticky ASKING is what makes the arm above reachable at EXEC; without it
@@ -404,6 +408,7 @@ fn batch_on_import_target_without_asking_is_moved() {
     );
 }
 
+// FM-TXN-023
 #[test]
 fn batch_on_migrating_source_probes_with_the_ask_target() {
     let (batch, slot) = tagged_batch();
@@ -425,6 +430,7 @@ fn batch_on_migrating_source_probes_with_the_ask_target() {
     );
 }
 
+// FM-TXN-027
 #[test]
 fn batch_on_migrating_source_with_unknown_target_serves_locally() {
     // No renderable ASK address — the per-command path bails the same way
@@ -446,6 +452,7 @@ fn batch_on_migrating_source_with_unknown_target_serves_locally() {
     );
 }
 
+// FM-TXN-025
 #[test]
 fn batch_on_unassigned_slot_is_clusterdown() {
     let (batch, slot) = tagged_batch();
@@ -456,6 +463,7 @@ fn batch_on_unassigned_slot_is_clusterdown() {
     );
 }
 
+// FM-TXN-028
 #[test]
 fn batch_readonly_eligible_serves_a_foreign_slot_locally() {
     // READONLY connection + an all-reads batch on a slot this replica's master
@@ -468,6 +476,7 @@ fn batch_readonly_eligible_serves_a_foreign_slot_locally() {
     );
 }
 
+// FM-TXN-028
 #[test]
 fn batch_readonly_ineligible_when_it_contains_a_write() {
     // The caller folds write-ness across the whole batch, so one queued write
@@ -481,6 +490,7 @@ fn batch_readonly_ineligible_when_it_contains_a_write() {
     );
 }
 
+// FM-TXN-025
 #[test]
 fn batch_readonly_never_rescues_an_unassigned_slot() {
     let (batch, slot) = tagged_batch();

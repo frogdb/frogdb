@@ -70,6 +70,7 @@ async fn test_reset_exits_pattern_pubsub_mode() {
     server.shutdown().await;
 }
 
+// FM-TXN-014
 #[tokio::test]
 async fn test_reset_aborts_transaction() {
     let server = TestServer::start_standalone().await;
@@ -98,6 +99,7 @@ async fn test_reset_aborts_transaction() {
     server.shutdown().await;
 }
 
+// FM-TXN-014
 #[tokio::test]
 async fn test_reset_clears_watches() {
     let server = TestServer::start_standalone().await;

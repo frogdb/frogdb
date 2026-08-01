@@ -317,6 +317,7 @@ mod tests {
         }
     }
 
+    // FM-TXN-001
     #[test]
     fn begin_rejects_nesting_and_take_leaves_state_clean() {
         let mut t = TransactionState::default();
@@ -335,6 +336,7 @@ mod tests {
         assert!(!t.is_open());
     }
 
+    // FM-TXN-020
     #[test]
     fn cross_shard_watch_set_folds_to_multi_at_take() {
         let mut t = TransactionState::default();
@@ -348,6 +350,7 @@ mod tests {
         assert!(summary.target.resolve().is_err(), "Multi → CROSSSLOT");
     }
 
+    // FM-TXN-013
     #[test]
     fn unwatch_drops_the_stale_cross_shard_fold() {
         let mut t = TransactionState::default();
@@ -361,6 +364,7 @@ mod tests {
         assert!(matches!(summary.target, TransactionTarget::Single(1)));
     }
 
+    // FM-TXN-019
     #[test]
     fn fold_keys_promotes_on_slot_mismatch_in_cluster_mode() {
         // "a" and "b" hash to different CRC16 slots, but may share a shard;
@@ -378,6 +382,7 @@ mod tests {
 
     // ---- TxnSlotAccumulator (transaction co-location owner) --------------
 
+    // FM-TXN-042
     #[test]
     fn accumulator_shard_fold_none_single_multi() {
         let mut acc = TxnSlotAccumulator::default();
@@ -414,6 +419,7 @@ mod tests {
         assert!(matches!(acc.target, TransactionTarget::Single(3)));
     }
 
+    // FM-TXN-019
     #[test]
     fn transaction_target_resolve_maps_multi_to_crossslot() {
         assert!(TransactionTarget::None.resolve().is_ok());
@@ -423,6 +429,7 @@ mod tests {
         assert_eq!(format!("{err:?}"), format!("{:?}", redirect::crossslot()));
     }
 
+    // FM-TXN-008
     #[test]
     fn abort_is_reported_in_the_summary_and_discard_clears_watches() {
         let mut t = TransactionState::default();

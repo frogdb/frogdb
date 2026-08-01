@@ -8500,6 +8500,7 @@ async fn test_cluster_remains_writable_during_concurrent_writes_and_failover() {
 // Tier 19: MULTI-EXEC on Replica with READONLY
 // ============================================================================
 
+// FM-TXN-028
 /// Tests that READONLY + MULTI + GETs + EXEC succeeds on a non-owner node.
 ///
 /// Inspired by Redis `16-transactions-on-replica.tcl`.
@@ -8560,6 +8561,7 @@ async fn test_multi_exec_reads_succeed_on_replica_with_readonly() {
     harness.shutdown_all().await;
 }
 
+// FM-TXN-009
 /// Tests that a write inside MULTI on a READONLY node returns MOVED/EXECABORT.
 ///
 /// Inspired by Redis `16-transactions-on-replica.tcl`.
@@ -8610,6 +8612,7 @@ async fn test_multi_exec_write_inside_readonly_session_returns_moved() {
     harness.shutdown_all().await;
 }
 
+// FM-TXN-028
 /// READONLY eligibility is folded across the *whole* batch, not per command: a
 /// transaction of reads on a foreign slot serves locally, but adding a single
 /// write to the same batch makes the whole thing MOVED. Anything else would let
@@ -9916,6 +9919,7 @@ fn assert_exact_error(response: &frogdb_protocol::Response, expected: &[u8], con
     }
 }
 
+// FM-TXN-004, FM-TXN-010
 /// Queue-time CROSSSLOT + EXECABORT: a command whose own two keys (RENAME's
 /// source/destination) span different slots is rejected immediately as its
 /// queue reply -- it never becomes `+QUEUED` -- and the transaction is marked
@@ -10030,6 +10034,7 @@ async fn test_multi_exec_cross_slot_returns_error() {
     harness.shutdown_all().await;
 }
 
+// FM-TXN-019
 /// Deferred EXEC-time CROSSSLOT (distinct from the queue-time path above):
 /// two *separate* single-key commands, each individually valid, that target
 /// different slots both get `+QUEUED` -- queuing only validates a command's
@@ -13494,6 +13499,7 @@ async fn migrate_keys(harness: &ClusterTestHarness, source_id: u64, target_id: u
     assert!(!is_error(&resp), "MIGRATE failed: {resp:?}");
 }
 
+// FM-TXN-009, FM-TXN-022, FM-TXN-047
 /// A slot migration that *completes* between queue time and EXEC time.
 ///
 /// EXEC re-validates and answers `-MOVED <slot> <new owner>` with the queue
@@ -13632,6 +13638,7 @@ async fn test_multi_exec_after_completed_slot_migration_redirects_with_moved() {
     harness.shutdown_all().await;
 }
 
+// FM-TXN-023
 /// A slot migration still *in flight* (slot MIGRATING, key already handed to the
 /// target) at EXEC time.
 ///
@@ -13725,6 +13732,7 @@ async fn test_multi_exec_during_in_flight_slot_migration_asks_when_keys_migrated
     harness.shutdown_all().await;
 }
 
+// FM-TXN-024
 /// A batch whose keys straddle an open slot — one already migrated, one still
 /// on the source. Neither node can serve the transaction atomically, so EXEC
 /// answers `-TRYAGAIN` and touches nothing.
@@ -13797,6 +13805,7 @@ async fn test_multi_exec_during_migration_with_split_keys_returns_tryagain() {
     harness.shutdown_all().await;
 }
 
+// FM-TXN-027
 /// An open migration alone is not a refusal. While the slot is MIGRATING but
 /// every key is still on the source, EXEC serves the batch normally — the
 /// presence probe, not the migration flag, is what decides.
@@ -13854,6 +13863,7 @@ async fn test_multi_exec_during_migration_serves_when_keys_still_local() {
     harness.shutdown_all().await;
 }
 
+// FM-TXN-015
 /// `ASKING` must survive the whole MULTI block, not just the next command.
 ///
 /// On the importing node the flag is read once per queued command *and* again by
@@ -13929,6 +13939,7 @@ async fn test_multi_exec_on_import_target_with_asking_serves_the_batch() {
     harness.shutdown_all().await;
 }
 
+// FM-TXN-029
 /// A transaction that touches no key is never redirected, even on a node that
 /// owns nothing relevant. Redis's `getNodeByQuery` returns `myself` when no slot
 /// resolves; folding a keyless batch to "slot 0" would break every
@@ -13984,6 +13995,7 @@ async fn test_keyless_multi_exec_is_never_redirected() {
     harness.shutdown_all().await;
 }
 
+// FM-TXN-030
 /// Scatter-gather commands (`MSET`/`MGET`/`DEL`/`EXISTS`/…) are *keyed*: a
 /// queued batch built only from them must be slot-validated at EXEC exactly like
 /// a batch of `SET`s.
@@ -14075,6 +14087,7 @@ async fn test_multi_exec_scatter_gather_batch_is_slot_validated() {
     harness.shutdown_all().await;
 }
 
+// FM-TXN-030
 /// The scripting family declares its keys dynamically (`EVAL <script> <numkeys>
 /// <key>…`), so a queued `EVAL` must be folded into the batch's slot set.
 ///
@@ -14145,6 +14158,7 @@ async fn test_multi_exec_eval_with_declared_keys_is_slot_validated() {
     harness.shutdown_all().await;
 }
 
+// FM-TXN-030
 /// A `READONLY` connection never rescues a batch that contains a write, even
 /// when the write is issued by a scatter-gather command.
 ///

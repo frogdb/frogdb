@@ -627,6 +627,7 @@ async fn test_client_unblock_releases_wait() {
     primary.shutdown().await;
 }
 
+// FM-TXN-044
 /// WAIT inside MULTI/EXEC never blocks: it returns the current acked count
 /// immediately (Redis CLIENT_DENY_BLOCKING semantics), not nil.
 ///
@@ -715,6 +716,7 @@ async fn test_wait_inside_multi_zero_replicas_zero_timeout() {
     primary.shutdown().await;
 }
 
+// FM-TXN-044
 /// `MULTI; WAIT 3 100; EXEC` on standalone (0 replicas connected) with a
 /// nonzero, finite timeout — the second acceptance-criteria case for issue
 /// 51. Asserts completion well *under* the requested 100ms window (not just
@@ -809,6 +811,7 @@ async fn test_wait_inside_multi_returns_correct_acked_count_with_replica() {
     primary.shutdown().await;
 }
 
+// FM-TXN-044
 /// PSYNC queued inside MULTI/EXEC replies `+OK` and never triggers a socket
 /// takeover. This path bypasses `PsyncIntercept` entirely: `TransactionQueue`
 /// (earlier in `PRE_DISPATCH_ORDER`) queues the command, and at EXEC
@@ -6648,6 +6651,7 @@ async fn test_self_fence_unarmed_allows_writes() {
     primary.shutdown().await;
 }
 
+// FM-TXN-007
 /// The self-fence gate runs at MULTI *queue* time: the queued write is rejected
 /// with CLUSTERDOWN, and the rejection flags the transaction dirty so EXEC
 /// aborts with `EXECABORT` (Redis parity — `rejectCommand` → `flagTransaction`).
@@ -6700,6 +6704,7 @@ async fn test_self_fence_multi_rejected_at_queue_time() {
     primary.shutdown().await;
 }
 
+// FM-TXN-008
 /// A rejected command must not leave a *partial* transaction behind. With one
 /// accepted command queued ahead of a fenced write, EXEC has a survivor it
 /// could run — the whole point of the dirty flag is that it must not. The
@@ -6843,6 +6848,7 @@ async fn test_min_replicas_to_write_gate_tracks_replica_health() {
     primary.shutdown().await;
 }
 
+// FM-TXN-007
 /// `min-replicas-to-write` gates MULTI at queue time (the queued write is
 /// rejected with NOREPLICAS and the transaction is flagged dirty, so EXEC
 /// answers EXECABORT) but — same known gap as self-fence — does NOT gate

@@ -197,6 +197,7 @@ fn only(responses: Vec<Response>) -> Response {
 // One test per TransactionOutcome variant
 // ---------------------------------------------------------------------------
 
+// FM-TXN-008, FM-TXN-016
 #[tokio::test]
 async fn exec_abort_when_queuing_poisoned_the_transaction() {
     let mut host = MockTxnHost::default();
@@ -215,6 +216,7 @@ async fn exec_abort_when_queuing_poisoned_the_transaction() {
     assert!(host.effects.is_empty(), "effects: {:?}", host.effects);
 }
 
+// FM-TXN-017
 #[tokio::test]
 async fn rate_limited_names_the_dimension_that_was_exceeded() {
     for (exceeded, msg) in [
@@ -240,6 +242,7 @@ async fn rate_limited_names_the_dimension_that_was_exceeded() {
     }
 }
 
+// FM-TXN-018
 #[tokio::test]
 async fn committed_empty_answers_an_empty_array_without_touching_a_shard() {
     let mut host = MockTxnHost::default();
@@ -252,6 +255,7 @@ async fn committed_empty_answers_an_empty_array_without_touching_a_shard() {
     assert!(host.effects.is_empty(), "effects: {:?}", host.effects);
 }
 
+// FM-TXN-019
 #[tokio::test]
 async fn cross_slot_when_the_queue_folded_to_more_than_one_shard() {
     let mut host = MockTxnHost::default();
@@ -269,6 +273,7 @@ async fn cross_slot_when_the_queue_folded_to_more_than_one_shard() {
     assert_eq!(host.effects, vec![Effect::Validate { asking: false }]);
 }
 
+// FM-TXN-022
 #[tokio::test]
 async fn redirected_returns_the_bare_redirect_not_an_array() {
     // The redirect frame comes from the seam that owns its wire format, so this
@@ -289,6 +294,27 @@ async fn redirected_returns_the_bare_redirect_not_an_array() {
     assert_eq!(host.effects, vec![Effect::Validate { asking: true }]);
 }
 
+// FM-TXN-026
+#[tokio::test]
+async fn a_validation_verdict_that_is_a_plain_error_short_circuits_the_same_way() {
+    // EXEC-time validation fails closed: when the key-presence probe behind an
+    // open slot migration cannot reach the shard, `validate_queued_batch`
+    // answers `ERR shard unavailable` instead of guessing. The algorithm treats
+    // every verdict alike -- one bare frame, no shard round-trip -- and files it
+    // under `Redirected`, because the verdict came from the redirect gate.
+    let mut host = MockTxnHost {
+        validate_verdicts: VecDeque::from([Some(Response::error("ERR shard unavailable"))]),
+        ..Default::default()
+    };
+
+    let (outcome, responses) = execute_transaction(&mut host, summary(vec![cmd("SET")])).await;
+
+    assert_eq!(outcome, TransactionOutcome::Redirected);
+    assert_eq!(error_text(&only(responses)), "ERR shard unavailable");
+    assert_eq!(host.effects, vec![Effect::Validate { asking: false }]);
+}
+
+// FM-TXN-031
 #[tokio::test]
 async fn error_when_the_shard_reports_one() {
     let mut host = MockTxnHost {
@@ -304,6 +330,7 @@ async fn error_when_the_shard_reports_one() {
     assert_eq!(error_text(&only(responses)), "ERR transaction failed");
 }
 
+// FM-TXN-032
 #[tokio::test]
 async fn error_when_the_shard_channel_is_closed_or_the_request_is_dropped() {
     for (reply, msg) in [
@@ -322,6 +349,7 @@ async fn error_when_the_shard_channel_is_closed_or_the_request_is_dropped() {
     }
 }
 
+// FM-TXN-033
 #[tokio::test]
 async fn watch_aborted_answers_nil() {
     let mut host = MockTxnHost {
@@ -341,6 +369,7 @@ async fn watch_aborted_answers_nil() {
     assert_eq!(only(responses), Response::null());
 }
 
+// FM-TXN-035
 #[tokio::test]
 async fn committed_returns_the_shard_results_in_an_array() {
     let mut host = MockTxnHost {
@@ -372,6 +401,7 @@ async fn committed_returns_the_shard_results_in_an_array() {
     );
 }
 
+// FM-TXN-046
 /// Compile-time completeness gate: the match has no wildcard arm, so a new
 /// [`TransactionOutcome`] variant breaks this file until a forcing test exists.
 #[test]
@@ -414,6 +444,7 @@ fn every_outcome_variant_has_a_forcing_test() {
 // Paths between the outcomes
 // ---------------------------------------------------------------------------
 
+// FM-TXN-040
 #[tokio::test]
 async fn a_blocking_pause_forces_a_second_slot_verdict() {
     // The topology can move while EXEC sits in an unbounded `CLIENT PAUSE`, so a
@@ -441,6 +472,7 @@ async fn a_blocking_pause_forces_a_second_slot_verdict() {
     );
 }
 
+// FM-TXN-040
 #[tokio::test]
 async fn a_non_blocking_pause_keeps_the_batch_at_exactly_one_slot_verdict() {
     let mut host = MockTxnHost {
@@ -466,6 +498,7 @@ async fn a_non_blocking_pause_keeps_the_batch_at_exactly_one_slot_verdict() {
     );
 }
 
+// FM-TXN-041
 #[tokio::test]
 async fn a_read_only_batch_never_reaches_the_pause_barrier() {
     let mut host = MockTxnHost {
@@ -483,6 +516,7 @@ async fn a_read_only_batch_never_reaches_the_pause_barrier() {
     );
 }
 
+// FM-TXN-037
 #[tokio::test]
 async fn deferred_replies_land_at_their_queued_positions() {
     // Queue: SET (shard), CONFIG (connection-level), INCR (shard), DBSIZE
@@ -542,6 +576,7 @@ async fn deferred_replies_land_at_their_queued_positions() {
     );
 }
 
+// FM-TXN-034
 #[tokio::test]
 async fn an_all_deferred_queue_with_watches_still_takes_the_shard_round_trip() {
     // Nothing to run on the shard, but the watch set has to be version-checked
@@ -573,6 +608,7 @@ async fn an_all_deferred_queue_with_watches_still_takes_the_shard_round_trip() {
     );
 }
 
+// FM-TXN-038
 #[tokio::test]
 async fn an_all_deferred_queue_without_watches_skips_the_shard_entirely() {
     let mut host = MockTxnHost {
@@ -593,6 +629,7 @@ async fn an_all_deferred_queue_without_watches_skips_the_shard_entirely() {
     );
 }
 
+// FM-TXN-042
 #[tokio::test]
 async fn an_unfolded_target_falls_back_to_the_connections_own_shard() {
     let mut host = MockTxnHost {

@@ -1111,6 +1111,7 @@ mod tests {
 
     // ---- ASKING -----------------------------------------------------------
 
+    // FM-TXN-015
     #[test]
     fn asking_is_one_shot() {
         let mut s = state();
@@ -1120,6 +1121,7 @@ mod tests {
         assert!(!s.take_asking(), "ASKING cleared after a single command");
     }
 
+    // FM-TXN-015
     /// Redis keeps `CLIENT_ASKING` set for the whole MULTI block so the EXEC-time
     /// re-validation can still take the importing-target arm. FrogDB mirrors
     /// that: inside an open transaction `take_asking` reads without clearing.
@@ -1139,6 +1141,7 @@ mod tests {
         );
     }
 
+    // FM-TXN-015
     /// A MULTI opened *without* a preceding ASKING never invents one.
     #[test]
     fn asking_absent_inside_multi_stays_absent() {
@@ -1149,6 +1152,7 @@ mod tests {
         assert!(!summary.asking);
     }
 
+    // FM-TXN-004
     /// DISCARD ends the block that made ASKING sticky, so the flag must go with
     /// it. Leaking it would let the *next* ordinary command be accepted on an
     /// importing target as though the client had just said ASKING.
@@ -1163,6 +1167,7 @@ mod tests {
         assert!(!s.take_asking(), "DISCARD consumes the sticky ASKING");
     }
 
+    // FM-TXN-003
     /// DISCARD outside MULTI is an error and must not consume a pending ASKING.
     #[test]
     fn asking_survives_discard_without_multi() {
@@ -1172,6 +1177,7 @@ mod tests {
         assert!(s.take_asking());
     }
 
+    // FM-TXN-014
     /// RESET / QUIT take the same path.
     #[test]
     fn asking_cleared_by_clear_transaction() {
@@ -1338,6 +1344,7 @@ mod tests {
 
     // ---- Transaction lifecycle -------------------------------------------
 
+    // FM-TXN-002, FM-TXN-047
     #[test]
     fn transaction_lifecycle_begin_queue_take() {
         let mut s = state();
@@ -1372,6 +1379,7 @@ mod tests {
         assert!(s.take_transaction().is_none());
     }
 
+    // FM-TXN-020
     #[test]
     fn take_transaction_folds_cross_shard_watch_set_to_multi() {
         // A WATCH set spanning two shards must make the transaction's target
@@ -1403,6 +1411,7 @@ mod tests {
         );
     }
 
+    // FM-TXN-013
     #[test]
     fn take_transaction_unwatch_drops_stale_cross_shard_watch_fold() {
         // Reviewer's regression: WATCH a key on shard 0, MULTI, UNWATCH (which
@@ -1434,6 +1443,7 @@ mod tests {
         );
     }
 
+    // FM-TXN-008
     #[test]
     fn transaction_abort_marks_summary() {
         let mut s = state();
@@ -1445,6 +1455,7 @@ mod tests {
         assert!(summary.exec_abort, "poisoned transaction reported at EXEC");
     }
 
+    // FM-TXN-004
     #[test]
     fn discard_resets_everything_including_watches() {
         let mut s = state();
@@ -1870,6 +1881,7 @@ mod tests {
 
     // ---- RESET ------------------------------------------------------------
 
+    // FM-TXN-014
     #[test]
     fn reset_clears_covered_state() {
         let mut s = state();

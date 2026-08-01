@@ -358,6 +358,7 @@ async fn run_shard_transaction<H: TxnHost + ?Sized>(
 mod tests {
     use super::TransactionOutcome;
 
+    // FM-TXN-046
     /// Pins the outcome → metric-label mapping. The exhaustive match in
     /// `metric_label` already guarantees at compile time that every variant
     /// has a label; this test pins the exact strings, which are a dashboard /

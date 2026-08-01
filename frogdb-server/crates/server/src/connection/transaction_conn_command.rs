@@ -502,6 +502,7 @@ mod tests {
         }
     }
 
+    // FM-TXN-001
     #[tokio::test]
     async fn multi_begins_and_rejects_nested() {
         let mut fx = Fixture::new();
@@ -515,6 +516,7 @@ mod tests {
         assert!(fx.state.in_transaction());
     }
 
+    // FM-TXN-003
     #[tokio::test]
     async fn discard_without_multi_errors_then_drops_open_transaction() {
         let mut fx = Fixture::new();
@@ -530,6 +532,7 @@ mod tests {
         assert!(!fx.state.in_transaction(), "DISCARD drops the transaction");
     }
 
+    // FM-TXN-011
     #[tokio::test]
     async fn watch_inside_multi_is_rejected() {
         let mut fx = Fixture::new();
@@ -543,6 +546,7 @@ mod tests {
         );
     }
 
+    // FM-TXN-012
     #[tokio::test]
     async fn watch_without_keys_errors() {
         let mut fx = Fixture::new();
@@ -550,6 +554,7 @@ mod tests {
         assert!(matches!(resp, Response::Error(_)), "WATCH needs >= 1 key");
     }
 
+    // FM-TXN-013
     #[tokio::test]
     async fn unwatch_is_ok_and_clears_watches() {
         let mut fx = Fixture::new();
@@ -563,6 +568,7 @@ mod tests {
         );
     }
 
+    // FM-TXN-047
     /// Regression guard for the *loud* EXEC spec-carrier (proposal 40 item 7,
     /// as it survives the command-spec-single-source refactor).
     ///

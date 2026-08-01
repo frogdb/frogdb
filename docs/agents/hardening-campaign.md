@@ -48,7 +48,10 @@ cache.
 ## Conventions
 
 - Failure-mode specs: `.scratch/hardening/specs/<area>-failure-modes.md`. Every `FM-<AREA>-NNN`
-  row names the test that forces it; `just lint-failure-modes` enforces spec ↔ test agreement.
+  row names the test that forces it in its `Forced by` cell (backticked, comma-separated), and
+  every named test carries a `// FM-<AREA>-NNN` comment on its definition (above the doc/attribute
+  block). `just lint-failure-modes` enforces both directions — an unforced row, a name no test
+  matches, and a tag no row names are all errors — and runs as part of `just lint`.
 - Campaign issues: `.scratch/hardening/issues/` per [issue-tracker](issue-tracker.md) conventions.
 - Metrics: `.scratch/hardening/metrics/loop-cost.md` — record a row before and after each
   extraction (`just loop-cost <area>`).
