@@ -10,6 +10,7 @@ use super::message::Envelope;
 use super::message::ShardMessage;
 use super::post_execution::{ENGINE_INTERNAL_CONN_ID, RemovalPropagation, RemovalReason};
 use super::worker::ShardWorker;
+use crate::vll::ContinuationEvent;
 #[cfg(any(test, feature = "shard-driver"))]
 use bytes::Bytes;
 
@@ -94,10 +95,21 @@ impl ShardWorker {
                     }
                 }
 
-                // Check for continuation lock release signal
-                _ = self.vll.await_continuation_release() => {
-                    self.vll.clear_continuation_lock();
-                    tracing::debug!(shard_id = self.shard_id(), "Continuation lock released");
+                // Continuation lock lifecycle: the held lock's release signal,
+                // or a parked request's drain deadline. The state machine
+                // applies the transition; this arm only reports it.
+                event = self.vll.next_continuation_event() => {
+                    match event {
+                        ContinuationEvent::Released => {
+                            tracing::debug!(shard_id = self.shard_id(), "Continuation lock released");
+                        }
+                        ContinuationEvent::DrainTimedOut => {
+                            tracing::warn!(
+                                shard_id = self.shard_id(),
+                                "Continuation lock request timed out waiting for the shard queue to drain"
+                            );
+                        }
+                    }
                 }
 
                 else => break,
@@ -361,21 +373,21 @@ impl ShardWorker {
         self.check_waiter_timeouts();
     }
 
-    /// Shard-driver harness seam mirroring the event loop's continuation-release
-    /// arm (`event_loop.rs:88-91`): await the stored release signal — fired when
-    /// the coordinator's `ContinuationGuard` drops — then clear the lock.
+    /// Shard-driver harness seam mirroring the event loop's continuation-event
+    /// arm: await the stored release signal — fired when the coordinator's
+    /// `ContinuationGuard` drops — or a parked request's drain deadline, and
+    /// apply whichever fires.
     ///
-    /// Only call when a continuation lock is held and its guard has been (or is
-    /// about to be) dropped; with no lock held `await_continuation_release`
-    /// resolves to `pending()` and this future never completes. The shard-driver
-    /// harness pumps this per shard, in a permuted order, after inducing the
-    /// guard drop (scenario 4).
+    /// Only call when a continuation lock is held (and its guard has been, or
+    /// is about to be, dropped) or a request is parked; with neither,
+    /// `next_continuation_event` resolves to `pending()` and this future never
+    /// completes. The shard-driver harness pumps this per shard, in a permuted
+    /// order, after inducing the guard drop (scenario 4).
     #[cfg(any(test, feature = "shard-driver"))]
     #[doc(hidden)]
     #[allow(dead_code)]
-    pub async fn drive_continuation_release(&mut self) {
-        self.vll.await_continuation_release().await;
-        self.vll.clear_continuation_lock();
+    pub async fn drive_continuation_release(&mut self) -> ContinuationEvent {
+        self.vll.next_continuation_event().await
     }
 
     /// Shard-driver harness seam: non-blocking receive of the next queued

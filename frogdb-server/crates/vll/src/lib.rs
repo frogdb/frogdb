@@ -20,8 +20,9 @@ pub use coordinator::{
     ScatterOutcome, ScatterParticipant, ScatterRequest, VllCoordinator,
 };
 pub use shard::{
-    CONTINUATION_DRAIN_TIMEOUT, ContinuationLockSnapshot, DEFAULT_MAX_QUEUE_DEPTH, IntentSnapshot,
-    PendingOpSnapshot, QUEUE_DEPTH_WARN_THRESHOLD, VllShardState,
+    CONTINUATION_DRAIN_TIMEOUT, ContinuationEvent, ContinuationLockSnapshot,
+    DEFAULT_MAX_QUEUE_DEPTH, IntentSnapshot, PendingOpSnapshot, QUEUE_DEPTH_WARN_THRESHOLD,
+    VllShardState,
 };
 pub use traits::{MetricsSink, NoopMetricsSink, ShardSink, ShardSinkError};
 pub use types::{LockMode, PendingOpState, ShardReadyResult, VllError};
