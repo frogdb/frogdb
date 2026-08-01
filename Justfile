@@ -66,6 +66,12 @@ release:
 
 # Run tests (optionally for a specific crate and/or matching a pattern)
 test crate="" pattern="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{crate}}" = "frogctl" ]; then
+      echo "frogctl is excluded from the default suite; use: just frogctl-test" >&2
+      exit 2
+    fi
     {{dyld-env}} {{rocksdb-env}} cargo nextest run {{ if crate != "" { "-p " + crate } else { "--all" } }} {{ if pattern != "" { "-E 'test(/" + pattern + "/)'" } else { "" } }}
 
 # Generate code coverage report (unit tests only)
@@ -73,9 +79,13 @@ coverage crate="" pattern="":
     {{dyld-env}} {{rocksdb-env}} cargo llvm-cov nextest {{ if crate != "" { "-p " + crate } else { "--all" } }} {{ if pattern != "" { "-E 'test(/" + pattern + "/)'" } else { "" } }} --html
     @echo "Report: target/llvm-cov/html/index.html"
 
-# Generate lcov coverage data (for CI upload)
+# Generate lcov coverage data (for CI upload). Deliberately un-freezes the frozen
+# redis-regression suite and includes frogctl (both excluded from the default `just
+# test`/`just check` dev loop during the hardening campaign): the campaign freeze is
+# about keeping the default dev loop fast, not about hiding code from coverage
+# measurement, so this pulls both back in via --ignore-default-filter.
 coverage-lcov:
-    {{dyld-env}} {{rocksdb-env}} cargo llvm-cov nextest --all --lcov --output-path target/llvm-cov/lcov.info
+    {{dyld-env}} {{rocksdb-env}} cargo llvm-cov nextest --all --features frogdb-redis-regression/regression --features frogctl/cli-tests --ignore-default-filter --lcov --output-path target/llvm-cov/lcov.info
 
 # Coverage *depth*: per-line exec counts + per-function test diversity
 # (see docs/agents/coverage-depth.md). Local-only; uses its own target dir.
