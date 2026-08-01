@@ -92,6 +92,15 @@ Conclusion — the intended contract, which the tests assert:
   captures a seq prefix. So a transaction's contiguous seq range is captured all-or-nothing.
   A regression that tore a single-shard transaction would be a real bug — this is the loud
   guard.
+
+  > **Correction (2026-07-31, issue 65).** The *conclusion* holds today, but this reasoning
+  > did not support it and the guarantee was in fact broken at the time it was written. The
+  > argument is about **enqueue** order; it says nothing about how the WAL flush thread
+  > groups enqueued entries into `WriteBatch`es. It grouped them by size threshold and batch
+  > timeout alone, so a shard task descheduled mid-transaction left a committed *prefix* in
+  > RocksDB for the cut to capture — which is what the guard test caught under load. The
+  > guarantee is now provided by WAL write groups (`FM-PERSISTENCE-001`); see
+  > [issue 65](65-checkpoint-multi-atomicity-testbox-flake.md).
 - **Cross-shard `MSET`/scatter may be torn by the cut (accepted limitation).** Independent
   per-shard writes + per-shard drain ⇒ the cut can catch shard A's half and not shard B's.
   This is consistent with FrogDB's cross-shard model: execution atomicity via locking,

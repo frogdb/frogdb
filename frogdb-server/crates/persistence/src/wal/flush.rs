@@ -67,6 +67,14 @@ impl WalEntry {
 
 pub(super) enum WalCommand {
     Write(WalEntry),
+    /// Open a write group. Every entry between this and its matching
+    /// [`WalCommand::GroupEnd`] lands in **one** committed storage batch —
+    /// the engine suppresses its size/timeout flush triggers for the duration.
+    /// See [`FlushEngine::begin_group`] for why this is the atomicity seam.
+    GroupBegin,
+    /// Close the innermost open write group and re-evaluate the flush triggers
+    /// that were suppressed while it was open.
+    GroupEnd,
     Flush {
         done_tx: flume::Sender<std::io::Result<()>>,
     },
@@ -340,6 +348,10 @@ pub(super) struct FlushEngine<S: WriteSink> {
     batch_max_seq: u64,
     last_flush: Instant,
     last_error_log: Option<Instant>,
+    /// Number of open write groups (see [`FlushEngine::begin_group`]). While
+    /// non-zero the engine's own flush triggers are suppressed, so a group's
+    /// entries cannot be cut across two committed batches.
+    group_depth: usize,
     lag: Arc<WalLagAtomics>,
     outcomes: Arc<FlushOutcomes>,
     metrics: Arc<dyn frogdb_types::traits::MetricsRecorder>,
@@ -369,6 +381,7 @@ impl<S: WriteSink> FlushEngine<S> {
             batch_max_seq: 0,
             last_flush: Instant::now(),
             last_error_log: None,
+            group_depth: 0,
             lag,
             outcomes,
             metrics,
@@ -381,6 +394,52 @@ impl<S: WriteSink> FlushEngine<S> {
 
     fn since_last_flush(&self) -> Duration {
         self.last_flush.elapsed()
+    }
+
+    /// Open a write group: suppress the engine's own flush triggers until the
+    /// matching [`end_group`](Self::end_group).
+    ///
+    /// This is the seam that makes a shard-local write batch atomic *in
+    /// storage*, not merely in the shard's event loop. Entries reach this
+    /// engine one [`WalCommand::Write`] at a time, and the batching decision
+    /// below is by size and elapsed time — neither of which knows where one
+    /// logical write batch ends and the next begins. Without a group, a
+    /// producer that is descheduled between two of its entries has the second
+    /// half land in a *later* committed batch, and anything reading the store
+    /// in between (a `BGSAVE`/`FULLRESYNC` checkpoint cut, or recovery after a
+    /// crash) observes half of it. Specified as the write-group row of
+    /// `.scratch/hardening/specs/persistence-failure-modes.md`.
+    ///
+    /// Groups nest (the depth counter), so a producer that opens one inside
+    /// another still gets a single commit at the outermost close.
+    ///
+    /// Cost: a group's entries stay staged in memory past
+    /// `batch_size_threshold` — the threshold caps batches *between* groups,
+    /// never inside one. That is inherent: a batch cannot be atomic and
+    /// size-capped at once.
+    fn begin_group(&mut self) {
+        self.group_depth += 1;
+    }
+
+    /// Close the innermost open write group. Saturating, so a stray
+    /// `GroupEnd` (a producer bug, or a marker that outlived its opener) can
+    /// never underflow into a permanently suppressed engine.
+    fn end_group(&mut self) {
+        self.group_depth = self.group_depth.saturating_sub(1);
+    }
+
+    /// Whether a write group is open, i.e. the engine's own size/timeout flush
+    /// triggers are currently suppressed.
+    fn in_group(&self) -> bool {
+        self.group_depth > 0
+    }
+
+    /// Whether the staged batch has met a flush trigger — size threshold or
+    /// batch timeout — *and* is allowed to commit (no open group).
+    fn should_flush(&self, batch_size_threshold: usize, batch_timeout: Duration) -> bool {
+        !self.in_group()
+            && (self.staged_size() >= batch_size_threshold
+                || self.since_last_flush() >= batch_timeout)
     }
 
     /// Stage one entry. A staging failure (CF handle missing — effectively
@@ -440,6 +499,13 @@ impl<S: WriteSink> FlushEngine<S> {
     /// writes correctly survive the tombstone. The outcome is recorded under the
     /// clear's `seq` even when the CF is empty (nothing staged), so the durable
     /// sequence still advances past it.
+    ///
+    /// This barrier outranks an open write group: the tombstone's range bound
+    /// is only correct against committed state, so a group containing a clear
+    /// *is* cut at the clear. Reachable only if a producer puts a clear in the
+    /// same group as other entries — core's `WalStrategy::ClearShard` (FLUSHDB
+    /// / FLUSHALL) yields exactly one action, so in FrogDB a clear is always a
+    /// group of its own.
     fn apply_clear(&mut self, seq: u64, size_estimate: usize) {
         // (1) Barrier: drain all lower-seq entries to disk.
         let _ = self.flush();
@@ -593,6 +659,19 @@ impl<S: WriteSink> FlushEngine<S> {
 // Flush thread loop
 // ============================================================================
 
+/// Drain [`WalCommand`]s into `engine` until the channel disconnects.
+///
+/// The loop's one non-obvious rule is the write-group suppression: while a
+/// group is open ([`WalCommand::GroupBegin`] … [`WalCommand::GroupEnd`]) the
+/// size and timeout triggers are held back so the group's entries commit as
+/// one batch. Two deliberate exceptions:
+///
+/// * An explicit [`WalCommand::Flush`] is always honoured. A producer that
+///   asks for durability now must not be answered "after your group closes" —
+///   a hang is worse than the tear, and the shard is the only producer per
+///   channel, so it never sends a flush inside its own group.
+/// * A disconnect drains and commits whatever is staged, group or not:
+///   the producer is gone, so the group can never be closed.
 pub(super) fn flush_thread_loop<S: WriteSink>(
     rx: flume::Receiver<WalCommand>,
     mut engine: FlushEngine<S>,
@@ -601,40 +680,52 @@ pub(super) fn flush_thread_loop<S: WriteSink>(
 ) {
     loop {
         match rx.recv_timeout(batch_timeout) {
-            Ok(cmd) => match cmd {
-                WalCommand::Write(entry) => {
-                    engine.apply(entry);
-                    // Re-read the live threshold once per batch decision so a
-                    // `CONFIG SET` store retunes batching without restart.
-                    let batch_size_threshold = batch_size_threshold.load(Ordering::Relaxed);
-                    // Opportunistically drain queued commands into this batch.
-                    while engine.staged_size() < batch_size_threshold {
-                        match rx.try_recv() {
-                            Ok(WalCommand::Write(e)) => engine.apply(e),
-                            Ok(WalCommand::Flush { done_tx }) => {
-                                let _ = done_tx.send(engine.flush());
-                                break;
-                            }
-                            Err(_) => break,
+            Ok(cmd) => {
+                match cmd {
+                    WalCommand::Write(entry) => engine.apply(entry),
+                    WalCommand::GroupBegin => engine.begin_group(),
+                    WalCommand::GroupEnd => engine.end_group(),
+                    WalCommand::Flush { done_tx } => {
+                        let _ = done_tx.send(engine.flush());
+                        continue;
+                    }
+                }
+                // Re-read the live threshold once per batch decision so a
+                // `CONFIG SET` store retunes batching without restart.
+                let batch_size_threshold = batch_size_threshold.load(Ordering::Relaxed);
+                // Opportunistically drain queued commands into this batch. An
+                // open group keeps draining past the threshold: the batch is
+                // already uncommittable, and stopping here would only park the
+                // group's tail in the channel until the next timeout.
+                while engine.in_group() || engine.staged_size() < batch_size_threshold {
+                    match rx.try_recv() {
+                        Ok(WalCommand::Write(e)) => engine.apply(e),
+                        Ok(WalCommand::GroupBegin) => engine.begin_group(),
+                        Ok(WalCommand::GroupEnd) => engine.end_group(),
+                        Ok(WalCommand::Flush { done_tx }) => {
+                            let _ = done_tx.send(engine.flush());
+                            break;
                         }
-                    }
-                    if engine.staged_size() >= batch_size_threshold
-                        || engine.since_last_flush() >= batch_timeout
-                    {
-                        engine.flush_detached();
+                        Err(_) => break,
                     }
                 }
-                WalCommand::Flush { done_tx } => {
-                    let _ = done_tx.send(engine.flush());
+                if engine.should_flush(batch_size_threshold, batch_timeout) {
+                    engine.flush_detached();
                 }
-            },
+            }
             Err(flume::RecvTimeoutError::Timeout) => {
-                engine.flush_detached();
+                // Suppressed mid-group: the entries staged so far are only half
+                // of a batch that must land atomically.
+                if !engine.in_group() {
+                    engine.flush_detached();
+                }
             }
             Err(flume::RecvTimeoutError::Disconnected) => {
                 while let Ok(cmd) = rx.try_recv() {
                     match cmd {
                         WalCommand::Write(e) => engine.apply(e),
+                        WalCommand::GroupBegin => engine.begin_group(),
+                        WalCommand::GroupEnd => engine.end_group(),
                         WalCommand::Flush { done_tx } => {
                             let _ = done_tx.send(engine.flush());
                         }

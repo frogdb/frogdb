@@ -22,8 +22,8 @@ spec; rows here stop at what the connection observes across the shard channel.
 | Forced by | The test(s) that fail if the behavior changes. Every one carries a `// FM-TXN-NNN` tag at its definition site; `just lint-failure-modes` enforces both directions. |
 | Bug refs | Known open issues that touch this mode. |
 
-Test names are bare function names, resolved against
-`cargo nextest list -p frogdb-txn -p frogdb-vll -p frogdb-server` (core command profile). Tests
+Test names are bare function names, resolved against the crate list in
+`scripts/failure-modes.py` (`NEXTEST_CRATES`, core command profile). Tests
 behind `--features turmoil` or an exotic command family are deliberately not cited: they do not
 run in the profile the campaign gates on. Neither is the frozen `redis-regression` suite.
 

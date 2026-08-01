@@ -196,6 +196,36 @@ impl RocksWalWriter {
         Ok(seq)
     }
 
+    /// Open a write group: every entry enqueued before the matching
+    /// [`Self::end_group`] lands in one committed storage batch.
+    ///
+    /// The markers travel the same FIFO channel as the entries themselves, so
+    /// the grouping is decided by *enqueue* order, not by wall-clock timing —
+    /// the shard task may be descheduled mid-group without the flush thread
+    /// cutting a batch underneath it. This is what makes a `MULTI`/`EXEC` (and
+    /// any multi-key command) atomic with respect to a checkpoint cut or a
+    /// crash: see [`super::flush::FlushEngine::begin_group`].
+    ///
+    /// Callers must pair this with [`Self::end_group`] on every path,
+    /// including errors; an unclosed group suppresses background flushing
+    /// until the next explicit flush or shutdown.
+    pub async fn begin_group(&self) -> std::io::Result<()> {
+        self.send_marker(WalCommand::GroupBegin, "begin_group")
+            .await
+    }
+
+    /// Close the innermost open write group, re-arming the flush triggers.
+    pub async fn end_group(&self) -> std::io::Result<()> {
+        self.send_marker(WalCommand::GroupEnd, "end_group").await
+    }
+
+    async fn send_marker(&self, cmd: WalCommand, what: &'static str) -> std::io::Result<()> {
+        self.cmd_tx.send_async(cmd).await.map_err(|_| {
+            error!(shard_id = self.shard_id, "WAL flush thread dead ({what})");
+            std::io::Error::other("WAL flush thread disconnected")
+        })
+    }
+
     /// Flush the buffered entries, returning this flush attempt's result.
     ///
     /// This reports only the outcome of the flush it triggers; failures of
@@ -307,6 +337,12 @@ impl super::WalSink for RocksWalWriter {
     }
     async fn write_clear(&self) -> std::io::Result<u64> {
         RocksWalWriter::write_clear(self).await
+    }
+    async fn begin_group(&self) -> std::io::Result<()> {
+        RocksWalWriter::begin_group(self).await
+    }
+    async fn end_group(&self) -> std::io::Result<()> {
+        RocksWalWriter::end_group(self).await
     }
     async fn flush_async(&self) -> std::io::Result<()> {
         RocksWalWriter::flush_async(self).await

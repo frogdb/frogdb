@@ -29,6 +29,15 @@ pub trait WalSink: Send + Sync {
     async fn write_delete(&self, key: &[u8]) -> std::io::Result<u64>;
     /// Enqueue a full-shard clear.
     async fn write_clear(&self) -> std::io::Result<u64>;
+    /// Open a write group: entries enqueued until the matching
+    /// [`Self::end_group`] must land in one committed storage batch, so a
+    /// checkpoint or a crash can never observe a prefix of them.
+    ///
+    /// Groups nest, and every caller must close what it opens — including on
+    /// the error path.
+    async fn begin_group(&self) -> std::io::Result<()>;
+    /// Close the innermost open write group.
+    async fn end_group(&self) -> std::io::Result<()>;
     /// Flush buffered entries now.
     async fn flush_async(&self) -> std::io::Result<()>;
     /// Confirm every entry written after `after_seq` is durable.

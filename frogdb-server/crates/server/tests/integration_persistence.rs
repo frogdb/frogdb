@@ -1872,14 +1872,21 @@ async fn test_restored_snapshot_accepts_and_replays_new_writes() {
 //
 // The intended contract, re-verified against current `main`:
 //
-//   * SINGLE-SHARD atomicity IS preserved in the cut (strong guarantee). A
-//     single-shard `MULTI`/`EXEC` is one shard event-loop message that enqueues
-//     all of its WAL writes before any later message (including the pre-snapshot
-//     `FlushWal`) is processed, and RocksDB commits in sequence order, so the
-//     cut captures either all of a transaction's writes or none — never a torn
-//     prefix. `test_checkpoint_preserves_single_shard_multi_atomicity_*` pins
-//     this. A regression that tore a single-shard transaction across the cut
-//     would be a real bug.
+//   * SINGLE-SHARD atomicity IS preserved in the cut (strong guarantee), and
+//     it rests on the WAL *write group*, not on event-loop ordering alone.
+//     A single-shard `MULTI`/`EXEC` is one shard event-loop message, so all of
+//     its WAL entries are enqueued before the pre-snapshot `FlushWal` is —
+//     but enqueued is not committed: the flush engine cuts `WriteBatch`es on
+//     its own size/timeout schedule, so a shard task descheduled between two
+//     entries used to leave a committed *prefix* in RocksDB for the cut to
+//     capture (issue 65's load-dependent flake). `persist_records` now brackets
+//     every batch in `begin_group`/`end_group` markers that ride the same FIFO
+//     channel and suppress those triggers, so the batch commits as one
+//     `WriteBatch`, specified as the write-group row of
+//     `.scratch/hardening/specs/persistence-failure-modes.md`.
+//     `test_checkpoint_preserves_single_shard_multi_atomicity_*` pins the
+//     end-to-end contract; a regression that tore a single-shard transaction
+//     across the cut would be a real bug.
 //
 //   * CROSS-SHARD atomicity is NOT preserved in the cut (accepted limitation).
 //     A cross-shard `MSET`/scatter dispatches independent per-shard writes, and
@@ -1971,6 +1978,8 @@ async fn hammer_bgsave(
 /// single generation value; the restored checkpoint must show, for every group,
 /// that its keys are either all absent or all present and equal — a single-shard
 /// transaction is never torn across the cut.
+///
+// FM-PERSISTENCE-001
 #[tokio::test]
 async fn test_checkpoint_preserves_single_shard_multi_atomicity_under_concurrent_bgsave() {
     use std::sync::Arc;

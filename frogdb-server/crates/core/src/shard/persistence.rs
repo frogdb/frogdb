@@ -1,6 +1,8 @@
 use crate::command::{WalAction, WriteRecord};
 use crate::store::Store;
 
+use smallvec::SmallVec;
+
 use frogdb_types::metrics::definitions::WalMergeOperands;
 
 use super::connection::NewConnection;
@@ -74,6 +76,17 @@ pub(crate) trait WalTarget {
     async fn write_merge(&self, key: &[u8], pairs: &[(u16, u8)]) -> std::io::Result<()>;
     /// Persist a full-shard clear as a keyless range-tombstone entry.
     async fn write_clear(&self) -> std::io::Result<()>;
+    /// Open a WAL write group: every entry written before the matching
+    /// [`WalTarget::end_group`] must land in **one** committed storage batch.
+    ///
+    /// This is what makes a batch of [`WriteRecord`]s atomic against a
+    /// checkpoint cut (BGSAVE) and against a crash. Without it the WAL's flush
+    /// thread cuts batches on its own size/timeout schedule, so a shard task
+    /// descheduled between two of a transaction's entries can leave a
+    /// *committed prefix* of that transaction in storage.
+    async fn begin_group(&self) -> std::io::Result<()>;
+    /// Close the innermost open WAL write group.
+    async fn end_group(&self) -> std::io::Result<()>;
     /// The WAL's current highest assigned sequence, or `None` when no WAL is
     /// configured. `Confirm` snapshots this *before* its first write so the lone
     /// [`WalTarget::flush_through`] below confirms every entry the batch
@@ -183,6 +196,20 @@ impl WalTarget for ShardWorker {
         Ok(())
     }
 
+    async fn begin_group(&self) -> std::io::Result<()> {
+        match self.persistence.wal_writer() {
+            Some(wal) => wal.begin_group().await,
+            None => Ok(()),
+        }
+    }
+
+    async fn end_group(&self) -> std::io::Result<()> {
+        match self.persistence.wal_writer() {
+            Some(wal) => wal.end_group().await,
+            None => Ok(()),
+        }
+    }
+
     fn wal_sequence(&self) -> Option<u64> {
         self.persistence.wal_writer().map(|wal| wal.sequence())
     }
@@ -208,35 +235,91 @@ impl WalTarget for ShardWorker {
 /// `FireAndForget` logs each action error and continues, and never flushes. No
 /// WAL configured ([`WalTarget::wal_sequence`] is `None`) short-circuits to
 /// `Ok(())` with no writes.
+///
+/// Either way a batch of more than one action is bracketed by a
+/// [`WalTarget::begin_group`] / [`WalTarget::end_group`] pair, so it commits to
+/// storage as one unit: a concurrent checkpoint (BGSAVE) or a crash observes all
+/// of the batch's writes or none of them, never a prefix. That is the atomicity
+/// a `MULTI` / `EXEC` on one shard promises — durability (`Confirm`) is the
+/// orthogonal axis. A one-action batch (the hot path: a single `SET`) is already
+/// indivisible and skips the markers. Specified as the write-group row of
+/// `.scratch/hardening/specs/persistence-failure-modes.md`.
 async fn persist_records(
     t: &impl WalTarget,
     records: &[WriteRecord<'_>],
     durability: Durability,
 ) -> std::io::Result<()> {
-    let Some(current_seq) = t.wal_sequence() else {
+    // Snapshot the sequence *before* the first write, so the single
+    // `flush_through` below confirms every entry this batch produced.
+    let Some(start_seq) = t.wal_sequence() else {
         return Ok(());
     };
-    // Snapshot the sequence *before* the first write in Confirm mode, so the
-    // single `flush_through` below confirms every entry this batch produced.
-    let start_seq = matches!(durability, Durability::Confirm).then_some(current_seq);
 
-    for record in records {
-        for action in record.wal_actions() {
-            match durability {
-                Durability::Confirm => execute_wal_action(t, &action).await?,
-                Durability::FireAndForget => {
-                    let _ = execute_wal_action(t, &action)
-                        .await
-                        .inspect_err(|e| tracing::error!(error = %e, "WAL persist failed"));
-                }
+    // Resolve the batch's actions once. The count is what decides whether the
+    // group markers are needed, and deriving it from the actions themselves
+    // keeps [`WriteRecord::wal_actions`] the single authority on how many
+    // entries a command produces — a second guess (per-strategy table, record
+    // count) that drifted low would silently reopen the tear.
+    let actions: SmallVec<[WalAction<'_>; 4]> =
+        records.iter().flat_map(WriteRecord::wal_actions).collect();
+    let grouped = actions.len() > 1;
+
+    let opened = if grouped {
+        t.begin_group().await
+    } else {
+        Ok(())
+    };
+    // A marker only fails when the WAL channel is gone, in which case every
+    // write below would fail identically — skip them rather than log N times.
+    let staged = if opened.is_ok() {
+        stage_actions(t, &actions, durability).await
+    } else {
+        Ok(())
+    };
+    // Close what was opened on every path, including the staging error path: an
+    // unclosed group suppresses this shard's background flushes until the next
+    // explicit flush.
+    let closed = if grouped && opened.is_ok() {
+        t.end_group().await
+    } else {
+        Ok(())
+    };
+
+    match durability {
+        Durability::Confirm => {
+            opened?;
+            staged?;
+            closed?;
+            t.flush_through(start_seq).await
+        }
+        Durability::FireAndForget => {
+            for e in [opened, closed].into_iter().filter_map(Result::err) {
+                tracing::error!(error = %e, "WAL write group marker failed");
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Stage every action of the batch, honoring `durability`'s error policy.
+/// Split out of [`persist_records`] so the write-group brackets there are
+/// unconditional — the group must close even when staging fails.
+async fn stage_actions(
+    t: &impl WalTarget,
+    actions: &[WalAction<'_>],
+    durability: Durability,
+) -> std::io::Result<()> {
+    for action in actions {
+        match durability {
+            Durability::Confirm => execute_wal_action(t, action).await?,
+            Durability::FireAndForget => {
+                let _ = execute_wal_action(t, action)
+                    .await
+                    .inspect_err(|e| tracing::error!(error = %e, "WAL persist failed"));
             }
         }
     }
-
-    match start_seq {
-        Some(seq) => t.flush_through(seq).await, // Confirm
-        None => Ok(()),                          // FireAndForget
-    }
+    Ok(())
 }
 
 impl ShardWorker {
@@ -285,6 +368,13 @@ mod tests {
         Clear,
     }
 
+    /// A recorded write-group marker.
+    #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+    enum Marker {
+        Begin,
+        End,
+    }
+
     /// In-memory [`WalTarget`]: answers `contains` from a set and records writes
     /// in call order — no RocksDB, no `ShardWorker`. `fail` makes every write
     /// return an error so the propagation the `Confirm` durability relies on
@@ -302,6 +392,12 @@ mod tests {
         seq: Cell<u64>,
         /// The `after_seq` of each `flush_through` call, in order.
         flushes: RefCell<Vec<u64>>,
+        /// Each write-group marker paired with the number of writes recorded
+        /// before it — enough to assert the brackets enclose the whole batch
+        /// without perturbing the `writes` log the other tests assert on.
+        markers: RefCell<Vec<(Marker, usize)>>,
+        /// Makes `begin_group` fail, modelling a dead WAL channel.
+        group_fail: bool,
         /// Every write attempt, bumped *before* the fail gate — so a swallowed
         /// `FireAndForget` failure is still visible as an attempt that ran.
         attempts: Cell<u64>,
@@ -318,6 +414,8 @@ mod tests {
                 flush_fail: false,
                 seq: Cell::new(0),
                 flushes: RefCell::new(Vec::new()),
+                markers: RefCell::new(Vec::new()),
+                group_fail: false,
                 attempts: Cell::new(0),
                 has_wal: true,
             }
@@ -344,6 +442,19 @@ mod tests {
                 has_wal: false,
                 ..Self::new(&[])
             }
+        }
+
+        /// A target whose `begin_group` fails (dead WAL channel).
+        fn group_failing() -> Self {
+            Self {
+                group_fail: true,
+                ..Self::new(&[])
+            }
+        }
+
+        /// Every write-group marker with the write count that preceded it.
+        fn markers(&self) -> Vec<(Marker, usize)> {
+            self.markers.take()
         }
 
         fn recorded(&self) -> Vec<Write> {
@@ -398,6 +509,19 @@ mod tests {
             self.gate()?;
             self.seq.set(self.seq.get() + 1);
             self.writes.borrow_mut().push(Write::Clear);
+            Ok(())
+        }
+        async fn begin_group(&self) -> std::io::Result<()> {
+            if self.group_fail {
+                return Err(std::io::Error::other("injected group failure"));
+            }
+            let writes = self.writes.borrow().len();
+            self.markers.borrow_mut().push((Marker::Begin, writes));
+            Ok(())
+        }
+        async fn end_group(&self) -> std::io::Result<()> {
+            let writes = self.writes.borrow().len();
+            self.markers.borrow_mut().push((Marker::End, writes));
             Ok(())
         }
         fn wal_sequence(&self) -> Option<u64> {
@@ -667,6 +791,109 @@ mod tests {
                 "{durability:?}: no flush without a WAL"
             );
             assert_eq!(t.attempts(), 0, "{durability:?}: no attempts without a WAL");
+            assert!(
+                t.markers().is_empty(),
+                "{durability:?}: no write group without a WAL"
+            );
         }
+    }
+
+    // A single-action batch skips the markers: one WAL entry is already
+    // indivisible, so the hot path does not pay for a group it cannot need.
+    // FM-PERSISTENCE-001
+    #[tokio::test]
+    async fn single_action_persist_skips_the_write_group() {
+        let cmd = MockPersistCommand;
+        let a = record_args(b"a");
+        let records = [WriteRecord::new(&cmd, &a)];
+
+        for durability in [Durability::Confirm, Durability::FireAndForget] {
+            let t = TestTarget::new(&[]);
+            persist_records(&t, &records, durability).await.unwrap();
+            assert_eq!(t.recorded(), vec![Write::Set(b"a".to_vec())]);
+            assert!(
+                t.markers().is_empty(),
+                "{durability:?}: no group around a lone entry"
+            );
+        }
+    }
+
+    // Every multi-action persist brackets its whole batch in exactly one write
+    // group, under both durabilities: the group is the atomicity unit a
+    // checkpoint cut and a crash observe, independent of whether the caller
+    // waits for durability.
+    // FM-PERSISTENCE-001
+    #[tokio::test]
+    async fn persist_brackets_the_batch_in_one_write_group() {
+        let cmd = MockPersistCommand;
+        let a = record_args(b"a");
+        let b = record_args(b"b");
+        let c = record_args(b"c");
+        let records = [
+            WriteRecord::new(&cmd, &a),
+            WriteRecord::new(&cmd, &b),
+            WriteRecord::new(&cmd, &c),
+        ];
+
+        for durability in [Durability::Confirm, Durability::FireAndForget] {
+            let t = TestTarget::new(&[]);
+            persist_records(&t, &records, durability).await.unwrap();
+            assert_eq!(
+                t.markers(),
+                vec![(Marker::Begin, 0), (Marker::End, 3)],
+                "{durability:?}: one group opened before the first write and \
+                 closed after the last"
+            );
+        }
+    }
+
+    // A staging failure still closes the group. An unclosed group would suppress
+    // the shard's background flushes for the life of the process.
+    // FM-PERSISTENCE-001
+    #[tokio::test]
+    async fn write_group_closes_on_staging_failure() {
+        let cmd = MockPersistCommand;
+        let a = record_args(b"a");
+        let b = record_args(b"b");
+        let records = [WriteRecord::new(&cmd, &a), WriteRecord::new(&cmd, &b)];
+
+        let t = TestTarget::failing();
+        let result = persist_records(&t, &records, Durability::Confirm).await;
+
+        assert!(result.is_err(), "write failure must still propagate");
+        assert_eq!(
+            t.markers(),
+            vec![(Marker::Begin, 0), (Marker::End, 0)],
+            "the group is closed even though staging aborted"
+        );
+    }
+
+    // If the group cannot be opened the WAL channel is gone: skip the writes
+    // (they would all fail), do not emit an unmatched close, and propagate under
+    // Confirm while FireAndForget logs and returns Ok.
+    // FM-PERSISTENCE-001
+    #[tokio::test]
+    async fn failed_group_open_skips_writes() {
+        let cmd = MockPersistCommand;
+        let a = record_args(b"a");
+        let b = record_args(b"b");
+        let records = [WriteRecord::new(&cmd, &a), WriteRecord::new(&cmd, &b)];
+
+        let t = TestTarget::group_failing();
+        assert!(
+            persist_records(&t, &records, Durability::Confirm)
+                .await
+                .is_err(),
+            "Confirm propagates a dead WAL channel"
+        );
+        assert_eq!(t.attempts(), 0, "no writes attempted without a group");
+        assert!(t.markers().is_empty(), "no unmatched close emitted");
+        assert!(t.flushed().is_empty(), "no flush after a failed group open");
+
+        let t = TestTarget::group_failing();
+        persist_records(&t, &records, Durability::FireAndForget)
+            .await
+            .expect("FireAndForget logs rather than propagates");
+        assert_eq!(t.attempts(), 0);
     }
 }
