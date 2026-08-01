@@ -8,14 +8,22 @@ rationale: `.scratch/hardening/` (specs, issues, metrics).
 
 | Phase | Area | State |
 |---|---|---|
-| 0 | Enablement (freeze, gating, recipes, frogdb-net) | in progress |
-| 1 | Transactions / VLL | pending |
-| 2 | Persistence / recovery | pending |
+| 0 | Enablement (freeze, gating, recipes, frogdb-net) | **done** (2026-07-31) |
+| 1 | Transactions / VLL | **LOCKED** (2026-08-01) — mutation gate 90%, both crates at 100% |
+| 2 | Persistence / recovery | pending — next |
 | 3 | Replication runtime | pending |
 | 4 | Cluster runtime | pending |
 
 Each area goes through: **extract → failure-mode spec → close known bugs → mutation-test →
 fill gaps → lock**. Areas are strictly serial, one PR per step.
+
+**Locked area rules (txn: frogdb-txn + frogdb-vll):** the failure-mode specs
+(`.scratch/hardening/specs/{txn,vll}-failure-modes.md`, header `Status: LOCKED`) are the
+contract — behavior changes there are spec-first, and `just lint-failure-modes` enforces
+spec↔test agreement on every commit. Before pushing changes that touch a locked crate, run
+`just mutants-diff <crate>` (CI is manual-only, so this is a push-discipline rule, not a CI
+gate; full runs: `just mutants <crate>` + `just mutants-gate <crate> 0.90`). Boundary ADR:
+`docs/adr/0002-txn-orchestration-behind-txnhost-seam.md`.
 
 ## Out of scope — do not touch during the campaign
 

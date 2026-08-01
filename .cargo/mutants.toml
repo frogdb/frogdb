@@ -19,10 +19,14 @@ exclude_globs = [
 ]
 
 # Never mutate observability plumbing: a survivor there is noise, not a
-# correctness gap.
+# correctness gap. Patterns match cargo-mutants' mutant names, which use
+# fully-qualified forms like `<impl std::fmt::Display for X>::fmt` and
+# `Type::record_outcome`.
 exclude_re = [
-    "fn record_",
-    "fn metric_label",
+    "::record_",
+    "::metric_label",
+    "impl std::fmt::Debug",
+    "impl std::fmt::Display",
     "impl Debug",
     "impl Display",
 ]
