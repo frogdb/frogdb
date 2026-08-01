@@ -11,7 +11,8 @@ use std::net::SocketAddr;
 use frogdb_cluster::types::{ClusterSnapshot, NodeInfo, SlotMigration};
 
 use super::routing::{
-    BatchKeys, BatchRoute, RouteDecision, RouteOutcome, route_queued_batch, route_with_snapshot,
+    BatchKeys, BatchRoute, RouteDecision, RouteOutcome, route_queued_batch, route_watched_keys,
+    route_with_snapshot, watch_slot_is_locally_served,
 };
 
 const SELF_NODE: u64 = 1;
@@ -499,4 +500,128 @@ fn batch_readonly_never_rescues_an_unassigned_slot() {
         batch_reply_text(route_queued_batch(&snap, &batch, false, SELF_NODE, true)),
         format!("CLUSTERDOWN Hash slot {slot} not served")
     );
+}
+
+// ---------------------------------------------------------------------------
+// WATCH-time and EXEC-time watch-set slot validation.
+//
+// WATCH short-circuits at the `TransactionControl` dispatch stage, long before
+// `ClusterSlotValidation` runs, so the stage gauntlet structurally cannot cover
+// it — these two seams are where the verdict is taken instead. See
+// `.scratch/replication-cluster-rework/issues/04-watch-slot-validation.md`.
+// ---------------------------------------------------------------------------
+
+/// The refusal text a `route_watched_keys` verdict carries, or a panic when the
+/// watch was accepted.
+fn watch_reply_text(verdict: Option<frogdb_protocol::Response>) -> String {
+    match verdict {
+        Some(frogdb_protocol::Response::Error(bytes)) => {
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
+        other => panic!("expected a refusal Error(_), got {other:?}"),
+    }
+}
+
+// FM-TXN-048
+#[test]
+fn watch_on_a_foreign_slot_is_refused_with_moved() {
+    // Recording the watch here would hand the client a CAS no writer on the
+    // real owner can ever dirty. Note the READONLY replica rescue deliberately
+    // has no say: `route_watched_keys` takes no `readonly_eligible` argument,
+    // because a CAS precondition can only be registered where the writes it
+    // guards are applied.
+    let (keys, slot) = tagged_batch();
+    let snap = owned_by(slot, OTHER_NODE);
+    assert_eq!(
+        watch_reply_text(route_watched_keys(&snap, &keys, false, SELF_NODE)),
+        format!("MOVED {slot} 127.0.0.1:6380")
+    );
+}
+
+// FM-TXN-048
+#[test]
+fn watch_across_two_slots_is_crossslot() {
+    let mut keys = BatchKeys::default();
+    keys.add_key(b"alpha");
+    keys.add_key(b"{different}beta");
+    assert_ne!(
+        frogdb_core::slot_for_key(b"alpha"),
+        frogdb_core::slot_for_key(b"{different}beta"),
+        "test fixture must use two genuinely different slots"
+    );
+    let snap = empty_snapshot();
+    assert_eq!(
+        watch_reply_text(route_watched_keys(&snap, &keys, false, SELF_NODE)),
+        super::redirect::CROSSSLOT_MSG
+    );
+}
+
+// FM-TXN-048
+#[test]
+fn watch_on_an_open_migration_is_accepted() {
+    // An open migration does not make the watch unserviceable: MIGRATE's delete
+    // on the source bumps the watched key's version, so the ordinary CAS check
+    // still fires. Refusing here would break every WATCH for the duration of
+    // any migration touching the slot.
+    let (keys, slot) = tagged_batch();
+    let mut snap = owned_by(slot, SELF_NODE);
+    snap.migrations.insert(
+        slot,
+        SlotMigration {
+            slot,
+            source_node: SELF_NODE,
+            target_node: OTHER_NODE,
+        },
+    );
+    assert_eq!(route_watched_keys(&snap, &keys, false, SELF_NODE), None);
+}
+
+// FM-TXN-048
+#[test]
+fn watch_on_an_unassigned_slot_is_clusterdown() {
+    let (keys, slot) = tagged_batch();
+    let snap = empty_snapshot();
+    assert_eq!(
+        watch_reply_text(route_watched_keys(&snap, &keys, false, SELF_NODE)),
+        format!("CLUSTERDOWN Hash slot {slot} not served")
+    );
+}
+
+// FM-TXN-049
+#[test]
+fn watch_slot_locally_served_accepts_an_open_migration() {
+    // Same reasoning as at WATCH time: the version check owns the open window.
+    let mut snap = owned_by(SLOT, SELF_NODE);
+    snap.migrations
+        .insert(SLOT, migration(SELF_NODE, OTHER_NODE));
+    assert!(watch_slot_is_locally_served(&snap, SLOT, false, SELF_NODE));
+
+    // The importing side, reached with ASKING, is serviceable too.
+    let mut importing = owned_by(SLOT, OTHER_NODE);
+    importing
+        .migrations
+        .insert(SLOT, migration(OTHER_NODE, SELF_NODE));
+    assert!(watch_slot_is_locally_served(
+        &importing, SLOT, true, SELF_NODE
+    ));
+}
+
+// FM-TXN-049
+#[test]
+fn watch_slot_locally_served_rejects_a_slot_owned_elsewhere() {
+    // The slot changed hands: this node's copy of the watched key is stale and
+    // its version can no longer observe the owner's writes.
+    assert!(!watch_slot_is_locally_served(
+        &owned_by(SLOT, OTHER_NODE),
+        SLOT,
+        false,
+        SELF_NODE
+    ));
+    // Unassigned is just as unobservable.
+    assert!(!watch_slot_is_locally_served(
+        &empty_snapshot(),
+        SLOT,
+        false,
+        SELF_NODE
+    ));
 }

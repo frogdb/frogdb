@@ -813,6 +813,18 @@ impl ConnectionState {
         std::mem::replace(&mut self.asking, false)
     }
 
+    /// Read the ASKING flag **without** consuming it.
+    ///
+    /// For the one caller that must ask the routing seam a question on behalf of
+    /// a command that is not itself the command being routed: `WATCH`
+    /// ([`ConnectionHandler::dispatch_transaction_command`](crate::connection::ConnectionHandler))
+    /// validates its keys' slot, but the one-shot flag belongs to the command
+    /// the client sent `ASKING` for — consuming it here would strand the
+    /// following `MULTI`/`EXEC` block on the importing target.
+    pub fn is_asking(&self) -> bool {
+        self.asking
+    }
+
     /// Set or clear the READONLY replica-read flag (READONLY / READWRITE).
     pub fn set_readonly(&mut self, readonly: bool) {
         self.readonly = readonly;

@@ -406,6 +406,19 @@ impl ConnectionHandler {
         match cmd_name {
             "EXEC" => Some(self.handle_exec().await),
             "MULTI" | "DISCARD" | "WATCH" | "UNWATCH" => {
+                // WATCH is the one keyed command in this group, and reaching
+                // this arm is precisely how it escapes the `ClusterSlotValidation`
+                // stage. Its own slot verdict is taken here instead — but only
+                // after the two rejections that outrank it (`WATCH` inside
+                // `MULTI`, and the arity error) have had their chance, which is
+                // what the guards below defer to.
+                if cmd_name == "WATCH"
+                    && !self.state.in_transaction()
+                    && !args.is_empty()
+                    && let Some(refusal) = self.pre_dispatch_view().validate_watch_slots(args)
+                {
+                    return Some(vec![refusal]);
+                }
                 // `as_connection()` yields a `'static` reference, so it does not
                 // conflict with re-borrowing `self` to build the mutable ConnCtx.
                 let command = self.core.registry.get_entry(cmd_name)?.as_connection()?;

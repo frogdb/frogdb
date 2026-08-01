@@ -173,6 +173,11 @@ impl TxnHost for ConnectionHandler {
             .await
     }
 
+    fn watched_slots_still_local(&mut self, watches: &[WatchEntry], asking: bool) -> bool {
+        self.pre_dispatch_view()
+            .watched_slots_still_local(watches, asking)
+    }
+
     async fn wait_if_paused(&mut self) -> bool {
         self.wait_if_paused_for_transaction().await
     }

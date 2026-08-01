@@ -53,6 +53,9 @@ struct MockTxnHost {
     rate_limit: Option<RateLimitExceeded>,
     /// One verdict per `validate_queued_batch` call; exhausted = `None`.
     validate_verdicts: VecDeque<Option<Response>>,
+    /// What `watched_slots_still_local` reports (false = a watched key's slot
+    /// has left this node).
+    watched_slots_local: bool,
     /// What `wait_if_paused` reports (true = it actually blocked).
     paused: bool,
     /// One reply per shard round-trip; exhausted = empty success.
@@ -72,6 +75,7 @@ impl Default for MockTxnHost {
             queue_has_writes: false,
             rate_limit: None,
             validate_verdicts: VecDeque::new(),
+            watched_slots_local: true,
             paused: false,
             shard_replies: VecDeque::new(),
             connection_level_reply: (Response::ok(), vec![]),
@@ -117,6 +121,10 @@ impl TxnHost for MockTxnHost {
     ) -> Option<Response> {
         self.effects.push(Effect::Validate { asking });
         self.validate_verdicts.pop_front().flatten()
+    }
+
+    fn watched_slots_still_local(&mut self, _watches: &[WatchEntry], _asking: bool) -> bool {
+        self.watched_slots_local
     }
 
     async fn wait_if_paused(&mut self) -> bool {
@@ -367,6 +375,57 @@ async fn watch_aborted_answers_nil() {
 
     assert_eq!(outcome, TransactionOutcome::WatchAborted);
     assert_eq!(only(responses), Response::null());
+}
+
+// FM-TXN-049
+#[tokio::test]
+async fn a_watched_slot_that_left_this_node_aborts_the_watch() {
+    // The queue names no key of its own, so the batch verdict is "serve here".
+    // The watch set is what still points at a slot this node no longer owns:
+    // its version can no longer observe the real owner's writes, so the CAS
+    // must fail rather than commit against a stale local copy.
+    let mut host = MockTxnHost {
+        watched_slots_local: false,
+        ..Default::default()
+    };
+    let mut s = summary(vec![cmd("PING")]);
+    s.watches = vec![WatchEntry {
+        key: Bytes::from_static(b"k"),
+        version: 3,
+        live_at_watch: true,
+    }];
+
+    let (outcome, responses) = execute_transaction(&mut host, s).await;
+
+    assert_eq!(outcome, TransactionOutcome::WatchAborted);
+    assert_eq!(only(responses), Response::null());
+    // Nothing ran: the batch never reached a shard.
+    assert_eq!(host.effects, vec![Effect::Validate { asking: false }]);
+}
+
+// FM-TXN-049
+#[tokio::test]
+async fn a_queue_redirect_outranks_the_watched_slot_abort() {
+    // Both gates fire. The queue's own verdict wins, because a client that must
+    // be sent elsewhere to run the batch at all gains nothing from being told
+    // its CAS failed here first.
+    let redirect = frogdb_core::redirect::moved(99, "10.0.0.2:6379".parse().expect("literal"));
+    let mut host = MockTxnHost {
+        validate_verdicts: VecDeque::from([Some(redirect)]),
+        watched_slots_local: false,
+        ..Default::default()
+    };
+    let mut s = summary(vec![cmd("SET")]);
+    s.watches = vec![WatchEntry {
+        key: Bytes::from_static(b"k"),
+        version: 3,
+        live_at_watch: true,
+    }];
+
+    let (outcome, responses) = execute_transaction(&mut host, s).await;
+
+    assert_eq!(outcome, TransactionOutcome::Redirected);
+    assert_eq!(error_text(&only(responses)), "MOVED 99 10.0.0.2:6379");
 }
 
 // FM-TXN-035

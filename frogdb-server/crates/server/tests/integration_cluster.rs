@@ -13638,6 +13638,195 @@ async fn test_multi_exec_after_completed_slot_migration_redirects_with_moved() {
     harness.shutdown_all().await;
 }
 
+// FM-TXN-048
+/// `WATCH` is a keyed command and is slot-routed like one.
+///
+/// It short-circuits at the transaction-control dispatch stage, long before the
+/// cluster slot-validation stage runs, so nothing in the ordinary gauntlet
+/// covers it: a node that does not own the key's slot used to answer `+OK` and
+/// register a CAS no writer on the real owner could ever dirty.
+#[tokio::test]
+async fn test_watch_on_a_slot_this_node_does_not_own_is_moved() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 1200u16;
+    let (owner_id, other_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find an owner for the test slot");
+    let key = key_for_slot(test_slot);
+    assert_eq!(
+        slot_for_key(key.as_bytes()),
+        test_slot,
+        "the probe key must land in the test slot"
+    );
+    let owner_addr = harness.node(owner_id).unwrap().client_addr();
+
+    // THE CONTRACT: the non-owner refuses and names the owner.
+    let watch = harness.node(other_id).unwrap().send("WATCH", &[&key]).await;
+    assert_eq!(
+        is_moved_redirect(&watch),
+        Some((test_slot, owner_addr)),
+        "WATCH on a slot this node does not own must answer MOVED, got {watch:?}"
+    );
+
+    // The owner still accepts it — the check refuses foreign slots, not WATCH.
+    assert_eq!(
+        harness.node(owner_id).unwrap().send("WATCH", &[&key]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        "WATCH on the slot's owner must still succeed"
+    );
+
+    // A watch set spanning two slots is CROSSSLOT, exactly like any other
+    // multi-key command.
+    let other_slot_key = key_for_slot(test_slot + 1);
+    assert_ne!(
+        slot_for_key(other_slot_key.as_bytes()),
+        test_slot,
+        "the second key must genuinely land in another slot"
+    );
+    let crossslot = harness
+        .node(owner_id)
+        .unwrap()
+        .send("WATCH", &[&key, &other_slot_key])
+        .await;
+    assert!(
+        get_error_message(&crossslot).is_some_and(|m| m.starts_with("CROSSSLOT")),
+        "WATCH across two slots must be CROSSSLOT, got {crossslot:?}"
+    );
+
+    harness.shutdown_all().await;
+}
+
+// FM-TXN-049
+/// A watched key whose slot leaves this node between `WATCH` and `EXEC`, with a
+/// transaction body that names no key of its own.
+///
+/// The slot is handed over with a bare `SETSLOT … NODE` — no `MIGRATE` — on
+/// purpose: a key-by-key migration deletes the watched key on the source, which
+/// bumps its version and makes the ordinary CAS check fire. Reassigning
+/// ownership alone leaves this node holding the key at an *unchanged* version,
+/// which is exactly the state in which nothing local can ever notice the new
+/// owner's writes. The queued batch is keyless, so the batch re-validation has
+/// nothing to route and would happily serve it here; the watch set is the only
+/// thing still pointing at the departed slot, so the CAS must fail (nil) rather
+/// than commit against this node's stale copy.
+#[tokio::test]
+async fn test_watch_then_slot_reassignment_then_keyless_exec_aborts_the_watch() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 1200u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find an owner for the test slot");
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key = format!("{tag}_watched");
+    assert_eq!(
+        slot_for_key(key.as_bytes()),
+        test_slot,
+        "the hash-tagged watched key must land in the migrated slot"
+    );
+
+    let source = harness.node(source_id).unwrap();
+    assert_eq!(
+        source.send("SET", &[&key, "v0"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        "seeding the watched key on its owner must succeed"
+    );
+
+    // WATCH, then queue a body that touches no key at all.
+    let mut client = source.connect().await;
+    assert_eq!(
+        client.command(&["WATCH", &key]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        "WATCH on the current owner must succeed"
+    );
+    assert_eq!(
+        client.command(&["MULTI"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        "MULTI should succeed"
+    );
+    assert_eq!(
+        client.command(&["PING"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        "a keyless command is queued without any slot verdict"
+    );
+
+    // Reassign the slot outright, without moving a single key: the watched key
+    // stays here, at the very version WATCH recorded. (`SETSLOT … NODE` only
+    // closes an open migration window, so the window is opened first — but no
+    // `MIGRATE` runs inside it.)
+    open_slot_migration_window(&harness, source_id, target_id, test_slot).await;
+    let target_cluster_id = harness
+        .get_node_id_str(target_id)
+        .expect("target cluster id");
+    let reassign = send_cluster_cmd(
+        &harness,
+        target_id,
+        &[
+            "SETSLOT",
+            &test_slot.to_string(),
+            "NODE",
+            &target_cluster_id,
+        ],
+    )
+    .await;
+    assert!(!is_error(&reassign), "SETSLOT NODE failed: {reassign:?}");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        harness
+            .node(source_id)
+            .unwrap()
+            .cluster_state()
+            .unwrap()
+            .get_slot_owner(test_slot),
+        Some(target_id),
+        "the source must agree the slot moved before EXEC runs"
+    );
+    assert_eq!(
+        node_dbsize(&harness, source_id).await,
+        1,
+        "the watched key must still be physically here — that is what makes its \
+         version stale rather than bumped"
+    );
+
+    // THE CONTRACT: the CAS fails rather than committing on a stale copy.
+    let exec = client.command(&["EXEC"]).await;
+    assert!(
+        matches!(
+            exec,
+            frogdb_protocol::Response::Null | frogdb_protocol::Response::Bulk(None)
+        ),
+        "EXEC must abort the watch with nil once the watched slot left this node, \
+         got {exec:?}"
+    );
+
+    // The abort discarded the transaction, so a bare EXEC is now an error.
+    assert!(
+        is_error(&client.command(&["EXEC"]).await),
+        "the watch abort must leave no transaction to re-EXEC"
+    );
+
+    harness.shutdown_all().await;
+}
+
 // FM-TXN-023
 /// A slot migration still *in flight* (slot MIGRATING, key already handed to the
 /// target) at EXEC time.

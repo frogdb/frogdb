@@ -208,6 +208,29 @@ pub async fn execute_transaction<H: TxnHost + ?Sized>(
         return (TransactionOutcome::Redirected, vec![redirect]);
     }
 
+    // The watch set is routed separately from the queue, and after it.
+    //
+    // Separately, because the two are not the same key set: a watch can name a
+    // slot no queued command mentions (the queue may name no key at all), and
+    // watch sets are not co-location-constrained the way a queue is — folding
+    // them together would turn a legitimate two-slot watch into CROSSSLOT.
+    //
+    // After, because a batch that must run elsewhere gains nothing from being
+    // told its CAS failed here first: the redirect is the more actionable
+    // answer, and the client's retry will re-WATCH on the node it lands on.
+    //
+    // A watched slot that has left this node is not a redirect but a *failed
+    // CAS*: nothing here can observe the new owner's writes to that key, so the
+    // watch is by definition broken. The client's ordinary retry loop re-issues
+    // WATCH, which now answers `-MOVED` and sends it to the owner.
+    if !watches.is_empty() && !host.watched_slots_still_local(&watches, asking) {
+        debug!(
+            conn_id = host.conn_id(),
+            "Transaction aborted: a watched key's slot is no longer served here"
+        );
+        return (TransactionOutcome::WatchAborted, vec![Response::null()]);
+    }
+
     // Partition commands into shard-executable and deferred. Two strategy
     // groups cannot execute on the shard — their shard-side
     // `Command::execute()` is a placeholder (see [`Deferral`]):

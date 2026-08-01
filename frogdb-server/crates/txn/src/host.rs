@@ -85,6 +85,21 @@ pub trait TxnHost {
         asking: bool,
     ) -> Option<Response>;
 
+    /// Whether every watched key's slot is still served by this node (cluster
+    /// mode only; standalone hosts always answer `true`).
+    ///
+    /// The queue's own verdict ([`Self::validate_queued_batch`]) covers the keys
+    /// the *commands* name. A watch set can point somewhere else entirely — at a
+    /// slot no queued command mentions, or at one the queue does not mention at
+    /// all — and a watched key whose slot has changed hands is unobservable from
+    /// here: the version WATCH recorded can never move again, however many
+    /// writes the new owner takes. `false` means EXEC must fail the CAS rather
+    /// than commit against a stale local copy.
+    ///
+    /// `asking` is the block-scoped ASKING flag, same as
+    /// [`Self::validate_queued_batch`] takes.
+    fn watched_slots_still_local(&mut self, watches: &[WatchEntry], asking: bool) -> bool;
+
     /// Block while the server is paused (`CLIENT PAUSE`). Returns `true` only
     /// if the call actually blocked — EXEC uses that to decide whether its
     /// pre-pause cluster-slot verdict is still fresh.

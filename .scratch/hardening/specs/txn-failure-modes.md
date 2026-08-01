@@ -269,7 +269,7 @@ Deviations from Redis are called out inline and collected in [Redis deviations](
 | Invariant | `take` folds every *live* watched shard into the target before resolving, so the watch set can promote a `Single` target to `Multi`. Unwatched/stale shards must not (FM-TXN-013). |
 | Outcome variant | `TransactionOutcome::CrossSlot` (label `crossslot`) |
 | Forced by | `cross_shard_watch_set_folds_to_multi_at_take`, `take_transaction_folds_cross_shard_watch_set_to_multi` |
-| Bug refs | `.scratch/replication-cluster-rework/issues/04-watch-slot-validation.md` (WATCH keys themselves are never slot-validated in cluster mode) |
+| Bug refs | `.scratch/replication-cluster-rework/issues/04-watch-slot-validation.md` (done — WATCH keys are slot-validated at WATCH time, FM-TXN-048, and the watch set is re-checked at EXEC, FM-TXN-049; deliberately *not* folded into the queue's `BatchKeys`, which would CROSSSLOT a legitimate two-slot watch set) |
 
 ## FM-TXN-021 — allow-cross-slot-standalone does not relax transactions
 
@@ -425,7 +425,7 @@ Deviations from Redis are called out inline and collected in [Redis deviations](
 | Invariant | The version check happens shard-side, before the first command runs, and the whole batch is refused atomically. The transaction and the watch set are consumed regardless. |
 | Outcome variant | `TransactionOutcome::WatchAborted` (label `watch_aborted`) |
 | Forced by | `watch_aborted_answers_nil`, `test_watch_exec_abort`, `test_scripted_write_dirties_watch`, `test_watch_exec_success` |
-| Bug refs | `.scratch/replication-cluster-rework/issues/04-watch-slot-validation.md` |
+| Bug refs | `.scratch/replication-cluster-rework/issues/04-watch-slot-validation.md` (done — the CAS is now taken only on a node that owns the watched slot: FM-TXN-048, FM-TXN-049) |
 
 ## FM-TXN-034 — A watched transaction with nothing to run still version-checks
 
@@ -594,6 +594,30 @@ Deviations from Redis are called out inline and collected in [Redis deviations](
 | Outcome variant | all |
 | Forced by | `exec_spec_carrier_execute_never_fabricates_success`, `test_multi_exec_after_completed_slot_migration_redirects_with_moved`, `transaction_lifecycle_begin_queue_take` |
 | Bug refs | none |
+
+## FM-TXN-048 — WATCH is slot-validated like any other keyed command
+
+| Field | Value |
+|---|---|
+| Trigger | Cluster mode: `WATCH` naming a key whose slot this node does not own (migrated away, never assigned, or owned by a peer), or naming keys that span two slots. |
+| Observable | A bare `-MOVED <slot> <owner>` (or `-CLUSTERDOWN Hash slot <slot> not served` when the slot has no owner, `-CROSSSLOT …` when the keys span slots). The watch is **not** recorded. |
+| NOT observable | `+OK` for a CAS registration against a slot this node does not serve — the client would believe it holds a watch that no writer on the real owner can ever dirty, i.e. a CAS that silently never fires. An open migration (`MIGRATING`/`IMPORTING`) must **not** refuse: the watch is still serviceable here and the EXEC-time probe (FM-TXN-049) owns that decision. `WATCH` must also not consume the one-shot `ASKING` flag the following `EXEC` needs. |
+| Invariant | `WATCH` short-circuits at the `TransactionControl` dispatch stage (position 5), *before* `ClusterSlotValidation` (position 14) is ever reached, so the stage gauntlet structurally cannot cover it — the verdict is taken in the stage itself, against one `ClusterState::snapshot`, through the same `route_with_snapshot` seam every keyed command uses. `WATCH` inside `MULTI` keeps its own rejection (FM-TXN-011), which outranks any slot verdict. |
+| Outcome variant | n/a (`TransactionControl` stage, before any transaction exists) |
+| Forced by | `watch_on_a_foreign_slot_is_refused_with_moved`, `watch_across_two_slots_is_crossslot`, `watch_on_an_open_migration_is_accepted`, `watch_on_an_unassigned_slot_is_clusterdown`, `test_watch_on_a_slot_this_node_does_not_own_is_moved` |
+| Bug refs | `.scratch/replication-cluster-rework/issues/04-watch-slot-validation.md` (done — these tests are its outcome) |
+
+## FM-TXN-049 — A watched key whose slot left this node fails the CAS at EXEC
+
+| Field | Value |
+|---|---|
+| Trigger | Cluster mode: `WATCH {S}k` while this node owns slot `S`, then `S` changes hands (a migration completes, the slot is reassigned, or it is left unassigned), then `MULTI` … `EXEC` — including a `MULTI` whose queued body names no key of its own (`PING`, `INFO`, …). |
+| Observable | The nil abort (`*-1`), exactly as if a writer had touched `{S}k`: `TransactionOutcome::WatchAborted`, label `watch_aborted`. The client's ordinary retry loop re-issues `WATCH`, which now answers `-MOVED` (FM-TXN-048) and sends it to the owner. |
+| NOT observable | The batch committing because the queue folded no key of the departed slot — the CAS decision would be taken against this node's stale, no-longer-owned copy of `{S}k` while the real owner serves writes to it, an undetectable WATCH false negative. Also **not** observable: a `-CROSSSLOT` for a watch set legitimately spanning two slots this node owns (only the *queue* is co-location-constrained, FM-TXN-019 — watch sets are not), nor a `-MOVED` naming a slot the queued batch never touches. |
+| Invariant | EXEC re-checks every watched key's slot through the same seam the queue uses — `route_with_snapshot` on one snapshot — and requires a local-serve arm (`LocalServe` / `LocalServeMigrating` / `AcceptImporting`). An *open* migration stays serviceable on purpose: `MIGRATE`'s delete on the source bumps the watched key's version, so the ordinary version check already fires; only losing the slot outright makes that version unobservable. The queue's own verdict (FM-TXN-022/025, `validate_queued_batch`) is taken first, so a redirect the batch itself earns outranks the abort. |
+| Outcome variant | `TransactionOutcome::WatchAborted` (label `watch_aborted`) |
+| Forced by | `a_watched_slot_that_left_this_node_aborts_the_watch`, `a_queue_redirect_outranks_the_watched_slot_abort`, `watch_slot_locally_served_accepts_an_open_migration`, `watch_slot_locally_served_rejects_a_slot_owned_elsewhere`, `test_watch_then_slot_reassignment_then_keyless_exec_aborts_the_watch` |
+| Bug refs | `.scratch/replication-cluster-rework/issues/04-watch-slot-validation.md` (done — these tests are its outcome) |
 
 ---
 
