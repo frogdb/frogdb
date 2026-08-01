@@ -235,8 +235,8 @@ mod tests {
         assert_eq!(queue.lowest_txid(), Some(2));
     }
 
-    /// `is_empty` gates the continuation-lock drain wait
-    /// ([`crate::VllShardState::acquire_continuation_lock`]): it must track
+    /// `is_empty` gates the continuation-lock drain check
+    /// ([`crate::VllShardState::request_continuation_lock`]): it must track
     /// the queue's contents, not a fixed answer.
     #[test]
     fn empty_reflects_queued_ops() {

@@ -59,7 +59,9 @@ smallvec.workspace = true
 usdt = { workspace = true, optional = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt"] }
+# test-util: `#[tokio::test(start_paused = true)]` for the deterministic
+# virtual-clock tests (shard continuation-lock parking).
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 shuttle.workspace = true
 proptest.workspace = true
 tempfile.workspace = true
