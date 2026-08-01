@@ -13,13 +13,12 @@ use std::collections::{HashMap, VecDeque};
 use async_trait::async_trait;
 use bytes::Bytes;
 use frogdb_core::{
-    MetricsRecorder, NoopMetricsRecorder, RateLimitExceeded, ServerWideOp, TransactionResult,
-    WatchEntry,
+    MetricsRecorder, RateLimitExceeded, ServerWideOp, TransactionResult, WatchEntry,
 };
 use frogdb_protocol::{ParsedCommand, Response};
 use frogdb_txn::{
     Deferral, ShardTxnReply, TransactionOutcome, TransactionTarget, TxnHost, TxnSummary,
-    execute_transaction,
+    execute_transaction, handle_exec,
 };
 
 // ---------------------------------------------------------------------------
@@ -41,12 +40,62 @@ enum Effect {
     ServerWide(ServerWideOp),
 }
 
+/// One sample recorded through [`MetricsRecorder`], captured verbatim so a
+/// test can assert on the exact name/value/labels a call site emitted.
+#[derive(Debug, Clone, PartialEq)]
+enum MetricSample {
+    Counter {
+        name: String,
+        value: u64,
+        labels: Vec<(String, String)>,
+    },
+    Histogram {
+        name: String,
+        value: f64,
+        labels: Vec<(String, String)>,
+    },
+}
+
+/// A [`MetricsRecorder`] that records every call instead of discarding it, so
+/// a test can assert `handle_exec`/`record_transaction_metrics` actually
+/// recorded something rather than merely returning without panicking.
+#[derive(Debug, Default)]
+struct RecordingMetricsRecorder {
+    samples: std::sync::Mutex<Vec<MetricSample>>,
+}
+
+impl MetricsRecorder for RecordingMetricsRecorder {
+    fn increment_counter(&self, name: &str, value: u64, labels: &[(&str, &str)]) {
+        self.samples.lock().unwrap().push(MetricSample::Counter {
+            name: name.to_string(),
+            value,
+            labels: labels
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        });
+    }
+
+    fn record_gauge(&self, _name: &str, _value: f64, _labels: &[(&str, &str)]) {}
+
+    fn record_histogram(&self, name: &str, value: f64, labels: &[(&str, &str)]) {
+        self.samples.lock().unwrap().push(MetricSample::Histogram {
+            name: name.to_string(),
+            value,
+            labels: labels
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        });
+    }
+}
+
 /// A [`TxnHost`] whose every answer is a field. Defaults describe the boring
 /// standalone case: no rate limit, no redirect, no pause, shard says success.
 struct MockTxnHost {
     shard_id: usize,
     conn_id: u64,
-    recorder: NoopMetricsRecorder,
+    recorder: RecordingMetricsRecorder,
     /// Command name (uppercase) -> how it must be deferred. Absent = shard.
     deferrals: HashMap<String, Deferral>,
     queue_has_writes: bool,
@@ -70,7 +119,7 @@ impl Default for MockTxnHost {
         Self {
             shard_id: 7,
             conn_id: 42,
-            recorder: NoopMetricsRecorder::new(),
+            recorder: RecordingMetricsRecorder::default(),
             deferrals: HashMap::new(),
             queue_has_writes: false,
             rate_limit: None,
@@ -496,6 +545,59 @@ fn every_outcome_variant_has_a_forcing_test() {
             !forcing_test(outcome).is_empty(),
             "{outcome:?} needs a test that forces it"
         );
+    }
+}
+
+// FM-TXN-046
+#[tokio::test]
+async fn handle_exec_returns_the_reply_and_records_exactly_the_outcome_metric_triple() {
+    // `handle_exec` is the single metric-recording exit: it must both hand
+    // back whatever `execute_transaction` produced (not swallow it) and
+    // record exactly the counter/histogram triple `record_transaction_metrics`
+    // defines for that outcome (not silently record nothing).
+    let mut host = MockTxnHost::default();
+
+    let responses = handle_exec(&mut host, summary(vec![cmd("SET")])).await;
+
+    assert_eq!(
+        responses,
+        vec![Response::Array(vec![Response::ok()])],
+        "handle_exec must return execute_transaction's replies, not an empty Vec"
+    );
+
+    let samples = host.recorder.samples.lock().unwrap();
+    assert_eq!(
+        samples.len(),
+        3,
+        "expected one committed-count sample plus the queued-commands and \
+         duration histograms: {samples:?}"
+    );
+    assert_eq!(
+        samples[0],
+        MetricSample::Counter {
+            name: "frogdb_transactions_total".to_string(),
+            value: 1,
+            labels: vec![("outcome".to_string(), "committed".to_string())],
+        }
+    );
+    match &samples[1] {
+        MetricSample::Histogram {
+            name,
+            value,
+            labels,
+        } => {
+            assert_eq!(name, "frogdb_transactions_queued_commands");
+            assert_eq!(*value, 1.0, "one command was queued");
+            assert_eq!(labels, &[("outcome".to_string(), "committed".to_string())]);
+        }
+        other => panic!("expected the queued-commands histogram, got {other:?}"),
+    }
+    match &samples[2] {
+        MetricSample::Histogram { name, labels, .. } => {
+            assert_eq!(name, "frogdb_transactions_duration_seconds");
+            assert_eq!(labels, &[("outcome".to_string(), "committed".to_string())]);
+        }
+        other => panic!("expected the duration histogram, got {other:?}"),
     }
 }
 

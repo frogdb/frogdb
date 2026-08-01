@@ -395,6 +395,29 @@ mod tests {
         // A second shard promotes to Multi.
         acc.fold_shard(2);
         assert!(matches!(acc.target, TransactionTarget::Multi(_)));
+
+        // Re-folding an already-present shard once in `Multi` must not
+        // duplicate it in the shard list.
+        acc.fold_shard(1);
+        match &acc.target {
+            TransactionTarget::Multi(shards) => assert_eq!(
+                shards,
+                &vec![1, 2],
+                "re-folding an existing shard must not duplicate it: {shards:?}"
+            ),
+            other => panic!("expected Multi, got {other:?}"),
+        }
+
+        // A genuinely new shard is appended.
+        acc.fold_shard(3);
+        match &acc.target {
+            TransactionTarget::Multi(shards) => assert_eq!(
+                shards,
+                &vec![1, 2, 3],
+                "a new shard must be appended: {shards:?}"
+            ),
+            other => panic!("expected Multi, got {other:?}"),
+        }
     }
 
     #[test]
@@ -406,6 +429,42 @@ mod tests {
         // A different slot forces Multi and signals the caller to skip the fold.
         assert!(acc.note_slot(200, 1));
         assert!(matches!(acc.target, TransactionTarget::Multi(_)));
+    }
+
+    #[test]
+    fn accumulator_note_slot_dedupes_shards_once_already_multi() {
+        let mut acc = TxnSlotAccumulator::default();
+        assert!(!acc.note_slot(100, 0));
+        acc.fold_shard(0);
+        assert!(acc.note_slot(200, 1));
+        match &acc.target {
+            TransactionTarget::Multi(shards) => assert_eq!(shards, &vec![0, 1]),
+            other => panic!("expected Multi, got {other:?}"),
+        }
+
+        // A further cross-slot key on a shard already in the Multi list must
+        // not duplicate it. `first_slot` never moves past the first slot
+        // seen, so every subsequent differing slot re-enters this arm.
+        assert!(acc.note_slot(300, 1));
+        match &acc.target {
+            TransactionTarget::Multi(shards) => assert_eq!(
+                shards,
+                &vec![0, 1],
+                "re-noting an existing shard must not duplicate it: {shards:?}"
+            ),
+            other => panic!("expected Multi, got {other:?}"),
+        }
+
+        // A genuinely new shard is appended.
+        assert!(acc.note_slot(400, 2));
+        match &acc.target {
+            TransactionTarget::Multi(shards) => assert_eq!(
+                shards,
+                &vec![0, 1, 2],
+                "a new shard must be appended: {shards:?}"
+            ),
+            other => panic!("expected Multi, got {other:?}"),
+        }
     }
 
     #[test]
@@ -446,6 +505,70 @@ mod tests {
         assert!(
             t.take(false).unwrap().watches.is_empty(),
             "DISCARD unwatches"
+        );
+    }
+
+    #[test]
+    fn queued_commands_reflects_the_open_queue_and_is_none_when_closed() {
+        let mut t = TransactionState::default();
+        assert!(t.queued_commands().is_none(), "no transaction open -> None");
+
+        t.begin().unwrap();
+        assert!(
+            t.queued_commands().is_some_and(|q| q.is_empty()),
+            "MULTI with nothing queued yet is Some(&[])"
+        );
+
+        t.push_queued_command(cmd(b"GET"));
+        t.push_queued_command(cmd(b"SET"));
+        let queued = t.queued_commands().expect("transaction open");
+        assert_eq!(queued.len(), 2, "both queued commands are visible");
+        assert_eq!(queued[0].name, Bytes::from_static(b"GET"));
+        assert_eq!(queued[1].name, Bytes::from_static(b"SET"));
+
+        t.take(false);
+        assert!(t.queued_commands().is_none(), "EXEC leaves the state clean");
+    }
+
+    #[test]
+    fn watched_key_iter_reflects_the_watch_set() {
+        let mut t = TransactionState::default();
+        assert_eq!(t.watched_key_iter().count(), 0, "no watches yet");
+
+        t.watch_key(Bytes::from_static(b"a"), 0, 1, true);
+        t.watch_key(Bytes::from_static(b"b"), 1, 2, true);
+        let mut keys: Vec<&Bytes> = t.watched_key_iter().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![&Bytes::from_static(b"a"), &Bytes::from_static(b"b")]
+        );
+
+        t.unwatch_all();
+        assert_eq!(t.watched_key_iter().count(), 0, "UNWATCH clears it");
+    }
+
+    // FM-TXN-014
+    #[test]
+    fn clear_resets_everything_unconditionally() {
+        let mut t = TransactionState::default();
+        t.begin().unwrap();
+        t.push_queued_command(cmd(b"GET"));
+        t.watch_key(Bytes::from_static(b"k"), 0, 1, true);
+        t.abort(Some("ERR boom".to_string()));
+        assert!(t.is_open());
+
+        t.clear();
+
+        assert!(!t.is_open(), "QUIT/RESET must close any open transaction");
+        assert!(t.queued_commands().is_none());
+        assert_eq!(t.watched_key_iter().count(), 0, "watches are dropped too");
+
+        // A clean MULTI after clear must not carry over the aborted flag.
+        t.begin().unwrap();
+        assert!(
+            !t.take(false).unwrap().exec_abort,
+            "clear must not leave exec_abort latched"
         );
     }
 }

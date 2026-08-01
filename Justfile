@@ -193,10 +193,12 @@ core-test-e2e area:
 
 # Mutation-test one crate (testbox-class workload; config in .cargo/mutants.toml)
 mutants crate *args:
+    mkdir -p target/mutants/{{crate}}
     {{dyld-env}} {{rocksdb-env}} cargo mutants -p {{crate}} --output target/mutants/{{crate}} {{args}}
 
 # Mutate only this branch's diff vs origin/main (PR-viable cost)
 mutants-diff crate:
+    mkdir -p target/mutants/{{crate}}-diff
     git diff $(git merge-base origin/main HEAD) > target/mutants-diff.patch
     {{dyld-env}} {{rocksdb-env}} cargo mutants -p {{crate}} --in-diff target/mutants-diff.patch --output target/mutants/{{crate}}-diff
 

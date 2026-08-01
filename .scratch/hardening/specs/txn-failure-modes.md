@@ -196,7 +196,7 @@ Deviations from Redis are called out inline and collected in [Redis deviations](
 | NOT observable | Queued commands executing on the way out; a surviving watch, `exec_abort` latch, or sticky `ASKING`. |
 | Invariant | `clear_transaction` is the QUIT/RESET seam: it drops the queue without running it and clears every transaction-scoped flag. |
 | Outcome variant | n/a |
-| Forced by | `test_reset_aborts_transaction`, `test_reset_clears_watches`, `test_reset_restores_clean_state`, `asking_cleared_by_clear_transaction`, `reset_clears_covered_state` |
+| Forced by | `test_reset_aborts_transaction`, `test_reset_clears_watches`, `test_reset_restores_clean_state`, `asking_cleared_by_clear_transaction`, `reset_clears_covered_state`, `clear_resets_everything_unconditionally` |
 | Bug refs | none |
 
 ## FM-TXN-015 — ASKING is sticky for the whole MULTI block and consumed by EXEC
@@ -580,7 +580,7 @@ Deviations from Redis are called out inline and collected in [Redis deviations](
 | NOT observable | An `EXEC` that records nothing; two samples for one `EXEC`; a renamed label breaking existing dashboards and alerts silently. |
 | Invariant | `handle_exec` is the single place the outcome metric is recorded, and the label map is exhaustive over the enum (no wildcard arm), so a new variant fails compilation rather than defaulting to some existing bucket. |
 | Outcome variant | all |
-| Forced by | `outcome_metric_labels_are_stable`, `every_outcome_variant_has_a_forcing_test`, `test_keyspace_metrics_counted_inside_transaction`, `stage_error_disposition_is_the_guard_dispatch_split` |
+| Forced by | `outcome_metric_labels_are_stable`, `every_outcome_variant_has_a_forcing_test`, `test_keyspace_metrics_counted_inside_transaction`, `stage_error_disposition_is_the_guard_dispatch_split`, `handle_exec_returns_the_reply_and_records_exactly_the_outcome_metric_triple` |
 | Bug refs | none |
 
 ## FM-TXN-047 — EXEC consumes the transaction on every exit path
