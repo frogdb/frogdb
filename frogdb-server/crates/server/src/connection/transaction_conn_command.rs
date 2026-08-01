@@ -205,22 +205,17 @@ impl ConnectionCommand for DiscardConnCommand {
             match state.discard() {
                 Some(metrics) => {
                     // Record the `discarded` transaction metric. DISCARD is the
-                    // only transaction outcome recorded outside `handle_exec`'s
-                    // `record_transaction_outcome` (it has no handler to call),
-                    // so it emits the `discarded` label directly here.
-                    frogdb_telemetry::definitions::TransactionsTotal::inc(recorder, "discarded");
-                    frogdb_telemetry::definitions::TransactionsQueuedCommands::observe(
+                    // only transaction outcome recorded outside
+                    // `frogdb_txn::handle_exec` (it has no EXEC handler to run
+                    // through), so it emits the `discarded` label directly —
+                    // through the same metric-shape helper, so the triple stays
+                    // defined in one place.
+                    frogdb_txn::record_transaction_metrics(
                         recorder,
-                        metrics.queued_count as f64,
                         "discarded",
+                        metrics.queued_count,
+                        metrics.start_time,
                     );
-                    if let Some(start) = metrics.start_time {
-                        frogdb_telemetry::definitions::TransactionsDuration::observe(
-                            recorder,
-                            start.elapsed().as_secs_f64(),
-                            "discarded",
-                        );
-                    }
                     Response::ok()
                 }
                 None => Response::error("ERR DISCARD without MULTI"),

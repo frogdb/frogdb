@@ -35,8 +35,8 @@ METRICS = REPO / ".scratch/hardening/metrics/loop-cost.md"
 # area -> (crate to check, file to touch, extra cargo args)
 AREAS: dict[str, tuple[str, str, list[str]]] = {
     "txn": (
-        "frogdb-server",
-        "frogdb-server/crates/server/src/connection/transaction.rs",
+        "frogdb-txn",
+        "frogdb-server/crates/txn/src/exec.rs",
         [],
     ),
     "persistence": (

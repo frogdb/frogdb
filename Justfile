@@ -166,7 +166,7 @@ core-test area pattern="":
     #!/usr/bin/env bash
     set -euo pipefail
     case "{{area}}" in
-      txn)         crates="-p frogdb-vll" ;;
+      txn)         crates="-p frogdb-vll -p frogdb-txn" ;;
       persistence) crates="-p frogdb-persistence" ;;
       replication) crates="-p frogdb-replication" ;;
       cluster)     crates="-p frogdb-cluster" ;;

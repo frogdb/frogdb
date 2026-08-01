@@ -70,6 +70,7 @@ frogdb-config.workspace = true
 frogdb-protocol.workspace = true
 frogdb-core.workspace = true
 frogdb-vll.workspace = true
+frogdb-txn.workspace = true
 frogdb-debug.workspace = true
 frogdb-replication.workspace = true
 frogdb-commands.workspace = true
@@ -77,6 +78,7 @@ frogdb-search.workspace = true
 frogdb-telemetry.workspace = true
 frogdb-net.workspace = true
 frogdb-macros = { path = "../frogdb-macros" }
+async-trait.workspace = true
 bytes.workspace = true
 rand.workspace = true
 tokio.workspace = true
