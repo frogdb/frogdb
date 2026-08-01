@@ -1,6 +1,6 @@
 # PRD: Wire WAIT in cluster mode — and the replication plane it depends on
 
-Status: draft
+Status: implemented (pending review)
 Area: Cluster / Replication
 Origin: follow-up to issue 37 (`.scratch/testing-improvements/issues/37`, done —
 the divergence was *pinned*, not fixed). Written 2026-07-28.
@@ -621,3 +621,117 @@ Tasks 0 and 9 bracket the work: 0 proves the problem exists, 9 proves it is gone
    issue rather than folding it in.
 4. Is per-shard replication (multiple PSYNC links per node) on the roadmap? If so, Option C's per-shard
    LSN vector becomes relevant and Q1's "node == shard" simplification expires.
+
+---
+
+## 7. Implementation notes
+
+Implemented 2026-07-28 on branch `worktree-agent-a08da274a56c9f10a` (11 commits, `752be979..fd293207`).
+Option A as recommended. This section records what the implementation found, what it deviated from,
+and what it deliberately left alone.
+
+### 7.1 The §2.2 premise was superseded
+
+Task 0's premise-check test (`752be979`) **passed on `main`**: a `CLUSTER REPLICATE`d replica does
+receive writes, and the owning primary does report `connected_slaves:1`. Between this PRD being
+written and being implemented, the replication plane stopped being config-role-gated:
+`replication_init.rs` already constructs the tracker and `PrimaryReplicationHandler` on every node,
+and `dispatch.rs`'s `PsyncIntercept` already gates PSYNC on the **live** `is_replica` flag rather than
+on handler presence.
+
+Consequences:
+
+- **Tasks 2 and 3 were already done.** `dispatch.rs` and `replication_init.rs` are untouched by this
+  branch. The one PSYNC-gate disjunct the PRD wanted removed (`|| primary_replication_handler.is_none()`)
+  was deliberately **kept**: it is a defensive presence check, not a role check, and removing it would
+  turn a missing handler into a panic in the handoff path rather than a clean error.
+- **Task 1 (issue 61) was not a blocker.** The staged-not-installed checkpoint path had already been
+  fixed; a promoted node serves live data. Issue 61 is not touched by this branch.
+- R1, R2, R3 did not materialise. R3 was still checked: a cluster primary with default config accepts
+  writes with zero replicas.
+
+What was actually missing was everything *around* the plane: promotion never reached the data path,
+WAIT was short-circuited, `CLUSTER SHARDS` reported a Raft index, and boot could resurrect a replica
+as a primary. Those are the tasks that carried real code.
+
+### 7.2 Decisions taken on the open questions
+
+- **R4 / Q1 (standalone WAIT with zero replicas)** — decided for **Redis parity**: the early return is
+  narrowed to the case where the node cannot have replicas at all, and a node that *can* have them
+  blocks to the deadline and returns the live count. `CHANGELOG.md` records the behavior change.
+- **Q6 (Dragonfly early exit)** — **not adopted**, per the PRD's recommendation.
+- **Q8 (`-UNBLOCKED`)** — implemented as
+  `-UNBLOCKED force unblock from blocking operation, instance state changed (master -> replica?)`,
+  fired from `WaitCoordinator::fence_role_change()` via `end_primary_stint`.
+- **WAITAOF** — out of scope, unchanged stub.
+- **Cluster-wide WAIT** — no server-side fan-out, as recommended; documented as a client concern.
+
+### 7.3 R4b — the two pinned contracts, re-decided
+
+Both flips were approved before implementation and are now pinned the other way:
+
+- **Issue 48 (chained replication).** The contract is no longer "no transitive replication" but
+  **"a node that is currently a replica cannot serve PSYNC"** — one rule, no cluster/standalone split.
+  A *promoted* node (raft failover, `REPLICAOF NO ONE`, `CLUSTER FAILOVER`) serves PSYNC to downstream
+  replicas because it is no longer a replica; a node that is still a replica rejects PSYNC with
+  `-ERR PSYNC not supported - server is not running as primary`, so a sub-replica still never attaches
+  behind a live replica. `test_chained_replication_rejected_sub_replica_never_receives_data` was
+  rewritten to assert exactly that, and `97b690e5` adds the demotion half (a node that *becomes* a
+  replica stops serving PSYNC and drops the sessions it was serving).
+- **Cluster WAIT = 0** (re-pinned by `c2878ffb`). Rewritten to assert real per-node semantics: WAIT on
+  a cluster primary counts *that node's* replicas, never redirects, and is rejected on a replica.
+
+### 7.4 Deviations from the task breakdown
+
+| Task | Deviation |
+|---|---|
+| 2, 3 | Not needed — already true on `main` (§7.1). |
+| 1 | Not needed — issue 61 already fixed. |
+| 8 | `CLUSTER SHARDS` now reports the real replication offset **for this node**; entries for *other* nodes still report `0` because a node has no way to learn a peer's data-plane offset (the cluster bus carries no offset gossip). Documented in the command's doc comment; a follow-up would need an offset field on the gossip/heartbeat. |
+| 11 | The Jepsen checker asserts `sync-writes-survive ≥ async-writes-survive` **plus** an absolute survival floor for sync writes, rather than a strict `>`. A strict inequality is flaky by construction: with a small op count both classes can survive 100% of failovers. |
+| 12 | `CHANGELOG.md` is owned by release-please, so the R4 behavior change was added under a manually-created `## Unreleased` heading rather than by editing a released section. |
+| — | Not in the breakdown: WAIT's deadline used a wall-clock computation that turmoil's simulated clock does not advance. Switched to a tokio timer so the turmoil scenarios (Task 10) can drive it deterministically. |
+| — | Not in the breakdown: demotion tears down downstream sessions on the *graceful* path (`end_primary_stint`); the TAKEOVER path already resynced from scratch and is left alone. |
+
+### 7.5 Task 13 — three defects, not one
+
+The boot-time role divergence turned out to be three independent bugs that had to line up (all fixed
+in `fd293207`, each validated with a negative control that makes
+`test_restarted_cluster_replica_stays_a_replica` fail):
+
+- **A.** `AddNode` re-registration took the *incoming* role. Every node self-registers on boot claiming
+  `Primary`, so a restarted replica demoted itself back into a slotless primary. The arm now preserves
+  the recorded `role`/`primary_id`, exactly as it already preserved the recorded epoch.
+- **B.** A role folded into a Raft snapshot leaves no log entry to replay, so the *local snapshot
+  restore* boot path told the data path nothing. New `ClusterStateMachine::reconcile_self_role`
+  compares the restored cluster-state role against the boot data-path role and emits one role-change
+  event when they disagree; `cluster_init` calls it once after detection is enabled. The test forces
+  this path with `raft.trigger().snapshot()` + `purge_log`.
+- **C.** *(pre-existing, uncovered by B)* Boot peer-seeding re-applied `AddNode` for peers already in
+  the restored state, overwriting their Raft-agreed client address with the `cluster_bus_port - 10000`
+  guess. The reattaching replica then dialed a dead port (`master_link_status:down`). Known peers are
+  now skipped.
+
+### 7.6 Shutdown fix (found while landing Task 13)
+
+Once cluster primaries serve PSYNC, a PSYNC connection — served inline by the connection task that
+accepted it — outlives shutdown: aborting the acceptors does not end an established session, and the
+peer keeps the socket open. The node kept streaming frames after its shards stopped and kept its
+handle on RocksDB, so an in-process restart on the same data directory failed with
+`LOCK: No locks available` (this regressed `test_cluster_epoch_persists`). `shutdown_subsystems` now
+calls `PrimaryReplicationHandler::shutdown_downstream_sessions`, which signals every session and waits
+(bounded) for the registry to drain; `ReplicaSession::run` moved its `unregister_replica` to the end of
+the exit handler so leaving the registry means the session is done with its per-sync resources. Pinned
+by `shutdown_downstream_sessions_ends_a_streaming_session` (a streaming session whose peer never closes
+the socket).
+
+### 7.7 Known gaps
+
+- `CLUSTER SHARDS` peer offsets stay `0` (§7.4, Task 8).
+- The post-promotion catch-up assertion depends on issue 66 (a data-less minimal-RDB fullsync); it is
+  asserted at the level issue 66 currently allows.
+- `WAITAOF` remains a stub.
+- Session teardown at shutdown waits on the registry, which is drained microseconds before the
+  connection task drops its handler `Arc`. In production shutdown is process exit, so this only
+  matters for in-process restarts; a fully deterministic version would need connection tasks to be
+  tracked and awaited by the server.

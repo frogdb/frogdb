@@ -33,6 +33,11 @@ pub enum WalEffectKind {
     Clear,
     FlushAsync,
     FlushThrough,
+    /// A write group opened — every write recorded until the matching
+    /// `GroupEnd` must commit as one storage batch in production.
+    GroupBegin,
+    /// The innermost open write group closed.
+    GroupEnd,
 }
 
 impl WalEffectKind {
@@ -106,6 +111,44 @@ impl FakeWalLog {
         }
         Ok(())
     }
+
+    /// The writes of each outermost write group, in order.
+    ///
+    /// Each inner `Vec` is one group's writes — in production exactly the
+    /// entries that must land in a single committed storage batch, so a test
+    /// can assert "all of this transaction's writes are in one group".
+    /// Writes recorded outside any group are not returned. Errors if the
+    /// markers are unbalanced (a close with no open, or an unclosed group).
+    pub fn groups(&self) -> Result<Vec<Vec<RecordedWalEffect>>, String> {
+        let mut groups: Vec<Vec<RecordedWalEffect>> = Vec::new();
+        let mut depth: usize = 0;
+        for e in self.effects() {
+            match e.kind {
+                WalEffectKind::GroupBegin => {
+                    if depth == 0 {
+                        groups.push(Vec::new());
+                    }
+                    depth += 1;
+                }
+                WalEffectKind::GroupEnd => {
+                    depth = depth.checked_sub(1).ok_or_else(|| {
+                        format!("GroupEnd with no open group at order {}", e.order)
+                    })?;
+                }
+                k if k.is_write() && depth > 0 => {
+                    groups
+                        .last_mut()
+                        .expect("depth > 0 implies a group")
+                        .push(e);
+                }
+                _ => {}
+            }
+        }
+        if depth > 0 {
+            return Err(format!("{depth} write group(s) left unclosed"));
+        }
+        Ok(groups)
+    }
 }
 
 /// Deterministic in-process [`WalSink`]. See module docs.
@@ -166,8 +209,8 @@ impl FakeWalSink {
         Ok(seq)
     }
 
-    /// Record a flush effect (never fails).
-    fn record_flush(&self, kind: WalEffectKind) {
+    /// Record a non-write effect — flush or group marker (never fails).
+    fn record_marker(&self, kind: WalEffectKind) {
         let order = self.order.fetch_add(1, Ordering::SeqCst);
         let seq = self.seq.load(Ordering::SeqCst);
         self.log
@@ -207,12 +250,20 @@ impl WalSink for FakeWalSink {
     async fn write_clear(&self) -> std::io::Result<u64> {
         self.record_write(WalEffectKind::Clear, None)
     }
+    async fn begin_group(&self) -> std::io::Result<()> {
+        self.record_marker(WalEffectKind::GroupBegin);
+        Ok(())
+    }
+    async fn end_group(&self) -> std::io::Result<()> {
+        self.record_marker(WalEffectKind::GroupEnd);
+        Ok(())
+    }
     async fn flush_async(&self) -> std::io::Result<()> {
-        self.record_flush(WalEffectKind::FlushAsync);
+        self.record_marker(WalEffectKind::FlushAsync);
         Ok(())
     }
     async fn flush_through(&self, _after_seq: u64) -> std::io::Result<()> {
-        self.record_flush(WalEffectKind::FlushThrough);
+        self.record_marker(WalEffectKind::FlushThrough);
         Ok(())
     }
     fn sequence(&self) -> u64 {

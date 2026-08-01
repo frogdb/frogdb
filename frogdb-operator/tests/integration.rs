@@ -347,7 +347,7 @@ mod cluster_tests {
 
         let node_ids = harness.node_ids();
         for &id in &node_ids {
-            let info = harness.get_cluster_info(id).unwrap();
+            let info = harness.get_cluster_info(id).await.unwrap();
             assert_eq!(info.cluster_known_nodes, 3);
         }
 
@@ -372,7 +372,7 @@ mod cluster_tests {
 
         let node_ids = harness.node_ids();
         for &id in &node_ids {
-            let info = harness.get_cluster_info(id).unwrap();
+            let info = harness.get_cluster_info(id).await.unwrap();
             assert_eq!(info.cluster_known_nodes, 5);
         }
 
@@ -431,7 +431,7 @@ mod cluster_tests {
 
         // All nodes should see 4 members
         for &id in &harness.node_ids() {
-            let info = harness.get_cluster_info(id).unwrap();
+            let info = harness.get_cluster_info(id).await.unwrap();
             assert_eq!(info.cluster_known_nodes, 4);
         }
 

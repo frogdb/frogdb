@@ -467,10 +467,15 @@ mod tests {
     type ReadyCallback = Arc<Mutex<Box<dyn FnMut(usize, u64) -> ShardReadyResult + Send>>>;
     type ExecuteCallback =
         Arc<Mutex<Box<dyn FnMut(usize, u64) -> Result<u32, ShardSinkError> + Send>>>;
+    type DispatchCallback =
+        Arc<Mutex<Box<dyn FnMut(usize, u64) -> Result<(), ShardSinkError> + Send>>>;
 
     /// Test sink that records every call and lets each test script the
     /// shard responses (ready / failed / dropped) and execute outcomes.
     struct TestSink {
+        // Per-shard dispatch outcome for lock-request: whether the message
+        // reaches the shard at all (a closed shard channel returns Err).
+        on_lock_send: DispatchCallback,
         // Per-shard callbacks for lock-request: send Ready or Failed.
         on_lock: ReadyCallback,
         // Per-shard execute callback: produce the Response or a send error.
@@ -490,6 +495,7 @@ mod tests {
             let aborts = Arc::new(Mutex::new(Vec::new()));
             (
                 TestSink {
+                    on_lock_send: Arc::new(Mutex::new(Box::new(|_, _| Ok(())))),
                     on_lock: Arc::new(Mutex::new(Box::new(|_, _| ShardReadyResult::Ready))),
                     on_execute: Arc::new(Mutex::new(Box::new(|s, _| Ok((s as u32) + 100)))),
                     aborted_shards: aborts.clone(),
@@ -514,6 +520,10 @@ mod tests {
             _operation: Self::Operation,
             ready_tx: oneshot::Sender<ShardReadyResult>,
         ) -> Result<(), ShardSinkError> {
+            {
+                let mut send_cb = self.on_lock_send.lock().await;
+                send_cb(shard_id, txid)?;
+            }
             let mut cb = self.on_lock.lock().await;
             let result = cb(shard_id, txid);
             let _ = ready_tx.send(result);
@@ -641,6 +651,48 @@ mod tests {
         assert_eq!(aborted, vec![2, 5, 7]);
     }
 
+    /// A phase-1 dispatch failure must abort the shards that already received
+    /// a lock request — they have declared intents and are holding (or
+    /// queueing for) locks that nothing else will ever release. The shard
+    /// whose dispatch failed never got the message, and the shards after it
+    /// were never reached, so neither is aborted.
+    #[tokio::test]
+    async fn phase1_dispatch_failure_aborts_shards_already_holding_intents() {
+        let (sink, aborts) = TestSink::ok_sink();
+        *sink.on_lock_send.lock().await = Box::new(|s, _| {
+            if s == 5 {
+                Err(ShardSinkError {
+                    shard_id: 5,
+                    reason: "shard channel closed",
+                })
+            } else {
+                Ok(())
+            }
+        });
+
+        let coord = VllCoordinator::new(sink, NoopMetricsSink);
+        let err = coord
+            .scatter(ScatterRequest {
+                txid: 13,
+                mode: LockMode::Write,
+                participants: vec![participant(2), participant(5), participant(7)],
+                timeout: Duration::from_secs(1),
+                command: "TEST",
+            })
+            .await
+            .expect_err("expected dispatch failure");
+
+        assert!(matches!(
+            err,
+            ScatterError::ShardUnavailable(ShardSinkError { shard_id: 5, .. })
+        ));
+        assert_eq!(
+            *aborts.lock().await,
+            vec![2],
+            "only shard 2 received a lock request and must be unwound"
+        );
+    }
+
     /// Regression test: a phase-3 dispatch failure must abort every shard
     /// that has not received (or could not receive) `VllExecute`, addressed
     /// by its *real* shard id — not an id reconstructed from its position in
@@ -703,6 +755,7 @@ mod tests {
         drop(guard);
     }
 
+    // FM-VLL-002
     #[tokio::test]
     async fn acquire_continuation_releases_partially_acquired_on_failure() {
         let (sink, _) = TestSink::ok_sink();
@@ -775,6 +828,7 @@ mod tests {
 
     /// On acquisition failure the primary work must never run and the error
     /// is surfaced; any partially acquired lock is released.
+    // FM-VLL-002
     #[tokio::test]
     async fn acquire_continuation_and_run_skips_run_and_releases_on_failure() {
         use std::sync::atomic::{AtomicBool, Ordering};

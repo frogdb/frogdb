@@ -66,6 +66,12 @@ release:
 
 # Run tests (optionally for a specific crate and/or matching a pattern)
 test crate="" pattern="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{crate}}" = "frogctl" ]; then
+      echo "frogctl is excluded from the default suite; use: just frogctl-test" >&2
+      exit 2
+    fi
     {{dyld-env}} {{rocksdb-env}} cargo nextest run {{ if crate != "" { "-p " + crate } else { "--all" } }} {{ if pattern != "" { "-E 'test(/" + pattern + "/)'" } else { "" } }}
 
 # Generate code coverage report (unit tests only)
@@ -73,9 +79,13 @@ coverage crate="" pattern="":
     {{dyld-env}} {{rocksdb-env}} cargo llvm-cov nextest {{ if crate != "" { "-p " + crate } else { "--all" } }} {{ if pattern != "" { "-E 'test(/" + pattern + "/)'" } else { "" } }} --html
     @echo "Report: target/llvm-cov/html/index.html"
 
-# Generate lcov coverage data (for CI upload)
+# Generate lcov coverage data (for CI upload). Deliberately un-freezes the frozen
+# redis-regression suite and includes frogctl (both excluded from the default `just
+# test`/`just check` dev loop during the hardening campaign): the campaign freeze is
+# about keeping the default dev loop fast, not about hiding code from coverage
+# measurement, so this pulls both back in via --ignore-default-filter.
 coverage-lcov:
-    {{dyld-env}} {{rocksdb-env}} cargo llvm-cov nextest --all --lcov --output-path target/llvm-cov/lcov.info
+    {{dyld-env}} {{rocksdb-env}} cargo llvm-cov nextest --all --features frogdb-redis-regression/regression --features frogctl/cli-tests --ignore-default-filter --lcov --output-path target/llvm-cov/lcov.info
 
 # Coverage *depth*: per-line exec counts + per-function test diversity
 # (see docs/agents/coverage-depth.md). Local-only; uses its own target dir.
@@ -89,11 +99,14 @@ coverage-calibrate crate:
     ./scripts/coverage-depth.py calibrate {{crate}}
 
 # Run concurrency tests (Shuttle + Turmoil + generated workload sweep)
+#
+# The generated-workload step filters on the whole `concurrency_workload` module, not just its
+# `seed_sweep_*` entry points, so `mod regressions`'s pinned reproducers run too — they were
+# silently never executed while the filters named the sweeps individually.
 concurrency:
     {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-core --features shuttle -E 'test(/concurrency/)'
     {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-server --features turmoil -E 'test(/simulation/)'
-    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-server --features turmoil -E 'test(/seed_sweep_short_workloads/)'
-    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-server --features turmoil -E 'test(/seed_sweep_txheavy/)'
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-server --features turmoil -E 'test(/concurrency_workload/)'
     {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-server --features turmoil -E 'test(/concurrency_pubsub/)'
 
 # Replay a single concurrency repro file (seed + profile + config)
@@ -106,12 +119,13 @@ concurrency-turmoil PATTERN='seed_sweep':
 
 # Run the nightly (1000+ seed) generated-workload sweep across all profiles (CI nightly
 # tier, not part of `just concurrency`/`just test-all`). SEEDS overrides seeds-per-profile
-# (default 250 x 4 profiles = 1000). OPS overrides ops-per-client and defaults to 75, NOT the
-# harness's coded default of 150 — see .scratch/concurrency-testing/issues/11:
-# ops_per_client >= ~90 makes the MultiWaiter "exactly-once delivery" invariant fail on nearly
-# every seed (a real, tracked bug), which would make this job permanently red rather than
-# surfacing new findings. Raise OPS only after that issue is resolved. clients/shards keep the
-# harness defaults but are independently overridable via FROGDB_CONCURRENCY_CLIENTS /
+# (default 250 x 4 profiles = 1000). OPS overrides ops-per-client and matches the harness's
+# coded default of 150. (It was held at 75 while the workload runner's final-state readback
+# raced long client scripts, reporting phantom "exactly-once delivery" loss above ~90 ops —
+# .scratch/concurrency-testing/issues/11 Finding A, fixed by latching
+# the readback to client completion; pinned by
+# `regressions::regression_drain_capture_race_multiwaiter_ops_110_seed_0`.) clients/shards keep
+# the harness defaults but are independently overridable via FROGDB_CONCURRENCY_CLIENTS /
 # FROGDB_CONCURRENCY_SHARDS env vars (see frogdb-server/crates/server/tests/concurrency_workload.rs).
 # Failing seeds each get a repro file under target/concurrency-repros/, replayable via
 # `just concurrency-repro`.
@@ -122,7 +136,7 @@ concurrency-turmoil PATTERN='seed_sweep':
 # thresholds the sweep-wide WGL downgrade ratio (FROGDB_WGL_DOWNGRADE_WARN_RATIO /
 # FROGDB_WGL_DOWNGRADE_FAIL_RATIO; see `common::sweep_summary`) — a run where too many keys never
 # got a real linearizability check now fails loudly instead of reporting a silent clean pass.
-concurrency-nightly SEEDS='250' OPS='75':
+concurrency-nightly SEEDS='250' OPS='150':
     {{dyld-env}} {{rocksdb-env}} FROGDB_CONCURRENCY_SEEDS={{SEEDS}} FROGDB_CONCURRENCY_OPS_PER_CLIENT={{OPS}} cargo nextest run -p frogdb-server --features turmoil --run-ignored all -E 'test(/seed_sweep_nightly/)'
 
 # Run the full test suite (unit + integration + concurrency + simulation)
@@ -143,6 +157,75 @@ bench:
     {{dyld-env}} {{rocksdb-env}} cargo bench -p frogdb-benches
 
 # =============================================================================
+# Hardening campaign (see docs/agents/hardening-campaign.md)
+# =============================================================================
+
+# Record an area's warm inner-loop cost (check + test-binary build medians)
+loop-cost area:
+    RUSTC_WRAPPER="" ./scripts/loop-cost.py {{area}}
+
+# Run one hardening area's crate tests (core command profile).
+# Crate lists grow as extraction phases land (frogdb-txn, frogdb-recovery, ...).
+core-test area pattern="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{area}}" in
+      txn)         crates="-p frogdb-vll -p frogdb-txn" ;;
+      persistence) crates="-p frogdb-persistence" ;;
+      replication) crates="-p frogdb-replication" ;;
+      cluster)     crates="-p frogdb-cluster" ;;
+      *) echo "unknown area: {{area}} (txn|persistence|replication|cluster)" >&2; exit 2 ;;
+    esac
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run $crates {{ if pattern != "" { "-E 'test(/" + pattern + "/)'" } else { "" } }}
+
+# Run one hardening area's end-to-end server tests (core command profile)
+core-test-e2e area:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{area}}" in
+      txn)         filter="test(integration_transactions::)" ;;
+      persistence) filter="test(integration_persistence::)" ;;
+      replication) filter="test(integration_replication::)" ;;
+      cluster)     filter="test(integration_cluster::)" ;;
+      *) echo "unknown area: {{area}} (txn|persistence|replication|cluster)" >&2; exit 2 ;;
+    esac
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-server -E "$filter"
+
+# Mutation-test one crate (testbox-class workload; config in .cargo/mutants.toml)
+mutants crate *args:
+    mkdir -p target/mutants/{{crate}}
+    {{dyld-env}} {{rocksdb-env}} cargo mutants -p {{crate}} --output target/mutants/{{crate}} {{args}}
+
+# Mutate only this branch's diff vs origin/main (PR-viable cost)
+mutants-diff crate:
+    mkdir -p target/mutants/{{crate}}-diff
+    git diff $(git merge-base origin/main HEAD) > target/mutants-diff.patch
+    {{dyld-env}} {{rocksdb-env}} cargo mutants -p {{crate}} --in-diff target/mutants-diff.patch --output target/mutants/{{crate}}-diff
+
+# Enforce an area's mutation score from a completed run (threshold e.g. 0.90)
+mutants-gate crate threshold:
+    ./scripts/mutants-gate.py target/mutants/{{crate}}/mutants.out/outcomes.json --min-score {{threshold}}
+
+# Run the frozen Redis compat suite (nightly / on-demand only during the campaign)
+regression pattern="":
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-redis-regression --features regression {{ if pattern != "" { "-E 'test(/" + pattern + "/)'" } else { "" } }}
+
+# Type-check the frozen suite without running it — the anti-rot guard
+regression-check:
+    {{dyld-env}} {{rocksdb-env}} cargo check -p frogdb-redis-regression --features regression --all-targets
+
+# Gate: failure-mode specs and the tests that force them must agree, both ways.
+# Every `Forced by` test in .scratch/hardening/specs/*-failure-modes.md must
+# exist and carry a `// FM-<AREA>-NNN` tag; every tag must name a spec row.
+# Builds the listed crates' test binaries (~15-25s warm, no test execution).
+lint-failure-modes:
+    {{dyld-env}} {{rocksdb-env}} RUSTC_WRAPPER="" ./scripts/failure-modes.py
+
+# Run frogctl's tests (excluded from the default suite during the campaign)
+frogctl-test:
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogctl --features cli-tests --ignore-default-filter
+
+# =============================================================================
 # Rust: Format & Lint
 # =============================================================================
 
@@ -155,7 +238,7 @@ fmt-check crate="":
     cargo fmt {{ if crate != "" { "-p " + crate } else { "--all" } }} -- --check
 
 # Run clippy lints (optionally for a specific crate)
-lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-turmoil
+lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-turmoil-features lint-turmoil lint-failure-modes
     {{dyld-env}} {{rocksdb-env}} cargo clippy {{ if crate != "" { "-p " + crate } else { "--all-targets" } }} -- -D warnings
 
 # Gate: turmoil-featured test bodies (frogdb-server/crates/server/tests/simulation.rs)
@@ -164,6 +247,87 @@ lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam l
 # rustc warnings via the nextest build. Lint them explicitly with the feature on.
 lint-turmoil:
     {{dyld-env}} {{rocksdb-env}} cargo clippy -p frogdb-server --features turmoil --tests -- -D warnings
+
+# Gate: the turmoil network swap is a cargo feature, so every crate in the
+# dependency chain has to forward it. A missing forward compiles the production
+# tokio stack into the "simulation" — the sims still pass, they just stop
+# simulating. Enforced in the manifests:
+#   1. a crate depending on frogdb-net must declare a `turmoil` feature;
+#   2. a crate that has a `turmoil` feature must forward `<dep>/turmoil` for
+#      every internal dependency that offers one (frogdb-net, frogdb-config, …).
+# The compile-time counterpart lives in crates/server/src/net.rs (a type-identity
+# assertion against turmoil::net) — this gate catches the wiring, that one
+# catches the types.
+lint-turmoil-features:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    status=0
+
+    # --others picks up manifests of crates added but not yet committed;
+    # --exclude-standard keeps target/ and friends out.
+    manifests=$(git ls-files --cached --others --exclude-standard -- '*Cargo.toml')
+
+    # Print a manifest's `turmoil = [...]` feature declaration (empty if absent).
+    turmoil_feature() {
+        awk '
+            /^\[features\]/ { in_features = 1; next }
+            /^\[/           { in_features = 0 }
+            in_features && /^turmoil[[:space:]]*=/ { found = 1 }
+            found { print }
+            found && /\]/ { exit }
+        ' "$1"
+    }
+
+    # Print a manifest's dependency names (normal/dev/build/target, never
+    # [workspace.dependencies] — that section is not a dependency edge).
+    deps_of() {
+        awk '
+            /^\[/ { in_deps = ($0 ~ /dependencies\]$/ && $0 !~ /^\[workspace/); next }
+            in_deps && /^[A-Za-z0-9_-]+[[:space:]]*[=.]/ {
+                name = $0
+                sub(/[[:space:]]*[=.].*$/, "", name)
+                print name
+            }
+        ' "$1"
+    }
+
+    package_name() { awk -F'"' '/^name[[:space:]]*=/ { print $2; exit }' "$1"; }
+
+    # Internal crates that offer a `turmoil` feature.
+    providers=""
+    for m in $manifests; do
+        [ -n "$(turmoil_feature "$m")" ] || continue
+        providers="$providers $(package_name "$m")"
+    done
+
+    for m in $manifests; do
+        decl=$(turmoil_feature "$m")
+        deps=$(deps_of "$m")
+        if [ -z "$decl" ]; then
+            if echo "$deps" | grep -qx 'frogdb-net'; then
+                echo "ERROR: $m depends on frogdb-net but declares no 'turmoil' feature," >&2
+                echo "       so the simulation swap can never reach it." >&2
+                status=1
+            fi
+            continue
+        fi
+        self=$(package_name "$m")
+        for p in $providers; do
+            [ "$p" = "$self" ] && continue
+            echo "$deps" | grep -qx "$p" || continue
+            case "$decl" in *"\"$p/turmoil\""*) continue ;; esac
+            echo "ERROR: $m: the 'turmoil' feature does not forward \"$p/turmoil\"." >&2
+            status=1
+        done
+    done
+
+    if [ "$status" -ne 0 ]; then
+        echo >&2
+        echo "       Add the missing forward to the crate's 'turmoil' feature, e.g." >&2
+        echo '       turmoil = ["dep:turmoil", "frogdb-net/turmoil", ...]' >&2
+        exit 1
+    fi
+    echo "OK: turmoil feature forwarding is wired through every dependent crate"
 
 # Gate: INFO section content must come from a renderer (crates/server/src/info),
 # never a post-hoc string patch. Rejects placeholder-anchor rewrites in the
@@ -985,11 +1149,23 @@ lint-metrics-chokepoint:
     echo "OK: metric emission goes through the typed handles"
 
 # =============================================================================
+# Build/test execution mode
+# =============================================================================
+
+# Show the current mode, or set it: just build-mode testbox
+build-mode *mode="":
+    ./scripts/build-mode.sh {{mode}}
+
+# =============================================================================
 # Blacksmith Testboxes (remote Linux build/test VMs)
 # =============================================================================
+#
+# The tb-* recipes require testbox mode (`just build-mode testbox`). For a
+# one-off without switching the worktree, set BUILD_MODE=testbox.
 
 # Warm up a testbox and record its ID for session-end cleanup
 tb-warmup workflow="test-unit-tests-testbox.yml" *args="":
+    @./scripts/require-testbox-mode.sh
     ./scripts/testbox-warmup.sh {{workflow}} {{args}}
 
 # Run a command on the most recently warmed testbox: just tb-run "just test frogdb-server"
@@ -997,6 +1173,7 @@ tb-run cmd:
     #!/usr/bin/env bash
     set -euo pipefail
     export PATH="$HOME/.local/bin:$PATH"
+    ./scripts/require-testbox-mode.sh
     id=$(tail -1 "$(git rev-parse --git-dir)/blacksmith-testboxes" 2>/dev/null || true)
     [ -n "$id" ] || { echo "no testbox recorded; run 'just tb-warmup' first" >&2; exit 1; }
     # The testbox SSH session does not inherit the workflow's PATH; mise-managed

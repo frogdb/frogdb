@@ -1,0 +1,18 @@
+[package]
+name = "frogdb-txn"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Connection-side MULTI/EXEC transaction orchestration and state"
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+frogdb-core.workspace = true
+frogdb-protocol.workspace = true
+frogdb-telemetry.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

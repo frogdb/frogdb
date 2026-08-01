@@ -36,7 +36,9 @@ mod routing;
 mod tests;
 mod validator;
 
-pub(crate) use routing::{BatchKeys, BatchRoute, route_queued_batch};
+pub(crate) use routing::{
+    BatchKeys, BatchRoute, route_queued_batch, route_watched_keys, watch_slot_is_locally_served,
+};
 pub use routing::{RouteDecision, RouteOutcome};
 pub(crate) use validator::SlotValidator;
 

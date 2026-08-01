@@ -128,6 +128,10 @@ Structure (H2/H3 outline):
 - `ConfigEpoch` u64, monotonic via `IncrementEpoch`, higher wins in conflict
   resolution; reset semantics (HARD zeroes, SOFT preserves). How a stale node
   detects it must re-sync metadata.
+- Config Epoch vs. Raft term: `CLUSTER INFO` reports `cluster_current_epoch` as the
+  replicated counter verbatim and the Raft leadership term separately as
+  `cluster_raft_term`. The former fold (`max(config_epoch, raft_term)`) is gone —
+  it hid real epoch bumps and manufactured fake ones (issue 47).
 
 ## Slot ownership and routing
 - Per-command `RouteDecision` variants and the wire outcome each produces

@@ -33,7 +33,7 @@ Decide and then implement one of:
   script loses its own atomicity) and errors the script if the slot has moved. Requires deciding
   what a mid-script failure returns to the client and what happens to writes already applied.
 - **(b) Pause barrier at migration finalization** (see
-  [02-migration-finalization-pause-barrier.md](02-migration-finalization-pause-barrier.md)) — makes
+  [02-migration-finalization-pause-barrier.md](../)) — makes
   the problem disappear for scripts *and* every other path, at an availability cost. If that issue is
   adopted, this one is subsumed.
 - **(c) Accept and document.** Record the window in

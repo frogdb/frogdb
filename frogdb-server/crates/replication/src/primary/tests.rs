@@ -7,6 +7,7 @@ use bytes::Bytes;
 /// `offsets` coordinator + `replay` backlog are the only inputs exercised.
 #[cfg(test)]
 fn divergence_handler(dir: &std::path::Path) -> crate::primary::PrimaryReplicationHandler {
+    use crate::identity::ReplicationIdentity;
     use crate::primary::PrimaryReplicationHandler;
     use crate::state::ReplicationState;
     use crate::tracker::ReplicationTrackerImpl;
@@ -14,10 +15,11 @@ fn divergence_handler(dir: &std::path::Path) -> crate::primary::PrimaryReplicati
     use std::sync::Arc;
     use std::time::Duration;
 
+    let tracker = Arc::new(ReplicationTrackerImpl::new());
     PrimaryReplicationHandler::new(
-        ReplicationState::new(),
+        ReplicationIdentity::adopting(ReplicationState::new(), &tracker),
         dir.join("replication_state.json"),
-        Arc::new(ReplicationTrackerImpl::new()),
+        tracker,
         None,
         dir.to_path_buf(),
         LagThresholdConfig {
@@ -294,6 +296,36 @@ fn test_ring_buffer_extract_is_nondestructive() {
 }
 
 #[test]
+fn ring_buffer_reset_closes_the_window_and_lets_the_floor_move_down() {
+    let rb = ReplicationRingBuffer::new(100, 1024 * 1024);
+    rb.arm_start(1000);
+    rb.push(1010, 0, Bytes::from("cmd1"));
+    assert_eq!(rb.start_offset(), Some(1000));
+
+    rb.reset();
+
+    assert_eq!(rb.start_offset(), None, "a reset buffer claims no history");
+    assert_eq!(rb.oldest_offset(), None);
+    assert!(rb.extract_divergent_writes(0).is_empty());
+    // The floor is `fetch_max`, so only a reset can bring it back below a
+    // previous stint's head — the case a re-promotion after a rewinding full
+    // resync lands in.
+    rb.arm_start(50);
+    assert_eq!(rb.start_offset(), Some(50));
+}
+
+#[test]
+fn ring_buffer_push_into_an_unarmed_buffer_opens_the_window_at_the_entry_start() {
+    let rb = ReplicationRingBuffer::new(100, 1024 * 1024);
+    rb.push(1010, 0, Bytes::from("0123456789"));
+    assert_eq!(
+        rb.start_offset(),
+        Some(1000),
+        "the pushed entry itself must be replayable"
+    );
+}
+
+#[test]
 fn test_ring_buffer_oldest_offset_tracks_eviction() {
     let rb = ReplicationRingBuffer::new(3, 1024 * 1024);
     assert_eq!(rb.oldest_offset(), None);
@@ -344,7 +376,7 @@ async fn save_state_persists_tracker_offset() {
     let replid = state.replication_id.clone();
     let tracker = Arc::new(ReplicationTrackerImpl::new());
     let handler = PrimaryReplicationHandler::new(
-        state,
+        crate::identity::ReplicationIdentity::adopting(state, &tracker),
         state_path.clone(),
         tracker.clone(),
         None,
@@ -363,9 +395,13 @@ async fn save_state_persists_tracker_offset() {
     );
 
     // The offset on disk starts at 0 even though it was never explicitly saved.
-    // Advance the tracker the way `broadcast_command` does, then persist.
-    tracker.set_offset(987);
-    handler.save_state().await.unwrap();
+    // Advance through the one advance gate, the way `broadcast_command` does —
+    // which moves the applied offset with the live head, since a primary
+    // broadcasts only what its shard already applied. A save point persists the
+    // applied offset, so a bare `tracker.set_offset` would not be a faithful
+    // stand-in here.
+    assert_eq!(handler.offsets.advance(&Bytes::from(vec![b'x'; 987])), 987);
+    handler.save_state().unwrap();
 
     // A restart seeds the tracker from this file, so the offset must survive
     // and keep the same replication id.
@@ -386,13 +422,13 @@ async fn wait_with_lagging_replica_broadcasts_a_stamped_getack() {
     use crate::wait_coordinator::WaitVerdict;
     use crate::{LagThresholdConfig, SplitBrainBufferConfig};
     use std::sync::Arc;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     use tempfile::TempDir;
 
     let dir = TempDir::new().unwrap();
     let tracker = Arc::new(ReplicationTrackerImpl::new());
     let handler = PrimaryReplicationHandler::new(
-        ReplicationState::new(),
+        crate::identity::ReplicationIdentity::adopting(ReplicationState::new(), &tracker),
         dir.path().join("replication_state.json"),
         tracker.clone(),
         None,
@@ -420,9 +456,10 @@ async fn wait_with_lagging_replica_broadcasts_a_stamped_getack() {
     let wait = handler.wait_coordinator();
     let verdict = wait
         .wait_for_replicas(
+            wait.role_fence(),
             target,
             1,
-            Some(Instant::now() + Duration::from_millis(30)),
+            Some(tokio::time::Instant::now() + Duration::from_millis(30)),
             &handler,
         )
         .await;
@@ -440,4 +477,256 @@ async fn wait_with_lagging_replica_broadcasts_a_stamped_getack() {
     );
     assert_eq!(frame.sequence, handler.offsets.current());
     assert!(frame.sequence > target, "GETACK advances the offset");
+}
+
+// ============================================================================
+// Primary stint boundaries: promotion freezes the APPLIED offset, demotion
+// closes the window.
+// ============================================================================
+
+/// A handler over a caller-supplied identity, so a test can hold the node's
+/// `live`/`applied` atomics and drive them the way a replica stream would.
+#[cfg(test)]
+fn stint_handler(
+    dir: &std::path::Path,
+    identity: crate::identity::ReplicationIdentity,
+) -> crate::primary::PrimaryReplicationHandler {
+    use crate::primary::PrimaryReplicationHandler;
+    use crate::tracker::ReplicationTrackerImpl;
+    use crate::{LagThresholdConfig, SplitBrainBufferConfig};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let tracker = Arc::new(ReplicationTrackerImpl::new());
+    PrimaryReplicationHandler::new(
+        identity,
+        dir.join("replication_state.json"),
+        tracker,
+        None,
+        dir.to_path_buf(),
+        LagThresholdConfig {
+            threshold_bytes: 0,
+            threshold_secs: 0,
+            cooldown: Duration::from_secs(0),
+        },
+        SplitBrainBufferConfig {
+            enabled: true,
+            max_entries: 1000,
+            max_bytes: 64 * 1024 * 1024,
+        },
+        0,
+    )
+}
+
+/// The replica-side offset pair over a node identity: what `streaming.rs` and
+/// `consume_frames` drive in production.
+#[cfg(test)]
+fn replica_heads(
+    identity: &crate::identity::ReplicationIdentity,
+) -> (
+    crate::replica::offset::ReplicaOffset,
+    crate::replica::AppliedOffset,
+) {
+    use crate::replica::offset::ReplicaOffset;
+    let applied = identity.applied();
+    (
+        ReplicaOffset::new(identity.state(), identity.live(), applied.clone()),
+        applied,
+    )
+}
+
+#[cfg(test)]
+fn frame_of(len: usize) -> crate::frame::ReplicationFrame {
+    crate::frame::ReplicationFrame::new(0, Bytes::from(vec![b'x'; len]))
+}
+
+/// CRITICAL: the promotion boundary is the offset of data this node HOLDS.
+///
+/// The replica stream advances the received head at decode time and queues the
+/// frame on a 10k-deep channel; a promotion that froze the received head would
+/// claim history for frames the keyspace never saw. A sibling replica sitting at
+/// that same received offset would then be granted `+CONTINUE` over a hole, with
+/// contiguous offsets hiding the divergence forever.
+#[tokio::test]
+async fn promotion_freezes_the_window_at_the_applied_offset_not_the_received_head() {
+    use crate::identity::ReplicationIdentity;
+    use crate::primary::replay::ReplayDecision;
+    use crate::state::ReplicationState;
+    use crate::tracker::ReplicationTrackerImpl;
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().unwrap();
+    let tracker = Arc::new(ReplicationTrackerImpl::new());
+    let identity = ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
+    let (received, applied) = replica_heads(&identity);
+    let inherited_id = identity.state().read().replication_id.clone();
+    let handler = stint_handler(dir.path(), identity);
+
+    // Two frames off the socket; only the first ever reaches the keyspace.
+    let landed = frame_of(100);
+    let queued = frame_of(40);
+    received.frame_advance(&landed);
+    received.frame_advance(&queued);
+    applied.frame_applied(&landed);
+    assert_eq!(received.current(), 140, "received head counts both frames");
+
+    let (boundary, snapshot) = handler.begin_primary_stint().unwrap();
+
+    assert_eq!(boundary, 100, "the window freezes at the applied offset");
+    assert_eq!(
+        snapshot.secondary_offset, 100,
+        "the inherited id's window ends at the data this node holds"
+    );
+    assert_eq!(
+        handler.current_offset(),
+        100,
+        "the new primary's stream head is rewound to its data, so its own \
+         writes continue from there"
+    );
+    assert_eq!(handler.replay.backlog_start(), Some(100));
+
+    // A downstream replica that read as far as the *received* head asks to
+    // continue from 140 under the inherited id. It must be told to full resync:
+    // this node never applied those 40 bytes.
+    let state = handler.state();
+    assert!(
+        matches!(
+            handler
+                .replay
+                .handle_partial_sync_request(&state, &inherited_id, 140, boundary),
+            ReplayDecision::FullResync(_)
+        ),
+        "a replica ahead of the promoted node's data must NOT get +CONTINUE"
+    );
+    // At the applied boundary the same replica is exactly caught up and is
+    // continuable with an empty tail — the point of arming the floor.
+    assert!(matches!(
+        handler
+            .replay
+            .handle_partial_sync_request(&state, &inherited_id, 100, boundary),
+        ReplayDecision::Continue(_)
+    ));
+}
+
+/// MAJOR: the backlog and its floor are scoped to a single primary stint.
+///
+/// A demoted node's buffered commands describe a history it no longer heads, and
+/// the resync that follows can rewind its offset *below* them. Left in place,
+/// the `fetch_max` floor could never follow the rewind down, so a re-promoted
+/// node would claim a window it cannot serve.
+#[tokio::test]
+async fn a_re_promotion_at_a_lower_offset_re_arms_the_floor_from_scratch() {
+    use crate::identity::ReplicationIdentity;
+    use crate::state::ReplicationState;
+    use crate::tracker::ReplicationTrackerImpl;
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().unwrap();
+    let tracker = Arc::new(ReplicationTrackerImpl::new());
+    let identity = ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
+    let applied = identity.applied();
+    let handler = stint_handler(dir.path(), identity.clone());
+
+    // Stint one: promote, then take writes as a primary.
+    handler.begin_primary_stint().unwrap();
+    push_write(&handler, "k1", "v1");
+    let high = push_write(&handler, "k2", "v2");
+    assert!(high > 0);
+    assert!(
+        handler.replay.oldest_offset().is_some(),
+        "backlog populated"
+    );
+
+    // Demotion: the window closes and the buffered history goes with it.
+    handler.end_primary_stint();
+    assert_eq!(
+        handler.replay.backlog_start(),
+        None,
+        "a node that follows someone else claims no replayable history"
+    );
+    assert_eq!(handler.replay.oldest_offset(), None, "backlog is empty");
+
+    // The new primary full-resyncs it to an offset BELOW where it had been. The
+    // demotion path opens a fresh applying stint before dialing (see
+    // `RealReplicaStreamer::start`), which re-opens the gate the promotion
+    // froze; the connection built under it then adopts the resync offset.
+    let _stint = applied.begin_replica_stint();
+    let (received, _applied) = replica_heads(&identity);
+    assert!(received.reset_to(50));
+
+    let (boundary, _) = handler.begin_primary_stint().unwrap();
+
+    assert_eq!(
+        boundary, 50,
+        "the second stint starts at the resynced offset"
+    );
+    assert_eq!(
+        handler.replay.backlog_start(),
+        Some(50),
+        "the floor follows the rewind down instead of staying at the old head"
+    );
+    assert_eq!(handler.replay.oldest_offset(), None);
+}
+
+/// MEDIUM: a promotion that cannot be written to disk must not happen.
+///
+/// Persisting is what makes the mint survive a restart; a node that reported a
+/// successful promotion and then came back advertising the id it replaced would
+/// hand `+CONTINUE` to replicas following the new one.
+#[tokio::test]
+async fn a_promotion_that_cannot_persist_leaves_the_identity_untouched() {
+    use crate::identity::ReplicationIdentity;
+    use crate::state::ReplicationState;
+    use crate::tracker::ReplicationTrackerImpl;
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().unwrap();
+    // A directory where the state file belongs: the atomic rename over it fails.
+    std::fs::create_dir_all(dir.path().join("replication_state.json")).unwrap();
+    let tracker = Arc::new(ReplicationTrackerImpl::new());
+    let identity = ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
+    let inherited_id = identity.state().read().replication_id.clone();
+    let handler = stint_handler(dir.path(), identity);
+
+    handler
+        .begin_primary_stint()
+        .expect_err("an unwritable state file must abort the promotion");
+
+    let state = handler.state();
+    assert_eq!(
+        state.replication_id, inherited_id,
+        "the failed mint must be rolled back, not left half-applied"
+    );
+    assert_eq!(state.secondary_id, None, "no failover window was opened");
+    assert_eq!(
+        handler.replay.backlog_start(),
+        None,
+        "an un-promoted node must not claim history"
+    );
+}
+
+/// A demotion drops the replicas that were following the ended stint — Redis's
+/// `replicationSetMaster` → `disconnectSlaves`.
+#[tokio::test]
+async fn ending_a_stint_disconnects_downstream_replicas() {
+    use crate::identity::ReplicationIdentity;
+    use crate::replica_session::Phase;
+    use crate::state::ReplicationState;
+    use crate::tracker::ReplicationTrackerImpl;
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().unwrap();
+    let tracker = Arc::new(ReplicationTrackerImpl::new());
+    let identity = ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
+    let handler = stint_handler(dir.path(), identity);
+    for addr in ["127.0.0.1:6380", "127.0.0.1:6381"] {
+        let session = handler.tracker.register_replica(addr.parse().unwrap());
+        session.force_phase_for_test(Phase::Streaming);
+    }
+
+    assert_eq!(
+        handler.end_primary_stint(),
+        2,
+        "every registered session must be signalled to tear down"
+    );
 }

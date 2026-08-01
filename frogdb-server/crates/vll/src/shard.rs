@@ -227,11 +227,16 @@ impl<O: Debug> VllShardState<O> {
 
     /// Acquire a continuation (drain + shard-exclusive) lock.
     ///
-    /// Drains the queue first (with a [`CONTINUATION_DRAIN_TIMEOUT`]) and
-    /// then takes the lock. The caller is responsible for polling
-    /// [`Self::take_pending_continuation_release`] in their event loop and
-    /// calling [`Self::clear_continuation_lock`] when the release signal
-    /// fires.
+    /// The queue must be empty before the shard can be taken exclusively —
+    /// an op still queued would execute (releasing its own locks) while the
+    /// continuation owner believes it holds the shard alone. The queue is
+    /// therefore drained first, and if it has not drained within
+    /// [`CONTINUATION_DRAIN_TIMEOUT`] the request fails with
+    /// [`VllError::LockTimeout`] and no lock is taken.
+    ///
+    /// The caller is responsible for awaiting
+    /// [`Self::await_continuation_release`] in their event loop and calling
+    /// [`Self::clear_continuation_lock`] when the release signal fires.
     pub async fn acquire_continuation_lock(
         &mut self,
         txid: u64,
@@ -244,21 +249,17 @@ impl<O: Debug> VllShardState<O> {
             return;
         }
 
-        let start = std::time::Instant::now();
-        loop {
-            let pending = self
-                .tx_queue
-                .as_ref()
-                .map(|q| !q.is_empty())
-                .unwrap_or(false);
-            if !pending {
-                break;
+        let drained = tokio::time::timeout(CONTINUATION_DRAIN_TIMEOUT, async {
+            while self.tx_queue.as_ref().is_some_and(|q| !q.is_empty()) {
+                tokio::time::sleep(CONTINUATION_DRAIN_POLL).await;
             }
-            if start.elapsed() > CONTINUATION_DRAIN_TIMEOUT {
-                let _ = ready_tx.send(ShardReadyResult::Failed(VllError::LockTimeout));
-                return;
-            }
-            tokio::time::sleep(CONTINUATION_DRAIN_POLL).await;
+        })
+        .await
+        .is_ok();
+
+        if !drained {
+            let _ = ready_tx.send(ShardReadyResult::Failed(VllError::LockTimeout));
+            return;
         }
 
         self.continuation_lock = Some(ContinuationLock::new(txid, conn_id));
@@ -287,11 +288,6 @@ impl<O: Debug> VllShardState<O> {
     pub fn clear_continuation_lock(&mut self) {
         self.continuation_lock = None;
         self.pending_continuation_release = None;
-    }
-
-    /// Returns true if a continuation lock is currently held.
-    pub fn has_continuation_lock(&self) -> bool {
-        self.continuation_lock.is_some()
     }
 
     /// Connection id of the current continuation-lock owner, if any.
@@ -475,6 +471,7 @@ mod tests {
         assert!(matches!(rr3.await, Ok(ShardReadyResult::Ready)));
     }
 
+    // FM-VLL-001
     #[tokio::test]
     async fn sca_lock_request_rejected_while_continuation_held() {
         let mut state: VllShardState<()> = VllShardState::default();
@@ -501,6 +498,7 @@ mod tests {
         assert_eq!(state.queue_depth(), 0);
     }
 
+    // FM-VLL-002
     #[tokio::test]
     async fn continuation_lock_blocks_second_acquire() {
         let mut state: VllShardState<()> = VllShardState::default();
@@ -520,6 +518,207 @@ mod tests {
             rr2.await,
             Ok(ShardReadyResult::Failed(VllError::ShardBusy))
         ));
+    }
+
+    /// A continuation lock takes the shard exclusively, so it may only be
+    /// granted once the queue has drained. An op still sitting in the queue
+    /// would execute — and release its own locks — while the continuation
+    /// owner believed it had the shard alone, so the request must fail with
+    /// `LockTimeout` rather than be granted over the top of it.
+    ///
+    /// Time is paused: the drain wait runs on the tokio clock, so the full
+    /// `CONTINUATION_DRAIN_TIMEOUT` elapses in virtual time.
+    // FM-VLL-003
+    #[tokio::test(start_paused = true)]
+    async fn continuation_lock_times_out_while_queue_is_not_empty() {
+        let mut state: VllShardState<()> = VllShardState::default();
+
+        let (rt, rr) = channels();
+        state.enqueue_lock_request(1, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt);
+        assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
+        assert_eq!(state.queue_depth(), 1, "op stays queued until it executes");
+
+        let (cont_rt, cont_rr) = channels();
+        let (_release_tx, release_rx) = oneshot::channel();
+        state
+            .acquire_continuation_lock(50, 7, cont_rt, release_rx)
+            .await;
+
+        assert!(matches!(
+            cont_rr.await,
+            Ok(ShardReadyResult::Failed(VllError::LockTimeout))
+        ));
+        assert_eq!(
+            state.continuation_lock_owner(),
+            None,
+            "a drain timeout must not leave a lock behind"
+        );
+        assert!(state.continuation_lock_snapshot().is_none());
+    }
+
+    /// The drain gate keys off the queue being *empty*, not off it having
+    /// never been used: once the queued op has executed and released, the
+    /// same request is granted immediately.
+    // FM-VLL-003
+    #[tokio::test(start_paused = true)]
+    async fn continuation_lock_acquires_once_queue_drains() {
+        let mut state: VllShardState<()> = VllShardState::default();
+
+        let (rt, rr) = channels();
+        state.enqueue_lock_request(1, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt);
+        assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
+        let dequeued = state.dequeue_for_execution(1).expect("op 1 ready");
+        state.release_after_execution(dequeued.txid, &dequeued.keys);
+        assert_eq!(state.queue_depth(), 0);
+
+        let (cont_rt, cont_rr) = channels();
+        let (_release_tx, release_rx) = oneshot::channel();
+        state
+            .acquire_continuation_lock(50, 7, cont_rt, release_rx)
+            .await;
+
+        assert!(matches!(cont_rr.await, Ok(ShardReadyResult::Ready)));
+        assert_eq!(state.continuation_lock_owner(), Some(7));
+    }
+
+    /// Owner/snapshot accessors must track the held lock, and
+    /// `clear_continuation_lock` must actually drop it — the host event loop
+    /// calls it after the release signal fires, and a shard that kept a stale
+    /// lock would refuse every later SCA request with `ShardBusy`.
+    #[tokio::test]
+    async fn continuation_lock_owner_and_snapshot_track_the_held_lock() {
+        let mut state: VllShardState<()> = VllShardState::default();
+        assert_eq!(state.continuation_lock_owner(), None);
+        assert!(state.continuation_lock_snapshot().is_none());
+
+        let (rt, rr) = channels();
+        let (release_tx, release_rx) = oneshot::channel();
+        state.acquire_continuation_lock(50, 7, rt, release_rx).await;
+        assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
+
+        assert_eq!(state.continuation_lock_owner(), Some(7));
+        let snap = state
+            .continuation_lock_snapshot()
+            .expect("snapshot while the lock is held");
+        assert_eq!(snap.txid, 50);
+        assert_eq!(snap.conn_id, 7);
+
+        // What the host event loop does once the coordinator's guard drops.
+        release_tx
+            .send(())
+            .expect("release receiver is held by the state");
+        state.await_continuation_release().await;
+        state.clear_continuation_lock();
+
+        assert_eq!(state.continuation_lock_owner(), None);
+        assert!(state.continuation_lock_snapshot().is_none());
+
+        // The shard accepts SCA work again.
+        let (rt2, rr2) = channels();
+        let outcome = state.enqueue_lock_request(
+            60,
+            vec![Bytes::from_static(b"k")],
+            LockMode::Write,
+            (),
+            rt2,
+        );
+        assert!(!outcome.enqueue_failed);
+        assert!(matches!(rr2.await, Ok(ShardReadyResult::Ready)));
+    }
+
+    /// With no lock held the release future must never resolve: the host
+    /// drives it from a `select!` arm that is recreated every iteration, so a
+    /// future that resolved immediately would spin the shard event loop.
+    #[tokio::test(start_paused = true)]
+    async fn await_continuation_release_pends_forever_without_a_lock() {
+        let mut state: VllShardState<()> = VllShardState::default();
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(500),
+                state.await_continuation_release()
+            )
+            .await
+            .is_err(),
+            "release future must stay pending while no lock is held"
+        );
+    }
+
+    /// The release future is cancel-safe: a `select!` iteration that loses to
+    /// another arm must not consume the stored receiver, and the signal must
+    /// still be observed on a later poll.
+    #[tokio::test(start_paused = true)]
+    async fn await_continuation_release_survives_cancellation_then_fires() {
+        let mut state: VllShardState<()> = VllShardState::default();
+        let (rt, rr) = channels();
+        let (release_tx, release_rx) = oneshot::channel();
+        state.acquire_continuation_lock(50, 7, rt, release_rx).await;
+        assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
+
+        // Lock still held: the future does not resolve, and this cancelled
+        // poll must not eat the receiver.
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(500),
+                state.await_continuation_release()
+            )
+            .await
+            .is_err()
+        );
+
+        release_tx.send(()).expect("release receiver preserved");
+        tokio::time::timeout(
+            Duration::from_millis(500),
+            state.await_continuation_release(),
+        )
+        .await
+        .expect("release must be observed after cancellation");
+    }
+
+    /// `queue_depth_warning` is a boundary: it fires at exactly
+    /// [`QUEUE_DEPTH_WARN_THRESHOLD`] queued ops, not one short of it.
+    #[tokio::test]
+    async fn queue_depth_warning_fires_exactly_at_threshold() {
+        let mut state: VllShardState<()> = VllShardState::default();
+
+        // Fill to one below the threshold. Distinct keys, so every op
+        // acquires immediately and stays queued in the Ready state.
+        for txid in 0..(QUEUE_DEPTH_WARN_THRESHOLD as u64 - 1) {
+            let (rt, _rr) = channels();
+            let outcome = state.enqueue_lock_request(
+                txid,
+                vec![Bytes::from(format!("k{txid}"))],
+                LockMode::Write,
+                (),
+                rt,
+            );
+            assert!(!outcome.enqueue_failed);
+        }
+        assert_eq!(state.queue_depth(), QUEUE_DEPTH_WARN_THRESHOLD - 1);
+
+        // Observed depth is one below the threshold: no warning.
+        let (rt, _rr) = channels();
+        let outcome = state.enqueue_lock_request(
+            u64::MAX - 1,
+            vec![Bytes::from_static(b"below")],
+            LockMode::Write,
+            (),
+            rt,
+        );
+        assert_eq!(outcome.queue_depth_warning, None);
+
+        // Observed depth is exactly the threshold: warning, carrying the depth.
+        let (rt, _rr) = channels();
+        let outcome = state.enqueue_lock_request(
+            u64::MAX,
+            vec![Bytes::from_static(b"at")],
+            LockMode::Write,
+            (),
+            rt,
+        );
+        assert_eq!(
+            outcome.queue_depth_warning,
+            Some(QUEUE_DEPTH_WARN_THRESHOLD)
+        );
     }
 
     #[test]

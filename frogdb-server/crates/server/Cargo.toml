@@ -16,10 +16,50 @@ name = "frogdb-server"
 path = "src/main.rs"
 
 [features]
+default = ["cmd-core"]
 shuttle = ["dep:shuttle", "frogdb-core/shuttle"]
-turmoil = ["dep:turmoil", "frogdb-config/turmoil", "frogdb-core/fake-wal"]
+# The turmoil simulation harness drives streams (XADD/XREADGROUP/XPENDING/…)
+# through `common::sim_harness`'s canonicalizer and `simulation.rs`'s
+# round-trip cases, so the stream family has to be compiled in whenever the
+# simulation tests are built. No other exotic family appears in the sim suite.
+turmoil = ["dep:turmoil", "frogdb-config/turmoil", "frogdb-net/turmoil", "frogdb-core/fake-wal", "cmd-stream"]
 causal-profile = ["dep:tokio-coz"]
 profiling = ["dep:tracing-flame"]
+
+# Command-family mirrors of `frogdb-commands`' feature set (see that crate's
+# lib.rs). `cmd-core` is a marker: `frogdb-commands`' own default already is
+# `core-profile`, so the default server build compiles the always-on families
+# and nothing else. `cmd-full` restores the complete command surface and is
+# what every registry-enumerating consumer must ask for.
+cmd-core = []
+cmd-json = ["frogdb-commands/json"]
+cmd-timeseries = ["frogdb-commands/timeseries"]
+cmd-bloom = ["frogdb-commands/bloom"]
+cmd-cuckoo = ["frogdb-commands/cuckoo"]
+cmd-cms = ["frogdb-commands/cms"]
+cmd-topk = ["frogdb-commands/topk"]
+cmd-tdigest = ["frogdb-commands/tdigest"]
+cmd-geo = ["frogdb-commands/geo"]
+cmd-vectorset = ["frogdb-commands/vectorset"]
+cmd-hyperloglog = ["frogdb-commands/hyperloglog"]
+cmd-stream = ["frogdb-commands/stream"]
+cmd-event-sourcing = ["frogdb-commands/event-sourcing"]
+cmd-full = [
+    "frogdb-commands/full",
+    "cmd-core",
+    "cmd-json",
+    "cmd-timeseries",
+    "cmd-bloom",
+    "cmd-cuckoo",
+    "cmd-cms",
+    "cmd-topk",
+    "cmd-tdigest",
+    "cmd-geo",
+    "cmd-vectorset",
+    "cmd-hyperloglog",
+    "cmd-stream",
+    "cmd-event-sourcing",
+]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)'] }
@@ -30,12 +70,15 @@ frogdb-config.workspace = true
 frogdb-protocol.workspace = true
 frogdb-core.workspace = true
 frogdb-vll.workspace = true
+frogdb-txn.workspace = true
 frogdb-debug.workspace = true
 frogdb-replication.workspace = true
 frogdb-commands.workspace = true
 frogdb-search.workspace = true
 frogdb-telemetry.workspace = true
+frogdb-net.workspace = true
 frogdb-macros = { path = "../frogdb-macros" }
+async-trait.workspace = true
 bytes.workspace = true
 rand.workspace = true
 tokio.workspace = true
@@ -67,7 +110,6 @@ openraft.workspace = true
 axum.workspace = true
 tower.workspace = true
 schemars.workspace = true
-socket2 = "0.6"
 rustls.workspace = true
 tokio-rustls.workspace = true
 arc-swap.workspace = true
@@ -85,6 +127,7 @@ http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
 
 [dev-dependencies]
+socket2.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 # test-support exposes RocksStore's single-key put/get accessors to the recovery
 # seam tests (crates/server/src/recovery/tests.rs); dev-only, kept out of the

@@ -187,6 +187,8 @@ Includes all single-node basic tests plus crash variants:
 | `slot-migration` | slot-migration | none | Hash slot redistribution |
 | `cross-slot` | cross-slot | none | Hash tag transactions |
 | `key-routing` | key-routing | none | MOVED/ASK redirects |
+| `cluster-replication` | cluster-replication | none | Cluster-mode `WAIT` durability across kill + promote |
+| `cluster-lag` | cluster-lag | none | Cluster-mode replication lag and offset progress |
 | `leader-election-partition` | leader-election | partition | Leader election under partitions |
 | `key-routing-kill` | key-routing | kill | Key routing under node kills |
 | `slot-migration-partition` | slot-migration | partition | Slot migration under partitions |
@@ -251,7 +253,7 @@ lein run test --workload register --nemesis none --time-limit 60
 
 ### Workloads
 
-`register`, `counter`, `append`, `transaction`, `queue`, `set`, `hash`, `sortedset`, `expiry`, `blocking`, `replication`, `split-brain`, `zombie`, `lag`, `cluster-formation`, `leader-election`, `slot-migration`, `cross-slot`, `key-routing`
+`register`, `counter`, `append`, `transaction`, `queue`, `set`, `hash`, `sortedset`, `expiry`, `blocking`, `replication`, `split-brain`, `zombie`, `lag`, `cluster-formation`, `leader-election`, `slot-migration`, `cross-slot`, `key-routing`, `cluster-replication`, `cluster-lag`
 
 ## Results
 

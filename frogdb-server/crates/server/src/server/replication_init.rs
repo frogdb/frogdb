@@ -13,7 +13,7 @@ use tracing::info;
 
 use crate::config::Config;
 use crate::replication::{
-    LagThresholdConfig, PrimaryReplicationHandler, ReplicaReplicationHandler,
+    LagThresholdConfig, PrimaryReplicationHandler, ReplicaReplicationHandler, ReplicationIdentity,
     SplitBrainBufferConfig,
 };
 use crate::replication_quorum::ReplicationQuorumChecker;
@@ -40,6 +40,10 @@ pub(super) struct ReplicationInitResult {
     /// same address `ROLE`/INFO report at boot — computed once here rather
     /// than re-resolved a second time.
     pub primary_addr: Option<std::net::SocketAddr>,
+    /// The node's replication identity, shared by both role handlers. Handed on
+    /// to the `RoleManager` so a runtime `REPLICAOF` builds its replica handler
+    /// over the same cell instead of minting a fresh one.
+    pub replication_identity: ReplicationIdentity,
 }
 
 /// Initialize replication handlers based on the server role.
@@ -88,7 +92,6 @@ pub(super) fn init_replication(
 ) -> Result<ReplicationInitResult> {
     let mut replica_handler: Option<Arc<ReplicaReplicationHandler>> = None;
     let mut replica_frame_rx: Option<mpsc::Receiver<frogdb_core::ReplicationFrame>> = None;
-    let mut shared_replication_offset: Option<Arc<AtomicU64>> = None;
     let mut primary_addr: Option<std::net::SocketAddr> = None;
 
     let state_path = config
@@ -98,9 +101,14 @@ pub(super) fn init_replication(
 
     // Primary-side seams, built unconditionally (see the fn doc).
     let tracker = Arc::new(ReplicationTrackerImpl::new());
-    tracker.set_offset(recovered_replication.offset_at_save);
+    // One identity cell per process, built before the role branch and shared by
+    // both handlers: the replication id, the failover window and the live
+    // offset belong to the *node*, not to whichever role is running right now.
+    // It also adopts the tracker's offset atomic, so INFO, the cluster bus's
+    // HealthProbe and a promotion's window boundary all read one value.
+    let identity = ReplicationIdentity::adopting(recovered_replication.clone(), &tracker);
     let primary_handler = Arc::new(PrimaryReplicationHandler::new(
-        recovered_replication.clone(),
+        identity.clone(),
         state_path.clone(),
         tracker.clone(),
         rocks_store.clone(),
@@ -117,10 +125,32 @@ pub(super) fn init_replication(
         },
         config.replication.replica_write_timeout_ms,
     ));
+    // A FULLRESYNC checkpoint must contain every write this node has already
+    // acknowledged: it is the sole carrier of the writes made before the replica
+    // attached (nothing was broadcast then, so no backlog tail can replay them).
+    // The replication crate owns no shards, so the drain is injected here — the
+    // same quiesce the snapshot coordinator's pre-snapshot hook performs.
+    {
+        let senders = shard_senders.clone();
+        primary_handler.set_pre_checkpoint_hook(Arc::new(move || {
+            let senders = senders.clone();
+            Box::pin(async move {
+                super::checkpoint_quiesce::quiesce_shards_for_checkpoint(&senders).await;
+            })
+        }));
+    }
     let replication_broadcaster: SharedBroadcaster = Arc::new(RoleGatedBroadcaster {
         inner: primary_handler.clone(),
         is_replica: is_replica_flag.clone(),
     });
+
+    // The cluster-bus HealthProbe offset handle is the identity's live atomic —
+    // the single one both role handlers advance — so the failure detector keeps
+    // reading this node's offset across a promotion or demotion instead of a
+    // handle only one role ever writes. Minted for every role, because any node
+    // can become a replica at runtime.
+    let shared_replication_offset: Option<Arc<AtomicU64>> =
+        config.cluster.enabled.then(|| identity.live());
 
     if config.replication.is_replica() {
         // Initialize ReplicaReplicationHandler for replica role
@@ -132,19 +162,17 @@ pub(super) fn init_replication(
         .map_err(|e| anyhow::anyhow!("Invalid primary address: {}", e))?;
         primary_addr = Some(resolved_primary_addr);
 
-        let repl_state = recovered_replication.clone();
-
         info!(
             primary = %resolved_primary_addr,
-            replication_id = %repl_state.replication_id,
-            offset_at_save = repl_state.offset_at_save,
+            replication_id = %identity.replication_id(),
+            offset_at_save = recovered_replication.offset_at_save,
             "Initialized replica replication state"
         );
 
         let (mut handler, frame_rx) = ReplicaReplicationHandler::new(
             resolved_primary_addr,
             config.server.port,
-            repl_state,
+            identity.clone(),
             state_path.clone(),
             config.persistence.data_dir.clone(),
         );
@@ -212,11 +240,11 @@ pub(super) fn init_replication(
             info!("Replication TLS enabled for outgoing replica connections");
         }
 
-        // Wire up shared replication offset for cluster bus HealthProbe
+        // Adopt the HealthProbe atomic explicitly so `shared_offset()` reports
+        // it as wired. It is the same `Arc` the identity already holds, so this
+        // is an identity swap, not a second atomic.
         if config.cluster.enabled {
-            let offset = Arc::new(AtomicU64::new(0));
-            handler.set_shared_offset(offset.clone());
-            shared_replication_offset = Some(offset);
+            handler.set_shared_offset(identity.live());
         }
 
         replica_handler = Some(Arc::new(handler));
@@ -228,13 +256,6 @@ pub(super) fn init_replication(
             standalone = config.replication.is_standalone(),
             "Initialized primary replication state"
         );
-
-        // Wire up shared replication offset for cluster bus HealthProbe. The
-        // handle is vended by the OffsetCoordinator (the offset's single owner),
-        // not the tracker, so the bus reads the atomic the advance gate writes.
-        if config.cluster.enabled && config.replication.is_primary() {
-            shared_replication_offset = Some(primary_handler.shared_offset());
-        }
     }
 
     // Create the replication quorum checker for primary self-fencing. It is
@@ -265,6 +286,7 @@ pub(super) fn init_replication(
         shared_replication_offset,
         replication_quorum_checker,
         primary_addr,
+        replication_identity: identity,
     })
 }
 
@@ -289,8 +311,13 @@ struct RoleGatedBroadcaster {
 }
 
 impl RoleGatedBroadcaster {
+    /// `Acquire`, pairing with the `Release` store in `RoleManager::promote`: a
+    /// writer that observes "primary" must also observe the freshly minted
+    /// replication id and armed backlog the promotion published before the flag.
+    /// A `Relaxed` load could see the flag alone and stamp a write under the
+    /// inherited identity.
     fn is_primary(&self) -> bool {
-        !self.is_replica.load(std::sync::atomic::Ordering::Relaxed)
+        !self.is_replica.load(std::sync::atomic::Ordering::Acquire)
     }
 }
 
@@ -319,8 +346,87 @@ impl ReplicationBroadcaster for RoleGatedBroadcaster {
     }
 
     fn current_offset(&self) -> u64 {
-        // The inherent (async) `current_offset` shadows the trait method here;
-        // the sync accessor reads the same OffsetCoordinator value.
-        self.inner.current_offset_sync()
+        // The inherent accessor shadows the trait method here; both read the
+        // same OffsetCoordinator value.
+        self.inner.current_offset()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::replication::ReplicationIdentity;
+    use frogdb_replication::ReplicationState;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    fn handler(
+        dir: &std::path::Path,
+        identity: ReplicationIdentity,
+    ) -> Arc<PrimaryReplicationHandler> {
+        Arc::new(PrimaryReplicationHandler::new(
+            identity,
+            dir.join("replication_state.json"),
+            Arc::new(ReplicationTrackerImpl::new()),
+            None,
+            dir.to_path_buf(),
+            LagThresholdConfig {
+                threshold_bytes: 0,
+                threshold_secs: 0,
+                cooldown: Duration::from_secs(0),
+            },
+            SplitBrainBufferConfig {
+                enabled: true,
+                max_entries: 128,
+                max_bytes: 1024 * 1024,
+            },
+            1000,
+        ))
+    }
+
+    /// A replica must never originate stream bytes, whatever the backlog says
+    /// (Redis `replicationFeedSlaves` returns early on `masterhost != NULL`).
+    /// After promotion the freshly armed backlog floor makes the same node
+    /// active with zero replicas attached — which is what stamps and buffers
+    /// every post-promotion write, so a sibling's `+CONTINUE` cannot resume
+    /// past a hole.
+    #[test]
+    fn role_gated_broadcaster_activates_only_after_promotion() {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = ReplicationIdentity::detached(ReplicationState::new());
+        let primary = handler(dir.path(), identity);
+        let is_replica = Arc::new(AtomicBool::new(true));
+        let broadcaster = RoleGatedBroadcaster {
+            inner: primary.clone(),
+            is_replica: is_replica.clone(),
+        };
+
+        // Still a replica: silent even once the identity has a window armed.
+        primary.begin_primary_stint().unwrap();
+        assert!(
+            !broadcaster.is_active(),
+            "a replica must not originate stream bytes"
+        );
+        assert_eq!(broadcaster.broadcast_command_on_shard(0, "SET", &[]), 0);
+
+        // Promotion opens the fence; the armed floor keeps it active with no
+        // replicas attached.
+        is_replica.store(false, Ordering::Release);
+        assert!(broadcaster.is_active());
+    }
+
+    /// A node that never was a primary and never got promoted has no resume
+    /// history, so writes stay unstamped and the propagation pipeline is
+    /// skipped entirely.
+    #[test]
+    fn standalone_primary_without_history_stays_inactive() {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = ReplicationIdentity::detached(ReplicationState::new());
+        let primary = handler(dir.path(), identity);
+        let broadcaster = RoleGatedBroadcaster {
+            inner: primary,
+            is_replica: Arc::new(AtomicBool::new(false)),
+        };
+
+        assert!(!broadcaster.is_active());
     }
 }

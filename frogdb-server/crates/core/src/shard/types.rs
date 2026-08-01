@@ -73,7 +73,7 @@ impl ShardIdentity {
 
     /// Whether this shard currently belongs to a replica server.
     pub(crate) fn is_replica(&self) -> bool {
-        self.is_replica.load(std::sync::atomic::Ordering::Relaxed)
+        self.is_replica.load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Set the replica flag (shared with the acceptor and connection handlers).
@@ -1266,7 +1266,9 @@ pub(crate) struct FixedRoleController(pub Option<std::net::SocketAddr>, pub bool
 
 #[cfg(test)]
 impl crate::command::RoleController for FixedRoleController {
-    fn request_promote(&self) {}
+    fn request_promote(&self) -> Result<(), crate::error::CommandError> {
+        Ok(())
+    }
     fn request_demote(&self, _primary: std::net::SocketAddr) {}
     fn primary_target(&self) -> Option<std::net::SocketAddr> {
         self.0

@@ -12,8 +12,9 @@
 
 use frogdb_test_harness::cluster_harness::{ClusterNodeConfig, ClusterTestHarness};
 use frogdb_test_harness::cluster_helpers::{
-    get_error_message, is_ask_redirect, is_cluster_down, is_error, is_moved_redirect, key_for_slot,
-    parse_cluster_info, parse_cluster_nodes, slot_for_key,
+    connected_slaves, get_error_message, is_ask_redirect, is_cluster_down, is_error,
+    is_moved_redirect, key_for_slot, master_repl_offset, parse_cluster_info, parse_cluster_nodes,
+    parse_info_fields, slot_for_key,
 };
 use serde::Deserialize;
 use std::time::Duration;
@@ -45,7 +46,7 @@ async fn test_cluster_formation_3_nodes() {
         .unwrap();
 
     for node_id in harness.node_ids() {
-        let info = harness.get_cluster_info(node_id).unwrap();
+        let info = harness.get_cluster_info(node_id).await.unwrap();
         assert_eq!(info.cluster_state, "ok");
         assert_eq!(info.cluster_known_nodes, 3);
     }
@@ -102,7 +103,7 @@ async fn test_single_node_cluster() {
     assert_eq!(harness.node_ids().len(), 1);
 
     let node_id = harness.node_ids()[0];
-    let info = harness.get_cluster_info(node_id).unwrap();
+    let info = harness.get_cluster_info(node_id).await.unwrap();
     // Currently returns hardcoded standalone response
     assert_eq!(info.cluster_state, "ok");
     assert_eq!(info.cluster_known_nodes, 1);
@@ -252,7 +253,7 @@ async fn test_add_node_to_cluster() {
 
     // Verify all nodes see 4 members
     for node_id in harness.node_ids() {
-        let info = harness.get_cluster_info(node_id).unwrap();
+        let info = harness.get_cluster_info(node_id).await.unwrap();
         assert_eq!(info.cluster_known_nodes, 4);
     }
 
@@ -312,7 +313,7 @@ async fn test_cluster_with_5_nodes() {
         .unwrap();
 
     for node_id in harness.node_ids() {
-        let info = harness.get_cluster_info(node_id).unwrap();
+        let info = harness.get_cluster_info(node_id).await.unwrap();
         assert_eq!(info.cluster_state, "ok");
         assert_eq!(info.cluster_known_nodes, 5);
     }
@@ -400,7 +401,7 @@ async fn test_node_restart_rejoins_cluster() {
         .await
         .unwrap();
 
-    let info = harness.get_cluster_info(victim).unwrap();
+    let info = harness.get_cluster_info(victim).await.unwrap();
     assert_eq!(info.cluster_state, "ok");
 
     harness.shutdown_all().await;
@@ -459,7 +460,7 @@ async fn test_graceful_shutdown_and_restart() {
 
     // Remaining nodes should still be operational
     for &id in &node_ids[1..] {
-        let info = harness.get_cluster_info(id).unwrap();
+        let info = harness.get_cluster_info(id).await.unwrap();
         assert_eq!(info.cluster_state, "ok");
     }
 
@@ -499,7 +500,7 @@ async fn test_custom_cluster_config() {
 
     // Verify cluster is operational
     for node_id in harness.node_ids() {
-        let info = harness.get_cluster_info(node_id).unwrap();
+        let info = harness.get_cluster_info(node_id).await.unwrap();
         assert_eq!(info.cluster_state, "ok");
     }
 
@@ -1181,7 +1182,7 @@ async fn test_partition_via_shutdown() {
         if let Some(node) = harness.node(node_id)
             && node.is_running()
         {
-            let info = harness.get_cluster_info(node_id).unwrap();
+            let info = harness.get_cluster_info(node_id).await.unwrap();
             assert_eq!(
                 info.cluster_state, "ok",
                 "Node {} should be ok after recovery",
@@ -1347,7 +1348,7 @@ async fn test_seven_node_cluster() {
         .unwrap();
 
     for node_id in harness.node_ids() {
-        let info = harness.get_cluster_info(node_id).unwrap();
+        let info = harness.get_cluster_info(node_id).await.unwrap();
         assert_eq!(info.cluster_state, "ok");
         assert_eq!(info.cluster_known_nodes, 7);
     }
@@ -1554,7 +1555,7 @@ async fn test_split_brain_writes_fail_on_minority() {
 
     // First verify cluster is healthy before partition
     let _pre_partition_node = harness.node(node_ids[3]).unwrap();
-    let info = harness.get_cluster_info(node_ids[3]).unwrap();
+    let info = harness.get_cluster_info(node_ids[3]).await.unwrap();
     eprintln!(
         "Pre-partition cluster state: {} (known_nodes: {})",
         info.cluster_state, info.cluster_known_nodes
@@ -1639,7 +1640,7 @@ async fn test_split_brain_writes_fail_on_minority() {
         if let Some(node) = harness.node(node_id)
             && node.is_running()
         {
-            let info = harness.get_cluster_info(node_id).unwrap();
+            let info = harness.get_cluster_info(node_id).await.unwrap();
             assert_eq!(
                 info.cluster_state, "ok",
                 "Node {} should recover after majority restored",
@@ -1651,7 +1652,7 @@ async fn test_split_brain_writes_fail_on_minority() {
     // Verify cluster is operational after recovery (state=ok means quorum restored)
     // Note: We check cluster state rather than writes because slot assignment
     // may not be fully propagated immediately after recovery
-    let final_info = harness.get_cluster_info(node_ids[3]).unwrap();
+    let final_info = harness.get_cluster_info(node_ids[3]).await.unwrap();
     eprintln!(
         "Post-recovery cluster state: {} (known_nodes: {})",
         final_info.cluster_state, final_info.cluster_known_nodes
@@ -1815,7 +1816,7 @@ async fn test_failover_during_migration_preserves_data() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Final state verification
-    let final_info = harness.get_cluster_info(target_node_id).unwrap();
+    let final_info = harness.get_cluster_info(target_node_id).await.unwrap();
     eprintln!(
         "Final cluster state: {} (known_nodes: {})",
         final_info.cluster_state, final_info.cluster_known_nodes
@@ -1939,7 +1940,7 @@ async fn test_concurrent_failover_attempts() {
             }
 
             // Check cluster info - the node that sees itself as having quorum
-            if let Ok(info) = harness.get_cluster_info(node_id)
+            if let Ok(info) = harness.get_cluster_info(node_id).await
                 && info.cluster_state == "ok"
             {
                 // This node believes it can serve requests
@@ -1968,9 +1969,16 @@ async fn test_concurrent_failover_attempts() {
     // In a correctly functioning Raft cluster, exactly one node should be leader
     assert_eq!(leader_count, 1, "Exactly one node should be the leader");
 
-    // Verify cluster can still make progress
+    // Verify the cluster can still make progress.
+    //
+    // Deliberately *not* `wait_for_cluster_convergence`: that requires
+    // `cluster_state:ok`, and the killed node is a slot-owning primary with no
+    // replica. Once the failure detector latches its FAIL flag those slots are
+    // uncovered and `fail` is the correct, permanent answer — so `ok` here was
+    // only ever a race against the ~5-probe latch. Progress means the four
+    // survivors converge on one topology.
     harness
-        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .wait_for_topology_agreement(Duration::from_secs(10))
         .await
         .unwrap();
 
@@ -2581,200 +2589,677 @@ async fn test_read_your_writes_consistency() {
 // PHASE 2: Replication Tests
 // ============================================================================
 
-/// Test 6: Replica receives writes.
+/// A `CLUSTER REPLICATE`d replica opens a real data-replication link to its
+/// primary and serves the primary's writes back under `READONLY`.
 ///
-/// In FrogDB's Raft-based cluster, all nodes replicate the Raft log,
-/// so data should be available on followers after commit.
+/// This is the load-bearing assertion for cluster-mode data replication. Raft
+/// carries *cluster metadata only* (ADR-0001): no `ClusterCommand` variant
+/// holds a key or a value, so a Raft follower that is a peer shard's primary
+/// never sees another shard's data. Data reaches a replica exactly one way —
+/// the per-node PSYNC link, the same mechanism standalone replication uses.
+/// Two independent observables therefore have to hold:
+///
+/// 1. the primary reports `connected_slaves:1` — the PSYNC link exists at all;
+/// 2. the replica returns the primary's value for an owned-slot key under
+///    `READONLY` — the link actually carries the write stream.
+///
+/// Asserting only (2) would let a test pass on a node that happens to hold the
+/// key for an unrelated reason; asserting only (1) would let it pass on a link
+/// that is attached but inert.
 #[tokio::test]
-async fn test_replica_receives_writes() {
+async fn test_cluster_replica_receives_writes_asserted() {
     let mut harness = ClusterTestHarness::new();
-    harness.start_cluster(3).await.unwrap();
-
-    let leader = harness
+    harness.start_cluster(2).await.unwrap();
+    harness
         .wait_for_leader(Duration::from_secs(10))
         .await
         .unwrap();
     harness
-        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .wait_for_cluster_convergence(Duration::from_secs(30))
         .await
         .unwrap();
+    let _ = harness
+        .wait_for_address_convergence(Duration::from_secs(10))
+        .await;
 
-    let node_ids = harness.node_ids();
-    let leader_node = harness.node(leader).unwrap();
+    let test_slot = 100u16;
+    let (owner_id, _) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
 
-    // Write to leader
-    let test_key = "replication_test_key";
-    let test_value = "replication_test_value";
-    let set_resp = leader_node.send("SET", &[test_key, test_value]).await;
-    eprintln!("SET on leader: {:?}", set_resp);
+    let replica_id = harness.add_replica(owner_id).await.unwrap();
 
-    // Wait for replication
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    harness
+        .wait_for_replication_link(owner_id, 1, Duration::from_secs(20))
+        .await
+        .expect("primary never reported an attached replica");
 
-    // Check on follower nodes
-    let followers: Vec<u64> = node_ids.into_iter().filter(|&id| id != leader).collect();
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key = format!("{}_replicated", tag);
+    let owner = harness.node(owner_id).unwrap();
+    let set_resp = owner.send("SET", &[&key, "replicated_value"]).await;
+    assert!(
+        !is_error(&set_resp),
+        "SET on primary failed: {:?}",
+        set_resp
+    );
 
-    for follower_id in followers {
-        if let Some(follower) = harness.node(follower_id) {
-            // Try to read - may need READONLY mode or may get redirect
-            let get_resp = follower.send("GET", &[test_key]).await;
-            eprintln!("GET on follower {}: {:?}", follower_id, get_resp);
+    // A replica does not own slots, so reads need READONLY on a held
+    // connection to bypass the MOVED redirect.
+    let replica = harness.node(replica_id).unwrap();
+    let mut client = replica.connect().await;
+    let ro = client.command(&["READONLY"]).await;
+    assert!(!is_error(&ro), "READONLY on replica failed: {:?}", ro);
 
-            match &get_resp {
-                frogdb_protocol::Response::Bulk(Some(v)) => {
-                    let retrieved = String::from_utf8_lossy(v);
-                    eprintln!("Follower {} has value: {}", follower_id, retrieved);
-                }
-                frogdb_protocol::Response::Error(e) => {
-                    let err = String::from_utf8_lossy(e);
-                    eprintln!("Follower {} error: {}", follower_id, err);
-                    // MOVED redirect is expected since follower may not own slot
-                }
-                _ => {}
+    let mut last = frogdb_protocol::Response::Null;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        last = client.command(&["GET", &key]).await;
+        if matches!(&last, frogdb_protocol::Response::Bulk(Some(v)) if v.as_ref() == b"replicated_value")
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        matches!(&last, frogdb_protocol::Response::Bulk(Some(v)) if v.as_ref() == b"replicated_value"),
+        "replica {replica_id} never received the primary's write, last GET: {last:?}"
+    );
+
+    // The replica must also present itself as a replica on the data path.
+    let info = replica.send("INFO", &["replication"]).await;
+    let fields = parse_info_fields(&info).expect("INFO replication should be a bulk reply");
+    assert_eq!(
+        fields.get("role").map(String::as_str),
+        Some("slave"),
+        "replica should report role:slave, got {fields:?}"
+    );
+
+    // The link is still attached after the write, not merely at handshake time.
+    let primary_info = harness
+        .node(owner_id)
+        .unwrap()
+        .send("INFO", &["replication"])
+        .await;
+    assert_eq!(
+        connected_slaves(&primary_info),
+        Some(1),
+        "primary should still report one attached replica, got: {primary_info:?}"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Poll `INFO replication` on a node until `role:` matches, returning the
+/// last value seen.
+async fn wait_for_data_path_role(
+    harness: &ClusterTestHarness,
+    node_id: u64,
+    want: &str,
+    timeout: Duration,
+) -> String {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut last = String::new();
+    while std::time::Instant::now() < deadline {
+        if let Some(node) = harness.node(node_id)
+            && let Ok(resp) = node.try_send("INFO", &["replication"]).await
+            && let Some(fields) = parse_info_fields(&resp)
+            && let Some(role) = fields.get("role")
+        {
+            last = role.clone();
+            if last == want {
+                return last;
             }
         }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
-
-    harness.shutdown_all().await;
+    last
 }
 
-/// Test 7: Replica catches up after delay.
+/// A committed cluster-state promotion installs the primary role on the data
+/// path: the promoted node stops being a replica, accepts writes, and keeps the
+/// data it replicated before the failover.
 ///
-/// Scenario: Replica temporarily disconnected, catches up
+/// This exercises the bridge between the two role systems. Raft owns the
+/// cluster-state role (`NodeRole` in `CLUSTER NODES`); the data path owns the
+/// replication role (the `is_replica` flag, the inbound stream, the replication
+/// identity). Without the `RoleChangeEvent` -> `RoleManager::promote` bridge a
+/// failover flips only the first, leaving a node that advertises `master` while
+/// still refusing writes and rejecting WAIT.
+///
+/// `CLUSTER FAILOVER TAKEOVER` is used rather than killing the primary because
+/// auto-failover is off by default, so a kill alone changes no cluster state.
 #[tokio::test]
-async fn test_replica_catches_up_after_delay() {
+async fn test_cluster_failover_promotes_the_data_path() {
     let mut harness = ClusterTestHarness::new();
-    harness.start_cluster(3).await.unwrap();
-
-    let leader = harness
+    harness.start_cluster(2).await.unwrap();
+    harness
         .wait_for_leader(Duration::from_secs(10))
         .await
         .unwrap();
     harness
-        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .wait_for_cluster_convergence(Duration::from_secs(30))
         .await
         .unwrap();
+    let _ = harness
+        .wait_for_address_convergence(Duration::from_secs(10))
+        .await;
 
-    let node_ids = harness.node_ids();
-
-    // Find a follower
-    let follower = *node_ids.iter().find(|&&id| id != leader).unwrap();
-    eprintln!("Disconnecting follower: {}", follower);
-
-    // Shutdown follower (simulating temporary disconnection)
-    harness.shutdown_node(follower).await;
-
-    // Write data while follower is down
-    let leader_node = harness.node(leader).unwrap();
-    let test_key = "catchup_test_key";
-    let test_value = "catchup_test_value";
-    let set_resp = leader_node.send("SET", &[test_key, test_value]).await;
-    eprintln!("SET while follower down: {:?}", set_resp);
-
-    // Wait a bit
-    tokio::time::sleep(Duration::from_secs(1)).await;
-
-    // Restart follower
-    eprintln!("Restarting follower: {}", follower);
-    harness.restart_node(follower).await.unwrap();
-
-    // Wait for follower to rejoin and catch up
+    let test_slot = 100u16;
+    let (owner_id, _) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+    let replica_id = harness.add_replica(owner_id).await.unwrap();
     harness
-        .wait_for_node_recognized(follower, Duration::from_secs(15))
+        .wait_for_replication_link(owner_id, 1, Duration::from_secs(20))
+        .await
+        .expect("primary never reported an attached replica");
+
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key = format!("{}_failover", tag);
+    let owner = harness.node(owner_id).unwrap();
+    assert!(!is_error(&owner.send("SET", &[&key, "pre_failover"]).await));
+
+    // Before the failover the replica refuses writes on the data path.
+    let replica = harness.node(replica_id).unwrap();
+    assert_eq!(
+        wait_for_data_path_role(&harness, replica_id, "slave", Duration::from_secs(10)).await,
+        "slave"
+    );
+
+    let resp = replica
+        .try_send_admin_aware("CLUSTER", &["FAILOVER", "TAKEOVER"])
         .await
         .unwrap();
+    assert!(
+        !is_error(&resp),
+        "CLUSTER FAILOVER TAKEOVER failed: {resp:?}"
+    );
 
-    // Additional time for log replication
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    // The data-path role must follow the cluster-state role.
+    assert_eq!(
+        wait_for_data_path_role(&harness, replica_id, "master", Duration::from_secs(20)).await,
+        "master",
+        "the promoted node must install the primary role on its data path, not \
+         just in cluster state"
+    );
 
-    // Check if follower has caught up (in Raft, this happens via log replication)
-    if let Some(follower_node) = harness.node(follower)
-        && follower_node.is_running()
-    {
-        let get_resp = follower_node.send("GET", &[test_key]).await;
-        eprintln!("GET on restarted follower: {:?}", get_resp);
-        // The follower should have the data after catching up
+    // ...and it must actually be writable for the slots it took over, with the
+    // data it replicated before the promotion still present.
+    let promoted = harness.node(replica_id).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let mut last = frogdb_protocol::Response::Null;
+    while std::time::Instant::now() < deadline {
+        last = promoted.send("SET", &[&key, "post_failover"]).await;
+        if !is_error(&last) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        !is_error(&last),
+        "the promoted node must accept writes for the slots it took over, got: {last:?}"
+    );
+
+    let resp = promoted.send("GET", &[&key]).await;
+    assert!(
+        matches!(&resp, frogdb_protocol::Response::Bulk(Some(v)) if v.as_ref() == b"post_failover"),
+        "promoted node should serve its own write, got: {resp:?}"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Snapshot one node's Raft state machine and purge the log the snapshot
+/// covers, so its next boot restores from the snapshot instead of replaying
+/// entries.
+async fn force_snapshot_and_purge(harness: &ClusterTestHarness, node_id: u64) {
+    let raft = harness
+        .node(node_id)
+        .unwrap()
+        .raft()
+        .expect("cluster nodes run Raft");
+
+    raft.trigger()
+        .snapshot()
+        .await
+        .expect("triggering a snapshot must not fail");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let snapshot_index = loop {
+        let taken = raft.metrics().borrow().snapshot.map(|id| id.index);
+        if let Some(index) = taken {
+            break index;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "node {node_id} never reported a snapshot"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+
+    raft.trigger()
+        .purge_log(snapshot_index)
+        .await
+        .expect("purging the snapshotted log prefix must not fail");
+}
+
+/// A restarted cluster replica comes back as a replica — in cluster state, on
+/// its own data path, and on its primary's replica list.
+///
+/// Two boot-time paths used to lose the role, and both are covered here because
+/// which one runs depends on whether openraft had snapshotted the `SetRole`
+/// entry by restart time:
+///
+/// 1. **Self-registration.** Every node re-proposes `AddNode` for itself at
+///    boot, claiming the only role it can know unaided — primary. When that
+///    overwrote the recorded role, a restarted replica demoted-by-restart into
+///    a slotless primary cluster-wide, and its primary lost a replica.
+/// 2. **Snapshot restore.** A role folded into the restored snapshot produces no
+///    log entry to replay, so nothing told the data path about it: the node came
+///    back answering `role:master` while the cluster still listed it as a
+///    replica — the contradictory role views of issue 37.
+///
+/// The assertions are deliberately taken from three vantage points: the
+/// primary's view of the cluster (`CLUSTER NODES`), the replica's view of itself
+/// (`INFO replication`), and the actual data link (`connected_slaves` plus
+/// `master_link_status:up`). Any one alone can be satisfied by a node that is
+/// only half-reattached.
+#[tokio::test]
+async fn test_restarted_cluster_replica_stays_a_replica() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(2).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(30))
+        .await
+        .unwrap();
+    let _ = harness
+        .wait_for_address_convergence(Duration::from_secs(10))
+        .await;
+
+    let test_slot = 100u16;
+    let (owner_id, _) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+    let replica_id = harness.add_replica(owner_id).await.unwrap();
+    harness
+        .wait_for_replication_link(owner_id, 1, Duration::from_secs(20))
+        .await
+        .expect("primary never reported an attached replica");
+    assert_eq!(
+        wait_for_data_path_role(&harness, replica_id, "slave", Duration::from_secs(10)).await,
+        "slave"
+    );
+
+    // Fold the `SetRole` entry into a snapshot and purge the log behind it, so
+    // the restart below has to restore the role from the snapshot. Without this
+    // the node replays the entry and the ordinary apply path emits the role
+    // change, which leaves boot path (2) above untested.
+    force_snapshot_and_purge(&harness, replica_id).await;
+
+    harness.restart_node(replica_id).await.unwrap();
+    harness
+        .wait_for_node_has_leader(replica_id, Duration::from_secs(20))
+        .await
+        .expect("restarted replica never rediscovered the Raft leader");
+
+    // (1) Cluster state: every node, including the primary, still calls it a
+    //     replica. This is what the self-registration `AddNode` used to clobber.
+    harness
+        .wait_for_role_propagation(replica_id, Duration::from_secs(20))
+        .await
+        .expect("restarted node stopped being a replica in cluster state");
+
+    let replica_hex = format!("{:040x}", replica_id);
+    let nodes = harness
+        .node(owner_id)
+        .unwrap()
+        .send("CLUSTER", &["NODES"])
+        .await;
+    let rendered = match &nodes {
+        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
+        other => panic!("CLUSTER NODES should be a bulk reply, got {other:?}"),
+    };
+    let line = rendered
+        .lines()
+        .find(|l| l.starts_with(&replica_hex))
+        .unwrap_or_else(|| panic!("restarted node missing from CLUSTER NODES:\n{rendered}"));
+    assert!(
+        line.contains("slave"),
+        "the primary must still render the restarted node as a slave, got: {line}"
+    );
+
+    // (2) The data path: the node itself agrees, and its inbound link is up.
+    assert_eq!(
+        wait_for_data_path_role(&harness, replica_id, "slave", Duration::from_secs(20)).await,
+        "slave",
+        "the restarted node reports role:master while cluster state calls it a \
+         replica — the two role views diverged across the restart"
+    );
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let mut link_status = String::new();
+    while std::time::Instant::now() < deadline {
+        let info = harness
+            .node(replica_id)
+            .unwrap()
+            .send("INFO", &["replication"])
+            .await;
+        if let Some(fields) = parse_info_fields(&info)
+            && let Some(status) = fields.get("master_link_status")
+        {
+            link_status = status.clone();
+            if link_status == "up" {
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert_eq!(
+        link_status, "up",
+        "the restarted replica never re-established its PSYNC link"
+    );
+
+    // (3) The primary's side of that same link.
+    harness
+        .wait_for_replication_link(owner_id, 1, Duration::from_secs(20))
+        .await
+        .expect("primary never saw the restarted replica reattach");
+
+    // ...and it carries data, not just a handshake.
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key = format!("{}_post_restart", tag);
+    let owner = harness.node(owner_id).unwrap();
+    assert!(!is_error(
+        &owner.send("SET", &[&key, "after_restart"]).await
+    ));
+
+    let replica = harness.node(replica_id).unwrap();
+    let mut client = replica.connect().await;
+    assert!(!is_error(&client.command(&["READONLY"]).await));
+    let mut last = frogdb_protocol::Response::Null;
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while std::time::Instant::now() < deadline {
+        last = client.command(&["GET", &key]).await;
+        if matches!(&last, frogdb_protocol::Response::Bulk(Some(v)) if v.as_ref() == b"after_restart")
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        matches!(&last, frogdb_protocol::Response::Bulk(Some(v)) if v.as_ref() == b"after_restart"),
+        "restarted replica never received a post-restart write, last GET: {last:?}"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Test 6: Replica receives writes.
+///
+/// Raft followers are *peer shard primaries*, not data replicas: Raft carries
+/// cluster metadata only, so a write to one node's slots is never visible on
+/// another node's data path. The only correct outcome on a peer is a MOVED
+/// redirect (or, with READONLY, a miss) — never the value.
+///
+/// The replica-side positive case lives in
+/// [`test_cluster_replica_receives_writes_asserted`].
+#[tokio::test]
+async fn test_raft_followers_do_not_receive_peer_shard_writes() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(30))
+        .await
+        .unwrap();
+    let _ = harness
+        .wait_for_address_convergence(Duration::from_secs(10))
+        .await;
+
+    let test_slot = 100u16;
+    let (owner_id, non_owner_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key = format!("{}_peer", tag);
+    let owner = harness.node(owner_id).unwrap();
+    let set_resp = owner.send("SET", &[&key, "owner_value"]).await;
+    assert!(!is_error(&set_resp), "SET on owner failed: {:?}", set_resp);
+
+    // Give Raft ample time to replicate its log. No amount of it can move
+    // user data, because no ClusterCommand carries any.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let peer = harness.node(non_owner_id).unwrap();
+    let resp = peer.send("GET", &[&key]).await;
+    assert!(
+        is_moved_redirect(&resp).is_some(),
+        "peer shard primary should redirect, got: {resp:?}"
+    );
+
+    // Even with the redirect suppressed the peer has no copy of the value.
+    let mut client = peer.connect().await;
+    let ro = client.command(&["READONLY"]).await;
+    assert!(!is_error(&ro), "READONLY failed: {ro:?}");
+    let resp = client.command(&["GET", &key]).await;
+    assert!(
+        matches!(resp, frogdb_protocol::Response::Bulk(None)),
+        "peer shard primary must not hold another shard's key, got: {resp:?}"
+    );
+
+    // The peer owns slots of its own, so it is a primary on the data path.
+    let info = peer.send("INFO", &["replication"]).await;
+    let fields = parse_info_fields(&info).expect("INFO replication should be a bulk reply");
+    assert_eq!(
+        fields.get("role").map(String::as_str),
+        Some("master"),
+        "peer shard primary should report role:master, got {fields:?}"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Test 7: a replica that attaches late catches up on the data written before
+/// it existed, and then keeps following the live stream.
+///
+/// The original test disconnected a *Raft follower* and looked for user data on
+/// it after a restart, which cannot work: Raft carries metadata only (ADR-0001).
+/// Catch-up is a property of the PSYNC link, and the interesting delay is the
+/// one between a write and the replica's arrival — the replica must full-sync
+/// the existing dataset (the staged-checkpoint install) and then continue on the
+/// command stream without a gap.
+///
+/// Both halves are asserted, because either alone is passable by a broken
+/// implementation: a full sync that never hands off to the stream satisfies the
+/// backfill, and a stream that starts at the current offset satisfies the live
+/// write while silently losing everything older.
+///
+/// Persistence is enabled deliberately, unlike most of this suite. A
+/// persistence-disabled primary answers `PSYNC ? -1` from the minimal-RDB
+/// branch, which carries no dataset at all (issue 66), so the backfill half
+/// would be asserting a known gap rather than the catch-up path.
+#[tokio::test]
+async fn test_replica_catches_up_on_data_written_before_it_attached() {
+    let config = ClusterNodeConfig {
+        persistence: true,
+        ..Default::default()
+    };
+    let mut harness = ClusterTestHarness::with_config(config);
+    harness.start_cluster(2).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(30))
+        .await
+        .unwrap();
+    let _ = harness
+        .wait_for_address_convergence(Duration::from_secs(10))
+        .await;
+
+    let test_slot = 100u16;
+    let (owner_id, _) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+
+    // Backfill: written while the primary has no replica at all.
+    let owner = harness.node(owner_id).unwrap();
+    let backfill: Vec<(String, String)> = (0..10)
+        .map(|i| (format!("{tag}_backfill_{i}"), format!("backfill_value_{i}")))
+        .collect();
+    for (key, value) in &backfill {
+        let resp = owner.send("SET", &[key, value]).await;
+        assert!(!is_error(&resp), "SET on primary failed: {resp:?}");
+    }
+
+    // The replica arrives afterwards and must full-sync the dataset above.
+    let replica_id = harness.add_replica(owner_id).await.unwrap();
+    harness
+        .wait_for_replication_link(owner_id, 1, Duration::from_secs(20))
+        .await
+        .expect("primary never reported an attached replica");
+
+    // A live write made after the link came up exercises the stream that
+    // follows the snapshot.
+    let live_key = format!("{tag}_live");
+    let owner = harness.node(owner_id).unwrap();
+    let resp = owner.send("SET", &[&live_key, "live_value"]).await;
+    assert!(!is_error(&resp), "live SET on primary failed: {resp:?}");
+
+    // Replicas own no slots, so reads need READONLY on a held connection.
+    let replica = harness.node(replica_id).unwrap();
+    let mut client = replica.connect().await;
+    let ro = client.command(&["READONLY"]).await;
+    assert!(!is_error(&ro), "READONLY on replica failed: {ro:?}");
+
+    // The live write is the last thing sent, so waiting for it also bounds the
+    // wait for the backfill: the snapshot precedes the stream.
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let mut last = frogdb_protocol::Response::Null;
+    while std::time::Instant::now() < deadline {
+        last = client.command(&["GET", &live_key]).await;
+        if matches!(&last, frogdb_protocol::Response::Bulk(Some(v)) if v.as_ref() == b"live_value")
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        matches!(&last, frogdb_protocol::Response::Bulk(Some(v)) if v.as_ref() == b"live_value"),
+        "replica {replica_id} never received the post-attach write, last GET: {last:?}"
+    );
+
+    for (key, expected) in &backfill {
+        let resp = client.command(&["GET", key]).await;
+        assert!(
+            matches!(&resp, frogdb_protocol::Response::Bulk(Some(v)) if v.as_ref() == expected.as_bytes()),
+            "replica {replica_id} did not catch up on {key} (written before it attached), got: {resp:?}"
+        );
     }
 
     harness.shutdown_all().await;
 }
 
-/// Test 8: Promoted replica has all data.
+/// Test 8: a replica promoted after its primary dies serves every key it
+/// replicated, with no losses and no redirects.
 ///
-/// Scenario: Failover to replica, verify it has all data
+/// The original test counted a `MOVED` reply as a hit ("data exists, just on
+/// another node"), which made the assertion vacuous — a node that lost the
+/// whole dataset and a node that never owned the slots both scored 10/10. The
+/// promoted node takes over the dead primary's slots, so `MOVED` here is a
+/// failure, not an acceptable outcome.
+///
+/// `CLUSTER FAILOVER TAKEOVER` drives the promotion because `auto_failover`
+/// defaults to off: killing the primary alone changes no cluster state.
 #[tokio::test]
 async fn test_promoted_replica_has_all_data() {
     let mut harness = ClusterTestHarness::new();
-    harness.start_cluster(3).await.unwrap();
-
-    let original_leader = harness
+    harness.start_cluster(2).await.unwrap();
+    harness
         .wait_for_leader(Duration::from_secs(10))
         .await
         .unwrap();
     harness
-        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .wait_for_cluster_convergence(Duration::from_secs(30))
         .await
         .unwrap();
+    let _ = harness
+        .wait_for_address_convergence(Duration::from_secs(10))
+        .await;
 
-    let leader_node = harness.node(original_leader).unwrap();
-
-    // Write several keys
-    let mut keys_values = Vec::new();
-    for i in 0..10 {
-        let key = format!("promote_key_{}", i);
-        let value = format!("promote_value_{}", i);
-        let resp = leader_node.send("SET", &[&key, &value]).await;
-        if !is_error(&resp) {
-            keys_values.push((key, value));
-        }
-    }
-    eprintln!("Wrote {} keys to leader", keys_values.len());
-
-    // Wait for replication
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    // Kill leader (forces promotion of a follower)
-    eprintln!("Killing leader: {}", original_leader);
-    harness.kill_node(original_leader).await;
-
-    // Wait for new leader (excluding the killed leader)
-    let new_leader = harness
-        .wait_for_new_leader(original_leader, Duration::from_secs(15))
+    let test_slot = 100u16;
+    let (owner_id, _) = find_owner_of_slot(&harness, test_slot)
         .await
-        .unwrap();
-    eprintln!("New leader (promoted): {}", new_leader);
+        .expect("could not find slot owner");
+    let replica_id = harness.add_replica(owner_id).await.unwrap();
+    harness
+        .wait_for_replication_link(owner_id, 1, Duration::from_secs(20))
+        .await
+        .expect("primary never reported an attached replica");
 
-    tokio::time::sleep(Duration::from_secs(1)).await;
-
-    // Verify new leader has all the data
-    let new_leader_node = harness.node(new_leader).unwrap();
-    let mut found_count = 0;
-
-    for (key, expected) in &keys_values {
-        let resp = new_leader_node.send("GET", &[key]).await;
-        match &resp {
-            frogdb_protocol::Response::Bulk(Some(v)) => {
-                let retrieved = String::from_utf8_lossy(v);
-                if retrieved == *expected {
-                    found_count += 1;
-                }
-            }
-            frogdb_protocol::Response::Error(e) => {
-                // MOVED is acceptable
-                let err = String::from_utf8_lossy(e);
-                if err.starts_with("MOVED") {
-                    found_count += 1; // Data exists, just on different node
-                }
-            }
-            _ => {}
-        }
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let keys_values: Vec<(String, String)> = (0..10)
+        .map(|i| (format!("{tag}_promote_{i}"), format!("promote_value_{i}")))
+        .collect();
+    let owner = harness.node(owner_id).unwrap();
+    for (key, value) in &keys_values {
+        let resp = owner.send("SET", &[key, value]).await;
+        assert!(!is_error(&resp), "SET on primary failed: {resp:?}");
     }
 
-    eprintln!(
-        "Promoted replica has {}/{} keys",
-        found_count,
-        keys_values.len()
+    // WAIT is the durability barrier: it returns once the replica has acked the
+    // offset covering the writes above, so the promotion below cannot race the
+    // stream. (In cluster mode it counts this node's replicas, same as
+    // standalone — see the WAIT section of this suite.)
+    let acked = owner.send("WAIT", &["1", "10000"]).await;
+    assert_eq!(
+        acked,
+        frogdb_protocol::Response::Integer(1),
+        "the replica should have acked the writes before the failover, got: {acked:?}"
     );
+
+    harness.kill_node(owner_id).await;
+    harness
+        .wait_for_new_leader(owner_id, Duration::from_secs(20))
+        .await
+        .expect("the surviving nodes never elected a new raft leader");
+
+    let replica = harness.node(replica_id).unwrap();
+    let resp = replica
+        .try_send_admin_aware("CLUSTER", &["FAILOVER", "TAKEOVER"])
+        .await
+        .unwrap();
+    assert!(
+        !is_error(&resp),
+        "CLUSTER FAILOVER TAKEOVER failed: {resp:?}"
+    );
+    assert_eq!(
+        wait_for_data_path_role(&harness, replica_id, "master", Duration::from_secs(20)).await,
+        "master",
+        "the promoted node must install the primary role on its data path"
+    );
+
+    let promoted = harness.node(replica_id).unwrap();
+    for (key, expected) in &keys_values {
+        let resp = promoted.send("GET", &[key]).await;
+        assert!(
+            matches!(&resp, frogdb_protocol::Response::Bulk(Some(v)) if v.as_ref() == expected.as_bytes()),
+            "promoted node lost {key}; a MOVED or a miss here is a failure, not a \
+             relocation — it owns the dead primary's slots. Got: {resp:?}"
+        );
+    }
 
     harness.shutdown_all().await;
 }
@@ -2991,7 +3476,7 @@ async fn test_partition_heals_cluster_recovers() {
         if let Some(node) = harness.node(node_id)
             && node.is_running()
         {
-            let info = harness.get_cluster_info(node_id).unwrap();
+            let info = harness.get_cluster_info(node_id).await.unwrap();
             eprintln!("Node {} after heal: state={}", node_id, info.cluster_state);
             assert_eq!(
                 info.cluster_state, "ok",
@@ -3042,7 +3527,7 @@ async fn test_zombie_leader_detection() {
     if let Some(leader_node) = harness.node(leader)
         && leader_node.is_running()
     {
-        let info = harness.get_cluster_info(leader).unwrap();
+        let info = harness.get_cluster_info(leader).await.unwrap();
         eprintln!(
             "Zombie leader state: {} (known_nodes: {})",
             info.cluster_state, info.cluster_known_nodes
@@ -4171,7 +4656,7 @@ async fn test_rolling_restart() {
     // Note: cluster_state may be "fail" without manual slot assignment, but
     // the key property is that all nodes survived restart and rejoined.
     for &node_id in &node_ids {
-        let info = harness.get_cluster_info(node_id).unwrap();
+        let info = harness.get_cluster_info(node_id).await.unwrap();
         eprintln!(
             "Node {}: state={}, known_nodes={}",
             node_id, info.cluster_state, info.cluster_known_nodes
@@ -4327,7 +4812,7 @@ async fn test_large_cluster_10_nodes() {
 
     // Verify all nodes report healthy
     for node_id in harness.node_ids() {
-        let info = harness.get_cluster_info(node_id).unwrap();
+        let info = harness.get_cluster_info(node_id).await.unwrap();
         assert_eq!(info.cluster_state, "ok", "Node {} should be ok", node_id);
         assert_eq!(
             info.cluster_known_nodes, 10,
@@ -4504,7 +4989,7 @@ async fn test_simultaneous_node_restarts() {
         if let Some(node) = harness.node(node_id)
             && node.is_running()
         {
-            let info = harness.get_cluster_info(node_id).unwrap();
+            let info = harness.get_cluster_info(node_id).await.unwrap();
             assert_eq!(info.cluster_state, "ok");
         }
     }
@@ -4538,7 +5023,7 @@ async fn test_node_restart_preserves_raft_state() {
     let follower = *node_ids.iter().find(|&&id| id != leader).unwrap();
 
     // Get current epoch (term) before restart
-    let pre_info = harness.get_cluster_info(follower).unwrap();
+    let pre_info = harness.get_cluster_info(follower).await.unwrap();
     let pre_epoch = pre_info.cluster_current_epoch;
     eprintln!("Pre-restart epoch: {}", pre_epoch);
 
@@ -4555,7 +5040,7 @@ async fn test_node_restart_preserves_raft_state() {
         .unwrap();
 
     // Get epoch after restart
-    let post_info = harness.get_cluster_info(follower).unwrap();
+    let post_info = harness.get_cluster_info(follower).await.unwrap();
     let post_epoch = post_info.cluster_current_epoch;
     eprintln!("Post-restart epoch: {}", post_epoch);
 
@@ -4695,6 +5180,15 @@ async fn test_flapping_node() {
 
     eprintln!("Testing flapping behavior for node {}", flapper);
 
+    // Did the FAIL latch actually engage at least once while the node was down?
+    // Without this the "no fail flags afterwards" assertion below could pass on
+    // a cluster that never flagged anything, which would make the recovery half
+    // of the hysteresis untested. The harness runs the detector at
+    // `heartbeat_interval_ms = 100` with `fail_threshold = 5`, so the latch
+    // engages ~500ms into each 1s down window; polling across five cycles makes
+    // observing it robust to a slow cycle rather than dependent on one.
+    let mut latch_observed = false;
+
     // Flap the node 5 times
     for i in 0..5 {
         eprintln!("Flap cycle {}/5", i + 1);
@@ -4702,8 +5196,22 @@ async fn test_flapping_node() {
         // Kill
         harness.kill_node(flapper).await;
 
-        // Short delay (simulate brief failure)
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // Short delay (simulate brief failure), spent watching for the latch.
+        // Only the flapper is down, so any `fail` flag is necessarily its own.
+        let down_until = tokio::time::Instant::now() + Duration::from_secs(1);
+        while tokio::time::Instant::now() < down_until {
+            if !latch_observed
+                && let Some(node) = harness.node(leader)
+                && let Ok(nodes) = parse_cluster_nodes(&node.send("CLUSTER", &["NODES"]).await)
+                && nodes
+                    .iter()
+                    .any(|n| n.flags.iter().any(|flag| flag == "fail"))
+            {
+                latch_observed = true;
+                eprintln!("FAIL latch engaged for the flapper during cycle {}", i + 1);
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
 
         // Restart
         harness.restart_node(flapper).await.unwrap();
@@ -4717,6 +5225,12 @@ async fn test_flapping_node() {
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
+    assert!(
+        latch_observed,
+        "the flapper must have been FAIL-flagged at least once while it was down; \
+         without that the recovery assertions below prove nothing"
+    );
+
     // Verify cluster is still healthy after flapping
     tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -4729,7 +5243,7 @@ async fn test_flapping_node() {
         if let Some(node) = harness.node(node_id)
             && node.is_running()
         {
-            let info = harness.get_cluster_info(node_id).unwrap();
+            let info = harness.get_cluster_info(node_id).await.unwrap();
             eprintln!(
                 "Node {} after flapping: state={}",
                 node_id, info.cluster_state
@@ -4737,6 +5251,29 @@ async fn test_flapping_node() {
             assert_eq!(
                 info.cluster_state, "ok",
                 "Cluster should remain healthy despite flapping"
+            );
+
+            // `cluster_state` alone would also read `ok` for a FAIL-flagged node
+            // that owns no slots, so check the flags directly: once the flapper
+            // has been up long enough to answer `fail-threshold` consecutive
+            // probes, the leader must have proposed `MarkNodeRecovered` and no
+            // node may still carry the flag.
+            let nodes = parse_cluster_nodes(
+                &harness
+                    .node(node_id)
+                    .unwrap()
+                    .send("CLUSTER", &["NODES"])
+                    .await,
+            )
+            .unwrap();
+            let flagged: Vec<_> = nodes
+                .iter()
+                .filter(|n| n.flags.iter().any(|f| f == "fail"))
+                .map(|n| n.id.clone())
+                .collect();
+            assert!(
+                flagged.is_empty(),
+                "node {node_id} still reports FAIL-flagged nodes after the flapping settled: {flagged:?}"
             );
         }
     }
@@ -4947,6 +5484,14 @@ async fn test_raft_snapshot_during_migration() {
         migration_state_found, slot_ownership_clear
     );
 
+    assert!(
+        migration_state_found || slot_ownership_clear,
+        "slot {test_slot} must be accounted for in the replicated topology after \
+         the leader died mid-migration: either the migration markers survived or \
+         some node owns the slot outright. Neither means the slot fell out of the \
+         topology, which is the inconsistent state this test exists to catch."
+    );
+
     // Try to clean up migration state
     for &node_id in &surviving_ids {
         if let Some(node) = harness.node(node_id)
@@ -4958,20 +5503,31 @@ async fn test_raft_snapshot_during_migration() {
         }
     }
 
-    // Verify cluster is still functional after the disruption
-    let cluster_ok = harness
-        .wait_for_cluster_convergence(Duration::from_secs(10))
-        .await
-        .is_ok();
+    // Verify the survivors still agree with each other after the disruption.
+    //
+    // Deliberately *not* `wait_for_cluster_convergence`: that also requires
+    // `cluster_state:ok`, and the killed node is a slot-owning primary with no
+    // replica, so once the failure detector FAIL-flags it the cluster reports
+    // `fail` for good — correctly. (Before the detector was fixed to reconcile
+    // its local health view on the new leader, the flag was never set and this
+    // scenario reported `ok`, which is what let the stronger helper pass here.)
+    // What this test is actually about is agreement: migration either survived
+    // or was cleanly abandoned, and no two survivors disagree about it.
+    let agreement = harness
+        .wait_for_topology_agreement(Duration::from_secs(10))
+        .await;
 
-    eprintln!("Cluster converged after migration+failover: {}", cluster_ok);
+    eprintln!(
+        "Survivors agreed on topology after migration+failover: {:?}",
+        agreement
+    );
 
     // The key assertion: cluster should be in a consistent state
     // Either migration completed, was aborted, or is still in progress
     // But never in an inconsistent state where nodes disagree
     assert!(
-        cluster_ok,
-        "Cluster should recover to consistent state after failover during migration"
+        agreement.is_ok(),
+        "Survivors should agree on topology after failover during migration: {agreement:?}"
     );
 
     harness.shutdown_all().await;
@@ -6001,7 +6557,7 @@ async fn test_cluster_set_config_epoch_returns_ok() {
     let node = harness.node(leader).unwrap();
 
     // Get current epoch
-    let info_before = harness.get_cluster_info(leader).unwrap();
+    let info_before = harness.get_cluster_info(leader).await.unwrap();
     let epoch_before = info_before.cluster_current_epoch;
 
     // SET-CONFIG-EPOCH should succeed (goes through Raft)
@@ -6016,7 +6572,7 @@ async fn test_cluster_set_config_epoch_returns_ok() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Epoch should have changed
-    let info_after = harness.get_cluster_info(leader).unwrap();
+    let info_after = harness.get_cluster_info(leader).await.unwrap();
     assert!(
         info_after.cluster_current_epoch > epoch_before,
         "Epoch should have increased from {}, got {}",
@@ -6067,9 +6623,60 @@ async fn test_cluster_saveconfig_returns_ok() {
 // Tier 12: Cluster Info Accuracy — Known-Gap Documentation
 // ============================================================================
 
-/// Verifies that replication-offset in CLUSTER SHARDS is non-zero after writes.
+/// Every `replication-offset` reported by `CLUSTER SHARDS`, keyed by node id.
+fn shards_replication_offsets(response: &frogdb_protocol::Response) -> Vec<(String, i64)> {
+    let frogdb_protocol::Response::Array(shards) = response else {
+        panic!("expected an array from CLUSTER SHARDS, got: {response:?}");
+    };
+    let mut out = Vec::new();
+    for shard in shards {
+        let frogdb_protocol::Response::Array(shard_fields) = shard else {
+            continue;
+        };
+        // nodes is at index 3 (after "slots", slots_array, "nodes")
+        let Some(frogdb_protocol::Response::Array(nodes)) = shard_fields.get(3) else {
+            continue;
+        };
+        for node_resp in nodes {
+            let frogdb_protocol::Response::Array(fields) = node_resp else {
+                continue;
+            };
+            let mut id = None;
+            let mut offset = None;
+            for pair in fields.chunks(2) {
+                match pair {
+                    [
+                        frogdb_protocol::Response::Bulk(Some(k)),
+                        frogdb_protocol::Response::Bulk(Some(v)),
+                    ] if k.as_ref() == b"id" => {
+                        id = Some(String::from_utf8_lossy(v).to_string());
+                    }
+                    [
+                        frogdb_protocol::Response::Bulk(Some(k)),
+                        frogdb_protocol::Response::Integer(n),
+                    ] if k.as_ref() == b"replication-offset" => offset = Some(*n),
+                    _ => {}
+                }
+            }
+            if let (Some(id), Some(offset)) = (id, offset) {
+                out.push((id, offset));
+            }
+        }
+    }
+    out
+}
+
+/// `CLUSTER SHARDS` reports the node's real data-replication offset — the same
+/// number `INFO replication` publishes as `master_repl_offset`.
+///
+/// It used to report the Raft last-applied log index whenever Raft was running.
+/// That was non-zero, so a "non-zero after writes" assertion passed while the
+/// field described cluster-metadata entries rather than replicated bytes — it
+/// would have been non-zero on a node that had never taken a single write.
+/// Equality against `INFO replication` is the assertion that can tell those
+/// apart.
 #[tokio::test]
-async fn test_cluster_shards_replication_offset_nonzero() {
+async fn test_cluster_shards_reports_real_replication_offset() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();
     harness
@@ -6081,60 +6688,54 @@ async fn test_cluster_shards_replication_offset_nonzero() {
         .await
         .unwrap();
 
-    let node_ids = harness.node_ids();
-    let node = harness.node(node_ids[0]).unwrap();
+    // Write to the node that actually owns the slot, so the offset under test
+    // moves rather than the write being redirected away.
+    let test_slot = 100u16;
+    let (owner_id, _) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+    let owner_name = harness.get_node_id_str(owner_id).unwrap();
 
-    // Write some data
-    let key = key_for_slot(100);
+    // Attach a replica: like Redis, the offset only advances once there is a
+    // replication stream to advance it.
+    let _replica_id = harness.add_replica(owner_id).await.unwrap();
+    harness
+        .wait_for_replication_link(owner_id, 1, Duration::from_secs(20))
+        .await
+        .expect("primary never reported an attached replica");
+    let owner = harness.node(owner_id).unwrap();
+
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
     for i in 0..10 {
-        let k = format!("{{{}}}_offset_{}", key, i);
-        node.send("SET", &[&k, "value"]).await;
+        let k = format!("{tag}_offset_{i}");
+        assert!(!is_error(&owner.send("SET", &[&k, "value"]).await));
     }
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // CLUSTER SHARDS should show non-zero replication-offset
-    let response = node.send("CLUSTER", &["SHARDS"]).await;
+    let live_offset = master_repl_offset(&owner.send("INFO", &["replication"]).await)
+        .expect("master_repl_offset") as i64;
     assert!(
-        !is_error(&response),
-        "CLUSTER SHARDS should succeed, got: {:?}",
-        response
+        live_offset > 0,
+        "test setup: writes must have advanced the replication offset"
     );
 
-    // Parse nested response to find replication-offset > 0 for at least one node
-    if let frogdb_protocol::Response::Array(shards) = &response {
-        let mut found_nonzero = false;
-        for shard in shards {
-            if let frogdb_protocol::Response::Array(shard_fields) = shard {
-                // nodes is at index 3 (after "slots", slots_array, "nodes")
-                if let Some(frogdb_protocol::Response::Array(nodes)) = shard_fields.get(3) {
-                    for node_resp in nodes {
-                        if let frogdb_protocol::Response::Array(fields) = node_resp {
-                            for pair in fields.windows(2) {
-                                if let [
-                                    frogdb_protocol::Response::Bulk(Some(k)),
-                                    frogdb_protocol::Response::Integer(offset),
-                                ] = pair
-                                    && k.as_ref() == b"replication-offset"
-                                    && *offset > 0
-                                {
-                                    found_nonzero = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        assert!(
-            found_nonzero,
-            "Expected at least one node with replication-offset > 0"
-        );
-    } else {
-        panic!(
-            "Expected Array response from CLUSTER SHARDS, got: {:?}",
-            response
-        );
-    }
+    let offsets = shards_replication_offsets(&owner.send("CLUSTER", &["SHARDS"]).await);
+    let mine = offsets
+        .iter()
+        .find(|(id, _)| *id == owner_name)
+        .map(|(_, offset)| *offset)
+        .expect("CLUSTER SHARDS must list the node it was asked on");
+    assert_eq!(
+        mine, live_offset,
+        "CLUSTER SHARDS must report the data-replication offset, not the Raft \
+         last-applied index; offsets = {offsets:?}"
+    );
+    assert_eq!(
+        offsets.len(),
+        1,
+        "only the node asked knows its stream position: every peer must omit \
+         `replication-offset` rather than render a 0 that reads as maximum lag; \
+         offsets = {offsets:?}"
+    );
 
     harness.shutdown_all().await;
 }
@@ -6301,6 +6902,7 @@ async fn test_readwrite_restores_moved_redirects() {
 // Tier 14: Migration Type Coverage — Known-Gap Documentation
 // ============================================================================
 
+#[cfg(feature = "cmd-stream")]
 /// Verifies that stream data survives slot migration.
 #[tokio::test]
 async fn test_e2e_migration_stream() {
@@ -6348,6 +6950,7 @@ async fn test_e2e_migration_stream() {
     harness.shutdown_all().await;
 }
 
+#[cfg(feature = "cmd-bloom")]
 /// Verifies that bloom filter data survives slot migration.
 #[tokio::test]
 async fn test_e2e_migration_bloom_filter() {
@@ -6391,6 +6994,7 @@ async fn test_e2e_migration_bloom_filter() {
     harness.shutdown_all().await;
 }
 
+#[cfg(feature = "cmd-timeseries")]
 /// Verifies that timeseries data survives slot migration.
 #[tokio::test]
 async fn test_e2e_migration_timeseries() {
@@ -6769,9 +7373,29 @@ async fn test_current_epoch_gte_my_epoch_invariant() {
     harness.shutdown_all().await;
 }
 
-/// Tests that the cluster epoch increases after a leader election / failover.
+/// Tests that the cluster epoch increases after a failover, i.e. after the
+/// *topology* actually changes.
 ///
 /// Inspired by Redis `03-failover-loop.tcl` post-conditions.
+///
+/// The event that moves the epoch is the failure detector committing
+/// `MarkNodeFailed` for the killed node (which bumps `config_epoch` inside the
+/// same state-machine transition), **not** the Raft election that precedes it.
+/// Those used to be indistinguishable: `cluster_current_epoch` was reported as
+/// `max(config_epoch, raft_term)`, so the election alone satisfied this
+/// assertion and the test would have passed even if no topology command ever
+/// committed. Since the fold was removed the test measures what its name claims,
+/// which is why the fixed sleep is replaced by a poll: electing a leader is fast,
+/// accumulating `fail_threshold` missed probes and replicating the resulting
+/// entry is not, and the two are no longer the same event.
+///
+/// Rebasing the test onto the real event exposed a genuine detector bug (the
+/// failure latch is one-shot, so a survivor that crossed the threshold while it
+/// was still a follower never propagated the FAIL once it became leader — the
+/// exact shape of every leader-death failover). `FailureDetector` now
+/// reconciles its local health view into the replicated topology each check
+/// interval instead of propagating the transition inline; this test is the
+/// end-to-end regression test for that.
 #[tokio::test]
 async fn test_cluster_epoch_increases_after_failover() {
     let mut harness = ClusterTestHarness::new();
@@ -6797,9 +7421,7 @@ async fn test_cluster_epoch_increases_after_failover() {
         .unwrap()
         .send("CLUSTER", &["INFO"])
         .await;
-    let pre_epoch = parse_cluster_info(&pre_info_resp)
-        .map(|i| i.cluster_current_epoch)
-        .unwrap_or(0);
+    let pre_info = parse_cluster_info(&pre_info_resp).unwrap();
 
     // Kill leader to trigger failover
     harness.kill_node(original_leader).await;
@@ -6809,22 +7431,41 @@ async fn test_cluster_epoch_increases_after_failover() {
         .await
         .unwrap();
 
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
-    // Check epoch after failover
-    let post_info_resp = harness
-        .node(non_leader)
-        .unwrap()
-        .send("CLUSTER", &["INFO"])
-        .await;
-    let post_epoch = parse_cluster_info(&post_info_resp)
-        .map(|i| i.cluster_current_epoch)
-        .unwrap_or(0);
+    // Poll for the replicated epoch bump. The read is taken from the same node
+    // throughout: `cluster_current_epoch` is a replicated value, so any node
+    // that has caught up reports it, but comparing across nodes would conflate
+    // an epoch bump with replication lag.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let post_epoch = loop {
+        let info = parse_cluster_info(
+            &harness
+                .node(non_leader)
+                .unwrap()
+                .send("CLUSTER", &["INFO"])
+                .await,
+        )
+        .unwrap();
+        if info.cluster_current_epoch > pre_info.cluster_current_epoch {
+            break info.cluster_current_epoch;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "cluster_current_epoch never moved after the leader was killed: \
+             pre={}, last seen={} (raft_term {} -> {}). A bumped term with a \
+             flat epoch means the election happened but no topology command \
+             committed.",
+            pre_info.cluster_current_epoch,
+            info.cluster_current_epoch,
+            pre_info.cluster_raft_term,
+            info.cluster_raft_term
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
 
     assert!(
-        post_epoch > pre_epoch,
+        post_epoch > pre_info.cluster_current_epoch,
         "Epoch should increase after failover: pre={}, post={}",
-        pre_epoch,
+        pre_info.cluster_current_epoch,
         post_epoch
     );
 
@@ -6839,23 +7480,27 @@ async fn test_cluster_epoch_increases_after_failover() {
 ///
 /// Issue 47: the original audit proposed asserting
 /// `INFO epoch <= max(NODES config_epoch)` after such a re-election. **That
-/// assertion is wrong and must never be reintroduced.**
-/// `cluster_current_epoch` is `max(replicated config_epoch, local Raft
-/// term)` (`fold_current_epoch` in `commands/cluster/mod.rs`), and every
-/// Raft election bumps the term regardless of whether any topology command
-/// committed -- so a re-election alone can push `cluster_current_epoch`
-/// above every per-node `config_epoch`. Redis has the same shape of
-/// divergence: `currentEpoch` may legitimately exceed every `configEpoch`
-/// after an election that reassigns no slots, and `redis-cli --cluster
-/// check`-style tooling flags epoch *collisions* (two nodes sharing a
-/// `configEpoch`), never epoch drift/exceedance.
+/// assertion is wrong and must never be reintroduced.** The counter
+/// legitimately runs *above* every per-node epoch — `IncrementEpoch` and
+/// `MarkNodeFailed` advance it without assigning it to anybody — so the
+/// bound is upside down. Redis has the same shape of divergence:
+/// `currentEpoch` may exceed every `configEpoch` after an election that
+/// reassigns no slots, and `redis-cli --cluster check`-style tooling flags
+/// epoch *collisions* (two nodes sharing a `configEpoch`), never epoch
+/// drift/exceedance.
 ///
 /// The relationship that DOES hold, and is pinned here instead, is the
 /// reverse bound: `cluster_current_epoch` is structurally `>=` every
-/// per-node `config_epoch` (a node's own `config_epoch` is only ever set to
-/// a value claimed from the very counter `cluster_current_epoch` folds in),
-/// and this test demonstrates the fold pushing it strictly above the
-/// (unchanged) per-node epochs.
+/// per-node `config_epoch`, because a node's own `config_epoch` is only ever
+/// set to a value minted from that very counter.
+///
+/// The contract this test pins for a re-election is now the *sharp* one:
+/// `cluster_current_epoch` reports the replicated counter directly, so a
+/// pure re-election must leave it **unchanged** while `cluster_raft_term`
+/// moves. Before the fold was removed the reported epoch tracked
+/// `max(counter, raft_term)` and rose on any election, which made
+/// `cluster_current_epoch` useless as a topology-change signal — the exact
+/// use an operator reaches for.
 #[tokio::test]
 async fn test_cluster_info_epoch_vs_nodes_epoch_after_reelection_no_topology_change() {
     let mut harness = ClusterTestHarness::new();
@@ -6906,32 +7551,49 @@ async fn test_cluster_info_epoch_vs_nodes_epoch_after_reelection_no_topology_cha
         pre_max_node_epoch
     );
 
-    // Trigger a pure Raft re-election: kill the leader. This is a
-    // Raft-internal event, not a `ClusterCommand` -- no topology command is
-    // proposed by this test at any point.
-    harness.kill_node(original_leader).await;
+    // Trigger a pure Raft re-election by making a follower campaign. Killing
+    // the leader would *also* work as an election trigger, but it is not a
+    // pure one: the failure detector then commits `MarkNodeFailed`, which is a
+    // real topology change that bumps the epoch (see
+    // `test_cluster_epoch_increases_after_failover`). Forcing a campaign leaves
+    // every node alive and healthy, so the only thing that can move is the
+    // term -- which is exactly the case this test exists to pin.
     harness
-        .wait_for_new_leader(original_leader, Duration::from_secs(15))
+        .node(non_leader)
+        .unwrap()
+        .raft()
+        .expect("cluster nodes run Raft")
+        .trigger()
+        .elect()
         .await
-        .unwrap();
-    tokio::time::sleep(Duration::from_secs(2)).await;
+        .expect("triggering an election must not fail");
 
-    let survivor = *harness
-        .node_ids()
-        .iter()
-        .find(|&&id| id != original_leader)
+    // Wait for the term to actually advance on the node being measured.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let post_info = loop {
+        let info = parse_cluster_info(
+            &harness
+                .node(non_leader)
+                .unwrap()
+                .send("CLUSTER", &["INFO"])
+                .await,
+        )
         .unwrap();
-    let post_info = parse_cluster_info(
-        &harness
-            .node(survivor)
-            .unwrap()
-            .send("CLUSTER", &["INFO"])
-            .await,
-    )
-    .unwrap();
+        if info.cluster_raft_term > pre_info.cluster_raft_term {
+            break info;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "forced election never raised cluster_raft_term (pre={}, last={})",
+            pre_info.cluster_raft_term,
+            info.cluster_raft_term
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+
     let post_nodes = parse_cluster_nodes(
         &harness
-            .node(survivor)
+            .node(non_leader)
             .unwrap()
             .send("CLUSTER", &["NODES"])
             .await,
@@ -6957,19 +7619,20 @@ async fn test_cluster_info_epoch_vs_nodes_epoch_after_reelection_no_topology_cha
         post_max_node_epoch
     );
 
-    // ...and it is free to exceed the per-node epochs purely from the Raft
-    // term fold, with zero topology change. Every node starts at
-    // config_epoch 0 (no epoch-bumping command has run), so any elected
-    // term (>= 1) strictly exceeds it -- this is the exact shape the naive
-    // `<=` assertion from the original audit would have rejected as a false
-    // regression.
-    assert!(
-        post_info.cluster_current_epoch > post_max_node_epoch,
-        "the term fold should push INFO's epoch strictly above the \
-         per-node config_epoch bound after a re-election: post INFO={}, \
-         post max NODES={}",
+    // ...and the headline contract: the epoch does NOT move on an election.
+    // `cluster_current_epoch` is the replicated counter, so it changes only
+    // when a topology command commits. This assertion is the inverse of what
+    // this test asserted under the fold, where the term was folded in and the
+    // reported epoch rose on every election with zero topology change.
+    assert_eq!(
         post_info.cluster_current_epoch,
-        post_max_node_epoch
+        pre_info.cluster_current_epoch,
+        "a pure Raft re-election must leave cluster_current_epoch alone \
+         (term {} -> {}): pre={}, post={}",
+        pre_info.cluster_raft_term,
+        post_info.cluster_raft_term,
+        pre_info.cluster_current_epoch,
+        post_info.cluster_current_epoch
     );
 
     harness.shutdown_all().await;
@@ -6985,19 +7648,17 @@ async fn test_cluster_info_epoch_vs_nodes_epoch_after_reelection_no_topology_cha
 /// `CLUSTER FAILOVER`, the only path that assigns a node its own nonzero
 /// `config_epoch`.
 ///
-/// **`cluster_current_epoch` is monotonic but NOT strictly increasing across
-/// a topology event.** Because the reported value is
-/// `max(config_epoch, raft_term)` (`fold_current_epoch`), a `config_epoch`
-/// bump is *invisible* whenever the Raft term already dominates -- and that
-/// is not a corner case: in a freshly bootstrapped cluster the first
-/// election takes `raft_term` to 1 while `config_epoch` is still 0, so the
-/// first failover (`config_epoch` 0 -> 1) leaves `cluster_current_epoch` at
-/// 1 both before and after. Those are the exact values observed here while
-/// this test was written. Anything that needs to *detect* a topology change
-/// must read the raw per-node `config_epoch` from `CLUSTER NODES` (as issue
-/// 16's `test_cluster_epoch_persists` does), not `CLUSTER INFO`'s folded
-/// epoch. The strict `>` bound is therefore deliberately not asserted
-/// below; only non-decrease is.
+/// **`cluster_current_epoch` increases strictly here**, and that is the
+/// point. The reported value used to be `max(config_epoch, raft_term)`, and
+/// the term dominated on a young cluster -- the first election takes
+/// `raft_term` to 1 while `config_epoch` is still 0, so the first failover
+/// (`config_epoch` 0 -> 1) left `cluster_current_epoch` at 1 both before and
+/// after, masking the topology change entirely. Those were the exact values
+/// observed here when this test was written against the fold, and they forced
+/// the weaker non-decrease assertion. Now that `cluster_current_epoch` is the
+/// replicated counter, a `Failover` bumps it and `CLUSTER INFO` shows it --
+/// so `CLUSTER INFO` is finally usable as a topology-change detector, not
+/// just `CLUSTER NODES`.
 #[tokio::test]
 async fn test_cluster_info_epoch_monotonic_across_failover() {
     let mut harness = ClusterTestHarness::new();
@@ -7075,23 +7736,20 @@ async fn test_cluster_info_epoch_monotonic_across_failover() {
         post_max_node_epoch
     );
 
-    // Monotonicity of the folded epoch: non-decreasing, never strictly
-    // increasing-by-construction. Both inputs to `max` are themselves
-    // monotonic (the replicated config_epoch counter and the Raft term), so
-    // the fold can only ever move forward.
+    // The replicated counter moves with the topology event, so the reported
+    // epoch increases strictly. `Failover` bumps `config_epoch` inside the
+    // same state-machine transition that reassigns the slots, so there is no
+    // window in which the promotion is visible but the epoch is not.
     assert!(
-        post_info.cluster_current_epoch >= pre_info.cluster_current_epoch,
-        "INFO's cluster_current_epoch must be monotonic (non-decreasing) \
-         across a failover: pre={}, post={}",
+        post_info.cluster_current_epoch > pre_info.cluster_current_epoch,
+        "INFO's cluster_current_epoch must increase across an epoch-bumping \
+         failover: pre={}, post={}",
         pre_info.cluster_current_epoch,
         post_info.cluster_current_epoch
     );
 
-    // ...but it is explicitly allowed to stay put while a config_epoch bump
-    // happens underneath it (see this test's doc comment). Asserting a
-    // strict `>` here would be asserting a guarantee the fold does not make;
-    // it fails on entirely correct behavior whenever raft_term >= the new
-    // config_epoch, which is the common case on a young cluster.
+    // The `>=` bound against the per-node epochs holds through the transition
+    // too: the promoted node's own epoch was minted from this very counter.
     assert!(
         post_info.cluster_current_epoch >= post_max_node_epoch,
         "deliberate invariant must hold across the epoch-bumping event too: \
@@ -7099,6 +7757,319 @@ async fn test_cluster_info_epoch_monotonic_across_failover() {
         post_info.cluster_current_epoch,
         post_max_node_epoch
     );
+
+    harness.shutdown_all().await;
+}
+
+/// Every node reports the **same** `cluster_current_epoch`.
+///
+/// This test is the headline benefit of reporting the replicated counter
+/// instead of `max(counter, local raft_term)`, and it could not have been
+/// written before: the Raft term is node-local and unreplicated, so a follower
+/// that had not seen the latest election — or a node campaigning on its own —
+/// reported a different `cluster_current_epoch` than the leader for identical
+/// cluster state. Redis's gossip header ratchets `currentEpoch` toward
+/// agreement precisely because tooling and operators compare the value across
+/// nodes; FrogDB gets the same property for free from Raft, but only once the
+/// reported value is the replicated one.
+///
+/// A forced election runs first so the nodes have genuinely had a term change
+/// to disagree about, and the epoch is pushed off zero by a join carrying a
+/// large epoch — an all-zero cluster would agree trivially.
+///
+/// The asserted property is **agreement plus a floor**, not a fixed value: the
+/// joiner is a phantom at an address nobody listens on, so the failure detector
+/// latches it FAIL within a few seconds and `MarkNodeFailed` bumps the counter
+/// past `CLAIMED_EPOCH`. Pinning equality would make the test unsatisfiable the
+/// moment the detector wins the race.
+#[tokio::test]
+async fn test_cluster_current_epoch_agrees_across_all_nodes() {
+    const CLAIMED_EPOCH: u64 = 500;
+    const JOINER_ID: u64 = 0xC0FFEE;
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    let leader = harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // Push the counter off zero through the ratchet path.
+    harness
+        .node(leader)
+        .unwrap()
+        .raft()
+        .unwrap()
+        .client_write(add_node_claiming(JOINER_ID, 7601, CLAIMED_EPOCH))
+        .await
+        .expect("uncontested claim must commit");
+
+    // Make one node campaign, so the cluster has a real term change in flight
+    // rather than a quiescent, trivially-identical state.
+    let follower = *harness.node_ids().iter().find(|&&id| id != leader).unwrap();
+    harness
+        .node(follower)
+        .unwrap()
+        .raft()
+        .unwrap()
+        .trigger()
+        .elect()
+        .await
+        .expect("triggering an election must not fail");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let mut reported = Vec::new();
+        for node_id in harness.node_ids() {
+            let info = parse_cluster_info(
+                &harness
+                    .node(node_id)
+                    .unwrap()
+                    .send("CLUSTER", &["INFO"])
+                    .await,
+            )
+            .unwrap();
+            reported.push((node_id, info.cluster_current_epoch, info.cluster_raft_term));
+        }
+
+        // Terms may legitimately differ across nodes; epochs may not. The
+        // counter must also have ratcheted to at least the claimed epoch — it
+        // may sit above it if the detector flagged the phantom joiner first.
+        let first_epoch = reported[0].1;
+        let agreed = reported.iter().all(|(_, epoch, _)| *epoch == first_epoch);
+        if agreed && first_epoch >= CLAIMED_EPOCH {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "nodes never agreed on a cluster_current_epoch >= {CLAIMED_EPOCH}; \
+             last seen (node, epoch, term): {reported:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// `cluster_current_epoch >= cluster_my_epoch` holds after a node joins
+/// carrying an epoch the cluster-wide counter never minted.
+///
+/// `AddNode` is the only path that introduces an epoch from outside the
+/// counter, so it is the only path that could leave a node reporting a
+/// `cluster_my_epoch` above `cluster_current_epoch`. The state machine ratchets
+/// the counter to any larger uncontested claim (issue 64), which is what keeps
+/// the bound true — and the bound now has to be *earned* there, because
+/// `CLUSTER INFO` no longer folds in the Raft term, which used to paper over a
+/// trailing counter on any cluster whose term happened to be larger.
+#[tokio::test]
+async fn test_join_with_large_epoch_keeps_current_epoch_above_my_epoch() {
+    const CLAIMED_EPOCH: u64 = 900;
+    const JOINER_ID: u64 = 0xDECAF;
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    let leader = harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    harness
+        .node(leader)
+        .unwrap()
+        .raft()
+        .unwrap()
+        .client_write(add_node_claiming(JOINER_ID, 7701, CLAIMED_EPOCH))
+        .await
+        .expect("uncontested claim must commit");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let mut all_ratcheted = true;
+        for node_id in harness.node_ids() {
+            let node = harness.node(node_id).unwrap();
+            // `NODES` first, then `INFO`: the two reads are separate commands
+            // and the `AddNode` entry can apply between them. Reading the
+            // per-node epochs from the older snapshot and the counter from the
+            // newer one can only understate the gap being asserted; the
+            // opposite order manufactures a failure out of read skew.
+            let nodes = parse_cluster_nodes(&node.send("CLUSTER", &["NODES"]).await).unwrap();
+            let info = parse_cluster_info(&node.send("CLUSTER", &["INFO"]).await).unwrap();
+            let max_node_epoch = nodes.iter().map(|n| n.config_epoch).max().unwrap_or(0);
+
+            // The invariant under test holds at every instant, converged or not.
+            assert!(
+                info.cluster_current_epoch >= info.cluster_my_epoch,
+                "node {node_id}: cluster_current_epoch ({}) must never trail \
+                 cluster_my_epoch ({})",
+                info.cluster_current_epoch,
+                info.cluster_my_epoch
+            );
+            assert!(
+                info.cluster_current_epoch >= max_node_epoch,
+                "node {node_id}: cluster_current_epoch ({}) must never trail \
+                 max(NODES config_epoch) ({max_node_epoch})",
+                info.cluster_current_epoch
+            );
+
+            if info.cluster_current_epoch < CLAIMED_EPOCH {
+                all_ratcheted = false;
+            }
+        }
+
+        if all_ratcheted {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the cluster-wide counter never ratcheted up to the joining node's \
+             claimed epoch {CLAIMED_EPOCH}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// The test harness's `get_cluster_info` reports what the server reports.
+///
+/// The harness used to synthesize `ClusterInfo` from the node's in-process
+/// `ClusterState` rather than issuing the command, so ~25 tests asserted
+/// against a struct the server never produced — and the two disagreed on real
+/// fields (`cluster_my_epoch` was the cluster-wide counter, not the node's own
+/// epoch). This test pins the harness to the wire format so the shortcut cannot
+/// come back.
+///
+/// The cluster is deliberately *not* left in the shape where every field
+/// coincides: a joining replica makes `cluster_size` differ from
+/// `cluster_known_nodes`, and a join claiming a large epoch pushes the
+/// cluster-wide counter off both zero and every node's own epoch. Comparing
+/// fields that are all equal to each other would pass against a synthesized
+/// struct — the exact failure mode this test exists to catch.
+#[tokio::test]
+async fn test_harness_cluster_info_matches_resp_reply() {
+    const CLAIMED_EPOCH: u64 = 250;
+    const JOINER_ID: u64 = 0xBEEF;
+    const JOINER_REPLICA_ID: u64 = 0xBEEF1;
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    let leader = harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    let raft = harness.node(leader).unwrap().raft().unwrap().clone();
+    // A primary claiming a large epoch: ratchets the counter above every node's
+    // own `config_epoch`, so `cluster_my_epoch != cluster_current_epoch`.
+    raft.client_write(add_node_claiming(JOINER_ID, 7801, CLAIMED_EPOCH))
+        .await
+        .expect("uncontested claim must commit");
+    // A replica: makes `cluster_size` (primaries) differ from
+    // `cluster_known_nodes` (all nodes).
+    let mut replica = frogdb_core::cluster::NodeInfo::new_replica(
+        JOINER_REPLICA_ID,
+        "127.0.0.1:7802".parse().unwrap(),
+        "127.0.0.1:17802".parse().unwrap(),
+        JOINER_ID,
+    );
+    replica.config_epoch = CLAIMED_EPOCH;
+    raft.client_write(frogdb_core::cluster::ClusterCommand::AddNode { node: replica })
+        .await
+        .expect("adding a replica must commit");
+
+    // Wait for both joins to be visible everywhere before comparing.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let mut seen = Vec::new();
+        for node_id in harness.node_ids() {
+            let info = parse_cluster_info(
+                &harness
+                    .node(node_id)
+                    .unwrap()
+                    .send("CLUSTER", &["INFO"])
+                    .await,
+            )
+            .unwrap();
+            seen.push((node_id, info.cluster_known_nodes, info.cluster_size));
+        }
+        if seen
+            .iter()
+            .all(|(_, known, size)| *known == 5 && *size == 4)
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "joins never converged; last seen (node, known_nodes, size): {seen:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    for node_id in harness.node_ids() {
+        let from_harness = harness.get_cluster_info(node_id).await.unwrap();
+        let from_resp = parse_cluster_info(
+            &harness
+                .node(node_id)
+                .unwrap()
+                .send("CLUSTER", &["INFO"])
+                .await,
+        )
+        .unwrap();
+
+        // Non-vacuity: the fields being compared must actually be able to
+        // disagree with one another on this cluster.
+        assert_ne!(
+            from_resp.cluster_size, from_resp.cluster_known_nodes,
+            "node {node_id}: test setup failed to separate cluster_size from cluster_known_nodes"
+        );
+        assert_ne!(
+            from_resp.cluster_my_epoch, from_resp.cluster_current_epoch,
+            "node {node_id}: test setup failed to separate cluster_my_epoch from the counter"
+        );
+
+        // The epoch fields are the ones that used to differ, and the ones every
+        // epoch test in this file reads.
+        assert_eq!(
+            from_harness.cluster_current_epoch, from_resp.cluster_current_epoch,
+            "node {node_id}: harness cluster_current_epoch must equal the RESP value"
+        );
+        assert_eq!(
+            from_harness.cluster_my_epoch, from_resp.cluster_my_epoch,
+            "node {node_id}: harness cluster_my_epoch must equal the RESP value"
+        );
+        assert_eq!(
+            from_harness.cluster_known_nodes, from_resp.cluster_known_nodes,
+            "node {node_id}: harness cluster_known_nodes must equal the RESP value"
+        );
+        assert_eq!(
+            from_harness.cluster_size, from_resp.cluster_size,
+            "node {node_id}: harness cluster_size must equal the RESP value"
+        );
+        assert_eq!(
+            from_harness.cluster_state, from_resp.cluster_state,
+            "node {node_id}: harness cluster_state must equal the RESP value"
+        );
+        assert_eq!(
+            from_harness.cluster_slots_assigned, from_resp.cluster_slots_assigned,
+            "node {node_id}: harness cluster_slots_assigned must equal the RESP value"
+        );
+        assert_eq!(
+            from_harness.cluster_slots_ok, from_resp.cluster_slots_ok,
+            "node {node_id}: harness cluster_slots_ok must equal the RESP value"
+        );
+    }
 
     harness.shutdown_all().await;
 }
@@ -7529,6 +8500,7 @@ async fn test_cluster_remains_writable_during_concurrent_writes_and_failover() {
 // Tier 19: MULTI-EXEC on Replica with READONLY
 // ============================================================================
 
+// FM-TXN-028
 /// Tests that READONLY + MULTI + GETs + EXEC succeeds on a non-owner node.
 ///
 /// Inspired by Redis `16-transactions-on-replica.tcl`.
@@ -7589,6 +8561,7 @@ async fn test_multi_exec_reads_succeed_on_replica_with_readonly() {
     harness.shutdown_all().await;
 }
 
+// FM-TXN-009
 /// Tests that a write inside MULTI on a READONLY node returns MOVED/EXECABORT.
 ///
 /// Inspired by Redis `16-transactions-on-replica.tcl`.
@@ -7639,6 +8612,7 @@ async fn test_multi_exec_write_inside_readonly_session_returns_moved() {
     harness.shutdown_all().await;
 }
 
+// FM-TXN-028
 /// READONLY eligibility is folded across the *whole* batch, not per command: a
 /// transaction of reads on a foreign slot serves locally, but adding a single
 /// write to the same batch makes the whole thing MOVED. Anything else would let
@@ -7799,21 +8773,22 @@ async fn test_auto_failover_selects_most_caught_up_replica() {
         .await
         .unwrap();
 
-    // The new leader should have the highest replication offset
-    // among surviving nodes. Since we can't easily measure per-node
-    // offsets in the current implementation, we just verify a leader
-    // was elected and the cluster recovers.
+    // The new leader should have the highest replication offset among the
+    // survivors. Per-node offsets are not observable yet, so what this test
+    // can pin is the *outcome*: a new Raft leader exists, and the cluster
+    // reports the dead primary's slots as lost.
     //
-    // `wait_for_new_leader` only guarantees a Raft leader exists; the
-    // failover state machine (slot re-ownership, epoch bump, failed-node
-    // reconciliation) that flips CLUSTER INFO back to `cluster_state:ok`
-    // lands a beat later. Poll for it on a bounded deadline instead of
-    // reading once and racing the transition.
+    // This cluster has five primaries and no replicas, so nothing can take
+    // over the killed node's slots. Once the failure detector latches its FAIL
+    // flag those slots are uncovered and `cluster_state:fail` is correct and
+    // permanent — Redis reports `fail` for uncovered slots too. Asserting `ok`
+    // here only ever passed by beating the ~5-probe latch; polling for the
+    // steady state is deterministic, because a killed node never answers again.
     let new_leader_node = harness.node(new_leader).unwrap();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     let info = loop {
         let info = parse_cluster_info(&new_leader_node.send("CLUSTER", &["INFO"]).await).unwrap();
-        if info.cluster_state == "ok" {
+        if info.cluster_state == "fail" {
             break info;
         }
         if tokio::time::Instant::now() >= deadline {
@@ -7822,8 +8797,12 @@ async fn test_auto_failover_selects_most_caught_up_replica() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     };
     assert_eq!(
-        info.cluster_state, "ok",
-        "New leader should report cluster as ok"
+        info.cluster_state, "fail",
+        "with no replica to promote, the killed primary's slots stay uncovered"
+    );
+    assert!(
+        info.cluster_slots_fail > 0,
+        "the uncovered slots must be the reported reason, got {info:?}"
     );
 
     harness.shutdown_all().await;
@@ -8492,7 +9471,7 @@ async fn test_cluster_meet_adds_node() {
 
     // Verify all nodes now see 4 nodes
     for &nid in &harness.node_ids() {
-        let info = harness.get_cluster_info(nid).unwrap();
+        let info = harness.get_cluster_info(nid).await.unwrap();
         assert_eq!(
             info.cluster_known_nodes, 4,
             "Node {} should see 4 known nodes after MEET",
@@ -8940,6 +9919,7 @@ fn assert_exact_error(response: &frogdb_protocol::Response, expected: &[u8], con
     }
 }
 
+// FM-TXN-004, FM-TXN-010
 /// Queue-time CROSSSLOT + EXECABORT: a command whose own two keys (RENAME's
 /// source/destination) span different slots is rejected immediately as its
 /// queue reply -- it never becomes `+QUEUED` -- and the transaction is marked
@@ -9054,6 +10034,7 @@ async fn test_multi_exec_cross_slot_returns_error() {
     harness.shutdown_all().await;
 }
 
+// FM-TXN-019
 /// Deferred EXEC-time CROSSSLOT (distinct from the queue-time path above):
 /// two *separate* single-key commands, each individually valid, that target
 /// different slots both get `+QUEUED` -- queuing only validates a command's
@@ -9503,6 +10484,16 @@ async fn test_cluster_slot_assignment_persists() {
 /// epoch 0 can't distinguish "persisted" from "reset to 0"), the target
 /// node is first promoted via a real `CLUSTER FAILOVER`, which is the only
 /// path that bumps a node's own `config_epoch` to a nonzero value.
+///
+/// Now that `cluster_current_epoch` reports the replicated counter instead of
+/// `max(counter, raft_term)`, the `CLUSTER INFO` side is worth asserting too
+/// and is checked below. It is asserted as non-regression rather than
+/// equality: the restart window is long enough for the surviving peer's
+/// failure detector to commit `MarkNodeFailed` for the node being restarted,
+/// which legitimately advances the counter. What must never happen is the
+/// counter coming back *below* where it was, or below the per-node epoch that
+/// demonstrably survived on disk -- either would mean the state machine lost
+/// replicated state.
 #[tokio::test]
 async fn test_cluster_epoch_persists() {
     let config = ClusterNodeConfig {
@@ -9567,6 +10558,8 @@ async fn test_cluster_epoch_persists() {
          persistence check meaningful"
     );
 
+    let pre_info = parse_cluster_info(&replica.send("CLUSTER", &["INFO"]).await).unwrap();
+
     // Restart the promoted node.
     harness.shutdown_node(replica_id).await;
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -9611,6 +10604,28 @@ async fn test_cluster_epoch_persists() {
         "raw per-node config_epoch must be identical (not merely >=) across \
          a restart: pre={}, post={}",
         pre_epoch, post_epoch
+    );
+
+    // The cluster-wide counter, read from the same restarted node. Under the
+    // old fold this assertion was vacuous -- the restart's own election bumped
+    // `raft_term`, which dominated the reported value whether or not the
+    // counter survived.
+    let post_info = parse_cluster_info(&replica.send("CLUSTER", &["INFO"]).await).unwrap();
+    assert!(
+        post_info.cluster_current_epoch >= pre_info.cluster_current_epoch,
+        "cluster_current_epoch must not regress across a restart: pre={}, \
+         post={} (raft_term {} -> {})",
+        pre_info.cluster_current_epoch,
+        post_info.cluster_current_epoch,
+        pre_info.cluster_raft_term,
+        post_info.cluster_raft_term
+    );
+    assert!(
+        post_info.cluster_current_epoch >= post_epoch,
+        "the restored counter must still dominate the per-node epoch that \
+         survived on disk: counter={}, my epoch={}",
+        post_info.cluster_current_epoch,
+        post_epoch
     );
 
     harness.shutdown_all().await;
@@ -11201,7 +12216,7 @@ async fn test_mark_node_failed_cluster_state_degrades() {
     );
 
     // Verify initial state
-    let info_before = harness.get_cluster_info(leader_id).unwrap();
+    let info_before = harness.get_cluster_info(leader_id).await.unwrap();
     let known_before = info_before.cluster_known_nodes;
     eprintln!("Before kill: known_nodes={}", known_before);
 
@@ -11228,7 +12243,7 @@ async fn test_mark_node_failed_cluster_state_degrades() {
     let mut known_after = known_before;
 
     while tokio::time::Instant::now() < deadline {
-        if let Ok(info) = harness.get_cluster_info(leader_id) {
+        if let Ok(info) = harness.get_cluster_info(leader_id).await {
             known_after = info.cluster_known_nodes;
             if known_after < known_before {
                 break;
@@ -11353,36 +12368,42 @@ async fn test_rapid_writes_across_all_nodes() {
 // WAIT in cluster mode (testing-gap issue 37)
 // ============================================================================
 //
-// Pinned contract (see the issue's `## Resolution` for the full write-up):
+// Pinned contract (see the issue's `## Resolution` and the WAIT-cluster-mode
+// PRD for the full write-up):
 //
-// FrogDB's `WAIT numreplicas timeout` is served by the connection-level
-// `WaitCoordinator`, which lives on the node's `PrimaryReplicationHandler`
-// (`server/src/connection/blocking.rs::handle_wait_command`). That handler is
-// constructed *only* when the node's replication role is the literal string
-// `"primary"` (`server/src/server/replication_init.rs:57`,
-// `config/src/replication.rs::is_primary`). A cluster node started by the test
-// harness keeps the default replication role `"standalone"` — cluster
-// membership and the *cluster* master/replica role are tracked separately, in
-// Raft-backed cluster state, and never set `replication.role = "primary"`.
+// WAIT has no cluster-specific path. A cluster replica attaches over the same
+// PSYNC link, into the same `ReplicationTrackerImpl`, as a standalone one —
+// Raft carries cluster metadata only (ADR-0001), never key data — so the
+// connection-level `WaitCoordinator`
+// (`server/src/connection/blocking.rs::handle_wait_command`) counts the same
+// thing in both modes: the replicas attached to *this* node.
 //
 // Consequences, all pinned below:
-//   * `handle_wait_command` finds `primary_replication_handler == None` and
-//     takes the standalone early-return, replying `Integer(0)` immediately for
-//     ANY `numreplicas`/`timeout` — it never blocks, never solicits acks, and
-//     never counts a shard's cluster replicas. Cluster-mode WAIT is, in effect,
-//     unwired: no replica ever counts toward the quorum.
+//   * WAIT counts this node's own replicas and blocks up to `timeout` for them,
+//     exactly as in standalone. `numreplicas 0` returns the live count
+//     immediately; an unreachable `numreplicas` blocks to the deadline and then
+//     returns what it has (Redis parity, deliberately not Dragonfly's
+//     early-exit).
+//   * WAIT never counts another shard's replicas: a node's PSYNC replicas are
+//     its own shard's replica set, which is what makes Redis's per-shard
+//     contract hold here without per-shard bookkeeping.
+//   * WAIT takes no key, so it never redirects — a node owning no slots still
+//     answers with an integer, never MOVED.
 //   * A cluster *replica* node carries the data-path `is_replica` flag, so WAIT
 //     is rejected there with the standard replica error (before arg parsing).
-//   * Across a failover, WAIT still never hangs. A promoted node's data-path
-//     role is not re-installed (known findings 34/61: promoted nodes can't
-//     serve PSYNC / runtime resync staged-not-installed), so a replica promoted
-//     in *cluster state* keeps its `is_replica` data-path flag and continues to
-//     reject WAIT — while surviving cluster primaries keep returning 0.
+//     A node promoted by a cluster failover installs the primary role on its
+//     data path, so it *serves* WAIT from that point on.
+//   * A slot-migration target is not a replica (migration moves keys with
+//     `MIGRATE`, not PSYNC), so it never counts toward the quorum.
 //
-// This is a deliberate, documented divergence from standalone WAIT (where the
-// coordinator blocks up to `timeout` and returns the real acked count) and from
-// Redis cluster WAIT (which counts the shard-local replica set). The tests pin
-// the *actual* behavior so a future wiring of cluster WAIT trips them loudly.
+// The one divergence from Redis is inherited from standalone and unrelated to
+// clustering: the coordinator waits on the node-global replication offset
+// rather than the connection's own `c->woff`
+// (`replication/src/wait_coordinator.rs`), which Dragonfly does too and which
+// can only over-wait, never under-wait.
+//
+// Cluster-*wide* durability is a client concern: fan the WAIT out to every
+// primary and take the minimum. FrogDB does not fan out server-side.
 
 /// Extract the integer from a `WAIT` reply, or panic with the actual response.
 fn wait_reply_count(resp: &frogdb_protocol::Response) -> i64 {
@@ -11392,22 +12413,15 @@ fn wait_reply_count(resp: &frogdb_protocol::Response) -> i64 {
     }
 }
 
-/// WAIT on a cluster primary returns 0 immediately for every `numreplicas`,
-/// even with a live cluster replica attached to the shard being written.
+/// WAIT on a cluster primary counts the replicas attached to that primary's
+/// shard, blocking until they ACK the write under test.
 ///
 /// Acceptance criteria (issue 37):
-///   * ack count matches the *actual counted* replica set — which in cluster
-///     mode is always 0 (no replica is wired into the WAIT coordinator), not
-///     the cluster-wide or shard-local replica count;
-///   * `WAIT 0` returns immediately;
-///   * `numreplicas` exceeding the counted replica set does not hang past the
-///     timeout — here it does not even reach the timeout, returning 0 at once.
-///
-/// The assertions bound each call *well under its own timeout* so a regression
-/// that actually engaged a blocking coordinator (returning the same 0 only
-/// after idling out the timeout) would be caught, not masked.
+///   * the ack count matches the actual replica set of the contacted node;
+///   * `WAIT 0` returns the live count immediately, without blocking;
+///   * a satisfiable `numreplicas` resolves well inside its timeout.
 #[tokio::test]
-async fn test_wait_in_cluster_returns_zero_immediately() {
+async fn test_wait_in_cluster_counts_shard_replicas() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(2).await.unwrap();
     harness
@@ -11419,16 +12433,17 @@ async fn test_wait_in_cluster_returns_zero_immediately() {
         .await
         .unwrap();
 
-    // Attach a real cluster replica to the first primary's shard.
+    // Attach a real cluster replica to the first primary's shard, and wait for
+    // the PSYNC link itself rather than for cluster-state convergence: the link
+    // is what WAIT counts.
     let primary_id = harness.node_ids()[0];
     let _replica_id = harness.add_replica(primary_id).await.unwrap();
     harness
-        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .wait_for_replication_link(primary_id, 1, Duration::from_secs(20))
         .await
-        .unwrap();
+        .expect("primary never reported an attached replica");
 
-    // Write a key into a slot this primary owns (no MOVED), then let any
-    // replication settle so a *working* coordinator would have acks to count.
+    // Write a key into a slot this primary owns (no MOVED).
     let primary = harness.node(primary_id).unwrap();
     let nodes = parse_cluster_nodes(&primary.send("CLUSTER", &["NODES"]).await).unwrap();
     let myself = nodes.iter().find(|n| n.is_myself()).unwrap();
@@ -11442,29 +12457,35 @@ async fn test_wait_in_cluster_returns_zero_immediately() {
         !is_error(&primary.send("SET", &[&key, "wait-cluster"]).await),
         "SET on the owning primary should succeed"
     );
-    tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Each case: (numreplicas, timeout_ms). A blocking implementation with 0
-    // counted replicas would idle for `timeout_ms` on the >0 cases; assert we
-    // return in well under half of it. Timeouts are kept generous enough that
-    // the half-timeout bound stays far above a debug-build round-trip, so the
-    // assertion measures "did not block", not scheduler noise.
-    for (num, timeout_ms) in [("0", 1000u64), ("1", 2000), ("2", 1500)] {
-        let start = std::time::Instant::now();
-        let resp = primary.send("WAIT", &[num, &timeout_ms.to_string()]).await;
-        let elapsed = start.elapsed();
-        assert_eq!(
-            wait_reply_count(&resp),
-            0,
-            "cluster WAIT {num} {timeout_ms}: no replica is wired into the WAIT \
-             coordinator, so the count is always 0"
-        );
-        assert!(
-            elapsed < Duration::from_millis(timeout_ms / 2),
-            "cluster WAIT {num} {timeout_ms} must return immediately (unwired \
-             fast-path), not block toward its timeout; took {elapsed:?}"
-        );
-    }
+    // The replica must ACK the write, and do so well inside the timeout.
+    let start = std::time::Instant::now();
+    let resp = primary.send("WAIT", &["1", "5000"]).await;
+    let elapsed = start.elapsed();
+    assert_eq!(
+        wait_reply_count(&resp),
+        1,
+        "cluster WAIT must count the shard's attached replica, got {resp:?}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(2500),
+        "a satisfiable cluster WAIT must resolve on the ACK, not on the \
+         deadline; took {elapsed:?}"
+    );
+
+    // `numreplicas 0` reports the live count without blocking at all.
+    let start = std::time::Instant::now();
+    let resp = primary.send("WAIT", &["0", "1000"]).await;
+    let elapsed = start.elapsed();
+    assert_eq!(
+        wait_reply_count(&resp),
+        1,
+        "WAIT 0 must report the live replica count, got {resp:?}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "WAIT 0 must not block; took {elapsed:?}"
+    );
 
     harness.shutdown_all().await;
 }
@@ -11508,20 +12529,22 @@ async fn test_wait_rejected_on_cluster_replica() {
     harness.shutdown_all().await;
 }
 
-/// WAIT never hangs across a failover of the shard being written to.
+/// A promoted node *serves* WAIT: the failover moves the WAIT surface along
+/// with the primary role, rather than leaving a node that advertises `master`
+/// while still rejecting WAIT as a replica.
 ///
-/// The owning primary is killed; the cluster promotes its replica in *cluster
-/// state* (CLUSTER NODES reports the replica as master). Pinned semantics:
-///   * WAIT on the promoted node still returns *immediately* — and, because a
-///     promotion is staged in cluster state but not re-installed on the data
-///     path (known findings 34/61), the node keeps its `is_replica` flag and so
-///     WAIT is still rejected there rather than served;
-///   * WAIT on the surviving sibling primary keeps returning 0 immediately.
+/// This is the tripwire the original issue-37 test was built to be. It pinned
+/// the opposite — a promoted node kept its data-path replica flag and kept
+/// rejecting WAIT — with an explicit note to flip it once promotions installed
+/// the data-path role. They do now (see
+/// `test_cluster_failover_promotes_the_data_path`), so this asserts the served
+/// contract, plus the safety property the old test guarded: WAIT resolves
+/// within its timeout on both the promoted node and the surviving sibling.
 ///
-/// Either way WAIT resolves in milliseconds, never hanging past the requested
-/// timeout — the core failover-safety property this test guards.
+/// `CLUSTER FAILOVER TAKEOVER` drives the promotion because auto-failover is
+/// off by default, so killing the primary alone changes no cluster state.
 #[tokio::test]
-async fn test_wait_in_cluster_does_not_hang_across_failover() {
+async fn test_wait_is_served_by_a_promoted_cluster_primary() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(2).await.unwrap();
     harness
@@ -11536,84 +12559,386 @@ async fn test_wait_in_cluster_does_not_hang_across_failover() {
     let primary_id = harness.node_ids()[0];
     let replica_id = harness.add_replica(primary_id).await.unwrap();
     harness
-        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .wait_for_replication_link(primary_id, 1, Duration::from_secs(20))
         .await
-        .unwrap();
+        .expect("primary never reported an attached replica");
 
-    // Write into a slot the doomed primary owns.
+    // Write into a slot the outgoing primary owns.
     let primary = harness.node(primary_id).unwrap();
     let nodes = parse_cluster_nodes(&primary.send("CLUSTER", &["NODES"]).await).unwrap();
     let myself = nodes.iter().find(|n| n.is_myself()).unwrap();
     let key = key_for_slot(myself.slots[0].0);
     let _ = primary.send("SET", &[&key, "pre-failover"]).await;
 
-    // Kill the owning primary → the cluster reacts (leader election + the
-    // replica's cluster-state promotion).
-    harness.kill_node(primary_id).await;
-    let _ = harness
-        .wait_for_new_leader(primary_id, Duration::from_secs(20))
-        .await;
-
-    // Poll until the replica reports itself master in cluster state (bounded),
-    // so we exercise WAIT *after* the promotion is visible.
+    // Before the promotion, WAIT on the replica is rejected.
     let replica = harness.node(replica_id).unwrap();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    loop {
-        let nodes = parse_cluster_nodes(&replica.send("CLUSTER", &["NODES"]).await).unwrap();
-        let m = nodes.iter().find(|n| n.is_myself()).unwrap();
-        if m.is_master() || tokio::time::Instant::now() > deadline {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-
-    // WAIT on the promoted node resolves immediately (does not hang), and is
-    // *still* the replica rejection: promotion is staged in cluster state but
-    // the data-path role is never re-installed (findings 34/61), so the node
-    // keeps `is_replica = true`. Pinning the rejection (rather than accepting
-    // either answer) is what makes this test notice a promotion that starts
-    // installing the data-path role — at which point this assertion should be
-    // updated to the served-WAIT contract.
-    let start = std::time::Instant::now();
-    let resp = replica.send("WAIT", &["1", "1500"]).await;
-    let elapsed = start.elapsed();
     assert!(
-        elapsed < Duration::from_millis(750),
-        "WAIT on the promoted node must not hang across failover; took {elapsed:?}"
-    );
-    assert!(
-        is_error(&resp),
-        "the promoted node keeps its data-path replica role, so WAIT is still \
-         rejected there; got {resp:?}"
-    );
-    assert!(
-        get_error_message(&resp).unwrap_or("").contains("replica"),
-        "post-failover WAIT rejection should still be the replica error, got: {:?}",
-        get_error_message(&resp)
+        is_error(&replica.send("WAIT", &["0", "100"]).await),
+        "a cluster replica must reject WAIT before the promotion"
     );
 
-    // A surviving sibling primary keeps answering WAIT with 0, immediately.
-    let sibling = harness
-        .node_ids()
-        .into_iter()
-        .find(|&id| id != primary_id && id != replica_id)
-        .expect("2-primary cluster + 1 replica must leave a surviving sibling primary");
+    let resp = replica
+        .try_send_admin_aware("CLUSTER", &["FAILOVER", "TAKEOVER"])
+        .await
+        .unwrap();
+    assert!(
+        !is_error(&resp),
+        "CLUSTER FAILOVER TAKEOVER failed: {resp:?}"
+    );
+    assert_eq!(
+        wait_for_data_path_role(&harness, replica_id, "master", Duration::from_secs(20)).await,
+        "master",
+        "the promoted node must install the primary role on its data path"
+    );
+
+    // WAIT is now served, not rejected. The promoted node has no replicas of
+    // its own, so `WAIT 0` reports 0 — an honest count, not a stub.
+    let promoted = harness.node(replica_id).unwrap();
     let start = std::time::Instant::now();
-    let resp = harness
-        .node(sibling)
-        .unwrap()
-        .send("WAIT", &["1", "1500"])
-        .await;
+    let resp = promoted.send("WAIT", &["0", "1500"]).await;
     let elapsed = start.elapsed();
-    // The sibling is a cluster primary (standalone replication role) → 0.
     assert_eq!(
         wait_reply_count(&resp),
         0,
-        "surviving cluster primary still serves WAIT from the unwired fast path"
+        "a promoted primary with no replicas must report 0, served not rejected; got {resp:?}"
     );
     assert!(
         elapsed < Duration::from_millis(750),
-        "WAIT on the surviving primary must not hang; took {elapsed:?}"
+        "WAIT 0 on the promoted node must not block; took {elapsed:?}"
+    );
+
+    // And an unsatisfiable WAIT still resolves at its own deadline rather than
+    // hanging — the failover-safety property the original test guarded.
+    let start = std::time::Instant::now();
+    let resp = promoted.send("WAIT", &["1", "800"]).await;
+    let elapsed = start.elapsed();
+    assert_eq!(
+        wait_reply_count(&resp),
+        0,
+        "an unreachable quorum returns the count it has, got {resp:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "WAIT must never outlive its timeout by more than scheduling slack; took {elapsed:?}"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// A `numreplicas` larger than the attached replica set blocks to the deadline
+/// and then returns the count it actually has (Redis parity).
+///
+/// Deliberately *not* Dragonfly's early exit: a replica may be mid-attach when
+/// WAIT starts, so returning early on "every currently-tracked replica has
+/// acked" would answer a question the client did not ask. The lower bound on
+/// elapsed time is the assertion that matters.
+#[tokio::test]
+async fn test_wait_numreplicas_exceeds_actual_blocks_to_timeout() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(2).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let primary_id = harness.node_ids()[0];
+    let _replica_id = harness.add_replica(primary_id).await.unwrap();
+    harness
+        .wait_for_replication_link(primary_id, 1, Duration::from_secs(20))
+        .await
+        .expect("primary never reported an attached replica");
+
+    let primary = harness.node(primary_id).unwrap();
+    let nodes = parse_cluster_nodes(&primary.send("CLUSTER", &["NODES"]).await).unwrap();
+    let myself = nodes.iter().find(|n| n.is_myself()).unwrap();
+    let key = key_for_slot(myself.slots[0].0);
+    assert!(!is_error(
+        &primary.send("SET", &[&key, "unreachable"]).await
+    ));
+
+    let start = std::time::Instant::now();
+    let resp = primary.send("WAIT", &["3", "500"]).await;
+    let elapsed = start.elapsed();
+    assert_eq!(
+        wait_reply_count(&resp),
+        1,
+        "an unreachable quorum returns the replicas that did ack, got {resp:?}"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(450),
+        "WAIT must block toward its deadline rather than early-exiting; took {elapsed:?}"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// WAIT counts *this* node's replicas, never the whole cluster's.
+///
+/// Two shards, one replica each: WAIT on shard A's primary must answer 1, not
+/// 2. This is the per-shard property Redis documents; FrogDB gets it for free
+/// because a node's PSYNC replicas are exactly its own shard's replica set.
+#[tokio::test]
+async fn test_wait_does_not_count_other_shards_replicas() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(2).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let primary_ids = harness.node_ids();
+    let (shard_a, shard_b) = (primary_ids[0], primary_ids[1]);
+    let _ = harness.add_replica(shard_a).await.unwrap();
+    let _ = harness.add_replica(shard_b).await.unwrap();
+    harness
+        .wait_for_replication_link(shard_a, 1, Duration::from_secs(20))
+        .await
+        .expect("shard A never reported an attached replica");
+    harness
+        .wait_for_replication_link(shard_b, 1, Duration::from_secs(20))
+        .await
+        .expect("shard B never reported an attached replica");
+
+    for id in [shard_a, shard_b] {
+        let node = harness.node(id).unwrap();
+        let nodes = parse_cluster_nodes(&node.send("CLUSTER", &["NODES"]).await).unwrap();
+        let myself = nodes.iter().find(|n| n.is_myself()).unwrap();
+        let key = key_for_slot(myself.slots[0].0);
+        assert!(!is_error(&node.send("SET", &[&key, "per-shard"]).await));
+
+        let resp = node.send("WAIT", &["1", "5000"]).await;
+        assert_eq!(
+            wait_reply_count(&resp),
+            1,
+            "node {id} must count its own single replica, not the cluster's two; got {resp:?}"
+        );
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// WAIT takes no key, so it never redirects.
+///
+/// The control is the same connection redirecting a *keyed* command in the same
+/// breath: that proves the node's redirect path is live and that WAIT's integer
+/// reply is an exemption rather than an accident of topology.
+#[tokio::test]
+async fn test_wait_never_redirects_in_cluster() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(2).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // Find a slot this node does *not* own, so a keyed command against it must
+    // be redirected.
+    let node_id = harness.node_ids()[0];
+    let node = harness.node(node_id).unwrap();
+    let nodes = parse_cluster_nodes(&node.send("CLUSTER", &["NODES"]).await).unwrap();
+    let myself = nodes.iter().find(|n| n.is_myself()).unwrap();
+    let foreign_slot = (0..16384u16)
+        .find(|slot| !myself.slots.iter().any(|(lo, hi)| slot >= lo && slot <= hi))
+        .expect("a 2-node cluster must leave some slot to another owner");
+
+    let redirected = node.send("GET", &[&key_for_slot(foreign_slot)]).await;
+    assert!(
+        get_error_message(&redirected)
+            .unwrap_or_default()
+            .starts_with("MOVED"),
+        "control: a keyed command for a foreign slot must be redirected, got {redirected:?}"
+    );
+
+    // Same connection, same topology: WAIT answers with an integer.
+    let resp = node.send("WAIT", &["0", "500"]).await;
+    assert_eq!(
+        wait_reply_count(&resp),
+        0,
+        "WAIT is keyless and must answer with an integer, never MOVED, got {resp:?}"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// A slot-migration target does not count as a replica.
+///
+/// Migration moves keys with `MIGRATE` (a client-level command), not PSYNC, so
+/// the importing node never enters the source's streaming-replica set. Pinning
+/// this keeps a future migration implementation from quietly inflating WAIT's
+/// answer with a node that holds only part of the keyspace.
+#[tokio::test]
+async fn test_wait_ignores_slot_migration_target() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(2).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let ids = harness.node_ids();
+    let (source_id, target_id) = (ids[0], ids[1]);
+    let source = harness.node(source_id).unwrap();
+    let nodes = parse_cluster_nodes(&source.send("CLUSTER", &["NODES"]).await).unwrap();
+    let myself = nodes.iter().find(|n| n.is_myself()).unwrap();
+    let slot = myself.slots[0].0;
+
+    let target_name = harness.get_node_id_str(target_id).unwrap();
+    let source_name = harness.get_node_id_str(source_id).unwrap();
+    let resp = source
+        .send(
+            "CLUSTER",
+            &["SETSLOT", &slot.to_string(), "MIGRATING", &target_name],
+        )
+        .await;
+    assert!(!is_error(&resp), "SETSLOT MIGRATING failed: {resp:?}");
+    let resp = harness
+        .node(target_id)
+        .unwrap()
+        .send(
+            "CLUSTER",
+            &["SETSLOT", &slot.to_string(), "IMPORTING", &source_name],
+        )
+        .await;
+    assert!(!is_error(&resp), "SETSLOT IMPORTING failed: {resp:?}");
+
+    let source = harness.node(source_id).unwrap();
+    let resp = source.send("WAIT", &["0", "500"]).await;
+    assert_eq!(
+        wait_reply_count(&resp),
+        0,
+        "a migration target is not a replica and must not count toward WAIT, got {resp:?}"
+    );
+
+    let _ = source
+        .send("CLUSTER", &["SETSLOT", &slot.to_string(), "STABLE"])
+        .await;
+    let _ = harness
+        .node(target_id)
+        .unwrap()
+        .send("CLUSTER", &["SETSLOT", &slot.to_string(), "STABLE"])
+        .await;
+
+    harness.shutdown_all().await;
+}
+
+/// A WAIT parked on a cluster primary is released with `-UNBLOCKED` when the
+/// cluster demotes that node.
+///
+/// The cluster path reaches the same seam as a standalone `REPLICAOF`: the
+/// committed `SetRole { Replica }` becomes a `RoleChangeEvent::Demoted`, which
+/// drives `RoleManager::demote` -> `end_primary_stint`, which releases the
+/// parked waits alongside the downstream disconnect. Pinned separately from the
+/// standalone case because the trigger, not the mechanism, is what differs.
+#[tokio::test]
+async fn test_wait_unblocked_on_cluster_demotion() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(2).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let ids = harness.node_ids();
+    let (demoted_id, survivor_id) = (ids[0], ids[1]);
+    let survivor_name = harness.get_node_id_str(survivor_id).unwrap();
+
+    let node = harness.node(demoted_id).unwrap();
+    let mut blocked = node.connect().await;
+    blocked.send_only(&["WAIT", "5", "0"]).await;
+    assert!(
+        blocked
+            .read_response(Duration::from_millis(500))
+            .await
+            .is_none(),
+        "WAIT 5 0 on a replica-less cluster primary must park"
+    );
+
+    let resp = node
+        .try_send_admin_aware("CLUSTER", &["REPLICATE", &survivor_name])
+        .await
+        .unwrap();
+    assert!(!is_error(&resp), "CLUSTER REPLICATE failed: {resp:?}");
+    assert_eq!(
+        wait_for_data_path_role(&harness, demoted_id, "slave", Duration::from_secs(20)).await,
+        "slave",
+        "the node must actually be demoted on the data path"
+    );
+
+    let resp = blocked
+        .read_response(Duration::from_secs(5))
+        .await
+        .expect("a cluster demotion must release the parked WAIT");
+    let msg = get_error_message(&resp).unwrap_or_default();
+    assert!(
+        msg.starts_with("UNBLOCKED") && msg.contains("master -> replica"),
+        "a WAIT released by a cluster demotion must be the -UNBLOCKED error, got: {resp:?}"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// A cluster primary with zero replicas still accepts writes.
+///
+/// Guard for the risk that building the primary-side replication seams on every
+/// cluster node silently turns on the self-fence / `min-replicas-to-write`
+/// machinery. Those stay gated on their own config flags, which default off, so
+/// a replica-less cluster primary must behave exactly as before.
+#[tokio::test]
+async fn test_cluster_primary_writes_without_replicas() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(2).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let primary_id = harness.node_ids()[0];
+    let primary = harness.node(primary_id).unwrap();
+    let nodes = parse_cluster_nodes(&primary.send("CLUSTER", &["NODES"]).await).unwrap();
+    let myself = nodes.iter().find(|n| n.is_myself()).unwrap();
+    let key = key_for_slot(myself.slots[0].0);
+
+    assert_eq!(
+        connected_slaves(&primary.send("INFO", &["replication"]).await),
+        Some(0),
+        "test setup: this primary must have no replicas"
+    );
+
+    for i in 0..5 {
+        let resp = primary.send("SET", &[&key, &format!("v{i}")]).await;
+        assert!(
+            !is_error(&resp),
+            "a replica-less cluster primary must accept writes, got {resp:?}"
+        );
+    }
+    let resp = primary.send("GET", &[&key]).await;
+    assert!(
+        matches!(&resp, frogdb_protocol::Response::Bulk(Some(v)) if v.as_ref() == b"v4"),
+        "the write must be readable back, got {resp:?}"
     );
 
     harness.shutdown_all().await;
@@ -12174,6 +13499,7 @@ async fn migrate_keys(harness: &ClusterTestHarness, source_id: u64, target_id: u
     assert!(!is_error(&resp), "MIGRATE failed: {resp:?}");
 }
 
+// FM-TXN-009, FM-TXN-022, FM-TXN-047
 /// A slot migration that *completes* between queue time and EXEC time.
 ///
 /// EXEC re-validates and answers `-MOVED <slot> <new owner>` with the queue
@@ -12312,6 +13638,196 @@ async fn test_multi_exec_after_completed_slot_migration_redirects_with_moved() {
     harness.shutdown_all().await;
 }
 
+// FM-TXN-048
+/// `WATCH` is a keyed command and is slot-routed like one.
+///
+/// It short-circuits at the transaction-control dispatch stage, long before the
+/// cluster slot-validation stage runs, so nothing in the ordinary gauntlet
+/// covers it: a node that does not own the key's slot used to answer `+OK` and
+/// register a CAS no writer on the real owner could ever dirty.
+#[tokio::test]
+async fn test_watch_on_a_slot_this_node_does_not_own_is_moved() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 1200u16;
+    let (owner_id, other_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find an owner for the test slot");
+    let key = key_for_slot(test_slot);
+    assert_eq!(
+        slot_for_key(key.as_bytes()),
+        test_slot,
+        "the probe key must land in the test slot"
+    );
+    let owner_addr = harness.node(owner_id).unwrap().client_addr();
+
+    // THE CONTRACT: the non-owner refuses and names the owner.
+    let watch = harness.node(other_id).unwrap().send("WATCH", &[&key]).await;
+    assert_eq!(
+        is_moved_redirect(&watch),
+        Some((test_slot, owner_addr)),
+        "WATCH on a slot this node does not own must answer MOVED, got {watch:?}"
+    );
+
+    // The owner still accepts it — the check refuses foreign slots, not WATCH.
+    assert_eq!(
+        harness.node(owner_id).unwrap().send("WATCH", &[&key]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        "WATCH on the slot's owner must still succeed"
+    );
+
+    // A watch set spanning two slots is CROSSSLOT, exactly like any other
+    // multi-key command.
+    let other_slot_key = key_for_slot(test_slot + 1);
+    assert_ne!(
+        slot_for_key(other_slot_key.as_bytes()),
+        test_slot,
+        "the second key must genuinely land in another slot"
+    );
+    let crossslot = harness
+        .node(owner_id)
+        .unwrap()
+        .send("WATCH", &[&key, &other_slot_key])
+        .await;
+    assert!(
+        get_error_message(&crossslot).is_some_and(|m| m.starts_with("CROSSSLOT")),
+        "WATCH across two slots must be CROSSSLOT, got {crossslot:?}"
+    );
+
+    harness.shutdown_all().await;
+}
+
+// FM-TXN-049
+/// A watched key whose slot leaves this node between `WATCH` and `EXEC`, with a
+/// transaction body that names no key of its own.
+///
+/// The slot is handed over with a bare `SETSLOT … NODE` — no `MIGRATE` — on
+/// purpose: a key-by-key migration deletes the watched key on the source, which
+/// bumps its version and makes the ordinary CAS check fire. Reassigning
+/// ownership alone leaves this node holding the key at an *unchanged* version,
+/// which is exactly the state in which nothing local can ever notice the new
+/// owner's writes. The queued batch is keyless, so the batch re-validation has
+/// nothing to route and would happily serve it here; the watch set is the only
+/// thing still pointing at the departed slot, so the CAS must fail (nil) rather
+/// than commit against this node's stale copy.
+#[tokio::test]
+async fn test_watch_then_slot_reassignment_then_keyless_exec_aborts_the_watch() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 1200u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find an owner for the test slot");
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key = format!("{tag}_watched");
+    assert_eq!(
+        slot_for_key(key.as_bytes()),
+        test_slot,
+        "the hash-tagged watched key must land in the migrated slot"
+    );
+
+    let source = harness.node(source_id).unwrap();
+    assert_eq!(
+        source.send("SET", &[&key, "v0"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        "seeding the watched key on its owner must succeed"
+    );
+
+    // WATCH, then queue a body that touches no key at all.
+    let mut client = source.connect().await;
+    assert_eq!(
+        client.command(&["WATCH", &key]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        "WATCH on the current owner must succeed"
+    );
+    assert_eq!(
+        client.command(&["MULTI"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        "MULTI should succeed"
+    );
+    assert_eq!(
+        client.command(&["PING"]).await,
+        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        "a keyless command is queued without any slot verdict"
+    );
+
+    // Reassign the slot outright, without moving a single key: the watched key
+    // stays here, at the very version WATCH recorded. (`SETSLOT … NODE` only
+    // closes an open migration window, so the window is opened first — but no
+    // `MIGRATE` runs inside it.)
+    open_slot_migration_window(&harness, source_id, target_id, test_slot).await;
+    let target_cluster_id = harness
+        .get_node_id_str(target_id)
+        .expect("target cluster id");
+    let reassign = send_cluster_cmd(
+        &harness,
+        target_id,
+        &[
+            "SETSLOT",
+            &test_slot.to_string(),
+            "NODE",
+            &target_cluster_id,
+        ],
+    )
+    .await;
+    assert!(!is_error(&reassign), "SETSLOT NODE failed: {reassign:?}");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        harness
+            .node(source_id)
+            .unwrap()
+            .cluster_state()
+            .unwrap()
+            .get_slot_owner(test_slot),
+        Some(target_id),
+        "the source must agree the slot moved before EXEC runs"
+    );
+    assert_eq!(
+        node_dbsize(&harness, source_id).await,
+        1,
+        "the watched key must still be physically here — that is what makes its \
+         version stale rather than bumped"
+    );
+
+    // THE CONTRACT: the CAS fails rather than committing on a stale copy.
+    let exec = client.command(&["EXEC"]).await;
+    assert!(
+        matches!(
+            exec,
+            frogdb_protocol::Response::Null | frogdb_protocol::Response::Bulk(None)
+        ),
+        "EXEC must abort the watch with nil once the watched slot left this node, \
+         got {exec:?}"
+    );
+
+    // The abort discarded the transaction, so a bare EXEC is now an error.
+    assert!(
+        is_error(&client.command(&["EXEC"]).await),
+        "the watch abort must leave no transaction to re-EXEC"
+    );
+
+    harness.shutdown_all().await;
+}
+
+// FM-TXN-023
 /// A slot migration still *in flight* (slot MIGRATING, key already handed to the
 /// target) at EXEC time.
 ///
@@ -12405,6 +13921,7 @@ async fn test_multi_exec_during_in_flight_slot_migration_asks_when_keys_migrated
     harness.shutdown_all().await;
 }
 
+// FM-TXN-024
 /// A batch whose keys straddle an open slot — one already migrated, one still
 /// on the source. Neither node can serve the transaction atomically, so EXEC
 /// answers `-TRYAGAIN` and touches nothing.
@@ -12477,6 +13994,7 @@ async fn test_multi_exec_during_migration_with_split_keys_returns_tryagain() {
     harness.shutdown_all().await;
 }
 
+// FM-TXN-027
 /// An open migration alone is not a refusal. While the slot is MIGRATING but
 /// every key is still on the source, EXEC serves the batch normally — the
 /// presence probe, not the migration flag, is what decides.
@@ -12534,6 +14052,7 @@ async fn test_multi_exec_during_migration_serves_when_keys_still_local() {
     harness.shutdown_all().await;
 }
 
+// FM-TXN-015
 /// `ASKING` must survive the whole MULTI block, not just the next command.
 ///
 /// On the importing node the flag is read once per queued command *and* again by
@@ -12609,6 +14128,7 @@ async fn test_multi_exec_on_import_target_with_asking_serves_the_batch() {
     harness.shutdown_all().await;
 }
 
+// FM-TXN-029
 /// A transaction that touches no key is never redirected, even on a node that
 /// owns nothing relevant. Redis's `getNodeByQuery` returns `myself` when no slot
 /// resolves; folding a keyless batch to "slot 0" would break every
@@ -12664,6 +14184,7 @@ async fn test_keyless_multi_exec_is_never_redirected() {
     harness.shutdown_all().await;
 }
 
+// FM-TXN-030
 /// Scatter-gather commands (`MSET`/`MGET`/`DEL`/`EXISTS`/…) are *keyed*: a
 /// queued batch built only from them must be slot-validated at EXEC exactly like
 /// a batch of `SET`s.
@@ -12755,6 +14276,7 @@ async fn test_multi_exec_scatter_gather_batch_is_slot_validated() {
     harness.shutdown_all().await;
 }
 
+// FM-TXN-030
 /// The scripting family declares its keys dynamically (`EVAL <script> <numkeys>
 /// <key>…`), so a queued `EVAL` must be folded into the batch's slot set.
 ///
@@ -12825,6 +14347,7 @@ async fn test_multi_exec_eval_with_declared_keys_is_slot_validated() {
     harness.shutdown_all().await;
 }
 
+// FM-TXN-030
 /// A `READONLY` connection never rescues a batch that contains a write, even
 /// when the write is issued by a scatter-gather command.
 ///

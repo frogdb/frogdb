@@ -9,9 +9,20 @@
 //! - O(N) complexity instead of O(N²) for gossip
 //! - Only the leader can write MarkNodeFailed commands via Raft anyway
 //! - TCP connect timeout provides reliable failure detection
+//!
+//! Every node probes its peers and keeps a local [`HealthTable`]; the leader
+//! *reconciles* that local view into the replicated topology once per check
+//! interval. Reconciliation (rather than propagating the threshold-crossing
+//! transition inline) is what makes the detector survive the case it exists
+//! for: when the leader itself dies, the survivors accumulate their missed
+//! probes while they are still followers, so the latch transition happens on a
+//! node that cannot write to Raft. A transition-triggered write would be
+//! dropped there and never retried — the latch is one-shot — leaving the dead
+//! node unflagged forever. A level-triggered reconciliation converges no
+//! matter which node was leader when the threshold was crossed.
 
 use frogdb_core::sync::{Arc, RwLock};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
@@ -56,29 +67,59 @@ struct NodeHealth {
     last_seen: Option<Instant>,
     /// Number of consecutive failures.
     failure_count: u32,
-    /// Whether we've already marked this node as FAIL via Raft.
+    /// Number of consecutive successes since the last failure. Only meaningful
+    /// while `is_marked_fail` is set: it drives the symmetric un-latch.
+    success_count: u32,
+    /// Whether this node is latched as FAIL locally.
     is_marked_fail: bool,
 }
 
-/// Outcome of recording a successful health check against a node.
+/// This node's local opinion of a peer, as read by the leader when it
+/// reconciles the replicated topology.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SuccessOutcome {
-    /// The node was previously latched as failed and has now recovered.
-    /// The caller should propagate the recovery (e.g. via Raft).
-    Recovered,
-    /// The node was already healthy; nothing to propagate.
-    NoChange,
+enum LocalVerdict {
+    /// Latched as failed: consecutive failures reached the threshold and the
+    /// peer has not yet strung together enough successes to clear the latch.
+    Failed,
+    /// Probed successfully within the staleness window and not latched.
+    Healthy,
+    /// Never probed, or last seen too long ago to claim either way. The leader
+    /// leaves the replicated flags alone.
+    Unknown,
 }
 
-/// Outcome of recording a failed health check against a node.
+/// What the leader decided to do about one peer in [`FailureDetector::reconcile_topology`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FailureOutcome {
-    /// The consecutive-failure count just crossed the threshold and the node
-    /// was latched as failed for the first time. The caller should propagate
-    /// the failure (e.g. via Raft).
-    ShouldMarkFail,
-    /// The failure was recorded but the node is not (newly) latched as failed.
-    NoChange,
+enum ReconcileAction {
+    /// Local view says failed, replicated topology still says healthy.
+    MarkFailed,
+    /// Local view says healthy, replicated topology still says failed.
+    MarkRecovered,
+}
+
+/// Holds a peer's slot in [`FailureDetector::inflight`] for the lifetime of one
+/// spawned reconciliation.
+///
+/// A `Drop` impl rather than a trailing `remove`, because a panic anywhere in
+/// the write path would otherwise leave the slot occupied for the life of the
+/// process — and a peer whose slot is stuck is a peer whose FAIL flag is never
+/// set or cleared again, silently.
+struct InflightGuard {
+    detector: Arc<FailureDetector>,
+    node_id: NodeId,
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        // This can run while unwinding, where a second panic aborts the
+        // process; a poisoned lock still guards a consistent `HashSet`, so
+        // recover from it rather than `unwrap()`.
+        self.detector
+            .inflight
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&self.node_id);
+    }
 }
 
 /// Pure per-node health state machine.
@@ -111,38 +152,64 @@ impl HealthTable {
 
     /// Record a successful health check for `node_id` at time `now`.
     ///
-    /// Resets the failure count, clears any latched failure, and refreshes the
-    /// last-seen timestamp. Returns [`SuccessOutcome::Recovered`] iff the node
-    /// was previously latched as failed (so the caller can propagate recovery).
-    fn record_success(&mut self, node_id: NodeId, now: Instant) -> SuccessOutcome {
+    /// Resets the failure run and refreshes the last-seen timestamp. A latched
+    /// node is *not* un-latched by a single success: clearing the latch takes
+    /// `fail_threshold` consecutive successes, mirroring the number of
+    /// consecutive failures it took to set it. Without that symmetry a peer
+    /// that answers one TCP connect in five keeps clearing its FAIL flag, and
+    /// every flap costs a `MarkNodeRecovered` / `MarkNodeFailed` pair — two
+    /// Raft writes and a config-epoch bump each round.
+    fn record_success(&mut self, node_id: NodeId, now: Instant) {
         let entry = self.health.entry(node_id).or_default();
-        let was_failed = entry.is_marked_fail;
         entry.last_seen = Some(now);
         entry.failure_count = 0;
-        entry.is_marked_fail = false;
-        if was_failed {
-            SuccessOutcome::Recovered
-        } else {
-            SuccessOutcome::NoChange
+        if entry.is_marked_fail {
+            entry.success_count += 1;
+            if entry.success_count >= self.fail_threshold {
+                entry.is_marked_fail = false;
+                entry.success_count = 0;
+            }
         }
     }
 
     /// Record a failed health check for `node_id`.
     ///
-    /// Increments the consecutive-failure count. Returns
-    /// [`FailureOutcome::ShouldMarkFail`] exactly once — on the transition
-    /// where the count first reaches `fail_threshold` and the node is not yet
-    /// latched — so the caller propagates the failure a single time (the flag
-    /// latches until a success resets it).
-    fn record_failure(&mut self, node_id: NodeId) -> FailureOutcome {
+    /// Increments the consecutive-failure count and latches the node as failed
+    /// once the count reaches `fail_threshold`. Also resets any in-progress
+    /// recovery run, so the successes that clear the latch must be consecutive.
+    fn record_failure(&mut self, node_id: NodeId) {
         let entry = self.health.entry(node_id).or_default();
         entry.failure_count += 1;
+        entry.success_count = 0;
 
-        if entry.failure_count >= self.fail_threshold && !entry.is_marked_fail {
+        if entry.failure_count >= self.fail_threshold {
             entry.is_marked_fail = true;
-            FailureOutcome::ShouldMarkFail
-        } else {
-            FailureOutcome::NoChange
+        }
+    }
+
+    /// How long a node may go unprobed before its last success stops counting.
+    fn stale_threshold(&self) -> Duration {
+        self.check_interval * (self.fail_threshold + 2)
+    }
+
+    /// This node's local opinion of `node_id` at time `now`.
+    ///
+    /// Level-triggered: [`Self::record_failure`] / [`Self::record_success`]
+    /// only move the state, they report nothing. Every decision is taken from
+    /// the current state here, so a caller that was not the leader when the
+    /// latch flipped can still act on it.
+    fn verdict(&self, node_id: NodeId, now: Instant) -> LocalVerdict {
+        let Some(entry) = self.health.get(&node_id) else {
+            return LocalVerdict::Unknown;
+        };
+        if entry.is_marked_fail {
+            return LocalVerdict::Failed;
+        }
+        match entry.last_seen {
+            Some(seen) if now.saturating_duration_since(seen) < self.stale_threshold() => {
+                LocalVerdict::Healthy
+            }
+            _ => LocalVerdict::Unknown,
         }
     }
 
@@ -154,7 +221,7 @@ impl HealthTable {
     /// present in the table, are treated as unreachable (conservative).
     fn reachable_count(&self, nodes: &[NodeInfo], self_node_id: NodeId, now: Instant) -> usize {
         // Consider a node unreachable if not seen in N check intervals.
-        let stale_threshold = self.check_interval * (self.fail_threshold + 2);
+        let stale_threshold = self.stale_threshold();
 
         nodes
             .iter()
@@ -194,10 +261,12 @@ impl HealthTable {
     }
 }
 
-/// Leader-only failure detector.
+/// Cluster failure detector.
 ///
-/// Only performs health checks when this node is the Raft leader.
-/// Uses TCP connect attempts to the cluster_addr of each node to detect failures.
+/// Every node probes its peers (TCP connect to `cluster_addr`) and keeps the
+/// result in a local [`HealthTable`]; only the leader turns that local view
+/// into `MarkNodeFailed` / `MarkNodeRecovered` Raft writes, via
+/// [`Self::reconcile_topology`].
 pub struct FailureDetector {
     /// This node's ID.
     self_node_id: NodeId,
@@ -214,6 +283,11 @@ pub struct FailureDetector {
     raft: Arc<ClusterRaft>,
     /// Network factory for pooled connections to peers.
     network_factory: Arc<ClusterNetworkFactory>,
+    /// Peers with a reconciliation write already in flight. Reconciliation is
+    /// level-triggered and runs every tick, so without this a Raft write that
+    /// is slow (or wedged behind an election) would be re-issued once per
+    /// second forever.
+    inflight: RwLock<HashSet<NodeId>>,
 }
 
 impl FailureDetector {
@@ -238,7 +312,17 @@ impl FailureDetector {
             cluster_state,
             raft,
             network_factory,
+            inflight: RwLock::new(HashSet::new()),
         }
+    }
+
+    /// How long a single reconciliation Raft write may run before it is
+    /// abandoned. Five check intervals (at least a second) is long enough to
+    /// ride out an election, short enough that a wedged write does not pin the
+    /// peer's in-flight slot — and with it the FAIL flag — indefinitely.
+    fn raft_write_timeout(&self) -> Duration {
+        Duration::from_millis(self.config.check_interval_ms.saturating_mul(5))
+            .max(Duration::from_secs(1))
     }
 
     /// Check if this node is currently the Raft leader.
@@ -247,29 +331,86 @@ impl FailureDetector {
         metrics.state == ServerState::Leader
     }
 
-    /// Record a successful connection to a node (local tracking).
-    /// Only writes to Raft if this node is the leader.
-    pub async fn record_success_local(&self, node_id: NodeId, is_leader: bool) {
-        let outcome = self
-            .health
+    /// Record a successful connection to a node (local tracking only).
+    ///
+    /// Propagation to the replicated topology is the leader's job and happens
+    /// in [`Self::reconcile_topology`], not here.
+    pub fn record_success_local(&self, node_id: NodeId) {
+        self.health
             .write()
             .unwrap()
             .record_success(node_id, Instant::now());
+    }
 
-        // If node recovered and we're the leader, mark via Raft
-        if outcome == SuccessOutcome::Recovered && is_leader {
-            self.mark_node_recovered(node_id).await;
+    /// Record a failed connection attempt to a node (local tracking only).
+    ///
+    /// See [`Self::record_success_local`] for why this does not write to Raft.
+    pub fn record_failure_local(&self, node_id: NodeId) {
+        self.health.write().unwrap().record_failure(node_id);
+    }
+
+    /// Bring the replicated topology in line with this node's local health
+    /// view. Leader-only: every write goes through Raft.
+    ///
+    /// Called once per check interval rather than on the latch transition, so
+    /// a node that crossed the failure threshold while it was still a follower
+    /// (the normal case when the *leader* is the node that died) still flags
+    /// the peer once it wins the election. Writes are gated on the replicated
+    /// flag already disagreeing, so a converged cluster performs no writes and
+    /// the config epoch does not churn.
+    ///
+    /// Decides on the caller's task, writes off it: each divergent peer gets a
+    /// spawned task, so a slow Raft write (or the auto-failover probes that
+    /// follow it) cannot stall the probe cadence of every other peer. The
+    /// [`Self::inflight`] set keeps the next tick from re-issuing a write that
+    /// has not finished yet.
+    pub fn reconcile_topology(self: &Arc<Self>) {
+        let now = Instant::now();
+        let verdicts: Vec<(NodeId, LocalVerdict, bool)> = {
+            let health = self.health.read().unwrap();
+            self.cluster_state
+                .get_all_nodes()
+                .into_iter()
+                .filter(|node| node.id != self.self_node_id)
+                .map(|node| (node.id, health.verdict(node.id, now), node.flags.fail))
+                .collect()
+        };
+
+        for (node_id, verdict, marked_failed) in verdicts {
+            match verdict {
+                LocalVerdict::Failed if !marked_failed => {
+                    self.spawn_reconcile(node_id, ReconcileAction::MarkFailed)
+                }
+                LocalVerdict::Healthy if marked_failed => {
+                    self.spawn_reconcile(node_id, ReconcileAction::MarkRecovered)
+                }
+                _ => {}
+            }
         }
     }
 
-    /// Record a failed connection attempt to a node (local tracking).
-    /// Only writes to Raft if this node is the leader.
-    pub async fn record_failure_local(&self, node_id: NodeId, is_leader: bool) {
-        let outcome = self.health.write().unwrap().record_failure(node_id);
-
-        if outcome == FailureOutcome::ShouldMarkFail && is_leader {
-            self.mark_node_failed(node_id).await;
+    /// Run one reconciliation write for `node_id` on its own task, unless one
+    /// is already in flight for that peer.
+    fn spawn_reconcile(self: &Arc<Self>, node_id: NodeId, action: ReconcileAction) {
+        if !self.inflight.write().unwrap().insert(node_id) {
+            tracing::debug!(
+                node_id,
+                ?action,
+                "Reconciliation already in flight; skipping"
+            );
+            return;
         }
+
+        let guard = InflightGuard {
+            detector: Arc::clone(self),
+            node_id,
+        };
+        tokio::spawn(async move {
+            match action {
+                ReconcileAction::MarkFailed => guard.detector.mark_node_failed(node_id).await,
+                ReconcileAction::MarkRecovered => guard.detector.mark_node_recovered(node_id).await,
+            }
+        });
     }
 
     /// Check if this node can form a quorum with reachable nodes.
@@ -289,8 +430,16 @@ impl FailureDetector {
     /// stale epoch).
     async fn mark_node_failed(&self, node_id: NodeId) {
         let cmd = ClusterCommand::MarkNodeFailed { node_id };
-        match self.raft.client_write(cmd).await {
-            Ok(resp) => {
+        let write = tokio::time::timeout(self.raft_write_timeout(), self.raft.client_write(cmd));
+        match write.await {
+            Err(_) => {
+                tracing::warn!(
+                    node_id,
+                    timeout_ms = self.raft_write_timeout().as_millis(),
+                    "MarkNodeFailed timed out; retrying on a later reconciliation"
+                );
+            }
+            Ok(Ok(resp)) => {
                 if let frogdb_core::cluster::ClusterResponse::Error(msg) = &resp.data {
                     tracing::warn!(node_id, error = %msg, "MarkNodeFailed rejected by state machine");
                     return;
@@ -304,7 +453,7 @@ impl FailureDetector {
                     self.trigger_auto_failover(node_id).await;
                 }
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 tracing::warn!(node_id, error = %e, "Failed to mark node as failed");
             }
         }
@@ -313,11 +462,19 @@ impl FailureDetector {
     /// Mark a node as recovered via Raft consensus.
     async fn mark_node_recovered(&self, node_id: NodeId) {
         let cmd = ClusterCommand::MarkNodeRecovered { node_id };
-        match self.raft.client_write(cmd).await {
-            Ok(_) => {
+        let write = tokio::time::timeout(self.raft_write_timeout(), self.raft.client_write(cmd));
+        match write.await {
+            Err(_) => {
+                tracing::warn!(
+                    node_id,
+                    timeout_ms = self.raft_write_timeout().as_millis(),
+                    "MarkNodeRecovered timed out; retrying on a later reconciliation"
+                );
+            }
+            Ok(Ok(_)) => {
                 tracing::info!(node_id, "Marked node as recovered via Raft");
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 tracing::warn!(node_id, error = %e, "Failed to mark node as recovered");
             }
         }
@@ -422,8 +579,21 @@ impl FailureDetector {
 
         const MAX_ATTEMPTS: u32 = 3;
         for attempt in 1..=MAX_ATTEMPTS {
-            match self.raft.client_write(cmd.clone()).await {
-                Ok(resp) => {
+            let write = tokio::time::timeout(
+                self.raft_write_timeout(),
+                self.raft.client_write(cmd.clone()),
+            );
+            match write.await {
+                Err(_) => {
+                    tracing::warn!(
+                        failed_primary = failed_node_id,
+                        new_primary = new_primary.id,
+                        attempt,
+                        timeout_ms = self.raft_write_timeout().as_millis(),
+                        "Auto-failover Raft write timed out"
+                    );
+                }
+                Ok(Ok(resp)) => {
                     if let frogdb_core::cluster::ClusterResponse::Error(msg) = &resp.data {
                         // The state machine rejected the transition (e.g. the
                         // successor vanished); retrying the same command cannot
@@ -443,24 +613,19 @@ impl FailureDetector {
                     );
                     return;
                 }
-                Err(e) if attempt < MAX_ATTEMPTS => {
-                    tracing::warn!(
-                        error = %e,
-                        attempt,
-                        "Auto-failover Raft write failed; retrying"
-                    );
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                }
-                Err(e) => {
-                    tracing::error!(
-                        error = %e,
-                        failed_primary = failed_node_id,
-                        new_primary = new_primary.id,
-                        "Auto-failover failed after {MAX_ATTEMPTS} attempts"
-                    );
+                Ok(Err(e)) => {
+                    tracing::warn!(error = %e, attempt, "Auto-failover Raft write failed");
                 }
             }
+            if attempt < MAX_ATTEMPTS {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
         }
+        tracing::error!(
+            failed_primary = failed_node_id,
+            new_primary = new_primary.id,
+            "Auto-failover failed after {MAX_ATTEMPTS} attempts"
+        );
     }
 
     /// Get the startup timing configuration.
@@ -572,13 +737,22 @@ pub fn spawn_failure_detector_task(detector: Arc<FailureDetector>) -> tokio::tas
 
     tokio::spawn(async move {
         let mut interval_timer = tokio::time::interval(interval);
+        // A stalled tick (runtime pause, host suspend) must not fire a burst of
+        // catch-up ticks: each one would probe every peer and count a failure
+        // per missed tick, latching FAIL on peers that were never down.
+        interval_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
             interval_timer.tick().await;
 
-            // All nodes track reachability for local quorum detection,
-            // but only the leader writes to Raft.
-            let is_leader = detector.is_leader();
+            // All nodes track reachability for local quorum detection, but
+            // only the leader writes to Raft. Reconcile before probing so the
+            // verdicts acted on are the ones the previous round settled. The
+            // writes it decides on run on their own tasks, so this loop keeps
+            // its cadence regardless of Raft latency.
+            if detector.is_leader() {
+                detector.reconcile_topology();
+            }
 
             // Get all nodes from cluster state
             let nodes = detector.cluster_state.get_all_nodes();
@@ -598,10 +772,10 @@ pub fn spawn_failure_detector_task(detector: Arc<FailureDetector>) -> tokio::tas
                 // Check each node concurrently
                 tokio::spawn(async move {
                     if check_node_reachable(addr, timeout).await {
-                        detector.record_success_local(node_id, is_leader).await;
+                        detector.record_success_local(node_id);
                     } else {
                         tracing::debug!(node_id, %addr, "Node unreachable");
-                        detector.record_failure_local(node_id, is_leader).await;
+                        detector.record_failure_local(node_id);
                     }
                 });
             }
@@ -630,10 +804,11 @@ mod tests {
 
     // ---- HealthTable: pure state-machine tests (no Raft, no network, no clock) ----
 
-    /// N-1 consecutive failures must NOT latch; the Nth latches exactly once;
-    /// further failures are NoChange; a success resets so it takes N again.
+    /// N-1 consecutive failures must NOT latch; the Nth latches; clearing the
+    /// latch takes the same N consecutive successes; then it takes N failures
+    /// again to re-latch.
     #[test]
-    fn test_health_table_threshold_latching() {
+    fn test_health_table_threshold_latching_is_symmetric() {
         let now = Instant::now();
         for threshold in [1u32, 2, 5] {
             let mut table = HealthTable::new(threshold, Duration::from_millis(1000));
@@ -641,54 +816,158 @@ mod tests {
 
             // First threshold-1 failures do not latch.
             for i in 1..threshold {
-                assert_eq!(
-                    table.record_failure(node),
-                    FailureOutcome::NoChange,
+                table.record_failure(node);
+                assert_ne!(
+                    table.verdict(node, now),
+                    LocalVerdict::Failed,
                     "failure #{i} (threshold {threshold}) must not latch"
                 );
             }
 
-            // The threshold-th failure latches exactly once.
+            // The threshold-th failure latches, and it stays latched.
+            table.record_failure(node);
             assert_eq!(
-                table.record_failure(node),
-                FailureOutcome::ShouldMarkFail,
+                table.verdict(node, now),
+                LocalVerdict::Failed,
                 "failure #{threshold} (threshold {threshold}) must latch"
             );
+            table.record_failure(node);
+            assert_eq!(table.verdict(node, now), LocalVerdict::Failed);
 
-            // Subsequent failures do not re-fire while latched.
-            assert_eq!(table.record_failure(node), FailureOutcome::NoChange);
-            assert_eq!(table.record_failure(node), FailureOutcome::NoChange);
-
-            // A success on a latched node reports recovery and clears state.
-            assert_eq!(table.record_success(node, now), SuccessOutcome::Recovered);
+            // Symmetric hysteresis: threshold-1 successes must NOT clear it.
+            for i in 1..threshold {
+                table.record_success(node, now);
+                assert_eq!(
+                    table.verdict(node, now),
+                    LocalVerdict::Failed,
+                    "success #{i} (threshold {threshold}) must not clear the latch"
+                );
+            }
+            table.record_success(node, now);
+            assert_eq!(
+                table.verdict(node, now),
+                LocalVerdict::Healthy,
+                "success #{threshold} (threshold {threshold}) must clear the latch"
+            );
 
             // After recovery it takes a full `threshold` run again to re-latch.
             for i in 1..threshold {
-                assert_eq!(
-                    table.record_failure(node),
-                    FailureOutcome::NoChange,
+                table.record_failure(node);
+                assert_ne!(
+                    table.verdict(node, now),
+                    LocalVerdict::Failed,
                     "post-recovery failure #{i} (threshold {threshold}) must not latch"
                 );
             }
-            assert_eq!(table.record_failure(node), FailureOutcome::ShouldMarkFail);
+            table.record_failure(node);
+            assert_eq!(table.verdict(node, now), LocalVerdict::Failed);
         }
     }
 
-    /// A success on a node that was never latched reports NoChange.
+    /// The recovery run must be *consecutive*: one failure in the middle of it
+    /// resets the count, so a peer that answers one probe in two never clears
+    /// its FAIL flag (and never churns the config epoch flipping it).
     #[test]
-    fn test_health_table_success_without_prior_failure_is_nochange() {
+    fn test_health_table_latch_survives_flapping_recovery() {
         let now = Instant::now();
         let mut table = HealthTable::new(3, Duration::from_millis(1000));
-        assert_eq!(table.record_success(7, now), SuccessOutcome::NoChange);
-        // A couple of sub-threshold failures then a success is still NoChange
-        // (never latched), and it resets the counter.
-        assert_eq!(table.record_failure(7), FailureOutcome::NoChange);
-        assert_eq!(table.record_failure(7), FailureOutcome::NoChange);
-        assert_eq!(table.record_success(7, now), SuccessOutcome::NoChange);
+        let node: NodeId = 7;
+
+        for _ in 0..3 {
+            table.record_failure(node);
+        }
+        assert_eq!(table.verdict(node, now), LocalVerdict::Failed);
+
+        // Alternating success/failure never accumulates 3 in a row.
+        for _ in 0..10 {
+            table.record_success(node, now);
+            table.record_failure(node);
+            assert_eq!(
+                table.verdict(node, now),
+                LocalVerdict::Failed,
+                "flapping peer must stay latched"
+            );
+        }
+
+        // A sustained run of successes finally clears it.
+        table.record_success(node, now);
+        table.record_success(node, now);
+        assert_eq!(table.verdict(node, now), LocalVerdict::Failed);
+        table.record_success(node, now);
+        assert_eq!(table.verdict(node, now), LocalVerdict::Healthy);
+    }
+
+    /// The level-triggered verdict outlives the one-shot latch transition.
+    ///
+    /// This is the property the leader's reconciliation depends on: a node
+    /// that latched while this process was a follower (so nobody who could
+    /// write to Raft saw the threshold crossing) must still report `Failed` on
+    /// every later poll.
+    #[test]
+    fn test_health_table_verdict_is_level_triggered() {
+        let t0 = Instant::now();
+        let check_interval = Duration::from_millis(100);
+        let mut table = HealthTable::new(2, check_interval);
+        let node: NodeId = 42;
+
+        // Never probed: no opinion, so the leader must not touch the flags.
+        assert_eq!(table.verdict(node, t0), LocalVerdict::Unknown);
+
+        table.record_success(node, t0);
+        assert_eq!(table.verdict(node, t0), LocalVerdict::Healthy);
+
+        // Sub-threshold failures do not change the verdict: the node was seen
+        // recently and is not latched.
+        table.record_failure(node);
+        assert_eq!(table.verdict(node, t0), LocalVerdict::Healthy);
+
+        // Latching flips the verdict, and it keeps reporting `Failed` on every
+        // subsequent poll.
+        table.record_failure(node);
+        assert_eq!(table.verdict(node, t0), LocalVerdict::Failed);
+        table.record_failure(node);
+        assert_eq!(table.verdict(node, t0), LocalVerdict::Failed);
+
+        // A latched node stays `Failed` however long it has been unreachable
+        // (staleness must not downgrade it to `Unknown` and un-flag it).
+        assert_eq!(
+            table.verdict(node, t0 + Duration::from_secs(3600)),
+            LocalVerdict::Failed
+        );
+
+        // Recovery reports `Healthy` again, after a full run of successes ...
+        table.record_success(node, t0);
+        table.record_success(node, t0);
+        assert_eq!(table.verdict(node, t0), LocalVerdict::Healthy);
+
+        // ... but only while the success is fresh: past the staleness window
+        // this node has no basis for claiming the peer is up, so it reports
+        // `Unknown` and leaves the replicated flags alone.
+        let stale = check_interval * (2 + 2);
+        assert_eq!(table.verdict(node, t0 + stale), LocalVerdict::Unknown);
+    }
+
+    /// A single success resets the failure run of a node that never latched —
+    /// the hysteresis only applies in the un-latch direction.
+    #[test]
+    fn test_health_table_success_resets_failure_run() {
+        let now = Instant::now();
+        let mut table = HealthTable::new(3, Duration::from_millis(1000));
+        table.record_success(7, now);
+        assert_eq!(table.verdict(7, now), LocalVerdict::Healthy);
+
+        // Two sub-threshold failures, then one success: still healthy.
+        table.record_failure(7);
+        table.record_failure(7);
+        table.record_success(7, now);
+        assert_eq!(table.verdict(7, now), LocalVerdict::Healthy);
+
         // Counter reset: two fresh failures still do not latch (threshold 3).
-        assert_eq!(table.record_failure(7), FailureOutcome::NoChange);
-        assert_eq!(table.record_failure(7), FailureOutcome::NoChange);
-        assert_eq!(table.record_failure(7), FailureOutcome::ShouldMarkFail);
+        table.record_failure(7);
+        table.record_failure(7);
+        assert_ne!(table.verdict(7, now), LocalVerdict::Failed);
+        table.record_failure(7);
+        assert_eq!(table.verdict(7, now), LocalVerdict::Failed);
     }
 
     /// Staleness window boundary: reachable strictly while

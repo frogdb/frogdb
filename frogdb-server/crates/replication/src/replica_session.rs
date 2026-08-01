@@ -177,6 +177,11 @@ pub struct ReplicaSession {
     acked_offset: AtomicU64,
     sync_bytes_transferred: AtomicU64,
 
+    /// Primary-initiated teardown signal (see [`Self::request_disconnect`]).
+    /// `notify_one`, not `notify_waiters`, so a request that races ahead of the
+    /// streaming loop's `notified()` is stored as a permit rather than lost.
+    disconnect: tokio::sync::Notify,
+
     inner: RwLock<SessionInner>,
 }
 
@@ -190,6 +195,7 @@ impl ReplicaSession {
             connected_at: now,
             acked_offset: AtomicU64::new(0),
             sync_bytes_transferred: AtomicU64::new(0),
+            disconnect: tokio::sync::Notify::new(),
             inner: RwLock::new(SessionInner {
                 phase: Phase::Connecting,
                 last_ack_time: now,
@@ -232,6 +238,22 @@ impl ReplicaSession {
     }
     pub fn replica_version(&self) -> Option<String> {
         self.inner.read().replica_version.clone()
+    }
+
+    /// Ask this session's streaming loop to tear itself down.
+    ///
+    /// Redis's `replicationSetMaster` calls `disconnectSlaves` when a primary
+    /// becomes a replica: the stream this node was serving describes a history
+    /// it no longer heads, so the downstream replicas must resync against
+    /// whoever does. The session ends as if the socket had closed — the replica
+    /// reconnects and PSYNCs afresh.
+    pub fn request_disconnect(&self) {
+        self.disconnect.notify_one();
+    }
+
+    /// Resolves once [`Self::request_disconnect`] has been called.
+    async fn disconnect_requested(&self) {
+        self.disconnect.notified().await;
     }
 
     /// Build a snapshot for read-only consumers (INFO, ROLE, cluster bus).
@@ -342,9 +364,6 @@ impl ReplicaSession {
         // Single exit handler — runs regardless of which `?` returned.
         self.set_phase(Phase::Disconnecting);
 
-        // Drop the session from the registry.
-        handler.tracker.unregister_replica(self.id);
-
         // Best-effort checkpoint dir cleanup. Only set when a checkpoint was
         // actually created, so NotFound shouldn't occur in practice.
         let path = self.inner.read().sync_checkpoint_path.clone();
@@ -357,6 +376,13 @@ impl ReplicaSession {
                 "Failed to clean up checkpoint directory"
             );
         }
+
+        // Drop the session from the registry, last: leaving the registry is
+        // what tells a waiting
+        // [`PrimaryReplicationHandler::shutdown_downstream_sessions`] that this
+        // session is done with its per-sync resources, so the removal must
+        // follow the cleanup above rather than precede it.
+        handler.tracker.unregister_replica(self.id);
 
         tracing::info!(
             replica_id = self.id,
@@ -397,7 +423,7 @@ impl ReplicaSession {
         replay_from: u64,
         handler: &Arc<PrimaryReplicationHandler>,
     ) -> io::Result<()> {
-        let replication_id = handler.state.read().await.replication_id.clone();
+        let replication_id = handler.state.read().replication_id.clone();
         let response = format!("+CONTINUE {}\r\n", replication_id);
         stream.write_all(response.as_bytes()).await?;
         self.start_streaming(stream, handler, replay_from).await
@@ -415,11 +441,11 @@ impl ReplicaSession {
         // data correspond (the critical invariant: offset must match the data
         // the replica loads).
         //
-        // Write ordering guarantees the safe direction. Each write is persisted
-        // (store + WAL) in the command pipeline *before* `broadcast_command`
-        // advances the tracker, so every write counted in `snapshot_offset` is
-        // already durable and will be captured when the checkpoint is cut a
-        // moment later. Conversely, writes that land between this capture and
+        // Write ordering guarantees the safe direction. Each write's WAL entry is
+        // enqueued in the command pipeline *before* `broadcast_command` advances
+        // the tracker, and the pre-checkpoint hook below drains those queues into
+        // RocksDB, so every write counted in `snapshot_offset` is captured when
+        // the checkpoint is cut. Conversely, writes that land between this capture and
         // the cut only *add* data to the checkpoint, raising data past the
         // offset. The result is `offset <= data`: the checkpoint can never be
         // missing data the offset claims to include. Capturing after the cut
@@ -443,6 +469,20 @@ impl ReplicaSession {
         if let Some(rocks) = handler.rocks_store.as_ref().cloned() {
             self.set_phase(Phase::PreparingCheckpoint);
             let checkpoint_path = handler.data_dir.join(format!("fullsync_{}", self.id));
+
+            // The checkpoint is a snapshot of what RocksDB *holds*, and a write
+            // is acknowledged as soon as it is staged in its shard's WAL
+            // flush-engine (default durability commits to RocksDB on a later
+            // size/timeout trigger). Cut without draining those engines, the
+            // checkpoint silently omits the primary's most recent writes — and
+            // for a full resync that is unrecoverable: with no replica attached
+            // when they were made, they were never broadcast, so there is no
+            // backlog tail to replay them from and the replica is missing them
+            // forever. So: drain first, cut second. Same contract the snapshot
+            // coordinator's pre-snapshot hook honours (issue 13).
+            if let Some(drain) = handler.pre_checkpoint_hook() {
+                drain().await;
+            }
 
             let path_clone = checkpoint_path.clone();
             let result = tokio::task::spawn_blocking(move || rocks.create_checkpoint(&path_clone))
@@ -750,11 +790,21 @@ impl ReplicaSession {
         // tasks: a detached read task would otherwise keep its half alive after
         // a lag-disconnect, leaving the replica in a zombie half-open link
         // (unregistered here, but never sent a FIN, so it never resyncs).
+        // The third exit is primary-initiated: a demotion asks every downstream
+        // session to end so the replicas resync against the new primary.
         let mut read_task = read_task;
         let mut write_task = write_task;
         tokio::select! {
             _ = &mut read_task => { write_task.abort(); }
             _ = &mut write_task => { read_task.abort(); }
+            _ = self.disconnect_requested() => {
+                tracing::info!(
+                    replica_id = self.id,
+                    "Disconnecting replica session on role change"
+                );
+                read_task.abort();
+                write_task.abort();
+            }
         }
         Ok(())
     }
@@ -957,8 +1007,10 @@ mod tests {
         data_dir: PathBuf,
     ) -> Arc<PrimaryReplicationHandler> {
         let state_path = data_dir.join("replication_state.json");
+        let identity =
+            crate::identity::ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
         Arc::new(PrimaryReplicationHandler::new(
-            ReplicationState::new(),
+            identity,
             state_path,
             tracker,
             rocks,
@@ -985,8 +1037,10 @@ mod tests {
         data_dir: PathBuf,
     ) -> Arc<PrimaryReplicationHandler> {
         let state_path = data_dir.join("replication_state.json");
+        let identity =
+            crate::identity::ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
         Arc::new(PrimaryReplicationHandler::new(
-            ReplicationState::new(),
+            identity,
             state_path,
             tracker,
             rocks,
@@ -1094,7 +1148,7 @@ mod tests {
         // No rocks store -> minimal-RDB full sync; backlog enabled so the
         // handoff window can be replayed.
         let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
-        let repl_id = handler.state.read().await.replication_id.clone();
+        let repl_id = handler.state.read().replication_id.clone();
 
         // Tiny buffer forces the session to block writing the RDB, giving us a
         // window to broadcast "during" the handoff.
@@ -1300,7 +1354,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let tracker = Arc::new(ReplicationTrackerImpl::new());
         let handler = make_handler(tracker.clone(), None, dir.path().to_path_buf());
-        let repl_id = handler.state.read().await.replication_id.clone();
+        let repl_id = handler.state.read().replication_id.clone();
 
         let (mut client, server) = tokio::io::duplex(64 * 1024);
         let session = tracker.register_replica(addr());
@@ -1374,7 +1428,7 @@ mod tests {
             Some(store.clone()),
             dir.path().to_path_buf(),
         );
-        let repl_id = handler.state.read().await.replication_id.clone();
+        let repl_id = handler.state.read().replication_id.clone();
 
         let (client, server) = tokio::io::duplex(64);
         let session = tracker.register_replica(addr());
@@ -1411,6 +1465,148 @@ mod tests {
             !expected_checkpoint.exists(),
             "checkpoint dir should have been removed by exit handler: {}",
             expected_checkpoint.display()
+        );
+    }
+
+    /// The pre-checkpoint hook runs *before* the checkpoint is cut, and what it
+    /// makes durable is inside the cut checkpoint.
+    ///
+    /// In production the hook drains every shard's WAL flush-engine into
+    /// RocksDB; here it writes the key directly, which is the same step reduced
+    /// to its essence — a write that reaches RocksDB only because the hook ran.
+    /// Both halves matter: run the hook *after* `create_checkpoint` and the key
+    /// is missing from the checkpoint even though the primary already
+    /// acknowledged it, and for a full resync (nothing in the backlog to replay)
+    /// the replica never sees it again.
+    ///
+    /// Drives `handle_full` directly rather than `run`, so no exit handler
+    /// deletes the checkpoint directory before the assertions can read it.
+    #[tokio::test]
+    async fn fullresync_cuts_the_checkpoint_after_the_pre_checkpoint_hook() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize};
+
+        let dir = TempDir::new().unwrap();
+        let rocks_path = dir.path().join("rocks");
+        let store = Arc::new(
+            RocksStore::open(&rocks_path, 1, &RocksConfig::default())
+                .expect("open rocksdb for test"),
+        );
+        // Already committed before the resync starts.
+        store.put(0, b"early", b"v").unwrap();
+
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler(
+            tracker.clone(),
+            Some(store.clone()),
+            dir.path().to_path_buf(),
+        );
+        let repl_id = handler.state.read().replication_id.clone();
+
+        let session = tracker.register_replica(addr());
+        let checkpoint_path = dir.path().join(format!("fullsync_{}", session.id()));
+
+        let runs = Arc::new(AtomicUsize::new(0));
+        let ran_before_the_cut = Arc::new(AtomicBool::new(false));
+        {
+            let store = store.clone();
+            let runs = runs.clone();
+            let ran_before_the_cut = ran_before_the_cut.clone();
+            let checkpoint_path = checkpoint_path.clone();
+            handler.set_pre_checkpoint_hook(Arc::new(move || {
+                let store = store.clone();
+                let runs = runs.clone();
+                let ran_before_the_cut = ran_before_the_cut.clone();
+                let checkpoint_path = checkpoint_path.clone();
+                Box::pin(async move {
+                    if runs.fetch_add(1, Ordering::SeqCst) == 0 {
+                        ran_before_the_cut.store(!checkpoint_path.exists(), Ordering::SeqCst);
+                    }
+                    store.put(0, b"drained", b"v").unwrap();
+                })
+            }));
+        }
+
+        // A tiny duplex buffer stalls the checkpoint stream. Reading the
+        // `+FULLRESYNC` line first pins the session past the reply, so dropping
+        // the client afterwards fails a *checkpoint stream* write — i.e. returns
+        // `handle_full` after the cut, not before it.
+        let (mut client, server) = tokio::io::duplex(64);
+        let task = tokio::spawn({
+            let session = session.clone();
+            let handler = handler.clone();
+            let server: BoxedStream = Box::new(server);
+            async move { session.handle_full(server, repl_id, &handler).await }
+        });
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
+        drop(client);
+        let _ = task.await.unwrap();
+
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            1,
+            "the drain must run exactly once per full resync"
+        );
+        assert!(
+            ran_before_the_cut.load(Ordering::SeqCst),
+            "the drain must run before the checkpoint is cut, not after"
+        );
+
+        let checkpoint = RocksStore::open(&checkpoint_path, 1, &RocksConfig::default())
+            .expect("cut checkpoint must be a readable database");
+        assert_eq!(
+            checkpoint.get(0, b"early").unwrap().as_deref(),
+            Some(&b"v"[..]),
+            "the checkpoint must carry writes committed before the resync"
+        );
+        assert_eq!(
+            checkpoint.get(0, b"drained").unwrap().as_deref(),
+            Some(&b"v"[..]),
+            "the checkpoint must carry writes the drain committed"
+        );
+    }
+
+    /// Without a hook installed the full-sync path still cuts a checkpoint —
+    /// a handler whose owner wired no drain (every unit test here, and any
+    /// embedder that keeps its writes in RocksDB synchronously) must not stall
+    /// or fail.
+    #[tokio::test]
+    async fn fullresync_without_a_pre_checkpoint_hook_still_cuts_the_checkpoint() {
+        let dir = TempDir::new().unwrap();
+        let rocks_path = dir.path().join("rocks");
+        let store = Arc::new(
+            RocksStore::open(&rocks_path, 1, &RocksConfig::default())
+                .expect("open rocksdb for test"),
+        );
+        store.put(0, b"early", b"v").unwrap();
+
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler(
+            tracker.clone(),
+            Some(store.clone()),
+            dir.path().to_path_buf(),
+        );
+        let repl_id = handler.state.read().replication_id.clone();
+        let session = tracker.register_replica(addr());
+        let checkpoint_path = dir.path().join(format!("fullsync_{}", session.id()));
+
+        let (mut client, server) = tokio::io::duplex(64);
+        let task = tokio::spawn({
+            let session = session.clone();
+            let handler = handler.clone();
+            let server: BoxedStream = Box::new(server);
+            async move { session.handle_full(server, repl_id, &handler).await }
+        });
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
+        drop(client);
+        let _ = task.await.unwrap();
+
+        let checkpoint = RocksStore::open(&checkpoint_path, 1, &RocksConfig::default())
+            .expect("cut checkpoint must be a readable database");
+        assert_eq!(
+            checkpoint.get(0, b"early").unwrap().as_deref(),
+            Some(&b"v"[..])
         );
     }
 
@@ -1474,7 +1670,7 @@ mod tests {
             Some(store.clone()),
             dir.path().to_path_buf(),
         );
-        let repl_id = handler.state.read().await.replication_id.clone();
+        let repl_id = handler.state.read().replication_id.clone();
 
         let (client, server) = tokio::io::duplex(1024 * 1024);
         let session = tracker.register_replica(addr());
@@ -1570,7 +1766,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let tracker = Arc::new(ReplicationTrackerImpl::new());
         let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
-        let repl_id = handler.state.read().await.replication_id.clone();
+        let repl_id = handler.state.read().replication_id.clone();
 
         // Advance the live offset and populate the backlog with real commands.
         let resume_point = handler.broadcast_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
@@ -1604,6 +1800,81 @@ mod tests {
         let _ = task.await.unwrap();
     }
 
+    /// Shutdown must end a streaming session even though its peer keeps the
+    /// socket open: the session is served inline by the accepting connection
+    /// task, so nothing else would ever release it — and it holds the storage
+    /// engine open behind the shutdown.
+    #[tokio::test]
+    async fn shutdown_downstream_sessions_ends_a_streaming_session() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
+        let repl_id = handler.state.read().replication_id.clone();
+
+        let resume_point = handler.broadcast_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
+
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let server: BoxedStream = Box::new(server);
+        let task = tokio::spawn({
+            let handler = handler.clone();
+            let repl_id = repl_id.clone();
+            async move {
+                handler
+                    .handle_psync(server, addr(), &repl_id, resume_point as i64)
+                    .await
+            }
+        });
+
+        // Streaming: the session is registered and parked on the WAL stream.
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+CONTINUE"), "got: {line:?}");
+        assert_eq!(tracker.get_all_replicas().len(), 1);
+
+        // The peer never closes — only the shutdown signal can end this.
+        let signalled = handler
+            .shutdown_downstream_sessions(Duration::from_secs(5))
+            .await;
+        assert_eq!(signalled, 1, "the streaming session must be signalled");
+        assert!(
+            tracker.get_all_replicas().is_empty(),
+            "shutdown must return only once every session has left the registry"
+        );
+        task.await.unwrap().unwrap();
+    }
+
+    /// A connection accepted a moment before the acceptors were aborted can
+    /// still reach PSYNC while the drain runs. It must be refused: a session
+    /// registered behind the drain would stream past the shutdown that was
+    /// meant to end them all, holding the storage engine open.
+    #[tokio::test]
+    async fn psync_after_the_shutdown_drain_is_refused() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
+        let repl_id = handler.state.read().replication_id.clone();
+        let resume_point = handler.broadcast_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
+
+        // No sessions yet, so the drain returns immediately — it still latches.
+        assert_eq!(
+            handler
+                .shutdown_downstream_sessions(Duration::from_secs(5))
+                .await,
+            0
+        );
+
+        let (_client, server) = tokio::io::duplex(64 * 1024);
+        let server: BoxedStream = Box::new(server);
+        let err = handler
+            .handle_psync(server, addr(), &repl_id, resume_point as i64)
+            .await
+            .expect_err("PSYNC must not be served once the drain has started");
+        assert_eq!(err.kind(), std::io::ErrorKind::ConnectionAborted);
+        assert!(
+            tracker.get_all_replicas().is_empty(),
+            "a refused PSYNC must not register a session"
+        );
+    }
+
     /// With the backlog disabled there is nothing to replay, so even a matching
     /// window falls back to FULLRESYNC — and the offset is the live tracker's.
     #[tokio::test]
@@ -1615,7 +1886,7 @@ mod tests {
 
         // make_handler disables the backlog; no rocks → minimal-RDB FULLRESYNC.
         let handler = make_handler(tracker.clone(), None, dir.path().to_path_buf());
-        let repl_id = handler.state.read().await.replication_id.clone();
+        let repl_id = handler.state.read().replication_id.clone();
 
         let (mut client, server) = tokio::io::duplex(64 * 1024);
         let server: BoxedStream = Box::new(server);
@@ -1654,7 +1925,7 @@ mod tests {
         let tracker = Arc::new(ReplicationTrackerImpl::new());
         // Tiny backlog (3 entries) so the early resume point is evicted.
         let handler = Arc::new(PrimaryReplicationHandler::new(
-            ReplicationState::new(),
+            crate::identity::ReplicationIdentity::adopting(ReplicationState::new(), &tracker),
             dir.path().join("replication_state.json"),
             tracker.clone(),
             None,
@@ -1671,7 +1942,7 @@ mod tests {
             },
             0,
         ));
-        let repl_id = handler.state.read().await.replication_id.clone();
+        let repl_id = handler.state.read().replication_id.clone();
 
         // First command's offset is the replica's resume point; later writes
         // evict it from the 3-entry backlog.

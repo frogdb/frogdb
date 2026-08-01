@@ -89,6 +89,11 @@ During failover, writes accepted by the old primary but not yet replicated may b
 | Write acknowledged but not replicated | Lost (bounded only by replication lag) — [Design intent] |
 | Write to an isolated old primary during split-brain | Discarded and audit-logged — [Tested] |
 
+### `WAIT` scope — [Tested]
+`WAIT` is **per-node in cluster mode, not cluster-wide**: it counts the replicas of the node that received it (one shard) and never redirects, matching Redis, Valkey and Dragonfly. A cluster-wide durability barrier is a client-side fan-out — `WAIT` every shard primary and take the minimum. The full contract is in [Clustering Internals](/architecture/clustering/#wait-semantics).
+
+Acknowledgment raises the odds an acknowledged write survives a failover; it does not guarantee it, because the election ranks candidates by lag but does not require the acknowledging replica to win — Redis's documented caveat. The Jepsen `cluster-replication` workload asserts the ordering property this implies (acknowledged writes survive a kill-and-promote at least as often as unacknowledged ones, above a survival floor), not an empty loss set.
+
 ### Reads from a Replica — [Design intent]
 A replica may return a value older than the primary's; staleness is bounded only by replication lag. The magnitude of that lag is untested, but the *ordering* of what a replica returns over time is — see [Monotonic Reads](#monotonic-reads--tested) above.
 
@@ -131,7 +136,7 @@ There is **no fencing-timeout config knob**; fencing is governed by these boolea
 **In cluster mode**, slot ownership is re-validated for the whole queued batch at `EXEC` entry, against a single `ClusterState` snapshot and before any command runs. A transaction whose slot changed hands after queuing is refused whole — `EXEC` returns a bare `-MOVED`/`-ASK`/`-TRYAGAIN`/`-CROSSSLOT` and discards the queue — so a migrated slot never receives a partially applied or orphaned transaction. See [MULTI/EXEC: validated twice](/architecture/clustering/#multiexec-validated-twice).
 
 ### Transaction Durability — [Tested]
-A transaction is applied as a single RocksDB `WriteBatch` (atomic at the storage layer), so its durability follows the [durability mode](#durability--tested): `async`/`periodic` return before the batch is durable, `sync` blocks until fsync.
+A transaction's writes are bracketed as one WAL write group, so they are applied as a single RocksDB `WriteBatch` (atomic at the storage layer) — the WAL flush engine holds back its size and time-based batch triggers until the group closes, so a stalled shard cannot leave half a transaction committed. Durability then follows the [durability mode](#durability--tested): `async`/`periodic` return before the batch is durable, `sync` blocks until fsync.
 
 ### WATCH — [Tested]
 `WATCH` provides optimistic locking: `EXEC` aborts (returns nil) if a watched key was modified by another client. Watched keys must be on the same internal shard as the transaction's keys. Verified in `integration_transactions.rs` (`test_watch_exec_success`, `test_watch_exec_abort`, and the PFADD watch-version regression tests).
@@ -139,7 +144,7 @@ A transaction is applied as a single RocksDB `WriteBatch` (atomic at the storage
 ### Checkpoint (BGSAVE) Cross-Shard Cut — [Tested]
 A `BGSAVE` checkpoint is a single RocksDB `Checkpoint` over one shared database, so it captures an atomic point-in-time image at one RocksDB sequence number across every internal shard's column family. Before the cut, `BGSAVE` drains every shard's WAL flush engine into RocksDB, so the image is a committed prefix of each shard's history rather than a partial mid-flush state.
 
-- **Single-shard transactions are never torn by the cut.** A single-shard `MULTI`/`EXEC` runs as one shard event-loop step that enqueues all of its writes before the pre-snapshot drain runs, and RocksDB commits in sequence order, so a checkpoint captures either all of a transaction's writes or none. This matters because a torn single-shard transaction in a recovery image would resurrect a half-applied transaction that no client ever observed.
+- **Single-shard transactions are never torn by the cut.** A single-shard `MULTI`/`EXEC` runs as one shard event-loop step, and its writes go to the WAL as one [write group](#transaction-durability--tested) that commits as a single `WriteBatch`, so a checkpoint captures either all of a transaction's writes or none. This matters because a torn single-shard transaction in a recovery image would resurrect a half-applied transaction that no client ever observed. The same group is what bounds a crash: recovery replays whole transactions.
 - **Cross-shard writes may be torn by the cut.** A cross-shard `MSET`/scatter dispatches independent per-shard writes, and the drain is likewise per-shard, so a checkpoint can capture one shard's half of a cross-shard write and not another's. This matches FrogDB's cross-shard model — execution atomicity via locking, without failure/durability atomicity (see [Cross-Slot in Standalone Mode](#cross-slot-in-standalone-mode) and the cross-shard transaction framing tracked for the durability phase). Within any one shard, the subset of a cross-shard write that lands on that shard is still applied atomically, so a shard's own portion is never itself torn.
 
 Verified in `integration_persistence.rs` (`test_checkpoint_preserves_single_shard_multi_atomicity_under_concurrent_bgsave`, `test_checkpoint_cross_shard_mset_contract_under_concurrent_bgsave`, and `test_concurrent_bgsave_stress_restores_cleanly`), which hammer transactions and cross-shard `MSET`s concurrently with repeated `BGSAVE`, then restore the resulting checkpoint and assert the cut preserved single-shard and per-shard atomicity.

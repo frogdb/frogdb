@@ -96,7 +96,7 @@ impl ConnectionHandler {
         // master_replid2/second_repl_offset.
         let (replication_id, secondary_window) = match &self.cluster.replication_state {
             Some(state) => {
-                let guard = state.read().await;
+                let guard = state.read();
                 let id = guard.replication_id.clone();
                 let replication_id = (!id.is_empty()).then_some(id);
                 // A window exists only once new_replication_id() has frozen the
@@ -111,7 +111,7 @@ impl ConnectionHandler {
             }
             None => (None, None),
         };
-        let is_replica = self.is_replica.load(std::sync::atomic::Ordering::Relaxed);
+        let is_replica = self.is_replica.load(std::sync::atomic::Ordering::Acquire);
         // `replication_tracker` is wired at boot for any node that *can* track
         // downstream replicas and outlives a runtime Role Demotion (the
         // `RoleManager` only owns the read-only flag / primary target / inbound
@@ -134,13 +134,22 @@ impl ConnectionHandler {
                         offset: replica.acked_offset,
                     })
                     .collect(),
-                repl_offset: tracker.current_offset(),
             });
+        // One offset counter per node, whatever role is running: the tracker's
+        // atomic is the node's replication identity offset, advanced by the
+        // primary stream when this node stamps writes and by the replica
+        // ingest loop when it applies them.
+        let repl_offset = self
+            .cluster
+            .replication_tracker
+            .as_ref()
+            .map_or(0, |tracker| tracker.current_offset());
         let replication = ReplicationSnapshot {
             is_replica,
             node_id: self.cluster.node_id,
             replication_id,
             primary,
+            repl_offset,
             master_host: shards.master_host.clone(),
             master_port: shards.master_port,
             master_link_up: shards.master_link_up,

@@ -1657,6 +1657,7 @@ async fn test_acl_log_entry_for_each_denial_path() {
     server.shutdown().await;
 }
 
+// FM-TXN-007
 /// Regression: queue-time denials inside MULTI must ALSO hit ACL LOG. Before the
 /// seam, the key and channel checks in `queue_command` returned NOPERM but never
 /// logged, unlike the live paths.
@@ -1699,6 +1700,41 @@ async fn test_acl_log_entry_for_each_denial_path_in_multi() {
         contexts.iter().any(|c| c == "channel"),
         "missing channel denial in MULTI: {contexts:?}"
     );
+
+    server.shutdown().await;
+}
+
+// FM-TXN-007
+/// A queue-time NOPERM poisons the whole transaction: EXEC answers EXECABORT
+/// and the commands that *did* queue never run. Redis flags the transaction on
+/// any rejected queue attempt; a partially-applied MULTI would be worse than an
+/// aborted one.
+#[tokio::test]
+async fn test_acl_denial_in_multi_poisons_the_transaction() {
+    let (server, mut admin) = start_server_with_admin("admin").await;
+    let mut user = create_and_auth_user(
+        &server,
+        &mut admin,
+        "txpoison",
+        "pass",
+        &["+@all", "~allowed:*"],
+    )
+    .await;
+
+    assert_ok(&user.command(&["MULTI"]).await);
+    let response = user.command(&["SET", "allowed:k", "v"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_error_prefix(&user.command(&["GET", "denied:k"]).await, "NOPERM");
+
+    let response = user.command(&["EXEC"]).await;
+    assert!(
+        matches!(&response, Response::Error(e) if e.starts_with(b"EXECABORT")),
+        "a NOPERM at queue time must abort the transaction, got {response:?}"
+    );
+
+    // The permitted write never happened.
+    let response = user.command(&["GET", "allowed:k"]).await;
+    assert_eq!(response, Response::Bulk(None));
 
     server.shutdown().await;
 }

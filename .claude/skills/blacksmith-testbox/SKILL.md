@@ -1,10 +1,10 @@
 ---
 name: blacksmith-testbox
 description: >
-  Validate code changes against real CI. Use for all tests, builds,
-  migrations, and any command that depends on secrets or services.
-  Use when testing, validating, checking, verifying, or before any
-  commit or push.
+  Run builds, tests, lints, and benchmarks on a remote Blacksmith testbox
+  (aarch64 Linux CI VM). Use only when the session is in testbox mode
+  (`just build-mode` reports `testbox`), or when the user asks to warm up,
+  run on, download from, or stop a testbox. Not needed in local mode.
 ---
 
 # Blacksmith Testbox
@@ -49,15 +49,19 @@ This repo wraps the testbox lifecycle so boxes are always cleaned up:
 - The box is Linux: build/runtime behavior can differ from local macOS (good — it matches
   production). `just` recipes work unchanged on the box.
 
-Why use the testbox: offload heavy compiles/tests/benches so the local macbook stays
-responsive and parallel agents don't contend for disk/memory. The remote-vs-local split is
-defined in CLAUDE.md ("Remote execution: Blacksmith testboxes") — in short: full builds,
-whole-suite tests, clippy, concurrency suites, benchmarks go remote; fmt and single-crate
-iteration loops stay local. (The generic guidance below saying tests must "never" run locally
-does not apply to this repo — FrogDB tests have no secret/service dependencies.)
-
 Concurrency caveat: run only one `tb-run` at a time per worktree — concurrent runs race the
 rsync sync. Agents in different worktrees get separate boxes automatically.
+
+## FrogDB: this skill applies only in testbox mode
+
+FrogDB sessions run in `local` (default) or `testbox` mode; CLAUDE.md ("Execution mode: local
+(default) or testbox") owns the policy — which commands go where, how the mode is chosen and
+recorded. Check with `just build-mode`. In local mode the `tb-*` recipes refuse to run and
+nothing in this skill applies; everything builds and tests on the local machine.
+
+Two pieces of the generic guidance below do **not** apply to this repo: tests may run locally
+(FrogDB tests need no secrets or services), and lifecycle commands go through `just tb-*`
+rather than the raw `blacksmith testbox` CLI.
 
 ## Install the CLI
 

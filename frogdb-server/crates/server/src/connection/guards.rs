@@ -17,6 +17,11 @@
 //! - [`PreDispatchView::validate_queued_batch`] — the EXEC-time twin of the two
 //!   above: whole-queue MOVED/ASK/TRYAGAIN/CROSSSLOT re-validation against one
 //!   cluster snapshot (called from `transaction.rs`, not from the gauntlet)
+//! - [`PreDispatchView::validate_watch_slots`] and
+//!   [`PreDispatchView::watched_slots_still_local`] — the same two decisions for
+//!   the *watch set*, which the gauntlet structurally cannot reach: `WATCH`
+//!   short-circuits at the `TransactionControl` stage, long before
+//!   `ClusterSlotValidation` runs
 //! - [`PreDispatchView::pubsub_mode_ping`] — RESP2 `["pong", msg]` framing
 //! - [`PreDispatchView::command_lookup_check`] — unknown-command and
 //!   wrong-arg-count rejection
@@ -29,7 +34,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AclManager, CommandFlags, CommandRegistry, ConnectionLevelOp, CoreMsg, ExecutionStrategy,
-    RateLimitExceeded, ScatterOp, ShardSender, shard_for_key, slot_for_key,
+    RateLimitExceeded, ScatterOp, ShardSender, WatchEntry, shard_for_key, slot_for_key,
 };
 use frogdb_protocol::{ParsedCommand, Response};
 use std::net::SocketAddr;
@@ -44,7 +49,8 @@ use crate::connection::permission_guard::{PermissionGuard, build_permission_guar
 use crate::connection::state::ConnectionState;
 use crate::connection::util::{extract_subcommand, key_access_type_for_flags};
 use crate::slot_migration::{
-    BatchKeys, BatchRoute, RouteDecision, RouteOutcome, SlotValidator, redirect, route_queued_batch,
+    BatchKeys, BatchRoute, RouteDecision, RouteOutcome, SlotValidator, redirect,
+    route_queued_batch, route_watched_keys, watch_slot_is_locally_served,
 };
 
 /// Everything the pre-dispatch gauntlet's *guard* stages read or mutate —
@@ -284,7 +290,7 @@ impl PreDispatchView<'_> {
         // (shard commands only), so a connection-level command like CONFIG —
         // now a `CommandImpl::Connection` entry with no shard executor — is
         // still visible to these gates.
-        if self.is_replica.load(Ordering::Relaxed)
+        if self.is_replica.load(Ordering::Acquire)
             && let Some(cmd_impl) = self.registry.get_entry(cmd_name)
             && cmd_impl.flags().contains(CommandFlags::WRITE)
             && !self.write_defers_to_cluster_redirect(cmd_name, args)
@@ -714,6 +720,70 @@ impl PreDispatchView<'_> {
             RouteOutcome::ServeLocal => None,
             RouteOutcome::Reply(resp) => Some(resp),
         }
+    }
+
+    /// Slot-validate the keys a `WATCH` names, in cluster mode.
+    ///
+    /// `WATCH` is a keyed command with a `KeySpec::All` spec, but it is
+    /// `ConnectionLevel(Transaction)` and so short-circuits at the
+    /// `TransactionControl` dispatch stage — long before `ClusterSlotValidation`
+    /// runs, which `is_cluster_exempt` would exempt it from anyway. Without this
+    /// call a node that does not own the key's slot answers `+OK` and registers
+    /// a CAS no writer on the real owner can ever dirty.
+    ///
+    /// Returns `Some(reply)` — the bare `-MOVED` / `-CLUSTERDOWN` /
+    /// `-CROSSSLOT` — when the watch must be refused and nothing recorded.
+    ///
+    /// ASKING is **peeked, not consumed**: the one-shot flag belongs to the
+    /// `MULTI`/`EXEC` block the client is setting up, which still needs it to
+    /// reach the importing-target routing arm.
+    pub(crate) fn validate_watch_slots(&self, keys: &[Bytes]) -> Option<Response> {
+        // Gated on the same handles as the per-command and EXEC-time seams, so
+        // no configuration can leave one validator live and another off.
+        self.cluster.slot_migration.as_ref()?;
+        let cluster_state = self.cluster.cluster_state.as_ref()?;
+        let node_id = self.cluster.node_id?;
+
+        let mut batch = BatchKeys::default();
+        for key in keys {
+            batch.add_key(key);
+        }
+        route_watched_keys(
+            &cluster_state.snapshot(),
+            &batch,
+            self.state.is_asking(),
+            node_id,
+        )
+    }
+
+    /// Whether every watched key's slot is still served by this node
+    /// (EXEC-time, cluster mode only).
+    ///
+    /// `false` means the CAS precondition can no longer be evaluated here: the
+    /// version the watch recorded is frozen on a slot whose real owner is now
+    /// taking writes, so EXEC must fail the watch rather than commit against a
+    /// stale local copy. The queue's own verdict
+    /// ([`Self::validate_queued_batch`]) is taken first and outranks this.
+    ///
+    /// One snapshot backs the whole answer. `asking` is the block-scoped flag
+    /// `take_transaction` captured for this EXEC — the connection's own copy has
+    /// already been consumed by then, so it cannot be read here.
+    pub(crate) fn watched_slots_still_local(&self, watches: &[WatchEntry], asking: bool) -> bool {
+        // Standalone has no slot ownership to lose: nothing to check.
+        self.check_watched_slots(watches, asking).unwrap_or(true)
+    }
+
+    /// The cluster-mode body of [`Self::watched_slots_still_local`]; `None` when
+    /// this server is not in cluster mode. Gated on the same three handles as
+    /// the per-command and EXEC-time batch seams.
+    fn check_watched_slots(&self, watches: &[WatchEntry], asking: bool) -> Option<bool> {
+        self.cluster.slot_migration.as_ref()?;
+        let cluster_state = self.cluster.cluster_state.as_ref()?;
+        let node_id = self.cluster.node_id?;
+        let snapshot = cluster_state.snapshot();
+        Some(watches.iter().all(|watch| {
+            watch_slot_is_locally_served(&snapshot, slot_for_key(&watch.key), asking, node_id)
+        }))
     }
 
     /// For multi-key commands targeting a MIGRATING slot, check key presence

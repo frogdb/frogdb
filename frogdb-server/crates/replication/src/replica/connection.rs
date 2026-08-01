@@ -14,9 +14,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::CheckpointInstaller;
 use super::offset::ReplicaOffset;
+use parking_lot::RwLock;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::RwLock;
 use tokio::time::timeout;
 
 use crate::BoxedStream;
@@ -172,7 +172,7 @@ impl ReplicaConnection {
         // lags between save points — a resume from behind the applied head would
         // re-receive already-applied data or force a needless full resync.
         let current = self.offsets.current();
-        let replication_id = self.state.read().await.replication_id.clone();
+        let replication_id = self.state.read().replication_id.clone();
         let (repl_id, offset) = psync_request_args(&replication_id, current);
         let cmd = serialize_command_to_resp(
             "PSYNC",
@@ -188,8 +188,22 @@ impl ReplicaConnection {
                 let new_offset: u64 = parts[2].parse().map_err(|_| {
                     io::Error::new(io::ErrorKind::InvalidData, "invalid offset in FULLRESYNC")
                 })?;
-                self.state.write().await.replication_id = new_repl_id.clone();
-                self.offsets.reset_to(new_offset);
+                // A full resync replaces this node's history wholesale, so any
+                // failover window it carried is dropped with it — serving a
+                // `+CONTINUE` against the old id afterwards would ship a tail
+                // from the *new* history (Redis: `clearReplicationId2`).
+                self.state
+                    .write()
+                    .adopt_replication_history(new_repl_id.clone());
+                if !self.offsets.reset_to(new_offset) {
+                    // A promotion froze the heads (or a newer stream took them)
+                    // while this sync was in flight: this connection no longer
+                    // owns the node's history and must not adopt an offset the
+                    // freshly minted window and backlog floor know nothing of.
+                    return Err(io::Error::other(
+                        "replication stream retired during FULLRESYNC",
+                    ));
+                }
                 tracing::info!(replication_id = %new_repl_id, offset = new_offset, "FULLRESYNC initiated");
                 self.set_state(ConnectionState::Syncing);
                 let line_buf = read_resp_line(&mut self.stream).await?;
@@ -225,8 +239,15 @@ impl ReplicaConnection {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 2 {
                 let new_repl_id = parts[1].to_string();
-                let mut state = self.state.write().await;
-                state.replication_id = new_repl_id.clone();
+                // The primary shifted its id (it was promoted) but the stream is
+                // continuous: everything up to the current offset is identical
+                // under the old id, so it becomes this node's failover window
+                // rather than being discarded (Redis: `shiftReplicationId`).
+                let resumed_at = self.offsets.current();
+                let mut state = self.state.write();
+                if state.replication_id != new_repl_id {
+                    state.shift_replication_id(new_repl_id.clone(), resumed_at);
+                }
                 tracing::info!(replication_id = %new_repl_id, "Partial sync with new replication ID");
             }
             self.set_state(ConnectionState::Streaming);
@@ -303,8 +324,16 @@ impl ReplicaConnection {
         // Adopt the staged offset into live state — the one step that must stay
         // on the connection, because it mutates `ReplicationState` + the shared
         // replica offset atomic (the cluster-bus / INFO handle).
-        self.state.write().await.replication_id = outcome.replication_id.clone();
-        self.offsets.reset_to(outcome.replication_offset);
+        self.state
+            .write()
+            .adopt_replication_history(outcome.replication_id.clone());
+        if !self.offsets.reset_to(outcome.replication_offset) {
+            // See `receive_rdb`: the stream was retired mid-sync, so adopting
+            // the checkpoint's offset would overwrite a frozen boundary.
+            return Err(io::Error::other(
+                "replication stream retired during checkpoint sync",
+            ));
+        }
         // The live keyspace now matches the snapshot, so the connection moves
         // into live WAL streaming (see `connect_and_sync`) exactly like the RDB
         // fullsync path — the link is up from here, matching `receive_rdb`.
@@ -326,7 +355,10 @@ impl ReplicaConnection {
         };
         if let Err(e) = installer(staged_dir).await {
             tracing::error!(error = %e, "Failed to install full-resync checkpoint into the live keyspace");
-            self.offsets.reset_to(0);
+            // Best effort: if the stream was retired meanwhile, the heads belong
+            // to whoever retired it and the rewind is neither possible nor
+            // needed.
+            let _ = self.offsets.reset_to(0);
             return Err(e);
         }
         Ok(())
@@ -356,7 +388,7 @@ mod tests {
     use crate::fullsync::{
         CheckpointChecksum, CheckpointFileHeader, FullSyncMetadata, calculate_bytes_checksum,
     };
-    use crate::replica::offset::ReplicaOffset;
+    use crate::replica::offset::{AppliedOffset, ReplicaOffset};
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::atomic::AtomicU64;
@@ -389,7 +421,11 @@ mod tests {
         st.offset_at_save = 100; // persisted save-point M lags
         let state = Arc::new(RwLock::new(st));
         // Live applied head N = 500 (diverged from the persisted 100).
-        let offsets = ReplicaOffset::new(state.clone(), Arc::new(AtomicU64::new(500)));
+        let offsets = ReplicaOffset::new(
+            state.clone(),
+            Arc::new(AtomicU64::new(500)),
+            AppliedOffset::detached(500),
+        );
 
         let mut conn = ReplicaConnection {
             stream: Box::new(server),
@@ -485,7 +521,11 @@ mod tests {
 
         let (mut client, server) = tokio::io::duplex(64 * 1024);
         let state = Arc::new(RwLock::new(ReplicationState::new()));
-        let offsets = ReplicaOffset::new(state.clone(), Arc::new(AtomicU64::new(0)));
+        let offsets = ReplicaOffset::new(
+            state.clone(),
+            Arc::new(AtomicU64::new(0)),
+            AppliedOffset::detached(0),
+        );
         let link_up = Arc::new(AtomicBool::new(false));
 
         let conn = ReplicaConnection {
@@ -528,7 +568,7 @@ mod tests {
         // Offset adopted into the live head + visible through the shared atomic.
         assert_eq!(f.offsets.current(), 4242);
         // Replication id adopted into live state.
-        assert_eq!(f.state.read().await.replication_id, "primary-replid");
+        assert_eq!(f.state.read().replication_id, "primary-replid");
         // Link up: Streaming, with the derived atomic set in lockstep.
         assert_eq!(f.conn.connection_state, ConnectionState::Streaming);
         assert!(f.link_up.load(Ordering::Acquire));
@@ -549,7 +589,11 @@ mod tests {
         let seen: Arc<std::sync::Mutex<Vec<(PathBuf, u64)>>> = Arc::default();
 
         let state = Arc::new(RwLock::new(ReplicationState::new()));
-        let offsets = ReplicaOffset::new(state.clone(), Arc::new(AtomicU64::new(0)));
+        let offsets = ReplicaOffset::new(
+            state.clone(),
+            Arc::new(AtomicU64::new(0)),
+            AppliedOffset::detached(0),
+        );
         let recorder = {
             let seen = seen.clone();
             let offsets = offsets.clone();
@@ -600,7 +644,7 @@ mod tests {
         assert_ne!(f.conn.connection_state, ConnectionState::Streaming);
         assert!(!f.link_up.load(Ordering::Acquire));
         assert_eq!(
-            psync_request_args(&f.state.read().await.replication_id, f.offsets.current()),
+            psync_request_args(&f.state.read().replication_id, f.offsets.current()),
             ("?".to_string(), -1),
         );
     }

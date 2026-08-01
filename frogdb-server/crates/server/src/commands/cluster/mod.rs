@@ -16,8 +16,9 @@ mod admin;
 use bytes::Bytes;
 use frogdb_cluster::wire;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, LookupSpec, WaiterWake, WalStrategy, slot_for_key,
+    AccessSpec, Arity, CLUSTER_SLOTS, Command, CommandContext, CommandError, CommandFlags,
+    CommandSpec, EventSpec, ExecutionStrategy, KeySpec, LookupSpec, WaiterWake, WalStrategy,
+    slot_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -60,20 +61,23 @@ fn count_slot_health(snapshot: &frogdb_cluster::ClusterSnapshot) -> SlotHealthCo
     counts
 }
 
-/// Get the local node's replication offset from Raft metrics or replication tracker.
+/// The local node's replication offset, as `CLUSTER SHARDS` / `CLUSTER SLOTS`
+/// report it.
+///
+/// This is the *data* replication offset — the same number `INFO replication`
+/// publishes as `master_repl_offset` and the same one a replica ACKs — read
+/// from the replication tracker in every mode.
+///
+/// It used to be the Raft last-applied log index whenever Raft was running,
+/// which was a different quantity wearing this one's name: Raft carries cluster
+/// metadata only (ADR-0001), so that index counted membership and slot-map
+/// entries, not bytes of client writes. A client comparing a primary's
+/// `replication-offset` against its replica's would have been comparing two
+/// numbers from unrelated planes.
 fn local_replication_offset(ctx: &CommandContext) -> i64 {
-    if let Some(raft) = ctx.raft {
-        return raft
-            .metrics()
-            .borrow()
-            .last_applied
-            .map(|log_id| log_id.index as i64)
-            .unwrap_or(0);
-    }
-    if let Some(tracker) = ctx.replication_tracker {
-        return tracker.current_offset() as i64;
-    }
-    0
+    ctx.replication_tracker
+        .map(|tracker| tracker.current_offset() as i64)
+        .unwrap_or(0)
 }
 
 pub struct ClusterCommand;
@@ -213,49 +217,62 @@ impl Command for ClusterCommand {
     }
 }
 
-/// Fold the cluster-wide replicated config epoch with the local Raft term
-/// into the single value `CLUSTER INFO` reports as `cluster_current_epoch`.
-///
-/// `config_epoch` is `ClusterState`'s own monotonic counter (bumped by
-/// `IncrementEpoch`, `Failover`, and `MarkNodeFailed`); `raft_term` is the
-/// local Raft leadership term (bumped by every election, with or without a
-/// cluster topology change).
-///
-/// This fold is a deliberate **divergence from Redis**, whose `currentEpoch`
-/// is agreed by gossip and bumped only by epoch-owning commands; Redis
-/// Cluster has no leader-election term to fold in. Two consequences follow,
-/// and both are intentional:
-///
-/// 1. A Raft re-election alone -- with no `Failover`/`MarkNodeFailed`/
-///    `IncrementEpoch` committed -- can push `cluster_current_epoch` above
-///    every per-node `config_epoch` reported by `CLUSTER NODES`. (Redis's
-///    `currentEpoch` can likewise exceed every `configEpoch` after an
-///    election that reassigns no slots, so the *shape* of the exceedance is
-///    familiar even though the mechanism differs.) Because `config_epoch` is
-///    itself always `>=` every per-node `config_epoch` -- a node's own
-///    `config_epoch` is only ever set to a value it claims from this counter
-///    at the moment it is bumped -- the fold guarantees
-///    `cluster_current_epoch >= max(per-node config_epoch)` always, never
-///    the reverse `<=` bound. Do NOT assert
-///    `cluster_current_epoch <= max(NODES config_epoch)`: that bound does not
-///    hold, and it failing is not a bug.
-/// 2. Conversely, a real topology event can be **invisible** here: bumping
-///    `config_epoch` from 0 to 1 while `raft_term` is already 1 leaves the
-///    reported value unchanged. `cluster_current_epoch` is therefore
-///    monotonic but not a reliable change-detector -- read the raw per-node
-///    `config_epoch` from `CLUSTER NODES` for that.
-///
-/// See `.scratch/testing-improvements/issues/47`
-/// and the "current epoch folds in the Raft term" section of
-/// `website/src/content/docs/architecture/clustering.md`.
-fn fold_current_epoch(config_epoch: frogdb_cluster::ConfigEpoch, raft_term: u64) -> u64 {
-    config_epoch.max(raft_term)
-}
-
 /// CLUSTER INFO - Returns cluster state information.
+///
+/// # `cluster_state`
+///
+/// `fail` means the keyspace is unservable from this node: some assigned slot's
+/// owner is FAIL-flagged (`cluster_slots_fail > 0`), this node cannot form a
+/// quorum, or Raft reports no usable leader. A FAIL-flagged node that owns no
+/// slots does **not** make the cluster `fail` — same rule as Redis, whose
+/// `clusterUpdateState` only degrades on slot coverage or majority loss.
+///
+/// # Epoch fields
+///
+/// `cluster_current_epoch` is the cluster-wide **replicated** config-epoch
+/// counter (`ClusterStateInner::config_epoch`), reported verbatim. It is the
+/// same number `CLUSTER NODES`, the HTTP admin API and the debug UI report, so
+/// every FrogDB surface agrees on one value, and — because it is replicated
+/// through the Raft log rather than derived from node-local runtime state —
+/// every node converges on the same value for the same cluster state.
+///
+/// It moves only on an epoch-owning event (`IncrementEpoch`, `Failover`,
+/// `MarkNodeFailed`, or a collision resolution at `AddNode`), which makes it a
+/// usable topology-change detector. It is *not* globally monotonic:
+/// `CLUSTER RESET HARD` resets it to `0`, exactly as Redis's `CLUSTER RESET
+/// HARD` resets `currentEpoch`.
+///
+/// `cluster_my_epoch` is this node's own `NodeInfo::config_epoch`. The
+/// `cluster_current_epoch >= cluster_my_epoch` invariant holds at the source:
+/// a per-node epoch is only ever set to a value minted from the counter, and
+/// `ClusterStateInner::reconcile_incoming_epoch` ratchets the counter up to any
+/// larger epoch an incoming node claims.
+///
+/// **Do NOT assert `cluster_current_epoch <= max(NODES config_epoch)`.** That
+/// bound does not hold and its failing is not a bug: `IncrementEpoch` and
+/// `MarkNodeFailed` bump the counter without stamping any node, so the counter
+/// legitimately exceeds every per-node epoch. Redis behaves the same way —
+/// `currentEpoch` may exceed every `configEpoch`, and `redis-cli --cluster
+/// check` flags epoch *collisions*, never exceedance.
+///
+/// `cluster_raft_term` is the local Raft leadership term
+/// (`RaftMetrics::current_term`) — a FrogDB extension with no Redis
+/// equivalent, reported as its own field rather than folded into
+/// `cluster_current_epoch`. Unlike the epoch it is **node-local and
+/// unreplicated**: it moves on every election attempt (including failed ones),
+/// so two nodes may legitimately report different terms. Watch it for
+/// control-plane churn; watch `cluster_current_epoch` for topology change. The
+/// line is **omitted entirely** whenever there is no Raft handle to read a term
+/// from — standalone, or cluster state without a wired-up Raft — rather than
+/// reporting a term of 0 that does not exist.
+///
+/// See `.scratch/replication-cluster-rework/epoch-fold-redesign.md`,
+/// `.scratch/testing-improvements/issues/47`, and
+/// the "Config epoch vs. Raft term" section of
+/// `website/src/content/docs/architecture/clustering.md`.
 fn cluster_info(ctx: &mut CommandContext) -> Result<Response, CommandError> {
     // Use ClusterState if available, otherwise return standalone mode info
-    if let Some(cluster_state) = ctx.cluster_state {
+    let report = if let Some(cluster_state) = ctx.cluster_state {
         let snapshot = cluster_state.snapshot();
         let slots_assigned = snapshot.slot_assignment.len() as u16;
         let known_nodes = snapshot.nodes.len();
@@ -275,22 +292,31 @@ fn cluster_info(ctx: &mut CommandContext) -> Result<Response, CommandError> {
         // If too much time has passed since a quorum ack, the cluster is unhealthy.
         const QUORUM_TIMEOUT_MS: u64 = 2000; // 2 seconds without quorum = fail
 
-        // Check for failed primaries - cluster is in fail state if any primary is marked failed
-        let has_failed_primary = snapshot
-            .nodes
-            .values()
-            .any(|n| n.is_primary() && n.flags.fail);
+        // Per-slot FAIL/PFAIL accounting: a slot only counts as `ok` when its
+        // owning node is neither FAIL- nor PFAIL-flagged.
+        let health = count_slot_health(&snapshot);
+
+        // `cluster_state` follows Redis: the cluster is only `fail` when the
+        // keyspace is actually unservable — some slot's owner is FAIL-flagged —
+        // or when this node has lost quorum. A FAIL-flagged primary that owns
+        // *no* slots (a freshly joined node, a drained one, a phantom entry
+        // from a failed join) costs the cluster nothing and must not flip the
+        // field: every client would see `fail` while every key stayed served.
+        let has_failed_slot_owner = health.fail > 0;
 
         // Check if we can form a quorum with reachable nodes (local perspective)
         let has_local_quorum = ctx.quorum_checker.map(|qc| qc.has_quorum()).unwrap_or(true); // If no quorum checker, assume healthy
 
-        // Extract Raft term to incorporate into epoch (leader elections bump the term)
-        let raft_term: u64 = ctx
-            .raft
-            .map(|r| r.metrics().borrow().current_term)
-            .unwrap_or(0);
+        // The local Raft leadership term, reported as its own field. Node-local
+        // and unreplicated -- never folded into `cluster_current_epoch`.
+        //
+        // Stays `None` without a Raft handle, so the line is omitted rather
+        // than reporting term 0 for a node that has no term. Cluster state can
+        // be present without Raft (a `ClusterState` snapshot restored on a node
+        // whose Raft is not wired up), and that case must not fabricate one.
+        let raft_term: Option<u64> = ctx.raft.map(|r| r.metrics().borrow().current_term);
 
-        let cluster_state_str = if has_failed_primary || !has_local_quorum {
+        let cluster_state_str = if has_failed_slot_owner || !has_local_quorum {
             "fail"
         } else if let Some(raft) = ctx.raft {
             use openraft::ServerState;
@@ -315,18 +341,77 @@ fn cluster_info(ctx: &mut CommandContext) -> Result<Response, CommandError> {
             "ok" // No Raft = standalone mode, always ok
         };
 
-        // Effective epoch: fold of config epoch and Raft term. See
-        // `fold_current_epoch` for the invariants this deliberately does and
-        // does not provide.
-        let effective_epoch = fold_current_epoch(snapshot.config_epoch, raft_term);
+        ClusterInfoReport {
+            state: cluster_state_str,
+            slots_assigned,
+            health,
+            known_nodes,
+            cluster_size,
+            current_epoch: snapshot.config_epoch,
+            my_epoch,
+            raft_term,
+        }
+    } else {
+        ClusterInfoReport::standalone()
+    };
 
-        // Real per-slot FAIL/PFAIL accounting: a slot only counts as `ok` when
-        // its owning node is neither FAIL- nor PFAIL-flagged. This keeps the
-        // granular breakdown honest even though `cluster_state` above already
-        // detects FAIL-flagged primaries at the coarser cluster-wide level.
-        let health = count_slot_health(&snapshot);
+    Ok(Response::bulk(Bytes::from(report.render())))
+}
 
-        let info = format!(
+/// Every value `CLUSTER INFO` reports, collected before rendering.
+///
+/// Cluster and standalone mode share one renderer so the field list — its
+/// names, order and the CRLF framing — has a single definition, and so a new
+/// field can never be added to one branch and forgotten in the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ClusterInfoReport {
+    state: &'static str,
+    slots_assigned: u16,
+    health: SlotHealthCounts,
+    known_nodes: usize,
+    /// Number of primaries, matching Redis's `cluster_size`.
+    cluster_size: usize,
+    /// The cluster-wide replicated config-epoch counter, verbatim.
+    current_epoch: frogdb_cluster::ConfigEpoch,
+    /// This node's own `NodeInfo::config_epoch`.
+    my_epoch: frogdb_cluster::ConfigEpoch,
+    /// The local Raft leadership term (FrogDB extension). `None` in standalone
+    /// mode, where there is no Raft group: the line is omitted rather than
+    /// reported as a fake `0`.
+    raft_term: Option<u64>,
+}
+
+impl ClusterInfoReport {
+    /// The fixed report for a standalone (non-cluster) server: one node owning
+    /// every slot, no epochs, no Raft.
+    fn standalone() -> Self {
+        Self {
+            state: "ok",
+            slots_assigned: CLUSTER_SLOTS,
+            health: SlotHealthCounts {
+                ok: CLUSTER_SLOTS,
+                pfail: 0,
+                fail: 0,
+            },
+            known_nodes: 1,
+            cluster_size: 1,
+            current_epoch: 0,
+            my_epoch: 0,
+            raft_term: None,
+        }
+    }
+
+    /// Render the `key:value\r\n` bulk-string body.
+    ///
+    /// `cluster_raft_term` is the one optional line: standalone servers have no
+    /// Raft group, and a term of `0` there would read as "term zero" rather
+    /// than "no term".
+    fn render(&self) -> String {
+        let raft_term = match self.raft_term {
+            Some(term) => format!("cluster_raft_term:{term}\r\n"),
+            None => String::new(),
+        };
+        format!(
             "\
 cluster_state:{}\r\n\
 cluster_slots_assigned:{}\r\n\
@@ -337,6 +422,7 @@ cluster_known_nodes:{}\r\n\
 cluster_size:{}\r\n\
 cluster_current_epoch:{}\r\n\
 cluster_my_epoch:{}\r\n\
+{}\
 cluster_stats_messages_ping_sent:0\r\n\
 cluster_stats_messages_pong_sent:0\r\n\
 cluster_stats_messages_sent:0\r\n\
@@ -344,39 +430,17 @@ cluster_stats_messages_ping_received:0\r\n\
 cluster_stats_messages_pong_received:0\r\n\
 cluster_stats_messages_received:0\r\n\
 total_cluster_links_buffer_limit_exceeded:0\r\n",
-            cluster_state_str,
-            slots_assigned,
-            health.ok,
-            health.pfail,
-            health.fail,
-            known_nodes,
-            cluster_size,
-            effective_epoch,
-            my_epoch,
-        );
-
-        Ok(Response::bulk(Bytes::from(info)))
-    } else {
-        // Standalone mode - return default info
-        let info = "\
-cluster_state:ok\r\n\
-cluster_slots_assigned:16384\r\n\
-cluster_slots_ok:16384\r\n\
-cluster_slots_pfail:0\r\n\
-cluster_slots_fail:0\r\n\
-cluster_known_nodes:1\r\n\
-cluster_size:1\r\n\
-cluster_current_epoch:0\r\n\
-cluster_my_epoch:0\r\n\
-cluster_stats_messages_ping_sent:0\r\n\
-cluster_stats_messages_pong_sent:0\r\n\
-cluster_stats_messages_sent:0\r\n\
-cluster_stats_messages_ping_received:0\r\n\
-cluster_stats_messages_pong_received:0\r\n\
-cluster_stats_messages_received:0\r\n\
-total_cluster_links_buffer_limit_exceeded:0\r\n";
-
-        Ok(Response::bulk(Bytes::from(info)))
+            self.state,
+            self.slots_assigned,
+            self.health.ok,
+            self.health.pfail,
+            self.health.fail,
+            self.known_nodes,
+            self.cluster_size,
+            self.current_epoch,
+            self.my_epoch,
+            raft_term,
+        )
     }
 }
 
@@ -478,16 +542,24 @@ fn cluster_shards(ctx: &mut CommandContext) -> Result<Response, CommandError> {
 }
 
 /// Map grouped [`wire::ShardView`]s to the `CLUSTER SHARDS` RESP array,
-/// overlaying `my_offset` as the `replication-offset` of the node whose id equals
-/// `my_id` (every other node reports 0).
+/// reporting `my_offset` as the `replication-offset` of the node whose id equals
+/// `my_id`.
+///
+/// Peers get **no** `replication-offset` field at all. The metadata plane
+/// carries topology, not stream positions, so this node does not know how far
+/// any peer has replicated; rendering the 0 it would otherwise have to invent
+/// would read as "that node is infinitely behind" and drive exactly the
+/// failover/lag decisions the field exists to inform. An absent field is the
+/// truthful answer, and the client asks the node itself (`INFO replication`,
+/// or `CLUSTER SHARDS` against that node) for the real one. Redis fills this in
+/// from gossip, which FrogDB's Raft plane deliberately does not carry.
 fn map_shards_response(
     views: &[wire::ShardView<'_>],
     my_id: Option<frogdb_cluster::NodeId>,
     my_offset: i64,
 ) -> Response {
     let node_entry = |view: &wire::NodeView<'_>, role: &'static str| -> Response {
-        let offset = if Some(view.id) == my_id { my_offset } else { 0 };
-        Response::Array(vec![
+        let mut entry = vec![
             Response::bulk(Bytes::from("id")),
             Response::bulk(Bytes::from(wire::format_node_id(view.id))),
             Response::bulk(Bytes::from("port")),
@@ -498,11 +570,14 @@ fn map_shards_response(
             Response::bulk(Bytes::from(view.node.addr.ip().to_string())),
             Response::bulk(Bytes::from("role")),
             Response::bulk(Bytes::from(role)),
-            Response::bulk(Bytes::from("replication-offset")),
-            Response::Integer(offset),
-            Response::bulk(Bytes::from("health")),
-            Response::bulk(Bytes::from(view.health)),
-        ])
+        ];
+        if Some(view.id) == my_id {
+            entry.push(Response::bulk(Bytes::from("replication-offset")));
+            entry.push(Response::Integer(my_offset));
+        }
+        entry.push(Response::bulk(Bytes::from("health")));
+        entry.push(Response::bulk(Bytes::from(view.health)));
+        Response::Array(entry)
     };
 
     let mut shards = Vec::new();
@@ -688,12 +763,15 @@ mod tests {
     }
 
     /// Look up a value in a flat `[k1, v1, k2, v2, ...]` bulk-keyed node entry.
-    fn field<'a>(entry: &'a [Response], key: &str) -> &'a Response {
+    fn opt_field<'a>(entry: &'a [Response], key: &str) -> Option<&'a Response> {
         entry
             .chunks_exact(2)
             .find(|pair| as_bulk(&pair[0]) == key)
             .map(|pair| &pair[1])
-            .unwrap_or_else(|| panic!("field {key} not found"))
+    }
+
+    fn field<'a>(entry: &'a [Response], key: &str) -> &'a Response {
+        opt_field(entry, key).unwrap_or_else(|| panic!("field {key} not found"))
     }
 
     /// Primary 1 owns slots 0-9 with replica 3; primary 2 owns zero slots.
@@ -745,11 +823,12 @@ mod tests {
     }
 
     #[test]
-    fn test_map_shards_response_overlays_offset_for_local_node_only() {
+    fn test_map_shards_response_reports_offset_for_local_node_only() {
         let snap = fixture();
-        // Local node is the primary (id 1); its offset must be overlaid, every
-        // other node reports 0. Zero-slot primary 2 is still present (SHARDS keeps
-        // it, unlike SLOTS).
+        // Local node is the primary (id 1); its offset is reported. Peers get no
+        // `replication-offset` field at all: this node does not know theirs, and
+        // a rendered 0 would read as "infinitely behind". Zero-slot primary 2 is
+        // still present (SHARDS keeps it, unlike SLOTS).
         let resp = map_shards_response(&wire::shard_views(&snap), Some(1), 42);
         let shards = as_arr(&resp);
         assert_eq!(shards.len(), 2);
@@ -766,58 +845,131 @@ mod tests {
 
         let replica = as_arr(&nodes0[1]);
         assert_eq!(as_bulk(field(replica, "role")), "slave");
-        assert_eq!(as_int(field(replica, "replication-offset")), 0);
+        assert!(
+            opt_field(replica, "replication-offset").is_none(),
+            "a peer's replication offset is unknown here, so the field is omitted"
+        );
+        assert_eq!(
+            as_bulk(field(replica, "health")),
+            "online",
+            "omitting one field must not disturb the pairs after it"
+        );
 
-        // Shard 1 = zero-slot primary 2: present, empty slots, offset 0.
+        // Shard 1 = zero-slot primary 2: present, empty slots, no offset.
         let shard1 = as_arr(&shards[1]);
         assert!(as_arr(field(shard1, "slots")).is_empty());
         let p2 = as_arr(&as_arr(field(shard1, "nodes"))[0]);
-        assert_eq!(as_int(field(p2, "replication-offset")), 0);
+        assert!(opt_field(p2, "replication-offset").is_none());
     }
 
-    // Pins `fold_current_epoch`'s `max(config_epoch, raft_term)` output for
-    // issue 47 -- see the doc comment on the function for why the original
-    // audit's `INFO epoch <= max(NODES config_epoch)` proposal was refuted
-    // and replaced with this deliberate-fold pinning instead.
+    // ------------------------------------------------------------------
+    // `CLUSTER INFO` epoch reporting. The Raft term used to be folded into
+    // `cluster_current_epoch` via `max(config_epoch, raft_term)` (issue 47
+    // pinned that fold; the epoch-fold redesign removed it). These tests pin
+    // the replacement contract: the counter is reported verbatim and the term
+    // is its own field.
+    // ------------------------------------------------------------------
 
-    #[test]
-    fn test_fold_current_epoch_raft_term_exceeds_config_epoch() {
-        // A Raft re-election with no topology change: term outruns the
-        // replicated config epoch. This is the exact scenario the original
-        // (refuted) audit claim got wrong -- the fold legitimately reports
-        // the higher term, not the config epoch.
-        assert_eq!(fold_current_epoch(3, 7), 7);
+    /// A report with the epoch triple set and everything else at a benign
+    /// default -- these tests are about the three epoch/term fields only.
+    fn epoch_report(current_epoch: u64, my_epoch: u64, raft_term: u64) -> ClusterInfoReport {
+        ClusterInfoReport {
+            state: "ok",
+            slots_assigned: 0,
+            health: SlotHealthCounts::default(),
+            known_nodes: 1,
+            cluster_size: 1,
+            current_epoch,
+            my_epoch,
+            raft_term: Some(raft_term),
+        }
+    }
+
+    /// Extract a `key:value` field from a rendered `CLUSTER INFO` body.
+    fn info_field(body: &str, key: &str) -> String {
+        body.lines()
+            .find_map(|line| line.strip_prefix(&format!("{}:", key)))
+            .unwrap_or_else(|| panic!("CLUSTER INFO must report a `{}` field", key))
+            .trim()
+            .to_string()
     }
 
     #[test]
-    fn test_fold_current_epoch_config_epoch_exceeds_raft_term() {
-        // A stable Raft leader (low term) with several topology events
-        // (failovers/epoch bumps) already committed.
-        assert_eq!(fold_current_epoch(9, 2), 9);
+    fn test_cluster_info_reports_config_epoch_counter_verbatim() {
+        // A Raft re-election with no topology change: the term outruns the
+        // replicated counter. The counter is what gets reported -- the term
+        // no longer inflates it, so `cluster_current_epoch` stays a usable
+        // topology-change detector and agrees across nodes.
+        let body = epoch_report(3, 3, 7).render();
+        assert_eq!(info_field(&body, "cluster_current_epoch"), "3");
+        assert_eq!(info_field(&body, "cluster_raft_term"), "7");
     }
 
     #[test]
-    fn test_fold_current_epoch_equal_values() {
-        assert_eq!(fold_current_epoch(5, 5), 5);
+    fn test_cluster_info_reports_raft_term_as_its_own_field() {
+        // A stable leader (low term) with several topology events already
+        // committed: both values are reported, neither shadows the other.
+        let body = epoch_report(9, 9, 2).render();
+        assert_eq!(info_field(&body, "cluster_current_epoch"), "9");
+        assert_eq!(info_field(&body, "cluster_raft_term"), "2");
     }
 
     #[test]
-    fn test_fold_current_epoch_both_zero() {
-        // Fresh, unbootstrapped cluster: no epoch bumps, no elections yet.
-        assert_eq!(fold_current_epoch(0, 0), 0);
-    }
-
-    #[test]
-    fn test_fold_current_epoch_masks_config_epoch_bump_under_higher_term() {
-        // The lossy direction of the fold, pinned deliberately: on a young
+    fn test_cluster_info_epoch_bump_is_visible_under_a_higher_term() {
+        // The masking case the fold produced, now pinned as fixed: on a young
         // cluster the first election takes raft_term to 1 while config_epoch
-        // is still 0, so the first real topology event (config_epoch 0 -> 1)
-        // produces *no* change in the reported cluster_current_epoch. This is
-        // exactly what `test_cluster_info_epoch_monotonic_across_failover`
-        // observes end-to-end, and it is why that test asserts non-decrease
-        // rather than a strict increase.
-        assert_eq!(fold_current_epoch(0, 1), 1);
-        assert_eq!(fold_current_epoch(1, 1), 1);
+        // is still 0, so the first topology event (config_epoch 0 -> 1) used
+        // to leave the reported value unchanged at 1. It is now visible.
+        let before = epoch_report(0, 0, 1).render();
+        let after = epoch_report(1, 1, 1).render();
+        assert_eq!(info_field(&before, "cluster_current_epoch"), "0");
+        assert_eq!(info_field(&after, "cluster_current_epoch"), "1");
+    }
+
+    #[test]
+    fn test_cluster_info_my_epoch_is_the_per_node_value_not_the_counter() {
+        // `cluster_my_epoch` is this node's own `NodeInfo::config_epoch`; the
+        // counter legitimately runs ahead of it (IncrementEpoch and
+        // MarkNodeFailed bump the counter without stamping any node). The
+        // `current >= my` invariant is upheld at the source by
+        // `ClusterStateInner::reconcile_incoming_epoch`, not by a `max()` here.
+        //
+        // Do NOT assert `cluster_current_epoch <= max(NODES config_epoch)`:
+        // that bound does not hold and its failing is not a bug.
+        let body = epoch_report(12, 4, 3).render();
+        assert_eq!(info_field(&body, "cluster_current_epoch"), "12");
+        assert_eq!(info_field(&body, "cluster_my_epoch"), "4");
+    }
+
+    /// Standalone has no Raft group, so it reports no term at all: a `0` there
+    /// would read as "term zero" and let a scrape chart a value that does not
+    /// exist. The epochs *are* reported as `0` -- those fields are Redis's and
+    /// clients parse them unconditionally.
+    #[test]
+    fn test_cluster_info_standalone_omits_the_raft_term_line() {
+        let body = ClusterInfoReport::standalone().render();
+        assert_eq!(info_field(&body, "cluster_current_epoch"), "0");
+        assert_eq!(info_field(&body, "cluster_my_epoch"), "0");
+        assert!(
+            !body.contains("cluster_raft_term"),
+            "standalone CLUSTER INFO must omit cluster_raft_term entirely, got:\n{body}"
+        );
+        assert_eq!(info_field(&body, "cluster_state"), "ok");
+        assert_eq!(info_field(&body, "cluster_slots_assigned"), "16384");
+        assert_eq!(info_field(&body, "cluster_slots_ok"), "16384");
+    }
+
+    #[test]
+    fn test_cluster_info_render_is_crlf_framed_key_value_lines() {
+        let body = epoch_report(1, 1, 1).render();
+        assert!(body.ends_with("\r\n"));
+        for line in body.split_terminator("\r\n") {
+            assert!(
+                line.contains(':') && !line.contains('\n'),
+                "every CLUSTER INFO line must be a single `key:value` pair, got {:?}",
+                line
+            );
+        }
     }
 
     // ------------------------------------------------------------------
@@ -900,6 +1052,21 @@ mod tests {
         assert_eq!(health.fail, 10, "only primary 1's slots are fail");
         assert_eq!(health.ok, 2, "primary 2's slots remain ok");
         assert_eq!(health.pfail, 0);
+    }
+
+    /// The `cluster_state:fail` predicate is `slots_fail > 0`, not "some
+    /// primary is FAIL-flagged": primary 2 owns no slots, so failing it leaves
+    /// the whole keyspace served and the cluster reports `ok`. A phantom joiner
+    /// at a dead address (a very common transient) is exactly this shape, and
+    /// under the old predicate it flipped every node's `cluster_state` to
+    /// `fail` while every key kept answering.
+    #[test]
+    fn test_count_slot_health_fail_flagged_slotless_primary_leaves_slots_ok() {
+        let mut snap = fixture();
+        snap.nodes.get_mut(&2).unwrap().flags.fail = true;
+        let health = count_slot_health(&snap);
+        assert_eq!(health.fail, 0, "a slotless primary owns no failed slots");
+        assert_eq!(health.ok, 10, "every assigned slot is still served");
     }
 
     #[test]

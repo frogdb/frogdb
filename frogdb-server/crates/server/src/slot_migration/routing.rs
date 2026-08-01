@@ -292,6 +292,63 @@ pub(crate) fn route_queued_batch(
     }
 }
 
+// ---------------------------------------------------------------------------
+// WATCH set routing
+// ---------------------------------------------------------------------------
+
+/// Route the keys named by a single `WATCH` against one [`ClusterSnapshot`].
+///
+/// `Some(reply)` is the bare `-MOVED` / `-CLUSTERDOWN` / `-CROSSSLOT` that
+/// becomes WATCH's whole answer, with nothing recorded; `None` means "record the
+/// watch here". Redis routes `WATCH` through `getNodeByQuery` like any other
+/// command with a key spec (`watch key [key …]`, firstkey 1), so the shape is
+/// the same as a queued batch: a key set that must resolve to one slot this node
+/// serves.
+///
+/// The two migration arms **accept**. An open migration does not make the watch
+/// unserviceable: `MIGRATE`'s delete on the source bumps the watched key's
+/// version, so the ordinary CAS check still fires. Refusing here would break
+/// every `WATCH` for the duration of any migration touching the slot.
+///
+/// There is deliberately no `readonly_eligible` parameter. The READONLY replica
+/// rescue that saves a *read* on a foreign slot must not save a `WATCH`: a CAS
+/// precondition can only be registered where the writes it guards are applied,
+/// so a READONLY connection is redirected to the slot's owner instead.
+pub(crate) fn route_watched_keys(
+    snapshot: &ClusterSnapshot,
+    keys: &BatchKeys,
+    asking: bool,
+    self_node_id: NodeId,
+) -> Option<Response> {
+    match route_queued_batch(snapshot, keys, asking, self_node_id, false) {
+        BatchRoute::ServeLocal
+        | BatchRoute::ProbeMigratingSource { .. }
+        | BatchRoute::ProbeImporting { .. } => None,
+        BatchRoute::Redirect(reply) => Some(reply),
+    }
+}
+
+/// Whether a *watched* key's slot is still served by this node — EXEC's
+/// question about the watch set, as opposed to the queued batch.
+///
+/// A watched key whose slot has changed hands is unobservable from here: the
+/// version WATCH recorded can never move again, however many writes the real
+/// owner takes, so committing would silently break the CAS. An open migration
+/// stays serviceable for the reason given on [`route_watched_keys`].
+pub(crate) fn watch_slot_is_locally_served(
+    snapshot: &ClusterSnapshot,
+    slot: u16,
+    asking: bool,
+    self_node_id: NodeId,
+) -> bool {
+    matches!(
+        route_with_snapshot(snapshot, slot, "EXEC", asking, self_node_id),
+        RouteDecision::LocalServe
+            | RouteDecision::LocalServeMigrating
+            | RouteDecision::AcceptImporting
+    )
+}
+
 /// The address of the node a slot is migrating *to*, if the snapshot knows it.
 fn migration_target_addr(snapshot: &ClusterSnapshot, slot: u16) -> Option<SocketAddr> {
     let migration = snapshot.migrations.get(&slot)?;

@@ -30,6 +30,29 @@ impl ClusterState {
                     tracing::info!(node_id = node.id, addr = %node.addr, "Adding node to cluster");
                 }
 
+                // Re-registration refreshes a node's *address*, never its role.
+                // A node re-registers itself on every boot (`cluster_init`) with
+                // the role it can know without the cluster's help — primary — so
+                // taking the incoming role would demote-by-restart: a replica
+                // that restarted would silently reappear as a slotless primary,
+                // its primary would lose a replica, and its data path would keep
+                // streaming from a node the topology no longer links it to.
+                // Role transitions belong to `SetRole` and `Failover`; this arm
+                // keeps the recorded role for the same reason it keeps the
+                // recorded epoch below.
+                if let Some(existing) = inner.nodes.get(&node.id) {
+                    if existing.role != node.role || existing.primary_id != node.primary_id {
+                        tracing::debug!(
+                            node_id = node.id,
+                            recorded_role = %existing.role,
+                            claimed_role = %node.role,
+                            "Node re-registered with a different role; kept its recorded role"
+                        );
+                    }
+                    node.role = existing.role;
+                    node.primary_id = existing.primary_id;
+                }
+
                 // Warn on version mismatch when a node joins or updates
                 if !node.version.is_empty() {
                     // Check against the majority version in the cluster
@@ -160,19 +183,36 @@ impl ClusterState {
 
                 // Now we can safely modify
                 let node = inner.nodes.get_mut(&node_id).unwrap();
+                let was_primary = node.role == NodeRole::Primary;
                 node.role = role;
                 node.primary_id = primary_id;
                 tracing::info!(node_id, ?role, "Set node role");
 
-                // Setting a node to Replica is a demotion. This is node-agnostic;
-                // the state machine decides whether it applies to *this* node.
+                // Both events are node-agnostic; the state machine decides
+                // whether they apply to *this* node.
+                //
+                // Replica: emit unconditionally. Re-issuing `SetRole { Replica }`
+                // on a node that is already a replica is how a re-parent is
+                // expressed, and the data path has to re-point its replication
+                // stream at the new primary — so this is not a no-op.
+                //
+                // Primary: emit only on a real replica→primary transition. A
+                // re-applied `SetRole { Primary }` on a node that is already a
+                // primary changes nothing, and promoting the data path again
+                // would mint a fresh replication ID and force every attached
+                // replica into a full resync for no reason.
                 let mut events = Vec::new();
-                if role == NodeRole::Replica {
-                    events.push(ClusterEvent::NodeDemoted {
+                match role {
+                    NodeRole::Replica => events.push(ClusterEvent::NodeDemoted {
                         demoted_node_id: node_id,
                         new_primary_id: primary_id,
                         epoch: inner.config_epoch,
-                    });
+                    }),
+                    NodeRole::Primary if !was_primary => events.push(ClusterEvent::NodePromoted {
+                        promoted_node_id: node_id,
+                        epoch: inner.config_epoch,
+                    }),
+                    NodeRole::Primary => {}
                 }
                 Ok((ClusterResponse::Ok, events))
             }
@@ -217,11 +257,13 @@ impl ClusterState {
 
                 // 2. Promote the successor (no-op if it is already a primary,
                 //    e.g. the absorb path or a replayed retry).
-                {
+                let successor_was_replica = {
                     let new_node = inner.nodes.get_mut(&new_primary_id).unwrap();
+                    let was_replica = new_node.role == NodeRole::Replica;
                     new_node.role = NodeRole::Primary;
                     new_node.primary_id = None;
-                }
+                    was_replica
+                };
 
                 // 3. Apply the old primary's fate. A graceful failover demotes
                 //    the old primary (a NodeDemoted event); a force failover
@@ -270,11 +312,20 @@ impl ClusterState {
                     "Applied atomic failover"
                 );
 
+                // Order matters on a node that is both: the demotion is the old
+                // primary's, the promotion the successor's, and they can never
+                // name the same node (the two ids are validated distinct above).
                 let mut events = Vec::new();
                 if graceful_demotion {
                     events.push(ClusterEvent::NodeDemoted {
                         demoted_node_id: old_primary_id,
                         new_primary_id: Some(new_primary_id),
+                        epoch,
+                    });
+                }
+                if successor_was_replica {
+                    events.push(ClusterEvent::NodePromoted {
+                        promoted_node_id: new_primary_id,
                         epoch,
                     });
                 }

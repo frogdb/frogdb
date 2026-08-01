@@ -14,17 +14,19 @@ mod tests;
 use bytes::Bytes;
 use frogdb_persistence::RocksStore;
 use frogdb_types::ReplicationTracker;
+use parking_lot::RwLock;
 use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::broadcast;
 
 use crate::BoxedStream;
 use crate::ReplicationBroadcaster;
 use crate::frame::{CONTROL_SHARD, ReplconfCodec, ReplicationFrame, serialize_command_to_resp};
+use crate::identity::ReplicationIdentity;
 use crate::offset_coordinator::OffsetCoordinator;
 use crate::replica_session::SyncKind;
 use crate::state::ReplicationState;
@@ -33,6 +35,15 @@ use crate::wait_coordinator::WaitCoordinator;
 
 pub use replay::{FullResyncReason, PartialSyncReplay, ReplayDecision, ReplayGrant};
 pub use ring_buffer::{ReplicationRingBuffer, SplitBrainBufferConfig};
+
+/// Injected work that must complete before a `FULLRESYNC` checkpoint is cut.
+///
+/// The replication crate owns no shards, so it cannot itself make the primary's
+/// storage engine hold every acknowledged write — the owner of the shards
+/// installs this hook (see `checkpoint_quiesce` in the server crate) and the
+/// full-sync path awaits it immediately before `create_checkpoint`.
+pub type PreCheckpointHook =
+    Arc<dyn Fn() -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 /// The split-brain divergence window this (demoted) Primary computed against the
 /// last offset the cluster had acknowledged — the writes it committed past that
@@ -131,6 +142,12 @@ pub struct PrimaryReplicationHandler {
     pub(crate) wal_broadcast: broadcast::Sender<ReplicationFrame>,
     /// Optional RocksDB store for FULLRESYNC checkpoint streaming.
     pub(crate) rocks_store: Option<Arc<RocksStore>>,
+    /// Work that must finish before a FULLRESYNC checkpoint is cut — in
+    /// production, draining every shard's WAL flush-engine into
+    /// [`Self::rocks_store`] (see [`PreCheckpointHook`]). Installed after
+    /// construction because the shards are wired up later; a handler without one
+    /// cuts the checkpoint straight from whatever RocksDB currently holds.
+    pre_checkpoint_hook: RwLock<Option<PreCheckpointHook>>,
     /// Directory for storing temporary checkpoint data.
     pub(crate) data_dir: PathBuf,
     /// Live proactive lag-disconnect thresholds, shared with every streaming
@@ -154,13 +171,18 @@ pub struct PrimaryReplicationHandler {
     /// connection handler asks this seam instead of assembling WAIT from
     /// tracker primitives.
     pub(crate) wait: WaitCoordinator,
+    /// Set once [`Self::shutdown_downstream_sessions`] starts draining. A
+    /// connection that was accepted just before the acceptors were aborted can
+    /// still reach PSYNC afterwards; without this latch it would register a
+    /// fresh session behind the drain and keep the storage engine open.
+    pub(crate) draining: AtomicBool,
 }
 
 impl PrimaryReplicationHandler {
     /// Create a new primary replication handler.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        state: ReplicationState,
+        identity: ReplicationIdentity,
         state_path: PathBuf,
         tracker: Arc<ReplicationTrackerImpl>,
         rocks_store: Option<Arc<RocksStore>>,
@@ -171,19 +193,29 @@ impl PrimaryReplicationHandler {
     ) -> Self {
         let (wal_broadcast, _) = broadcast::channel(10000);
         let replay = PartialSyncReplay::new(&split_brain_config);
-        let state = Arc::new(RwLock::new(state));
-        let offsets = Arc::new(OffsetCoordinator::new(tracker.clone(), state.clone()));
+        let offsets = Arc::new(OffsetCoordinator::new(tracker.clone(), &identity));
         let wait = WaitCoordinator::new(offsets.clone(), tracker.clone());
         let lag_thresholds = Arc::new(LagThresholds::new(
             lag_config.threshold_bytes,
             lag_config.threshold_secs,
         ));
+        // A node that recovers a nonzero offset is resuming a primary stint it
+        // already had replicas for, so it claims history from there: a replica
+        // reconnecting at exactly that offset gets an empty-tail `+CONTINUE`,
+        // and every write from now on is stamped and buffered (`is_active`) so
+        // no gap opens behind it. A genuinely fresh node stays unarmed until it
+        // is promoted or a replica attaches, so standalone writes pay nothing.
+        let recovered_offset = identity.current_offset();
+        if recovered_offset > 0 {
+            replay.arm_backlog_floor(recovered_offset);
+        }
         Self {
-            state,
+            state: identity.state(),
             state_path,
             tracker,
             wal_broadcast,
             rocks_store,
+            pre_checkpoint_hook: RwLock::new(None),
             data_dir,
             lag_thresholds,
             lag_cooldown: lag_config.cooldown,
@@ -191,7 +223,21 @@ impl PrimaryReplicationHandler {
             write_timeout_ms,
             offsets,
             wait,
+            draining: AtomicBool::new(false),
         }
+    }
+
+    /// Install the work that must complete before a FULLRESYNC checkpoint is
+    /// cut (see [`PreCheckpointHook`]). Set once during wiring; replacing it is
+    /// allowed and simply supersedes the previous hook.
+    pub fn set_pre_checkpoint_hook(&self, hook: PreCheckpointHook) {
+        *self.pre_checkpoint_hook.write() = Some(hook);
+    }
+
+    /// The installed pre-checkpoint hook, cloned out so no lock is held while it
+    /// runs.
+    pub(crate) fn pre_checkpoint_hook(&self) -> Option<PreCheckpointHook> {
+        self.pre_checkpoint_hook.read().clone()
     }
 
     /// The WAIT quorum seam. The handler itself is the production
@@ -201,9 +247,157 @@ impl PrimaryReplicationHandler {
         &self.wait
     }
 
-    pub async fn state(&self) -> ReplicationState {
-        self.state.read().await.clone()
+    pub fn state(&self) -> ReplicationState {
+        self.state.read().clone()
     }
+
+    /// Begin a primary stint: mint a fresh replication id whose failover window
+    /// is frozen at the **applied** offset, and open the backlog window there.
+    ///
+    /// This is the *replication* half of a promotion, kept next to the machinery
+    /// it mutates. It is synchronous on purpose — the caller (`RoleManager`)
+    /// holds a blocking mutex. It runs after the inbound replica stream has been
+    /// signalled to stop, but frames already decoded may never have reached the
+    /// keyspace, so the boundary comes from
+    /// [`OffsetCoordinator::settle_at_applied`] — the received head is rewound
+    /// down to the data this node actually holds. Freezing the received head
+    /// instead would advertise history over a hole and hand a `+CONTINUE` to a
+    /// replica whose data would then silently diverge. Returns the frozen
+    /// boundary and the state snapshot that was persisted.
+    ///
+    /// Arming the backlog is not optional bookkeeping: without it the promoted
+    /// node claims no history, so it would serve `+FULLRESYNC` to every replica
+    /// that was already following the stream it just inherited. The buffer is
+    /// reset first — anything left from a previous stint belongs to a history
+    /// this node no longer heads.
+    ///
+    /// Fallible, and every failure leaves the node un-promoted: the staging area
+    /// is disarmed *before* the identity is minted, and a failed persist rolls
+    /// the identity back under the same lock that minted it. A promotion that
+    /// could not be written down would be forgotten on the next boot while
+    /// replicas kept following the minted id.
+    ///
+    /// The disarm stays first deliberately. Moving it past the persist would
+    /// swap a harmless failure (the node stays a replica having dropped a
+    /// staged checkpoint it would have to re-fetch) for the exact bug the
+    /// disarm exists to fix: a persisted new identity with an armed checkpoint
+    /// from the deposed primary still waiting to be installed on the next boot.
+    pub fn begin_primary_stint(&self) -> std::io::Result<(u64, ReplicationState)> {
+        // First, and before anything is minted: the node no longer follows the
+        // history it inherited, so an inherited staged checkpoint must never be
+        // re-installed under it (see [`crate::discard_staged_full_sync`]). If it
+        // cannot be disarmed the promotion must not proceed.
+        crate::discard_staged_full_sync(&self.data_dir)?;
+        let boundary = self.offsets.settle_at_applied();
+        // The mint, the persist and the rollback happen under ONE write lock:
+        // the minted id must not be observable (`INFO replication`, a PSYNC
+        // window check) on a node that is about to roll it back and stay a
+        // replica. Holding a lock across file IO is deliberate here — it is one
+        // small write, taken once per role change, and the alternative is a
+        // window where the node advertises an identity it does not have.
+        let snapshot = {
+            let mut state = self.state.write();
+            let previous = state.clone();
+            state.new_replication_id(boundary);
+            if boundary > state.offset_at_save {
+                state.offset_at_save = boundary;
+            }
+            let snapshot = state.clone();
+            if let Err(e) = self.save_snapshot(&snapshot) {
+                *state = previous;
+                tracing::error!(
+                    error = %e,
+                    boundary,
+                    "Failed to persist the minted replication id; promotion aborted"
+                );
+                return Err(e);
+            }
+            snapshot
+        };
+        self.replay.reset_backlog();
+        self.replay.arm_backlog_floor(boundary);
+        tracing::info!(
+            replication_id = %snapshot.replication_id,
+            secondary_id = ?snapshot.secondary_id,
+            boundary,
+            "Primary stint started: minted replication id and armed backlog"
+        );
+        Ok((boundary, snapshot))
+    }
+
+    /// End a primary stint: close the backlog window and drop every downstream
+    /// replica session.
+    ///
+    /// Redis's `replicationSetMaster` calls `disconnectSlaves` for the same
+    /// reason: once this node follows someone else, the stream it was serving
+    /// describes a history it no longer heads, and a full resync may rewind its
+    /// offset below what it already handed out. Replicas must come back and
+    /// PSYNC against the history this node ends up on. Returns how many sessions
+    /// were signalled.
+    ///
+    /// Clients parked in WAIT are released here too, for the same reason and in
+    /// the same breath: they are waiting for acknowledgments on the stream that
+    /// is being torn down, so any count they could still reach would describe a
+    /// history this node no longer heads.
+    pub fn end_primary_stint(&self) -> usize {
+        self.wait.fence_role_change();
+        self.replay.reset_backlog();
+        // Retire whatever applier the previous inbound stream left running, so
+        // frames decoded under the old history cannot land on top of the
+        // resync that is about to happen. Retiring (rather than aborting) lets
+        // it finish the group it already claimed.
+        self.offsets.retire_replica_applies();
+        let disconnected = self.tracker.disconnect_all_replicas();
+        tracing::info!(
+            disconnected,
+            "Primary stint ended: backlog cleared and downstream replicas disconnected"
+        );
+        disconnected
+    }
+
+    /// End every downstream replica session and wait for them to unregister.
+    ///
+    /// A PSYNC connection is served inline by the connection task that accepted
+    /// it, and a streaming session only ends when its peer closes the socket or
+    /// this node stops being a primary. Neither happens on shutdown: aborting
+    /// the acceptors leaves established sessions streaming, so this node keeps
+    /// writing frames after its shards have stopped and keeps its handle on the
+    /// storage engine — which blocks a restart in the same process (the RocksDB
+    /// LOCK is still held) and, in a cluster, delays the downstream replica's
+    /// resync against whoever takes over.
+    ///
+    /// The drain latches first: aborting the acceptors stops *new* connections,
+    /// but one accepted a moment earlier can still reach PSYNC while the drain
+    /// runs, and a session registered behind the drain would outlive it. From
+    /// here on [`Self::handle_psync`] refuses.
+    ///
+    /// Returns how many sessions were signalled. Waits up to `drain_timeout`
+    /// for the registry to empty; a session that ignores the signal is logged
+    /// rather than waited on forever.
+    pub async fn shutdown_downstream_sessions(&self, drain_timeout: Duration) -> usize {
+        self.draining.store(true, Ordering::Release);
+        let signalled = self.tracker.disconnect_all_replicas();
+        if signalled == 0 {
+            return 0;
+        }
+        let deadline = tokio::time::Instant::now() + drain_timeout;
+        while !self.tracker.get_all_replicas().is_empty() {
+            if tokio::time::Instant::now() >= deadline {
+                tracing::warn!(
+                    remaining = self.tracker.get_all_replicas().len(),
+                    "Replica sessions still registered after disconnect signal"
+                );
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tracing::info!(
+            signalled,
+            "Downstream replica sessions torn down on shutdown"
+        );
+        signalled
+    }
+
     pub fn tracker(&self) -> Arc<ReplicationTrackerImpl> {
         self.tracker.clone()
     }
@@ -238,8 +432,13 @@ impl PrimaryReplicationHandler {
     ///
     /// On restart the tracker is seeded from this file, so the reported
     /// `master_repl_offset` never silently rewinds to a stale boot value.
-    pub async fn save_state(&self) -> std::io::Result<()> {
-        let snapshot = self.offsets.reconcile_for_persist().await;
+    pub fn save_state(&self) -> std::io::Result<()> {
+        self.offsets.reconcile_for_persist().save(&self.state_path)
+    }
+
+    /// Persist an already-reconciled snapshot (the one
+    /// [`Self::begin_primary_stint`] returned) to the same state file.
+    pub fn save_snapshot(&self, snapshot: &ReplicationState) -> std::io::Result<()> {
         snapshot.save(&self.state_path)
     }
 
@@ -256,6 +455,14 @@ impl PrimaryReplicationHandler {
         replication_id: &str,
         offset: i64,
     ) -> io::Result<()> {
+        // Refuse once the shutdown drain has started: a session opened now
+        // would stream past the drain that was meant to end them all.
+        if self.draining.load(Ordering::Acquire) {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "primary is shutting down",
+            ));
+        }
         // One call resolves the whole PSYNC decision. [`PartialSyncReplay`] owns
         // both bounds of the continuable window — the upper bound + replid match
         // ([`ReplicationState::window_contains`]) and the lower bound (the
@@ -267,15 +474,21 @@ impl PrimaryReplicationHandler {
         // the data the replica will receive. `PSYNC ? -1` folds into the
         // `InitialSync` arm.
         let current_offset = self.offsets.current();
-        let state = self.state.read().await;
-        let current_repl_id = state.replication_id.clone();
-        let decision = self.replay.handle_partial_sync_request(
-            &state,
-            replication_id,
-            offset.max(0) as u64,
-            current_offset,
-        );
-        drop(state);
+        // The guard lives in its own block: this future is spawned, so a
+        // `parking_lot` guard merely *dropped* before the `.await` below would
+        // still make the future `!Send`.
+        let (current_repl_id, decision) = {
+            let state = self.state.read();
+            (
+                state.replication_id.clone(),
+                self.replay.handle_partial_sync_request(
+                    &state,
+                    replication_id,
+                    offset.max(0) as u64,
+                    current_offset,
+                ),
+            )
+        };
 
         let session = self.tracker.register_replica(addr);
         let sync_kind = match decision {
@@ -390,14 +603,14 @@ impl PrimaryReplicationHandler {
     pub fn replica_count(&self) -> usize {
         self.tracker.replica_count()
     }
-    pub async fn current_offset(&self) -> u64 {
+    pub fn current_offset(&self) -> u64 {
         // The coordinator owns the live offset; it never returns a stale
         // persisted value.
         self.offsets.current()
     }
 
-    pub async fn replication_id(&self) -> String {
-        self.state.read().await.replication_id.clone()
+    pub fn replication_id(&self) -> String {
+        self.state.read().replication_id.clone()
     }
 
     /// Get a shared reference to the replication state (IDs + offset).
@@ -415,9 +628,6 @@ impl PrimaryReplicationHandler {
     /// atomic the `advance` gate writes.
     pub fn shared_offset(&self) -> Arc<AtomicU64> {
         self.offsets.shared_offset()
-    }
-    pub fn current_offset_sync(&self) -> u64 {
-        self.offsets.current()
     }
 }
 

@@ -205,22 +205,17 @@ impl ConnectionCommand for DiscardConnCommand {
             match state.discard() {
                 Some(metrics) => {
                     // Record the `discarded` transaction metric. DISCARD is the
-                    // only transaction outcome recorded outside `handle_exec`'s
-                    // `record_transaction_outcome` (it has no handler to call),
-                    // so it emits the `discarded` label directly here.
-                    frogdb_telemetry::definitions::TransactionsTotal::inc(recorder, "discarded");
-                    frogdb_telemetry::definitions::TransactionsQueuedCommands::observe(
+                    // only transaction outcome recorded outside
+                    // `frogdb_txn::handle_exec` (it has no EXEC handler to run
+                    // through), so it emits the `discarded` label directly —
+                    // through the same metric-shape helper, so the triple stays
+                    // defined in one place.
+                    frogdb_txn::record_transaction_metrics(
                         recorder,
-                        metrics.queued_count as f64,
                         "discarded",
+                        metrics.queued_count,
+                        metrics.start_time,
                     );
-                    if let Some(start) = metrics.start_time {
-                        frogdb_telemetry::definitions::TransactionsDuration::observe(
-                            recorder,
-                            start.elapsed().as_secs_f64(),
-                            "discarded",
-                        );
-                    }
                     Response::ok()
                 }
                 None => Response::error("ERR DISCARD without MULTI"),
@@ -411,6 +406,19 @@ impl ConnectionHandler {
         match cmd_name {
             "EXEC" => Some(self.handle_exec().await),
             "MULTI" | "DISCARD" | "WATCH" | "UNWATCH" => {
+                // WATCH is the one keyed command in this group, and reaching
+                // this arm is precisely how it escapes the `ClusterSlotValidation`
+                // stage. Its own slot verdict is taken here instead — but only
+                // after the two rejections that outrank it (`WATCH` inside
+                // `MULTI`, and the arity error) have had their chance, which is
+                // what the guards below defer to.
+                if cmd_name == "WATCH"
+                    && !self.state.in_transaction()
+                    && !args.is_empty()
+                    && let Some(refusal) = self.pre_dispatch_view().validate_watch_slots(args)
+                {
+                    return Some(vec![refusal]);
+                }
                 // `as_connection()` yields a `'static` reference, so it does not
                 // conflict with re-borrowing `self` to build the mutable ConnCtx.
                 let command = self.core.registry.get_entry(cmd_name)?.as_connection()?;
@@ -507,6 +515,7 @@ mod tests {
         }
     }
 
+    // FM-TXN-001
     #[tokio::test]
     async fn multi_begins_and_rejects_nested() {
         let mut fx = Fixture::new();
@@ -520,6 +529,7 @@ mod tests {
         assert!(fx.state.in_transaction());
     }
 
+    // FM-TXN-003
     #[tokio::test]
     async fn discard_without_multi_errors_then_drops_open_transaction() {
         let mut fx = Fixture::new();
@@ -535,6 +545,7 @@ mod tests {
         assert!(!fx.state.in_transaction(), "DISCARD drops the transaction");
     }
 
+    // FM-TXN-011
     #[tokio::test]
     async fn watch_inside_multi_is_rejected() {
         let mut fx = Fixture::new();
@@ -548,6 +559,7 @@ mod tests {
         );
     }
 
+    // FM-TXN-012
     #[tokio::test]
     async fn watch_without_keys_errors() {
         let mut fx = Fixture::new();
@@ -555,6 +567,7 @@ mod tests {
         assert!(matches!(resp, Response::Error(_)), "WATCH needs >= 1 key");
     }
 
+    // FM-TXN-013
     #[tokio::test]
     async fn unwatch_is_ok_and_clears_watches() {
         let mut fx = Fixture::new();
@@ -568,6 +581,7 @@ mod tests {
         );
     }
 
+    // FM-TXN-047
     /// Regression guard for the *loud* EXEC spec-carrier (proposal 40 item 7,
     /// as it survives the command-spec-single-source refactor).
     ///

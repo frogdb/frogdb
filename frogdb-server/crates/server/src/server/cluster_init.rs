@@ -5,7 +5,7 @@ use frogdb_core::cluster::{ClusterWriter, Proposed};
 use frogdb_core::sync::Arc;
 use frogdb_core::{
     ClusterNetworkFactory, ClusterRaft, ClusterState, ClusterStateMachine, ClusterStorage,
-    MetricsRecorder, ShardSender,
+    MetricsRecorder, RoleReconcile, ShardSender,
 };
 use std::time::Duration;
 use tracing::{info, warn};
@@ -18,6 +18,26 @@ use crate::net::{TcpListener, spawn};
 use crate::slot_migration::SlotMigrationCoordinator;
 
 use super::util::hash_addr_to_node_id;
+
+/// How often the two role views are compared at runtime.
+///
+/// Only a node whose views disagree does anything on a tick, and only a failed
+/// role change can leave them disagreeing, so this is a repair cadence rather
+/// than a steady-state cost. Seconds, not milliseconds: the event path is what
+/// makes failover fast; this is the backstop that makes it *eventual*.
+const SELF_ROLE_RECONCILE_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Backoff between the consumer's in-line retries of a failed role change.
+///
+/// Deliberately short and bounded. The consumer drains the single ordered
+/// role-change channel, so every millisecond it spends retrying an old event
+/// delays a newer one; anything the retries here cannot fix is handed to the
+/// periodic reconciler, which always acts on the *current* cluster state.
+const ROLE_CHANGE_RETRY_BACKOFF: [Duration; 3] = [
+    Duration::from_millis(50),
+    Duration::from_millis(100),
+    Duration::from_millis(200),
+];
 
 /// Result of the cluster initialization phase.
 pub(super) struct ClusterInitResult {
@@ -67,6 +87,10 @@ pub(super) async fn init_cluster(
     // threaded here to seed the `RoleManager`'s `primary_target` — the
     // single source `ROLE`/INFO read, live, for the whole process lifetime.
     boot_primary_addr: Option<std::net::SocketAddr>,
+    // The node's replication identity, built once in `init_replication`. The
+    // runtime replica streamer builds every demotion handler over it, so a role
+    // round-trip keeps one replication id and one live offset.
+    replication_identity: crate::replication::ReplicationIdentity,
     shared_replication_offset: Option<Arc<frogdb_core::sync::AtomicU64>>,
     // Live `[cluster]` decision flags (auto-failover, self-fence, replica
     // priority), owned by the ConfigManager. The failure detector reads them at
@@ -103,6 +127,7 @@ pub(super) async fn init_cluster(
     let streamer: Arc<dyn crate::role_manager::ReplicaStreamer> =
         Arc::new(crate::role_manager::RealReplicaStreamer::new(
             config,
+            replication_identity,
             shard_senders.clone(),
             num_shards,
             is_replica_flag.clone(),
@@ -114,6 +139,12 @@ pub(super) async fn init_cluster(
         crate::role_manager::RoleManager::new(is_replica_flag.clone(), streamer, boot_primary_addr);
     if let Some(checker) = replication_self_fence {
         role_manager.set_replication_self_fence(checker);
+    }
+    // The replication half of a promotion: minting the new `master_replid`,
+    // freezing the inherited one as the failover window, and arming the backlog
+    // all live on the primary handler, which exists on every role.
+    if let Some(handler) = primary_replication_handler {
+        role_manager.set_stint_target(handler.clone());
     }
     let role_handle = crate::role_manager::RoleManagerHandle::new(role_manager);
     let role_controller: Arc<dyn frogdb_core::RoleController> = Arc::new(role_handle.clone());
@@ -144,12 +175,38 @@ pub(super) async fn init_cluster(
         cluster.set_self_node_id(node_id);
         let mut state_machine = ClusterStateMachine::with_state(cluster.clone());
 
-        // Enable demotion detection unconditionally. The demotion-event consumer
-        // performs a real data-path Role Demotion (via `request_demote`) during
-        // failover, so it must run whenever cluster mode is on — the kill-switch
-        // is `cluster.enabled` itself. `split_brain_log_enabled` gates ONLY the
-        // split-brain log line inside the consumer, never the demotion behavior.
-        let demotion_rx = state_machine.enable_demotion_detection(node_id);
+        // Point the state machine at the durable snapshot store (same RocksDB as
+        // the Raft log) and restore whatever it already holds. Without this the
+        // state machine is in-memory only, so a restart after openraft purged the
+        // log prefix would silently lose nodes, slot ownership and the epoch
+        // counter (issue 16).
+        state_machine.attach_snapshot_store(raft_storage.snapshot_store())?;
+
+        // Enable role-change detection unconditionally. Its consumer performs the
+        // real data-path Role Demotion (`request_demote`) and Role Promotion
+        // (`request_promote`) during failover, so it must run whenever cluster
+        // mode is on — the kill-switch is `cluster.enabled` itself.
+        // `split_brain_log_enabled` gates ONLY the split-brain log line inside
+        // the consumer, never the role changes themselves.
+        let role_change_rx = state_machine.enable_role_change_detection(node_id);
+
+        // Close the boot-time gap between the two role views. The state just
+        // restored above carries this node's cluster-state role, but a role
+        // folded into a snapshot produced no log entry to replay, so nothing
+        // would tell the data path about it: a restarted replica would come back
+        // up answering `role:master` while the cluster still lists it as a
+        // replica (issue 37). The event lands on the unbounded channel the
+        // consumer spawned below drains, so ordering with that spawn is safe.
+        if let Some(role) = state_machine
+            .reconcile_self_role(is_replica_flag.load(std::sync::atomic::Ordering::Acquire))
+        {
+            info!(
+                node_id = node_id,
+                restored_role = %role,
+                "Restored cluster state disagreed with the boot data-path role; \
+                 reconciling the data path to the cluster's view"
+            );
+        }
 
         // Enable slot migration completion notifications for blocked client handling
         let migration_rx = state_machine.enable_migration_complete_notification();
@@ -311,6 +368,12 @@ pub(super) async fn init_cluster(
         // Clone network factory before passing to Raft (so we can use it later for CLUSTER MEET/FORGET)
         let network_factory_clone = network_factory.clone();
 
+        // Take the role-reconciliation handle before the state machine is moved
+        // into Raft: the periodic reconciler spawned below is what turns a
+        // failed data-path promotion or demotion into an eventually-converging
+        // one instead of a permanently split role view.
+        let self_role_reconciler = state_machine.self_role_reconciler();
+
         // Initialize Raft instance
         let raft = openraft::Raft::new(
             node_id,
@@ -347,8 +410,19 @@ pub(super) async fn init_cluster(
             }
         }
 
-        // Add all initial nodes to cluster_state
+        // Add all initial nodes to cluster_state.
+        //
+        // The client address here is a *guess* (`cluster_bus_port - 10000`), good
+        // only until each peer self-registers its real one over Raft. A peer the
+        // restored state already knows therefore must not be re-seeded: its
+        // recorded address was agreed by the cluster, and overwriting it with the
+        // guess would point this node's data path at a port nobody listens on —
+        // which is exactly what a restored replica does when it reattaches to its
+        // primary at boot.
         for (peer_id, basic_node) in &initial_members {
+            if cluster.get_node(*peer_id).is_some() {
+                continue;
+            }
             if let Ok(peer_cluster_addr) = basic_node.addr.parse::<std::net::SocketAddr>() {
                 let client_port = peer_cluster_addr.port().saturating_sub(10000);
                 let client_addr = std::net::SocketAddr::new(peer_cluster_addr.ip(), client_port);
@@ -537,13 +611,13 @@ pub(super) async fn init_cluster(
             });
         }
 
-        // Spawn the demotion-event consumer. It ALWAYS runs in cluster mode: it
-        // performs the real data-path Role Demotion during failover. Split-brain
-        // *logging* is an optional side-effect gated by `split_brain_log_enabled`
-        // (modeled as `Option<SplitBrainLogger>`) — disabling the log must never
-        // disable the demotion behavior.
+        // Spawn the role-change consumer. It ALWAYS runs in cluster mode: it
+        // performs the real data-path Role Demotion and Role Promotion during
+        // failover. Split-brain *logging* is an optional side-effect gated by
+        // `split_brain_log_enabled` (modeled as `Option<SplitBrainLogger>`) —
+        // disabling the log must never disable the role changes.
         {
-            let mut demotion_rx = demotion_rx;
+            let mut role_change_rx = role_change_rx;
             let split_brain_logger = if config.replication.split_brain_log_enabled {
                 Some(SplitBrainLogger {
                     data_dir: config.persistence.data_dir.clone(),
@@ -558,14 +632,51 @@ pub(super) async fn init_cluster(
             } else {
                 None
             };
-            let consumer = DemotionConsumer {
+            let consumer = RoleChangeConsumer {
                 split_brain_logger,
                 cluster_state: cluster.clone(),
                 role_controller: role_controller.clone(),
+                logged_demotion: std::sync::Mutex::new(None),
             };
             spawn(async move {
-                while let Some(event) = demotion_rx.recv().await {
-                    consumer.handle(&event);
+                while let Some(event) = role_change_rx.recv().await {
+                    consumer.handle(&event).await;
+                }
+            });
+        }
+
+        // Re-drive role convergence periodically. The consumer above retries a
+        // failed role change only briefly (it must keep draining the channel,
+        // so a newer event is never queued behind an old one retrying), and a
+        // role change can also fail for a reason that only time fixes — a
+        // transient identity-persist error, or a demotion whose new primary is
+        // not in this node's cluster state yet. Without a re-drive the node
+        // would keep serving the role it failed to leave until it restarted:
+        // a shard with no writable primary, or a deposed primary still taking
+        // writes. This tick compares the two role views and emits at most one
+        // event when they disagree, so it is silent whenever they agree.
+        if let Some(reconciler) = self_role_reconciler {
+            let is_replica = is_replica_flag.clone();
+            spawn(async move {
+                let mut ticker = tokio::time::interval(SELF_ROLE_RECONCILE_INTERVAL);
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                // The first tick fires immediately and boot already reconciled.
+                ticker.tick().await;
+                loop {
+                    ticker.tick().await;
+                    match reconciler
+                        .reconcile(is_replica.load(std::sync::atomic::Ordering::Acquire))
+                    {
+                        RoleReconcile::Agreed => {}
+                        RoleReconcile::ReDriven(role) => warn!(
+                            node_id = node_id,
+                            cluster_role = %role,
+                            "Data-path role still disagrees with cluster state; re-driving the role change"
+                        ),
+                        // The consumer is gone: this node is shutting down and
+                        // there is no data path left to reconcile.
+                        RoleReconcile::Detached => break,
+                    }
                 }
             });
         }
@@ -646,7 +757,7 @@ pub(super) async fn init_cluster(
 ///
 /// Constructed only when `split_brain_log_enabled` is set. Holds exactly the
 /// collaborators the log path needs; when logging is disabled the
-/// [`DemotionConsumer`] holds `None` here and the demotion still runs.
+/// [`RoleChangeConsumer`] holds `None` here and the demotion still runs.
 struct SplitBrainLogger {
     data_dir: std::path::PathBuf,
     primary_handler: Option<Arc<crate::replication::PrimaryReplicationHandler>>,
@@ -734,76 +845,185 @@ fn split_brain_header(
     }
 }
 
-/// Consumes `DemotionEvent`s from the Raft Metadata Plane and reflects each onto
-/// the local data path via a real Role Demotion.
+/// Consumes this node's `RoleChangeEvent`s from the Raft Metadata Plane and
+/// reflects each onto the local data path as a real Role Demotion or Promotion.
+///
+/// This is the only bridge between the two role systems. Raft owns the
+/// *cluster-state* role (`NodeRole`); the data path owns the *replication* role
+/// (the `is_replica` flag, the inbound stream, the replication identity). A
+/// cluster-state change that never reaches this consumer is inert: the node
+/// would advertise one role in `CLUSTER NODES` and behave as the other.
+///
+/// Both directions run through [`Self::handle`] on a single task fed by a single
+/// channel, so a failover flap (primary -> replica -> primary) is replayed in
+/// Raft apply order rather than raced.
 ///
 /// Split-brain *logging* is an optional side-effect (`split_brain_logger`, gated
-/// by config); the demotion it performs is not. This is the seam that decouples
-/// cluster failover behavior from logging configuration (issue 07): whether or
-/// not the logger is present, [`Self::handle`] always issues the demotion.
-struct DemotionConsumer {
+/// by config); the demotion it accompanies is not. This is the seam that
+/// decouples cluster failover behavior from logging configuration (issue 07):
+/// whether or not the logger is present, the role change always happens.
+struct RoleChangeConsumer {
     split_brain_logger: Option<SplitBrainLogger>,
     cluster_state: ClusterState,
     role_controller: Arc<dyn frogdb_core::RoleController>,
+    /// The last `(node, epoch)` demotion whose divergence was logged, so the
+    /// reconciler's 1 Hz re-emission of an unconverged demotion cannot write a
+    /// fresh split-brain record — and bump its metrics — every tick.
+    logged_demotion: std::sync::Mutex<Option<(frogdb_core::NodeId, u64)>>,
 }
 
-impl DemotionConsumer {
+impl RoleChangeConsumer {
+    /// Reflect one committed cluster-state role change onto the data path.
+    async fn handle(&self, event: &frogdb_core::RoleChangeEvent) {
+        match event {
+            frogdb_core::RoleChangeEvent::Demoted(e) => self.handle_demotion(e).await,
+            frogdb_core::RoleChangeEvent::Promoted(e) => self.handle_promotion(e).await,
+        }
+    }
+
     /// Process one demotion event: optionally log the split-brain divergence,
     /// then reconfigure the local data path to replicate from the committed new
     /// primary. The Raft plane owns the decision (ADR-0001); this only reflects
     /// it onto the data path.
-    fn handle(&self, event: &frogdb_core::DemotionEvent) {
-        // Split-brain logging is opt-out; the demotion below is not.
-        if let Some(logger) = &self.split_brain_logger {
+    ///
+    /// The new primary's address can lag the demotion: this node can learn that
+    /// it is a replica before the entry carrying that node's address has
+    /// applied here. Re-resolve across a bounded backoff rather than dropping
+    /// the demotion — and if even that is not enough, leave it to the periodic
+    /// self-role reconciler, which will re-emit while the views disagree.
+    async fn handle_demotion(&self, event: &frogdb_core::DemotionEvent) {
+        // Split-brain logging is opt-out; the demotion below is not. The
+        // self-role reconciler re-emits this event every second while the
+        // cluster and data-path views disagree, so the log is deduplicated per
+        // (node, epoch): one divergence, one record — not one file per tick.
+        let already_logged = {
+            let mut last = self.logged_demotion.lock().expect("not poisoned");
+            let key = (event.demoted_node_id, event.epoch);
+            last.replace(key) == Some(key)
+        };
+        if !already_logged && let Some(logger) = &self.split_brain_logger {
             logger.log(event);
         }
 
-        if let Some(new_id) = event.new_primary_id {
-            match self
-                .cluster_state
+        let Some(new_id) = event.new_primary_id else {
+            return;
+        };
+
+        let resolve = || {
+            self.cluster_state
                 .snapshot()
                 .nodes
                 .get(&new_id)
                 .map(|n| n.addr)
-            {
-                Some(addr) => {
-                    tracing::warn!(
-                        new_primary = %addr,
-                        "Role Demotion: reconfiguring data path to replicate from new primary"
-                    );
-                    self.role_controller.request_demote(addr);
-                }
-                None => {
-                    tracing::warn!(
-                        new_primary = new_id,
-                        "Demotion event: new primary not yet in cluster state; cannot reconfigure data path"
-                    );
-                }
+        };
+        let mut addr = resolve();
+        for backoff in ROLE_CHANGE_RETRY_BACKOFF {
+            if addr.is_some() {
+                break;
+            }
+            tokio::time::sleep(backoff).await;
+            addr = resolve();
+        }
+
+        match addr {
+            Some(addr) => {
+                tracing::warn!(
+                    new_primary = %addr,
+                    "Role Demotion: reconfiguring data path to replicate from new primary"
+                );
+                self.role_controller.request_demote(addr);
+            }
+            None => {
+                tracing::warn!(
+                    new_primary = new_id,
+                    "Demotion event: new primary not yet in cluster state; the self-role \
+                     reconciler will retry the demotion"
+                );
             }
         }
+    }
+
+    /// Process one promotion event: stop replicating and become a writable
+    /// primary, exactly as `REPLICAOF NO ONE` does.
+    ///
+    /// The promotion is fallible — it mints and persists a replication identity
+    /// before clearing the replica flag — and there is no client to return the
+    /// error to, so the node deliberately stays a replica until it succeeds.
+    /// Reporting a promotion the node could not actually perform would leave it
+    /// accepting writes under an identity it may not have after a restart.
+    ///
+    /// A failure is retried here across a bounded backoff (an identity persist
+    /// fails for transient reasons — a full disk, a slow fsync — far more often
+    /// than permanent ones) and, if it still fails, left to the periodic
+    /// self-role reconciler. Something must keep re-driving it: a shard whose
+    /// promoted node never installs the primary role has no writable primary
+    /// until the process restarts.
+    async fn handle_promotion(&self, event: &frogdb_core::PromotionEvent) {
+        tracing::warn!(
+            promoted_node = event.promoted_node_id,
+            epoch = event.epoch,
+            "Role Promotion: cluster state promoted this node; installing primary role on the data path"
+        );
+
+        let mut last_err = match self.role_controller.request_promote() {
+            Ok(()) => return,
+            Err(e) => e,
+        };
+        for backoff in ROLE_CHANGE_RETRY_BACKOFF {
+            tokio::time::sleep(backoff).await;
+            match self.role_controller.request_promote() {
+                Ok(()) => return,
+                Err(e) => last_err = e,
+            }
+        }
+
+        tracing::error!(
+            promoted_node = event.promoted_node_id,
+            epoch = event.epoch,
+            attempts = ROLE_CHANGE_RETRY_BACKOFF.len() + 1,
+            error = %last_err,
+            "Role Promotion failed; node remains a replica on the data path despite being \
+             a primary in cluster state. The self-role reconciler will retry."
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use frogdb_core::DemotionEvent;
     use frogdb_core::RoleController;
     use frogdb_core::cluster::{ClusterCommand, NodeInfo};
+    use frogdb_core::{DemotionEvent, PromotionEvent, RoleChangeEvent};
     use std::net::SocketAddr;
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     /// A `RoleController` that records every transition request, so tests can
-    /// assert the demotion consumer drove the data path.
+    /// assert the role-change consumer drove the data path.
     #[derive(Default)]
     struct RecordingController {
         demotes: Mutex<Vec<SocketAddr>>,
         promotes: AtomicUsize,
+        /// When set, `request_promote` always reports failure (the identity
+        /// could not be persisted) after still counting the attempt.
+        promote_fails: AtomicBool,
+        /// A transient fault instead: this many promotions fail, then they
+        /// start succeeding. Zero (the default) means "never fail".
+        promote_failures_left: AtomicUsize,
     }
     impl RoleController for RecordingController {
-        fn request_promote(&self) {
+        fn request_promote(&self) -> Result<(), frogdb_core::CommandError> {
             self.promotes.fetch_add(1, Ordering::SeqCst);
+            let transient = self.promote_failures_left.load(Ordering::SeqCst) > 0;
+            if transient {
+                self.promote_failures_left.fetch_sub(1, Ordering::SeqCst);
+            }
+            if transient || self.promote_fails.load(Ordering::SeqCst) {
+                return Err(frogdb_core::CommandError::Internal {
+                    message: "promotion failed".to_string(),
+                });
+            }
+            Ok(())
         }
         fn request_demote(&self, primary: SocketAddr) {
             self.demotes.lock().unwrap().push(primary);
@@ -841,18 +1061,21 @@ mod tests {
     /// Criterion 1: with split-brain logging DISABLED, a demotion event still
     /// demotes the node (the bug this issue fixes — a disabled log line used to
     /// silently disable automatic failover demotion).
-    #[test]
-    fn demotion_fires_when_split_brain_log_disabled() {
+    #[tokio::test(start_paused = true)]
+    async fn demotion_fires_when_split_brain_log_disabled() {
         let new_id = 2u64;
         let primary = addr("127.0.0.1:7002");
         let controller = Arc::new(RecordingController::default());
-        let consumer = DemotionConsumer {
+        let consumer = RoleChangeConsumer {
             split_brain_logger: None, // logging disabled
             cluster_state: cluster_with_primary(new_id, primary),
             role_controller: controller.clone(),
+            logged_demotion: std::sync::Mutex::new(None),
         };
 
-        consumer.handle(&demotion_event(Some(new_id)));
+        consumer
+            .handle(&RoleChangeEvent::Demoted(demotion_event(Some(new_id))))
+            .await;
 
         assert_eq!(
             *controller.demotes.lock().unwrap(),
@@ -877,26 +1100,30 @@ mod tests {
     /// Criterion 2: with logging ENABLED (a real logger present) the demotion
     /// behavior is identical to the disabled case. Same event, same topology,
     /// only the logger presence differs — the resulting demotion must match.
-    #[test]
-    fn demotion_identical_whether_or_not_log_enabled() {
+    #[tokio::test(start_paused = true)]
+    async fn demotion_identical_whether_or_not_log_enabled() {
         let new_id = 2u64;
         let primary = addr("127.0.0.1:7002");
 
         let controller_off = Arc::new(RecordingController::default());
-        DemotionConsumer {
+        RoleChangeConsumer {
             split_brain_logger: None, // logging disabled
             cluster_state: cluster_with_primary(new_id, primary),
             role_controller: controller_off.clone(),
+            logged_demotion: std::sync::Mutex::new(None),
         }
-        .handle(&demotion_event(Some(new_id)));
+        .handle(&RoleChangeEvent::Demoted(demotion_event(Some(new_id))))
+        .await;
 
         let controller_on = Arc::new(RecordingController::default());
-        DemotionConsumer {
+        RoleChangeConsumer {
             split_brain_logger: Some(noop_logger()), // logging enabled
             cluster_state: cluster_with_primary(new_id, primary),
             role_controller: controller_on.clone(),
+            logged_demotion: std::sync::Mutex::new(None),
         }
-        .handle(&demotion_event(Some(new_id)));
+        .handle(&RoleChangeEvent::Demoted(demotion_event(Some(new_id))))
+        .await;
 
         assert_eq!(*controller_on.demotes.lock().unwrap(), vec![primary]);
         assert_eq!(
@@ -959,21 +1186,205 @@ mod tests {
 
     /// A demotion event whose new primary is not yet in the committed topology
     /// cannot resolve an address, so no demotion is issued (and nothing panics).
-    #[test]
-    fn no_demotion_when_new_primary_absent_from_topology() {
+    #[tokio::test(start_paused = true)]
+    async fn no_demotion_when_new_primary_absent_from_topology() {
         let controller = Arc::new(RecordingController::default());
-        let consumer = DemotionConsumer {
+        let consumer = RoleChangeConsumer {
             split_brain_logger: None,
             cluster_state: ClusterState::new(), // empty topology
             role_controller: controller.clone(),
+            logged_demotion: std::sync::Mutex::new(None),
         };
 
-        consumer.handle(&demotion_event(Some(99)));
+        consumer
+            .handle(&RoleChangeEvent::Demoted(demotion_event(Some(99))))
+            .await;
 
         assert!(
             controller.demotes.lock().unwrap().is_empty(),
             "unknown new primary must not trigger a demotion"
         );
+    }
+
+    fn promotion_event() -> PromotionEvent {
+        PromotionEvent {
+            promoted_node_id: 1,
+            epoch: 7,
+        }
+    }
+
+    /// The promotion half of the bridge: a committed cluster-state promotion
+    /// installs the primary role on the data path.
+    ///
+    /// Without this, a node promoted by Raft keeps its `is_replica` flag: it
+    /// advertises `master` in `CLUSTER NODES` while still refusing writes,
+    /// refusing to serve PSYNC, and rejecting WAIT.
+    #[tokio::test(start_paused = true)]
+    async fn promotion_installs_the_primary_role_on_the_data_path() {
+        let controller = Arc::new(RecordingController::default());
+        let consumer = RoleChangeConsumer {
+            split_brain_logger: None,
+            cluster_state: ClusterState::new(),
+            role_controller: controller.clone(),
+            logged_demotion: std::sync::Mutex::new(None),
+        };
+
+        consumer
+            .handle(&RoleChangeEvent::Promoted(promotion_event()))
+            .await;
+
+        assert_eq!(
+            controller.promotes.load(Ordering::SeqCst),
+            1,
+            "a committed promotion must drive a data-path Role Promotion"
+        );
+        assert!(
+            controller.demotes.lock().unwrap().is_empty(),
+            "a promotion must not touch the demotion path"
+        );
+    }
+
+    /// Promotion, like demotion, must not depend on split-brain logging config.
+    #[tokio::test(start_paused = true)]
+    async fn promotion_fires_with_a_split_brain_logger_present() {
+        let controller = Arc::new(RecordingController::default());
+        let consumer = RoleChangeConsumer {
+            split_brain_logger: Some(SplitBrainLogger {
+                data_dir: std::path::PathBuf::from("/nonexistent"),
+                primary_handler: None,
+                metrics: Arc::new(PrometheusRecorder::new()),
+            }),
+            cluster_state: ClusterState::new(),
+            role_controller: controller.clone(),
+            logged_demotion: std::sync::Mutex::new(None),
+        };
+
+        consumer
+            .handle(&RoleChangeEvent::Promoted(promotion_event()))
+            .await;
+
+        assert_eq!(controller.promotes.load(Ordering::SeqCst), 1);
+    }
+
+    /// A promotion that cannot be installed (identity persistence failed) is
+    /// retried a bounded number of times and then swallowed rather than
+    /// panicking the consumer task — the node stays a replica, which is the
+    /// safe half of the trade, and the task lives to process the next role
+    /// change. Convergence past that point is the reconciler's job.
+    #[tokio::test(start_paused = true)]
+    async fn failed_promotion_retries_then_leaves_the_consumer_running() {
+        let controller = Arc::new(RecordingController::default());
+        controller.promote_fails.store(true, Ordering::SeqCst);
+        let consumer = RoleChangeConsumer {
+            split_brain_logger: None,
+            cluster_state: ClusterState::new(),
+            role_controller: controller.clone(),
+            logged_demotion: std::sync::Mutex::new(None),
+        };
+
+        let per_event = ROLE_CHANGE_RETRY_BACKOFF.len() + 1;
+        consumer
+            .handle(&RoleChangeEvent::Promoted(promotion_event()))
+            .await;
+        assert_eq!(
+            controller.promotes.load(Ordering::SeqCst),
+            per_event,
+            "a failing promotion must be retried, but only a bounded number of times"
+        );
+
+        // Still processes the next event.
+        consumer
+            .handle(&RoleChangeEvent::Promoted(promotion_event()))
+            .await;
+        assert_eq!(controller.promotes.load(Ordering::SeqCst), per_event * 2);
+    }
+
+    /// A promotion that fails transiently and then succeeds converges inside
+    /// the consumer, without waiting for the periodic reconciler: the node ends
+    /// up a primary on the data path, which is the whole point of retrying.
+    #[tokio::test(start_paused = true)]
+    async fn a_transiently_failing_promotion_converges() {
+        let controller = Arc::new(RecordingController::default());
+        controller.promote_failures_left.store(2, Ordering::SeqCst);
+        let consumer = RoleChangeConsumer {
+            split_brain_logger: None,
+            cluster_state: ClusterState::new(),
+            role_controller: controller.clone(),
+            logged_demotion: std::sync::Mutex::new(None),
+        };
+
+        consumer
+            .handle(&RoleChangeEvent::Promoted(promotion_event()))
+            .await;
+
+        assert_eq!(
+            controller.promotes.load(Ordering::SeqCst),
+            3,
+            "two failures then a success: the third attempt must be the last"
+        );
+    }
+
+    /// A demotion whose new primary is not in this node's cluster state *yet*
+    /// still reconfigures the data path once the topology entry applies. The
+    /// address lags the role change often enough that dropping the demotion on
+    /// the first miss would strand the node as a writable ex-primary.
+    #[tokio::test(start_paused = true)]
+    async fn a_demotion_whose_primary_arrives_late_still_reconfigures() {
+        let new_id = 2u64;
+        let primary = addr("127.0.0.1:7002");
+        let controller = Arc::new(RecordingController::default());
+        let cluster = ClusterState::new(); // topology does not know the primary yet
+        let consumer = RoleChangeConsumer {
+            split_brain_logger: None,
+            cluster_state: cluster.clone(),
+            role_controller: controller.clone(),
+            logged_demotion: std::sync::Mutex::new(None),
+        };
+
+        let seeder = crate::net::spawn(async move {
+            // Lands between the first and second retry.
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            let node = NodeInfo::new_primary(new_id, primary, addr("127.0.0.1:17000"));
+            cluster
+                .apply_local(ClusterCommand::AddNode { node })
+                .expect("seed new primary");
+        });
+
+        consumer
+            .handle(&RoleChangeEvent::Demoted(demotion_event(Some(new_id))))
+            .await;
+        seeder.await.unwrap();
+
+        assert_eq!(
+            *controller.demotes.lock().unwrap(),
+            vec![primary],
+            "a late topology entry must still produce the demotion"
+        );
+    }
+
+    /// A demotion followed by a promotion on one consumer leaves the data path
+    /// in the *last* state, which is what a single ordered channel guarantees.
+    #[tokio::test(start_paused = true)]
+    async fn role_changes_apply_in_the_order_received() {
+        let new_id = 2u64;
+        let primary = addr("127.0.0.1:7002");
+        let controller = Arc::new(RecordingController::default());
+        let consumer = RoleChangeConsumer {
+            split_brain_logger: None,
+            cluster_state: cluster_with_primary(new_id, primary),
+            role_controller: controller.clone(),
+            logged_demotion: std::sync::Mutex::new(None),
+        };
+
+        consumer
+            .handle(&RoleChangeEvent::Demoted(demotion_event(Some(new_id))))
+            .await;
+        consumer
+            .handle(&RoleChangeEvent::Promoted(promotion_event()))
+            .await;
+
+        assert_eq!(*controller.demotes.lock().unwrap(), vec![primary]);
+        assert_eq!(controller.promotes.load(Ordering::SeqCst), 1);
     }
 
     // ========================================================================
@@ -988,7 +1399,7 @@ mod tests {
     // buffer-overflow truncation path were all unexercised.
     //
     // These tests stage a real divergence on a real handler and invoke the exact
-    // code the Raft `DemotionConsumer` runs in production (`logger.log` /
+    // code the Raft `RoleChangeConsumer` runs in production (`logger.log` /
     // `consumer.handle`), asserting the audit file contents, the telemetry, and
     // that the demotion (which triggers discard-via-resync-from-the-new-primary)
     // is still issued.
@@ -1007,7 +1418,7 @@ mod tests {
         buffer_entries: usize,
     ) -> Arc<PrimaryReplicationHandler> {
         Arc::new(PrimaryReplicationHandler::new(
-            ReplicationState::new(),
+            crate::replication::ReplicationIdentity::detached(ReplicationState::new()),
             data_dir.join("replication_state.json"),
             Arc::new(ReplicationTrackerImpl::new()),
             None,
@@ -1094,8 +1505,8 @@ mod tests {
     /// installs on the next boot. The Raft transport that would normally deliver
     /// the `DemotionEvent` is stubbed by invoking `consumer.handle` directly with
     /// the event the metadata plane commits.
-    #[test]
-    fn split_brain_lifecycle_captures_audit_and_initiates_discard() {
+    #[tokio::test(start_paused = true)]
+    async fn split_brain_lifecycle_captures_audit_and_initiates_discard() {
         let dir = tempfile::tempdir().unwrap();
         let handler = split_brain_handler(dir.path(), 1000);
 
@@ -1127,7 +1538,7 @@ mod tests {
         let new_primary_addr = addr("127.0.0.1:7002");
         let recorder = Arc::new(PrometheusRecorder::new());
         let controller = Arc::new(RecordingController::default());
-        let consumer = DemotionConsumer {
+        let consumer = RoleChangeConsumer {
             split_brain_logger: Some(SplitBrainLogger {
                 data_dir: dir.path().to_path_buf(),
                 primary_handler: Some(handler.clone()),
@@ -1135,6 +1546,7 @@ mod tests {
             }),
             cluster_state: cluster_with_primary(new_id, new_primary_addr),
             role_controller: controller.clone(),
+            logged_demotion: std::sync::Mutex::new(None),
         };
 
         let event = DemotionEvent {
@@ -1142,7 +1554,9 @@ mod tests {
             new_primary_id: Some(new_id),
             epoch: 41,
         };
-        consumer.handle(&event);
+        consumer
+            .handle(&RoleChangeEvent::Demoted(event.clone()))
+            .await;
 
         // ---- (1)+(2) audit file: exactly the divergent writes + the window.
         assert!(
@@ -1194,6 +1608,36 @@ mod tests {
             vec![new_primary_addr],
             "demotion to the new primary must fire so the divergent node resyncs \
              (discarding its divergent writes)"
+        );
+
+        // ---- (5) the self-role reconciler re-emits an unconverged demotion
+        // every second; a re-delivery of the same (node, epoch) must not write
+        // a second audit file or inflate the discard telemetry.
+        let files_before = std::fs::read_dir(dir.path()).unwrap().count();
+        consumer
+            .handle(&RoleChangeEvent::Demoted(event.clone()))
+            .await;
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            files_before,
+            "a re-driven demotion must not write a new split-brain log"
+        );
+        assert_eq!(
+            recorder.counter_value("frogdb_split_brain_events_total"),
+            Some(1),
+            "a re-driven demotion must not count as a second split-brain event"
+        );
+
+        // A demotion at a *newer* epoch is a new divergence and logs again.
+        let newer = DemotionEvent {
+            epoch: event.epoch + 1,
+            ..event.clone()
+        };
+        consumer.handle(&RoleChangeEvent::Demoted(newer)).await;
+        assert_eq!(
+            recorder.counter_value("frogdb_split_brain_events_total"),
+            Some(2),
+            "a demotion at a new epoch is a distinct divergence"
         );
     }
 

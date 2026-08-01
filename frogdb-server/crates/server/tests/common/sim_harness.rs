@@ -43,6 +43,10 @@ pub struct SimConfig {
     pub base_latency_ms: u64,
     /// Random seed for deterministic simulation.
     pub seed: u64,
+    /// Virtual-time ceiling on the run. Turmoil aborts the sim once it elapses,
+    /// so it must comfortably exceed the longest client script; it is virtual
+    /// time, so an unused ceiling costs no wall-clock.
+    pub simulation_duration: Duration,
 }
 
 impl Default for SimConfig {
@@ -53,6 +57,7 @@ impl Default for SimConfig {
             enable_latency: false,
             base_latency_ms: 0,
             seed: 42,
+            simulation_duration: Duration::from_secs(60),
         }
     }
 }
@@ -67,7 +72,7 @@ impl Default for SimConfig {
 pub fn build_sim(config: &SimConfig) -> Sim<'static> {
     let mut builder = Builder::new();
     builder
-        .simulation_duration(Duration::from_secs(60))
+        .simulation_duration(config.simulation_duration)
         .rng_seed(config.seed)
         .enable_random_order();
     if config.enable_latency {

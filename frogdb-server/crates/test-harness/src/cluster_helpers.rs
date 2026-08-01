@@ -48,8 +48,14 @@ pub struct ClusterInfo {
     pub cluster_slots_fail: u16,
     pub cluster_known_nodes: usize,
     pub cluster_size: usize,
+    /// The cluster-wide replicated config-epoch counter (reported verbatim,
+    /// never folded with the Raft term).
     pub cluster_current_epoch: u64,
+    /// This node's own `NodeInfo::config_epoch`.
     pub cluster_my_epoch: u64,
+    /// The local Raft leadership term — a FrogDB extension with no Redis
+    /// equivalent. Node-local and unreplicated.
+    pub cluster_raft_term: u64,
 }
 
 /// Parsed node info from CLUSTER NODES response.
@@ -98,6 +104,40 @@ pub fn key_for_slot(slot: u16) -> String {
     format!("{{slot{}}}", slot)
 }
 
+/// Parse an `INFO <section>` bulk reply into its `key:value` pairs.
+///
+/// Cluster replication is the ordinary per-node PSYNC link, so cluster tests
+/// read the same `INFO replication` fields the standalone replication tests do
+/// (`connected_slaves`, `master_repl_offset`, `role`, `master_link_status`).
+pub fn parse_info_fields(response: &Response) -> Option<std::collections::HashMap<String, String>> {
+    let Response::Bulk(Some(body)) = response else {
+        return None;
+    };
+    Some(
+        String::from_utf8_lossy(body)
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .map(|(k, v)| (k.to_string(), v.trim().to_string()))
+            .collect(),
+    )
+}
+
+/// `connected_slaves` from an `INFO replication` reply, if present.
+pub fn connected_slaves(response: &Response) -> Option<usize> {
+    parse_info_fields(response)?
+        .get("connected_slaves")?
+        .parse()
+        .ok()
+}
+
+/// `master_repl_offset` from an `INFO replication` reply, if present.
+pub fn master_repl_offset(response: &Response) -> Option<u64> {
+    parse_info_fields(response)?
+        .get("master_repl_offset")?
+        .parse()
+        .ok()
+}
+
 /// Parse CLUSTER INFO response into structured data.
 pub fn parse_cluster_info(response: &Response) -> Result<ClusterInfo, ClusterError> {
     let text = match response {
@@ -141,6 +181,9 @@ pub fn parse_cluster_info(response: &Response) -> Result<ClusterInfo, ClusterErr
     }
     if let Some(val) = map.get("cluster_my_epoch") {
         info.cluster_my_epoch = val.parse().unwrap_or(0);
+    }
+    if let Some(val) = map.get("cluster_raft_term") {
+        info.cluster_raft_term = val.parse().unwrap_or(0);
     }
 
     Ok(info)

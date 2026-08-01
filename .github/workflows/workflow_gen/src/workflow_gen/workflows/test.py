@@ -19,7 +19,7 @@ from workflow_gen.helpers import (
     rust_toolchain_step,
     script,
 )
-from workflow_gen.schema import Job, PullRequestTrigger, PushTrigger, Step, Trigger, Workflow
+from workflow_gen.schema import Job, Step, Trigger, Workflow
 
 # Runner label — GitHub-hosted standard runners, which are free and unmetered on
 # public repositories. This previously routed trusted actors to a `self-hosted`
@@ -43,10 +43,9 @@ MISE_HELM = "helm"
 def test_workflow() -> Workflow:
     w = Workflow(
         name="Test",
-        on=Trigger(
-            push=PushTrigger(branches=["main"]),
-            pull_request=PullRequestTrigger(branches=["main"]),
-        ),
+        # CI is manual-dispatch-only during the hardening campaign (push/pull_request
+        # triggers removed; see the sibling nightly workflows for the same pattern).
+        on=Trigger(),
         env=omap(CARGO_TERM_COLOR="always"),
     )
 
@@ -58,6 +57,7 @@ def test_workflow() -> Workflow:
             outputs=omap(
                 rust="${{ steps.filter.outputs.rust }}",
                 operator="${{ steps.filter.outputs.operator }}",
+                operator_config="${{ steps.filter.outputs.operator_config }}",
                 workflows="${{ steps.filter.outputs.workflows }}",
                 grafana="${{ steps.filter.outputs.grafana }}",
                 helm="${{ steps.filter.outputs.helm }}",
@@ -73,6 +73,12 @@ def test_workflow() -> Workflow:
                     name="Check changed paths",
                     uses=PATHS_FILTER,
                     with_=omap(
+                        # dorny/paths-filter infers a base automatically for push/
+                        # pull_request events, but workflow_dispatch has no event-implied
+                        # base commit — without this it errors out. `main` matches what
+                        # push/pull_request compared against anyway, since this workflow
+                        # only ever ran on that branch.
+                        base="main",
                         filters=script("""\
                             rust:
                               - 'frogdb-server/**'
@@ -87,6 +93,10 @@ def test_workflow() -> Workflow:
                               - 'frogdb-operator/**'
                               - 'rust-toolchain.toml'
                               - '.mise.toml'
+                            operator_config:
+                              - 'frogdb-server/crates/config/**'
+                              - 'frogdb-server/crates/config-derive/**'
+                              - 'frogdb-operator/Cargo.lock'
                             workflows:
                               - '.github/**'
                             grafana:
@@ -173,6 +183,47 @@ def test_workflow() -> Workflow:
         ),
     )
 
+    # Compile-only guard for the command-family cargo features (see
+    # frogdb-server/crates/commands/Cargo.toml). `unit-tests` runs
+    # `cargo nextest run --all`, whose workspace-wide feature unification pulls
+    # `cmd-full` in through docs-gen/redis-regression/shard-harness — so neither
+    # the reduced core profile nor an individually-selected family is ever built
+    # by the rest of CI. Both directions are checked here so a gated family (or
+    # a core-profile-only build) cannot rot unnoticed.
+    cmd_full_build = w.job(
+        "cmd-full-build",
+        Job(
+            name="Command Feature Profiles Build",
+            runs_on=RUNS_ON,
+            needs="changes",
+            if_="needs.changes.outputs.rust == 'true'",
+            steps=[
+                checkout_step(),
+                mise_setup_step(install_args=MISE_JUST),
+                rust_toolchain_step(),
+                libclang_step(),
+                cargo_cache_step(shared_key="stable"),
+                run_step(
+                    name="Check commands crate (core profile only)",
+                    run="cargo check -p frogdb-commands --no-default-features"
+                    " --features core-profile --all-targets",
+                ),
+                run_step(
+                    name="Check commands crate (full command surface)",
+                    run="cargo check -p frogdb-commands --features full --all-targets",
+                ),
+                run_step(
+                    name="Check server (core profile only)",
+                    run="cargo check -p frogdb-server --all-targets",
+                ),
+                run_step(
+                    name="Check server (full command surface)",
+                    run="cargo check -p frogdb-server --features cmd-full --all-targets",
+                ),
+            ],
+        ),
+    )
+
     # Coverage tracking lives entirely in the dedicated nightly workflow
     # (coverage_nightly.py -> coverage-nightly.yml, issue 59): a scheduled,
     # non-PR-gating job so a red/slow coverage run never blocks a merge. See that
@@ -224,31 +275,36 @@ def test_workflow() -> Workflow:
                     name="Run Turmoil simulation tests",
                     run="cargo nextest run -p frogdb-server --features turmoil -E 'test(/simulation/)'",
                 ),
+                # Filter the whole `concurrency_workload` module rather than its
+                # `seed_sweep_*` entry points individually: `mod regressions`'s
+                # pinned reproducers live in the same file and were silently
+                # never executed under the narrower filters.
                 run_step(
-                    name="Run generated-workload seed sweep (short workloads)",
+                    name="Run generated-workload tests (seed sweeps + pinned regressions)",
                     run="cargo nextest run -p frogdb-server --features turmoil"
-                    " -E 'test(/seed_sweep_short_workloads/)'",
-                ),
-                run_step(
-                    name="Run generated-workload seed sweep (TxHeavy)",
-                    run="cargo nextest run -p frogdb-server --features turmoil"
-                    " -E 'test(/seed_sweep_txheavy/)'",
+                    " -E 'test(/concurrency_workload/)'",
                 ),
             ],
         ),
     )
 
     # The operator is a separate cargo workspace with its own lockfile and no
-    # coverage under `cargo nextest run --all`. It depends on frogdb-config, so
-    # a server-side schema change (rust filter) must also re-run these tests to
-    # catch config-generation drift — hence the `rust || operator` gate.
+    # coverage under `cargo nextest run --all`, so ordinary server changes
+    # (rust filter) don't need to re-run it. The one real coupling (ADR-0001)
+    # is that frogdb-operator imports the frogdb-config crate — only changes
+    # to that config schema (or the operator's own lockfile, which pins it)
+    # can cause config-generation drift, hence the narrower
+    # `operator || operator_config` gate instead of the broad `rust` one.
     operator_tests = w.job(
         "operator-tests",
         Job(
             name="Operator Tests",
             runs_on=RUNS_ON,
             needs="changes",
-            if_="needs.changes.outputs.rust == 'true' || needs.changes.outputs.operator == 'true'",
+            if_=(
+                "needs.changes.outputs.operator == 'true' || "
+                "needs.changes.outputs.operator_config == 'true'"
+            ),
             steps=[
                 checkout_step(),
                 mise_setup_step(install_args=MISE_JUST_NEXTEST),
@@ -501,6 +557,7 @@ def test_workflow() -> Workflow:
                 actionlint,
                 lint,
                 unit_tests,
+                cmd_full_build,
                 shuttle_tests,
                 turmoil_tests,
                 operator_tests,

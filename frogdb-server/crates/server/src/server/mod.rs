@@ -1,5 +1,6 @@
 //! Main server implementation.
 
+mod checkpoint_quiesce;
 mod cluster_init;
 mod init;
 mod listeners;
@@ -302,6 +303,7 @@ impl Server {
             repl.primary_replication_handler.as_ref(),
             &infra.metrics_recorder,
             repl.primary_addr,
+            repl.replication_identity.clone(),
             repl.shared_replication_offset,
             infra.config_manager.cluster_flags(),
             infra.is_replica_flag.clone(),

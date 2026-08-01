@@ -10,12 +10,6 @@ env:
   CARGO_TERM_COLOR: always
 'on':
   workflow_dispatch: {}
-  push:
-    branches:
-    - main
-  pull_request:
-    branches:
-    - main
 jobs:
   changes:
     name: Detect Changes
@@ -23,6 +17,7 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       operator: ${{ steps.filter.outputs.operator }}
+      operator_config: ${{ steps.filter.outputs.operator_config }}
       workflows: ${{ steps.filter.outputs.workflows }}
       grafana: ${{ steps.filter.outputs.grafana }}
       helm: ${{ steps.filter.outputs.helm }}
@@ -37,6 +32,7 @@ jobs:
       name: Check changed paths
       uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d
       with:
+        base: main
         filters: |
           rust:
             - 'frogdb-server/**'
@@ -51,6 +47,10 @@ jobs:
             - 'frogdb-operator/**'
             - 'rust-toolchain.toml'
             - '.mise.toml'
+          operator_config:
+            - 'frogdb-server/crates/config/**'
+            - 'frogdb-server/crates/config-derive/**'
+            - 'frogdb-operator/Cargo.lock'
           workflows:
             - '.github/**'
           grafana:
@@ -136,6 +136,37 @@ jobs:
         shared-key: stable
     - name: Run unit tests
       run: cargo nextest run --all
+  cmd-full-build:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    name: Command Feature Profiles Build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      with:
+        install: 'true'
+        install_args: just
+        cache: 'true'
+        experimental: 'true'
+    - name: Install Rust 1.92.0
+      uses: dtolnay/rust-toolchain@1.92.0
+    - name: Install libclang
+      run: sudo apt-get install -y libclang-dev
+    - name: Cache Rust build artifacts
+      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      with:
+        shared-key: stable
+    - name: Check commands crate (core profile only)
+      run: cargo check -p frogdb-commands --no-default-features --features core-profile --all-targets
+    - name: Check commands crate (full command surface)
+      run: cargo check -p frogdb-commands --features full --all-targets
+    - name: Check server (core profile only)
+      run: cargo check -p frogdb-server --all-targets
+    - name: Check server (full command surface)
+      run: cargo check -p frogdb-server --features cmd-full --all-targets
   shuttle-tests:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
@@ -186,13 +217,11 @@ jobs:
         shared-key: turmoil
     - name: Run Turmoil simulation tests
       run: cargo nextest run -p frogdb-server --features turmoil -E 'test(/simulation/)'
-    - name: Run generated-workload seed sweep (short workloads)
-      run: cargo nextest run -p frogdb-server --features turmoil -E 'test(/seed_sweep_short_workloads/)'
-    - name: Run generated-workload seed sweep (TxHeavy)
-      run: cargo nextest run -p frogdb-server --features turmoil -E 'test(/seed_sweep_txheavy/)'
+    - name: Run generated-workload tests (seed sweeps + pinned regressions)
+      run: cargo nextest run -p frogdb-server --features turmoil -E 'test(/concurrency_workload/)'
   operator-tests:
     needs: changes
-    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.operator == 'true'
+    if: needs.changes.outputs.operator == 'true' || needs.changes.outputs.operator_config == 'true'
     name: Operator Tests
     runs-on: ubuntu-latest
     steps:
@@ -433,6 +462,7 @@ jobs:
     - actionlint
     - lint
     - unit-tests
+    - cmd-full-build
     - shuttle-tests
     - turmoil-tests
     - operator-tests

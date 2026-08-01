@@ -74,15 +74,21 @@ impl Command for ReplicaofCommand {
         // Role Promotion: `REPLICAOF NO ONE` — become a standalone primary.
         if arg1.eq_ignore_ascii_case("no") && arg2.eq_ignore_ascii_case("one") {
             tracing::info!("REPLICAOF NO ONE - Role Promotion to primary");
-            ctx.is_replica = false;
             // The RoleManager owns the flag and the streaming lifecycle: it
-            // clears the replica flag and stops any inbound stream.
+            // clears the replica flag and stops any inbound stream. A promotion
+            // that could not mint or persist its identity returns an error and
+            // leaves the node a replica, so the local view is only updated after
+            // it succeeds.
             if let Some(ref controller) = ctx.role_controller {
-                controller.request_promote();
+                controller.request_promote()?;
+                ctx.is_replica = false;
             } else if let Some(ref flag) = ctx.is_replica_flag {
+                ctx.is_replica = false;
                 // No manager wired (e.g. a bare test harness): still reflect the
                 // new role rather than silently doing nothing.
                 flag.store(false, std::sync::atomic::Ordering::Release);
+            } else {
+                ctx.is_replica = false;
             }
             return Ok(Response::ok());
         }
@@ -470,6 +476,12 @@ pub(crate) const WAIT_ON_REPLICA_ERR: &str = "ERR WAIT cannot be used with repli
      Please also note that since Redis 4.0 if a replica is connected to a master, \
      writes are only accepted with the WRITE command flag.";
 
+/// The error a WAIT parked across a demotion is released with, matching Redis's
+/// `disconnectAllBlockedClients` (`replication.c`) verbatim. A count would be a
+/// worse answer than an error: the stream it counted acks on is gone.
+pub(crate) const WAIT_ROLE_CHANGED_ERR: &str =
+    "UNBLOCKED force unblock from blocking operation, instance state changed (master -> replica?)";
+
 /// Parse and validate `WAIT <numreplicas> <timeout_ms>` arguments.
 ///
 /// One definition shared by the connection-level blocking path and the
@@ -535,6 +547,11 @@ pub(crate) fn parse_wait_args(args: &[Bytes]) -> Result<(u32, u64), CommandError
 /// and executed on the shard, where [`Command::execute`] below mirrors Redis's
 /// `CLIENT_DENY_BLOCKING` fast path: return the current acked count
 /// immediately, never block.
+///
+/// WAIT is keyless and per-node in both standalone and cluster mode: it counts
+/// the replicas attached to *this* node and never redirects. See
+/// [`crate::connection::ConnectionHandler::handle_wait_command`] for the full
+/// contract.
 pub struct WaitCommand;
 
 impl Command for WaitCommand {
@@ -564,13 +581,6 @@ impl Command for WaitCommand {
         }
 
         let (_num_replicas, _timeout_ms) = parse_wait_args(args)?;
-
-        // Cluster mode: same pinned divergence as the connection-level path —
-        // the WAIT coordinator is unwired in cluster mode (see the
-        // WAIT-cluster-mode PRD), so the count is always 0.
-        if ctx.cluster_state.is_some() {
-            return Ok(Response::Integer(0));
-        }
 
         // Deny-blocking context (MULTI/EXEC executes queued commands on the
         // shard): return the acked count for the current live offset without

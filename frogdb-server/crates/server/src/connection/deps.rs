@@ -9,20 +9,19 @@ use std::time::Duration;
 
 use frogdb_core::{
     AclManager, ClusterNetworkFactory, ClusterRaft, ClusterState, CommandLatencyHistograms,
-    CommandRegistry, MetricsRecorder, NoopMetricsRecorder, ReplicationState,
-    ReplicationTrackerImpl, ShardSender, SharedFunctionRegistry, SharedHotkeySession,
-    command::QuorumChecker, new_shared_hotkey_session, persistence::SnapshotCoordinator,
+    CommandRegistry, MetricsRecorder, NoopMetricsRecorder, ReplicationTrackerImpl, ShardSender,
+    SharedFunctionRegistry, SharedHotkeySession, command::QuorumChecker, new_shared_hotkey_session,
+    persistence::SnapshotCoordinator,
 };
 use frogdb_debug::MemoryDiagConfig;
 use frogdb_telemetry::SharedTracer;
-use tokio::sync::RwLock;
 
 use frogdb_core::ClientRegistry;
 
 use crate::cluster_pubsub::ClusterPubSubForwarder;
 use crate::config::TracingConfig;
 use crate::cursor_store::AggregateCursorStore;
-use crate::replication::PrimaryReplicationHandler;
+use crate::replication::{PrimaryReplicationHandler, SharedReplicationState};
 use crate::runtime_config::ConfigManager;
 use crate::slot_migration::SlotMigrationCoordinator;
 
@@ -104,13 +103,14 @@ pub struct ClusterDeps {
 
     /// Shared replication state (IDs + offset) for the active role.
     ///
-    /// Populated for both primary and replica roles (the same
-    /// `Arc<RwLock<ReplicationState>>` held by the role's replication handler),
+    /// Populated for both primary and replica roles (the node's one
+    /// [`crate::replication::ReplicationIdentity`] cell, which both role
+    /// handlers share),
     /// letting INFO replication report the real `master_replid` exchanged in
     /// PSYNC/FULLRESYNC. `None` in standalone mode and in pure cluster mode,
     /// where there is no PSYNC replication identity and INFO falls back to the
     /// node id.
-    pub replication_state: Option<Arc<RwLock<ReplicationState>>>,
+    pub replication_state: Option<SharedReplicationState>,
 
     /// Optional quorum checker for self-fencing (write rejection on quorum loss).
     pub quorum_checker: Option<Arc<dyn QuorumChecker>>,

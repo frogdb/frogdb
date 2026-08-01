@@ -17,7 +17,7 @@
 use crate::common::replication_helpers::{
     get_replication_state, parse_info_replication, start_primary_replica_pair, wait_for_replication,
 };
-use crate::common::response_helpers::assert_ok;
+use crate::common::response_helpers::{assert_bulk_eq, assert_ok};
 use crate::common::test_server::{
     ServerRole, TestServer, TestServerConfig, get_error_message, is_error, parse_integer,
     parse_simple_string,
@@ -26,6 +26,7 @@ use bytes::Bytes;
 use frogdb_core::{Arity, CommandFlags, CommandRegistry};
 use frogdb_protocol::Response;
 use rstest::rstest;
+use std::path::PathBuf;
 use std::time::Duration;
 
 // ============================================================================
@@ -321,6 +322,7 @@ async fn test_write_propagation(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
+#[cfg(feature = "cmd-hyperloglog")]
 /// A PFADD that moves no register is a no-op write: it must not produce a
 /// replication frame, so the primary's `master_repl_offset` must not advance.
 #[rstest]
@@ -382,6 +384,7 @@ async fn test_noop_pfadd_not_propagated(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
+#[cfg(feature = "cmd-hyperloglog")]
 /// A PFMERGE that adds no new register to an existing destination is a no-op
 /// write: it must not produce a replication frame (offset must not advance).
 /// Creating the destination — even when the merged result is empty — is a real
@@ -624,6 +627,7 @@ async fn test_client_unblock_releases_wait() {
     primary.shutdown().await;
 }
 
+// FM-TXN-044
 /// WAIT inside MULTI/EXEC never blocks: it returns the current acked count
 /// immediately (Redis CLIENT_DENY_BLOCKING semantics), not nil.
 ///
@@ -712,6 +716,7 @@ async fn test_wait_inside_multi_zero_replicas_zero_timeout() {
     primary.shutdown().await;
 }
 
+// FM-TXN-044
 /// `MULTI; WAIT 3 100; EXEC` on standalone (0 replicas connected) with a
 /// nonzero, finite timeout — the second acceptance-criteria case for issue
 /// 51. Asserts completion well *under* the requested 100ms window (not just
@@ -806,6 +811,7 @@ async fn test_wait_inside_multi_returns_correct_acked_count_with_replica() {
     primary.shutdown().await;
 }
 
+// FM-TXN-044
 /// PSYNC queued inside MULTI/EXEC replies `+OK` and never triggers a socket
 /// takeover. This path bypasses `PsyncIntercept` entirely: `TransactionQueue`
 /// (earlier in `PRE_DISPATCH_ORDER`) queues the command, and at EXEC
@@ -1256,16 +1262,24 @@ async fn test_runtime_full_resync_installs_snapshot_into_live_store() {
         "master's snapshot must be installed into the live keyspace without a restart"
     );
 
+    // Per key, not one wait then instant reads: the install is documented as
+    // atomic *per shard* only (`LiveCheckpointInstaller::install`), so seeing
+    // `m0` proves only that `m0`'s shard has swapped. Every other key gets its
+    // own bounded wait.
     for i in 0..5 {
+        let key = format!("m{i}");
         assert_eq!(
-            string_value(&node.send("GET", &[&format!("m{i}")]).await).as_deref(),
+            wait_for_value(&node, &key, Some("from-master"), Duration::from_secs(10))
+                .await
+                .as_deref(),
             Some("from-master"),
-            "master's key m{i} must be live on the demoted node"
+            "master's key {key} must be live on the demoted node"
         );
+        let forked = format!("p{i}");
         assert_eq!(
-            string_value(&node.send("GET", &[&format!("p{i}")]).await),
+            wait_for_value(&node, &forked, None, Duration::from_secs(10)).await,
             None,
-            "forked key p{i} must be gone from the demoted node's live keyspace"
+            "forked key {forked} must be gone from the demoted node's live keyspace"
         );
     }
     assert_eq!(
@@ -1283,6 +1297,62 @@ async fn test_runtime_full_resync_installs_snapshot_into_live_store() {
         Some("streamed"),
         "streaming must resume from the installed snapshot's offset"
     );
+
+    node.shutdown().await;
+    master.shutdown().await;
+}
+
+/// A `FULLRESYNC` checkpoint must contain every write the primary has already
+/// acknowledged — including those still sitting in a shard's WAL flush-engine.
+///
+/// A write is acked once staged in the flush engine; the engine commits it to
+/// RocksDB on a later size/timeout trigger. The checkpoint snapshots what
+/// RocksDB *holds*, so cutting one without first draining the engines omits the
+/// primary's most recent writes. For a full resync that hole is permanent: with
+/// no replica attached when those writes were made, nothing was broadcast, so no
+/// backlog tail can replay them — the replica is simply missing them forever.
+///
+/// The batch timeout is parked far beyond the test's runtime, which makes "acked
+/// but not yet in RocksDB" the steady state instead of a millisecond race: with
+/// no drain on the full-sync path *none* of the keys below reach the replica, on
+/// every platform. (The bug this pins was originally a coin-flip that only came
+/// up heads on macOS, where the checkpoint was cut inside the default 10ms
+/// window — a green run elsewhere proved nothing.)
+#[tokio::test]
+async fn test_full_resync_checkpoint_carries_writes_still_pending_in_the_wal() {
+    let config = || TestServerConfig {
+        persistence: true,
+        // No background flush can rescue the checkpoint during this test...
+        persistence_batch_timeout_ms: Some(600_000),
+        // ...and no periodic snapshot can drain the engines behind our back
+        // (its pre-snapshot hook performs the very drain under test).
+        snapshot_interval_secs: Some(0),
+        ..Default::default()
+    };
+    let master = TestServer::start_primary_with_config(config()).await;
+    let node = TestServer::start_primary_with_config(config()).await;
+
+    // Enough keys to cover every shard several times over, so the assertion does
+    // not depend on which shard a key routes to.
+    const KEYS: usize = 20;
+    for i in 0..KEYS {
+        assert_ok(&master.send("SET", &[&format!("k{i}"), "acked"]).await);
+    }
+
+    let master_port = master.port().to_string();
+    assert_ok(&node.send("REPLICAOF", &["127.0.0.1", &master_port]).await);
+
+    for i in 0..KEYS {
+        let key = format!("k{i}");
+        assert_eq!(
+            wait_for_value(&node, &key, Some("acked"), Duration::from_secs(10))
+                .await
+                .as_deref(),
+            Some("acked"),
+            "{key} was acknowledged by the primary, so the full-resync checkpoint \
+             must carry it — an unflushed WAL entry is not an excuse to lose it"
+        );
+    }
 
     node.shutdown().await;
     master.shutdown().await;
@@ -1762,26 +1832,21 @@ async fn test_partial_sync_falls_back_to_full(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
-/// Replication-ID handling across a `REPLICAOF NO ONE` promotion.
+/// Replication-ID handling across a `REPLICAOF NO ONE` promotion (PSYNC2 parity).
 ///
-/// This test PINS FrogDB's actual PSYNC2-divergent promotion semantics rather
-/// than asserting Redis parity — see [`docs`](../../../website/src/content/docs/operations/replication.md)
-/// ("do not rely on a specific secondary-ID continuation behavior").
+/// The promoted node mints a *new* `master_replid` and preserves the inherited
+/// one as `master_replid2`, with `second_repl_offset` frozen at the live applied
+/// offset it reached — the failover window a surviving sibling partial-resyncs
+/// through.
 ///
-/// Redis PSYNC2 on promotion: the promoted node mints a *new* `master_replid`
-/// and preserves the old one as `master_replid2` with `second_repl_offset` = the
-/// live offset at promotion, so downstream replicas can partial-resync
-/// (`+CONTINUE`) through the failover.
+/// One deliberate divergence remains, pinned here: `second_repl_offset` is
+/// **inclusive**. Redis stores `master_repl_offset + 1` because its replicas
+/// request the offset they want *next*; FrogDB replicas request the offset they
+/// have *applied* and the window predicate is `<=`, so adding one would widen
+/// the window by a byte position with no corresponding request convention.
 ///
-/// FrogDB DIVERGES on the manual `REPLICAOF NO ONE` path:
-///   1. the promoted node keeps the *same* `master_replid` it adopted from its
-///      former primary during FULLRESYNC — no new id is minted;
-///   2. no secondary window is established — `master_replid2` stays all-zero and
-///      `second_repl_offset` stays `-1`.
-/// (The replid-rotation machinery — [`ReplicationState::new_replication_id`] and
-/// the `secondary_id`/`secondary_offset` window — exists in the replication
-/// crate but is NOT wired to the runtime promotion path; it currently has no
-/// production caller.)
+/// This test previously pinned the opposite contract (no mint, no window) — see
+/// `.scratch/testing-improvements/issues/34`.
 #[rstest]
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
@@ -1814,6 +1879,19 @@ async fn test_secondary_replication_id_failover(#[case] persistence: bool) {
         replid_before, primary_replid,
         "replica must adopt the primary's replid via FULLRESYNC before promotion"
     );
+    // No window before the first promotion: nothing has been failed over yet.
+    assert_eq!(
+        before.get("master_replid2").map(String::as_str),
+        Some("0000000000000000000000000000000000000000"),
+    );
+    assert_eq!(
+        before.get("second_repl_offset").map(String::as_str),
+        Some("-1"),
+    );
+    let offset_before: i64 = before
+        .get("master_repl_offset")
+        .and_then(|v| v.parse().ok())
+        .expect("replica master_repl_offset");
 
     // Promote replica to primary (stop replication).
     let promote_resp = replica.send("REPLICAOF", &["NO", "ONE"]).await;
@@ -1826,30 +1904,113 @@ async fn test_secondary_replication_id_failover(#[case] persistence: bool) {
         "Promoted replica should report as master"
     );
 
-    // (a) DIVERGENCE: the replid is NOT rotated on promotion — the promoted node
-    // keeps the id it adopted from its former primary. (Redis mints a new one.)
+    // (a) A fresh replication id is minted: the promoted node heads its own
+    // history from here, so nothing that follows it can be confused with the
+    // stream it inherited.
+    let replid_after = after.get("master_replid").cloned().unwrap();
+    assert_ne!(
+        replid_after, replid_before,
+        "promotion must mint a new master_replid"
+    );
     assert_eq!(
-        after.get("master_replid").cloned().unwrap(),
-        replid_before,
-        "FrogDB keeps the same master_replid across REPLICAOF NO ONE promotion \
-         (diverges from Redis, which mints a new replid)"
+        replid_after.len(),
+        40,
+        "a minted replid keeps the 40-hex-char shape"
     );
 
-    // (b) DIVERGENCE: no secondary window is established — replid2 stays all-zero
-    // and second_repl_offset stays -1. (Redis sets replid2 = the old replid.)
+    // (b) The inherited id becomes the failover window.
+    assert_eq!(
+        after.get("master_replid2").cloned().unwrap(),
+        replid_before,
+        "the inherited replid must be retained as master_replid2"
+    );
+
+    // (c) The window boundary is the live applied offset at promotion,
+    // inclusive — not `+1` (FrogDB replicas request their applied offset and
+    // the window predicate is `<=`).
+    let second_offset: i64 = after
+        .get("second_repl_offset")
+        .and_then(|v| v.parse().ok())
+        .expect("second_repl_offset");
+    assert_eq!(
+        second_offset, offset_before,
+        "second_repl_offset must be the promoted node's applied offset, inclusive"
+    );
+    // The live offset is continuous across the identity change: everything at
+    // or below the boundary is shared history under the old id.
+    let offset_after: i64 = after
+        .get("master_repl_offset")
+        .and_then(|v| v.parse().ok())
+        .expect("master_repl_offset");
+    assert_eq!(offset_after, offset_before);
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// A role round-trip must not leave a stale failover window behind: once the
+/// promoted node adopts someone else's history via `+FULLRESYNC`, its claim to
+/// the old stream is gone and `master_replid2` must go back to the all-zero
+/// sentinel (Redis `clearReplicationId2`, `replication.c` `readSyncBulkPayload`).
+///
+/// Leaving it set would let the node grant `+CONTINUE` over data it discarded.
+#[tokio::test]
+async fn test_promotion_window_cleared_when_node_adopts_a_new_history() {
+    let (primary, replica) = start_primary_replica_pair(TestServerConfig::default()).await;
+    let fresh_primary = TestServer::start_standalone().await;
+
+    for i in 0..3 {
+        primary.send("SET", &[&format!("rt{i}"), "v"]).await;
+    }
+    let _ = primary.send("WAIT", &["1", "2000"]).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Promote: window armed.
+    assert_ok(&replica.send("REPLICAOF", &["NO", "ONE"]).await);
+    let promoted = parse_info_replication(&replica.send("INFO", &["replication"]).await).unwrap();
+    assert_ne!(
+        promoted.get("master_replid2").map(String::as_str),
+        Some("0000000000000000000000000000000000000000"),
+        "promotion must arm the failover window"
+    );
+
+    // Demote onto an unrelated primary: the full resync replaces this node's
+    // history entirely.
+    assert_ok(
+        &replica
+            .send(
+                "REPLICAOF",
+                &["127.0.0.1", &fresh_primary.port().to_string()],
+            )
+            .await,
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let mut after = parse_info_replication(&replica.send("INFO", &["replication"]).await).unwrap();
+    while std::time::Instant::now() < deadline {
+        after = parse_info_replication(&replica.send("INFO", &["replication"]).await).unwrap();
+        if after.get("master_link_status").map(String::as_str) == Some("up") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        after.get("master_link_status").map(String::as_str),
+        Some("up"),
+        "demoted node must link up with its new primary"
+    );
     assert_eq!(
         after.get("master_replid2").map(String::as_str),
         Some("0000000000000000000000000000000000000000"),
-        "FrogDB does not populate master_replid2 on REPLICAOF NO ONE promotion \
-         (diverges from Redis PSYNC2, which stores the prior replid as replid2)"
+        "adopting a new history must clear the failover window"
     );
     assert_eq!(
         after.get("second_repl_offset").map(String::as_str),
         Some("-1"),
-        "second_repl_offset must remain the -1 sentinel when no failover window is set"
+        "the window boundary must return to the -1 sentinel"
     );
 
     replica.shutdown().await;
+    fresh_primary.shutdown().await;
     primary.shutdown().await;
 }
 
@@ -1863,11 +2024,11 @@ async fn test_secondary_replication_id_failover(#[case] persistence: bool) {
 /// with `-ERR ... not running as primary`, because the handler was constructed
 /// only for a boot-configured primary.
 ///
-/// What is still divergent from Redis PSYNC2: the promoted node does not rotate
-/// its replication id and establishes no `replid2` window, so a surviving
-/// replica cannot *partial*-resync from it — it gets a full resync
-/// (`+FULLRESYNC`), which is safe but not free. That part is pinned by
-/// `test_psync2_failover_partial_sync`.
+/// The grant is two-sided and pinned here: a sibling that presents the
+/// *inherited* replid at exactly the failover boundary gets `+CONTINUE`; one
+/// byte past it (history the promoted node never applied) gets `+FULLRESYNC`,
+/// and so does an unrelated replid. Granting the first case is what makes a
+/// failover cheap; refusing the second is what keeps it correct.
 #[rstest]
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
@@ -1905,9 +2066,9 @@ async fn test_promoted_node_via_replicaof_no_one_serves_downstream_psync(
         "promoted node must report role:master"
     );
 
-    // PSYNC to the promoted node is served: the promotion acquired the
-    // primary-side handler, so a surviving replica gets a resync offer instead
-    // of "not running as primary".
+    // A sibling exactly at the failover boundary resumes: the inherited replid
+    // is the promoted node's `master_replid2` and the boundary is inside the
+    // window, so the tail it needs is empty.
     let resp = replica
         .send_raw(&encode_resp_command(&[
             "PSYNC",
@@ -1921,8 +2082,39 @@ async fn test_promoted_node_via_replicaof_no_one_serves_downstream_psync(
         "promoted node must serve downstream PSYNC, got: {head:?}"
     );
     assert!(
-        head.contains("FULLRESYNC") || head.contains("CONTINUE"),
-        "promoted node must offer a resync via PSYNC, got: {head:?}"
+        head.contains("CONTINUE"),
+        "a sibling at the failover boundary must be granted +CONTINUE, got: {head:?}"
+    );
+
+    // One byte past the boundary is history the promoted node never applied.
+    // Granting it would leave those writes resident on the peer forever while
+    // the promoted node streams unrelated history — permanent silent
+    // divergence, undetectable by offset comparison.
+    let ahead = replica
+        .send_raw(&encode_resp_command(&[
+            "PSYNC",
+            &replid,
+            &(offset + 1).to_string(),
+        ]))
+        .await;
+    let ahead = String::from_utf8_lossy(&ahead);
+    assert!(
+        ahead.contains("FULLRESYNC"),
+        "an offset past the failover boundary must full-resync, got: {ahead:?}"
+    );
+
+    // An unrelated replid matches neither `master_replid` nor `master_replid2`.
+    let unknown = replica
+        .send_raw(&encode_resp_command(&[
+            "PSYNC",
+            "0123456789abcdef0123456789abcdef01234567",
+            "0",
+        ]))
+        .await;
+    let unknown = String::from_utf8_lossy(&unknown);
+    assert!(
+        unknown.contains("FULLRESYNC"),
+        "an unknown replid must full-resync, got: {unknown:?}"
     );
 
     replica.shutdown().await;
@@ -2035,6 +2227,102 @@ async fn test_promoted_replica_enforces_write_gates_set_before_promotion() {
     );
 
     replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// The demotion half of the same contract: a node that *stops* being a primary
+/// stops being a replication source, in the same breath.
+///
+/// The primary-side handler is never torn down (it exists on every role), so
+/// the transition has to be carried by behavior rather than by construction:
+/// `RoleManager::demote` calls `end_primary_stint`, which closes the backlog
+/// window and disconnects the downstream replicas, and the live role flag makes
+/// the next `PSYNC` attempt fail the `PsyncIntercept` gate. Together those give
+/// the invariant a sub-replica depends on — there is no window in which a node
+/// is a replica of one node while still serving a resync to another.
+#[tokio::test]
+async fn test_demoted_primary_stops_serving_psync_to_its_downstream() {
+    let config = TestServerConfig::default();
+
+    let primary = TestServer::start_primary_with_config(config.clone()).await;
+    // `node` boots writable, takes a downstream of its own, and is then demoted
+    // under that downstream's feet.
+    let node = TestServer::start_primary_with_config(config.clone()).await;
+    let downstream = TestServer::start_primary_with_config(config).await;
+
+    assert_ok(
+        &downstream
+            .send("REPLICAOF", &["127.0.0.1", &node.port().to_string()])
+            .await,
+    );
+    let acked = parse_integer(&node.send("WAIT", &["1", "10000"]).await).unwrap_or(0);
+    assert_eq!(
+        acked, 1,
+        "downstream must attach to the writable node first"
+    );
+
+    assert_ok(&node.send("SET", &["pre-demote", "1"]).await);
+    let _ = node.send("WAIT", &["1", "5000"]).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        matches!(&downstream.send("GET", &["pre-demote"]).await, Response::Bulk(Some(v)) if v.as_ref() == b"1"),
+        "sanity: the link must be live before the demotion under test"
+    );
+
+    // Demote. The downstream's link is severed by `end_primary_stint` and its
+    // reconnect attempts are refused by the role gate from here on.
+    assert_ok(
+        &node
+            .send("REPLICAOF", &["127.0.0.1", &primary.port().to_string()])
+            .await,
+    );
+
+    let mut link_down = false;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let info =
+            parse_info_replication(&downstream.send("INFO", &["replication"]).await).unwrap();
+        if info.get("master_link_status").map(String::as_str) == Some("down") {
+            link_down = true;
+            break;
+        }
+    }
+    assert!(
+        link_down,
+        "a downstream of a demoted node must lose its link, not keep streaming from a replica"
+    );
+
+    // The refusal is explicit, not just a dropped connection.
+    let (replid, offset) = get_replication_state(&downstream)
+        .await
+        .expect("downstream INFO replication");
+    let resp = node
+        .send_raw(&encode_resp_command(&[
+            "PSYNC",
+            &replid,
+            &offset.to_string(),
+        ]))
+        .await;
+    let head = String::from_utf8_lossy(&resp);
+    assert!(
+        head.starts_with("-ERR") && head.contains("not running as primary"),
+        "a demoted node must reject downstream PSYNC outright, got: {head:?}"
+    );
+
+    // And a write that lands on the new primary does not reach the orphan.
+    assert_ok(&primary.send("SET", &["post-demote", "1"]).await);
+    wait_for_replication(&primary, 2000).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        matches!(
+            downstream.send("GET", &["post-demote"]).await,
+            Response::Bulk(None)
+        ),
+        "the orphaned downstream must not receive writes relayed through a demoted node"
+    );
+
+    downstream.shutdown().await;
+    node.shutdown().await;
     primary.shutdown().await;
 }
 
@@ -3232,6 +3520,57 @@ async fn test_wait_zero_timeout_blocks_without_quorum() {
         .expect("unblocked WAIT must reply");
     assert_eq!(parse_integer(&resp), Some(0));
 
+    primary.shutdown().await;
+}
+
+/// A WAIT parked across a demotion is released with `-UNBLOCKED`, not with a
+/// count.
+///
+/// Redis unblocks every blocked client from `replicationSetMaster` for the same
+/// reason: the wait was counting acknowledgments on a replication stream that
+/// the demotion tears down, so any number it could still produce would describe
+/// a history the node no longer heads. The release happens inside
+/// `end_primary_stint`, next to the downstream disconnect it belongs with.
+#[tokio::test]
+async fn test_wait_unblocked_on_demotion() {
+    let config = TestServerConfig::default();
+    let primary = TestServer::start_primary_with_config(config.clone()).await;
+    let new_primary = TestServer::start_primary_with_config(config).await;
+
+    let mut blocked = primary.connect().await;
+    // No replicas, so a quorum of 5 is unreachable and `timeout 0` parks
+    // forever — the demotion is the only thing that can release it.
+    blocked.send_only(&["WAIT", "5", "0"]).await;
+    primary.wait_for_blocked_clients(1).await;
+    assert!(
+        blocked
+            .read_response(Duration::from_millis(300))
+            .await
+            .is_none(),
+        "WAIT 5 0 must still be parked before the demotion"
+    );
+
+    assert_ok(
+        &primary
+            .send("REPLICAOF", &["127.0.0.1", &new_primary.port().to_string()])
+            .await,
+    );
+
+    let resp = blocked
+        .read_response(Duration::from_secs(5))
+        .await
+        .expect("a demotion must release the parked WAIT, not leave it hanging");
+    let msg = get_error_message(&resp).unwrap_or_default();
+    assert!(
+        msg.starts_with("UNBLOCKED"),
+        "a WAIT released by a demotion must be an -UNBLOCKED error, got: {resp:?}"
+    );
+    assert!(
+        msg.contains("master -> replica"),
+        "the error must name the cause the way Redis does, got: {msg}"
+    );
+
+    new_primary.shutdown().await;
     primary.shutdown().await;
 }
 
@@ -4536,6 +4875,7 @@ async fn test_incr_decr_replicates(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
+#[cfg(feature = "cmd-stream")]
 /// Stream XADD replicates to replica (XLEN matches).
 #[rstest]
 #[case::in_memory(false)]
@@ -4626,14 +4966,16 @@ async fn test_role_changes_after_replicaof(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
-/// Cross-failover behavior after `REPLICAOF NO ONE`, pinning FrogDB's actual
-/// (PSYNC2-divergent) semantics. In Redis a promoted replica hands surviving
-/// replicas a *partial* resync via `master_replid2`; FrogDB serves PSYNC from a
-/// promoted node but rotates no replication id and sets no replid2, so the only
-/// offer is a full resync (see `test_secondary_replication_id_failover` and
-/// `test_promoted_node_via_replicaof_no_one_serves_downstream_psync` for the
-/// primitives). This test pins that whole shape end-to-end from a two-replica
-/// topology, and confirms the promoted node still holds the pre-promotion data.
+/// PSYNC2 cross-failover from a two-replica topology: a replica promoted with
+/// `REPLICAOF NO ONE` rotates its replication id, keeps the inherited id as the
+/// failover window, and hands a *surviving sibling* a partial resync over that
+/// window instead of forcing a full one.
+///
+/// `test_secondary_replication_id_failover` pins the identity rotation and
+/// `test_promoted_node_via_replicaof_no_one_serves_downstream_psync` pins the
+/// grant/reject boundary; this test composes both from the topology a real
+/// failover has, and confirms the promoted node still holds the pre-promotion
+/// data it is now the head of.
 #[rstest]
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
@@ -4675,22 +5017,29 @@ async fn test_psync2_failover_partial_sync(#[case] persistence: bool) {
         Some("master"),
         "promoted replica1 must report role:master"
     );
-    // DIVERGENCE (pinned): the replid is not rotated and no secondary window is
-    // established on promotion.
-    assert_eq!(
+    // The promoted node heads a new history: fresh replid, inherited id kept as
+    // the failover window, boundary frozen at the offset it had applied.
+    assert_ne!(
         info_map.get("master_replid").cloned().unwrap(),
         pre_replid,
-        "promoted node keeps its adopted replid (no rotation)"
+        "promotion must rotate the replication id"
     );
     assert_eq!(
-        info_map.get("master_replid2").map(String::as_str),
-        Some("0000000000000000000000000000000000000000"),
-        "no secondary replication id is established on REPLICAOF NO ONE promotion"
+        info_map.get("master_replid2").cloned().unwrap(),
+        pre_replid,
+        "the inherited replid must be retained as the failover window"
+    );
+    assert_eq!(
+        info_map
+            .get("second_repl_offset")
+            .and_then(|v| v.parse::<i64>().ok()),
+        Some(pre_offset),
+        "the window boundary is the applied offset at promotion (inclusive)"
     );
 
-    // The promoted node serves PSYNC (its primary-side handler is live), but
-    // DIVERGENCE (pinned): with no replid rotation and no `replid2` window there
-    // is no *partial* resync path — a surviving replica full-resyncs instead.
+    // A surviving sibling presenting the shared history (old replid, offset at
+    // the boundary) is continued, not full-resynced: that window is exactly what
+    // `master_replid2` exists for.
     let psync = replica1
         .send_raw(&encode_resp_command(&[
             "PSYNC",
@@ -4700,8 +5049,8 @@ async fn test_psync2_failover_partial_sync(#[case] persistence: bool) {
         .await;
     let psync_head = String::from_utf8_lossy(&psync);
     assert!(
-        !psync_head.contains("not running as primary"),
-        "promoted node serves downstream PSYNC, got: {psync_head:?}"
+        psync_head.contains("CONTINUE"),
+        "a sibling inside the failover window must be granted +CONTINUE, got: {psync_head:?}"
     );
 
     // The promoted node remains writable and still holds all pre-promotion data.
@@ -4718,6 +5067,161 @@ async fn test_psync2_failover_partial_sync(#[case] persistence: bool) {
     replica2.shutdown().await;
     replica1.shutdown().await;
     primary.shutdown().await;
+}
+
+/// The whole failover a real operator performs: primary `P` with replicas `R1`
+/// and `R2`, `P` dies, `R1` is promoted, `R2` is repointed at `R1`.
+///
+/// Every step downstream of the promotion depends on the promoted node actually
+/// becoming a primary rather than a node that merely reports `role:master`: it
+/// must serve `R2`'s PSYNC, stamp and broadcast its own post-promotion writes,
+/// count `R2` in `connected_slaves`, and let `WAIT` observe `R2`'s ACKs. Before
+/// this landed the promoted node kept a frozen no-op broadcaster, so the chain
+/// silently ended at `R1` — `R2` linked to nothing and saw no data.
+#[tokio::test]
+async fn test_failover_chain_survivor_reattaches_to_promoted_node() {
+    let mut primary = TestServer::start_primary().await;
+    let replica1 = TestServer::start_replica(&primary).await;
+    let replica2 = TestServer::start_replica(&primary).await;
+
+    for i in 0..5 {
+        primary.send("SET", &[&format!("chain{i}"), "v"]).await;
+    }
+    let _ = primary.send("WAIT", &["2", "5000"]).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // The primary dies; R1 takes over.
+    primary.shutdown_mut().await;
+    assert_ok(&replica1.send("REPLICAOF", &["NO", "ONE"]).await);
+
+    // The survivor is repointed at the new primary.
+    assert_ok(
+        &replica2
+            .send("REPLICAOF", &["127.0.0.1", &replica1.port().to_string()])
+            .await,
+    );
+
+    let mut link_up = false;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let info = parse_info_replication(&replica2.send("INFO", &["replication"]).await).unwrap();
+        if info.get("master_link_status").map(String::as_str) == Some("up") {
+            link_up = true;
+            break;
+        }
+    }
+    assert!(
+        link_up,
+        "the survivor must establish a replication link to the promoted node"
+    );
+
+    // A post-promotion write must be stamped, backlogged and streamed: the
+    // promoted node is the head of the history now.
+    assert_ok(&replica1.send("SET", &["chain_after", "promoted"]).await);
+    let acked = parse_integer(&replica1.send("WAIT", &["1", "5000"]).await)
+        .expect("WAIT must return an integer");
+    assert!(
+        acked >= 1,
+        "the promoted node's WAIT must observe the survivor's ACK, got {acked}"
+    );
+
+    let promoted_info =
+        parse_info_replication(&replica1.send("INFO", &["replication"]).await).unwrap();
+    assert_eq!(
+        promoted_info.get("connected_slaves").map(String::as_str),
+        Some("1"),
+        "the promoted node must count the survivor as a connected replica"
+    );
+
+    let mut replicated = false;
+    for _ in 0..40 {
+        if let Response::Bulk(Some(v)) = replica2.send("GET", &["chain_after"]).await
+            && v.as_ref() == b"promoted"
+        {
+            replicated = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    assert!(
+        replicated,
+        "the survivor must receive writes made after the promotion"
+    );
+
+    replica2.shutdown().await;
+    replica1.shutdown().await;
+}
+
+/// The failover window is part of the persisted replication state, so a promoted
+/// node that restarts must come back with the same identity it minted: the same
+/// `master_replid`, the same `master_replid2`, and the same `second_repl_offset`.
+///
+/// Losing any of the three across a restart would silently revoke the partial
+/// resync a surviving replica is entitled to (or, worse, mint a *second* new id
+/// for the same history).
+#[tokio::test]
+async fn test_promoted_identity_survives_restart() {
+    let primary_tmp = tempfile::tempdir().unwrap();
+    let replica_tmp = tempfile::tempdir().unwrap();
+    let replica_dir = replica_tmp.path().join("data");
+    let config = |dir: PathBuf| TestServerConfig {
+        persistence: true,
+        data_dir: Some(dir),
+        num_shards: Some(1),
+        ..Default::default()
+    };
+
+    let primary =
+        TestServer::start_primary_with_config(config(primary_tmp.path().join("data"))).await;
+    let replica =
+        TestServer::start_replica_with_config(&primary, config(replica_dir.clone())).await;
+
+    for i in 0..3 {
+        primary.send("SET", &[&format!("restart{i}"), "v"]).await;
+    }
+    let _ = primary.send("WAIT", &["1", "5000"]).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    assert_ok(&replica.send("REPLICAOF", &["NO", "ONE"]).await);
+    let before = parse_info_replication(&replica.send("INFO", &["replication"]).await).unwrap();
+    let replid = before.get("master_replid").cloned().unwrap();
+    let replid2 = before.get("master_replid2").cloned().unwrap();
+    let boundary = before.get("second_repl_offset").cloned().unwrap();
+    assert_ne!(
+        replid2, "0000000000000000000000000000000000000000",
+        "promotion must have armed a failover window before we restart"
+    );
+    // Data written as a primary must outlive the restart too: the inherited
+    // full-sync checkpoint is disarmed on promotion, so boot recovery can not
+    // re-install it over the promoted node's own database.
+    assert_ok(&replica.send("SET", &["restart_after", "promoted"]).await);
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Reboot the promoted node on its own data dir, now as a primary.
+    let promoted = TestServer::start_primary_with_config(config(replica_dir)).await;
+    let after = parse_info_replication(&promoted.send("INFO", &["replication"]).await).unwrap();
+    assert_eq!(
+        after.get("master_replid").cloned().unwrap(),
+        replid,
+        "the minted replid must survive a restart"
+    );
+    assert_eq!(
+        after.get("master_replid2").cloned().unwrap(),
+        replid2,
+        "the failover window's replid must survive a restart"
+    );
+    assert_eq!(
+        after.get("second_repl_offset").cloned().unwrap(),
+        boundary,
+        "the failover window's boundary must survive a restart"
+    );
+    assert_bulk_eq(&promoted.send("GET", &["restart_after"]).await, b"promoted");
+    assert_bulk_eq(&promoted.send("GET", &["restart0"]).await, b"v");
+
+    promoted.shutdown().await;
 }
 
 /// Continuous writes during failover — no loss for acked writes.
@@ -6147,6 +6651,7 @@ async fn test_self_fence_unarmed_allows_writes() {
     primary.shutdown().await;
 }
 
+// FM-TXN-007
 /// The self-fence gate runs at MULTI *queue* time: the queued write is rejected
 /// with CLUSTERDOWN, and the rejection flags the transaction dirty so EXEC
 /// aborts with `EXECABORT` (Redis parity — `rejectCommand` → `flagTransaction`).
@@ -6199,6 +6704,7 @@ async fn test_self_fence_multi_rejected_at_queue_time() {
     primary.shutdown().await;
 }
 
+// FM-TXN-008
 /// A rejected command must not leave a *partial* transaction behind. With one
 /// accepted command queued ahead of a fenced write, EXEC has a survivor it
 /// could run — the whole point of the dirty flag is that it must not. The
@@ -6342,6 +6848,7 @@ async fn test_min_replicas_to_write_gate_tracks_replica_health() {
     primary.shutdown().await;
 }
 
+// FM-TXN-007
 /// `min-replicas-to-write` gates MULTI at queue time (the queued write is
 /// rejected with NOREPLICAS and the transaction is flagged dirty, so EXEC
 /// answers EXECABORT) but — same known gap as self-fence — does NOT gate
@@ -6601,6 +7108,26 @@ async fn wait_connected_slaves(server: &TestServer, want: i64, within: Duration)
     last
 }
 
+/// Poll `WAIT want …` until the primary reports `want` acking replicas, or the
+/// deadline elapses; returns the last count seen.
+///
+/// A single `WAIT` call is not a safe assertion for a *healthy* link when the
+/// primary runs a short `replication-replica-write-timeout-ms`: on a loaded
+/// machine a scheduling hiccup can block a per-replica write past that timeout,
+/// costing one disconnect/reconnect round even though nothing is wrong. Polling
+/// keeps the assertion about convergence rather than about timing.
+async fn wait_for_acks(server: &TestServer, want: i64, within: Duration) -> i64 {
+    let deadline = std::time::Instant::now() + within;
+    loop {
+        let acked =
+            parse_integer(&server.send("WAIT", &[&want.to_string(), "1000"]).await).unwrap_or(0);
+        if acked >= want || std::time::Instant::now() >= deadline {
+            return acked;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 /// End-to-end coverage of the broadcast-lag disconnect path (audit gap E#8):
 /// a streaming replica is stalled at the network layer until it exceeds the
 /// primary's lag tolerance; the primary disconnects it; the replica then
@@ -6707,7 +7234,7 @@ async fn test_broadcast_lag_disconnect_and_resync(#[case] persistence: bool) {
 
     // Seed a key and confirm it replicates end-to-end before we stall.
     assert_ok(&primary.send("SET", &["seed_key", "seed_value"]).await);
-    let acked = parse_integer(&primary.send("WAIT", &["1", "3000"]).await).unwrap_or(0);
+    let acked = wait_for_acks(&primary, 1, Duration::from_secs(15)).await;
     assert_eq!(
         acked, 1,
         "seed write should be acked by the healthy replica"
@@ -6776,7 +7303,7 @@ async fn test_broadcast_lag_disconnect_and_resync(#[case] persistence: bool) {
 
     // ---- Convergence: the resync must deliver the full keyspace, including
     // every write the replica missed while stalled.
-    let acked_recovered = parse_integer(&primary.send("WAIT", &["1", "10000"]).await).unwrap_or(0);
+    let acked_recovered = wait_for_acks(&primary, 1, Duration::from_secs(20)).await;
     assert_eq!(
         acked_recovered, 1,
         "WAIT must report the reconnected replica acking after recovery"

@@ -75,6 +75,8 @@ a pending op and the Knossos search explodes into OOM.
 | `slot-migration` | slot-migration | none | 60s | Hash slot redistribution during changes |
 | `cross-slot` | cross-slot | none | 30s | Hash tag transactions across slots |
 | `key-routing` | key-routing | none | 30s | MOVED/ASK redirect handling + data (durability + value-correctness) |
+| `cluster-replication` | cluster-replication | none | 120s | Cluster-mode `WAIT` durability: seeds acked + async writes, stops the shard primary, promotes the replica, compares survival rates |
+| `cluster-lag` | cluster-lag | none | 60s | Cluster-mode replication lag + offset progress (advancing, monotone, replica never ahead, counted in `connected_slaves`) |
 
 ### Raft Cluster with Faults
 

@@ -24,7 +24,14 @@
 //! that is *replication*, nothing that is *connection*.
 
 use std::sync::Arc;
-use std::time::Instant;
+
+/// The WAIT deadline is a *timer* instant, not a wall-clock one: it is handed
+/// straight to `tokio::time::timeout_at`. Using `std::time::Instant` here would
+/// silently mis-fire whenever the tokio clock is not the real one — under
+/// `tokio::time::pause()` and under turmoil the simulated clock runs ahead of
+/// real time, so a std-derived deadline converts to an already-elapsed timer and
+/// WAIT returns instantly instead of blocking.
+use tokio::time::Instant;
 
 use frogdb_types::ReplicationTracker;
 
@@ -50,7 +57,7 @@ impl AckSolicitor for PrimaryReplicationHandler {
     }
 }
 
-/// How a WAIT ended. Both arms carry the acked count, because WAIT's reply is
+/// How a WAIT ended. Every arm carries the acked count, because WAIT's reply is
 /// the count *regardless* of whether the quorum was reached — the verdict only
 /// distinguishes the paths for observability and tests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,15 +66,42 @@ pub enum WaitVerdict {
     Reached(u32),
     /// The deadline elapsed first; count is what had acked by then.
     TimedOut(u32),
+    /// The node stopped being a primary while the wait was parked. The count is
+    /// what had acked at that moment, but it describes a history this node no
+    /// longer heads, so the caller must report an error rather than a number.
+    RoleChanged(u32),
 }
 
 impl WaitVerdict {
     /// The number of replicas that acknowledged the target offset — the WAIT
-    /// reply value in every outcome.
+    /// reply value in every outcome where a number is a truthful answer.
     pub fn count(&self) -> u32 {
         match self {
-            WaitVerdict::Reached(n) | WaitVerdict::TimedOut(n) => *n,
+            WaitVerdict::Reached(n) | WaitVerdict::TimedOut(n) | WaitVerdict::RoleChanged(n) => *n,
         }
+    }
+}
+
+/// A subscription to this node's role-change fence, taken *before* the caller
+/// decides that the node is still a primary.
+///
+/// Ordering is the whole point. A demotion publishes the data-path replica flag
+/// first and bumps the fence second (`RoleManager::demote` →
+/// [`PrimaryReplicationHandler::end_primary_stint`]), and a `watch` receiver
+/// only observes bumps that happen after it was created. A caller that checked
+/// the role and *then* subscribed would miss a demotion landing in between and
+/// park forever on a node that has already rejected every later WAIT. Taking
+/// the fence first and re-reading the role afterwards closes that window: one
+/// of the two observations must see the change.
+pub struct RoleFence(tokio::sync::watch::Receiver<u64>);
+
+impl RoleFence {
+    /// Resolve once this node's role changed since the fence was taken.
+    ///
+    /// A dropped sender resolves too: the coordinator that owned the fence is
+    /// gone, so the stream this wait was parked on is gone with it.
+    async fn changed(&mut self) {
+        let _ = self.0.changed().await;
     }
 }
 
@@ -82,12 +116,43 @@ pub struct WaitCoordinator {
     offsets: Arc<OffsetCoordinator>,
     /// Ack registry: quorum counting + the ACK notification channel.
     tracker: Arc<ReplicationTrackerImpl>,
+    /// Role-change fence: bumped when this node stops being a primary, which
+    /// releases every parked wait. A counter rather than a flag because a node
+    /// can be demoted, promoted and demoted again while one WAIT is parked, and
+    /// a subscriber only ever needs "did it change since I started".
+    role_fence: tokio::sync::watch::Sender<u64>,
 }
 
 impl WaitCoordinator {
     /// Build a coordinator over the offset seam and the ack registry.
     pub fn new(offsets: Arc<OffsetCoordinator>, tracker: Arc<ReplicationTrackerImpl>) -> Self {
-        Self { offsets, tracker }
+        Self {
+            offsets,
+            tracker,
+            role_fence: tokio::sync::watch::Sender::new(0),
+        }
+    }
+
+    /// Release every parked WAIT because this node is no longer a primary.
+    ///
+    /// Redis does the same from `replicationSetMaster` (via
+    /// `disconnectAllBlockedClients`): a client blocked for replica
+    /// acknowledgments on a node that just became a replica is waiting on a
+    /// stream that no longer exists, and the honest reply is an error, not the
+    /// count it happened to reach. Called from
+    /// [`PrimaryReplicationHandler::end_primary_stint`], next to the downstream
+    /// disconnect it belongs with.
+    pub fn fence_role_change(&self) {
+        self.role_fence.send_modify(|epoch| *epoch += 1);
+    }
+
+    /// Subscribe to the role-change fence.
+    ///
+    /// Take this *before* checking whether this node is still a primary and
+    /// hand it to [`Self::wait_for_replicas`]; see [`RoleFence`] for why the
+    /// order is load-bearing.
+    pub fn role_fence(&self) -> RoleFence {
+        RoleFence(self.role_fence.subscribe())
     }
 
     /// Snapshot the offset a WAIT must see acknowledged: the live write
@@ -128,8 +193,13 @@ impl WaitCoordinator {
     /// There is no periodic re-solicit during long waits — replicas answer
     /// GETACK immediately and spontaneously ACK every second, which also
     /// bounds the ack latency of replicas that attach mid-wait.
+    ///
+    /// `fence` is the caller's [`RoleFence`], taken before it decided this node
+    /// was a primary — a demotion that landed anywhere from that decision
+    /// onwards releases the wait as [`WaitVerdict::RoleChanged`].
     pub async fn wait_for_replicas(
         &self,
+        mut fence: RoleFence,
         target: u64,
         num_replicas: u32,
         deadline: Option<Instant>,
@@ -147,11 +217,19 @@ impl WaitCoordinator {
         }
 
         let quorum = self.tracker.wait_for_acks(target, num_replicas);
+        tokio::pin!(quorum);
+
         match deadline {
-            None => WaitVerdict::Reached(quorum.await),
-            Some(d) => match tokio::time::timeout_at(d.into(), quorum).await {
-                Ok(count) => WaitVerdict::Reached(count),
-                Err(_) => WaitVerdict::TimedOut(self.count_acked(target)),
+            None => tokio::select! {
+                count = &mut quorum => WaitVerdict::Reached(count),
+                _ = fence.changed() => WaitVerdict::RoleChanged(self.count_acked(target)),
+            },
+            Some(d) => tokio::select! {
+                res = tokio::time::timeout_at(d, &mut quorum) => match res {
+                    Ok(count) => WaitVerdict::Reached(count),
+                    Err(_) => WaitVerdict::TimedOut(self.count_acked(target)),
+                },
+                _ = fence.changed() => WaitVerdict::RoleChanged(self.count_acked(target)),
             },
         }
     }
@@ -165,7 +243,6 @@ mod tests {
     use bytes::Bytes;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
-    use tokio::sync::RwLock;
 
     /// Mock solicitor: records how many GETACK rounds were requested.
     struct MockSolicitor {
@@ -191,8 +268,9 @@ mod tests {
 
     fn coordinator() -> (WaitCoordinator, Arc<ReplicationTrackerImpl>) {
         let tracker = ReplicationTrackerImpl::new_arc();
-        let state = Arc::new(RwLock::new(ReplicationState::new()));
-        let offsets = Arc::new(OffsetCoordinator::new(tracker.clone(), state));
+        let identity =
+            crate::identity::ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
+        let offsets = Arc::new(OffsetCoordinator::new(tracker.clone(), &identity));
         (WaitCoordinator::new(offsets, tracker.clone()), tracker)
     }
 
@@ -209,7 +287,9 @@ mod tests {
         tracker.record_ack(id, 100);
 
         let solicitor = MockSolicitor::new();
-        let verdict = coord.wait_for_replicas(100, 1, None, &solicitor).await;
+        let verdict = coord
+            .wait_for_replicas(coord.role_fence(), 100, 1, None, &solicitor)
+            .await;
         assert_eq!(verdict, WaitVerdict::Reached(1));
         assert_eq!(solicitor.calls(), 0, "satisfied WAIT must not send GETACK");
     }
@@ -223,7 +303,9 @@ mod tests {
         tracker.record_ack(id, 50);
 
         let solicitor = MockSolicitor::new();
-        let verdict = coord.wait_for_replicas(50, 0, None, &solicitor).await;
+        let verdict = coord
+            .wait_for_replicas(coord.role_fence(), 50, 0, None, &solicitor)
+            .await;
         assert_eq!(verdict, WaitVerdict::Reached(1));
         assert_eq!(solicitor.calls(), 0);
     }
@@ -244,7 +326,7 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(5);
         let verdict = coord
-            .wait_for_replicas(200, 1, Some(deadline), &solicitor)
+            .wait_for_replicas(coord.role_fence(), 200, 1, Some(deadline), &solicitor)
             .await;
         acker.await.unwrap();
 
@@ -266,7 +348,7 @@ mod tests {
         let solicitor = MockSolicitor::new();
         let deadline = Instant::now() + Duration::from_millis(30);
         let verdict = coord
-            .wait_for_replicas(300, 2, Some(deadline), &solicitor)
+            .wait_for_replicas(coord.role_fence(), 300, 2, Some(deadline), &solicitor)
             .await;
 
         assert_eq!(verdict, WaitVerdict::TimedOut(1));
@@ -281,7 +363,7 @@ mod tests {
         let solicitor = MockSolicitor::new();
         let deadline = Instant::now() + Duration::from_millis(20);
         let verdict = coord
-            .wait_for_replicas(0, 1, Some(deadline), &solicitor)
+            .wait_for_replicas(coord.role_fence(), 0, 1, Some(deadline), &solicitor)
             .await;
 
         // target 0 with no streaming replicas: count is 0, quorum of 1 unmet.
@@ -298,7 +380,7 @@ mod tests {
         let solicitor = MockSolicitor::new();
         let deadline = Instant::now() + Duration::from_millis(30);
         let verdict = coord
-            .wait_for_replicas(100, 1, Some(deadline), &solicitor)
+            .wait_for_replicas(coord.role_fence(), 100, 1, Some(deadline), &solicitor)
             .await;
         assert_eq!(verdict, WaitVerdict::TimedOut(0));
     }
@@ -319,9 +401,194 @@ mod tests {
             })
         };
 
-        let verdict = coord.wait_for_replicas(400, 1, None, &solicitor).await;
+        let verdict = coord
+            .wait_for_replicas(coord.role_fence(), 400, 1, None, &solicitor)
+            .await;
         acker.await.unwrap();
         assert_eq!(verdict, WaitVerdict::Reached(1));
+    }
+
+    #[tokio::test]
+    async fn role_change_releases_a_wait_parked_forever() {
+        // `WAIT n 0` has no deadline, so the fence is the only thing that can
+        // release it short of the quorum.
+        let (coord, tracker) = coordinator();
+        let _id = streaming_replica(&tracker, 6381);
+        let coord = Arc::new(coord);
+
+        let fencer = {
+            let coord = coord.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                coord.fence_role_change();
+            })
+        };
+
+        let solicitor = MockSolicitor::new();
+        let verdict = coord
+            .wait_for_replicas(coord.role_fence(), 400, 1, None, &solicitor)
+            .await;
+        fencer.await.unwrap();
+        assert_eq!(verdict, WaitVerdict::RoleChanged(0));
+    }
+
+    #[tokio::test]
+    async fn role_change_releases_a_wait_with_a_deadline() {
+        let (coord, tracker) = coordinator();
+        let _id = streaming_replica(&tracker, 6382);
+        let coord = Arc::new(coord);
+
+        let fencer = {
+            let coord = coord.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                coord.fence_role_change();
+            })
+        };
+
+        let solicitor = MockSolicitor::new();
+        let started = Instant::now();
+        let verdict = coord
+            .wait_for_replicas(
+                coord.role_fence(),
+                400,
+                1,
+                Some(Instant::now() + Duration::from_secs(30)),
+                &solicitor,
+            )
+            .await;
+        fencer.await.unwrap();
+        assert_eq!(verdict, WaitVerdict::RoleChanged(0));
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the fence must win the race against a far-off deadline"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_fence_from_an_earlier_stint_does_not_release_a_later_wait() {
+        // The subscription is taken when the caller enters WAIT, so demotions
+        // that happened before it must not count — otherwise every WAIT after
+        // the first demotion would fail instantly.
+        let (coord, tracker) = coordinator();
+        let id = streaming_replica(&tracker, 6383);
+        coord.fence_role_change();
+        coord.fence_role_change();
+
+        let solicitor = MockSolicitor::new();
+        let acker = {
+            let tracker = tracker.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                tracker.record_ack(id, 400);
+            })
+        };
+
+        let verdict = coord
+            .wait_for_replicas(coord.role_fence(), 400, 1, None, &solicitor)
+            .await;
+        acker.await.unwrap();
+        assert_eq!(verdict, WaitVerdict::Reached(1));
+    }
+
+    #[tokio::test]
+    async fn a_demotion_racing_the_role_check_still_releases_the_wait() {
+        // The interleaving the fence-first ordering exists for: the caller has
+        // read "I am a primary", the demotion lands (replica flag, then fence
+        // bump), and only then does the wait park. Because the caller took the
+        // fence before its role check, the bump is already pending on this
+        // receiver and the wait is released instead of parking forever on a
+        // node that now rejects every WAIT. Deterministic: the bump happens
+        // before `wait_for_replicas` is even called, with no timing involved.
+        let (coord, tracker) = coordinator();
+        let _id = streaming_replica(&tracker, 6387);
+
+        let fence = coord.role_fence();
+        coord.fence_role_change();
+
+        let solicitor = MockSolicitor::new();
+        let verdict = coord
+            .wait_for_replicas(fence, 400, 1, None, &solicitor)
+            .await;
+        assert_eq!(verdict, WaitVerdict::RoleChanged(0));
+    }
+
+    #[tokio::test]
+    async fn a_replica_that_attaches_mid_wait_can_satisfy_the_quorum() {
+        // Membership is read at count time, not snapshotted when the wait
+        // starts, so a replica that finishes its handshake while a WAIT is
+        // parked counts towards it. This is what makes the Redis-parity
+        // "unreachable numreplicas blocks to the deadline" rule correct rather
+        // than merely slow: the replica may still be mid-attach.
+        let (coord, tracker) = coordinator();
+        let coord = Arc::new(coord);
+
+        let attacher = {
+            let tracker = tracker.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                let id = streaming_replica(&tracker, 6384);
+                tracker.record_ack(id, 500);
+            })
+        };
+
+        // No streaming replica exists yet, so there is nothing to solicit from.
+        let solicitor = MockSolicitor::new();
+        let verdict = coord
+            .wait_for_replicas(
+                coord.role_fence(),
+                500,
+                1,
+                Some(Instant::now() + Duration::from_secs(5)),
+                &solicitor,
+            )
+            .await;
+        attacher.await.unwrap();
+
+        assert_eq!(verdict, WaitVerdict::Reached(1));
+        assert_eq!(
+            solicitor.calls(),
+            0,
+            "no replica was attached when the wait blocked, so no GETACK round"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_replica_that_detaches_mid_wait_stops_counting() {
+        // The acked count is a projection over live sessions: a replica that
+        // drops its link before the quorum is reached takes its ack with it,
+        // and the deadline reports the reduced count rather than a stale one.
+        let (coord, tracker) = coordinator();
+        let a = streaming_replica(&tracker, 6385);
+        let _b = streaming_replica(&tracker, 6386);
+        tracker.record_ack(a, 600);
+        assert_eq!(coord.count_acked(600), 1);
+
+        let detacher = {
+            let tracker = tracker.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                tracker.unregister_replica(a);
+            })
+        };
+
+        let solicitor = MockSolicitor::new();
+        let verdict = coord
+            .wait_for_replicas(
+                coord.role_fence(),
+                600,
+                2,
+                Some(Instant::now() + Duration::from_millis(200)),
+                &solicitor,
+            )
+            .await;
+        detacher.await.unwrap();
+
+        assert_eq!(
+            verdict,
+            WaitVerdict::TimedOut(0),
+            "the detached replica's ack must not survive it"
+        );
     }
 
     #[tokio::test]

@@ -395,7 +395,7 @@ impl InfoSection for ReplicationSection {
             w.field("master_failover_state", "no-failover")
                 .field("master_replid", &replid)
                 .field("master_replid2", replid2)
-                .field("master_repl_offset", primary.repl_offset)
+                .field("master_repl_offset", r.repl_offset)
                 .field("second_repl_offset", second_repl_offset)
                 .field(
                     "repl_backlog_active",
@@ -403,7 +403,7 @@ impl InfoSection for ReplicationSection {
                 )
                 .field("repl_backlog_size", 1048576)
                 .field("repl_backlog_first_byte_offset", 0)
-                .field("repl_backlog_histlen", primary.repl_offset);
+                .field("repl_backlog_histlen", r.repl_offset);
         } else {
             w.field("role", if r.is_replica { "slave" } else { "master" });
             if r.is_replica {
@@ -418,7 +418,11 @@ impl InfoSection for ReplicationSection {
                 .field("master_failover_state", "no-failover")
                 .field("master_replid", &replid)
                 .field("master_replid2", replid2)
-                .field("master_repl_offset", 0)
+                // A replica reports the offset it has applied, not zero: it is
+                // the offset it would resume from, and the boundary it would
+                // freeze if promoted. Matches Redis, which keeps one
+                // `master_repl_offset` counter across both roles.
+                .field("master_repl_offset", r.repl_offset)
                 .field("second_repl_offset", second_repl_offset)
                 .field("repl_backlog_active", 0)
                 .field("repl_backlog_size", 1048576)
@@ -876,10 +880,8 @@ mod tests {
         // Primary arm: a promoted node exposes the previous primary's id as
         // master_replid2 and its inclusive boundary as second_repl_offset.
         let mut src = sources();
-        src.replication.primary = Some(PrimarySnapshot {
-            replicas: vec![],
-            repl_offset: 5000,
-        });
+        src.replication.primary = Some(PrimarySnapshot { replicas: vec![] });
+        src.replication.repl_offset = 5000;
         let prev_id = "abcd".repeat(10);
         src.replication.secondary_window = Some((prev_id.clone(), 4096));
         let out = render(&ReplicationSection, &src);
@@ -943,6 +945,22 @@ mod tests {
     }
 
     #[test]
+    fn replication_replica_renders_its_applied_offset() {
+        // A replica's master_repl_offset is the offset it has applied — the
+        // value it would resume from and freeze as the failover boundary if
+        // promoted. Reporting a hardcoded 0 made a promoted node's
+        // second_repl_offset look like it came out of nowhere.
+        let mut src = sources();
+        src.replication.is_replica = true;
+        src.replication.master_host = Some("10.0.0.1".to_string());
+        src.replication.master_port = Some(6380);
+        src.replication.repl_offset = 172;
+        let out = render(&ReplicationSection, &src);
+        assert!(out.contains("role:slave\r\n"), "{out}");
+        assert!(out.contains("master_repl_offset:172\r\n"), "{out}");
+    }
+
+    #[test]
     fn replication_primary_renders_slave_lines() {
         let mut src = sources();
         src.replication.primary = Some(PrimarySnapshot {
@@ -951,8 +969,8 @@ mod tests {
                 port: 7001,
                 offset: 99,
             }],
-            repl_offset: 100,
         });
+        src.replication.repl_offset = 100;
         let out = render(&ReplicationSection, &src);
         assert!(out.contains("role:master\r\n"), "{out}");
         assert!(out.contains("connected_slaves:1\r\n"), "{out}");

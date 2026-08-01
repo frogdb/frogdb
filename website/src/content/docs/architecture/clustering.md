@@ -168,47 +168,59 @@ Nodes detect that their local view is stale by:
 | Client redirect | A `-MOVED` reply names the current owner of a slot |
 | Replication handshake | The primary's Config Epoch travels with the replication stream |
 
-### `CLUSTER INFO`'s current epoch folds in the Raft term
+### Config Epoch vs. Raft term
 
-`CLUSTER INFO` reports `cluster_current_epoch` as `max(config_epoch, raft_term)`, where
-`config_epoch` is the cluster-wide counter above and `raft_term` is the local Raft leadership term
-(`commands/cluster/mod.rs`, `fold_current_epoch`). Every Raft election bumps the term, whether or
-not it changes cluster topology, so a leader re-election with no `Failover`/`MarkNodeFailed`/
-`IncrementEpoch` committed can push `cluster_current_epoch` strictly above every per-node
-`config_epoch` reported by `CLUSTER NODES`.
+`CLUSTER INFO` reports two separate counters, and conflating them is a mistake:
 
-This is a deliberate **divergence from Redis**: Redis's `currentEpoch` is agreed by gossip and
-bumped only by epoch-owning commands (`CLUSTER BUMPEPOCH`, failover votes, `CLUSTER
-SET-CONFIG-EPOCH`), never by a leader-election mechanism, because Redis Cluster has none. FrogDB's
-consensus plane does have one, and folding its term into the reported epoch means a stale reader
-can tell "the cluster's control plane has moved on" (a new Raft term) even when no slot ownership
-changed — at the cost of `cluster_current_epoch` no longer being a pure count of committed
-topology events.
+| Field | Meaning | Moves when |
+|-------|---------|-----------|
+| `cluster_current_epoch` | The cluster-wide replicated Config Epoch counter, verbatim | A topology transition commits (`IncrementEpoch`, `Failover`, `MarkNodeFailed`, an `AddNode` claim above the counter) |
+| `cluster_raft_term` | The local Raft leadership term (a FrogDB extension; Redis has no equivalent) | Any Raft election, including ones that change no cluster topology |
+| `cluster_my_epoch` | This node's own `NodeInfo::config_epoch` | This node claims an epoch (promotion via `Failover`, or joining with a claim) |
 
-The relationship this guarantees, and the one regression tests pin
-(`frogdb-server/crates/server/tests/integration_cluster.rs`,
-`test_cluster_info_epoch_vs_nodes_epoch_after_reelection_no_topology_change` and
-`test_cluster_info_epoch_monotonic_across_failover`), is `cluster_current_epoch >= max(per-node
-config_epoch)` — never the reverse. A node's own `config_epoch` is only ever set to a value it
-claims from the same counter `cluster_current_epoch` folds in (the `Failover` transition, see
-below), so the cluster-wide counter can never trail behind any individual node. Do not assert
-`cluster_current_epoch <= max(NODES config_epoch)`: an audit once proposed that bound and it does
-not hold — a passing test asserting it would be testing a coincidence, not a guarantee (issue 47).
+`cluster_current_epoch` used to be reported as `max(config_epoch, raft_term)`. The fold is gone
+(issue 47): it made the field mean neither counter. Every restart and every re-election bumped the
+term, so the reported epoch moved when nothing about the topology had — and, in the other
+direction, a real Config Epoch bump was invisible whenever the term already dominated (on a fresh
+cluster the first election takes the term to 1 while the counter is 0, so the first `CLUSTER
+FAILOVER` moved the counter 0 → 1 and left the folded value at 1 before and after). Both readings
+were wrong for the same reason: a topology counter and a consensus-liveness counter answer
+different questions and cannot share a field. Monitoring for topology changes now reads
+`cluster_current_epoch` directly; the Raft term is available beside it for anyone who wants to see
+consensus churn.
 
-The fold is lossy in the other direction too, which matters if you are monitoring for topology
-changes. `cluster_current_epoch` is monotonic (both inputs to the `max` only ever move forward) but
-**not strictly increasing**: a `config_epoch` bump is invisible whenever `raft_term` already
-dominates. On a freshly bootstrapped cluster the first election takes `raft_term` to 1 while
-`config_epoch` is still 0, so the first `CLUSTER FAILOVER` moves `config_epoch` from 0 to 1 and
-leaves `cluster_current_epoch` at 1 before and after. To detect that a topology event happened, read
-the raw per-node `config_epoch` from `CLUSTER NODES` rather than `CLUSTER INFO`'s folded value.
+`cluster_current_epoch` is a pure count of committed topology events, which makes it directly
+comparable to Redis's `currentEpoch` — bumped there by epoch-owning commands (`CLUSTER BUMPEPOCH`,
+failover votes, `CLUSTER SET-CONFIG-EPOCH`) and agreed by gossip rather than by a log.
+
+A standalone (non-cluster) server omits the `cluster_raft_term` line entirely rather than reporting
+`0`, because it runs no Raft group and a zero there would be charted as a real term. The epoch
+fields are still reported as `0` — Redis defines them for standalone servers and clients parse them
+unconditionally.
+
+The relationship regression tests pin (`frogdb-server/crates/server/tests/integration_cluster.rs`,
+`test_cluster_info_epoch_vs_nodes_epoch_after_reelection_no_topology_change`,
+`test_cluster_info_epoch_monotonic_across_failover` and
+`test_join_with_large_epoch_keeps_current_epoch_above_my_epoch`) is `cluster_current_epoch >=
+max(per-node config_epoch)` — never the reverse. A node's own `config_epoch` is either minted by the
+counter (the `Failover` transition) or ratchets the counter up to it on admission (`AddNode`, see
+[Config Epoch collisions](#config-epoch-collisions)), so the cluster-wide counter can never trail an
+individual node. Do not assert `cluster_current_epoch <= max(NODES config_epoch)`: an audit once
+proposed that bound and it does not hold — a passing test asserting it would be testing a
+coincidence, not a guarantee (issue 47).
+
+`cluster_current_epoch` never decreases *within the life of a cluster*, and with the fold removed
+every bump is now visible. `CLUSTER RESET HARD` is the exception operators should know about: it
+resets the node's replicated state, counter included, because the point of a hard reset is to
+produce a node that is no longer part of that cluster.
 
 ### Config Epoch collisions
 
 Two primaries claiming the same nonzero `config_epoch` is the invariant violation worth watching
 for — it is what Redis's `redis-cli --cluster check` flags, and it makes slot-ownership arbitration
-undecidable, because the epoch is the tiebreaker. Epoch drift or exceedance (the `CLUSTER INFO` fold
-above) is not a collision and is not a bug.
+undecidable, because the epoch is the tiebreaker. `cluster_current_epoch` running ahead of every
+per-node `config_epoch` is neither a collision nor a bug — see
+[Config Epoch vs. Raft term](#config-epoch-vs-raft-term).
 
 **Prevention.** Every epoch FrogDB mints comes from the single Raft-replicated counter, so
 `Failover`, `MarkNodeFailed`, and `IncrementEpoch` cannot produce a duplicate. `AddNode` is the one
@@ -380,9 +392,22 @@ ownerless — either the whole topology change commits or none of it does. (Auto
 `client_write` a few times to survive transient leadership churn, since the `FAIL` latch would
 otherwise not re-trigger it.)
 
-A node that finds itself demoted (via `SetRole { role: Replica }` or a graceful `Failover`)
-receives a `DemotionEvent` carrying the new primary's id, and switches to streaming from the new
-primary via PSYNC.
+A node that finds itself demoted (via `SetRole { role: Replica }` or a graceful `Failover`) and a
+node that finds itself promoted (via `SetRole { role: Primary }` or the successor half of a
+`Failover`) both receive a `RoleChangeEvent` on one ordered channel, and apply it to the data path —
+the demoted node starts streaming from the new primary via PSYNC, the promoted node stops its
+upstream stream, mints a new replication identity, and begins serving. See
+[Data replication and `WAIT`](#data-replication-and-wait) for why both halves travel the same
+channel.
+
+**Graceful and forced failover differ in the old primary's fate**, and the difference is visible on
+the data path. `CLUSTER FAILOVER` commits `force: false`, which *demotes* the old primary — it gets
+a `RoleChangeEvent`, drops its data-path primary role, disconnects its downstream replicas, and
+releases any parked `WAIT`s. `CLUSTER FAILOVER FORCE` / `TAKEOVER` commits `force: true`, which
+*removes* the old primary from cluster state instead; no event reaches it, so a node that is
+partitioned or dead when it is taken over still believes it is a primary if it comes back. That is
+the intended shape (the takeover path exists for when the old primary cannot be talked to at all),
+but it means a takeover is not a way to demote a reachable node.
 
 ### Asymmetric partitions and false positives
 
@@ -403,8 +428,11 @@ the false positive is benign:
   from the leader only, not from the majority) safely continues to accept writes; a node that loses
   quorum fences itself. Either way, a write the flagged primary accepts is not lost, because no
   failover transferred its slots.
-- **Automatic recovery.** The leader keeps probing flagged nodes; the first successful probe
-  proposes `MarkNodeRecovered`, clearing the flag.
+- **Automatic recovery.** The leader keeps probing flagged nodes and proposes `MarkNodeRecovered`
+  once a peer answers `fail-threshold` consecutive probes — the same count it took to flag it. The
+  hysteresis is symmetric on purpose: clearing the flag on a single successful probe let a peer that
+  answered one connect in five oscillate between flagged and clear, and each round trip cost two
+  Raft writes and a Config Epoch bump.
 
 The dangerous case — a promoted replica and the old primary both serving the same slot — requires
 both a replica topology and auto-failover racing the old primary's self-fence; that is a separate,
@@ -422,9 +450,13 @@ with `FAIL` taking precedence over `PFAIL`, so `slots_ok + slots_pfail + slots_f
 
 This matters because those three fields are the standard health signal that cluster-aware clients
 and monitoring read; if `slots_ok` always equalled `slots_assigned`, an operator watching them would
-see a healthy cluster while a primary was flagged failed. They now agree with the coarser
-`cluster_state` field, which reports `fail` whenever any primary carries the `FAIL` flag or the
-local node has lost quorum.
+see a healthy cluster while a primary was flagged failed. The coarser `cluster_state` field is
+derived from the same accounting: it reports `fail` when `cluster_slots_fail > 0`, when the local
+node cannot form a quorum, or when Raft reports no usable leader. A `FAIL`-flagged node that owns no
+slots leaves `cluster_state` at `ok`, matching Redis, whose `clusterUpdateState` degrades only on
+slot coverage or majority loss. That case is common in practice — a node that failed to finish
+joining sits in the topology at a dead address and gets flagged within seconds — and treating it as
+a cluster-wide failure would tell every client the keyspace was down while every key kept answering.
 
 `cluster_slots_pfail` reports 0 in practice today, because nothing sets `PFAIL`. `PFAIL` in Redis
 means "one node suspects this peer, but the cluster has not agreed yet" — a distinction that only
@@ -436,6 +468,82 @@ begin reporting real counts if a suspicion phase were ever introduced.
 
 ---
 
+## Data Replication and `WAIT`
+
+There is **one replication plane**, not two. A cluster replica attaches to its primary over the
+same PSYNC link, streams the same frames, and ACKs into the same tracker as a standalone replica
+does — Raft carries no key data (ADR 0001). Everything in
+[Replication Internals](/architecture/replication/) applies verbatim inside a cluster; the only
+difference is how a node is told to become a replica.
+
+| | Standalone | Cluster |
+|---|---|---|
+| Attach a replica | `REPLICAOF <host> <port>` | `CLUSTER REPLICATE <node-id>` (committed through Raft) |
+| Promote | `REPLICAOF NO ONE` | `CLUSTER FAILOVER` on the replica, or auto-failover |
+| Data transport | PSYNC checkpoint + command stream | identical |
+| `WAIT` | counts this node's replicas | identical |
+
+`CLUSTER REPLICATE` changes the target's **role**; it does not move slots. A node that already
+owns slots and is then made a replica keeps owning them (and can no longer be written), so a
+deliberate shard layout assigns the slots first.
+
+### The PSYNC gate is the live data-path role
+
+Two role views exist and must not be confused: the cluster-state role in the Raft state machine,
+and the data-path role — one process-wide atomic owned by `RoleManager`. The Raft view is the
+*decision*; the atomic is the *effect*. A `RoleChangeEvent` bridges them, so a raft-driven
+promotion or demotion reaches the data path (see [Failover](#failover)). Promotion and demotion
+share one ordered channel deliberately: a failover round can flip a node
+primary → replica → primary within a few log entries, and applying those out of order would leave
+the node permanently fenced.
+
+`PSYNC` is refused by any node whose live data-path role is replica, and served by any node whose
+role is primary — whether it booted as one or was promoted a moment ago. That single rule gives
+both halves of the contract: a promoted cluster node immediately serves its own downstream
+replicas, and
+[chained replication stays rejected](/operations/replication/#how-frogdb-differs-from-redis-replication)
+because a node that is still following someone else never serves.
+
+### `WAIT` semantics
+
+`WAIT` has **no cluster-specific path at all** — the same code serves both modes, which is what
+Redis, Valkey and Dragonfly do:
+
+- **Per-node, not cluster-wide.** `WAIT numreplicas timeout` counts the replicas attached to *the
+  node the client is talking to* — that is, the replicas of one shard. It says nothing about any
+  other shard.
+- **Never redirects.** `WAIT` takes no key, so it has no slot and can never answer `-MOVED`. The
+  node that receives it answers it.
+- **Rejected on a replica**, before argument parsing, exactly like Redis.
+- **An unreachable `numreplicas` blocks to the deadline** rather than early-returning — a replica
+  may still be mid-attach. `timeout 0` blocks indefinitely; `CLIENT UNBLOCK` is the escape hatch.
+- **A demotion releases parked waits** with
+  `-UNBLOCKED force unblock from blocking operation, instance state changed (master -> replica?)`.
+  A count would be the worse answer: the replication history it counted acks against is no longer
+  this node's.
+- **Cluster-wide durability is a client-side fan-out** — issue `WAIT` against every shard primary
+  (`ALL_SHARDS` + `AGG_MIN` in Redis's routing vocabulary) and take the minimum.
+- **Best-effort even at `≥1`.** Failover ranks candidate replicas by lag, but does not *require*
+  that a specific acknowledging replica win the election, so `WAIT` raises the probability that an
+  acknowledged write survives a failover without making it a guarantee. This is Redis's documented
+  caveat and it holds here too.
+
+Slot migration does not interact with the count: a migration target is not a replica of the source,
+so it never contributes an ack.
+
+### Offsets
+
+The replication offset is a data-plane quantity and is reported as one. `INFO replication`
+(`master_repl_offset`, `connected_slaves`, the per-slave lines) is live in cluster mode, and
+`CLUSTER SHARDS` reports the same counter for the node answering the command — *not* the Raft
+last-applied index, which counts membership and slot-map entries and would make a node that has
+never taken a write look healthy. Peer nodes' `replication-offset` in `CLUSTER SHARDS` is omitted
+entirely: a node knows its own stream position, nothing in the metadata plane carries anyone
+else's, and reporting `0` for a healthy peer would read as a lag alarm. Ask each node for its
+own offset.
+
+---
+
 ## Node-to-Node Communication
 
 Nodes do NOT gossip topology. They connect directly for:
@@ -444,7 +552,7 @@ Nodes do NOT gossip topology. They connect directly for:
 |---------|-----------|-----------|
 | Raft consensus (metadata) | Leader <-> members | Cluster bus (`cluster_addr`) |
 | Failure detection | Leader -> members | TCP connect probe |
-| Replication | Replica -> Primary | PSYNC checkpoint + command stream |
+| Replication | Replica -> Primary | PSYNC checkpoint + command stream (see [Data Replication and `WAIT`](#data-replication-and-wait)) |
 | Slot key-transfer | Source -> Target | `MIGRATE` protocol |
 
 Only the first row is Raft; the rest are data-path or health-probe connections that never pass

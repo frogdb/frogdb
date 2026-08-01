@@ -31,8 +31,10 @@ _Avoid_: **Orchestrator** — the earlier external-control-plane design, superse
 introduce it in new code or docs
 
 **Config Epoch**:
-The monotonic cluster-topology version counter (`ConfigEpoch`).
-_Avoid_: bare "epoch" (homonym with Snapshot Epoch)
+The monotonic cluster-topology version counter (`ConfigEpoch`). Reported verbatim as
+`cluster_current_epoch`; distinct from the **Raft term** (`cluster_raft_term`), which counts
+leader elections and moves without any topology change.
+_Avoid_: bare "epoch" (homonym with Snapshot Epoch); conflating Config Epoch with Raft term
 
 ### Storage & persistence
 

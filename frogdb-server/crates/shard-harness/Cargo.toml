@@ -1,0 +1,26 @@
+[package]
+name = "frogdb-shard-harness"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Deterministic shard-worker driver harness against the real command set"
+autotests = false
+
+[[test]]
+name = "main"
+path = "tests/main.rs"
+
+[dependencies]
+# Enables the test-only public seam surface (drive* wrapper methods on
+# ShardWorker, ShardReceiver::try_recv, FakeWalSink) this harness drives.
+frogdb-core = { workspace = true, features = ["shard-driver", "fake-wal"] }
+# The harness drives the *real* command set through `register_all` (see
+# tests/shard_driver.rs) and its scenarios reach for streams (scenario_s5), so
+# it always compiles the full command surface.
+frogdb-commands = { workspace = true, features = ["full"] }
+frogdb-protocol.workspace = true
+frogdb-vll.workspace = true
+bytes.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+proptest.workspace = true

@@ -1016,9 +1016,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.18"
+version = "0.9.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
+checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -1693,8 +1693,6 @@ dependencies = [
  "dashmap",
  "frogdb-acl",
  "frogdb-cluster",
- "frogdb-commands",
- "frogdb-core",
  "frogdb-persistence",
  "frogdb-protocol",
  "frogdb-replication",
@@ -1758,6 +1756,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "frogdb-net"
+version = "0.1.0"
+dependencies = [
+ "socket2",
+ "tokio",
+ "turmoil",
 ]
 
 [[package]]
@@ -1869,6 +1876,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arc-swap",
+ "async-trait",
  "axum",
  "bitvec",
  "bytes",
@@ -1882,6 +1890,7 @@ dependencies = [
  "frogdb-core",
  "frogdb-debug",
  "frogdb-macros",
+ "frogdb-net",
  "frogdb-persistence",
  "frogdb-protocol",
  "frogdb-replication",
@@ -1889,6 +1898,7 @@ dependencies = [
  "frogdb-telemetry",
  "frogdb-test-harness",
  "frogdb-testing",
+ "frogdb-txn",
  "frogdb-vll",
  "futures",
  "hex",
@@ -1933,6 +1943,19 @@ dependencies = [
  "webpki-roots",
  "x509-parser",
  "zip",
+]
+
+[[package]]
+name = "frogdb-shard-harness"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "frogdb-commands",
+ "frogdb-core",
+ "frogdb-protocol",
+ "frogdb-vll",
+ "proptest",
+ "tokio",
 ]
 
 [[package]]
@@ -1994,6 +2017,19 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "frogdb-txn"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "frogdb-core",
+ "frogdb-protocol",
+ "frogdb-telemetry",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -4367,9 +4403,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.10"
+version = "0.103.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df33b2b81ac578cabaf06b89b0631153a3f416b0a886e8a7a1707fb51abbd1ef"
+checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
 dependencies = [
  "aws-lc-rs",
  "ring",

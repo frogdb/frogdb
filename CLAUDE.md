@@ -30,11 +30,44 @@ just fmt-py                             # format Python code
   `just test frogdb-server test_name`
 - If you encounter an error with `sccache`, rerun the command prefixed with `RUSTC_WRAPPER=""`
 
+### Execution mode: local (default) or testbox
+
+Builds and tests run in one of two modes. **`local` is the default.**
+
+- **Settle the mode before the first build/test/lint/bench command of a session**, including a
+  resumed one. If the prompt names a mode ("local mode", "use the testbox"), use it. Otherwise
+  ask the user — never guess, and never switch mid-session on your own.
+- The mode is recorded per-worktree: `just build-mode` prints it, `just build-mode testbox`
+  sets it. A SessionStart hook injects the recorded value so it survives resumes; confirm it
+  anyway. Record the answer so later sessions and the tb-* guard agree.
+- Subagents inherit the session's mode — state it explicitly in every dispatch prompt.
+- The `tb-*` recipes refuse to run in local mode (`BUILD_MODE=testbox` overrides for a one-off).
+
+**Local mode** — everything runs on this machine, testbox untouched: full-workspace builds,
+whole-suite `just test`, `just lint`, concurrency/turmoil suites, benchmarks. Heavy runs follow
+the liveness rule below. Say so if a run is slow; do not reach for a testbox to fix it.
+
+**Testbox mode** — heavy compute moves to a remote aarch64 Linux VM (matches production better
+than macOS; RocksDB builds from vendored source there) so the laptop stays responsive and
+parallel agents don't contend for CPU/disk/memory. Mechanics live in the `blacksmith-testbox`
+skill.
+
+- **Run remotely** (`just tb-run "<command>"`): full-workspace builds, `just test` (whole
+  suite), `just lint` (clippy compiles everything), concurrency/turmoil suites, benchmarks,
+  and anything else expected to take >2 minutes of compute.
+- **Still local**: `just fmt`/`fmt-check` (no compilation), single-crate check/test iteration
+  loops (`just check <crate>`, `just test <crate> <pattern>`), and other sub-minute commands.
+- Lifecycle: `just tb-warmup` at task start (5-minute idle timeout; records the box ID so a
+  SessionEnd hook cleans it up). Never call `blacksmith testbox warmup` directly — that
+  bypasses the auto-cleanup. Re-warm freely after idle expiry; re-hydration restores from
+  cache.
+- **One `tb-run` at a time per worktree**: concurrent runs race the rsync sync. Agents in
+  different worktrees get separate boxes automatically (IDs are recorded per-worktree).
+
 ### Long-Running Commands
 
 - sometimes compilation/test commands can hang. Perform liveness checks on long-running commands to
 ensure they are still progressing and not stuck.
-
 
 ## Agent Guidelines
 
@@ -66,6 +99,13 @@ ensure they are still progressing and not stuck.
 
 ## Agent skills
 
+### Hardening campaign (ACTIVE)
+
+Foundation-hardening campaign is in progress: core areas (transactions, persistence, replication,
+cluster) are being extracted, specced, and mutation-tested; the redis-regression suite is frozen
+and operator/frogctl are out of scope. **Read `docs/agents/hardening-campaign.md` before working
+on core-area code.**
+
 ### Issue tracker
 
 Issues + PRDs live as markdown under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
@@ -88,17 +128,6 @@ plain line coverage (which function is reached by how many *distinct* tests). Se
 
 ### Remote compilation/testing: Blacksmith testboxes
 
-Prompt the user if they want to use blacksmith remote "testboxes" to run computationally intensive
-commands like running the full test suite or compilation. See the `blacksmith-testbox` skill for details.
-
-- **Can run remotely** (`just tb-run "<command>"`): full-workspace builds, `just test` (whole
-  suite), `just lint` (clippy compiles everything), concurrency/turmoil suites, benchmarks,
-  and anything else expected to take >2 minutes of compute.
-- **Always run locally**: `just fmt`/`fmt-check` (no compilation), single-crate check/test iteration
-  loops (`just check <crate>`, `just test <crate> <pattern>`), and other sub-minute commands.
-- Lifecycle: `just tb-warmup` at task start (5-minute idle timeout; records the box ID so a
-  SessionEnd hook cleans it up). Never call `blacksmith testbox warmup` directly — that
-  bypasses the auto-cleanup. Re-warm freely after idle expiry; re-hydration restores from
-  cache.
-- **One `tb-run` at a time per worktree**: concurrent runs race the rsync sync. Agents in
-  different worktrees get separate boxes automatically (IDs are recorded per-worktree).
+Gated behind the session's execution mode — see
+[Execution mode](#execution-mode-local-default-or-testbox) for the policy and the
+`blacksmith-testbox` skill for the mechanics.

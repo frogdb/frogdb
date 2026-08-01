@@ -424,6 +424,17 @@ pub enum ClusterEvent {
         /// The configuration epoch at the time of demotion.
         epoch: u64,
     },
+    /// A node was promoted from replica to primary (via `SetRole { Primary }`
+    /// or the successor half of a `Failover`). Node-agnostic, and emitted only
+    /// on a real role *transition* — re-applying a command that leaves an
+    /// already-primary node primary produces nothing, so a log replay cannot
+    /// drive a spurious data-path promotion.
+    NodePromoted {
+        /// The node that was promoted.
+        promoted_node_id: NodeId,
+        /// The configuration epoch at the time of promotion.
+        epoch: u64,
+    },
     /// A slot migration completed (relevant on all nodes, no self-filter).
     SlotMigrationCompleted {
         /// The slot whose migration completed.

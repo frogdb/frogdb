@@ -12,4 +12,4 @@ tokio.workspace = true
 frogdb-protocol.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }

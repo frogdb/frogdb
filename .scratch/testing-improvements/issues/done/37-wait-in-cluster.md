@@ -133,3 +133,28 @@ to WAIT, left un-fixed):
   34/61), so a promoted node never becomes a writable primary that could serve
   WAIT. Wiring cluster WAIT to count shard-local replicas is gated on that being
   fixed first.
+
+### Superseded by the WAIT-cluster-mode PRD (2026-07-28)
+
+All three pinning tests above have been rewritten, and both follow-ups are fixed,
+by [`.scratch/replication-cluster-rework/wait-cluster-mode.md`](../../replication-cluster-rework/wait-cluster-mode.md)
+(status: implemented, pending review):
+
+- **The `0` divergence is gone.** WAIT in cluster mode counts this node's
+  replicas from the same tracker standalone WAIT uses; there is no cluster
+  special case in `handle_wait_command` at all.
+  `test_wait_in_cluster_returns_zero_immediately` became
+  `test_wait_in_cluster_counts_shard_replicas`.
+- **`test_wait_rejected_on_cluster_replica`** survives unchanged — WAIT on a
+  replica is still an error.
+- **`test_wait_in_cluster_does_not_hang_across_failover`** now asserts the
+  opposite outcome: a promoted node *accepts* WAIT, which is exactly the tripwire
+  the original test was built to be.
+- **Follow-up 1 (contradictory role views)** — fixed. Three defects had to line
+  up: `AddNode` re-registration overwrote a recorded replica role with the
+  self-claimed `Primary`; a role folded into a Raft snapshot reached the data
+  path through no boot path; and boot peer-seeding overwrote a restored peer's
+  Raft-agreed address with a guess. See PRD §7.5.
+- **Follow-up 2 (promotion not installed on the data path)** — fixed by the
+  raft→data-path promotion bridge (PRD Task 4). Issue 61's staged-not-installed
+  checkpoint had already been fixed independently.

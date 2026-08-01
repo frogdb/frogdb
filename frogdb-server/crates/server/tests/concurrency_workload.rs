@@ -238,12 +238,12 @@ fn seed_sweep_txheavy() {
 #[ignore = "nightly-tier sweep; run via `just concurrency-nightly`"]
 fn seed_sweep_nightly() {
     let seeds_per_profile = env_override("FROGDB_CONCURRENCY_SEEDS", 250u64);
-    // 75, not e.g. 150: at ops_per_client >= ~90 the MultiWaiter "exactly-once delivery"
-    // invariant fails on nearly every seed (see
-    // .scratch/concurrency-testing/issues/11, Finding A) — a real bug,
-    // but one that would make this job permanently red instead of surfacing new findings. Raise
-    // this default only after that issue is resolved.
-    let ops_per_client = env_override("FROGDB_CONCURRENCY_OPS_PER_CLIENT", 75usize);
+    // Back to the original 150 (held at 75 while the workload runner's final-state readback
+    // raced long client scripts and reported phantom "exactly-once delivery" loss above ~90
+    // ops — see .scratch/concurrency-testing/issues/11, Finding A;
+    // fixed by latching the readback to client completion, pinned by
+    // `regressions::regression_drain_capture_race_multiwaiter_ops_110_seed_0`).
+    let ops_per_client = env_override("FROGDB_CONCURRENCY_OPS_PER_CLIENT", 150usize);
     let num_clients = env_override("FROGDB_CONCURRENCY_CLIENTS", 4usize);
     let num_shards = env_override("FROGDB_CONCURRENCY_SHARDS", 2usize);
     // Nightly can afford a far larger WGL state-search budget than a per-PR
@@ -388,6 +388,41 @@ mod regressions {
         assert!(
             report.passed(),
             "cross-shard WATCH false-negative regressed: {:?}",
+            report.violations
+        );
+    }
+
+    /// FIXED HARNESS BUG (live pin): the final-state readback used to race a
+    /// still-running workload. `workload_runner`'s drainer slept a fixed 30
+    /// sim-seconds from sim start and then LRANGE'd every key as "final state";
+    /// a `MultiWaiter` client spends 120–400 sim-ms of think time before each
+    /// producer push, so once `ops_per_client` passed ~90 the scripts ran past
+    /// 30s and the capture happened *mid-workload*. Every element pushed after
+    /// the readback was then neither delivered nor in final state, which
+    /// `check_exactly_once_delivery` correctly reported as a lost element —
+    /// the entirety of `.scratch/concurrency-testing/issues/11`
+    /// Finding A, which reproduced on nearly every seed above the threshold and
+    /// held the nightly `ops_per_client` cap at 75.
+    ///
+    /// Fix: the drainer (and the WAITQUEUE prober) key off a client-completion
+    /// latch instead of a wall-clock deadline, so the capture is always taken
+    /// after the last client script finished.
+    ///
+    /// This seed/config is one of the reproducers from the original bisection.
+    /// It must FAIL before that fix and PASS after; `ops_per_client = 110` is
+    /// load-bearing — at the per-PR tier's 30 the scripts finish well inside
+    /// the old 30s window and the bug is invisible.
+    ///
+    /// The FIFO/exactly-once *product* properties this ultimately protects are
+    /// specced in `.scratch/hardening/specs/blocking-failure-modes.md`; this
+    /// test is not cited there because it is turmoil-gated (see that spec's
+    /// scope note).
+    #[test]
+    fn regression_drain_capture_race_multiwaiter_ops_110_seed_0() {
+        let report = run_and_check(0, Profile::MultiWaiter, 4, 110, 2, MAX_WGL_STATES);
+        assert!(
+            report.passed(),
+            "final-state capture raced the workload again: {:?}",
             report.violations
         );
     }

@@ -19,13 +19,15 @@
 //! of *replication*, never in the vocabulary of *which field*.
 
 use bytes::Bytes;
+use parking_lot::RwLock;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::RwLock;
 
 use frogdb_types::ReplicationTracker;
 
 use crate::frame::ReplicationFrame;
+use crate::identity::ReplicationIdentity;
+use crate::replica::offset::AppliedOffset;
 use crate::state::ReplicationState;
 use crate::tracker::ReplicationTrackerImpl;
 
@@ -51,6 +53,13 @@ pub struct OffsetCoordinator {
     /// [`Self::shared_offset`]. The tracker borrows a clone of this Arc for its
     /// read/lag accessors, but this type owns the advance and the vend.
     live: Arc<AtomicU64>,
+    /// The node's applied offset — the offset of the data it actually holds
+    /// ([`crate::identity::ReplicationIdentity`]'s `applied` atomic). On a
+    /// primary it moves in lockstep with `live` (a write is applied on its shard
+    /// before it is broadcast, and [`Self::advance`] moves both); while the node
+    /// was a replica it lagged `live` by whatever sat in the frame channel. The
+    /// promotion path reads *this*, never `live` — see [`Self::settle_at_applied`].
+    applied: AppliedOffset,
     /// Per-replica acked offsets + the WAIT ack-notification channel. The
     /// tracker's session registry; the coordinator borrows it for aggregation
     /// and ack ingestion only.
@@ -60,18 +69,19 @@ pub struct OffsetCoordinator {
 }
 
 impl OffsetCoordinator {
-    /// Build a coordinator over an existing tracker and persisted state.
+    /// Build a coordinator over an existing tracker and the node's replication
+    /// identity.
     ///
-    /// The coordinator adopts the tracker's offset atomic as its canonical
-    /// `live` handle: from here on the coordinator owns the advance and vends
-    /// the cluster-bus handle, while the tracker retains a borrowed clone only
-    /// for its INFO/ROLE read + lag accessors.
-    pub fn new(tracker: Arc<ReplicationTrackerImpl>, state: Arc<RwLock<ReplicationState>>) -> Self {
-        let live = tracker.offset_handle();
+    /// The coordinator takes the identity's `live` atomic — the same one the
+    /// tracker reads for INFO/ROLE + lag and the replica handler advances while
+    /// this node follows a primary. From here on the coordinator owns the
+    /// advance and vends the cluster-bus handle.
+    pub fn new(tracker: Arc<ReplicationTrackerImpl>, identity: &ReplicationIdentity) -> Self {
         Self {
-            live,
+            live: identity.live(),
+            applied: identity.applied(),
             tracker,
-            state,
+            state: identity.state(),
         }
     }
 
@@ -92,9 +102,17 @@ impl OffsetCoordinator {
     ///
     /// The primary no longer hands a raw `.len()` to a `payload_len: u64`
     /// parameter a caller could get wrong — the unit is applied here, once.
+    /// The primary broadcasts a write only after its shard has applied it, so
+    /// the applied counter advances with the live head and the two stay level
+    /// for as long as this node is the primary.
     pub fn advance(&self, payload: &Bytes) -> u64 {
         let n = Self::advance_unit(payload);
-        self.live.fetch_add(n, Ordering::Release) + n
+        // Live first: a reader that catches the pair mid-advance must see the
+        // received head at or above the applied one, never the reverse — the
+        // invariant every "data this node holds" caller is written against.
+        let live = self.live.fetch_add(n, Ordering::Release) + n;
+        self.applied.advance_by(n);
+        live
     }
 
     /// Replica-side spelling of the advance *unit*. The replica advances its own
@@ -111,6 +129,56 @@ impl OffsetCoordinator {
     /// every `state.offset_at_save` read for "where is the stream now".
     pub fn current(&self) -> u64 {
         self.live.load(Ordering::Acquire)
+    }
+
+    /// The offset of the data this node holds — never above [`Self::current`].
+    pub fn applied(&self) -> u64 {
+        self.applied.current()
+    }
+
+    /// Settle the stream head on the applied offset and return it — the one
+    /// boundary a promotion may freeze its replication-id window and backlog
+    /// floor at.
+    ///
+    /// While this node followed a primary, the live head ran ahead of the
+    /// applied offset by whatever the streaming path had decoded but the frame
+    /// consumer had not applied (see [`crate::consume_frames`]). Those frames
+    /// die with the inbound stream, so the bytes they occupied are not part of
+    /// this node's history: the head rewinds onto the applied offset and the new
+    /// stint continues from there. Without the rewind the promoted primary would
+    /// stamp its first write above a range no replica can ever be sent, leaving
+    /// every downstream offset permanently shifted against its own.
+    ///
+    /// Freezing is what makes the boundary exact rather than merely current:
+    /// [`AppliedOffset::freeze`] closes the applier's gate under the same lock
+    /// it reads the counter with, so the frame consumer cannot claim another
+    /// group afterwards and every group it *did* claim is already inside the
+    /// value returned here.
+    ///
+    /// Called from the promotion path only, where the role flag still fences
+    /// writes, so nothing is racing the store.
+    pub fn settle_at_applied(&self) -> u64 {
+        let applied = self.applied.freeze();
+        let received = self.current();
+        if received > applied {
+            tracing::warn!(
+                received,
+                applied,
+                discarded_bytes = received - applied,
+                "Promotion discarding replication frames received but never applied"
+            );
+            self.live.store(applied, Ordering::Release);
+        }
+        applied
+    }
+
+    /// Retire the replica applier without freezing the counter — the demotion
+    /// mirror of [`Self::settle_at_applied`]. The consumer behind the stream
+    /// that just ended stops at its next frame instead of draining stale frames
+    /// into a keyspace that is about to resync (see
+    /// [`AppliedOffset::retire_replica_applies`]).
+    pub fn retire_replica_applies(&self) {
+        self.applied.retire_replica_applies();
     }
 
     /// The cluster bus's HealthProbe handle, vended by the OWNER of the atomic.
@@ -149,9 +217,9 @@ impl OffsetCoordinator {
     /// Can a partial resync be *offset-wise* continued for this id/offset?
     /// Reads its OWN live offset — the caller no longer fetches and threads it.
     /// (Replay availability is gated separately; see proposal 14.)
-    pub async fn can_serve_partial_sync(&self, requested_id: &str, requested_offset: u64) -> bool {
+    pub fn can_serve_partial_sync(&self, requested_id: &str, requested_offset: u64) -> bool {
         let current = self.current();
-        let state = self.state.read().await;
+        let state = self.state.read();
         state.window_contains(requested_id, requested_offset, current)
     }
 
@@ -160,9 +228,13 @@ impl OffsetCoordinator {
     ///
     /// The tracker only ever advances past the loaded offset, so the reconcile
     /// is monotonic; the guard keeps a save from ever moving the offset back.
-    pub async fn reconcile_for_persist(&self) -> ReplicationState {
-        let offset = self.current();
-        let mut state = self.state.write().await;
+    pub fn reconcile_for_persist(&self) -> ReplicationState {
+        // The *applied* offset, not the live head: persisting a position above
+        // the data on disk would let a restart resume over a hole. The two are
+        // equal on a primary; they differ only while this node is following
+        // someone else's stream.
+        let offset = self.applied();
+        let mut state = self.state.write();
         if offset > state.offset_at_save {
             state.offset_at_save = offset;
         }
@@ -174,13 +246,14 @@ impl OffsetCoordinator {
 mod tests {
     use super::*;
     use crate::frame::serialize_command_to_resp;
+    use crate::replica::offset::ReplicaOffset;
     use crate::replica_session::Phase;
     use bytes::Bytes;
 
     fn coordinator() -> OffsetCoordinator {
         let tracker = ReplicationTrackerImpl::new_arc();
-        let state = Arc::new(RwLock::new(ReplicationState::new()));
-        OffsetCoordinator::new(tracker, state)
+        let identity = ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
+        OffsetCoordinator::new(tracker, &identity)
     }
 
     /// A RESP-ish payload of exactly `n` bytes, for driving the advance gate.
@@ -254,8 +327,8 @@ mod tests {
     #[test]
     fn ingest_replica_ack_advances_and_notifies_wait() {
         let tracker = ReplicationTrackerImpl::new_arc();
-        let state = Arc::new(RwLock::new(ReplicationState::new()));
-        let coord = OffsetCoordinator::new(tracker.clone(), state);
+        let identity = ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
+        let coord = OffsetCoordinator::new(tracker.clone(), &identity);
         let session = tracker.register_replica("127.0.0.1:6380".parse().unwrap());
         session.force_phase_for_test(Phase::Streaming);
         let mut acks = tracker.subscribe_acks();
@@ -269,8 +342,8 @@ mod tests {
     #[test]
     fn seed_replica_position_notifies_wait_on_advance() {
         let tracker = ReplicationTrackerImpl::new_arc();
-        let state = Arc::new(RwLock::new(ReplicationState::new()));
-        let coord = OffsetCoordinator::new(tracker.clone(), state);
+        let identity = ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
+        let coord = OffsetCoordinator::new(tracker.clone(), &identity);
         let session = tracker.register_replica("127.0.0.1:6380".parse().unwrap());
         session.force_phase_for_test(Phase::Streaming);
         let mut acks = tracker.subscribe_acks();
@@ -300,8 +373,8 @@ mod tests {
     #[test]
     fn min_acked_aggregates_streaming_replicas() {
         let tracker = ReplicationTrackerImpl::new_arc();
-        let state = Arc::new(RwLock::new(ReplicationState::new()));
-        let coord = OffsetCoordinator::new(tracker.clone(), state);
+        let identity = ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
+        let coord = OffsetCoordinator::new(tracker.clone(), &identity);
         assert_eq!(coord.min_acked(), None);
 
         let s1 = tracker.register_replica("127.0.0.1:6380".parse().unwrap());
@@ -313,33 +386,35 @@ mod tests {
         assert_eq!(coord.min_acked(), Some(100));
     }
 
-    #[tokio::test]
-    async fn can_serve_partial_sync_uses_its_own_live_offset() {
+    #[test]
+    fn can_serve_partial_sync_uses_its_own_live_offset() {
         let tracker = ReplicationTrackerImpl::new_arc();
-        let state = Arc::new(RwLock::new(ReplicationState::new()));
-        let coord = OffsetCoordinator::new(tracker.clone(), state.clone());
-        let repl_id = state.read().await.replication_id.clone();
+        let identity = ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
+        let state = identity.state();
+        let coord = OffsetCoordinator::new(tracker.clone(), &identity);
+        let repl_id = state.read().replication_id.clone();
 
         // Advance the live offset through the coordinator; the window check must
         // read this value itself rather than receiving it as a parameter.
         coord.advance(&payload(1000));
 
-        assert!(coord.can_serve_partial_sync(&repl_id, 500).await);
-        assert!(coord.can_serve_partial_sync(&repl_id, 1000).await);
+        assert!(coord.can_serve_partial_sync(&repl_id, 500));
+        assert!(coord.can_serve_partial_sync(&repl_id, 1000));
         // Past the live head — outside the window.
-        assert!(!coord.can_serve_partial_sync(&repl_id, 1001).await);
+        assert!(!coord.can_serve_partial_sync(&repl_id, 1001));
         // Unknown replication id — never in the window.
-        assert!(!coord.can_serve_partial_sync("unknown_id", 500).await);
+        assert!(!coord.can_serve_partial_sync("unknown_id", 500));
     }
 
-    #[tokio::test]
-    async fn can_serve_partial_sync_honours_secondary_failover_window() {
+    #[test]
+    fn can_serve_partial_sync_honours_secondary_failover_window() {
         let tracker = ReplicationTrackerImpl::new_arc();
-        let state = Arc::new(RwLock::new(ReplicationState::new()));
-        let coord = OffsetCoordinator::new(tracker.clone(), state.clone());
+        let identity = ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
+        let state = identity.state();
+        let coord = OffsetCoordinator::new(tracker.clone(), &identity);
 
         let old_id = {
-            let mut s = state.write().await;
+            let mut s = state.write();
             let old = s.replication_id.clone();
             // Freeze the failover boundary from the live offset (1000).
             s.new_replication_id(1000);
@@ -348,27 +423,66 @@ mod tests {
 
         // The secondary window is the frozen failover boundary (1000), checked
         // independently of the live offset (still 0 here).
-        assert!(coord.can_serve_partial_sync(&old_id, 500).await);
-        assert!(coord.can_serve_partial_sync(&old_id, 1000).await);
-        assert!(!coord.can_serve_partial_sync(&old_id, 1001).await);
+        assert!(coord.can_serve_partial_sync(&old_id, 500));
+        assert!(coord.can_serve_partial_sync(&old_id, 1000));
+        assert!(!coord.can_serve_partial_sync(&old_id, 1001));
     }
 
-    #[tokio::test]
-    async fn reconcile_for_persist_is_monotonic() {
+    #[test]
+    fn primary_advance_keeps_applied_level_with_live() {
+        let coord = coordinator();
+        coord.advance(&payload(120));
+        assert_eq!(coord.applied(), coord.current());
+        // Nothing to settle: the head does not move.
+        assert_eq!(coord.settle_at_applied(), 120);
+        assert_eq!(coord.current(), 120);
+    }
+
+    #[test]
+    fn settle_at_applied_rewinds_a_head_that_ran_ahead() {
+        // The replica shape: the streaming path advanced the received head for
+        // frames the consumer never applied. Promotion must freeze — and
+        // continue — at the applied offset, discarding the phantom bytes.
         let tracker = ReplicationTrackerImpl::new_arc();
-        let state = Arc::new(RwLock::new(ReplicationState::new()));
-        let coord = OffsetCoordinator::new(tracker.clone(), state.clone());
+        let identity = ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
+        let coord = OffsetCoordinator::new(tracker, &identity);
+        let applied = identity.applied();
+        let received = ReplicaOffset::new(identity.state(), identity.live(), applied.clone());
+        let applied_frame = ReplicationFrame::new(0, payload(100));
+        let queued_frame = ReplicationFrame::new(0, payload(40));
+        received.frame_advance(&applied_frame);
+        received.frame_advance(&queued_frame);
+        applied.frame_applied(&applied_frame);
+
+        assert_eq!(coord.current(), 140, "received head");
+        assert_eq!(coord.applied(), 100, "only one frame applied");
+        assert_eq!(coord.settle_at_applied(), 100);
+        assert_eq!(
+            coord.current(),
+            100,
+            "the head continues from applied data, not from received bytes"
+        );
+        // The first post-promotion write continues from the settled head.
+        assert_eq!(coord.advance(&payload(10)), 110);
+    }
+
+    #[test]
+    fn reconcile_for_persist_is_monotonic() {
+        let tracker = ReplicationTrackerImpl::new_arc();
+        let identity = ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
+        let state = identity.state();
+        let coord = OffsetCoordinator::new(tracker.clone(), &identity);
 
         coord.advance(&payload(750));
-        let snapshot = coord.reconcile_for_persist().await;
+        let snapshot = coord.reconcile_for_persist();
         assert_eq!(snapshot.offset_at_save, 750);
         // The persisted field was updated in place too.
-        assert_eq!(state.read().await.offset_at_save, 750);
+        assert_eq!(state.read().offset_at_save, 750);
 
         // A reconcile never moves the offset backwards: if the persisted field
         // is already ahead (e.g. seeded from staged metadata), it is preserved.
-        state.write().await.offset_at_save = 5000;
-        let snapshot = coord.reconcile_for_persist().await;
+        state.write().offset_at_save = 5000;
+        let snapshot = coord.reconcile_for_persist();
         assert_eq!(snapshot.offset_at_save, 5000);
     }
 }

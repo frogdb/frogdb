@@ -35,6 +35,7 @@ ruff     = "latest"     # Python formatter/linter (invoked via uvx today; shim a
 "cargo:cargo-watch"    = "8.5.3"
 "cargo:cargo-sweep"    = "0.8.0"
 "cargo:cargo-zigbuild" = "0.22.1"
+"cargo:cargo-mutants"  = "27.1.0"  # mutation testing for the hardening campaign
 
 # Prebuilt GitHub-release binaries via the ubi backend
 "ubi:mozilla/sccache" = "latest"

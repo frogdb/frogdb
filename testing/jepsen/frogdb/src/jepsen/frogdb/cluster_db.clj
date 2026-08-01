@@ -69,6 +69,21 @@
                :container container
                :exit-code exit-code}))))
 
+(defn docker-stop
+  "Stop a Docker container and leave it stopped.
+
+   Unlike killing the process inside it, this survives the compose file's
+   `restart: unless-stopped` policy — a stopped container stays down, which is
+   what a failover test needs from a fenced-out node."
+  [container]
+  (let [cmd ["docker" "stop" "-t" "1" container]
+        pb (ProcessBuilder. ^java.util.List cmd)
+        _ (.redirectErrorStream pb true)
+        proc (.start pb)
+        exit-code (.waitFor proc)]
+    (when (not= 0 exit-code)
+      (warn "docker stop failed for" container "exit code:" exit-code))))
+
 (defn docker-kill-process
   "Kill the FrogDB process inside a container with the given signal."
   [container signal]
@@ -438,6 +453,142 @@
 
           :else
           (do (Thread/sleep 1000) (recur)))))))
+
+;; ===========================================================================
+;; Shard Replication (cluster-mode PSYNC replicas)
+;; ===========================================================================
+;;
+;; A freshly formed FrogDB cluster is all primaries: every node owns a slot
+;; range and nothing replicates anything. `CLUSTER REPLICATE` attaches one node
+;; to another over the *same* PSYNC link standalone replication uses — Raft
+;; carries cluster metadata only (ADR-0001), never key data. These helpers build
+;; that shard (one primary + one attached replica) so the cluster workloads can
+;; drive WAIT and measure replication lag against a real replication stream.
+;;
+;; Note: `CLUSTER REPLICATE` changes the node's role, it does not move its slots.
+;; The node that becomes a replica keeps owning the slot range it was assigned at
+;; formation, and those slots are unwritable while it is a replica. Workloads
+;; using these helpers must therefore confine themselves to keys in the *primary's*
+;; slots — hash-tag every key onto one slot and pick the primary from that slot's
+;; owner (see [[key-owner-node]]).
+
+(defn cluster-replicate!
+  "CLUSTER REPLICATE <primary-id> — make the node behind `conn` a replica of
+   `primary-id` (a 40-char hex cluster node ID)."
+  [conn primary-id]
+  (wcar conn (car/redis-call ["CLUSTER" "REPLICATE" primary-id])))
+
+(defn cluster-failover!
+  "CLUSTER FAILOVER [FORCE|TAKEOVER] on a replica.
+
+   The graceful (no-argument) form demotes the old primary; FORCE/TAKEOVER
+   *removes* it from the cluster instead, which is what you want when it is
+   already dead."
+  ([conn] (wcar conn (car/redis-call ["CLUSTER" "FAILOVER"])))
+  ([conn mode] (wcar conn (car/redis-call ["CLUSTER" "FAILOVER" (str mode)]))))
+
+(defn slot-owner-node
+  "Node name (e.g. \"n2\") that owns `slot`, read from CLUSTER SLOTS on
+   `ref-conn`. Returns nil when the slot is unassigned or its owner's address is
+   not one of the known cluster IPs."
+  [ref-conn slot]
+  (some (fn [row]
+          (let [start (long (nth row 0))
+                end (long (nth row 1))
+                master (nth row 2)]
+            (when (<= start slot end)
+              (get-node-for-ip (str (nth master 0))))))
+        (cluster-slots ref-conn)))
+
+(defn key-owner-node
+  "Node name that owns the slot `key` hashes to. The slot comes from the server's
+   own CLUSTER KEYSLOT, so hash tags are honoured exactly as the routing layer
+   sees them."
+  [ref-conn key]
+  (when-let [slot (cluster-keyslot ref-conn key)]
+    (slot-owner-node ref-conn (long slot))))
+
+(defn replica-get
+  "GET `key` from a cluster replica.
+
+   Sends READONLY on the same connection first: a replica answers MOVED for the
+   slots its primary owns until the connection opts into replica reads."
+  [conn key]
+  (client/parse-value
+    (second (wcar conn
+              (car/redis-call ["READONLY"])
+              (car/redis-call ["GET" key])))))
+
+(defn replication-link-up?
+  "True when `primary-conn` reports at least `n` connected replicas and every
+   connection in `replica-conns` reports `master_link_status:up`."
+  [primary-conn replica-conns n]
+  (and (>= (or (try+ (client/get-connected-replicas primary-conn)
+                     (catch Object _ 0))
+               0)
+           n)
+       (every? (fn [c]
+                 (= "up" (try+ (get (client/info-replication c) "master_link_status")
+                               (catch Object _ nil))))
+               replica-conns)))
+
+(defn wait-for-replication-link
+  "Poll until [[replication-link-up?]] holds or `timeout-ms` elapses.
+   Returns true when the link came up."
+  [primary-conn replica-conns n timeout-ms]
+  (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
+    (loop []
+      (cond
+        (replication-link-up? primary-conn replica-conns n) true
+        (< (System/currentTimeMillis) deadline) (do (Thread/sleep 250) (recur))
+        :else false))))
+
+(def default-attach-timeout-ms
+  "How long to wait for a `CLUSTER REPLICATE` to turn into a live PSYNC link.
+   Sized for a full resync (a RocksDB checkpoint transfer over the Docker
+   network), not for the metadata round trip."
+  60000)
+
+(defn attach-shard-replica!
+  "Attach `replica` to `primary` as a cluster-mode PSYNC replica and wait for the
+   link to come up.
+
+   `conns` is a node-name -> conn-spec map, `ref-conn` any connection used to
+   resolve cluster node IDs. Returns
+   `{:primary p :replica r :primary-id id :attached? bool}`."
+  [ref-conn conns primary replica docker-host? base-port timeout-ms]
+  (let [primary-id (resolve-node-id primary docker-host? base-port ref-conn)
+        replica-conn (get conns replica)
+        primary-conn (get conns primary)]
+    (info "Attaching" replica "as a cluster replica of" primary "(" primary-id ")")
+    (cluster-replicate! replica-conn primary-id)
+    (let [ok (wait-for-replication-link primary-conn [replica-conn] 1 timeout-ms)]
+      (when-not ok
+        (warn "Replication link" replica "->" primary "did not come up within" timeout-ms "ms"))
+      {:primary primary
+       :replica replica
+       :primary-id primary-id
+       :attached? ok})))
+
+(defn ensure-shard-replica!
+  "Idempotently resolve the shard a workload drives and attach a replica to it.
+
+   The shard's primary is the owner of `probe-key`'s slot, so hash-tagged
+   workload keys route to it without a redirect; the replica is any other node.
+   `state-atom` caches the result, and the whole thing runs under a lock because
+   Jepsen calls `setup!` once per worker thread and only one of them may issue
+   the `CLUSTER REPLICATE`."
+  ([state-atom ref-conn conns nodes docker-host? base-port probe-key]
+   (ensure-shard-replica! state-atom ref-conn conns nodes docker-host? base-port
+                          probe-key default-attach-timeout-ms))
+  ([state-atom ref-conn conns nodes docker-host? base-port probe-key timeout-ms]
+   (locking state-atom
+     (or @state-atom
+         (let [primary (or (key-owner-node ref-conn probe-key) (first nodes))
+               replica (first (remove #{primary} nodes))]
+           (reset! state-atom
+                   (attach-shard-replica! ref-conn conns primary replica
+                                          docker-host? base-port timeout-ms)))))))
 
 ;; ===========================================================================
 ;; Slot Assignment

@@ -246,6 +246,7 @@ async fn test_command_metrics_recorded() {
 // Keyspace Hit/Miss Metrics Tests
 // ============================================================================
 
+// FM-TXN-046
 /// Keyspace hit/miss metrics must be recorded for commands executed inside a
 /// MULTI/EXEC transaction, matching the single-command path and Redis (which
 /// counts hits/misses per command regardless of transaction context).

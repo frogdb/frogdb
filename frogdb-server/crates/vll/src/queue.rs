@@ -235,6 +235,34 @@ mod tests {
         assert_eq!(queue.lowest_txid(), Some(2));
     }
 
+    /// `is_empty` gates the continuation-lock drain wait
+    /// ([`crate::VllShardState::acquire_continuation_lock`]): it must track
+    /// the queue's contents, not a fixed answer.
+    #[test]
+    fn empty_reflects_queued_ops() {
+        let mut queue = TransactionQueue::new(100);
+        assert!(queue.is_empty());
+
+        queue.enqueue(make_test_op(1)).unwrap();
+        assert!(!queue.is_empty());
+
+        queue.dequeue(1).unwrap();
+        assert!(queue.is_empty(), "queue is empty again once the op leaves");
+    }
+
+    /// Ages feed the `VLL` diagnostics output; a stuck-at-zero age would
+    /// silently hide a wedged op.
+    #[test]
+    fn pending_op_age_advances() {
+        let op = make_test_op(1);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        assert!(
+            op.age() >= std::time::Duration::from_millis(1),
+            "age must measure elapsed time since enqueue, got {:?}",
+            op.age()
+        );
+    }
+
     #[test]
     fn test_get_mut() {
         let mut queue = TransactionQueue::new(100);
@@ -255,6 +283,14 @@ mod tests {
         let lock = ContinuationLock::new(42, 123);
         assert_eq!(lock.txid, 42);
         assert_eq!(lock.conn_id, 123);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        // Bounded on both sides: a lock age that never advances would hide a
+        // long-held continuation lock in the diagnostics output.
+        assert!(
+            lock.age() >= std::time::Duration::from_millis(1),
+            "age must measure elapsed time since acquisition, got {:?}",
+            lock.age()
+        );
         assert!(lock.age() < std::time::Duration::from_secs(10));
     }
 }

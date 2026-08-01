@@ -185,10 +185,7 @@ impl ConnectionHandler {
             return None;
         }
 
-        match ack_rx.await {
-            Ok(UnregisterAck::AlreadyServed) => response_rx.await.ok(),
-            Ok(UnregisterAck::Unregistered) | Err(_) => None,
-        }
+        reconcile_ack(ack_rx.await, response_rx).await
     }
 
     /// Handle the WAIT command at the connection level.
@@ -208,13 +205,23 @@ impl ConnectionHandler {
     ///   escape hatch (TIMEOUT mode returns the current count, ERROR mode the
     ///   `-UNBLOCKED` error).
     ///
-    /// Documented divergence: with no replication configured (standalone —
-    /// no primary handler, so no replica can ever attach), WAIT returns the
-    /// count (0) immediately instead of idling out the timeout; the quorum is
-    /// unreachable by construction.
+    /// There is no cluster-mode special case. Cluster replicas attach over the
+    /// same PSYNC link and ACK into the same tracker as standalone ones (Raft
+    /// carries metadata only, ADR-0001), so WAIT counts *this node's* replicas
+    /// in both modes — the per-node contract Redis, Valkey and Dragonfly all
+    /// implement. A cluster-wide guarantee is a client-side fan-out
+    /// (`ALL_SHARDS` + `AGG_MIN`), not a server-side one; WAIT never redirects,
+    /// because it takes no key.
+    ///
+    /// An unreachable `numreplicas` blocks to the deadline rather than
+    /// early-returning (Redis parity; a replica may still be mid-attach). The
+    /// only shortcut left is structural: with no primary handler wired at all
+    /// no replica can ever attach, so the quorum is decided immediately. A real
+    /// server always has one — the handler is built on every role — so that
+    /// path is reachable only from deps that carry no replication wiring.
     pub(crate) async fn handle_wait_command(&mut self, args: &[Bytes]) -> Response {
         // Redis rejects WAIT on replicas before looking at the arguments.
-        if self.is_replica.load(std::sync::atomic::Ordering::Relaxed) {
+        if self.is_replica.load(std::sync::atomic::Ordering::Acquire) {
             return Response::error(crate::commands::replication::WAIT_ON_REPLICA_ERR);
         }
 
@@ -223,23 +230,27 @@ impl ConnectionHandler {
             Err(err) => return err.to_response(),
         };
 
-        // Cluster mode: the WAIT coordinator is deliberately unwired — cluster
-        // replicas replicate through the cluster machinery, but their acks are
-        // not yet a per-slot durability signal a keyed WAIT could honestly
-        // count (see the WAIT-cluster-mode PRD). Return 0 immediately, the
-        // pinned divergence, rather than counting full-stream acks that don't
-        // carry that meaning.
-        if self.cluster.cluster_state.is_some() {
-            return Response::Integer(0);
-        }
-
-        // Standalone: no primary replication handler means no replica can ever
-        // attach, so the quorum is decided now.
+        // No primary replication handler means no replica can ever attach, so
+        // the quorum is decided now. Not a role decision: the handler is built
+        // on every role, so this is the "replication is not wired at all" case.
         let Some(primary) = self.cluster.primary_replication_handler.clone() else {
             return Response::Integer(0);
         };
 
         let wait = primary.wait_coordinator();
+
+        // Subscribe to the role fence *before* concluding that this node is
+        // still a primary. A demotion publishes the replica flag first and
+        // bumps the fence second, so with the fence in hand one of the two
+        // observations below is guaranteed to see a demotion that races this
+        // WAIT — without it, a demotion landing between the check above and
+        // the subscription inside the coordinator would park this wait on a
+        // node that has already rejected every later WAIT.
+        let fence = wait.role_fence();
+        if self.is_replica.load(std::sync::atomic::Ordering::Acquire) {
+            return Response::error(crate::commands::replication::WAIT_ROLE_CHANGED_ERR);
+        }
+
         let target = wait.target_offset();
 
         // Fast path (Redis: `replicationCountAcksByOffset` before blocking).
@@ -248,7 +259,10 @@ impl ConnectionHandler {
             return Response::Integer(count as i64);
         }
 
-        let deadline = (timeout_ms > 0).then(|| Instant::now() + Duration::from_millis(timeout_ms));
+        // Timer clock, not wall clock: the coordinator hands this to
+        // `tokio::time::timeout_at` (see the import note in `wait_coordinator`).
+        let deadline = (timeout_ms > 0)
+            .then(|| tokio::time::Instant::now() + Duration::from_millis(timeout_ms));
 
         // Mark the connection blocked in the registry so CLIENT UNBLOCK can
         // target this wait, clearing any stale signal first (same bookkeeping
@@ -260,12 +274,22 @@ impl ConnectionHandler {
 
         // Race the coordinator (which owns the single timeout authority via its
         // internal deadline) against CLIENT UNBLOCK.
-        let wait_fut = wait.wait_for_replicas(target, num_replicas, deadline, primary.as_ref());
+        let wait_fut =
+            wait.wait_for_replicas(fence, target, num_replicas, deadline, primary.as_ref());
         tokio::pin!(wait_fut);
 
         let response = tokio::select! {
             biased;
-            verdict = &mut wait_fut => Response::Integer(verdict.count() as i64),
+            verdict = &mut wait_fut => match verdict {
+                // A demotion tore down the stream this wait was parked on.
+                // Redis replies with an error from `disconnectAllBlockedClients`
+                // rather than a count, because the count would describe a
+                // history the node no longer heads.
+                crate::replication::WaitVerdict::RoleChanged(_) => {
+                    Response::error(crate::commands::replication::WAIT_ROLE_CHANGED_ERR)
+                }
+                other => Response::Integer(other.count() as i64),
+            },
             mode = self.client_handle.unblocked() => match mode {
                 Some(UnblockMode::Error) => {
                     Response::error("UNBLOCKED client unblocked via CLIENT UNBLOCK")
@@ -282,5 +306,87 @@ impl ConnectionHandler {
         self.admin.client_registry.reset_unblock(self.state.id);
 
         response
+    }
+}
+
+/// Decide the reply from the shard's `UnregisterWait` ack and whatever the
+/// (still open) response channel holds.
+///
+/// Split out of [`ConnectionHandler::reconcile_unregister`] for the same reason
+/// [`BlockingWaitCoordinator`] is split out of `handle_blocking_wait`: this is
+/// the whole serve-vs-timeout decision, and as a free function over two
+/// in-memory channels it is unit-testable without a live shard or a whole
+/// `ConnectionHandler`. `Some` means a raced serve was drained and must be
+/// delivered; `None` means fall back to the op-aware timeout/unblock reply.
+async fn reconcile_ack(
+    ack: Result<UnregisterAck, oneshot::error::RecvError>,
+    response_rx: &mut oneshot::Receiver<Response>,
+) -> Option<Response> {
+    match ack {
+        // The shard says a serve already removed this waiter and sent on the
+        // response channel. Draining it is what keeps the popped element from
+        // being delivered to nobody.
+        Ok(UnregisterAck::AlreadyServed) => response_rx.await.ok(),
+        Ok(UnregisterAck::Unregistered) | Err(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod reconcile_tests {
+    use super::*;
+
+    /// FM-BLOCKING-005
+    ///
+    /// `AlreadyServed` means the shard popped an element for this waiter after
+    /// the coordinator had already chosen a timeout. The value must be drained
+    /// off the still-open receiver and delivered — dropping it is exactly the
+    /// "neither delivered nor in final state" loss the conservation checkers
+    /// report.
+    #[tokio::test]
+    async fn already_served_drains_the_raced_value() {
+        let (tx, mut rx) = oneshot::channel();
+        tx.send(Response::Integer(42)).unwrap();
+        let out = reconcile_ack(Ok(UnregisterAck::AlreadyServed), &mut rx).await;
+        assert!(
+            matches!(out, Some(Response::Integer(42))),
+            "a serve that raced the timeout must be delivered, not dropped"
+        );
+    }
+
+    /// FM-BLOCKING-005
+    ///
+    /// `Unregistered` is the shard's authoritative "the timeout won, nothing was
+    /// consumed" — the caller keeps its op-aware timeout reply.
+    #[tokio::test]
+    async fn unregistered_keeps_the_timeout_reply() {
+        let (_tx, mut rx) = oneshot::channel::<Response>();
+        let out = reconcile_ack(Ok(UnregisterAck::Unregistered), &mut rx).await;
+        assert!(out.is_none());
+    }
+
+    /// FM-BLOCKING-005
+    ///
+    /// A closed ack channel (shard gone) is not an excuse to hang or to
+    /// fabricate a delivery: fall back to the timeout reply.
+    #[tokio::test]
+    async fn closed_ack_channel_keeps_the_timeout_reply() {
+        let (ack_tx, ack_rx) = oneshot::channel::<UnregisterAck>();
+        drop(ack_tx);
+        let (_tx, mut rx) = oneshot::channel::<Response>();
+        let out = reconcile_ack(ack_rx.await, &mut rx).await;
+        assert!(out.is_none());
+    }
+
+    /// FM-BLOCKING-005
+    ///
+    /// `AlreadyServed` with a response channel that closed without a value
+    /// (shard teardown between ack and send) must degrade to the timeout reply
+    /// rather than blocking forever on a dead channel.
+    #[tokio::test]
+    async fn already_served_with_closed_response_channel_falls_back() {
+        let (tx, mut rx) = oneshot::channel::<Response>();
+        drop(tx);
+        let out = reconcile_ack(Ok(UnregisterAck::AlreadyServed), &mut rx).await;
+        assert!(out.is_none());
     }
 }

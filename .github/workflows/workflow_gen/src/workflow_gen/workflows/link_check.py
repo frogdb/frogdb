@@ -7,8 +7,6 @@ from workflow_gen.schema import (
     Defaults,
     DefaultsRun,
     Job,
-    PullRequestTrigger,
-    PushTrigger,
     Step,
     Trigger,
     Workflow,
@@ -16,14 +14,10 @@ from workflow_gen.schema import (
 
 
 def link_check_workflow() -> Workflow:
-    paths = ["website/**", "lychee.toml"]
-
     w = Workflow(
         name="Link check",
-        on=Trigger(
-            push=PushTrigger(branches=["main"], paths=paths),
-            pull_request=PullRequestTrigger(branches=["main"], paths=paths),
-        ),
+        # CI is manual-dispatch-only during the hardening campaign.
+        on=Trigger(),
         concurrency=Concurrency(
             group="link-check-${{ github.ref }}",
             cancel_in_progress=True,

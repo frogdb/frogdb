@@ -2,149 +2,27 @@
 //!
 //! This module contains all state types used by the connection handler:
 //! - [`ConnectionState`] - Full connection state
-//! - [`TransactionState`] - MULTI/EXEC transaction state
 //! - [`PubSubState`] - Pub/Sub subscription state
 //! - [`AuthState`] - Authentication state
 //! - [`BlockedState`] - Blocking command wait state
 //! - [`LocalClientStats`] - Per-connection stats accumulator
+//!
+//! The MULTI/EXEC slice — [`TransactionState`] and its summary/target/error
+//! vocabulary — lives in the `frogdb-txn` crate alongside the EXEC algorithm
+//! that consumes it, and is re-exported here so the connection layer keeps one
+//! import site for connection state.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::net::SocketAddr;
 
 use bytes::Bytes;
 use frogdb_core::{
     AuthenticatedUser, ClientStatsDelta, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
-    MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION, WatchEntry,
-    shard_for_key, slot_for_key,
+    MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
 };
-use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
+use frogdb_protocol::{ParsedCommand, ProtocolVersion};
 
-use crate::slot_migration::redirect;
-
-/// Target shard(s) for a transaction (prepared for future multi-shard support).
-#[derive(Debug, Clone, Default)]
-pub enum TransactionTarget {
-    /// No keys yet - target undetermined.
-    #[default]
-    None,
-    /// Single shard - execute directly.
-    Single(usize),
-    /// Multiple shards detected - error in Phase 7.1, VLL in future.
-    Multi(Vec<usize>),
-}
-
-impl TransactionTarget {
-    /// EXEC-time resolution. A `Multi` target means the transaction's keys are
-    /// not co-located, so it rejects with the CROSSSLOT reply from the redirect
-    /// seam (never a fresh literal); `None`/`Single` pass through for the caller
-    /// to route.
-    #[allow(clippy::result_large_err)]
-    pub fn resolve(self) -> Result<TransactionTarget, Response> {
-        match self {
-            TransactionTarget::Multi(_) => Err(redirect::crossslot()),
-            other => Ok(other),
-        }
-    }
-}
-
-/// Folds queued-command keys into a [`TransactionTarget`] during MULTI queuing,
-/// promoting `None → Single → Multi`. Single owner of the transaction
-/// co-location rule that once lived split across three ad-hoc spots
-/// (`note_cluster_slot`, `add_transaction_shard`, and the WATCH loop). In
-/// cluster mode a slot mismatch promotes to `Multi` (EXEC then returns
-/// CROSSSLOT); in standalone mode a shard mismatch does.
-#[derive(Debug, Default)]
-struct TxnSlotAccumulator {
-    /// First cluster slot seen (cluster mode only), for slot-level detection.
-    /// Redis requires all keys in a MULTI/EXEC to hash to the same slot, which
-    /// is stricter than shard-level detection.
-    first_slot: Option<u16>,
-    /// Shard(s) folded so far.
-    target: TransactionTarget,
-}
-
-impl TxnSlotAccumulator {
-    /// Fold one command's keys. `is_cluster` selects slot-level (cluster) vs
-    /// shard-level (standalone) mismatch detection.
-    fn add_keys<K: AsRef<[u8]>>(&mut self, keys: &[K], num_shards: usize, is_cluster: bool) {
-        for key in keys {
-            let shard = shard_for_key(key.as_ref(), num_shards);
-            // In cluster mode a cross-slot key already forces `Multi`; skip the
-            // normal per-shard fold for it.
-            if is_cluster && self.note_slot(slot_for_key(key.as_ref()), shard) {
-                continue;
-            }
-            self.fold_shard(shard);
-        }
-    }
-
-    /// Fold a single already-resolved shard into the target (None → Single →
-    /// Multi). Used for a same-shard-validated key set (WATCH).
-    fn fold_shard(&mut self, shard_id: usize) {
-        self.target = match &self.target {
-            TransactionTarget::None => TransactionTarget::Single(shard_id),
-            TransactionTarget::Single(s) if *s == shard_id => TransactionTarget::Single(shard_id),
-            TransactionTarget::Single(s) => TransactionTarget::Multi(vec![*s, shard_id]),
-            TransactionTarget::Multi(shards) => {
-                let mut shards = shards.clone();
-                if !shards.contains(&shard_id) {
-                    shards.push(shard_id);
-                }
-                TransactionTarget::Multi(shards)
-            }
-        };
-    }
-
-    /// Record a key's slot during cluster-mode queuing. The first slot seen is
-    /// remembered; a later key in a different slot promotes the target to
-    /// `Multi`. Returns `true` when this key was cross-slot, signalling
-    /// [`add_keys`](Self::add_keys) to skip the normal per-shard fold.
-    fn note_slot(&mut self, slot: u16, shard_id: usize) -> bool {
-        match self.first_slot {
-            None => {
-                self.first_slot = Some(slot);
-                false
-            }
-            Some(s) if s != slot => {
-                self.target = match &self.target {
-                    TransactionTarget::None => TransactionTarget::Multi(vec![shard_id]),
-                    TransactionTarget::Single(s) => TransactionTarget::Multi(vec![*s, shard_id]),
-                    TransactionTarget::Multi(shards) => {
-                        let mut shards = shards.clone();
-                        if !shards.contains(&shard_id) {
-                            shards.push(shard_id);
-                        }
-                        TransactionTarget::Multi(shards)
-                    }
-                };
-                true
-            }
-            _ => false,
-        }
-    }
-}
-
-/// State for MULTI/EXEC transactions.
-#[derive(Debug, Default)]
-pub struct TransactionState {
-    /// Queue of commands to execute at EXEC time (None = not in transaction).
-    pub queue: Option<Vec<ParsedCommand>>,
-    /// Watched keys: key -> (shard_id, version_at_watch_time, live_at_watch).
-    /// `live_at_watch` is the `wk->expired` inverse — whether the key was
-    /// present and unexpired when watched — carried per key into EXEC via
-    /// [`WatchEntry`]. `shard_id` stays connection-side only (it drives the
-    /// EXEC target fold, not the wire watch set).
-    pub watches: HashMap<Bytes, (usize, u64, bool)>,
-    /// Co-location accumulator: folds queued keys (and watched shards) into the
-    /// target shard(s), owning the `Multi`-promotion rule.
-    slots: TxnSlotAccumulator,
-    /// Whether any queued command had an error (abort at EXEC).
-    pub exec_abort: bool,
-    /// Error messages for commands that had syntax errors during queuing.
-    pub queued_errors: Vec<String>,
-    /// Start time of the transaction (when MULTI was called).
-    pub start_time: Option<std::time::Instant>,
-}
+pub use frogdb_txn::{TransactionState, TransactionTarget, TxnError, TxnMetrics, TxnSummary};
 
 /// Pub/Sub state for a connection.
 #[derive(Debug, Default)]
@@ -442,45 +320,6 @@ pub struct SubCounts {
     pub patterns: usize,
     /// Number of sharded channel subscriptions.
     pub sharded: usize,
-}
-
-/// Error returned by a transaction lifecycle transition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TxnError {
-    /// MULTI issued while already in a transaction.
-    Nested,
-}
-
-/// Snapshot of a transaction captured atomically by EXEC.
-///
-/// Taking the summary leaves the connection's transaction state clean, so the
-/// EXEC handler never needs to clear fields by hand.
-#[derive(Debug)]
-pub struct TxnSummary {
-    /// Queued commands, in submission order.
-    pub queue: Vec<ParsedCommand>,
-    /// Watched keys with their watch-time version and liveness.
-    pub watches: Vec<WatchEntry>,
-    /// Target shard(s) folded from the queued commands and watches.
-    pub target: TransactionTarget,
-    /// Whether a command failed during queuing (EXEC must abort).
-    pub exec_abort: bool,
-    /// The connection's ASKING flag as it stood for the whole MULTI block.
-    /// Sticky across queuing (see [`ConnectionState::take_asking`]) and
-    /// consumed here, so EXEC's batch slot re-validation can reach the
-    /// importing-target routing arm.
-    pub asking: bool,
-    /// When MULTI was issued, for duration metrics.
-    pub start_time: Option<std::time::Instant>,
-}
-
-/// Lightweight metrics captured by DISCARD.
-#[derive(Debug, Clone, Copy)]
-pub struct TxnMetrics {
-    /// Number of commands that had been queued.
-    pub queued_count: usize,
-    /// When MULTI was issued, for duration metrics.
-    pub start_time: Option<std::time::Instant>,
 }
 
 /// Disposition of the next reply, decided by [`ConnectionState::consume_reply_disposition`].
@@ -836,114 +675,73 @@ impl ConnectionState {
 
     /// Whether a transaction is open (a command queue exists).
     pub fn in_transaction(&self) -> bool {
-        self.transaction.queue.is_some()
+        self.transaction.is_open()
     }
 
     /// Read-only view of the queued commands, if a transaction is open
     /// (for DEBUG MEMORY accounting).
     pub fn queued_commands(&self) -> Option<&[ParsedCommand]> {
-        self.transaction.queue.as_deref()
+        self.transaction.queued_commands()
     }
 
     /// Read-only iterator over watched keys (for DEBUG MEMORY accounting).
     pub fn watched_key_iter(&self) -> impl Iterator<Item = &Bytes> {
-        self.transaction.watches.keys()
+        self.transaction.watched_key_iter()
     }
 
     /// Begin a transaction (MULTI). Errors with [`TxnError::Nested`] if one is
     /// already open. Existing watches are preserved (WATCH before MULTI).
     pub fn begin_transaction(&mut self) -> Result<(), TxnError> {
-        if self.transaction.queue.is_some() {
-            return Err(TxnError::Nested);
-        }
-        self.transaction.queue = Some(Vec::new());
-        self.transaction.slots = TxnSlotAccumulator::default();
-        self.transaction.exec_abort = false;
-        self.transaction.queued_errors.clear();
-        self.transaction.start_time = Some(std::time::Instant::now());
-        Ok(())
+        self.transaction.begin()
     }
 
     /// Push a validated command onto the transaction queue (no-op outside a
     /// transaction, matching the historical guard).
     pub fn push_queued_command(&mut self, cmd: ParsedCommand) {
-        if let Some(ref mut queue) = self.transaction.queue {
-            queue.push(cmd);
-        }
+        self.transaction.push_queued_command(cmd);
     }
 
     /// Mark the transaction poisoned so EXEC aborts. An accompanying error
     /// message, if any, is recorded for diagnostics.
     pub fn abort_transaction(&mut self, error: Option<String>) {
-        self.transaction.exec_abort = true;
-        if let Some(error) = error {
-            self.transaction.queued_errors.push(error);
-        }
+        self.transaction.abort(error);
     }
 
     /// Fold one queued command's keys into the transaction target. In cluster
     /// mode a slot mismatch promotes the target to `Multi` (EXEC returns
-    /// CROSSSLOT); in standalone mode a shard mismatch does. The
-    /// [`TxnSlotAccumulator`] owns the rule.
+    /// CROSSSLOT); in standalone mode a shard mismatch does. The transaction
+    /// state's slot accumulator owns the rule.
     pub fn fold_transaction_keys<K: AsRef<[u8]>>(
         &mut self,
         keys: &[K],
         num_shards: usize,
         is_cluster: bool,
     ) {
-        self.transaction
-            .slots
-            .add_keys(keys, num_shards, is_cluster);
+        self.transaction.fold_keys(keys, num_shards, is_cluster);
     }
 
     /// Record a watched key with its watch-time version, shard, and liveness.
     pub fn watch_key(&mut self, key: Bytes, shard_id: usize, version: u64, live_at_watch: bool) {
         self.transaction
-            .watches
-            .insert(key, (shard_id, version, live_at_watch));
+            .watch_key(key, shard_id, version, live_at_watch);
     }
 
     /// Forget all watched keys (UNWATCH).
     pub fn unwatch_all(&mut self) {
-        self.transaction.watches.clear();
+        self.transaction.unwatch_all();
     }
 
     /// EXEC: take the queue and watches atomically, leaving the transaction
     /// state clean. Returns `None` for EXEC without MULTI.
+    ///
+    /// ASKING was held sticky for the duration of the block; EXEC is the last
+    /// reader, so it is folded into the summary and cleared here (the
+    /// connection leaves EXEC with a clean flag, exactly as a non-transactional
+    /// command would).
     pub fn take_transaction(&mut self) -> Option<TxnSummary> {
-        self.transaction.queue.as_ref()?;
-        // Fold every *live* watch's shard into the target now, at EXEC time.
-        // Doing it here (rather than at WATCH or MULTI) keeps the fold in sync
-        // with the current watch set: a cross-shard watch set promotes the
-        // target to `Multi` (EXEC CROSSSLOT-rejects, so a concurrent write to a
-        // watched key on another shard can't be silently missed — a
-        // false-negative commit), while an UNWATCH inside MULTI that cleared the
-        // watches contributes nothing, leaving no stale fold to spuriously
-        // CROSSSLOT an otherwise single-shard EXEC.
-        for &(shard_id, _, _) in self.transaction.watches.values() {
-            self.transaction.slots.fold_shard(shard_id);
-        }
-        let txn = std::mem::take(&mut self.transaction);
-        // ASKING was held sticky for the duration of the block; EXEC is the
-        // last reader, so consume it here (the connection leaves EXEC with a
-        // clean flag, exactly as a non-transactional command would).
-        let asking = std::mem::replace(&mut self.asking, false);
-        Some(TxnSummary {
-            queue: txn.queue.expect("queue presence checked above"),
-            watches: txn
-                .watches
-                .into_iter()
-                .map(|(key, (_, version, live_at_watch))| WatchEntry {
-                    key,
-                    version,
-                    live_at_watch,
-                })
-                .collect(),
-            target: txn.slots.target,
-            exec_abort: txn.exec_abort,
-            asking,
-            start_time: txn.start_time,
-        })
+        let summary = self.transaction.take(self.asking)?;
+        self.asking = false;
+        Some(summary)
     }
 
     /// DISCARD: drop the whole transaction including watches. Returns `None` for
@@ -956,21 +754,16 @@ impl ConnectionState {
     /// `ASKING` — a dual-homed write. Redis clears it on the same path
     /// (`discardTransaction` → `resetClient`).
     pub fn discard_transaction(&mut self) -> Option<TxnMetrics> {
-        let queued_count = self.transaction.queue.as_ref()?.len();
-        let start_time = self.transaction.start_time;
-        self.transaction = TransactionState::default();
+        let metrics = self.transaction.discard()?;
         self.asking = false;
-        Some(TxnMetrics {
-            queued_count,
-            start_time,
-        })
+        Some(metrics)
     }
 
     /// Clear the entire transaction state unconditionally (QUIT / RESET),
     /// including the MULTI-sticky `ASKING` flag (see
     /// [`discard_transaction`](Self::discard_transaction)).
     pub fn clear_transaction(&mut self) {
-        self.transaction = TransactionState::default();
+        self.transaction.clear();
         self.asking = false;
     }
 
@@ -1018,6 +811,18 @@ impl ConnectionState {
             return self.asking;
         }
         std::mem::replace(&mut self.asking, false)
+    }
+
+    /// Read the ASKING flag **without** consuming it.
+    ///
+    /// For the one caller that must ask the routing seam a question on behalf of
+    /// a command that is not itself the command being routed: `WATCH`
+    /// ([`ConnectionHandler::dispatch_transaction_command`](crate::connection::ConnectionHandler))
+    /// validates its keys' slot, but the one-shot flag belongs to the command
+    /// the client sent `ASKING` for — consuming it here would strand the
+    /// following `MULTI`/`EXEC` block on the importing target.
+    pub fn is_asking(&self) -> bool {
+        self.asking
     }
 
     /// Set or clear the READONLY replica-read flag (READONLY / READWRITE).
@@ -1306,6 +1111,7 @@ impl ConnectionState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use frogdb_core::WatchEntry;
 
     fn state() -> ConnectionState {
         ConnectionState::new(1, "127.0.0.1:0".parse().unwrap(), false)
@@ -1317,6 +1123,7 @@ mod tests {
 
     // ---- ASKING -----------------------------------------------------------
 
+    // FM-TXN-015
     #[test]
     fn asking_is_one_shot() {
         let mut s = state();
@@ -1326,6 +1133,7 @@ mod tests {
         assert!(!s.take_asking(), "ASKING cleared after a single command");
     }
 
+    // FM-TXN-015
     /// Redis keeps `CLIENT_ASKING` set for the whole MULTI block so the EXEC-time
     /// re-validation can still take the importing-target arm. FrogDB mirrors
     /// that: inside an open transaction `take_asking` reads without clearing.
@@ -1345,6 +1153,7 @@ mod tests {
         );
     }
 
+    // FM-TXN-015
     /// A MULTI opened *without* a preceding ASKING never invents one.
     #[test]
     fn asking_absent_inside_multi_stays_absent() {
@@ -1355,6 +1164,7 @@ mod tests {
         assert!(!summary.asking);
     }
 
+    // FM-TXN-004
     /// DISCARD ends the block that made ASKING sticky, so the flag must go with
     /// it. Leaking it would let the *next* ordinary command be accepted on an
     /// importing target as though the client had just said ASKING.
@@ -1369,6 +1179,7 @@ mod tests {
         assert!(!s.take_asking(), "DISCARD consumes the sticky ASKING");
     }
 
+    // FM-TXN-003
     /// DISCARD outside MULTI is an error and must not consume a pending ASKING.
     #[test]
     fn asking_survives_discard_without_multi() {
@@ -1378,6 +1189,7 @@ mod tests {
         assert!(s.take_asking());
     }
 
+    // FM-TXN-014
     /// RESET / QUIT take the same path.
     #[test]
     fn asking_cleared_by_clear_transaction() {
@@ -1544,6 +1356,7 @@ mod tests {
 
     // ---- Transaction lifecycle -------------------------------------------
 
+    // FM-TXN-002, FM-TXN-047
     #[test]
     fn transaction_lifecycle_begin_queue_take() {
         let mut s = state();
@@ -1557,7 +1370,7 @@ mod tests {
 
         s.push_queued_command(cmd(b"GET"));
         s.push_queued_command(cmd(b"SET"));
-        s.transaction.slots.fold_shard(2);
+        s.transaction.fold_shard(2);
         s.watch_key(Bytes::from_static(b"k"), 2, 7, true);
 
         let summary = s.take_transaction().expect("in transaction");
@@ -1578,6 +1391,7 @@ mod tests {
         assert!(s.take_transaction().is_none());
     }
 
+    // FM-TXN-020
     #[test]
     fn take_transaction_folds_cross_shard_watch_set_to_multi() {
         // A WATCH set spanning two shards must make the transaction's target
@@ -1594,7 +1408,7 @@ mod tests {
         s.begin_transaction().expect("MULTI after WATCH");
         // Queue a single-shard command (shard 1), as seed 8 does (DEL {t1}kv1).
         s.push_queued_command(cmd(b"DEL"));
-        s.transaction.slots.fold_shard(1);
+        s.transaction.fold_shard(1);
 
         let summary = s.take_transaction().expect("in transaction");
         // Live cross-shard watch set folded at EXEC → Multi → CROSSSLOT.
@@ -1609,6 +1423,7 @@ mod tests {
         );
     }
 
+    // FM-TXN-013
     #[test]
     fn take_transaction_unwatch_drops_stale_cross_shard_watch_fold() {
         // Reviewer's regression: WATCH a key on shard 0, MULTI, UNWATCH (which
@@ -1625,7 +1440,7 @@ mod tests {
         s.unwatch_all();
         // Queue a single-shard command on a *different* shard than the old watch.
         s.push_queued_command(cmd(b"SET"));
-        s.transaction.slots.fold_shard(1);
+        s.transaction.fold_shard(1);
 
         let summary = s.take_transaction().expect("in transaction");
         assert!(summary.watches.is_empty(), "UNWATCH cleared the watch set");
@@ -1640,6 +1455,7 @@ mod tests {
         );
     }
 
+    // FM-TXN-008
     #[test]
     fn transaction_abort_marks_summary() {
         let mut s = state();
@@ -1651,6 +1467,7 @@ mod tests {
         assert!(summary.exec_abort, "poisoned transaction reported at EXEC");
     }
 
+    // FM-TXN-004
     #[test]
     fn discard_resets_everything_including_watches() {
         let mut s = state();
@@ -1668,52 +1485,11 @@ mod tests {
         assert!(summary.watches.is_empty());
     }
 
-    // ---- TxnSlotAccumulator (transaction co-location owner) --------------
-
-    #[test]
-    fn accumulator_shard_fold_none_single_multi() {
-        let mut acc = TxnSlotAccumulator::default();
-        assert!(matches!(acc.target, TransactionTarget::None));
-        acc.fold_shard(1);
-        assert!(matches!(acc.target, TransactionTarget::Single(1)));
-        // Re-folding the same shard stays Single.
-        acc.fold_shard(1);
-        assert!(matches!(acc.target, TransactionTarget::Single(1)));
-        // A second shard promotes to Multi.
-        acc.fold_shard(2);
-        assert!(matches!(acc.target, TransactionTarget::Multi(_)));
-    }
-
-    #[test]
-    fn accumulator_cluster_slot_mismatch_forces_multi() {
-        let mut acc = TxnSlotAccumulator::default();
-        // First key establishes the slot; not cross-slot.
-        assert!(!acc.note_slot(100, 0));
-        acc.fold_shard(0);
-        // A different slot forces Multi and signals the caller to skip the fold.
-        assert!(acc.note_slot(200, 1));
-        assert!(matches!(acc.target, TransactionTarget::Multi(_)));
-    }
-
-    #[test]
-    fn accumulator_same_slot_stays_single() {
-        let mut acc = TxnSlotAccumulator::default();
-        assert!(!acc.note_slot(100, 3));
-        acc.fold_shard(3);
-        // Same slot again: not cross-slot, stays Single.
-        assert!(!acc.note_slot(100, 3));
-        acc.fold_shard(3);
-        assert!(matches!(acc.target, TransactionTarget::Single(3)));
-    }
-
-    #[test]
-    fn transaction_target_resolve_maps_multi_to_crossslot() {
-        assert!(TransactionTarget::None.resolve().is_ok());
-        assert!(TransactionTarget::Single(3).resolve().is_ok());
-        let err = TransactionTarget::Multi(vec![0, 1]).resolve().unwrap_err();
-        // The rejection is byte-identical to the redirect seam.
-        assert_eq!(format!("{err:?}"), format!("{:?}", redirect::crossslot()));
-    }
+    // The transaction co-location accumulator and `TransactionTarget::resolve`
+    // are unit-tested in `frogdb-txn` (`state.rs`), where they live. What stays
+    // here is the `ConnectionState` delegation: the transaction lifecycle as the
+    // connection drives it, including the ASKING interaction that only exists at
+    // this level.
 
     #[test]
     fn fold_transaction_keys_cross_slot_pair_forces_multi_in_cluster() {
@@ -2117,6 +1893,7 @@ mod tests {
 
     // ---- RESET ------------------------------------------------------------
 
+    // FM-TXN-014
     #[test]
     fn reset_clears_covered_state() {
         let mut s = state();

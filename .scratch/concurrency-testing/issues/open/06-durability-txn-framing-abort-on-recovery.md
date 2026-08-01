@@ -2,7 +2,7 @@
 
 Status: needs-triage
 Type: AFK
-Origin: [issue 05](./05-vll-phase3-partial-commit-decision.md) decision (2026-07-21) — option 2b, deferred to the durability phase
+Origin: [issue 05](../) decision (2026-07-21) — option 2b, deferred to the durability phase
 
 ## What to build
 

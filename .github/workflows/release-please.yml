@@ -7,9 +7,6 @@
 
 name: Release Please
 'on':
-  push:
-    branches:
-    - main
   workflow_dispatch: {}
 jobs:
   release-please:

@@ -560,6 +560,15 @@
           "note": ""
         },
         {
+          "name": "FROGDB.HOTSHARDS",
+          "status": "supported",
+          "arity": {
+            "kind": "at_least",
+            "min": 0
+          },
+          "note": ""
+        },
+        {
           "name": "FROGDB.VERSION",
           "status": "supported",
           "arity": {
@@ -3868,9 +3877,9 @@
     }
   ],
   "summary": {
-    "supported": 370,
+    "supported": 371,
     "partial": 12,
     "unsupported": 15,
-    "extension": 133
+    "extension": 134
   }
 }

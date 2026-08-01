@@ -395,6 +395,24 @@ impl TestWal {
             .unwrap();
     }
 
+    /// Open a write group (writer's `begin_group`).
+    fn begin_group(&self) {
+        self.tx
+            .as_ref()
+            .unwrap()
+            .send(WalCommand::GroupBegin)
+            .unwrap();
+    }
+
+    /// Close the innermost write group (writer's `end_group`).
+    fn end_group(&self) {
+        self.tx
+            .as_ref()
+            .unwrap()
+            .send(WalCommand::GroupEnd)
+            .unwrap();
+    }
+
     /// Explicit flush: this flush attempt's result only (writer's `flush_async`).
     fn flush(&self) -> std::io::Result<()> {
         let (done_tx, done_rx) = flume::bounded(1);
@@ -423,6 +441,21 @@ impl TestWal {
         if let Some(h) = self.handle.take() {
             h.join().unwrap();
         }
+    }
+
+    /// Assert nothing commits for `window`.
+    ///
+    /// A negative assertion over a sleep, which is the safe direction: a loaded
+    /// or slow machine oversleeps, giving the behaviour under test *more* time
+    /// to appear, so the assertion only gets stronger — it cannot flake the way
+    /// a positive deadline can.
+    fn assert_no_commit_for(&self, what: &str, window: Duration) {
+        std::thread::sleep(window);
+        assert!(
+            self.committed_batches().is_empty(),
+            "expected no commit while {what}, got {:?}",
+            self.committed_batches()
+        );
     }
 
     fn wait_until(&self, what: &str, cond: impl Fn() -> bool) {
@@ -539,6 +572,177 @@ fn test_sink_clear_advances_durable_sequence() {
     wal.flush_through(0, 1).unwrap();
     assert_eq!(wal.outcomes.durable_sequence(), 1);
     assert!(wal.outcomes.last_flush_ok());
+    wal.shutdown();
+}
+
+/// The tear this whole mechanism exists to prevent, forced deterministically:
+/// without a write group, a producer that stalls between two entries of the
+/// *same* logical batch leaves a committed **prefix** in storage. A checkpoint
+/// cut (BGSAVE) or a crash in that window observes half a transaction.
+///
+/// Under full-suite load the stall is just the shard task being descheduled;
+/// here it is an explicit condition-wait for the timeout flush to land.
+///
+// FM-PERSISTENCE-001
+#[test]
+fn test_sink_ungrouped_entries_tear_across_batches() {
+    let mut wal = TestWal::spawn(1024 * 1024, Duration::from_millis(20));
+    wal.put(1, b"a", 10);
+    // The producer stalls here — the flush thread's timeout fires underneath it.
+    wal.wait_until("timeout flush of the partial batch", || {
+        !wal.committed_batches().is_empty()
+    });
+    wal.put(2, b"b", 10);
+    wal.put(3, b"c", 10);
+    wal.flush_through(0, 3).unwrap();
+
+    assert_eq!(
+        wal.committed_batches(),
+        vec![
+            vec![TestOp::Put(b"a".to_vec(), b"v".to_vec())],
+            vec![
+                TestOp::Put(b"b".to_vec(), b"v".to_vec()),
+                TestOp::Put(b"c".to_vec(), b"v".to_vec()),
+            ],
+        ],
+        "ungrouped entries are cut by the batch timeout"
+    );
+    wal.shutdown();
+}
+
+/// The fix: the same stall inside a write group commits as one batch. The
+/// timeout trigger is suppressed until the group closes, so no reader — a
+/// checkpoint or a crash-recovery replay — can observe the prefix.
+///
+// FM-PERSISTENCE-001
+#[test]
+fn test_sink_write_group_survives_the_batch_timeout() {
+    let timeout = Duration::from_millis(20);
+    let mut wal = TestWal::spawn(1024 * 1024, timeout);
+    wal.begin_group();
+    wal.put(1, b"a", 10);
+    // Stall well past several timeout periods: nothing may commit yet.
+    wal.assert_no_commit_for("a write group is open", timeout * 5);
+    wal.put(2, b"b", 10);
+    wal.put(3, b"c", 10);
+    wal.end_group();
+    wal.flush_through(0, 3).unwrap();
+
+    assert_eq!(
+        wal.committed_batches(),
+        vec![vec![
+            TestOp::Put(b"a".to_vec(), b"v".to_vec()),
+            TestOp::Put(b"b".to_vec(), b"v".to_vec()),
+            TestOp::Put(b"c".to_vec(), b"v".to_vec()),
+        ]],
+        "the whole group commits as one batch"
+    );
+    assert_eq!(wal.outcomes.durable_sequence(), 3);
+    wal.shutdown();
+}
+
+/// The size threshold is suppressed too: a group larger than the threshold
+/// still commits atomically. Atomicity outranks batch sizing — a group cannot
+/// be split without reintroducing the tear, so an oversized transaction buys
+/// its atomicity with one oversized write batch.
+///
+// FM-PERSISTENCE-001
+#[test]
+fn test_sink_write_group_survives_the_size_threshold() {
+    let mut wal = TestWal::spawn(100, Duration::from_secs(60));
+    wal.begin_group();
+    wal.put(1, b"a", 200);
+    wal.put(2, b"b", 200);
+    wal.assert_no_commit_for(
+        "a write group exceeds the size threshold",
+        Duration::from_millis(100),
+    );
+    wal.end_group();
+    // Closing re-arms the suppressed trigger: the oversized batch commits on
+    // its own, with no explicit flush.
+    wal.wait_until("the closed group to commit", || {
+        !wal.committed_batches().is_empty()
+    });
+    assert_eq!(
+        wal.committed_batches(),
+        vec![vec![
+            TestOp::Put(b"a".to_vec(), b"v".to_vec()),
+            TestOp::Put(b"b".to_vec(), b"v".to_vec()),
+        ]],
+        "one batch, threshold notwithstanding"
+    );
+    assert_eq!(wal.outcomes.durable_sequence(), 2);
+    wal.shutdown();
+}
+
+/// An explicit flush inside a group is still honoured. The producer is gone or
+/// is asking for durability now; answering "after your group closes" would
+/// deadlock it. The shard never does this — it flushes only after closing —
+/// so this pins the defensive branch, not a reachable behaviour.
+#[test]
+fn test_sink_explicit_flush_inside_a_group_is_honoured() {
+    let mut wal = TestWal::spawn(1024 * 1024, Duration::from_secs(60));
+    wal.begin_group();
+    wal.put(1, b"a", 10);
+    wal.flush().unwrap();
+    assert_eq!(
+        wal.committed_batches(),
+        vec![vec![TestOp::Put(b"a".to_vec(), b"v".to_vec())]],
+        "an explicit flush commits even mid-group"
+    );
+    wal.end_group();
+    wal.shutdown();
+}
+
+/// A producer that dies mid-group does not strand its entries: the disconnect
+/// drain commits what is staged. The group can never be closed, and losing the
+/// writes outright would be strictly worse than committing a prefix nobody can
+/// observe (the process is going away).
+#[test]
+fn test_sink_unclosed_group_commits_on_disconnect() {
+    let mut wal = TestWal::spawn(1024 * 1024, Duration::from_secs(60));
+    wal.begin_group();
+    wal.put(1, b"a", 10);
+    wal.put(2, b"b", 10);
+    wal.shutdown();
+
+    assert_eq!(
+        wal.committed_batches(),
+        vec![vec![
+            TestOp::Put(b"a".to_vec(), b"v".to_vec()),
+            TestOp::Put(b"b".to_vec(), b"v".to_vec()),
+        ]],
+        "the shutdown drain commits an unclosed group"
+    );
+    assert_eq!(wal.outcomes.durable_sequence(), 2);
+}
+
+/// Groups nest: only the outermost close re-arms the flush triggers, so a
+/// caller that wraps a batch cannot have its atomicity broken by an inner
+/// group closing early.
+#[test]
+fn test_sink_nested_write_groups_commit_as_one_batch() {
+    let timeout = Duration::from_millis(20);
+    let mut wal = TestWal::spawn(1024 * 1024, timeout);
+    wal.begin_group();
+    wal.put(1, b"a", 10);
+    wal.begin_group();
+    wal.put(2, b"b", 10);
+    wal.end_group(); // inner close: still inside the outer group
+    wal.put(3, b"c", 10);
+    wal.assert_no_commit_for("the outer group is still open", timeout * 5);
+    wal.end_group();
+    wal.flush_through(0, 3).unwrap();
+
+    assert_eq!(
+        wal.committed_batches(),
+        vec![vec![
+            TestOp::Put(b"a".to_vec(), b"v".to_vec()),
+            TestOp::Put(b"b".to_vec(), b"v".to_vec()),
+            TestOp::Put(b"c".to_vec(), b"v".to_vec()),
+        ]],
+        "the inner close does not cut the outer group"
+    );
     wal.shutdown();
 }
 

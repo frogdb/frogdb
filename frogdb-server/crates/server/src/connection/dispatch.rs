@@ -549,7 +549,7 @@ impl ConnectionHandler {
                     // what decides. A replica refusing PSYNC here is what keeps
                     // chained replication unsupported rather than silently
                     // half-working. This is the sole place this check lives.
-                    if self.is_replica.load(std::sync::atomic::Ordering::Relaxed)
+                    if self.is_replica.load(std::sync::atomic::Ordering::Acquire)
                         || self.cluster.primary_replication_handler.is_none()
                     {
                         return StageOutcome::ShortCircuit(vec![Response::error(
@@ -856,6 +856,7 @@ mod tests {
         ]
     };
 
+    // FM-TXN-006
     /// Validates [`PRE_DISPATCH_ORDER`] against every declared constraint — the
     /// endpoint invariants plus all [`MUST_PRECEDE`] pairs. Would catch a
     /// reorder that compiles but breaks a correctness invariant.
@@ -883,6 +884,7 @@ mod tests {
         }
     }
 
+    // FM-TXN-046
     /// Every stage's error disposition, pinned as data: `true` = an error from
     /// this stage is a `rejected_call` (nothing executed), `false` = a
     /// `failed_call` (an executor ran and errored). Guards the split the INFO

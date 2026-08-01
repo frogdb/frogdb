@@ -143,6 +143,7 @@ mod tests {
         }
     }
 
+    // FM-BLOCKING-001
     #[tokio::test]
     async fn response_wins() {
         let (tx, mut rx) = oneshot::channel();
@@ -155,6 +156,7 @@ mod tests {
         ));
     }
 
+    // FM-BLOCKING-004
     #[tokio::test]
     async fn channel_drop_yields_null_response() {
         let (tx, mut rx) = oneshot::channel::<Response>();
@@ -164,6 +166,7 @@ mod tests {
         assert!(matches!(outcome, WaitOutcome::Response(Response::Null)));
     }
 
+    // FM-BLOCKING-002
     #[tokio::test]
     async fn timeout_wins_when_idle() {
         // Keep the sender alive but never send, so only the deadline can fire.
@@ -175,6 +178,7 @@ mod tests {
         assert!(matches!(outcome, WaitOutcome::Timeout));
     }
 
+    // FM-BLOCKING-003
     #[tokio::test]
     async fn unblock_wins_over_idle_wait() {
         let (_tx, mut rx) = oneshot::channel::<Response>();
@@ -186,6 +190,7 @@ mod tests {
         ));
     }
 
+    // FM-BLOCKING-001
     #[tokio::test]
     async fn biased_response_beats_elapsed_deadline() {
         // Both the response and the deadline are ready: biased ordering must
@@ -203,6 +208,7 @@ mod tests {
         );
     }
 
+    // FM-BLOCKING-002, FM-BLOCKING-003
     #[test]
     fn timeout_reply_picks_nil_shape_per_op() {
         use frogdb_core::Direction;

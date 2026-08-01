@@ -247,14 +247,20 @@ pub enum ConnMutation {
 /// implemented by the server's `RoleManager` handle; `core` stays decoupled
 /// from the replication streaming machinery behind this trait.
 ///
-/// Both methods are fire-and-request: they flip the data-path role flag
-/// synchronously (so `ROLE`/`INFO`/the write guard reflect the new role
-/// immediately) and drive the stream teardown/startup the transition implies.
-/// See `frogdb-server`'s `role_manager` module.
+/// Both methods flip the data-path role flag synchronously (so
+/// `ROLE`/`INFO`/the write guard reflect the new role immediately) and drive
+/// the stream teardown/startup the transition implies. See `frogdb-server`'s
+/// `role_manager` module.
 pub trait RoleController: Send + Sync {
     /// Role Promotion: become a writable primary (`REPLICAOF NO ONE`). Stops
     /// any inbound replication stream and clears the replica flag. Idempotent.
-    fn request_promote(&self);
+    ///
+    /// Fallible: a promotion mints a replication identity and must persist it
+    /// before the flag flips. If that cannot be done the node stays a replica
+    /// and the error surfaces to the caller — a node that reported `+OK` while
+    /// its promotion was forgotten on disk would come back after a restart
+    /// advertising the identity it thought it had replaced.
+    fn request_promote(&self) -> Result<(), CommandError>;
 
     /// Role Demotion: become a replica of `primary` (`REPLICAOF host port` or a
     /// Raft-driven failover). Sets the replica flag, tears down any existing

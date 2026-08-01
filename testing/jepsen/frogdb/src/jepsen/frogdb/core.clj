@@ -39,6 +39,7 @@
             [jepsen.frogdb.cluster-db :as cluster-db]
             [jepsen.frogdb.cluster-client :as cluster-client]
             [jepsen.frogdb.cluster-formation :as cluster-formation]
+            [jepsen.frogdb.cluster-replication :as cluster-replication]
             [jepsen.frogdb.leader-election :as leader-election]
             [jepsen.frogdb.slot-migration :as slot-migration]
             [jepsen.frogdb.cross-slot :as cross-slot]
@@ -89,6 +90,7 @@
    ;; Replication workloads
    :replication replication/workload
    :replication-failover replication-failover/workload
+   :replication-failover-chain replication-failover/chain-workload
    :split-brain split-brain/workload
    :zombie zombie/workload
    :lag lag/workload
@@ -98,6 +100,9 @@
    :slot-migration slot-migration/workload
    :cross-slot cross-slot/workload
    :key-routing key-routing/workload
+   ;; Cluster-mode data replication (per-node PSYNC inside a Raft cluster)
+   :cluster-replication cluster-replication/workload
+   :cluster-lag lag/cluster-workload
    ;; Elle workloads
    :list-append list-append/workload
    ;; Gap analysis workloads
@@ -146,12 +151,14 @@
         cluster-node-count (get opts :cluster-nodes 3)
         ;; Replication workloads default to multi-node
         replication-workload? (contains? #{:replication :replication-failover
+                                           :replication-failover-chain
                                            :split-brain :zombie :lag
                                            :partition-recovery}
                                          (keyword (:workload opts)))
         ;; Cluster workloads default to cluster mode
         cluster-workload? (contains? #{:cluster-formation :leader-election :slot-migration
                                        :cross-slot :key-routing
+                                       :cluster-replication :cluster-lag
                                        :migration-recovery :concurrent-migration
                                        :membership-routing :rolling-restart}
                                      (keyword (:workload opts)))

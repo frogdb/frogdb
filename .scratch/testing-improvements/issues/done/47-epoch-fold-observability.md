@@ -110,3 +110,52 @@ None - can start immediately
 - .scratch/testing-improvements/audit/verdicts-F.md #1 (ADJUSTED L2/C1 — reframe required)
 - commands/cluster/mod.rs:247
 - cluster/src/wire.rs:136
+
+---
+
+## Follow-up resolution: the fold itself is gone (2026-07-28)
+
+This issue pinned the fold's behaviour and documented it honestly; it deliberately did not remove
+it. The removal happened under
+[PRD: Cluster epoch fold redesign](../../replication-cluster-rework/epoch-fold-redesign.md)
+(branch `worktree-agent-a8eb890ba0f01c596`, commit `41c1727d` plus follow-ups).
+
+What changed relative to what this issue left behind:
+
+- `fold_current_epoch` and its five unit tests are deleted. `CLUSTER INFO` reports
+  `cluster_current_epoch` as the replicated counter verbatim.
+- The Raft term is now its own field, `cluster_raft_term`, documented as node-local and
+  unreplicated. It is also exposed in the HTTP admin API (`raft_term`) and the debug web UI, so
+  the term is observable without a folded field.
+- The `current_epoch >= max(per-node config_epoch)` relationship this issue pinned still holds, but
+  now at its source: issue 64's `reconcile_incoming_epoch` ratchets the cluster-wide counter on
+  `AddNode` instead of a `max()` at the reporting site.
+  `test_config_epoch_counter_dominates_every_node_epoch_across_command_sequence`
+  (`crates/cluster/src/state.rs`) sweeps a mixed command sequence and asserts it after every step.
+- The "monotonic but not a reliable topology-change detector" caveat this issue documented is
+  **obsolete**: every Config Epoch bump is now visible in `cluster_current_epoch`. The remaining
+  caveat is `CLUSTER RESET HARD`, which resets the counter by design.
+- Docs: the architecture subsection this issue added ("`CLUSTER INFO`'s current epoch folds in the
+  Raft term") is replaced by "Config Epoch vs. Raft term", a field-by-field table plus why the fold
+  was wrong in both directions.
+
+Two integration tests this issue created were rebased onto the new contract rather than deleted:
+`test_cluster_info_epoch_vs_nodes_epoch_after_reelection_no_topology_change` now asserts a pure
+re-election leaves `cluster_current_epoch` **unchanged** (it previously tolerated the term-driven
+bump), and `test_cluster_info_epoch_monotonic_across_failover` asserts a strict increase where it
+previously had to accept equality.
+
+Rebasing `test_cluster_epoch_increases_after_failover` onto the real counter exposed a genuine
+product bug the fold had been hiding end-to-end: `FailureDetector` propagated its one-shot FAIL
+latch inline and leader-only, so a survivor that crossed `fail-threshold` while still a follower
+never flagged the dead node after winning the election — no epoch bump, no auto-failover, which is
+the shape of every leader-death failover. The detector now reconciles its local health view into
+the replicated topology once per check interval. Details in the PRD's implementation notes.
+
+### Review-fix round (2026-07-28)
+
+One observability change relative to the notes above: **standalone mode omits the
+`cluster_raft_term` line entirely** rather than reporting `cluster_raft_term:0`. A server with no
+Raft has no term, and printing `0` states something untrue — the same bar this issue was filed
+under. The other zeroed standalone fields (`cluster_current_epoch`, `cluster_my_epoch`) are
+unchanged: `0` is the accurate value for a counter that exists and has never moved.

@@ -93,6 +93,71 @@ pub fn consume_staged_replication_metadata(data_dir: &Path) {
     }
 }
 
+/// Throw away every artifact of an inherited full sync: the staged checkpoint
+/// directory and the replication metadata that rides with it (both the copy
+/// inside the staged dir and any copy a previous install already carried into
+/// `data_dir`).
+///
+/// A staged checkpoint is normally left on disk after a runtime install so a
+/// crash mid-install re-installs the same snapshot on the next boot
+/// (`replica/connection.rs`, `recovery/checkpoint.rs`). That replay is only
+/// harmless while the node is still following the history the snapshot came
+/// from. Once the node is **promoted** it heads its own history: reinstalling
+/// the inherited snapshot would move its live database aside and resurrect the
+/// old primary's replication id, silently discarding every write it took as a
+/// primary. So promotion consumes the staging area instead of leaving it armed.
+///
+/// Disarmed atomically: the staged directory is **renamed aside first**, which
+/// is the single step that makes the boot installer stop seeing it, and only
+/// then deleted. A recursive delete is not atomic — interrupted halfway it
+/// leaves a partial directory that the installer may still accept, so a crash
+/// during promotion could resurrect a mangled snapshot. After the rename the
+/// leftover `*.discarded` directory is inert (the installer only looks at the
+/// exact staged name), so its removal is best-effort.
+///
+/// Idempotent: missing files are not an error. A rename failure **is** an error
+/// and is propagated — the staging area is still armed, so the caller must not
+/// complete a promotion on top of it.
+pub fn discard_staged_full_sync(data_dir: &Path) -> io::Result<()> {
+    if let Some(staged) = frogdb_persistence::rocks::staged::StagedCheckpoint::for_db_dir(data_dir)
+        && staged.exists()
+    {
+        let disarmed = staged.dir().with_extension("discarded");
+        // A leftover from an earlier discard whose delete did not finish: a
+        // rename onto a non-empty directory fails, so clear the target first.
+        if disarmed.exists()
+            && let Err(e) = fs::remove_dir_all(&disarmed)
+        {
+            tracing::warn!(
+                path = %disarmed.display(),
+                error = %e,
+                "Failed to clear a leftover discarded checkpoint directory"
+            );
+        }
+        fs::rename(staged.dir(), &disarmed).map_err(|e| {
+            tracing::error!(
+                path = %staged.dir().display(),
+                error = %e,
+                "Failed to disarm the staged full-sync checkpoint"
+            );
+            e
+        })?;
+        tracing::info!(
+            path = %staged.dir().display(),
+            "Discarded the staged full-sync checkpoint inherited from the previous primary"
+        );
+        if let Err(e) = fs::remove_dir_all(&disarmed) {
+            tracing::warn!(
+                path = %disarmed.display(),
+                error = %e,
+                "Discarded checkpoint is disarmed but could not be deleted"
+            );
+        }
+    }
+    consume_staged_replication_metadata(data_dir);
+    Ok(())
+}
+
 /// Replication state that is persisted to disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplicationState {
@@ -246,18 +311,55 @@ impl ReplicationState {
     /// the live value as an argument keeps `secondary_offset` from ever being
     /// frozen behind where the stream has actually reached.
     pub fn new_replication_id(&mut self, live_offset: u64) {
-        // Store current ID as secondary for failover continuity
-        self.secondary_id = Some(self.replication_id.clone());
-        self.secondary_offset = live_offset as i64;
-
-        // Generate new primary ID
-        self.replication_id = generate_replication_id();
-
+        let minted = generate_replication_id();
+        self.shift_replication_id(minted, live_offset);
         tracing::info!(
             new_id = %self.replication_id,
             secondary_id = ?self.secondary_id,
             "Generated new replication ID"
         );
+    }
+
+    /// Adopt `new_id` as the primary history, demoting the current id into the
+    /// failover window frozen at `live_offset`.
+    ///
+    /// Redis's `shiftReplicationId()`. Two callers: minting on promotion
+    /// ([`Self::new_replication_id`]) and a replica adopting the id carried by a
+    /// `+CONTINUE` — in both cases everything up to `live_offset` is byte-identical
+    /// under the old id, so downstream replicas following it can still be resumed.
+    ///
+    /// `live_offset` is **inclusive** here: FrogDB's window check is
+    /// `requested_offset <= secondary_offset`, so it does not carry Redis's `+1`
+    /// (see [`Self::window_contains`]).
+    pub fn shift_replication_id(&mut self, new_id: String, live_offset: u64) {
+        self.secondary_id = Some(std::mem::replace(&mut self.replication_id, new_id));
+        self.secondary_offset = live_offset as i64;
+    }
+
+    /// Drop the failover continuity window (`secondary_id` / `secondary_offset`).
+    ///
+    /// The analogue of Redis's `clearReplicationId2()`. The window says "I used
+    /// to be `secondary_id` up to `secondary_offset`, so I can still serve a
+    /// partial resync to anyone who was following that history". The moment this
+    /// node adopts a *different* node's history — every `+FULLRESYNC` and every
+    /// checkpoint install — that claim becomes a lie: the node no longer holds
+    /// the old stream's data, and honoring a `+CONTINUE` against it would ship a
+    /// tail from the new history under the old id. Redis clears the window at
+    /// exactly these points (`replication.c` `readSyncBulkPayload`).
+    pub fn clear_secondary_window(&mut self) {
+        self.secondary_id = None;
+        self.secondary_offset = -1;
+    }
+
+    /// Adopt `replication_id` as this node's history, dropping any stale failover
+    /// window in the same step.
+    ///
+    /// Every replica-side adoption point (`+FULLRESYNC`, `+CONTINUE` id refresh,
+    /// checkpoint metadata) goes through here so the window can never outlive the
+    /// history it described. See [`Self::clear_secondary_window`].
+    pub fn adopt_replication_history(&mut self, replication_id: String) {
+        self.replication_id = replication_id;
+        self.clear_secondary_window();
     }
 
     /// Check whether a PSYNC request's offset window can be continued from this
@@ -316,7 +418,10 @@ impl ReplicationState {
     /// (now stale or freshly generated) state file held. Runtime-only fields
     /// (`master_host`/`master_port`) are preserved.
     pub fn apply_staged_metadata(&mut self, meta: &StagedReplicationMetadata) {
-        self.replication_id = meta.replication_id.clone();
+        // Adopting a checkpoint means adopting the primary's history wholesale —
+        // any failover window this node carried described a stream it no longer
+        // holds, so it goes with it.
+        self.adopt_replication_history(meta.replication_id.clone());
         // A staged checkpoint offset *is* a save-point offset.
         self.offset_at_save = meta.replication_offset;
     }
@@ -563,6 +668,101 @@ mod tests {
     }
 
     #[test]
+    fn discard_staged_full_sync_disarms_the_staging_area() {
+        let parent = tempdir().unwrap();
+        let data_dir = parent.path().join("db");
+        fs::create_dir_all(&data_dir).unwrap();
+        let staged =
+            frogdb_persistence::rocks::staged::StagedCheckpoint::for_db_dir(&data_dir).unwrap();
+        fs::create_dir_all(staged.dir()).unwrap();
+        fs::write(staged.replication_metadata_path(), "{}").unwrap();
+        // A previous install may already have carried a copy into the data dir.
+        let carried = ReplicationState::staged_metadata_path(&data_dir);
+        fs::write(&carried, "{}").unwrap();
+
+        discard_staged_full_sync(&data_dir).unwrap();
+
+        assert!(
+            !staged.exists(),
+            "a promoted node must not leave an inherited checkpoint armed for the next boot"
+        );
+        assert!(!carried.exists());
+        // Idempotent: a second promotion (or a node that never full-synced)
+        // finds nothing to discard and does not fail.
+        discard_staged_full_sync(&data_dir).unwrap();
+    }
+
+    #[test]
+    fn discard_staged_full_sync_disarms_before_deleting() {
+        let parent = tempdir().unwrap();
+        let data_dir = parent.path().join("db");
+        fs::create_dir_all(&data_dir).unwrap();
+        let staged =
+            frogdb_persistence::rocks::staged::StagedCheckpoint::for_db_dir(&data_dir).unwrap();
+        fs::create_dir_all(staged.dir()).unwrap();
+        // A leftover from an earlier discard whose delete never finished. The
+        // rename target must be cleared, not collided with, or the staging area
+        // would stay armed.
+        let disarmed = staged.dir().with_extension("discarded");
+        fs::create_dir_all(&disarmed).unwrap();
+        fs::write(disarmed.join("stale.sst"), b"junk").unwrap();
+
+        discard_staged_full_sync(&data_dir).unwrap();
+
+        assert!(!staged.exists(), "staging area must be disarmed");
+        assert!(!disarmed.exists(), "the renamed copy is deleted afterwards");
+    }
+
+    #[test]
+    fn discard_staged_full_sync_keeps_the_metadata_when_disarming_fails() {
+        let parent = tempdir().unwrap();
+        let data_dir = parent.path().join("db");
+        fs::create_dir_all(&data_dir).unwrap();
+        let staged =
+            frogdb_persistence::rocks::staged::StagedCheckpoint::for_db_dir(&data_dir).unwrap();
+        fs::create_dir_all(staged.dir()).unwrap();
+        let carried = ReplicationState::staged_metadata_path(&data_dir);
+        fs::write(&carried, "{}").unwrap();
+
+        // Make both the pre-clear and the rename fail: the rename target is a
+        // non-empty directory (rename onto it is ENOTEMPTY) whose entries cannot
+        // be unlinked (no write permission on the directory).
+        let disarmed = staged.dir().with_extension("discarded");
+        fs::create_dir_all(disarmed.join("child")).unwrap();
+        let mut perms = fs::metadata(&disarmed).unwrap().permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(&disarmed, perms).unwrap();
+        let restore = |dir: &Path| {
+            let mut perms = fs::metadata(dir).unwrap().permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            perms.set_readonly(false);
+            fs::set_permissions(dir, perms).unwrap();
+        };
+        if fs::write(disarmed.join("probe"), b"x").is_ok() {
+            // Permission checks are bypassed (running as root); this failure
+            // cannot be provoked here.
+            restore(&disarmed);
+            return;
+        }
+
+        let result = discard_staged_full_sync(&data_dir);
+        restore(&disarmed);
+
+        assert!(
+            result.is_err(),
+            "a still-armed staging area must fail the promotion, not be ignored"
+        );
+        assert!(
+            staged.exists(),
+            "the staging area is still armed — the caller must see that"
+        );
+        assert!(
+            carried.exists(),
+            "metadata must survive a failed disarm so the aborted promotion stays consistent"
+        );
+    }
+
+    #[test]
     fn offset_at_save_loads_from_legacy_replication_offset_key() {
         // Existing on-disk state files were written with the old
         // `replication_offset` key; the serde alias keeps them loadable so a
@@ -584,5 +784,77 @@ mod tests {
         });
         let state: ReplicationState = serde_json::from_str(&json.to_string()).unwrap();
         assert_eq!(state.offset_at_save, 1234);
+    }
+
+    #[test]
+    fn shift_replication_id_freezes_window_inclusively() {
+        let mut state = ReplicationState::new();
+        let old = state.replication_id.clone();
+        state.new_replication_id(100);
+
+        assert_eq!(state.secondary_id.as_deref(), Some(old.as_str()));
+        // Inclusive boundary: no Redis-style `+1`, because `window_contains`
+        // compares with `<=`.
+        assert_eq!(state.secondary_offset, 100);
+        assert_ne!(state.replication_id, old);
+        assert!(state.window_contains(&old, 100, 100));
+        assert!(!state.window_contains(&old, 101, 200));
+    }
+
+    #[test]
+    fn clear_secondary_window_closes_the_old_history() {
+        let mut state = ReplicationState::new();
+        let old = state.replication_id.clone();
+        state.new_replication_id(100);
+        assert!(state.window_contains(&old, 50, 100));
+
+        state.clear_secondary_window();
+
+        assert!(state.secondary_id.is_none());
+        assert_eq!(
+            state.secondary_offset, -1,
+            "-1 is the INFO 'no window' sentinel"
+        );
+        assert!(!state.window_contains(&old, 50, 100));
+        // The primary branch is untouched.
+        let current = state.replication_id.clone();
+        assert!(state.window_contains(&current, 50, 100));
+    }
+
+    #[test]
+    fn adopt_replication_history_drops_a_stale_window() {
+        let mut state = ReplicationState::new();
+        let old = state.replication_id.clone();
+        state.new_replication_id(100);
+
+        let adopted = generate_replication_id();
+        state.adopt_replication_history(adopted.clone());
+
+        assert_eq!(state.replication_id, adopted);
+        assert!(state.secondary_id.is_none());
+        assert_eq!(state.secondary_offset, -1);
+        assert!(
+            !state.window_contains(&old, 50, 100),
+            "a node that adopted someone else's history no longer holds the old stream"
+        );
+    }
+
+    #[test]
+    fn apply_staged_metadata_drops_a_stale_window() {
+        let mut state = ReplicationState::new();
+        let old = state.replication_id.clone();
+        state.new_replication_id(100);
+
+        let meta = StagedReplicationMetadata {
+            replication_id: generate_replication_id(),
+            replication_offset: 4242,
+            checksum: None,
+        };
+        state.apply_staged_metadata(&meta);
+
+        assert_eq!(state.replication_id, meta.replication_id);
+        assert_eq!(state.offset_at_save, 4242);
+        assert!(state.secondary_id.is_none());
+        assert!(!state.window_contains(&old, 50, 4242));
     }
 }

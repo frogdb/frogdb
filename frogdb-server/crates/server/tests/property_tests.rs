@@ -351,6 +351,7 @@ proptest! {
         })?;
     }
 
+    // FM-TXN-014
     /// RESET after any state modification returns connection to clean state
     #[test]
     fn test_reset_restores_clean_state(
