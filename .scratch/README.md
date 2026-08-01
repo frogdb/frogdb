@@ -12,14 +12,14 @@ temp dir. Several files here are load-bearing — `scripts/coverage-depth.py` wr
 
 | directory | state | open | done | what |
 |---|---|--:|--:|---|
-| [testing-improvements-round2](testing-improvements-round2/) | active | — | — | round-2 testing-gap audit; 249 findings, **proposal stage, no issues filed yet** |
+| [testing-improvements-round2](testing-improvements-round2/) | active | 95 | 0 | round-2 testing-gap audit; 249 findings → 95 issues, incl. **~40 suspected live defects** |
 | [arch-deepening](arch-deepening/) | active | 15 | 5 | architecture deepening rounds; proposals backlog empty, issues backlog is not |
 | [concurrency-testing](concurrency-testing/) | active | 4 | 7 | concurrency invariant testing; phases 1–5 shipped, incl. one **real un-root-caused bug** (issue 11) |
 | [replication-cluster-rework](replication-cluster-rework/) | active | 4 | 0 | four rework PRDs, all merged 2026-07-30; follow-ups outstanding |
 | [naming-cleanup](naming-cleanup/) | active | 1 | 7 | canonical terminology; decisions now canon in `CONTEXT.md` files |
 | [testing-improvements](testing-improvements/) | archive-of-record | 4 | 63 | round-1 testing-gap audit. **Do not delete** — live write target + 10 inbound refs |
 
-Totals: **28 open, 82 done** across 110 issues.
+Totals: **123 open, 82 done** across 205 issues.
 
 ## Conventions
 

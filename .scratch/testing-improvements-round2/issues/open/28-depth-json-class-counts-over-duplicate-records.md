@@ -1,0 +1,100 @@
+# `depth.json` `class_counts` are computed over duplicate function records — `untested` is inflated ~7×
+
+Status: ready-for-agent
+Type: AFK
+Origin: round-2 testing audit 2026-07-28 — 15 parallel area audits, `.scratch/testing-improvements-round2/`
+Source: MASTER.md §1 "Data-quality caveat" · MASTER.md §7 D3
+Score: not scored — coverage-pipeline defect, measured directly by the coordinator rather than found by the finding rubric
+Area: tooling — `scripts/coverage-depth.py`, `docs/agents/coverage-depth.md`
+
+## Context
+
+`target/llvm-cov/depth/depth.json`'s `class_counts` are computed over the export's raw
+`functions[]` array, which carries one record per **monomorphisation** plus `::<_>` generic
+placeholder records (one copy of which is zeroed). The same function is therefore counted several
+times, and because the zeroed copies land in the `untested` bucket, that class is inflated by
+roughly 7× against a name-dedupe and roughly 7× again against a span-dedupe.
+
+The class counts are what the audit brief handed to 15 parallel agents as the ranking signal
+(`BRIEF.md:52` quotes `untested (14849 fns)`, `single-test (6475)`, `monoculture (4325)`,
+`hot-but-shallow (13)`), and they are what the generated report and the 2026-07-28 audit summary
+publish. Separately, the generated report asserts that its de-duplicated line figure "matches
+`llvm-cov export --format=lcov` exactly" — **that claim is false**, because the lcov artifact it
+claims to match carries essentially no test-execution data (issue 27).
+
+The per-file `line_counts` in `depth.json` are sound. Every audit finding whose sole evidence was a
+depth class was re-checked against span-deduped data before being reported, and all survived.
+
+## Evidence
+
+Measured directly:
+
+- **`untested` 14 849 raw → 7 008 name-deduped → 2 163 span-deduped.**
+
+Two of the re-checks came out sharper under span-dedupe, and are the record of why this matters:
+
+| function | span-deduped | reading |
+|---|---|---|
+| `failure_detector.rs:330 trigger_auto_failover` | 0 tests, **0/104 regions** | genuinely never executed *(04/F2)* |
+| `routing.rs:197 execute_cross_shard_copy` | 0 tests, **0/102 regions** | genuinely never executed *(03/F2)* |
+| `strategies.rs:153 merge_sum_integers` | 2 tests, 10/10 regions | full region coverage, both tests all-success *(03/F1)* |
+| `acl/categories/mod.rs:149 all_for_command` | **3551 tests, 233 560 execs, 7/7 regions** | maximally covered, and the covered path is `unwrap_or_default()` returning `[]` for 185 of 356 commands *(15/F1)* |
+| `shard/types.rs:479 invalidate_keys_all_modes` | 37 tests, 16/18 regions | well tested — and the lazy-expiry callsite calls the *other* function *(02/F1)* |
+
+Production path:
+
+- `scripts/coverage-depth.py:499-507` — `index_functions`'s own docstring records that
+  `--ignore-filename-regex` prunes `files[]` but **not** `functions[]`, so the export "still
+  carries every dependency monomorphization instantiated into these binaries (24k of 26k entries
+  for a single small crate)". It filters by *filename* only; it does not fold instantiations of the
+  same function together before classifying.
+- `scripts/coverage-depth.py:839` — the report emits: *"The de-duplicated figure is what the HTML
+  gutter shows and matches `llvm-cov export --format=lcov` exactly."* That equality cannot hold
+  while `lcov.info` carries 323/128 130 nonzero `DA` records (issue 27).
+- `docs/agents/coverage-depth.md:63-77` — "Reading the classes" documents `untested` /
+  `single-test` / `monoculture` / `hot-but-shallow` / `well-covered` / `covered` as one class per
+  *function*, with no mention of monomorphisation duplicates. This is the doc that has to be
+  corrected.
+- `.scratch/testing-improvements/audit/coverage-depth-2026-07-28.md` and
+  `.scratch/testing-improvements-round2/BRIEF.md:52` both publish the inflated raw figures.
+
+## What to fix
+
+1. Dedupe `functions[]` before classification — fold monomorphisations and drop `::<_>` placeholder
+   records, keyed by demangled name *and* source span, so a function is classified once.
+2. Recompute `class_counts` from the deduped set and publish both the raw and deduped totals so the
+   difference is visible rather than silent.
+3. Remove or correct the "matches `llvm-cov export --format=lcov` exactly" claim at
+   `scripts/coverage-depth.py:839`. If the equality is to be kept, it must be re-established
+   against a fixed `lcov.info` (issue 27) and asserted, not stated.
+4. Correct `docs/agents/coverage-depth.md`: document the dedupe rule in "Reading the classes" and
+   drop any claim of exact agreement with the lcov artifact.
+5. Regenerate `.scratch/testing-improvements/audit/coverage-depth-2026-07-28.md` from the fixed
+   pipeline, and annotate the round-2 `BRIEF.md` figures as superseded rather than editing history.
+
+## Acceptance criteria
+
+- [ ] `depth.json`'s `class_counts` are computed over deduped records; `untested` reports 2 163
+      (span-deduped) rather than 14 849 for the 2026-07-28 suite, or the report explains in one
+      line why the number differs.
+- [ ] The report shows raw and deduped counts side by side.
+- [ ] No claim of exact equality with `llvm-cov export --format=lcov` remains at
+      `scripts/coverage-depth.py:839` unless it is backed by an assertion in the pipeline.
+- [ ] `docs/agents/coverage-depth.md` documents the dedupe rule and contains no uncorrected
+      equality claim.
+- [ ] A regression test on the pipeline: a fixture export containing two monomorphisations plus one
+      zeroed `::<_>` record for the same function yields exactly one classified entry.
+- [ ] Per-file `line_counts` are unchanged by this work — they were already sound.
+
+## Test boundary
+
+**Not a product test.** The one mechanical check worth having is a fixture-driven unit test on
+`scripts/coverage-depth.py`'s `index_functions` / classification step, asserting that duplicate
+records collapse. There is no product behaviour to exercise, so none of the five levels applies.
+
+## Depends on
+
+Issue 27, `.scratch/testing-improvements-round2/issues/` — the equality claim in step 3 cannot be
+re-established until `lcov.info` carries real data. Issue 31,
+`.scratch/testing-improvements-round2/issues/`, is the decision on when to do both relative to the
+testing work.

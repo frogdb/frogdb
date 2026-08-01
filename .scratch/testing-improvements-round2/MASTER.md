@@ -5,6 +5,11 @@
 
 Per-area proposals: [`proposals/`](proposals/) (01–15).
 
+**This document is the audit record; the actionable form is [`issues/open/`](issues/open/)** —
+95 issues, number ranges mapped in [`README.md`](README.md). §2 themes are issues 19–26, the §3
+defect table is issues 35–76 in table order, §4 and §5 are issues 33 and 34, §7 decisions are
+issues 29–32, and the §6/`INFRASTRUCTURE.md` items are issues 01–18.
+
 ---
 
 ## 1. Headline
@@ -31,13 +36,16 @@ inputs, both since confirmed by direct measurement:
 | `target/llvm-cov/depth/depth.json` | `class_counts` computed over duplicate function records (monomorphisations + `::<_>` generic placeholders, one copy zeroed) | `untested` 14 849 raw → 7 008 name-deduped → **2 163 span-deduped** |
 
 Consequences: `coverage-nightly.yml` consumes `just coverage-lcov`, so **the CI coverage
-number is meaningless**; and `docs/agents/coverage-depth.md`'s claim that the deduplicated
-figure "matches `llvm-cov export --format=lcov` exactly" is false. The per-file
+number is meaningless**; and the claim that the deduplicated figure "matches `llvm-cov export
+--format=lcov` exactly" is false. *(Attribution corrected during filing: that string is not in
+`docs/agents/coverage-depth.md` — it is emitted into every generated report by
+`scripts/coverage-depth.py:839`, with a matching comment at `:667`. The doc is what has to be
+corrected; the script is what says it.)* The per-file
 `line_counts` in `depth.json` are sound, and the strongest findings below are anchored on
 those or on read source, not on depth classes.
 
-Both should be filed as their own issues, independent of this audit. Until fixed, no
-coverage number from this repo should be quoted.
+Both are filed as their own issues — 27 and 28 in [`issues/open/`](issues/open/) — independent
+of this audit. Until fixed, no coverage number from this repo should be quoted.
 
 Every finding whose sole evidence was a depth class was re-checked against **span-deduped**
 data before being listed below. All survived, and two came out sharper:
@@ -153,8 +161,11 @@ no second definition exists.
 Found by reading, not by test failure. **None of these are test gaps** — the proposed
 tests fail against today's code. Ordered by consequence.
 
-Two were verified directly by the coordinator (marked ✅); the rest carry the auditing
-agent's file:line evidence and need confirmation before or during fixing.
+**One** was verified directly by the coordinator (marked ✅); the rest carry the auditing
+agent's file:line evidence and need confirmation before or during fixing. *(This line read
+"Two" until filing; only one row was ever marked. Two further rows — 03/F1 and 02/F1 — are
+independently corroborated by the span-deduped table in §1, which is weaker than a direct
+verification and is cited as such in their issues.)*
 
 ### Security
 
@@ -242,6 +253,16 @@ Found while auditing; each is worse than no test, because it reads as coverage.
 - `core/tests/concurrency.rs:641` asserts partial cross-shard visibility is *acceptable*, contradicting VLL's stated contract — rename or delete *(12)*
 
 ## 5. Dead code found (delete, do not test)
+
+> **Correction, recorded during filing.** The heading overstates the consensus: **five of the ten
+> items below are contested by the proposal that found them**, which recommends wiring them up
+> rather than deleting them. `CrashTestHarness` (13/F15 wants the API *used*) · `ConfigParam::default`
+> (15/F15 wants the invariant wired) · `set_running_function` (09/F15 — deleting it makes
+> `FUNCTION STATS running_script` permanently null, which is the actual bug) · `new_replication_id`
+> (14 — it is the function replid rotation will need, blocked on
+> `.scratch/replication-cluster-rework/`) · `PageCacheSink` (13/F14 recommends *exporting* it under
+> `test-support`). Issue 34, [`issues/open/`](issues/open/), marks each contested item as such and
+> does not resolve them. Do not treat this section as a delete list.
 
 `connection/builder.rs` (175 lines, zero call sites) · `CrashTestHarness` byte-level verify
 API (13 fns, zero call sites) · `scan.rs` SCAN/KEYS impl duplicating the live `scatter.rs`
