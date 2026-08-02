@@ -142,11 +142,11 @@ concurrency-nightly SEEDS='250' OPS='150':
 # Run the full test suite (unit + integration + concurrency + simulation)
 test-all: test concurrency
 
-# Run tokio-coz causal profiler tests (requires tokio_unstable)
+# Run tokio-coz causal profiler tests (requires tokio_unstable, set workspace-wide in
+# .cargo/config.toml — this recipe no longer exports its own RUSTFLAGS, which used to fork a
+# second copy of the build cache and made the `cargo sweep` bracketing necessary)
 test-coz:
-    -cargo sweep --stamp
-    RUSTFLAGS="--cfg tokio_unstable" cargo test -p tokio-coz
-    -cargo sweep --time 0
+    cargo test -p tokio-coz
 
 # Run browser integration tests (requires chromedriver running on port 9515)
 test-browser:

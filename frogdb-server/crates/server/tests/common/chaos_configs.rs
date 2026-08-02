@@ -223,6 +223,16 @@ impl ChaosConfigBuilder {
         self
     }
 
+    /// Seed the injector's random draws (jitter, connection resets).
+    ///
+    /// Pass the simulation's seed. Left at `0` the injector is still reproducible — it is a
+    /// fixed seed, not process entropy — but two sims that differ only in seed would then
+    /// receive the identical chaos sequence.
+    pub fn seed(mut self, seed: u64) -> Self {
+        self.config.seed = seed;
+        self
+    }
+
     /// Add a per-shard delay.
     pub fn shard_delay(mut self, shard_id: usize, ms: u64) -> Self {
         self.config.shard_delays_ms.insert(shard_id, ms);

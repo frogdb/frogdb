@@ -183,8 +183,17 @@ pub async fn real_frogdb_server(num_shards: usize) -> Result<(), BoxError> {
 ///
 /// The fake path never opens RocksDB: recovery leaves `rocks_store = None` and
 /// the shard spawn selects the in-process fake sink.
-pub async fn real_frogdb_server_fake_persistence(num_shards: usize) -> Result<(), BoxError> {
+///
+/// `seed` is the simulation's seed. It seeds the chaos injector's generator so that every
+/// random draw the server makes under simulation is a function of the run's seed rather than
+/// of process entropy — the injector is inert at these settings, but a config that carries the
+/// seed cannot silently become nondeterministic when a caller later enables jitter.
+pub async fn real_frogdb_server_fake_persistence(
+    num_shards: usize,
+    seed: u64,
+) -> Result<(), BoxError> {
     let config = Config {
+        chaos: frogdb_server::config::ChaosConfig::default().with_seed(seed),
         server: ServerConfig {
             bind: "0.0.0.0".to_string(),
             port: SERVER_PORT,

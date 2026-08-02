@@ -51,8 +51,9 @@ pub fn run_pubsub_workload(workload: &PubSubWorkload, num_shards: usize) -> PubS
         num_shards,
         ..SimConfig::default()
     });
+    let seed = workload.seed;
     sim.host(SERVER_HOST, move || {
-        real_frogdb_server_fake_persistence(num_shards)
+        real_frogdb_server_fake_persistence(num_shards, seed)
     });
 
     let history = Arc::new(Mutex::new(PubSubHistory::new()));

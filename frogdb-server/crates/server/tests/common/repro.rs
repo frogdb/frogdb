@@ -1,8 +1,9 @@
 //! Repro-file read/write for the generated-workload seed sweep.
 //!
-//! On a sweep failure the harness writes `target/concurrency-repros/<seed>.json`
-//! capturing the exact `(seed, profile, config)` so the failure can be replayed
-//! in isolation via `just concurrency-repro <file>`.
+//! On a sweep failure the harness writes
+//! `target/concurrency-repros/<seed>-<profile>-<ops>.json` capturing the exact
+//! `(seed, profile, config)` so the failure can be replayed in isolation via
+//! `just concurrency-repro <file>`.
 
 #![allow(dead_code)]
 
@@ -39,9 +40,26 @@ pub fn read_repro(path: impl AsRef<Path>) -> ReproFile {
         .unwrap_or_else(|e| panic!("parse repro {}: {e}", path.as_ref().display()))
 }
 
-/// The default repro-file path for a seed: `<workspace-root>/target/concurrency-repros/<seed>.json`.
-pub fn repro_path(seed: u64) -> PathBuf {
-    concurrency_repro_dir().join(format!("{seed}.json"))
+/// The default repro-file path for a run, keyed by `(seed, profile, ops)`:
+/// `<workspace-root>/target/concurrency-repros/<seed>-<profile>-<ops>.json`.
+///
+/// The key is the full triple rather than the bare seed because the same seed is reused
+/// across profiles and workload sizes (`seed_sweep_short_workloads` and `seed_sweep_txheavy`
+/// both walk `0..20`, and the nightly tier reruns those seeds at a larger `ops_per_client`).
+/// Keying on the seed alone made those runs collide: the last failure to be written silently
+/// overwrote every earlier one, so the uploaded artifact directory could not describe more
+/// than one failing configuration per seed and `just concurrency-repro` would replay the
+/// wrong workload.
+pub fn repro_path(seed: u64, profile: Profile, ops_per_client: usize) -> PathBuf {
+    concurrency_repro_dir().join(format!(
+        "{seed}-{}-{ops_per_client}.json",
+        profile_slug(profile)
+    ))
+}
+
+/// Lowercase filename-safe profile token (`TxHeavy` -> `txheavy`).
+fn profile_slug(profile: Profile) -> String {
+    format!("{profile:?}").to_lowercase()
 }
 
 /// The repro directory, anchored deterministically rather than trusting the test process's
@@ -89,16 +107,35 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The path key is the full `(seed, profile, ops)` triple: two runs of the same seed at
+    /// different profiles or workload sizes must not overwrite each other's repro file.
+    #[test]
+    fn repro_path_is_keyed_by_seed_profile_and_ops() {
+        let base = repro_path(42, Profile::Mixed, 30);
+        assert!(
+            base.ends_with("target/concurrency-repros/42-mixed-30.json"),
+            "unexpected repro path {}",
+            base.display()
+        );
+        assert_ne!(
+            base,
+            repro_path(42, Profile::TxHeavy, 30),
+            "profile ignored"
+        );
+        assert_ne!(base, repro_path(42, Profile::Mixed, 90), "ops ignored");
+        assert_ne!(base, repro_path(43, Profile::Mixed, 30), "seed ignored");
+    }
+
     /// `repro_path()` must resolve to the workspace-root `target/concurrency-repros/`,
     /// regardless of the test process's CWD — nextest runs test binaries with CWD set to the
     /// crate root, not the repo root, so a CWD-relative path would silently miss the directory
     /// the nightly CI workflow uploads as an artifact.
     #[test]
     fn repro_path_resolves_under_workspace_root_target_dir() {
-        let path = repro_path(42);
+        let path = repro_path(42, Profile::Mixed, 30);
         assert!(
-            path.ends_with("target/concurrency-repros/42.json"),
-            "expected path to end with target/concurrency-repros/42.json, got {}",
+            path.ends_with("target/concurrency-repros/42-mixed-30.json"),
+            "expected path to end with target/concurrency-repros/42-mixed-30.json, got {}",
             path.display()
         );
 
