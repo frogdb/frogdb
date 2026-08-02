@@ -172,7 +172,7 @@ core-test area pattern="":
     case "{{area}}" in
       txn)         crates="-p frogdb-vll -p frogdb-txn" ;;
       persistence) crates="-p frogdb-persistence -p frogdb-recovery" ;;
-      replication) crates="-p frogdb-replication" ;;
+      replication) crates="-p frogdb-replication -p frogdb-replication-runtime" ;;
       cluster)     crates="-p frogdb-cluster" ;;
       *) echo "unknown area: {{area}} (txn|persistence|replication|cluster)" >&2; exit 2 ;;
     esac

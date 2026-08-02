@@ -45,8 +45,8 @@ AREAS: dict[str, tuple[str, str, list[str]]] = {
         [],
     ),
     "replication": (
-        "frogdb-server",
-        "frogdb-server/crates/server/src/replication/executor.rs",
+        "frogdb-replication-runtime",
+        "frogdb-server/crates/replication-runtime/src/install.rs",
         [],
     ),
     "cluster": (

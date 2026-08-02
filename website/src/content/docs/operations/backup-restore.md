@@ -66,7 +66,7 @@ Do this by staging the snapshot as a `checkpoint_ready` directory **next to** `d
 in its parent directory) before starting the server. This reuses the same staged-checkpoint
 install path FrogDB already runs on every boot for replica full sync
 (`frogdb-server/crates/persistence/src/rocks/checkpoint.rs`,
-`frogdb-server/crates/server/src/recovery/checkpoint.rs`): on startup, before opening RocksDB,
+`frogdb-server/crates/recovery/src/checkpoint.rs`): on startup, before opening RocksDB,
 FrogDB looks for `checkpoint_ready` beside `data-dir`, verifies it's a complete database, moves
 any existing `data-dir` aside to `<data-dir>_backup_<unix-timestamp>` (never deletes it), and
 renames `checkpoint_ready` into place as the new `data-dir`.

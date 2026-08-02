@@ -15,3 +15,4 @@ Warm incremental medians after touching the area's primary file: `check` = `carg
 | 2026-07-31 | dd2f6704 | txn | frogdb-txn | 1.8 | 2.6 | 27 |
 | 2026-08-01 | cf7c95d3 | persistence | frogdb-recovery | 4.7 | 4.0 | 11 |
 | 2026-08-02 | 57ae8cef | persistence | frogdb-recovery | 5.8 | 3.9 | 20 |
+| 2026-08-02 | 1d0df774 | replication | frogdb-replication-runtime | 11.3 | 3.6 | 8 |

@@ -188,7 +188,7 @@ pub struct Server {
     /// The same checker, un-erased, so the live `self-fence-on-replica-loss` and
     /// `replica-freshness-timeout-ms` setters stay reachable (a
     /// `dyn QuorumChecker` hides them). `Some` exactly on a primary.
-    replication_self_fence: Option<Arc<crate::replication_quorum::ReplicationQuorumChecker>>,
+    replication_self_fence: Option<Arc<frogdb_replication_runtime::ReplicationQuorumChecker>>,
 
     /// Optional connection task monitor for tokio-metrics instrumentation.
     conn_monitor: Option<tokio_metrics::TaskMonitor>,
@@ -473,7 +473,7 @@ impl Server {
     /// `replica-freshness-timeout-ms` seams.
     pub fn replication_self_fence(
         &self,
-    ) -> Option<&Arc<crate::replication_quorum::ReplicationQuorumChecker>> {
+    ) -> Option<&Arc<frogdb_replication_runtime::ReplicationQuorumChecker>> {
         self.replication_self_fence.as_ref()
     }
 

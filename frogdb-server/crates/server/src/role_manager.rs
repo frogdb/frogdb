@@ -135,7 +135,7 @@ pub struct RoleManager {
     /// re-promotion starts unarmed instead of inheriting a fence earned by
     /// replica sessions that are no longer this node's. `None` only in unit
     /// tests that exercise the flag lifecycle without replication wiring.
-    replication_self_fence: Option<Arc<crate::replication_quorum::ReplicationQuorumChecker>>,
+    replication_self_fence: Option<Arc<frogdb_replication_runtime::ReplicationQuorumChecker>>,
     /// The replication half of a role transition (see [`PrimaryStintTarget`]).
     /// `None` only in unit tests that exercise the flag lifecycle without
     /// replication wiring — production always wires the primary handler.
@@ -180,7 +180,7 @@ impl RoleManager {
     /// its arming. Called once, during cluster init.
     pub fn set_replication_self_fence(
         &mut self,
-        checker: Arc<crate::replication_quorum::ReplicationQuorumChecker>,
+        checker: Arc<frogdb_replication_runtime::ReplicationQuorumChecker>,
     ) {
         self.replication_self_fence = Some(checker);
     }
@@ -1025,7 +1025,7 @@ mod tests {
         use std::time::Duration;
 
         let tracker = Arc::new(ReplicationTrackerImpl::new());
-        let checker = Arc::new(crate::replication_quorum::ReplicationQuorumChecker::new(
+        let checker = Arc::new(frogdb_replication_runtime::ReplicationQuorumChecker::new(
             tracker.clone(),
             true,
             Duration::from_secs(3),

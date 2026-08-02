@@ -811,7 +811,7 @@ pub struct ConfigManager {
     /// reason as the lag thresholds above; it never fences until a replica has
     /// actually streamed from this node.
     replication_self_fence:
-        std::sync::OnceLock<Arc<crate::replication_quorum::ReplicationQuorumChecker>>,
+        std::sync::OnceLock<Arc<frogdb_replication_runtime::ReplicationQuorumChecker>>,
     /// Serializes the whole CONFIG SET lifecycle (see [`Self::set`]).
     set_lock: Mutex<()>,
 }
@@ -1020,7 +1020,7 @@ impl ConfigManager {
     /// configured values into the checker on publish.
     pub fn set_replication_self_fence(
         &self,
-        checker: Arc<crate::replication_quorum::ReplicationQuorumChecker>,
+        checker: Arc<frogdb_replication_runtime::ReplicationQuorumChecker>,
     ) {
         if self.replication_self_fence.set(checker).is_ok()
             && let Some(c) = self.replication_self_fence.get()
@@ -4825,7 +4825,7 @@ maxmemory = 0
     fn self_fence_sets_reach_the_published_quorum_checker() {
         let config = test_config();
         let manager = ConfigManager::new(&config);
-        let checker = Arc::new(crate::replication_quorum::ReplicationQuorumChecker::new(
+        let checker = Arc::new(frogdb_replication_runtime::ReplicationQuorumChecker::new(
             Arc::new(frogdb_core::ReplicationTrackerImpl::new()),
             true,
             std::time::Duration::from_millis(3000),

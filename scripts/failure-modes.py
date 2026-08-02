@@ -58,6 +58,7 @@ NEXTEST_CRATES = [
     "frogdb-recovery",
     "frogdb-core",
     "frogdb-replication",
+    "frogdb-replication-runtime",
 ]
 
 # `## FM-TXN-001 — title`

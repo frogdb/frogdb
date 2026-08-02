@@ -122,7 +122,7 @@ Two independent mechanisms let a primary care about replica acknowledgment:
 
 `WAIT` is **per-node and keyless in every mode**: it counts the replicas attached to the node that received it and never redirects. Cluster mode adds no special case — see [Clustering Internals: `WAIT` semantics](/architecture/clustering/#wait-semantics) for the full contract, including why a cluster-wide guarantee is a client-side fan-out.
 
-**Quorum fencing** is separate. `ReplicationQuorumChecker` (`frogdb-server/crates/server/src/replication_quorum.rs`) arms the first time a replica reaches the streaming phase and stays armed thereafter. Once armed, if no fresh streaming replica has acked within the freshness window, writes are rejected with `-CLUSTERDOWN` ("quorum lost, writes rejected"). This is gated by `self-fence-on-replica-loss` (default `true`). There is no `-NOREPL` error in FrogDB.
+**Quorum fencing** is separate. `ReplicationQuorumChecker` (`frogdb-server/crates/replication-runtime/src/quorum.rs`) arms the first time a replica reaches the streaming phase and stays armed thereafter. Once armed, if no fresh streaming replica has acked within the freshness window, writes are rejected with `-CLUSTERDOWN` ("quorum lost, writes rejected"). This is gated by `self-fence-on-replica-loss` (default `true`). There is no `-NOREPL` error in FrogDB.
 
 Both knobs are live: the toggle and `replica-freshness-timeout-ms` are atomics read at each write pre-check, so `CONFIG SET` applies from the next command without a restart. Two consequences worth planning around:
 

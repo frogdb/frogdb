@@ -33,8 +33,10 @@ Sources of truth (author must open each and confirm the diagram matches):
   (`crates/vll/`), not `core/src/vll/`.
 - `frogdb-server/crates/core/src/pubsub.rs` — `PubSubMessage`,
   `ShardSubscriptions`.
-- `frogdb-server/crates/server/src/replication/` — `PrimaryReplicationHandler`,
-  `ReplicaReplicationHandler`, `ReplicaCommandExecutor`, replication frames.
+- `frogdb-server/crates/replication/src/` — `PrimaryReplicationHandler`,
+  `ReplicaReplicationHandler`, replication frames.
+- `frogdb-server/crates/replication-runtime/src/` — `ReplicaCommandExecutor`
+  (`executor.rs`), the full-resync export/install seams, `ReplicationQuorumChecker`.
 - `frogdb-server/crates/cluster/src/` — `ClusterState`, `ClusterStateMachine`,
   cluster commands (`commands.rs`, `state.rs`, `types.rs`). NOTE: cluster is its
   own crate (`crates/cluster/`), not `core/src/cluster/`. Raft wiring

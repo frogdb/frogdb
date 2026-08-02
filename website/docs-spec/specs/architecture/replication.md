@@ -45,7 +45,7 @@ authority):
   `WAIT`).
 - `frogdb-server/crates/replication/src/split_brain_log.rs` — divergent-write
   audit log.
-- `frogdb-server/crates/server/src/replication_quorum.rs` — `ReplicationQuorumChecker`
+- `frogdb-server/crates/replication-runtime/src/quorum.rs` — `ReplicationQuorumChecker`
   (CLUSTERDOWN write fencing).
 - `frogdb-server/crates/config/src/replication.rs` — `min_replicas_to_write`,
   `min_replicas_timeout_ms`, `self_fence_on_replica_loss` (default values).
@@ -186,7 +186,7 @@ reference (S3), not be hand-typed.
 
 Drift guards:
 - S7 code-path check must cover every `crates/replication/...` and
-  `crates/server/src/replication_quorum.rs` path cited here.
+  `crates/replication-runtime/src/quorum.rs` path cited here.
 - No hardcoded buffer capacities in prose unless traceable to a named const; if a
   capacity is stated (e.g. broadcast channel size), cite the source line in a
   comment for reviewers and re-verify on each edit — these are `channel(N)`

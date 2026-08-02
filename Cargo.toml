@@ -12,6 +12,7 @@ members = [
     "frogdb-server/crates/txn",
     "frogdb-server/crates/recovery",
     "frogdb-server/crates/replication",
+    "frogdb-server/crates/replication-runtime",
     "frogdb-server/crates/commands",
     "frogdb-server/crates/core",
     "frogdb-server/crates/shard-harness",
@@ -135,6 +136,7 @@ frogdb-vll = { path = "frogdb-server/crates/vll" }
 frogdb-txn = { path = "frogdb-server/crates/txn" }
 frogdb-recovery = { path = "frogdb-server/crates/recovery" }
 frogdb-replication = { path = "frogdb-server/crates/replication" }
+frogdb-replication-runtime = { path = "frogdb-server/crates/replication-runtime" }
 frogdb-commands = { path = "frogdb-server/crates/commands" }
 frogdb-protocol = { path = "frogdb-server/crates/protocol" }
 frogdb-types = { path = "frogdb-server/crates/types" }

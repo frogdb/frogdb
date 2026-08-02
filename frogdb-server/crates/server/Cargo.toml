@@ -74,6 +74,7 @@ frogdb-txn.workspace = true
 frogdb-recovery.workspace = true
 frogdb-debug.workspace = true
 frogdb-replication.workspace = true
+frogdb-replication-runtime.workspace = true
 frogdb-commands.workspace = true
 frogdb-search.workspace = true
 frogdb-telemetry.workspace = true

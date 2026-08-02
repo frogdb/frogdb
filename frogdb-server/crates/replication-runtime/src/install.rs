@@ -33,8 +33,8 @@
 use std::io;
 use std::path::Path;
 
-use crate::config::Config;
 use bytes::Bytes;
+use frogdb_config::Config;
 use frogdb_core::persistence::{RocksConfig, RocksStore, deserialize, recover_shard_into};
 use frogdb_core::shard::shard_for_key;
 use frogdb_core::sync::Arc;

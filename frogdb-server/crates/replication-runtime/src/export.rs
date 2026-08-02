@@ -1,6 +1,6 @@
 //! Reading this node's **live** keyspace for a full resync it must serve.
 //!
-//! The mirror image of [`install`](super::install). A primary with
+//! The mirror image of [`install`](crate::install). A primary with
 //! `persistence.enabled = false` has no RocksDB to checkpoint, but a full resync
 //! still owes the replica the whole dataset — Redis serves exactly this case by
 //! forking and serializing the RDB straight to the socket. FrogDB serializes

@@ -1,8 +1,9 @@
 //! Quorum checker for replication mode.
 //!
 //! Monitors replica ACK freshness via the ReplicationTrackerImpl. When no
-//! replica has ACKed recently, `has_quorum()` returns false, causing guards.rs
-//! to reject writes with CLUSTERDOWN — fencing the primary during partitions.
+//! replica has ACKed recently, `has_quorum()` returns false, causing the
+//! server's write gate (`commands/guards.rs`) to reject writes with
+//! CLUSTERDOWN — fencing the primary during partitions.
 
 use frogdb_core::ReplicationTrackerImpl;
 use frogdb_core::command::QuorumChecker;

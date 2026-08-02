@@ -1,21 +1,23 @@
 //! Server-side replication handling.
 //!
 //! The core replication protocol (frame encoding, state management, tracker,
-//! primary/replica handlers, fullsync) lives in the `frogdb-replication` crate.
+//! primary/replica handlers, fullsync) lives in the `frogdb-replication` crate,
+//! and the shard-touching runtime behind its injected seams (replica apply,
+//! full-resync export/install, the replica-loss write fence) lives in
+//! `frogdb-replication-runtime`.
 //!
-//! This module provides the executor, which applies replicated commands to shards.
-
-pub mod executor;
-pub mod export;
-pub mod install;
+//! What is left here is the connection-coupled half: the `REPLICAOF` /
+//! `REPLCONF` / `PSYNC` command handlers. This module re-exports the other two
+//! crates so the server's call sites keep a single `crate::replication` facade.
 
 pub use crate::commands::replication::*;
-pub use executor::ReplicaCommandExecutor;
-pub use export::live_snapshot_source;
-pub use install::LiveSnapshotInstaller;
 // Transaction reconstruction + the consume loop live in the replication crate;
-// the server contributes only the `ReplicaApplier` impl (`ReplicaCommandExecutor`).
+// the server contributes only the `ReplicaApplier` impl (`ReplicaCommandExecutor`),
+// which lives in the replication-runtime crate.
 pub use frogdb_replication::{ApplyError, ReplicaApplier, consume_frames};
+pub use frogdb_replication_runtime::{
+    LiveSnapshotInstaller, ReplicaCommandExecutor, live_snapshot_source,
+};
 
 // Re-export from frogdb-replication for backward compatibility.
 pub use frogdb_replication::{

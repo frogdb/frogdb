@@ -16,7 +16,7 @@ use crate::replication::{
     LagThresholdConfig, PrimaryReplicationHandler, ReplicaReplicationHandler, ReplicationIdentity,
     SplitBrainBufferConfig,
 };
-use crate::replication_quorum::ReplicationQuorumChecker;
+use frogdb_replication_runtime::ReplicationQuorumChecker;
 
 /// Result of the replication initialization phase.
 pub(super) struct ReplicationInitResult {

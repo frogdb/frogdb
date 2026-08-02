@@ -105,7 +105,7 @@ pub(super) async fn init_cluster(
     // The replication self-fence checker, so a Role Demotion can un-latch its
     // arming (a re-promoted node must not inherit a fence earned by replica
     // sessions that are no longer its own).
-    replication_self_fence: Option<Arc<crate::replication_quorum::ReplicationQuorumChecker>>,
+    replication_self_fence: Option<Arc<frogdb_replication_runtime::ReplicationQuorumChecker>>,
     #[cfg(not(feature = "turmoil"))] tls_runtime: &Option<
         Arc<crate::tls_runtime::TlsRuntimeHandle>,
     >,

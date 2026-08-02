@@ -9,7 +9,7 @@ Scope: the full-sync payload path — what a primary puts on the wire when it gr
 (`frogdb-replication/src/replica/connection.rs`), the shard-level export/install seam
 (`frogdb-core/src/shard/dispatch_replication.rs`), the dataset framing they share
 (`frogdb-persistence/src/serialization/dataset.rs`), and the server-side wiring that connects them
-(`frogdb-server/src/replication/{export,install}.rs`). Rows stop at what a *client of the replica*
+(`frogdb-replication-runtime/src/{export,install}.rs`). Rows stop at what a *client of the replica*
 can observe once the sync reports done.
 
 Adjacent specs: the boot-time half of a full sync — installing a staged checkpoint and adopting the
