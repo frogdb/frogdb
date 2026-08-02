@@ -241,8 +241,23 @@ impl TransactionState {
     }
 
     /// Record a watched key with its watch-time version, shard, and liveness.
+    ///
+    /// First watch wins: re-`WATCH`ing a key that is already in the watch set
+    /// keeps the *earlier* snapshot, so a write that landed between the two
+    /// WATCHes still aborts the EXEC. Overwriting would re-arm the CAS against
+    /// the newer version and silently forget that write — a WATCH false
+    /// negative. Redis has the same rule from the other side:
+    /// `watchForKey()` returns early for an already-watched key, and
+    /// `CLIENT_DIRTY_CAS` is cleared only by EXEC/DISCARD/UNWATCH/RESET. The
+    /// liveness flag rides along for the same reason: a key watched live and
+    /// since expired must not be downgraded to an already-stale watch, which
+    /// never aborts. Only the set-clearing transitions ([`Self::unwatch_all`],
+    /// [`Self::take`], [`Self::discard`], [`Self::clear`]) let a later WATCH
+    /// take a fresh snapshot.
     pub fn watch_key(&mut self, key: Bytes, shard_id: usize, version: u64, live_at_watch: bool) {
-        self.watches.insert(key, (shard_id, version, live_at_watch));
+        self.watches
+            .entry(key)
+            .or_insert((shard_id, version, live_at_watch));
     }
 
     /// Forget all watched keys (UNWATCH).
@@ -348,6 +363,40 @@ mod tests {
         let summary = t.take(false).expect("in transaction");
         assert!(matches!(summary.target, TransactionTarget::Multi(_)));
         assert!(summary.target.resolve().is_err(), "Multi → CROSSSLOT");
+    }
+
+    // FM-TXN-050
+    #[test]
+    fn rewatching_a_key_keeps_the_first_snapshot() {
+        let mut t = TransactionState::default();
+        t.watch_key(Bytes::from_static(b"k"), 0, 11, true);
+        // A writer moved the version and the key died between the two WATCHes.
+        // Redis' `watchForKey` no-ops on an already-watched key, so neither the
+        // version nor the liveness observation may be laundered away here.
+        t.watch_key(Bytes::from_static(b"k"), 0, 22, false);
+
+        t.begin().expect("MULTI after WATCH");
+        let summary = t.take(false).expect("in transaction");
+        assert_eq!(summary.watches.len(), 1, "one entry per watched key");
+        assert_eq!(
+            summary.watches[0].version, 11,
+            "the first WATCH's version snapshot wins"
+        );
+        assert!(
+            summary.watches[0].live_at_watch,
+            "the first WATCH's liveness observation wins"
+        );
+
+        // Clearing the watch set does re-arm: the next WATCH is a first watch.
+        t.watch_key(Bytes::from_static(b"k"), 0, 33, false);
+        t.unwatch_all();
+        t.watch_key(Bytes::from_static(b"k"), 0, 44, true);
+        t.begin().expect("MULTI after UNWATCH + WATCH");
+        let summary = t.take(false).expect("in transaction");
+        assert_eq!(
+            summary.watches[0].version, 44,
+            "UNWATCH lets the next WATCH take a fresh snapshot"
+        );
     }
 
     // FM-TXN-013
