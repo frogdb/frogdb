@@ -53,6 +53,19 @@ use crate::slot_migration::{
     route_queued_batch, route_watched_keys, watch_slot_is_locally_served,
 };
 
+/// The `-MISCONF` reply sent while `snapshot.stop-writes-on-save-error` is on
+/// and the last background save failed.
+///
+/// The prefix is Redis' verbatim, because that is what clients and operator
+/// runbooks match on. The rest is not: Redis' text says the dataset is at risk,
+/// which would be a lie here. FrogDB acknowledges a write only once the WAL has
+/// it, so a failed snapshot costs backup freshness, not acknowledged data — and
+/// the remediation names the fields FrogDB actually publishes.
+pub(crate) const SAVE_ERROR_REFUSAL: &str = "MISCONF Errors writing snapshots. \
+     Refusing writes because snapshot.stop-writes-on-save-error is on. \
+     Acknowledged writes are still durable in the WAL; backups are not. \
+     Check rdb_last_bgsave_error in INFO persistence and disk space, then BGSAVE.";
+
 /// Everything the pre-dispatch gauntlet's *guard* stages read or mutate —
 /// connection-mode state, the registry, cluster/admin dep handles, per-command
 /// scratch — and nothing on the socket. Constructible in a unit test with no
@@ -298,6 +311,35 @@ impl PreDispatchView<'_> {
             return Some(Response::error(
                 "READONLY You can't write against a read only replica.",
             ));
+        }
+
+        // MISCONF: reject writes while the last background save failed, but only
+        // when the operator asked for it (`snapshot.stop-writes-on-save-error`,
+        // off by default). Redis runs the equivalent check
+        // (`writeCommandsDeniedByDiskError`) immediately before its
+        // `NOREPLICAS` gate and after its OOM gate, which is exactly here:
+        // FrogDB's OOM refusal is shard-side (`check_memory_for_write`), so
+        // everything in this function already precedes it. It sits *after* the
+        // read-only-replica check rather than before it — FrogDB's ladder puts
+        // READONLY first so a slot redirect can take precedence — which is also
+        // what keeps a replica answering `-READONLY` (a client-actionable
+        // reply) instead of `-MISCONF` about a backup it does not own.
+        //
+        // Replica *apply* traffic cannot reach this: the replication executor
+        // sends `CoreMsg::Execute` straight to the shards under
+        // `REPLICA_INTERNAL_CONN_ID` and never builds a `PreDispatchView`. A
+        // primary whose saves are failing therefore refuses its clients without
+        // stalling the replica it is feeding — the same carve-out Redis makes
+        // with its "unless coming from our master" clause.
+        //
+        // Shares the two bounds documented on the `NOREPLICAS` gate below:
+        // writes issued from inside a Lua script, and a MULTI queued while
+        // healthy then EXEC'd after a save failed, are not gated here.
+        if let Some(cmd_impl) = self.registry.get_entry(cmd_name)
+            && cmd_impl.flags().contains(CommandFlags::WRITE)
+            && self.config_manager.refuse_writes_on_save_error()
+        {
+            return Some(Response::error(SAVE_ERROR_REFUSAL));
         }
 
         // Self-fence: reject writes when quorum is lost in cluster mode

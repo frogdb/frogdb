@@ -1,6 +1,8 @@
 //! Integration tests for persistence: write → shutdown → restart → read cycles.
 
-use crate::common::response_helpers::{assert_ok, unwrap_array, unwrap_bulk, unwrap_integer};
+use crate::common::response_helpers::{
+    assert_bulk_eq, assert_error_prefix, assert_ok, unwrap_array, unwrap_bulk, unwrap_integer,
+};
 use crate::common::test_server::{TestServer, TestServerConfig};
 use bytes::Bytes;
 use frogdb_protocol::Response;
@@ -2820,6 +2822,167 @@ async fn bgsave_failure_is_visible_in_info_persistence() {
         info_field_str(&recovered_info, "rdb_current_bgsave_time_sec"),
         "-1",
         "nothing is running once the save has been counted:\n{recovered_info}"
+    );
+
+    drop(client);
+    server.shutdown().await;
+}
+
+/// Break `dir` so the snapshot stager cannot create its staging directory,
+/// drive one `BGSAVE` through to failure, then make `dir` writable again.
+///
+/// The permissions are restored before the caller asserts anything, so a
+/// failing assertion still leaves a removable temp dir behind.
+#[cfg(unix)]
+async fn fail_one_background_save(
+    client: &mut crate::common::test_server::TestClient,
+    dir: &std::path::Path,
+) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let set_mode = |mode: u32| {
+        let mut perms = std::fs::metadata(dir).unwrap().permissions();
+        perms.set_mode(mode);
+        std::fs::set_permissions(dir, perms).unwrap();
+    };
+
+    set_mode(0o500);
+    let resp = client.command(&["BGSAVE"]).await;
+    assert!(
+        matches!(&resp, Response::Simple(msg)
+            if String::from_utf8_lossy(msg).contains("Background saving started")),
+        "Unexpected BGSAVE response: {resp:?}"
+    );
+
+    let mut info = String::new();
+    let mut failed = false;
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        info = String::from_utf8(
+            unwrap_bulk(&client.command(&["INFO", "persistence"]).await).to_vec(),
+        )
+        .unwrap();
+        if info_field_str(&info, "rdb_last_bgsave_status") == "err" {
+            failed = true;
+            break;
+        }
+    }
+
+    set_mode(0o700);
+    assert!(
+        failed,
+        "the save under an unwritable dir must fail:\n{info}"
+    );
+}
+
+// FM-PERSISTENCE-046
+/// With `stop-writes-on-save-error` on, a failed background save must make the
+/// server refuse client writes with `-MISCONF` until a save succeeds again.
+///
+/// Reads keep working throughout — the point of the latch is that backups are
+/// stale, not that the keyspace is unreadable — and the refusal is armed by
+/// *both* halves: flipping the flag on a healthy server changes nothing.
+#[cfg(unix)]
+#[tokio::test]
+async fn failed_save_refuses_writes_when_stop_writes_on_save_error_is_on() {
+    let data_root = tempfile::tempdir().unwrap();
+    let snapshot_root = tempfile::tempdir().unwrap();
+    let server = TestServer::start_standalone_with_config(snapshot_observability_config(
+        &data_root.path().join("data"),
+        snapshot_root.path(),
+    ))
+    .await;
+    let mut client = server.connect().await;
+
+    // Arming the flag on a healthy server refuses nothing: no save has failed.
+    assert_ok(
+        &client
+            .command(&["CONFIG", "SET", "stop-writes-on-save-error", "yes"])
+            .await,
+    );
+    assert_ok(&client.command(&["SET", "k", "v"]).await);
+
+    fail_one_background_save(&mut client, snapshot_root.path()).await;
+
+    assert_error_prefix(
+        &client.command(&["SET", "k", "v2"]).await,
+        "MISCONF Errors writing snapshots.",
+    );
+    // Reads are unaffected, and the refused write did not land.
+    assert_bulk_eq(&client.command(&["GET", "k"]).await, b"v");
+
+    // A successful save clears the latch.
+    let resp = client.command(&["BGSAVE"]).await;
+    assert!(
+        matches!(&resp, Response::Simple(msg)
+            if String::from_utf8_lossy(msg).contains("Background saving")),
+        "Unexpected BGSAVE response: {resp:?}"
+    );
+    let mut recovered = false;
+    let mut info = String::new();
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        info = String::from_utf8(
+            unwrap_bulk(&client.command(&["INFO", "persistence"]).await).to_vec(),
+        )
+        .unwrap();
+        if info_field_u64(&info, "rdb_saves") >= 1 {
+            recovered = true;
+            break;
+        }
+    }
+    assert!(recovered, "the second BGSAVE must succeed:\n{info}");
+
+    assert_ok(&client.command(&["SET", "k", "v2"]).await);
+    assert_bulk_eq(&client.command(&["GET", "k"]).await, b"v2");
+
+    drop(client);
+    server.shutdown().await;
+}
+
+// FM-PERSISTENCE-046
+/// The refusal is opt-in: under the default (`stop-writes-on-save-error` off) a
+/// failed background save is reported in `INFO persistence` and nothing else.
+///
+/// FrogDB's durability is the WAL, so a failed snapshot costs backup freshness,
+/// not acknowledged writes — refusing writes over it is a parity checkbox, never
+/// the default. Turning the flag on *after* the failure still latches, which is
+/// what makes the check a live read of the coordinator rather than a decision
+/// frozen at save time.
+#[cfg(unix)]
+#[tokio::test]
+async fn snapshot_failure_does_not_refuse_writes_under_the_default() {
+    let data_root = tempfile::tempdir().unwrap();
+    let snapshot_root = tempfile::tempdir().unwrap();
+    let server = TestServer::start_standalone_with_config(snapshot_observability_config(
+        &data_root.path().join("data"),
+        snapshot_root.path(),
+    ))
+    .await;
+    let mut client = server.connect().await;
+    assert_ok(&client.command(&["SET", "k", "v"]).await);
+
+    let config = unwrap_array(
+        client
+            .command(&["CONFIG", "GET", "stop-writes-on-save-error"])
+            .await,
+    );
+    assert_eq!(unwrap_bulk(&config[1]), b"no", "the default must be off");
+
+    fail_one_background_save(&mut client, snapshot_root.path()).await;
+
+    assert_ok(&client.command(&["SET", "k", "v2"]).await);
+    assert_bulk_eq(&client.command(&["GET", "k"]).await, b"v2");
+
+    // Same failed save, flag flipped afterwards: now it refuses.
+    assert_ok(
+        &client
+            .command(&["CONFIG", "SET", "stop-writes-on-save-error", "yes"])
+            .await,
+    );
+    assert_error_prefix(
+        &client.command(&["SET", "k", "v3"]).await,
+        "MISCONF Errors writing snapshots.",
     );
 
     drop(client);

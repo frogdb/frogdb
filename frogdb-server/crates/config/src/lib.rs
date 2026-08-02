@@ -24,6 +24,7 @@ pub mod param;
 pub mod param_id;
 pub mod params;
 pub mod persistence;
+pub mod recovery;
 pub mod replication;
 pub mod security;
 pub mod server;
@@ -54,6 +55,7 @@ pub use param::{ConfigError, ConfigParam, DynParam, Propagation};
 pub use param_id::{ImmutableParamId, MutableParamId};
 pub use params::{ConfigParamInfo, config_param_registry};
 pub use persistence::{PersistenceConfig, SnapshotConfig};
+pub use recovery::{OnDecodeFailure, RecoveryConfig};
 pub use replication::ReplicationConfigSection;
 pub use security::{AclFileConfig, SecurityConfig};
 pub use server::ServerConfig;
@@ -106,6 +108,11 @@ pub struct Config {
     #[serde(default)]
     #[section]
     pub snapshot: SnapshotConfig,
+
+    /// Startup-recovery policy.
+    #[serde(default)]
+    #[section]
+    pub recovery: RecoveryConfig,
 
     /// HTTP server configuration (metrics, health, debug UI, admin REST API).
     #[serde(default)]
@@ -322,6 +329,7 @@ impl Config {
         self.replication.validate()?;
         self.tracing.validate()?;
         self.persistence.validate()?;
+        self.recovery.validate()?;
         self.cluster.validate()?;
         self.admin.validate()?;
         self.tls.validate()?;

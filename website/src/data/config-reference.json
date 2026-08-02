@@ -663,6 +663,19 @@
         }
       ]
     },
+    "recovery": {
+      "description": "Recovery policy configuration.",
+      "fields": [
+        {
+          "name": "on-decode-failure",
+          "type": "string",
+          "default": "continue",
+          "description": "What to do when a stored value fails to deserialize during restore:\n`\"continue\"` (skip the key, count it, keep the rest of the keyspace) or\n`\"refuse\"` (fail startup on the first one).\n\n`continue` is the default because one bit-rotted value must not cost a\nwhole keyspace, and because the unambiguous case — a database where\nnothing at all decoded — already refuses without any policy. Choose\n`refuse` when serving a silently smaller keyspace is worse than not\nserving.\n\nBoot-time only: recovery has already run by the time a client can issue\n`CONFIG SET`.",
+          "config_param": "recovery-on-decode-failure",
+          "mutable": false
+        }
+      ]
+    },
     "replication": {
       "description": "Replication configuration.",
       "fields": [
@@ -954,6 +967,14 @@
           "default": 3600,
           "description": "Interval between automatic snapshots in seconds (0 = disabled).",
           "config_param": "snapshot-interval-secs",
+          "mutable": true
+        },
+        {
+          "name": "stop-writes-on-save-error",
+          "type": "boolean",
+          "default": false,
+          "description": "Refuse client writes with `-MISCONF` while the last background save has\nfailed, until a save succeeds. FrogDB's answer to Redis'\n`stop-writes-on-bgsave-error` — but **off** by default, where Redis'\nis on.\n\nThe defaults differ because the artifact means different things. In\nRedis the RDB/AOF *is* the durability mechanism, so a failing save means\nacknowledged writes are at risk. In FrogDB the WAL is the durability\nmechanism and a snapshot is a backup artifact, so a failing save means\nbackups are stale — real, alarm-worthy, and not on its own a reason to\nstop serving. Turn it on for Redis parity or when a broken backup is\nconsidered a reason to stop taking writes.",
+          "config_param": "stop-writes-on-save-error",
           "mutable": true
         }
       ]

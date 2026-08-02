@@ -295,9 +295,6 @@ impl PersistenceConfig {
 }
 
 /// Snapshot configuration.
-//
-// No fields are exposed as CONFIG GET/SET parameters today; each still carries
-// an explicit `#[param(skip)]` so the per-field coverage guarantee holds.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ConfigParams)]
 #[params(section = "snapshot")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
@@ -317,6 +314,22 @@ pub struct SnapshotConfig {
     #[param(skip)]
     // skip: borderline: snapshot retention count, no Redis CONFIG analogue; snapshot subsystem liveness unverified
     pub max_snapshots: usize,
+
+    /// Refuse client writes with `-MISCONF` while the last background save has
+    /// failed, until a save succeeds. FrogDB's answer to Redis'
+    /// `stop-writes-on-bgsave-error` — but **off** by default, where Redis'
+    /// is on.
+    ///
+    /// The defaults differ because the artifact means different things. In
+    /// Redis the RDB/AOF *is* the durability mechanism, so a failing save means
+    /// acknowledged writes are at risk. In FrogDB the WAL is the durability
+    /// mechanism and a snapshot is a backup artifact, so a failing save means
+    /// backups are stale — real, alarm-worthy, and not on its own a reason to
+    /// stop serving. Turn it on for Redis parity or when a broken backup is
+    /// considered a reason to stop taking writes.
+    #[serde(default = "default_stop_writes_on_save_error")]
+    #[param(mutable)]
+    pub stop_writes_on_save_error: bool,
 }
 
 fn default_snapshot_dir() -> PathBuf {
@@ -331,12 +344,21 @@ fn default_max_snapshots() -> usize {
     DEFAULT_MAX_SNAPSHOTS
 }
 
+fn default_stop_writes_on_save_error() -> bool {
+    DEFAULT_STOP_WRITES_ON_SAVE_ERROR
+}
+
+/// Default for `snapshot.stop-writes-on-save-error`. Inverted from Redis'
+/// `stop-writes-on-bgsave-error yes` on purpose — see the field's docs.
+pub const DEFAULT_STOP_WRITES_ON_SAVE_ERROR: bool = false;
+
 impl Default for SnapshotConfig {
     fn default() -> Self {
         Self {
             snapshot_dir: default_snapshot_dir(),
             snapshot_interval_secs: default_snapshot_interval_secs(),
             max_snapshots: default_max_snapshots(),
+            stop_writes_on_save_error: default_stop_writes_on_save_error(),
         }
     }
 }
