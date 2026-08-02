@@ -6,7 +6,7 @@ use crate::fullsync::{
     SNAPSHOT_MARKER, calculate_bytes_checksum, receive_checkpoint_files,
 };
 use crate::state::ReplicationState;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -14,10 +14,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::offset::ReplicaOffset;
+use super::payload_reader::PayloadReader;
 use super::{FullSyncPayload, SnapshotInstaller};
 use parking_lot::RwLock;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::timeout;
 
 use crate::BoxedStream;
@@ -105,6 +106,10 @@ pub(crate) enum SyncType {
 }
 
 pub struct ReplicaConnection {
+    /// The link to the primary. Read it unbuffered (`read_resp_line`,
+    /// `read_buf`) or through [`Self::payload_reader`] — **never** through a
+    /// locally constructed `BufReader`, which would silently swallow the live
+    /// frames that arrive alongside a full-sync trailer (hardening issue 01).
     pub(crate) stream: BoxedStream,
     pub(crate) _primary_addr: SocketAddr,
     pub(crate) state: Arc<RwLock<ReplicationState>>,
@@ -127,6 +132,11 @@ pub struct ReplicaConnection {
     /// wiring that has no shards, which degrades to the staged-for-next-boot
     /// behaviour (warned about in [`Self::receive_checkpoint`]).
     pub(crate) snapshot_installer: Option<SnapshotInstaller>,
+    /// Live stream bytes a full-sync payload read pulled off the socket past
+    /// the trailer, parked here by [`PayloadReader`] until
+    /// [`Self::take_pending_stream_bytes`] seeds the streaming decoder with
+    /// them. Empty on every other path.
+    pub(crate) pending_stream_bytes: BytesMut,
 }
 
 impl ReplicaConnection {
@@ -137,6 +147,27 @@ impl ReplicaConnection {
         self.connection_state = state;
         self.link_up
             .store(state == ConnectionState::Streaming, Ordering::Release);
+    }
+
+    /// The buffered view of the socket every full-sync payload path must read
+    /// through: it parks whatever it reads past the payload in
+    /// `pending_stream_bytes` instead of dropping it (hardening issue 01).
+    ///
+    /// This is the *only* place the socket may be wrapped in a buffering
+    /// reader, which is what keeps a future third payload shape from
+    /// reintroducing the frame loss: it gets the hand-back for free.
+    fn payload_reader(&mut self) -> PayloadReader<'_> {
+        PayloadReader::new(&mut self.stream, &mut self.pending_stream_bytes)
+    }
+
+    /// Take the live bytes a payload read buffered past its trailer, leaving
+    /// the field empty so they are handed over exactly once.
+    ///
+    /// Called by [`Self::stream_replication`] to seed its decode buffer.
+    ///
+    /// [`Self::stream_replication`]: ReplicaConnection::stream_replication
+    pub(crate) fn take_pending_stream_bytes(&mut self) -> BytesMut {
+        std::mem::take(&mut self.pending_stream_bytes)
     }
 
     pub(crate) async fn handshake(&mut self, listening_port: u16) -> io::Result<()> {
@@ -302,6 +333,10 @@ impl ReplicaConnection {
     /// straight to the installer, which decodes them and pushes each key to its
     /// own shard.
     ///
+    /// Read through [`Self::payload_reader`], so the live frames that arrive in
+    /// the same segment as the trailer are handed to the streaming loop rather
+    /// than dropped with the reader (hardening issue 01).
+    ///
     /// The trailing metadata's combined checksum is verified over the blobs
     /// exactly as [`CheckpointStager::commit`] verifies it over the files, so a
     /// corrupted or truncated dataset fails the sync instead of being installed
@@ -316,25 +351,30 @@ impl ReplicaConnection {
     /// path has between install and metadata consumption.
     pub(crate) async fn receive_snapshot(&mut self, blob_count: usize) -> io::Result<()> {
         tracing::info!(blob_count = blob_count, "Receiving FrogDB live dataset");
-        let mut reader = BufReader::new(&mut self.stream);
-        let mut blobs: Vec<Vec<u8>> = Vec::with_capacity(blob_count);
-        let mut combined = CheckpointChecksum::new();
-        for _ in 0..blob_count {
-            let header = CheckpointStreamCodec::read_file_header(&mut reader).await?;
-            let mut blob = vec![
-                0u8;
-                usize::try_from(header.size).map_err(|_| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "dataset blob size overflows usize",
-                    )
-                })?
-            ];
-            reader.read_exact(&mut blob).await?;
-            combined.update_file(&header.name, &calculate_bytes_checksum(&blob));
-            blobs.push(blob);
-        }
-        let metadata = CheckpointStreamCodec::read_metadata(&mut reader).await?;
+        // Scoped so the reader is dropped — handing its over-read live tail to
+        // `pending_stream_bytes` — before anything else touches `self`.
+        let (blobs, combined, metadata) = {
+            let mut reader = self.payload_reader();
+            let mut blobs: Vec<Vec<u8>> = Vec::with_capacity(blob_count);
+            let mut combined = CheckpointChecksum::new();
+            for _ in 0..blob_count {
+                let header = CheckpointStreamCodec::read_file_header(&mut *reader).await?;
+                let mut blob = vec![
+                    0u8;
+                    usize::try_from(header.size).map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "dataset blob size overflows usize",
+                        )
+                    })?
+                ];
+                reader.read_exact(&mut blob).await?;
+                combined.update_file(&header.name, &calculate_bytes_checksum(&blob));
+                blobs.push(blob);
+            }
+            let metadata = CheckpointStreamCodec::read_metadata(&mut *reader).await?;
+            (blobs, combined, metadata)
+        };
         if combined.finalize() != metadata.checksum {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -375,6 +415,12 @@ impl ReplicaConnection {
     /// snapshot. An install failure rewinds the offset to 0, which makes the
     /// next reconnect send `PSYNC ? -1` and retry the whole full resync.
     ///
+    /// **Receive → stream continuity.** The transport loop runs on
+    /// [`Self::payload_reader`], not a bare `BufReader`, so the live frames the
+    /// trailer's read pulled in behind it survive into `stream_replication`
+    /// (hardening issue 01) — a checkpoint is slow enough that the primary is
+    /// almost always already streaming by the time the trailer lands.
+    ///
     /// The staged dir is deliberately left on disk after the install: if the
     /// process dies between install and the next durable write, the boot-time
     /// installer replays the same snapshot, which is idempotent.
@@ -391,9 +437,12 @@ impl ReplicaConnection {
         let stager = CheckpointStager::new(parent_dir);
         let incoming = stager.incoming_dir();
 
-        let mut reader = BufReader::new(&mut self.stream);
-        let (metadata, computed) =
-            receive_checkpoint_files(&mut reader, &incoming, file_count).await?;
+        // Scoped like `receive_snapshot`: dropping the reader is what hands the
+        // live tail it read past the trailer to `pending_stream_bytes`.
+        let (metadata, computed) = {
+            let mut reader = self.payload_reader();
+            receive_checkpoint_files(&mut *reader, &incoming, file_count).await?
+        };
 
         let outcome = stager.commit(incoming, computed, &metadata).await?;
 
@@ -475,6 +524,7 @@ impl ReplicaConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frame::ReplicationFrame;
     use crate::fullsync::{
         CheckpointChecksum, CheckpointFileHeader, FullSyncMetadata, calculate_bytes_checksum,
     };
@@ -527,6 +577,7 @@ mod tests {
             link_up: Arc::new(AtomicBool::new(false)),
             ack_interval: Duration::from_secs(1),
             snapshot_installer: None,
+            pending_stream_bytes: BytesMut::new(),
         };
 
         let mut client = client;
@@ -596,6 +647,12 @@ mod tests {
         state: Arc<RwLock<ReplicationState>>,
         offsets: ReplicaOffset,
         link_up: Arc<AtomicBool>,
+        /// The primary's half of the duplex, kept alive for the test's whole
+        /// body. Its *write* side is shut down (so the connection's reads see
+        /// EOF and terminate), but the half itself must not be dropped: the
+        /// streaming path writes ACKs back, and a dropped peer would turn those
+        /// into a broken-pipe error instead of the clean close under test.
+        _client: tokio::io::DuplexStream,
     }
 
     async fn checkpoint_fixture(
@@ -603,11 +660,24 @@ mod tests {
         offset: u64,
         installer: Option<SnapshotInstaller>,
     ) -> CheckpointFixture {
+        checkpoint_fixture_with_tail(tmp, offset, installer, &[]).await
+    }
+
+    /// As [`checkpoint_fixture`], with `tail` bytes appended to the payload in
+    /// the *same* write — the live WAL frames a primary is already streaming by
+    /// the time its checkpoint trailer lands.
+    async fn checkpoint_fixture_with_tail(
+        tmp: &std::path::Path,
+        offset: u64,
+        installer: Option<SnapshotInstaller>,
+        tail: &[u8],
+    ) -> CheckpointFixture {
         let files = vec![
             ("CURRENT".to_string(), b"MANIFEST-000005\n".to_vec()),
             ("000042.sst".to_string(), (0u8..=200).collect()),
         ];
-        let body = encode_checkpoint_body(&files, "primary-replid", offset).await;
+        let mut body = encode_checkpoint_body(&files, "primary-replid", offset).await;
+        body.extend_from_slice(tail);
 
         let (mut client, server) = tokio::io::duplex(64 * 1024);
         let state = Arc::new(RwLock::new(ReplicationState::new()));
@@ -628,12 +698,15 @@ mod tests {
             link_up: link_up.clone(),
             ack_interval: Duration::from_secs(1),
             snapshot_installer: installer,
+            pending_stream_bytes: BytesMut::new(),
         };
 
-        // Feed the whole checkpoint body, then close so no read blocks.
+        // Feed the whole checkpoint body (plus any live tail) in one write, then
+        // shut the write half so no read blocks. One write is what makes the
+        // over-read deterministic: the trailer and the tail are a single chunk,
+        // so the fill that completes the trailer necessarily takes the tail too.
         client.write_all(&body).await.unwrap();
         client.shutdown().await.unwrap();
-        drop(client);
 
         CheckpointFixture {
             conn,
@@ -641,6 +714,7 @@ mod tests {
             state,
             offsets,
             link_up,
+            _client: client,
         }
     }
 
@@ -804,7 +878,21 @@ mod tests {
         corrupt: bool,
         installer: Option<SnapshotInstaller>,
     ) -> CheckpointFixture {
-        let body = encode_dataset_body(&blobs, "primary-replid", offset, corrupt).await;
+        dataset_fixture_with_tail(tmp, blobs, offset, corrupt, installer, &[]).await
+    }
+
+    /// As [`dataset_fixture`], with `tail` bytes appended to the payload in the
+    /// same write — the live frames trailing a dataset envelope.
+    async fn dataset_fixture_with_tail(
+        tmp: &std::path::Path,
+        blobs: Vec<Vec<u8>>,
+        offset: u64,
+        corrupt: bool,
+        installer: Option<SnapshotInstaller>,
+        tail: &[u8],
+    ) -> CheckpointFixture {
+        let mut body = encode_dataset_body(&blobs, "primary-replid", offset, corrupt).await;
+        body.extend_from_slice(tail);
 
         let (mut client, server) = tokio::io::duplex(64 * 1024);
         let state = Arc::new(RwLock::new(ReplicationState::new()));
@@ -825,11 +913,11 @@ mod tests {
             link_up: link_up.clone(),
             ack_interval: Duration::from_secs(1),
             snapshot_installer: installer,
+            pending_stream_bytes: BytesMut::new(),
         };
 
         client.write_all(&body).await.unwrap();
         client.shutdown().await.unwrap();
-        drop(client);
 
         CheckpointFixture {
             conn,
@@ -837,6 +925,7 @@ mod tests {
             state,
             offsets,
             link_up,
+            _client: client,
         }
     }
 
@@ -981,6 +1070,7 @@ mod tests {
             link_up: Arc::new(AtomicBool::new(false)),
             ack_interval: Duration::from_secs(1),
             snapshot_installer: None,
+            pending_stream_bytes: BytesMut::new(),
         };
 
         let task = tokio::spawn(async move {
@@ -1017,5 +1107,117 @@ mod tests {
             0,
             "the granted offset is not adopted, so the retry is a full resync"
         );
+    }
+
+    // ---- receive -> stream continuity (issue 01) --------------------------
+
+    /// The live WAL frames a primary streams while its full-sync payload is
+    /// still in flight, encoded as they appear on the wire, paired with the
+    /// offset they advance the replica by (payload bytes, per `frame_advance`).
+    fn live_frame_tail(payloads: &[&[u8]]) -> (Vec<u8>, u64) {
+        let mut wire = Vec::new();
+        let mut advance = 0u64;
+        for (i, payload) in payloads.iter().enumerate() {
+            let frame = ReplicationFrame::new(i as u64, Bytes::copy_from_slice(payload));
+            wire.extend_from_slice(&frame.encode());
+            advance += payload.len() as u64;
+        }
+        (wire, advance)
+    }
+
+    /// Run the streaming loop to the primary's clean close and collect every
+    /// frame it handed to the applier.
+    async fn stream_to_close(conn: &mut ReplicaConnection) -> Vec<Bytes> {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        conn.stream_replication(&tx).await.unwrap();
+        drop(tx);
+        let mut frames = Vec::new();
+        while let Some(frame) = rx.recv().await {
+            frames.push(frame.payload);
+        }
+        frames
+    }
+
+    /// Issue 01: the frames that arrive in the same read as the checkpoint
+    /// trailer are streamed, not swallowed by the payload reader.
+    ///
+    /// A checkpoint transfer is slow, so by the time its trailer lands the
+    /// primary has almost always started streaming; the buffered read that
+    /// completes the trailer takes those frames with it. Before the fix the
+    /// reader was a function-local `BufReader` and dropping it discarded them —
+    /// the socket had no copy left, so they were never decoded, never applied
+    /// and never ACKed, and the replica's offset stayed permanently short with
+    /// `master_link_status:up` (WAIT then never satisfiable).
+    // FM-REPLICATION-005
+    #[tokio::test]
+    async fn receive_checkpoint_streams_the_frames_that_trailed_the_payload() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (tail, advance) = live_frame_tail(&[
+            b"*1\r\n$4\r\nPING\r\n",
+            b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n",
+        ]);
+        let mut f = checkpoint_fixture_with_tail(tmp.path(), 4242, None, &tail).await;
+
+        f.conn.receive_checkpoint(f.file_count).await.unwrap();
+        let frames = stream_to_close(&mut f.conn).await;
+
+        assert_eq!(
+            frames,
+            vec![
+                Bytes::from_static(b"*1\r\n$4\r\nPING\r\n"),
+                Bytes::from_static(b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n"),
+            ],
+            "every byte after the trailer must reach the frame decoder"
+        );
+        assert_eq!(
+            f.offsets.current(),
+            4242 + advance,
+            "the received head covers the trailing frames, so it can catch the primary"
+        );
+    }
+
+    /// The live-dataset path has the same seam and the same bug: both payload
+    /// shapes read through the same reader, so both hand their over-read tail
+    /// to the stream.
+    // FM-REPLICATION-005
+    #[tokio::test]
+    async fn receive_snapshot_streams_the_frames_that_trailed_the_payload() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (tail, advance) = live_frame_tail(&[b"*1\r\n$4\r\nPING\r\n"]);
+        let installer = Arc::new(|_payload: FullSyncPayload| {
+            Box::pin(async { Ok(()) }) as Pin<Box<dyn Future<Output = io::Result<()>> + Send>>
+        }) as SnapshotInstaller;
+
+        let mut f = dataset_fixture_with_tail(
+            tmp.path(),
+            vec![b"shard-zero".to_vec()],
+            4242,
+            false,
+            Some(installer),
+            &tail,
+        )
+        .await;
+
+        f.conn.receive_snapshot(f.file_count).await.unwrap();
+        let frames = stream_to_close(&mut f.conn).await;
+
+        assert_eq!(frames, vec![Bytes::from_static(b"*1\r\n$4\r\nPING\r\n")]);
+        assert_eq!(f.offsets.current(), 4242 + advance);
+    }
+
+    /// A sync that transferred no live tail must not leave phantom bytes in the
+    /// decoder: the hand-back is exactly what the payload read over-read.
+    // FM-REPLICATION-005
+    #[tokio::test]
+    async fn a_payload_with_no_trailing_frames_leaves_the_stream_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut f = checkpoint_fixture(tmp.path(), 4242, None).await;
+
+        f.conn.receive_checkpoint(f.file_count).await.unwrap();
+
+        assert!(f.conn.pending_stream_bytes.is_empty());
+        let frames = stream_to_close(&mut f.conn).await;
+        assert!(frames.is_empty());
+        assert_eq!(f.offsets.current(), 4242);
     }
 }
