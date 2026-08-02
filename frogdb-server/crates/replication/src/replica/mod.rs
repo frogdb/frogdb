@@ -2,6 +2,7 @@
 
 pub(crate) mod connection;
 pub(crate) mod offset;
+mod payload_reader;
 mod streaming;
 #[cfg(test)]
 mod tests;
@@ -363,6 +364,7 @@ impl ReplicaReplicationHandler {
             link_up: self.link_up.clone(),
             ack_interval: self.ack_interval,
             snapshot_installer: self.snapshot_installer.clone(),
+            pending_stream_bytes: bytes::BytesMut::new(),
         };
         // Whatever ends this attempt — clean close, a handshake/sync error, or
         // the caller dropping the stream — the link is no longer up. `conn`

@@ -98,6 +98,20 @@ Deliberate non-guarantees, so a future reader does not mistake them for gaps:
 | Forced by | `full_sync_replays_writes_made_during_handoff` |
 | Bug refs | `.scratch/replication-cluster-rework/issues` (the WAL-drain half — a full-resync checkpoint cut before the shard WALs were drained lost acknowledged writes) |
 
+## FM-REPLICATION-005 — the receive→stream handoff loses no byte of the live tail
+
+| Field | Value |
+|---|---|
+| Trigger | The primary streaming live WAL frames while the replica is still reading the full-sync payload — the normal case, because `start_streaming` begins the moment the payload is written, so the trailer and the first frames routinely arrive in the same TCP segment. Sharpened by load: the slower the transfer (a large checkpoint, a contended host), the more frames are already queued behind the trailer. Both payload shapes are exposed, checkpoint and live dataset. |
+| Observable | Streaming resumes on the byte after the trailer: every frame the primary sent during the transfer is decoded, applied and ACKed, so the replica's offset converges on the primary's and `WAIT` is satisfiable without a reconnect. A sync whose payload was followed by nothing on the wire starts streaming from an empty decoder. |
+| NOT observable | **A replica whose offset is permanently short of the primary's stream position while it reports `master_link_status:up`** — the whole bug (issue 01): the frames that shared the trailer's read were dropped with the payload reader, so they were never decoded, never applied and never ACKed. Nor its consequences: `WAIT` structurally unsatisfiable against a replica the primary considers online; a fixed byte-count divergence that only a reconnect (which re-syncs from the replica's short offset) can heal; frames re-decoded or double-counted because the residual was handed over more than once. |
+| Invariant | The payload paths never wrap the socket themselves: [`PayloadReader`] owns the `BufReader`, and its `Drop` moves whatever the buffering read past the payload into the connection's `pending_stream_bytes` — on every exit path, including the `?` returns of a failed sync. `stream_replication` *seeds* its decode buffer with `take_pending_stream_bytes()` instead of starting empty, and drains the seeded bytes **before** its first socket read, because they can already hold whole frames the primary is waiting to see ACKed. The hand-back is take-once (`mem::take`), so a residual cannot be replayed. A third payload shape inherits all of this by construction: `payload_reader()` is the only sanctioned way to buffer this socket (`stream` says so at its declaration), and it carries the hand-back with it. |
+| Outcome variant | n/a (wire-level invariant; surfaces as a stalled replica offset and an unsatisfiable `WAIT`) |
+| Forced by | `receive_checkpoint_streams_the_frames_that_trailed_the_payload`, `receive_snapshot_streams_the_frames_that_trailed_the_payload`, `a_payload_with_no_trailing_frames_leaves_the_stream_empty`, `dropping_the_reader_hands_back_what_it_read_past_the_payload`, `a_fully_consumed_reader_leaves_no_residual` |
+| Bug refs | `.scratch/hardening/issues` (issue 01 — surfaced as a load-dependent `test_broadcast_lag_disconnect_and_resync` flake; the seed write was acked by neither replica because the ACK never arrived) |
+
+[`PayloadReader`]: ../../../frogdb-server/crates/replication/src/replica/payload_reader.rs
+
 ---
 
 ## Redis deviations
