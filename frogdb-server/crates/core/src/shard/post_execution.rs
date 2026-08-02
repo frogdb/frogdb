@@ -1799,7 +1799,7 @@ mod tests {
                 keys: vec![key.clone()],
                 op: BlockingOp::BLPop,
                 response_tx: tx,
-                deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(60)),
+                deadline: Some(tokio::time::Instant::now() + std::time::Duration::from_secs(60)),
                 protocol_version: frogdb_protocol::ProtocolVersion::default(),
             })
             .unwrap();
@@ -1867,7 +1867,7 @@ mod tests {
                 keys: vec![key.clone()],
                 op: BlockingOp::BLPop,
                 response_tx: tx,
-                deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(60)),
+                deadline: Some(tokio::time::Instant::now() + std::time::Duration::from_secs(60)),
                 protocol_version: frogdb_protocol::ProtocolVersion::default(),
             })
             .unwrap();

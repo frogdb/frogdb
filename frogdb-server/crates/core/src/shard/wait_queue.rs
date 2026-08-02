@@ -1,9 +1,10 @@
 use std::collections::{HashMap, VecDeque};
-use std::time::Instant;
 
 use bytes::Bytes;
 use frogdb_protocol::{ProtocolVersion, Response};
 use tokio::sync::oneshot;
+
+use tokio::time::Instant;
 
 use crate::command::WaiterKind;
 use crate::types::BlockingOp;
@@ -19,6 +20,13 @@ pub struct WaitEntry {
     /// Channel to send the response when data is available.
     pub response_tx: oneshot::Sender<Response>,
     /// Deadline for the blocking operation (None = indefinite).
+    ///
+    /// A [`tokio::time::Instant`], i.e. the same clock the timer that will fire at this
+    /// deadline runs on. It must not be a `std::time::Instant`: under a paused runtime
+    /// (`tokio::time::pause`, which every simulated turmoil host uses) the two clocks run at
+    /// different rates, so a std-derived deadline converted for comparison drifts by however
+    /// much wall time the process has burned — and once virtual time overtakes wall time it is
+    /// unconditionally in the past, timing out every blocking command instantly.
     pub deadline: Option<Instant>,
     /// Protocol version of the blocked client (for RESP3-aware score formatting).
     pub protocol_version: ProtocolVersion,

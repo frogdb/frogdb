@@ -3,7 +3,8 @@
 //! permutation. Invariants: element conservation, empty wait queue at quiesce,
 //! no delivery to a closed receiver.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
 
 use bytes::Bytes;
 use frogdb_protocol::Response;

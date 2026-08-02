@@ -7,11 +7,13 @@
 //! registry); the coordinator is a pure async decision over three inputs, which
 //! makes it unit-testable with an in-memory `oneshot` and a mock unblock source.
 
-use std::time::Instant;
-
 use frogdb_core::{BlockingOp, ClientHandle, UnblockMode};
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
+// The deadline is slept on with `tokio::time::sleep_until`, so it must be stated on the
+// timer's clock. A `std::time::Instant` converted here would be reinterpreted as an offset
+// from the runtime's start, which under a paused clock is an arbitrarily different time.
+use tokio::time::Instant;
 
 /// Outcome of a blocking wait. Public so it can be asserted in unit tests and
 /// converted to a reply with op-aware nil shaping.
@@ -82,7 +84,7 @@ impl BlockingWaitCoordinator {
         // the select! branch alive without artificially timing out.
         let timeout_fut = async {
             match deadline {
-                Some(d) => tokio::time::sleep_until(d.into()).await,
+                Some(d) => tokio::time::sleep_until(d).await,
                 None => std::future::pending::<()>().await,
             }
         };
