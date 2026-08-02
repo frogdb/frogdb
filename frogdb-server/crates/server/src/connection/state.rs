@@ -721,6 +721,7 @@ impl ConnectionState {
     }
 
     /// Record a watched key with its watch-time version, shard, and liveness.
+    /// First watch wins — see [`TransactionState::watch_key`].
     pub fn watch_key(&mut self, key: Bytes, shard_id: usize, version: u64, live_at_watch: bool) {
         self.transaction
             .watch_key(key, shard_id, version, live_at_watch);

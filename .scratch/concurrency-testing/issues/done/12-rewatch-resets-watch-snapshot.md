@@ -1,6 +1,6 @@
 # 12 — Re-WATCHing an already-watched key resets its version snapshot (WATCH false-negative)
 
-Status: ready-for-agent
+Status: done
 Type: bug
 Origin: post-harness-fix re-verification of issue 11 Finding B (2026-08-02), local `seed_sweep_nightly`
 runs at `ops_per_client = 60`, `seeds = 20`.
@@ -91,15 +91,44 @@ re-WATCH — the same laundering in a different coat).
 
 ## Acceptance criteria
 
-- [ ] A re-`WATCH` of an already-watched key does not reset that key's version/liveness snapshot.
-- [ ] Deterministic regression test (worker- or turmoil-level, **not** a pinned nightly seed — see
+- [x] A re-`WATCH` of an already-watched key does not reset that key's version/liveness snapshot.
+- [x] Deterministic regression test (worker- or turmoil-level, **not** a pinned nightly seed — see
       issue 14): client A `WATCH k`; client B writes `k`; client A `WATCH k` again; `MULTI`/write/
       `EXEC` must return nil.
-- [ ] Existing WATCH pins stay green: `regression_crossshard_watch_false_negative_seed_8`,
+- [x] Existing WATCH pins stay green: `regression_crossshard_watch_false_negative_seed_8`,
       `regression_watch_second_watcher_aborts_realpath`,
       `watch_lazy_expiry_false_negative_realpath`,
       `regression_watch_read_lazy_purge_aborts_realpath`.
-- [ ] TCL/redis-regression WATCH coverage unaffected.
+- [x] TCL/redis-regression WATCH coverage unaffected — the change is confined to the
+      connection-side watch-set recording; no command semantics or wire shapes moved.
+
+## Resolution
+
+Fixed spec-first, per the locked-area rules (`docs/agents/hardening-campaign.md`).
+
+**Spec.** New row **FM-TXN-050 — Re-WATCHing an already-watched key keeps the first snapshot** in
+`.scratch/hardening/specs/txn-failure-modes.md`, with FM-TXN-033's "NOT observable" cell
+cross-referencing it (a second `WATCH` must not re-arm the CAS against a newer snapshot).
+
+**Fix.** One site — `TransactionState::watch_key`
+(`frogdb-server/crates/txn/src/state.rs`) — now records with
+`self.watches.entry(key).or_insert((shard_id, version, live_at_watch))`, so the first watch of a
+key wins until a set-clearing transition (`unwatch_all` / `take` / `discard` / `clear`). It is the
+only insertion point: `ConnectionState::watch_key` and the `ConnCtx` impl in
+`auth_conn_command.rs` both delegate to it, and `handle_watch` is the only caller. The `GetVersion`
+round-trip in `handle_watch` is deliberately still taken for the whole argument list (one
+round-trip per batch, and it is what lazily purges already-expired keys); only the recording is
+guarded. The `live_at_watch` flag rides along, so a live-then-expired watch cannot be laundered
+into an already-stale one — the shard-side gap-4 clause (`live_at_watch && !exists_unexpired` in
+`check_watches`) keeps firing off the *first* observation even when a re-WATCH's no-bump purge
+physically removes the key.
+
+**Tests (both red before the fix).** `rewatching_a_key_keeps_the_first_snapshot`
+(`frogdb-server/crates/txn/src/state.rs`; pre-fix `left: 22, right: 11`) also pins that
+`UNWATCH` re-arms, and `test_rewatch_does_not_rearm_a_dirty_watch`
+(`frogdb-server/crates/server/tests/integration_transactions.rs`; pre-fix
+`left: Array([Simple("OK")]), right: Bulk(None)` — the false-negative commit itself) covers the
+WATCH / other-conn write / WATCH / EXEC → nil path end to end plus the untouched-key commit.
 
 ## References
 
