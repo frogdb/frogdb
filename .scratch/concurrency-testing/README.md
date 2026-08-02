@@ -2,25 +2,33 @@
 
 State: active
 
-Phases 1–5 (incl. 4a/4b/4c) merged 2026-07-22; nightly CI live. Four issues remain open,
-including one **real, un-root-caused bug**.
+Phases 1–5 (incl. 4a/4b/4c) merged 2026-07-22; nightly CI live. Eight issues remain open,
+including one **real product bug** (12) and a harness defect that makes every seed-indexed
+finding a sample rather than a fact (14).
 
 ## Layout
 
 | path | what |
 |---|---|
 | `proposals/` | design proposals |
-| `issues/open/` | 4 open |
-| `issues/done/` | 7 closed |
+| `issues/open/` | 8 open |
+| `issues/done/` | 8 closed |
 
-## Still open (4)
+## Still open (8)
 
 | # | issue | note |
 |---|---|---|
 | 05 | VLL phase-3 partial-commit decision | open design question, referenced from shipped docs |
 | 06 | durability txn framing abort-on-recovery | the fix deferred by 05 |
 | 10 | notify-capture broader scenario rollout | |
-| 11 | nightly smoke findings | **real bug** — MultiWaiter data loss ≳90 ops (Finding A). Its `## Resolution shipped in phase 5 (CI wiring)` heading resolves only the CI sub-part; findings A/B/C are still live. Do not read that heading as "closed" |
+| 12 | re-WATCH resets watch snapshot | **real product bug** — second `WATCH k` overwrites the first snapshot, EXEC commits over an interfering write |
+| 13 | WATCH checker counts a no-op DEL as a write | checker false positive — breaks the checker's no-false-positive claim |
+| 14 | workload harness not reproducible | same seed → different history and different verdict; seed pins, repro files and nightly triage all rest on a contract that does not hold |
+| 15 | ZSet model BZPOPMAX tie rule | model artifact — source of every `(ZSet) not linearizable` report |
+| 16 | exact FIFO checker degrades to an unsound proxy | checker false positive — registration ordinals are almost never captured, so wake order is judged by record-arrival order |
+
+Issue 11 (the nightly smoke findings) is closed: Finding A was the harness drain race, Finding C the
+ZSet model artifact, and Finding B split into 12 (product), 13 and 16 (checker).
 
 ## Inbound references
 
