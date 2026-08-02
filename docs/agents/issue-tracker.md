@@ -36,9 +36,10 @@ presence of a `README.md` with a `State:` line, and the absence of duplicate iss
 ### `## Resolution` is not a status
 
 An issue can carry a `## Resolution` section describing work that shipped and still be open —
-`concurrency-testing/issues/open/11` has `## Resolution shipped in phase 5 (CI wiring)`, which
-resolves one sub-part while its findings A/B/C remain un-root-caused. Only the `Status:` line
-is authoritative. Do not grep for `## Resolution` to decide what is done.
+`concurrency-testing/issues/11` carried `## Resolution shipped in phase 5 (CI wiring)` for weeks
+while its findings A/B/C stayed un-root-caused, and only closed once each finding was resolved or
+split out. Only the `Status:` line is authoritative. Do not grep for `## Resolution` to decide
+what is done.
 
 An issue can also be *reopened* after closing — `testing-improvements/issues/open/40` shipped,
 then regressed when a later commit deleted its cron. Reopening means flipping `Status:` back,

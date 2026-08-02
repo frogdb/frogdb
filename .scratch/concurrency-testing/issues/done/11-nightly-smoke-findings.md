@@ -1,6 +1,7 @@
 # 11 — Nightly-tier smoke testing surfaced real concurrency invariant violations
 
-Status: needs-triage
+Status: done
+Landed: findings split into issues 12–16, 2026-08-02
 Type: bug
 Origin: Phase 5 (CI wiring) plumbing validation, 2026-07-22 — testbox smoke runs of the new
 `seed_sweep_nightly` harness (`just concurrency-nightly`), not the 1000-seed sweep itself.
@@ -95,17 +96,25 @@ be triaged as real product bugs.
       FROGDB_CONCURRENCY_SEEDS=5 just concurrency-nightly`, or replay any of the repro files
       generated during the bisection — not preserved past the testbox session, so a fresh repro run
       is needed), this should be one of the cheaper items to reproduce and fix.
-- [ ] Investigate the new TxHeavy WATCH false-negative (Finding B, seed 3 at
+- [x] Investigate the new TxHeavy WATCH false-negative (Finding B, seed 3 at
       `ops_per_client=60`) against the existing WATCH false-negative fix that pinned
       `regression_crossshard_watch_false_negative_seed_8` — determine whether it's the same root
       cause reachable via a different path, or a distinct gap.
       Repro: `FROGDB_CONCURRENCY_OPS_PER_CLIENT=60 FROGDB_CONCURRENCY_SEEDS=20
       just concurrency-nightly` (TxHeavy profile, seed 3).
-- [ ] Investigate the MultiWaiter FIFO wake-order violation (Finding B, seed 5 at same params).
-- [ ] Investigate MultiWaiter ZSet non-linearizability (Findings B/C — reproduces at both
+      **Done 2026-08-02** — a distinct gap, filed as issue 12 (re-WATCH resets the version
+      snapshot). One of the three reported seeds (14) turned out to be a *checker* false positive,
+      filed as issue 13. See the re-verification section below.
+- [x] Investigate the MultiWaiter FIFO wake-order violation (Finding B, seed 5 at same params).
+      **Done 2026-08-02 — not a product bug.** The exact wake-order checker had no registration
+      ordinals for the flagged waiters and fell back to its invoke-order proxy, which flags nested
+      invoke intervals; filed as issue 16. See the re-verification section below.
+- [x] Investigate MultiWaiter ZSet non-linearizability (Findings B/C — reproduces at both
       `ops_per_client=30` seed 1 and `ops_per_client=60` seed 19, and `ops_per_client=150` regime
       too). Given it reproduces at the per-PR-vetted `ops_per_client=30`, this is reachable with a
       comparatively short/cheap repro and should be prioritized for root-causing.
+      **Done 2026-08-02 — not a product bug.** The `ZSetModel` BZPOPMAX tie rule is inverted;
+      filed as issue 15. See the re-verification section below.
 - [x] Once Finding A is fixed, revisit whether `concurrency-nightly`'s default `ops_per_client`
       (see "Resolution" below) can be safely raised back toward the harness's original coded
       default, to get longer per-history coverage in the nightly tier. **Done** — raised 75 → 150
@@ -273,3 +282,101 @@ the capped value, so the cap was buying nothing.
   working as designed.
 - Blocking-path failure modes are now specced in
   `.scratch/hardening/specs/blocking-failure-modes.md` (FM-BLOCKING-001..005).
+
+## Findings B and C — post-harness-fix re-verification (2026-08-02)
+
+Re-ran every seed/profile/OPS combo cited in Findings B and C on the fixed harness (local mode, no
+product changes). **Only one of the three violation classes is a product bug.** Three new issues
+came out of it: 12 (product), 13 (checker), 15 (model) — plus 14, which invalidates the way this
+issue reports failures by seed.
+
+### The seed numbers in Findings B and C are not stable
+
+The harness is **not reproducible**: re-running the same `Workload` (same seed, profile, clients,
+ops, shards) yields a different history and a different verdict every time, in-process and across
+processes. Filed as **issue 14**, with digests. Consequences for this issue:
+
+- a per-combo verdict is a *sample*, not a fact — every verdict below is annotated with how many
+  repeats it survived;
+- the seed labels in Findings B/C identify sampling draws, not bugs. The same ZSet class appeared at
+  seeds 1, 10, 13 and 19 in different sweeps, and the FIFO class at seeds 5 and 6;
+- `target/concurrency-repros/<seed>.json` does not replay the failure it was written for.
+
+### Per-combo verdicts
+
+| combo (seed / profile / OPS) | cited as | verdict on the fixed harness |
+|---|---|---|
+| 3 / TxHeavy / 60 | Finding B (i) | **FAIL** — WATCH false-negative, 5 of 5 repeats. Real product bug → issue 12 |
+| 5 / MultiWaiter / 60 | Finding B (ii) | **FAIL, rare** — FIFO wake order in 1 of 6 repeats; 0 of 40 further repeats. Checker false positive → issue 16 |
+| 19 / MultiWaiter / 60 | Finding B (iii) | **FAIL** — ZSet non-linearizable (2 keys), first attempt. Model artifact → issue 15 |
+| 1 / MultiWaiter / 30 | Finding C | **PASS** — the class re-sampled at seed 10 in the same sweep; same model artifact → issue 15 |
+
+Full sweeps behind those verdicts, verbatim:
+
+`FROGDB_CONCURRENCY_OPS_PER_CLIENT=60 FROGDB_CONCURRENCY_SEEDS=20 just concurrency-nightly`
+— 5 of 80 seed×profile runs:
+
+```
+seed 3 (TxHeavy) FAILED: ["WATCH false-negative: watch false-negative: exec op 24459 committed
+  though op 24406 wrote watched key [123, 116, 49, 125, 107, 118, 49] after watch op 24403"]
+seed 14 (TxHeavy) FAILED: ["WATCH false-negative: watch false-negative: exec op 29575 committed
+  though op 29569 wrote watched key [123, 116, 48, 125, 107, 118, 48] after watch op 29564"]
+seed 16 (TxHeavy) FAILED: ["WATCH false-negative: watch false-negative: exec op 30468 committed
+  though op 30464 wrote watched key [123, 116, 48, 125, 107, 118, 48] after watch op 30459"]
+seed 13 (MultiWaiter) FAILED: ["key {t12}zs0 (ZSet) not linearizable (problematic ops [38539, …])"]
+seed 19 (MultiWaiter) FAILED: ["key {t13}zs1 (ZSet) not linearizable (problematic ops [41412, …])",
+  "key {t12}zs0 (ZSet) not linearizable (problematic ops [41416, …])"]
+```
+
+`FROGDB_CONCURRENCY_OPS_PER_CLIENT=30 FROGDB_CONCURRENCY_SEEDS=20 just concurrency-nightly`
+— 1 of 80:
+
+```
+seed 10 (MultiWaiter) FAILED: ["key {t12}zs0 (ZSet) not linearizable (problematic ops [18605, …])"]
+```
+
+No `exactly-once delivery` violation appeared in either sweep — Finding A stays fixed.
+
+### Class-by-class outcome
+
+**(i) TxHeavy WATCH false-negative — REAL, product bug → issue 12.** A second `WATCH k` on a
+connection already watching `k` overwrites the version snapshot taken by the first, so writes
+between the two WATCHes are forgotten and EXEC commits. Redis' `watchForKey()` no-ops on a
+re-watch; `TransactionState::watch_key` does a `HashMap::insert`. Distinct from the pinned
+cross-shard `regression_crossshard_watch_false_negative_seed_8`. Trace in issue 12.
+
+**(i-b) Seed 14's WATCH false-negative — NOT a product bug → issue 13.** The flagged "writer" is a
+`DEL` that returned `0`; `written_keys_of`'s default branch counts a DEL as a write regardless of
+result, and the same hole exists for DELs inside another client's committed EXEC. The
+no-false-positive claim this checker rests on is what breaks.
+
+**(ii) MultiWaiter FIFO wake order — reproduces, but NOT a product bug → issue 16.** Seed 5 / OPS=60
+reproduced `FIFO wake order violated on key [123,116,52,125,108,115,48]` (= `{t4}ls0`) in 1 of 6
+repeats, seed 6 / OPS=110 in 1 of 6, seed 3 / OPS=110 in 1 of 4; every hit flagged adjacent op ids
+(31 vs 29; 1776 vs 1775; 2698 vs 2697), i.e. near-simultaneous waiters. Instrumenting
+`WaiterRegistrationOrder::get` on the seed-3 hit settled which path fired: three of the four served
+waiters on the key had **no** registration ordinal (`reg_order_len=6` for 12 distinct
+`(key, client)` blocking pairs), so `check_fifo_wake_order_exact`'s `all_known` gate was false and
+the key fell to the invoke-order proxy — the path its own doc comment calls a possible false
+positive. The flagged pair's invoke intervals are nested (`[112,118]` vs `[113,115]`), and
+`invoke_time` is a shared record-order counter rather than a clock, so the proxy's premise does not
+hold for concurrent waiters at all. The prober's 50 sim-ms cadence versus a few sim-ms of park time
+is why ordinals are missing. Filed as issue 16 (checker/harness), not as product.
+
+**(iii) ZSet non-linearizability (Findings B *and* C) — NOT a product bug → issue 15.** The
+`ZSetModel` pops the lexicographically *smallest* member on a `bzpopmax` score tie; Redis and FrogDB
+pop the *greatest*. The generator emits scores `0..100` over members `m0..m4`, so ties are routine
+(the model's "workloads avoid ties" comment is stale). Every reported ZSet violation examined
+traces to a tied-score BZPOPMAX where the server answered correctly. Finding C's "genuine sampling
+effect" conclusion still holds mechanically — the tier did surface something at `ops_per_client=30`
+— but what it surfaced is a model bug.
+
+### What this leaves for issue 11
+
+Findings A and C are resolved (harness defect and model defect respectively); Finding B splits into
+issue 12 (product), issue 13 (checker) and issue 16 (checker). Every investigation item is closed
+out, so this issue is closed; the follow-up work lives in issues 12–16
+(`.scratch/concurrency-testing/issues/`). The overarching lesson is issue 14: until the
+harness is deterministic, no
+finding here can be pinned by seed, and this issue's own seed-indexed history should be read as
+"these classes exist", never "this seed reproduces it".

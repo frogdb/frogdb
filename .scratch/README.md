@@ -14,7 +14,7 @@ temp dir. Several files here are load-bearing — `scripts/coverage-depth.py` wr
 |---|---|--:|--:|---|
 | [testing-improvements-round2](testing-improvements-round2/) | active | 95 | 0 | round-2 testing-gap audit; 249 findings → 95 issues, incl. **~40 suspected live defects** |
 | [arch-deepening](arch-deepening/) | active | 15 | 5 | architecture deepening rounds; proposals backlog empty, issues backlog is not |
-| [concurrency-testing](concurrency-testing/) | active | 4 | 7 | concurrency invariant testing; phases 1–5 shipped. Issue 11 Finding A was a harness defect, fixed; B and C still open |
+| [concurrency-testing](concurrency-testing/) | active | 8 | 8 | concurrency invariant testing; phases 1–5 shipped. Issue 11's findings re-verified 2026-08-02 and split into issues 12–16 — one real product bug (12), the rest harness/checker defects |
 | [replication-cluster-rework](replication-cluster-rework/) | active | 8 | 2 | four rework PRDs, all merged 2026-07-30; follow-ups outstanding |
 | [hardening](hardening/) | active | 6 | 2 | foundation-hardening campaign; failure-mode specs + mutation gates, txn/vll **locked** 2026-08-01 |
 | [naming-cleanup](naming-cleanup/) | active | 1 | 7 | canonical terminology; decisions now canon in `CONTEXT.md` files |
@@ -37,11 +37,11 @@ three that bite most often:
    get renumbered; number + directory does not. Markdown links point at the directory:
    `[issue 66](../../.scratch/testing-improvements/issues/)`.
 
-3. **A `## Resolution` heading does not mean closed.** `concurrency-testing/issues/open/11`
+3. **A `## Resolution` heading does not mean closed.** `concurrency-testing/issues/11`
    carries two of them — a phase-5 resolution that a later section marks superseded, and a
-   root-cause fix for Finding A — while Findings B and C stay live. Only the `Status:` line
-   is authoritative, and it takes a bare legal value: put the nuance in a section, not on
-   the line.
+   root-cause fix for Finding A — and stayed open for weeks afterward, until Findings B and C
+   were resolved too. Only the `Status:` line is authoritative, and it takes a bare legal
+   value: put the nuance in a section, not on the line.
 
 Sub-issue numbers (`13-01`, `13-02`, `13-03` under `arch-deepening`) are distinct issues.
 Cite the full number.
