@@ -38,6 +38,16 @@ impl RocksStore {
     /// Install a staged full-sync checkpoint (see [`super::staged`] for the
     /// three-party contract), if one is present next to `rocksdb_dir`.
     pub fn load_staged_checkpoint(rocksdb_dir: &Path) -> std::io::Result<bool> {
+        Self::load_staged_checkpoint_with(rocksdb_dir, &crate::fs_seam::RealFs)
+    }
+
+    /// [`load_staged_checkpoint`](Self::load_staged_checkpoint) against an
+    /// injectable filesystem, so the sync/rename ordering the install depends on
+    /// can be asserted by a recording fake. See [`crate::fs_seam`] for the rule.
+    pub(crate) fn load_staged_checkpoint_with(
+        rocksdb_dir: &Path,
+        fs: &dyn crate::fs_seam::SnapshotFs,
+    ) -> std::io::Result<bool> {
         let staged = match super::staged::StagedCheckpoint::for_db_dir(rocksdb_dir) {
             Some(s) => s,
             None => return Ok(false),
@@ -86,6 +96,12 @@ impl RocksStore {
         // is the commit point, and the staged replication metadata rides
         // inside the installed dir. (Both windows are pinned by the
         // crash-window tests in `rocks/tests.rs`.)
+        //
+        // That reasoning only holds if each rename is *durable* when the next
+        // one runs, so `parent` is fsynced after both (see [`crate::fs_seam`]).
+        // Without the first sync a power loss could surface rename 2 without
+        // rename 1 — the live dir replaced while the backup that was supposed
+        // to hold the previous database never appeared.
         if rocksdb_dir.exists() {
             let ts = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -93,10 +109,12 @@ impl RocksStore {
                 .unwrap_or(0);
             let bd = parent.join(super::staged::backup_dir_name(db_name, ts));
             info!(from = %rocksdb_dir.display(), to = %bd.display(), "Backing up existing database");
-            std::fs::rename(rocksdb_dir, &bd)?;
+            fs.rename(rocksdb_dir, &bd)?;
+            fs.sync_dir(parent)?;
         }
         info!(from = %staged.dir().display(), to = %rocksdb_dir.display(), "Installing checkpoint as new database");
-        std::fs::rename(staged.dir(), rocksdb_dir)?;
+        fs.rename(staged.dir(), rocksdb_dir)?;
+        fs.sync_dir(parent)?;
 
         // Post-commit, best-effort retention: keep the newest backup, delete
         // older ones. Without this, every replica full sync leaked a complete

@@ -479,6 +479,42 @@ fn test_load_staged_checkpoint_installs_and_backs_up_old_db() {
     assert_eq!(read_db(&backups[0], b"k"), Some(b"old".to_vec()));
 }
 
+// FM-PERSISTENCE-023
+/// The install's crash-window reasoning ("crash between rename 1 and rename 2 is
+/// recoverable") only holds if each rename is durable when the next one runs, so
+/// the data dir's parent is fsynced after both. Asserted through the `SnapshotFs`
+/// seam: an fsync reaching the platter is not observable from a unit test, but
+/// the publisher issuing it in the right place is.
+#[test]
+fn staged_checkpoint_install_fsyncs_the_data_dir_parent() {
+    let t = TempDir::new().unwrap();
+    let parent = t.path();
+    let data = parent.join("data");
+    let crd = parent.join("checkpoint_ready");
+    write_db(&data, b"k", b"old");
+    write_db(&crd, b"k", b"new");
+    let fs = crate::fs_seam::RecordingFs::new();
+
+    assert!(RocksStore::load_staged_checkpoint_with(&data, &fs).unwrap());
+
+    let trace = fs.trace(parent);
+    assert_eq!(trace.len(), 4, "two renames, each with its sync: {trace:?}");
+    assert!(
+        trace[0].starts_with("rename data -> data_backup_"),
+        "first the live db moves aside: {trace:?}"
+    );
+    assert_eq!(
+        trace[1], "sync_dir .",
+        "the backup rename must be durable \
+         before the install rename can consume checkpoint_ready: {trace:?}"
+    );
+    assert_eq!(trace[2], "rename checkpoint_ready -> data");
+    assert_eq!(
+        trace[3], "sync_dir .",
+        "the install rename is the commit point and must be durable: {trace:?}"
+    );
+}
+
 // FM-PERSISTENCE-025
 /// First full sync onto a node with no existing db: install with no backup.
 #[test]

@@ -878,7 +878,11 @@ impl Command for ExistsCommand {
         // Note: Redis counts duplicates (EXISTS key key returns 2 if key exists)
         let mut count = 0i64;
         for key in args {
-            if ctx.store.contains(key) {
+            // Logical existence, not physical: a key past its deadline that the
+            // sampled sweeper has not reached yet does not exist.
+            // `exists_unexpired` (NOT `get_with_expiry_check`) keeps EXISTS a
+            // non-destructive probe — it must not purge or report a removal.
+            if ctx.store.exists_unexpired(key) {
                 count += 1;
             }
         }

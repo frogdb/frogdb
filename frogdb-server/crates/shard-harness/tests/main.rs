@@ -13,3 +13,6 @@ mod scenario_s4;
 mod scenario_s5;
 mod scenario_s6;
 mod scenario_s8;
+
+// Targeted regression scenarios (not part of the numbered S-series).
+mod scenario_expiry_window;

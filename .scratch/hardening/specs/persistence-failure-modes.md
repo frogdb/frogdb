@@ -78,7 +78,7 @@ Deliberate non-guarantees, so a future reader does not mistake them for gaps:
 | Trigger | `persistence.durability-mode = periodic` (the default, `interval_ms = 1000`; Redis `appendfsync everysec`); a crash lands between two periodic syncs. |
 | Observable | Writes acknowledged more than one interval before the crash are recovered. Writes acknowledged inside the current window may be absent — that is the mode's contract, not a defect. |
 | NOT observable | Loss of a write older than the interval, i.e. an unbounded window: the periodic sync thread silently stopping would turn `periodic` into `async` while `INFO` still reports `durability_mode:periodic`. Also not observable: a *gap* — a recovered keyspace holding a later write while a strictly earlier one from the same shard is missing (the WAL commits in enqueue order, so loss is always a suffix). |
-| Invariant | `spawn_periodic_sync` drives a `WalCommand::Flush` every `interval_ms`, and that flush commits with `sync = true`; between flushes `FlushEngine::should_flush` may still commit on the size threshold, which only ever shortens the window. |
+| Invariant | The commit seam never fsyncs in this mode (`is_sync` is false, so every `WriteSink::commit` passes `sync = false`); durability comes entirely from out of band. `spawn_periodic_sync` calls `RocksStore::durable_sync` every `interval_ms` — flush every shard's memtable, then publish the sequence that flush covered to each registered WAL writer's durable watermark and re-record the on-disk WAL watermark. Between ticks `FlushEngine::should_flush` may still *commit* on the size threshold, which shortens the window of buffered (not yet even committed) entries but does not make them durable. |
 | Outcome variant | n/a (`INFO persistence` `durability_mode:periodic`, `wal_durability_lag_ms`) |
 | Forced by | `test_periodic_mode_loss_bounded_by_flush_interval`, `test_periodic_mode_after_interval`, `test_periodic_mode_within_window` |
 | Bug refs | none |
@@ -88,12 +88,24 @@ Deliberate non-guarantees, so a future reader does not mistake them for gaps:
 | Field | Value |
 |---|---|
 | Trigger | `persistence.durability-mode = async` (Redis `appendfsync no`); a crash with no explicit flush since the last one. |
-| Observable | Only writes covered by an *explicit* durability request survive — a `Durability::Confirm` persist, an operator `sync_wal()`, or shutdown's drain. Everything after the last such point is gone. |
-| NOT observable | A silently *bounded* window that makes `async` behave like `periodic` — an operator who chose `async` must not be able to mistake page-cache residency for durability. Equally: an explicit flush that does **not** sync, which would leave the "durable point" undurable. |
-| Invariant | `DurabilityMode::Async` commits with `sync = false` on every batch trigger and spawns no periodic syncer; only `WalCommand::Flush` (from `flush_through` / `flush_async` / drop) passes `sync = true`. Durability is therefore an event, not a clock. |
+| Observable | Only writes covered by an *out-of-band fsync* survive — an operator `sync_wal()`, a `RocksStore::durable_sync()`, or a RocksDB-internal memtable flush. Everything after the last such point is gone. |
+| NOT observable | A silently *bounded* window that makes `async` behave like `periodic` — an operator who chose `async` must not be able to mistake page-cache residency for durability. Equally: a *reported* durable point that no fsync backs (FM-PERSISTENCE-043) — `flush_through` in this mode confirms that the batch reached RocksDB, not that it reached the device, and the durable sequence must not claim otherwise. |
+| Invariant | `DurabilityMode::Async` commits with `sync = false` on **every** trigger — size threshold, batch timeout, an explicit `WalCommand::Flush` from `flush_through` / `flush_async`, and the shutdown drain alike — and spawns no periodic syncer. `WalCommand::Flush` empties the buffer into RocksDB; it does not fsync, because the mode's whole contract is that fsync is somebody else's event. Durability is therefore an event, not a clock, and the event is external to the WAL writer. |
 | Outcome variant | n/a (`INFO persistence` `durability_mode:async`) |
 | Forced by | `test_async_mode_unbounded_loss_without_fsync`, `test_async_mode_window_bounded_only_by_external_fsync`, `test_async_mode_explicit_flush`, `test_explicit_sync_wal` |
 | Bug refs | none |
+
+## FM-PERSISTENCE-043 — the reported durable sequence counts only fsynced commits
+
+| Field | Value |
+|---|---|
+| Trigger | `periodic` or `async` durability (FM-PERSISTENCE-003/004): the flush engine commits batches with `sync = false`, and something reads the WAL writer's durable sequence before any out-of-band fsync has landed. |
+| Observable | `RocksWalWriter::durable_sequence` advances only for a commit that actually fsynced (`sync` mode), or when `RocksStore::durable_sync` publishes the sequence its flush covered. What merely reached RocksDB is reported separately as `WalLagStats::committed_sequence`, so the buffered-vs-committed gap an operator watches for stuck flushes stays visible. |
+| NOT observable | A durable sequence above the last fsynced sequence — "handed to RocksDB" reported as "on the device", which is a durability claim the mode never made. Equally: a durable sequence above the *committed* sequence (an out-of-band sync claiming writes committed after its flush began); a `Durability::Confirm` that starts failing in `periodic`/`async` because it was re-pointed at a watermark those modes never advance; an empty-stage `flush()` moving either sequence. |
+| Invariant | `FlushOutcomes` keeps two sequences instead of conflating them. `committed_seq` is stored by `record_success` after every successful commit and is what `confirm_durable_through` checks — `Durability::Confirm` means "the batch reached storage", and the durability mode alone decides whether storage means the device (FM-PERSISTENCE-002/003/004). `synced_seq` is `fetch_max`'d only when that commit passed `sync = true`, or by `publish_synced_through` from `RocksStore::durable_sync`, which snapshots each registered writer's `committed_seq` *before* calling `flush()` so it can never over-claim a write committed during the flush. Writers register a `Weak<dyn DurableSyncTarget>` with the store at construction, so the out-of-band syncer reaches every shard's watermark without the flush thread being on the path. `FlushEngine::flush` returns early on an empty stage without touching either sequence. |
+| Outcome variant | n/a (storage-layer invariant; `WalLagStats`) |
+| Forced by | `durable_sequence_tracks_only_fsynced_commits_in_periodic_mode`, `durable_sequence_tracks_only_fsynced_commits_in_async_mode`, `sync_mode_durable_sequence_equals_committed_sequence`, `empty_flush_advances_neither_sequence` |
+| Bug refs | `.scratch/testing-improvements-round2/issues/done/71-durable-sequence-advances-on-non-synced-commits.md` (fixed) |
 
 ## FM-PERSISTENCE-005 — a WAL failure under the default `continue` policy acknowledges a lost write
 
@@ -188,7 +200,7 @@ Deliberate non-guarantees, so a future reader does not mistake them for gaps:
 | NOT observable | A post-clear write swallowed by the clear's range tombstone, or a pre-clear write surviving it. Space reclamation resurrecting cleared data at the next compaction. |
 | Invariant | `apply_clear` commits what is staged, applies the range delete, and commits again — the bound of a range tombstone is only correct against committed state, so it cannot be batched with either side. Reclamation (`rocks/reclaim.rs`, `delete_file_in_range_cf` + a forced bottommost compaction on a dedicated thread) runs *after* the clear commits and is coalesced per `(tier, shard)`, so it never races a concurrent write into resurrection. |
 | Outcome variant | n/a |
-| Forced by | `test_sink_clear_is_a_flush_barrier_between_batches`, `test_sink_clear_advances_durable_sequence`, `test_wal_clear_reclamation_end_to_end`, `clear_reclamation_keeps_data_gone_after_reopen`, `clear_reclamation_preserves_post_clear_writes`, `clear_shard_routes_to_clear` |
+| Forced by | `test_sink_clear_is_a_flush_barrier_between_batches`, `test_sink_clear_advances_committed_sequence`, `test_wal_clear_reclamation_end_to_end`, `clear_reclamation_keeps_data_gone_after_reopen`, `clear_reclamation_preserves_post_clear_writes`, `clear_shard_routes_to_clear` |
 | Bug refs | none |
 
 ## FM-PERSISTENCE-013 — WAL backpressure blocks the writer, it never drops entries
@@ -255,9 +267,9 @@ and no synchronous `SAVE` — the command is an explicit `-ERR ... not supported
 | Trigger | The process dies, or the stager fails (unwritable directory, ENOTEMPTY on promotion, IO error mid-checkpoint), part-way through building a snapshot. |
 | Observable | No `snapshot_NNNNN` directory for the failed epoch. At most a dot-prefixed `.snapshot_NNNNN.tmp`, which every scanner skips and which the next run at that epoch removes before starting. A snapshot directory that *does* exist always holds both `checkpoint/` and a `metadata.json` carrying `FROGDB_SNAPSHOT_COMPLETE_v1`. |
 | NOT observable | A `snapshot_NNNNN` without its completion marker being adopted as the latest snapshot; a leaked temp directory (a full extra copy of the database) after a failure; a metadata file that is half-written. A crashed epoch permanently wedging that epoch number. |
-| Invariant | Everything is built under `.snapshot_NNNNN.tmp` and published by a single `rename` — the commit point. Every `?` in `SnapshotStager::run` drops a `TmpDirGuard` whose `Drop` removes the staging directory unless `commit()` was called, so cleanup covers *all* failure paths rather than the one somebody remembered. `metadata.json` is itself written `.tmp` + rename inside the staging dir, and `mark_complete` is the only writer of the completion marker; `load_latest_metadata` refuses to adopt an unmarked snapshot (it resumes the epoch counter but reports no last save). |
+| Invariant | Everything is built under `.snapshot_NNNNN.tmp` and published by a single `rename` — the commit point. Every `?` in `SnapshotStager::run` drops a `TmpDirGuard` whose `Drop` removes the staging directory unless `commit()` was called, so cleanup covers *all* failure paths rather than the one somebody remembered. `metadata.json` is itself written `.tmp` + rename inside the staging dir, and `mark_complete` is the only writer of the completion marker; `load_latest_metadata` refuses to adopt an unmarked snapshot (it resumes the epoch counter but reports no last save). An *unreadable* `latest`/`metadata.json` (absent, zero-length, garbage) is not allowed to collapse the epoch to 0 either: the boot seed takes the max of the metadata's epoch and the highest `snapshot_NNNNN` directory on disk, and logs the parse failure, so a damaged pointer costs the last-save time but never makes the next `BGSAVE` reuse a live epoch or reap existing snapshots. |
 | Outcome variant | `SnapshotError::{Io, Internal}`, `frogdb_persistence_errors{type="snapshot"}` |
-| Forced by | `test_stager_happy_path`, `test_stager_checkpoint_failure_aborts_cleanly`, `test_stager_promote_rename_failure_leaves_no_leak`, `test_stager_reclaims_stale_tmp`, `test_stager_excludes_search_sidecar`, `test_metadata_file_new`, `test_metadata_file_complete`, `test_metadata_serialization`, `test_metadata_to_metadata`, `test_metadata_deserializes_legacy_num_keys_field`, `test_handle_is_bare_epoch_carrier`, `test_incomplete_snapshot_skipped`, `test_corrupted_snapshot_metadata`, `test_truncated_metadata_recovery`, `test_missing_completion_marker` |
+| Forced by | `test_stager_happy_path`, `test_stager_checkpoint_failure_aborts_cleanly`, `test_stager_promote_rename_failure_leaves_no_leak`, `test_stager_reclaims_stale_tmp`, `test_stager_excludes_search_sidecar`, `test_metadata_file_new`, `test_metadata_file_complete`, `test_metadata_serialization`, `test_metadata_to_metadata`, `test_metadata_deserializes_legacy_num_keys_field`, `test_handle_is_bare_epoch_carrier`, `test_incomplete_snapshot_skipped`, `test_corrupted_snapshot_metadata`, `test_truncated_metadata_recovery`, `test_missing_completion_marker`, `coordinator_boot_keeps_the_epoch_when_latest_metadata_is_unreadable` |
 | Bug refs | none |
 
 ## FM-PERSISTENCE-018 — publishing steps after the commit point cannot fail a durable snapshot
@@ -320,17 +332,17 @@ and no synchronous `SAVE` — the command is an explicit `-ERR ... not supported
 | Forced by | `bgsave_failure_is_visible_in_info_persistence`, `test_coordinator_records_failed_then_recovered_save`, `persistence_renders_the_real_bgsave_outcome`, `test_coordinator_reports_last_and_current_save_duration`, `test_failed_save_leaves_no_duration_and_nothing_in_flight`, `persistence_renders_save_durations_with_redis_sentinels`, `lastsave_tracks_real_bgsave_and_ignores_failed_saves`, `lastsave_returns_zero_when_never_saved`, `lastsave_returns_timestamp_after_save`, `bgsave_starts_each_time_under_instant_completion`, `test_lastsave_basic`, `test_bgsave_then_lastsave`, `test_bgsave_basic` |
 | Bug refs | `.scratch/hardening/issues/03` (fixed), `.scratch/hardening/issues/09` (the MISCONF decision, open), `.scratch/hardening/issues/10` (the scripting path's placeholder INFO, open) |
 
-## FM-PERSISTENCE-023 — the renames that publish a checkpoint are not fsynced
+## FM-PERSISTENCE-023 — the renames that publish a checkpoint are fsynced on both sides
 
 | Field | Value |
 |---|---|
 | Trigger | Power loss (not a process crash) shortly after a "Snapshot completed" log line, or shortly after a staged checkpoint is installed over the live database. |
-| Observable | Current behavior: unverified. RocksDB fsyncs the checkpoint *contents*, but neither the promotion rename, the `latest` repoint, the `metadata.json` rename, nor the two `checkpoint_ready` install renames is followed by a directory fsync — there is no `sync_all`/`sync_data` anywhere in the persistence or replication production paths. The directory entry that publishes a durable payload may therefore be lost while the in-memory coordinator, `LASTSAVE`, and `rdb_last_save_time` all report success. |
-| NOT observable | Any claim that a completed `BGSAVE` is power-loss durable. Note the WAL watermark side-file is deliberately *not* fsynced for the opposite reason (FM-PERSISTENCE-035): it may only lag, so an unsynced write can under-report but never false-alarm. |
-| Invariant | Rename atomicity is relied on and tested (crash-window tests inject the process-crash cases); rename *durability* is neither argued nor tested. Forcing it needs a power-loss/barrier harness — filesystem fault injection the campaign has not built. |
-| Outcome variant | n/a |
-| Forced by | MISSING ([gap: 04-checkpoint-publish-renames-not-fsynced.md](../issues/open/04-checkpoint-publish-renames-not-fsynced.md)) |
-| Bug refs | `.scratch/hardening/issues/04` |
+| Observable | A snapshot the coordinator reported complete is still there after the reboot, holding a `metadata.json` with the completion marker, and `latest` resolves to it. Every publishing rename is bracketed: what it publishes is fsynced *before* the rename, and the directory that gains the new name is fsynced *after* it. |
+| NOT observable | `snapshot_NNNNN` present with an absent, zero-length or truncated `metadata.json`; `latest` pointing at a directory that is not there; a completed `BGSAVE` erased by a reboot while `LASTSAVE` and `rdb_last_save_time` still report it. On the install side: a backup rename that reached disk paired with an install rename that did not. Note the WAL watermark side-file remains deliberately *not* fsynced for the opposite reason (FM-PERSISTENCE-035): it may only lag, so an unsynced write can under-report but never false-alarm. |
+| Invariant | The stager writes through a `SnapshotFs` seam (`sync_file`, `sync_dir`, `rename`, `symlink`, `write`) rather than calling `std::fs` directly, so the order of syncs and renames is a testable sequence and not a claim about syscalls. Order: `finalize_metadata` fsyncs `metadata.json.tmp` and then the staging directory, so the commit rename cannot become durable ahead of the metadata it publishes; `install()` fsyncs `snapshot_dir` after the promotion rename; `update_latest_symlink` fsyncs `snapshot_dir` again after the repoint. RocksDB's `create_checkpoint` already fsyncs the checkpoint's own file contents and directory, so the stager syncs only what it wrote itself. `load_staged_checkpoint` applies the same rule to the two `checkpoint_ready` install renames, fsyncing the parent of the live data dir after each. Directory durability is `File::open(dir)?.sync_all()`, the portable directory-entry barrier; a platform whose directories cannot be opened for sync (Windows) degrades to a no-op rather than failing a save. |
+| Outcome variant | n/a (a failure to sync is an `SnapshotError::Io` on the save, not a silent success) |
+| Forced by | `stager_fsyncs_metadata_and_staging_dir_before_install`, `stager_fsyncs_snapshot_dir_after_install_and_after_latest_repoint`, `staged_checkpoint_install_fsyncs_the_data_dir_parent` |
+| Bug refs | `.scratch/hardening/issues/done/04-checkpoint-publish-renames-not-fsynced.md` (fixed), `.scratch/testing-improvements-round2/issues/done/74-snapshot-stager-fsyncs-nothing-before-promoting-latest.md` (the same hole, filed twice; fixed together) |
 
 ---
 
@@ -501,6 +513,21 @@ rows below are that decision, phase by phase.
 | Forced by | `test_expiry_filtering_on_recovery`, `test_immediate_expiry_recovery`, `test_expiry_index_rebuilt`, `test_recover_skips_expired`, `test_recover_with_expiry`, `test_expiry_roundtrip` |
 | Bug refs | none |
 
+## FM-PERSISTENCE-044 — a key past its deadline is never resurrected by a command that reads through the expiry window
+
+The live-read counterpart of FM-PERSISTENCE-036: that row keeps a dead key from coming back across
+a *restart*, this one keeps it from coming back while the process is still running.
+
+| Field | Value |
+|---|---|
+| Trigger | Active expiry is sampled, so a key whose `expires_at` has already passed can still be physically present in the store. A command reaches it before the sweeper does — the ordinary `SET … EX` then `PERSIST` cache-pinning pattern is enough. |
+| Observable | Every command reports the key as gone: `PERSIST` → `0`, `RENAME` → no-such-key error, `RENAMENX`/`EXISTS` → `0`, `TYPE` → `none`, `EXPIRETIME`/`PEXPIRETIME` → `-2`. A later expiry tick finds nothing left to do and `EXISTS` is still `0`. |
+| NOT observable | A key made **permanently immortal** because `PERSIST` cleared `expires_at` and dropped the `ExpiryIndex` entry after the deadline had passed — the value would then outlive its TTL forever, and diverge from a replica that expired it independently. A value read back through `RENAME`/`RENAMENX`. An `ExpiryIndex` orphan (`by_time` without `by_key`, or the reverse) left behind by any of these paths. A non-destructive probe (`TYPE`, `EXISTS`) reporting a lazy purge, which would turn an observation into a mutation. |
+| Invariant | `HashMapStore::persist` opens with `check_and_delete_expired`, the same guard its sibling `touch` uses, so the logically-dead key is deleted rather than pinned. Value-returning paths (`RENAME`, `RENAMENX`) go through `get_with_expiry_check`, matching `UNLINK`; non-mutating probes (`TYPE`, `EXISTS`, including the scatter-gather `EXISTS` branch) go through `exists_unexpired`, which answers correctly without purging. `EXPIRETIME`/`PEXPIRETIME` apply the same `expires_at <= now → -2` guard as `TTL`/`PTTL`. Every deletion runs through the store's own delete path, so `by_time` and `by_key` stay in step. |
+| Outcome variant | n/a (per-command replies; `ExpiryIndex` consistency) |
+| Forced by | `persist_on_expired_key_deletes_instead_of_immortalizing`, `persist_on_expired_key_leaves_no_expiry_index_orphan`, `nondestructive_probes_do_not_see_a_past_deadline_key` |
+| Bug refs | `.scratch/testing-improvements-round2/issues/done/57-persist-past-deadline-key-permanently-immortal.md` (fixed) |
+
 ## FM-PERSISTENCE-037 — a corrupt function library does not block startup
 
 | Field | Value |
@@ -590,4 +617,4 @@ named above, so a change here is a visible spec edit rather than a silent drift.
 | — | `SAVE`, `BGREWRITEAOF`, and `SYNC` are explicit `-ERR ... not supported` stubs | All three are supported | There is no AOF and no synchronous save path: durability is continuous WAL persistence, and `BGSAVE` is the only snapshot verb. The stub text points at `BGSAVE` rather than failing opaquely. |
 | — | Snapshot cadence is a single `snapshot-interval-secs` timer, live-retunable, with no dirty-key threshold | `save <seconds> <changes>` save points, several of them, each a (time, change-count) pair | FrogDB's WAL already bounds durability loss (FM-PERSISTENCE-002/003/004), so the snapshot's job is periodic backup artifacts, not the durability mechanism Redis' save points implement. A tick during a running save is dropped, never queued. |
 | FM-PERSISTENCE-034 | Point-in-time WAL replay: truncate at the first inconsistency and open | `aof-load-truncated yes` (default) truncates a torn AOF tail and starts | Matched deliberately. The divergence is what happens *behind* a mid-log corruption: FrogDB discards the valid suffix (RocksDB's point-in-time mode), where Redis with `aof-load-truncated no` would refuse to start. FrogDB has no equivalent strict knob. |
-| FM-PERSISTENCE-023 | Checkpoint publication relies on rename atomicity; no directory fsync anywhere on the path | Redis fsyncs the RDB file and renames it into place | A real durability gap under power loss (as opposed to process crash), filed as issue 04. |
+| FM-PERSISTENCE-023 | Checkpoint publication fsyncs the staged payload before each publishing rename and the containing directory after it | Redis fsyncs the RDB file and renames it into place | Matched deliberately, and extended: Redis has one file to sync, FrogDB publishes a directory tree, so the directory entry — not just the payload — is the thing that must survive. Was a real power-loss gap (issue 04 / issue 74) until phase 2c. |

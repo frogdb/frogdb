@@ -17,8 +17,10 @@
 //! treats a half-written database on disk as a first-class hazard.
 use super::SnapshotError;
 use super::metadata::SnapshotMetadataFile;
+use crate::fs_seam::SnapshotFs;
 use crate::rocks::RocksStore;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// RAII cleanup for the staging dir. Removes `path` on `Drop` unless `commit()`
 /// has run. This is the single owner of "remove the temp dir on failure": it
@@ -73,6 +75,12 @@ pub(crate) struct SnapshotStager {
     pub(crate) epoch: u64,
     pub(crate) num_shards: usize,
     pub(crate) max_snapshots: usize,
+    /// The filesystem the publication protocol writes through
+    /// ([`crate::fs_seam::RealFs`] in production). Every rename on the path to a
+    /// published snapshot is bracketed by syncs through this seam, which is also
+    /// what makes the ordering assertable from a unit test
+    /// See [`crate::fs_seam`] for the rule and why it is written through a seam.
+    pub(crate) fs: Arc<dyn SnapshotFs>,
 }
 
 impl SnapshotStager {
@@ -122,7 +130,7 @@ impl SnapshotStager {
         // Post-install, best-effort: the snapshot is already durable in
         // `final_dir`. These touch only the *pointer* and *retention*, not the
         // snapshot's contents, so a failure must not fail the snapshot.
-        if let Err(e) = Self::update_latest_symlink(&self.snapshot_dir, &self.name) {
+        if let Err(e) = Self::update_latest_symlink(&*self.fs, &self.snapshot_dir, &self.name) {
             tracing::warn!(error = %e, "Failed to update latest symlink after snapshot install");
         }
         if let Err(e) = Self::cleanup_old_snapshots(&self.snapshot_dir, self.max_snapshots) {
@@ -148,6 +156,17 @@ impl SnapshotStager {
     }
 
     /// Compute the size, then write `metadata.json` atomically (`.tmp` + rename).
+    ///
+    /// Durability ([`crate::fs_seam`]): the metadata's *contents* are fsynced
+    /// before the rename that publishes them, and the staging directory is
+    /// fsynced after it. The second sync is what the promotion in
+    /// [`install`](Self::install) rides on — without it the commit rename could
+    /// become durable while the `metadata.json` entry it publishes has not,
+    /// producing a `snapshot_NNNNN` that reads as incomplete after a reboot.
+    /// The checkpoint subtree needs no sync from us: RocksDB's
+    /// `create_checkpoint` fsyncs the files it writes and the directory holding
+    /// them, so `checkpoint`'s entry in the staging dir is covered by the same
+    /// `sync_dir` call.
     fn finalize_metadata(&self, seq: u64) -> Result<SnapshotMetadataFile, SnapshotError> {
         let cp = self.tmp.join("checkpoint");
         let mut md = SnapshotMetadataFile::new(self.epoch, seq, self.num_shards);
@@ -158,14 +177,22 @@ impl SnapshotStager {
         let json = serde_json::to_string_pretty(&md)
             .map_err(|e| SnapshotError::Internal(format!("Failed to serialize metadata: {e}")))?;
         let tmp_meta = self.tmp.join("metadata.json.tmp");
-        std::fs::write(&tmp_meta, &json)?;
-        std::fs::rename(&tmp_meta, self.tmp.join("metadata.json"))?;
+        self.fs.write(&tmp_meta, json.as_bytes())?;
+        self.fs.sync_file(&tmp_meta)?;
+        self.fs.rename(&tmp_meta, &self.tmp.join("metadata.json"))?;
+        self.fs.sync_dir(&self.tmp)?;
         Ok(md)
     }
 
-    /// Atomic promotion: rename `tmp` → `final_dir`.
+    /// Atomic promotion: rename `tmp` → `final_dir`, then fsync the directory
+    /// that gained the name. Both paths live in `snapshot_dir`, so the one sync
+    /// makes the disappearance of `.snapshot_NNNNN.tmp` and the appearance of
+    /// `snapshot_NNNNN` durable together — the rename is the commit point, and
+    /// this is what commits it against a power loss rather than only against a
+    /// process crash.
     fn install(&self) -> Result<(), SnapshotError> {
-        std::fs::rename(&self.tmp, &self.final_dir)?;
+        self.fs.rename(&self.tmp, &self.final_dir)?;
+        self.fs.sync_dir(&self.snapshot_dir)?;
         Ok(())
     }
 
@@ -220,20 +247,36 @@ impl SnapshotStager {
         Ok(())
     }
 
-    /// Atomically repoint `latest` at `sn` via `.latest.tmp` → rename.
+    /// Atomically repoint `latest` at `sn` via `.latest.tmp` → rename, then
+    /// fsync the directory so the repoint survives a power loss
+    /// ([`crate::fs_seam`]). A symlink's target is stored in the inode, so
+    /// there is nothing to `sync_file` here — the directory entry is the whole
+    /// payload.
     #[cfg(unix)]
-    fn update_latest_symlink(sd: &std::path::Path, sn: &str) -> Result<(), SnapshotError> {
+    fn update_latest_symlink(
+        fs: &dyn SnapshotFs,
+        sd: &std::path::Path,
+        sn: &str,
+    ) -> Result<(), SnapshotError> {
         let ll = sd.join("latest");
         let tl = sd.join(".latest.tmp");
         let _ = std::fs::remove_file(&tl);
-        std::os::unix::fs::symlink(sn, &tl)?;
-        std::fs::rename(&tl, &ll)?;
+        fs.symlink(Path::new(sn), &tl)?;
+        fs.rename(&tl, &ll)?;
+        fs.sync_dir(sd)?;
         Ok(())
     }
 
     #[cfg(not(unix))]
-    fn update_latest_symlink(sd: &std::path::Path, sn: &str) -> Result<(), SnapshotError> {
-        std::fs::write(sd.join("latest"), sn)?;
+    fn update_latest_symlink(
+        fs: &dyn SnapshotFs,
+        sd: &std::path::Path,
+        sn: &str,
+    ) -> Result<(), SnapshotError> {
+        let ll = sd.join("latest");
+        fs.write(&ll, sn.as_bytes())?;
+        fs.sync_file(&ll)?;
+        fs.sync_dir(sd)?;
         Ok(())
     }
 }

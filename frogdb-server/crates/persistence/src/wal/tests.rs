@@ -482,7 +482,7 @@ impl Drop for TestWal {
 }
 
 #[test]
-fn test_sink_happy_path_batches_and_advances_durable_sequence() {
+fn test_sink_happy_path_batches_and_advances_committed_sequence() {
     let mut wal = TestWal::spawn(1024 * 1024, Duration::from_secs(60));
     wal.put(1, b"a", 10);
     wal.put(2, b"b", 10);
@@ -500,7 +500,7 @@ fn test_sink_happy_path_batches_and_advances_durable_sequence() {
         ],
         "entries commit in order"
     );
-    assert_eq!(wal.outcomes.durable_sequence(), 3);
+    assert_eq!(wal.outcomes.committed_sequence(), 3);
     assert!(wal.outcomes.last_flush_ok());
     assert_eq!(wal.outcomes.flush_failures(), 0);
     assert_eq!(wal.outcomes.lost_ops(), 0);
@@ -527,7 +527,7 @@ fn test_sink_stages_merge_operand_in_order() {
         ],
         "merge operand staged after the put, carrying its bytes"
     );
-    assert_eq!(wal.outcomes.durable_sequence(), 2);
+    assert_eq!(wal.outcomes.committed_sequence(), 2);
     assert!(wal.outcomes.last_flush_ok());
     assert_eq!(wal.lag.pending_ops.load(Ordering::Acquire), 0);
     wal.shutdown();
@@ -560,7 +560,7 @@ fn test_sink_clear_is_a_flush_barrier_between_batches() {
         ],
         "pre-clear puts flush first, the clear commits alone, post-clear puts follow"
     );
-    assert_eq!(wal.outcomes.durable_sequence(), 4);
+    assert_eq!(wal.outcomes.committed_sequence(), 4);
     assert!(wal.outcomes.last_flush_ok());
     assert_eq!(wal.outcomes.flush_failures(), 0);
     assert_eq!(wal.lag.pending_ops.load(Ordering::Acquire), 0);
@@ -574,11 +574,11 @@ fn test_sink_clear_is_a_flush_barrier_between_batches() {
 /// empty-CF path — where the range delete stages nothing — is exercised by the
 /// server integration tests.)
 #[test]
-fn test_sink_clear_advances_durable_sequence() {
+fn test_sink_clear_advances_committed_sequence() {
     let mut wal = TestWal::spawn(1024 * 1024, Duration::from_secs(60));
     wal.clear(1, 64);
     wal.flush_through(0, 1).unwrap();
-    assert_eq!(wal.outcomes.durable_sequence(), 1);
+    assert_eq!(wal.outcomes.committed_sequence(), 1);
     assert!(wal.outcomes.last_flush_ok());
     wal.shutdown();
 }
@@ -645,7 +645,7 @@ fn test_sink_write_group_survives_the_batch_timeout() {
         ]],
         "the whole group commits as one batch"
     );
-    assert_eq!(wal.outcomes.durable_sequence(), 3);
+    assert_eq!(wal.outcomes.committed_sequence(), 3);
     wal.shutdown();
 }
 
@@ -679,7 +679,7 @@ fn test_sink_write_group_survives_the_size_threshold() {
         ]],
         "one batch, threshold notwithstanding"
     );
-    assert_eq!(wal.outcomes.durable_sequence(), 2);
+    assert_eq!(wal.outcomes.committed_sequence(), 2);
     wal.shutdown();
 }
 
@@ -724,7 +724,7 @@ fn test_sink_unclosed_group_commits_on_disconnect() {
         ]],
         "the shutdown drain commits an unclosed group"
     );
-    assert_eq!(wal.outcomes.durable_sequence(), 2);
+    assert_eq!(wal.outcomes.committed_sequence(), 2);
 }
 
 // FM-PERSISTENCE-011
@@ -764,7 +764,7 @@ fn test_sink_size_threshold_triggers_commit_without_explicit_flush() {
     wal.wait_until("size-threshold flush to commit", || {
         !wal.committed_batches().is_empty()
     });
-    assert_eq!(wal.outcomes.durable_sequence(), 1);
+    assert_eq!(wal.outcomes.committed_sequence(), 1);
     wal.shutdown();
 }
 
@@ -795,7 +795,7 @@ fn test_sink_size_threshold_flush_error_surfaces_on_confirm() {
     assert_eq!(wal.outcomes.lost_ops(), 1);
     assert_eq!(wal.outcomes.lost_bytes(), 200);
     assert!(!wal.outcomes.last_flush_ok());
-    assert_eq!(wal.outcomes.durable_sequence(), 0);
+    assert_eq!(wal.outcomes.committed_sequence(), 0);
     wal.shutdown();
 }
 
@@ -828,7 +828,7 @@ fn test_sink_disconnect_drain_error_recorded() {
     assert_eq!(wal.outcomes.flush_failures(), 1);
     assert_eq!(wal.outcomes.lost_ops(), 1);
     assert!(!wal.outcomes.last_flush_ok());
-    assert_eq!(wal.outcomes.durable_sequence(), 0);
+    assert_eq!(wal.outcomes.committed_sequence(), 0);
 }
 
 // FM-PERSISTENCE-005
@@ -862,7 +862,7 @@ fn test_sink_failure_attribution_and_recovery() {
     // Recovery is truthfully reported: the last flush attempt succeeded and
     // the durable sequence advanced, but the loss remains counted forever.
     assert!(wal.outcomes.last_flush_ok());
-    assert_eq!(wal.outcomes.durable_sequence(), 2);
+    assert_eq!(wal.outcomes.committed_sequence(), 2);
     assert_eq!(wal.outcomes.flush_failures(), 1);
     assert_eq!(wal.outcomes.lost_ops(), 1);
     wal.shutdown();
@@ -899,7 +899,7 @@ async fn test_wal_lag_stats() {
     let s = wal.lag_stats();
     assert_eq!(s.shard_id, 0);
     assert_eq!(s.sequence, 0);
-    assert_eq!(s.durable_sequence, 0);
+    assert_eq!(s.committed_sequence, 0);
     assert_eq!(s.flush_failures, 0);
     assert_eq!(s.lost_ops, 0);
     assert!(s.last_flush_ok);
@@ -911,7 +911,10 @@ async fn test_wal_lag_stats() {
     wal.flush_async().await.unwrap();
     let s = wal.lag_stats();
     assert_eq!(s.sequence, 2);
-    assert_eq!(s.durable_sequence, 2, "durable high-water tracks the flush");
+    assert_eq!(
+        s.committed_sequence, 2,
+        "committed high-water tracks the flush"
+    );
     assert!(s.last_flush_ok);
     assert_eq!(s.lost_ops, 0);
 }
@@ -1193,13 +1196,39 @@ impl PageCacheWal {
     fn crash_and_recover(mut self) -> BTreeMap<Vec<u8>, Vec<u8>> {
         let target = self.last_seq;
         spin_until("all sent writes committed to the sink", || {
-            self.outcomes.durable_sequence() >= target
+            self.outcomes.committed_sequence() >= target
         });
         drop(self.tx.take());
         self.handle.take().unwrap().join().unwrap();
         let mut st = self.state.lock().unwrap();
         st.crash();
         st.recovered()
+    }
+
+    /// The out-of-band sync exactly as production performs it
+    /// ([`crate::rocks::RocksStore::durable_sync`]): snapshot what has been
+    /// committed, fsync, then publish that sequence as durable. Snapshotting
+    /// first is the part that must not be reordered — a write committed during
+    /// the flush may not be covered by it.
+    fn durable_sync(&self) {
+        use crate::rocks::DurableSyncTarget;
+        let covered = self.outcomes.committed_sequence();
+        self.state.lock().unwrap().fsync();
+        self.outcomes.publish_synced_through(covered);
+    }
+
+    /// Wait until every write sent so far has reached the commit seam.
+    fn wait_committed(&self, target: u64) {
+        spin_until("all sent writes committed to the sink", || {
+            self.outcomes.committed_sequence() >= target
+        });
+    }
+
+    /// Stop the flush thread cleanly (no crash), for tests that assert on the
+    /// watermarks rather than on what survives.
+    fn stop(mut self) {
+        drop(self.tx.take());
+        self.handle.take().unwrap().join().unwrap();
     }
 
     fn commit_syncs(&self) -> Vec<bool> {
@@ -1390,6 +1419,150 @@ fn test_async_mode_window_bounded_only_by_external_fsync() {
         synced as usize,
         "only the externally-fsynced prefix survives; the unbounded tail is lost"
     );
+}
+
+// FM-PERSISTENCE-043
+/// `Periodic`: committing is not syncing. N ops committed at the (never
+/// fsyncing) commit seam leave the durable sequence at 0; only the periodic
+/// sync task advances it, and then to exactly the prefix its flush covered.
+/// Before the fix `durable_sequence()` was stored on every successful commit,
+/// so it read `N` here with nothing on the device.
+#[test]
+fn durable_sequence_tracks_only_fsynced_commits_in_periodic_mode() {
+    let mut wal = PageCacheWal::spawn(DurabilityMode::Periodic {
+        interval_ms: 60_000,
+    });
+    let n = 8u64;
+    for i in 0..n {
+        wal.put(&key(i as u32), b"v");
+    }
+    wal.flush();
+    wal.wait_committed(n);
+
+    assert_eq!(
+        wal.outcomes.committed_sequence(),
+        n,
+        "every op reached RocksDB"
+    );
+    assert!(
+        wal.commit_syncs().iter().all(|&s| !s),
+        "periodic mode never fsyncs at the commit seam: {:?}",
+        wal.commit_syncs()
+    );
+    assert_eq!(
+        wal.outcomes.durable_sequence(),
+        0,
+        "no fsync has happened, so nothing may be reported durable"
+    );
+
+    // The periodic tick: fsync, then publish what it covered.
+    wal.durable_sync();
+    assert_eq!(
+        wal.outcomes.durable_sequence(),
+        n,
+        "the periodic sync makes exactly the committed prefix durable"
+    );
+
+    // The next interval's writes are committed but not yet synced.
+    for i in n..(n + 4) {
+        wal.put(&key(i as u32), b"v");
+    }
+    wal.flush();
+    wal.wait_committed(n + 4);
+    assert_eq!(wal.outcomes.committed_sequence(), n + 4);
+    assert_eq!(
+        wal.outcomes.durable_sequence(),
+        n,
+        "the new window is not durable until the next tick"
+    );
+    wal.stop();
+}
+
+// FM-PERSISTENCE-043
+/// `Async`: same rule, no clock. The durable sequence stays at 0 through any
+/// number of commits — including an explicit `WalCommand::Flush`, which in this
+/// mode empties the buffer without fsyncing — and moves only when an
+/// out-of-band sync publishes its coverage.
+#[test]
+fn durable_sequence_tracks_only_fsynced_commits_in_async_mode() {
+    let mut wal = PageCacheWal::spawn(DurabilityMode::Async);
+    let n = 6u64;
+    for i in 0..n {
+        wal.put(&key(i as u32), b"v");
+        wal.flush(); // an explicit durability request, per write
+    }
+    wal.wait_committed(n);
+
+    assert_eq!(wal.outcomes.committed_sequence(), n);
+    assert_eq!(
+        wal.outcomes.durable_sequence(),
+        0,
+        "async fsyncs nothing on its own, not even on an explicit flush"
+    );
+
+    wal.durable_sync();
+    assert_eq!(
+        wal.outcomes.durable_sequence(),
+        n,
+        "an out-of-band fsync is the only thing that advances it"
+    );
+    wal.stop();
+}
+
+// FM-PERSISTENCE-043
+/// `Sync` mode is unchanged: every commit fsyncs, so the two watermarks are the
+/// same number and the fix is invisible here — which is exactly why no existing
+/// test noticed the defect.
+#[test]
+fn sync_mode_durable_sequence_equals_committed_sequence() {
+    let mut wal = PageCacheWal::spawn(DurabilityMode::Sync);
+    let n = 5u64;
+    for i in 0..n {
+        wal.put(&key(i as u32), b"v");
+        wal.flush();
+    }
+    wal.wait_committed(n);
+    assert_eq!(wal.outcomes.committed_sequence(), n);
+    assert_eq!(
+        wal.outcomes.durable_sequence(),
+        n,
+        "in sync mode committing is syncing"
+    );
+    wal.stop();
+}
+
+// FM-PERSISTENCE-043
+/// A flush with nothing staged is a no-op on both watermarks: it must not
+/// commit, must not re-report a stale sequence, and must not let the durable
+/// watermark drift toward the committed one for free.
+#[test]
+fn empty_flush_advances_neither_sequence() {
+    let mut wal = PageCacheWal::spawn(DurabilityMode::Async);
+    wal.put(&key(0), b"v");
+    wal.put(&key(1), b"v");
+    wal.flush();
+    wal.wait_committed(2);
+    let commits = wal.commit_syncs().len();
+
+    wal.flush();
+    wal.flush();
+
+    assert_eq!(
+        wal.commit_syncs().len(),
+        commits,
+        "an empty stage must not reach the sink at all"
+    );
+    assert_eq!(
+        wal.outcomes.committed_sequence(),
+        2,
+        "the committed sequence stays where the last real commit left it"
+    );
+    assert_eq!(
+        wal.outcomes.durable_sequence(),
+        0,
+        "an empty flush is not an fsync"
+    );
+    wal.stop();
 }
 
 // FM-PERSISTENCE-013

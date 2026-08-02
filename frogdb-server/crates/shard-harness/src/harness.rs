@@ -39,6 +39,7 @@ use frogdb_core::shard::{
     BlockingMsg, CoreMsg, DebugIntrospectionMsg, Envelope, NewConnection, ShardMessage,
     ShardReceiver, ShardSender, ShardWorkerBuilder, WatchEntry,
 };
+use frogdb_core::store::BackdateExpiryResult;
 use frogdb_core::types::BlockingOp;
 use frogdb_core::{CommandRegistry, ShardWorker};
 
@@ -319,6 +320,30 @@ impl ShardDriver {
         )
         .await;
         rx.await.expect("memory check")
+    }
+
+    /// Move a key's expiry deadline `ms` milliseconds into the past (the
+    /// production `DEBUG EXPIRE-BACKDATE` seam), putting the key inside the
+    /// sampled-expiry window deterministically — no sleep, no wall-clock race.
+    /// Rewrites only the deadline: the key stays physically present until a
+    /// read or the sweep removes it.
+    pub async fn backdate_expiry(
+        &mut self,
+        shard: usize,
+        key: &str,
+        ms: u64,
+    ) -> BackdateExpiryResult {
+        let (tx, rx) = oneshot::channel();
+        self.dispatch(
+            shard,
+            DebugIntrospectionMsg::ExpireBackdate {
+                key: Bytes::copy_from_slice(key.as_bytes()),
+                ms,
+                response_tx: tx,
+            },
+        )
+        .await;
+        rx.await.expect("expire backdate")
     }
 
     pub async fn expiry_index_check(&mut self, shard: usize) -> ExpiryIndexCheckInfo {

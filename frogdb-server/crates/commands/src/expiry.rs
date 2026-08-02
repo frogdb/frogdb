@@ -737,6 +737,12 @@ impl Command for ExpiretimeCommand {
 
         match ctx.store.get_expiry(key) {
             Some(expires_at) => {
+                if expires_at <= Instant::now() {
+                    // Already expired (lazy expiry will clean it up): report
+                    // "no such key", matching TTL/PTTL — never a deadline that
+                    // has already gone by.
+                    return Ok(Response::Integer(-2));
+                }
                 let unix_ts = instant_to_unix_secs(expires_at);
                 Ok(Response::Integer(unix_ts))
             }
@@ -781,6 +787,12 @@ impl Command for PexpiretimeCommand {
 
         match ctx.store.get_expiry(key) {
             Some(expires_at) => {
+                if expires_at <= Instant::now() {
+                    // Already expired (lazy expiry will clean it up): report
+                    // "no such key", matching TTL/PTTL — never a deadline that
+                    // has already gone by.
+                    return Ok(Response::Integer(-2));
+                }
                 let unix_ts = instant_to_unix_ms(expires_at);
                 Ok(Response::Integer(unix_ts))
             }

@@ -1236,6 +1236,13 @@ impl Store for HashMapStore {
     }
 
     fn persist(&mut self, key: &[u8]) -> bool {
+        // Check and delete if expired first. Without this a key that is past
+        // its deadline but not yet swept has its deadline *cleared* — nothing
+        // can ever expire it again, so it becomes permanently immortal.
+        if self.check_and_delete_expired(key) {
+            return false;
+        }
+
         if let Some(entry) = self.data.get_mut(key)
             && entry.metadata.expires_at.is_some()
         {
@@ -2590,6 +2597,91 @@ mod tests {
         );
         // Drained: a second take is empty.
         assert!(s.take_lazily_purged().is_empty());
+    }
+
+    // FM-PERSISTENCE-044
+    /// `PERSIST` on a key that is past its deadline but not yet physically
+    /// purged must observe the logical expiry and delete the key — clearing
+    /// `expires_at` instead would resurrect an already-dead key and make it
+    /// **permanently** immortal (the deadline is gone, so nothing can ever
+    /// expire it again), diverging this replica from every other.
+    #[test]
+    fn persist_on_expired_key_deletes_instead_of_immortalizing() {
+        let mut s = HashMapStore::new();
+        s.set(Bytes::from_static(b"k"), Value::string("v"));
+        s.set_expiry(b"k", Instant::now() - Duration::from_secs(1));
+        assert!(s.contains(b"k"), "precondition: still physically present");
+
+        assert!(
+            !s.persist(b"k"),
+            "PERSIST on a past-deadline key must report 0 (no TTL was removed)"
+        );
+        assert!(
+            !s.contains(b"k"),
+            "the past-deadline key must be lazily deleted, not immortalized"
+        );
+        assert!(!s.exists_unexpired(b"k"));
+        // The removal is physical, so it reports like every other lazy purge.
+        assert_eq!(
+            s.take_lazily_purged(),
+            vec![Bytes::from_static(b"k")],
+            "the lazy removal must be reported to the worker"
+        );
+    }
+
+    // FM-PERSISTENCE-044
+    /// The `PERSIST`-on-expired path must retire the key through the normal
+    /// `uninstall` seam so the key-level expiry index is left consistent — no
+    /// index entry pointing at a key that is gone, and no entry-with-deadline
+    /// missing from the index.
+    #[test]
+    fn persist_on_expired_key_leaves_no_expiry_index_orphan() {
+        let mut s = HashMapStore::new();
+        s.set(Bytes::from_static(b"k"), Value::string("v"));
+        s.set_expiry(b"k", Instant::now() - Duration::from_secs(1));
+        s.set(Bytes::from_static(b"live"), Value::string("v"));
+        s.set_expiry(b"live", Instant::now() + Duration::from_secs(3600));
+
+        assert!(!s.persist(b"k"));
+
+        assert!(
+            s.audit_expiry_index().is_empty(),
+            "expiry index must stay consistent after the lazy delete"
+        );
+        assert!(
+            s.expiry_index.get(b"k").is_none(),
+            "no index entry may survive the deleted key"
+        );
+        // The untouched neighbour keeps its deadline: the purge is surgical.
+        assert!(s.expiry_index.get(b"live").is_some());
+        s.assert_consistent();
+    }
+
+    // FM-PERSISTENCE-044
+    /// The seam `TYPE` and `EXISTS` read (`Store::exists_unexpired`) must
+    /// report a past-deadline key as gone while it is still physically
+    /// present, and must stay non-destructive: no purge, no report. (`contains`
+    /// is the raw physical test and deliberately still sees the key — commands
+    /// must not read it directly. Regression guard: this store seam is already
+    /// correct; the defect was on the command surface, which read `contains`.)
+    #[test]
+    fn nondestructive_probes_do_not_see_a_past_deadline_key() {
+        let mut s = HashMapStore::new();
+        s.set(Bytes::from_static(b"k"), Value::string("v"));
+        s.set_expiry(b"k", Instant::now() - Duration::from_secs(1));
+
+        assert!(
+            !s.exists_unexpired(b"k"),
+            "a past-deadline key must read as absent through the probe seam"
+        );
+        assert!(
+            s.contains(b"k"),
+            "the probe must not physically remove the key"
+        );
+        assert!(
+            s.take_lazily_purged().is_empty(),
+            "a non-destructive probe must not report a purge"
+        );
     }
 
     #[test]

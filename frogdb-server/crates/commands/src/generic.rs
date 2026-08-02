@@ -12,7 +12,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    EventSpec, ExecutionStrategy, KeyAccessFlag, KeySpec, KeyspaceEventFlags, LookupSpec,
+    EventSpec, ExecutionStrategy, KeyAccessFlag, KeySpec, KeyType, KeyspaceEventFlags, LookupSpec,
     ScatterGatherOp, ServerWideOp, Value, WaiterWake, WalStrategy, shard_for_key,
 };
 use frogdb_protocol::Response;
@@ -45,7 +45,15 @@ impl Command for TypeCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
-        let key_type = ctx.store.key_type(key);
+        // Active expiry is sampled, so a key past its deadline can still be
+        // physically present: gate the type read on the logical-expiry probe.
+        // `exists_unexpired` (NOT `get_with_expiry_check`) keeps TYPE a pure
+        // metadata probe — it must not physically purge or report a removal.
+        let key_type = if ctx.store.exists_unexpired(key) {
+            ctx.store.key_type(key)
+        } else {
+            KeyType::None
+        };
         Ok(Response::Simple(Bytes::from(key_type.as_str())))
     }
 }
@@ -91,13 +99,16 @@ impl Command for RenameCommand {
             return Err(CommandError::CrossSlot);
         }
 
-        // Get the value from old key
-        let value = ctx
-            .store
-            .get(old_key)
-            .ok_or(CommandError::InvalidArgument {
-                message: "no such key".to_string(),
-            })?;
+        // Get the value from old key. The expiry-checking read (matching
+        // UNLINK below) is what makes a source past its deadline — but not yet
+        // swept — behave as "no such key" instead of being resurrected under
+        // the new name.
+        let value =
+            ctx.store
+                .get_with_expiry_check(old_key)
+                .ok_or(CommandError::InvalidArgument {
+                    message: "no such key".to_string(),
+                })?;
 
         // src == dst short-circuit. Redis renameGenericCommand checks samekey
         // *after* confirming the source exists (missing source is still an
@@ -179,18 +190,23 @@ impl Command for RenamenxCommand {
         // modifying anything or emitting events. Declaring the no-op skips the
         // effect pipeline (WAL, replication, notifications, WATCH bump) —
         // Redis returns before signalModifiedKey / server.dirty++.
+        // Trigger lazy expiry first (matching UNLINK below): a destination past
+        // its deadline does not exist, so RENAMENX must proceed rather than
+        // report a spurious 0.
+        let _ = ctx.store.get_with_expiry_check(new_key);
         if ctx.store.contains(new_key) {
             ctx.effects.write_was_noop = true;
             return Ok(Response::Integer(0));
         }
 
-        // Get the value from old key
-        let value = ctx
-            .store
-            .get(old_key)
-            .ok_or(CommandError::InvalidArgument {
-                message: "no such key".to_string(),
-            })?;
+        // Get the value from old key (expiry-checking read: a source past its
+        // deadline is "no such key", not a value to resurrect).
+        let value =
+            ctx.store
+                .get_with_expiry_check(old_key)
+                .ok_or(CommandError::InvalidArgument {
+                    message: "no such key".to_string(),
+                })?;
 
         // Get expiry if any
         let expiry = ctx.store.get_expiry(old_key);

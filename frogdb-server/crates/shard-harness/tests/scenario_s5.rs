@@ -132,7 +132,8 @@ async fn s5_ttl_arm_drains_xreadgroup_to_nogroup_after_f1_fix() {
 /// of removal.
 ///
 /// NOTE (finding): not every "read" purges. Metadata probes that read the
-/// expiry non-destructively — `TYPE` (`Store::key_type`), `EXISTS`/`TOUCH`
+/// expiry non-destructively — `TYPE` (`Store::exists_unexpired` gating
+/// `Store::key_type`), `EXISTS`/`TOUCH`
 /// (`Store::exists_unexpired`), and the `LookupSpec::FirstKey` keyspace-hit seam
 /// (also `exists_unexpired`) — are `&self` and do NOT physically remove the key,
 /// so they do not report a purge; only a value-read through

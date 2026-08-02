@@ -102,10 +102,16 @@ pub struct WalLagStats {
     pub durability_lag_ms: u64,
     /// Highest sequence assigned to a WAL entry.
     pub sequence: u64,
-    /// Highest sequence confirmed durable in storage. Trails `sequence` by the
-    /// buffered entries; a widening gap paired with `lost_ops > 0` means
-    /// flushes are failing.
-    pub durable_sequence: u64,
+    /// Highest sequence committed to storage. Trails `sequence` by the buffered
+    /// entries; a widening gap paired with `lost_ops > 0` means flushes are
+    /// failing.
+    ///
+    /// Deliberately *committed*, not durable: whether a commit implies an fsync
+    /// is the durability mode's decision, so a lag stat named "durable" would
+    /// report `periodic`/`async` writes as on-device when they are only in
+    /// RocksDB. The fsync watermark is
+    /// `RocksWalWriter::durable_sequence`.
+    pub committed_sequence: u64,
     /// Total failed flush attempts since startup.
     pub flush_failures: u64,
     /// Entries dropped in failed batches since startup. Losses are permanent:

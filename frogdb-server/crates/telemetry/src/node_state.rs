@@ -280,7 +280,7 @@ mod tests {
             pending_bytes: pending * 10,
             durability_lag_ms: dlag,
             sequence: 0,
-            durable_sequence: 0,
+            committed_sequence: 0,
             flush_failures: 1,
             lost_ops: 2,
             lost_bytes: 200,

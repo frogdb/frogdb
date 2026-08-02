@@ -730,13 +730,14 @@ impl ShardWorker {
                 // Keyspace hit/miss counted per key through the shared accounting
                 // seam (this cross-shard path bypasses the single-shard LookupSpec
                 // seam), consistent with the `LookupSpec::EveryKey` rule: the
-                // unexpired-existence probe is the hit, independent of the reply's
-                // own `contains` test.
+                // unexpired-existence probe is the hit — and it is also the reply,
+                // so a key past its deadline but not yet swept is reported absent
+                // here exactly as the single-shard EXISTS reports it.
                 let mut existed = Vec::with_capacity(keys.len());
                 let mut results = Vec::with_capacity(keys.len());
                 for key in keys {
-                    existed.push(self.store.exists_unexpired(key));
-                    let exists = self.store.contains(key);
+                    let exists = self.store.exists_unexpired(key);
+                    existed.push(exists);
                     results.push((key.clone(), Response::Integer(if exists { 1 } else { 0 })));
                 }
                 self.record_lookup_existence(existed);
@@ -1785,6 +1786,50 @@ pub(super) mod scatter_effect_tests {
             !worker.store.contains(b"stale"),
             "the expiry-aware read must have lazily purged the key"
         );
+    }
+
+    /// Issue 57: the scatter `EXISTS` arm must *reply* from the same
+    /// unexpired-existence probe it counts hits with. Replying from the raw
+    /// physical `Store::contains` made a key past its deadline — but not yet
+    /// swept — report `1` while the accounting recorded a miss: the reply and
+    /// the stats disagreed, and a cross-shard EXISTS contradicted the
+    /// single-shard one.
+    #[tokio::test]
+    async fn scatter_exists_reports_hot_expired_key_as_absent() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = scatter_worker(bc as SharedBroadcaster);
+
+        worker.store.set(
+            Bytes::from_static(b"stale"),
+            Value::string(Bytes::from_static(b"old")),
+        );
+        worker
+            .store
+            .set_expiry(b"stale", Instant::now() - Duration::from_secs(60));
+        assert!(
+            worker.store.contains(b"stale"),
+            "key must still be physically present before the scatter probe"
+        );
+
+        let keys = [Bytes::from_static(b"stale")];
+        let result = worker
+            .execute_scatter_part(&keys, &ScatterOp::Exists, 1)
+            .await;
+
+        match result {
+            PartialResult::Keyed(pairs) => {
+                assert_eq!(pairs.len(), 1);
+                assert_eq!(
+                    pairs[0].1,
+                    Response::Integer(0),
+                    "a past-deadline key must not be counted by EXISTS"
+                );
+            }
+            other => panic!("expected keyed EXISTS reply, got {other:?}"),
+        }
+        // The probe is non-destructive: EXISTS never purges (see
+        // `lazy_value_read_reports_purge_but_nondestructive_probes_do_not`).
+        assert!(worker.store.contains(b"stale"));
     }
 
     /// D4 (round-7 follow-up item 3): the transport-frame producer shared by

@@ -47,6 +47,13 @@ impl RocksWalWriter {
             last_flush_timestamp_ms: AtomicU64::new(now_ms),
         });
         let outcomes = Arc::new(FlushOutcomes::new());
+        // Register this shard's durability watermark with the store *before*
+        // the sink takes ownership of the handle: in `periodic`/`async` the
+        // commit seam never fsyncs, so `RocksStore::durable_sync` is the only
+        // thing that can advance it.
+        rocks.register_sync_target(
+            &(Arc::clone(&outcomes) as Arc<dyn crate::rocks::DurableSyncTarget>),
+        );
         // Adopt the caller's shared handle when one is supplied so every shard's
         // flush thread and `CONFIG SET batch-size-threshold-kb` observe one
         // cell; otherwise mint a private one seeded from the static config.
@@ -282,7 +289,7 @@ impl RocksWalWriter {
             pending_bytes: self.lag.pending_bytes.load(Ordering::Acquire),
             durability_lag_ms: dlm,
             sequence: self.sequence.load(Ordering::SeqCst),
-            durable_sequence: self.outcomes.durable_sequence(),
+            committed_sequence: self.outcomes.committed_sequence(),
             flush_failures: self.outcomes.flush_failures(),
             lost_ops: self.outcomes.lost_ops(),
             lost_bytes: self.outcomes.lost_bytes(),
@@ -295,9 +302,18 @@ impl RocksWalWriter {
     pub fn sequence(&self) -> u64 {
         self.sequence.load(Ordering::SeqCst)
     }
-    /// Highest sequence confirmed durable in storage.
+    /// Highest sequence an fsync has covered.
+    ///
+    /// In `sync` mode this tracks every commit; in `periodic`/`async` it only
+    /// advances when [`RocksStore::durable_sync`] (or an operator `sync_wal`)
+    /// publishes the sequence its flush covered. Use
+    /// [`Self::committed_sequence`] for "reached storage".
     pub fn durable_sequence(&self) -> u64 {
         self.outcomes.durable_sequence()
+    }
+    /// Highest sequence committed to storage, fsynced or not.
+    pub fn committed_sequence(&self) -> u64 {
+        self.outcomes.committed_sequence()
     }
     pub fn shard_id(&self) -> usize {
         self.shard_id

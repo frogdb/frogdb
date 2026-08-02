@@ -280,7 +280,7 @@ impl WalSink for FakeWalSink {
             pending_bytes: 0,
             durability_lag_ms: 0,
             sequence: seq,
-            durable_sequence: seq,
+            committed_sequence: seq,
             flush_failures: 0,
             lost_ops: 0,
             lost_bytes: 0,

@@ -235,7 +235,26 @@ fn stager(
     epoch: u64,
     max_snapshots: usize,
 ) -> SnapshotStager {
+    stager_on(
+        snapshot_dir,
+        data_dir,
+        epoch,
+        max_snapshots,
+        std::sync::Arc::new(crate::fs_seam::RealFs),
+    )
+}
+
+/// [`stager`] against a caller-supplied filesystem seam — the durability-ordering
+/// tests pass a [`crate::fs_seam::RecordingFs`].
+fn stager_on(
+    snapshot_dir: &Path,
+    data_dir: &Path,
+    epoch: u64,
+    max_snapshots: usize,
+    fs: std::sync::Arc<dyn crate::fs_seam::SnapshotFs>,
+) -> SnapshotStager {
     SnapshotStager {
+        fs,
         snapshot_dir: snapshot_dir.to_path_buf(),
         tmp: snapshot_dir.join(format!(".snapshot_{epoch:05}.tmp")),
         final_dir: snapshot_dir.join(format!("snapshot_{epoch:05}")),
@@ -321,6 +340,100 @@ fn test_stager_excludes_search_sidecar() {
             .join("segment.dat")
             .exists(),
         "the live sidecar must be untouched by snapshotting"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Publication durability
+//
+// `rename(2)` makes a partial snapshot invisible to other processes, which is
+// what the partial-snapshot invariant rests on, but it is not durable on its own.
+// These two
+// tests assert the *ordering* of syncs against renames through the `SnapshotFs`
+// seam — the only part of "this survives a power loss" a unit test can observe
+// without syscall interposition. Between them they pin the complete recorded
+// protocol: test one owns the prefix through the promotion rename, test two owns
+// the suffix from it.
+// ---------------------------------------------------------------------------
+
+// FM-PERSISTENCE-023
+/// Everything a rename publishes is fsynced before that rename runs:
+/// `metadata.json.tmp`'s contents before it becomes `metadata.json`, and the
+/// staging directory (which now names both `checkpoint` and `metadata.json`)
+/// before the promotion rename consumes it. Without the second sync a power loss
+/// could surface `snapshot_NNNNN` holding entries that never reached disk — the
+/// exact "complete snapshot with no metadata" state the boot path then has to
+/// treat as garbage.
+#[test]
+fn stager_fsyncs_metadata_and_staging_dir_before_install() {
+    let db = TempDir::new().unwrap();
+    let store = make_store(db.path());
+    let snap = TempDir::new().unwrap();
+    let data = TempDir::new().unwrap();
+    let fs = std::sync::Arc::new(crate::fs_seam::RecordingFs::new());
+
+    stager_on(snap.path(), data.path(), 1, 5, fs.clone())
+        .run(&store)
+        .unwrap();
+
+    let trace = fs.trace(snap.path());
+    let t = ".snapshot_00001.tmp";
+    assert_eq!(
+        trace[..5].to_vec(),
+        vec![
+            format!("write {t}/metadata.json.tmp"),
+            format!("sync_file {t}/metadata.json.tmp"),
+            format!("rename {t}/metadata.json.tmp -> {t}/metadata.json"),
+            format!("sync_dir {t}"),
+            format!("rename {t} -> snapshot_00001"),
+        ],
+        "metadata contents and the staging dir must both be durable before the \
+         promotion rename; got {trace:?}"
+    );
+}
+
+// FM-PERSISTENCE-023
+/// The directory that gains a published name is fsynced after each rename that
+/// gives it one: `snapshot_dir` after the promotion, and `snapshot_dir` again
+/// after `latest` is repointed. Without those a reboot can lose the promotion
+/// (a `BGSAVE` that reported success), or leave `latest` dangling at a directory
+/// that is not there.
+#[test]
+fn stager_fsyncs_snapshot_dir_after_install_and_after_latest_repoint() {
+    let db = TempDir::new().unwrap();
+    let store = make_store(db.path());
+    let snap = TempDir::new().unwrap();
+    let data = TempDir::new().unwrap();
+    let fs = std::sync::Arc::new(crate::fs_seam::RecordingFs::new());
+
+    stager_on(snap.path(), data.path(), 1, 5, fs.clone())
+        .run(&store)
+        .unwrap();
+
+    let trace = fs.trace(snap.path());
+    let t = ".snapshot_00001.tmp";
+    // `.` is `snapshot_dir` itself — the directory holding every published name.
+    #[cfg(unix)]
+    let expected = vec![
+        format!("rename {t} -> snapshot_00001"),
+        "sync_dir .".to_string(),
+        "symlink .latest.tmp".to_string(),
+        "rename .latest.tmp -> latest".to_string(),
+        "sync_dir .".to_string(),
+    ];
+    #[cfg(not(unix))]
+    let expected = vec![
+        format!("rename {t} -> snapshot_00001"),
+        "sync_dir .".to_string(),
+        "write latest".to_string(),
+        "sync_file latest".to_string(),
+        "sync_dir .".to_string(),
+    ];
+    assert_eq!(
+        trace[4..].to_vec(),
+        expected,
+        "each publishing rename must be followed by a sync of the directory it \
+         published into; got {trace:?}"
     );
 }
 
@@ -883,6 +996,46 @@ async fn wait_idle(coord: &RocksSnapshotCoordinator) -> bool {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     false
+}
+
+// FM-PERSISTENCE-017
+/// A `latest`/`metadata.json` a power loss left unreadable must not collapse the
+/// epoch to 0. Epoch 0 makes the next `BGSAVE` target `snapshot_00001` — a
+/// directory that already exists — and makes retention mis-order the snapshot
+/// set. The seed therefore falls back to the highest `snapshot_NNNNN` on disk,
+/// which is proof that epoch ran whatever the pointer says.
+///
+/// Both unreadable shapes are covered: garbage JSON (`load_latest_metadata`
+/// errors) and an absent `metadata.json` behind a live `latest` (it returns
+/// `(0, None)` — a *silent* zero, which is the more dangerous of the two).
+#[cfg(unix)]
+#[test]
+fn coordinator_boot_keeps_the_epoch_when_latest_metadata_is_unreadable() {
+    for (case, body) in [("garbage", Some("{not json")), ("absent", None)] {
+        let db = TempDir::new().unwrap();
+        let store = Arc::new(make_store(db.path()));
+        let snap = TempDir::new().unwrap();
+        let data = TempDir::new().unwrap();
+
+        let dir = snap.path().join("snapshot_00007");
+        std::fs::create_dir_all(&dir).unwrap();
+        if let Some(b) = body {
+            std::fs::write(dir.join("metadata.json"), b).unwrap();
+        }
+        std::os::unix::fs::symlink("snapshot_00007", snap.path().join("latest")).unwrap();
+
+        let coord = coordinator(store, snap.path(), data.path());
+
+        assert_eq!(
+            coord.current_epoch(),
+            7,
+            "[{case}] an unreadable pointer must not rewind the epoch"
+        );
+        assert!(
+            coord.last_save_time().is_none(),
+            "[{case}] an unreadable snapshot is still not a usable save"
+        );
+    }
 }
 
 // FM-PERSISTENCE-042

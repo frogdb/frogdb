@@ -39,7 +39,26 @@ impl RocksSnapshotCoordinator {
     ) -> Result<Self, SnapshotError> {
         std::fs::create_dir_all(&config.snapshot_dir)?;
         let ns = rs.num_shards();
-        let (ie, lm) = Self::load_latest_metadata(&config.snapshot_dir).unwrap_or((0, None));
+        // An unreadable `latest`/`metadata.json` — absent, zero-length, garbage,
+        // whatever a power loss left behind — must not collapse the epoch to 0
+        // Epoch 0 makes the next `BGSAVE` reuse
+        // `snapshot_00001`, whose `final_dir` already exists, and it makes the
+        // retention pass reason about a snapshot set it has mis-numbered. So the
+        // failure is logged, not swallowed, and the seed falls back to the
+        // highest epoch actually on disk.
+        let (mut ie, lm) = match Self::load_latest_metadata(&config.snapshot_dir) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    snapshot_dir = %config.snapshot_dir.display(),
+                    "Failed to read the latest snapshot metadata; \
+                     seeding the epoch from the snapshot directories on disk"
+                );
+                (0, None)
+            }
+        };
+        ie = ie.max(Self::highest_snapshot_epoch(&config.snapshot_dir));
         // Seed the last-save time from the newest complete snapshot's *own*
         // recorded completion time, not from "now": the artifact on disk may be
         // days old, and a boot is not a save. A complete snapshot with no
@@ -65,9 +84,36 @@ impl RocksSnapshotCoordinator {
             data_dir,
         })
     }
+    /// The epoch the next save will advance from — seeded at boot from the
+    /// newest snapshot on disk, then incremented per save.
+    pub fn current_epoch(&self) -> u64 {
+        self.scheduler.current_epoch()
+    }
     pub fn set_pre_snapshot_hook(&self, hook: PreSnapshotHook) {
         *self.pre_snapshot_hook.write().unwrap() = Some(hook);
     }
+    /// Highest `snapshot_NNNNN` epoch present under `sd`, or 0 if there are
+    /// none. The floor for the boot epoch seed: a snapshot directory on disk is
+    /// proof that epoch ran, whatever `latest` and `metadata.json` say. Ignores
+    /// unreadable directories and unparsable names rather than failing — this is
+    /// the fallback path, and it may only ever raise the seed.
+    pub(crate) fn highest_snapshot_epoch(sd: &std::path::Path) -> u64 {
+        let Ok(entries) = std::fs::read_dir(sd) else {
+            return 0;
+        };
+        entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+            .filter_map(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .strip_prefix("snapshot_")
+                    .and_then(|s| s.parse::<u64>().ok())
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
     fn load_latest_metadata(
         sd: &std::path::Path,
     ) -> Result<(u64, Option<SnapshotMetadataFile>), SnapshotError> {
@@ -195,6 +241,7 @@ impl SnapshotRun {
                 epoch,
                 num_shards,
                 max_snapshots,
+                fs: Arc::new(crate::fs_seam::RealFs),
             }
             .run(&rocks_store)
         })

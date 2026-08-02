@@ -11,6 +11,7 @@
 //! entry lands in memory: it drives a [`RestoreSink`] that `frogdb-core`
 //! implements over its `HashMapStore`.
 
+pub(crate) mod fs_seam;
 pub mod recovery;
 pub mod rocks;
 pub mod serialization;

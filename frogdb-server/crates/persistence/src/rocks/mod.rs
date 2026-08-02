@@ -22,6 +22,23 @@ use std::sync::Arc;
 use std::sync::Arc as StdArc;
 use tracing::{debug, error, info};
 
+/// A durability watermark that an out-of-band, database-wide fsync can advance.
+///
+/// The WAL flush engine tracks two sequences: what has been *committed* (handed
+/// to RocksDB) and what has been *synced* (covered by an fsync). In the
+/// `periodic` and `async` durability modes the commit seam never fsyncs, so the
+/// only thing that can advance the synced watermark is
+/// [`RocksStore::durable_sync`] — and it can only do so for writers it can
+/// reach. Each `RocksWalWriter` therefore registers its outcome record here at
+/// construction, as a `Weak` so a dropped writer is not kept alive (and is
+/// pruned on the next registration or sync).
+pub(crate) trait DurableSyncTarget: Send + Sync {
+    /// Highest sequence this writer has committed to the store.
+    fn committed_sequence(&self) -> u64;
+    /// Publish `seq` as covered by an fsync. Idempotent and monotonic.
+    fn publish_synced_through(&self, seq: u64);
+}
+
 pub struct RocksStore {
     pub(crate) db: DBWithThreadMode<MultiThreaded>,
     pub(crate) num_shards: usize,
@@ -47,6 +64,10 @@ pub struct RocksStore {
     /// shims; production threads the real recorder through
     /// [`open_with_warm_metrics`](RocksStore::open_with_warm_metrics).
     metrics: Arc<dyn frogdb_types::traits::MetricsRecorder>,
+    /// Per-shard durability watermarks an out-of-band [`Self::durable_sync`]
+    /// publishes to. Weak, so registering never keeps a dropped WAL writer
+    /// alive; dead entries are pruned on register and on sync.
+    sync_targets: std::sync::Mutex<Vec<std::sync::Weak<dyn DurableSyncTarget>>>,
 }
 
 impl RocksStore {
@@ -283,7 +304,44 @@ impl RocksStore {
             flush_compact_range: config.flush_compact_range,
             reclaim_guard: reclaim::ReclaimGuard::new(),
             metrics,
+            sync_targets: std::sync::Mutex::new(Vec::new()),
         })
+    }
+
+    /// Register a WAL writer's durability watermark for [`Self::durable_sync`].
+    pub(crate) fn register_sync_target(&self, target: &Arc<dyn DurableSyncTarget>) {
+        let mut targets = self.sync_targets.lock().unwrap();
+        targets.retain(|w| w.strong_count() > 0);
+        targets.push(Arc::downgrade(target));
+    }
+
+    /// fsync everything committed so far, then publish the covered sequence to
+    /// every registered WAL writer and re-record the on-disk WAL watermark.
+    ///
+    /// The committed sequences are snapshotted **before** the flush: a write
+    /// that commits while the flush is running may not be covered by it, and
+    /// over-claiming durability is precisely the failure this path exists to
+    /// prevent. Publishing after a failed flush would make
+    /// the same claim, so a flush error short-circuits.
+    pub fn durable_sync(&self) -> Result<(), RocksError> {
+        let pending: Vec<(Arc<dyn DurableSyncTarget>, u64)> = {
+            let mut targets = self.sync_targets.lock().unwrap();
+            targets.retain(|w| w.strong_count() > 0);
+            targets
+                .iter()
+                .filter_map(|w| w.upgrade())
+                .map(|t| {
+                    let seq = t.committed_sequence();
+                    (t, seq)
+                })
+                .collect()
+        };
+        self.flush()?;
+        for (target, seq) in pending {
+            target.publish_synced_through(seq);
+        }
+        self.record_wal_watermark();
+        Ok(())
     }
     /// Main-tier resolver shim; see [`RocksStore::tier_cf_handle`] for the
     /// single resolver shared by all tiers.

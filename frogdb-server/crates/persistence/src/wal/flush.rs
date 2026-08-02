@@ -222,15 +222,23 @@ impl WriteSink for RocksSink {
 ///
 /// Invariants (single flush thread writes; sequence numbers are assigned
 /// monotonically and batches are committed in sequence order):
-/// - `durable_seq` is the highest sequence whose batch committed. Every entry
-///   with a lower sequence was either committed or counted in `lost_ops`.
+/// - `committed_seq` is the highest sequence whose batch committed — reached
+///   RocksDB, not necessarily the device. Every entry with a lower sequence was
+///   either committed or counted in `lost_ops`.
+/// - `synced_seq` is the highest sequence an *fsync* has covered. It advances
+///   only on a commit that passed `sync = true` (i.e. `DurabilityMode::Sync`) or
+///   when an out-of-band [`RocksStore::durable_sync`] publishes the sequence its
+///   flush covered. In `sync` mode the two coincide; in `periodic`/`async` they
+///   must not, and conflating them is what made "durable" mean "handed to
+///   RocksDB".
 /// - `highest_failed_seq` is the highest sequence contained in any failed
 ///   (dropped) batch. A confirmation for entries written after sequence `S`
 ///   fails iff `highest_failed_seq > S` — batches are seq-ordered, so a failed
 ///   batch with max sequence above `S` must have contained at least one entry
 ///   assigned after `S`.
 pub(super) struct FlushOutcomes {
-    durable_seq: AtomicU64,
+    committed_seq: AtomicU64,
+    synced_seq: AtomicU64,
     highest_failed_seq: AtomicU64,
     flush_failures: AtomicU64,
     lost_ops: AtomicU64,
@@ -244,7 +252,8 @@ pub(super) struct FlushOutcomes {
 impl FlushOutcomes {
     pub(super) fn new() -> Self {
         Self {
-            durable_seq: AtomicU64::new(0),
+            committed_seq: AtomicU64::new(0),
+            synced_seq: AtomicU64::new(0),
             highest_failed_seq: AtomicU64::new(0),
             flush_failures: AtomicU64::new(0),
             lost_ops: AtomicU64::new(0),
@@ -254,8 +263,18 @@ impl FlushOutcomes {
         }
     }
 
-    fn record_success(&self, max_seq: u64) {
-        self.durable_seq.store(max_seq, Ordering::Release);
+    /// Record a successful commit through `max_seq`. `synced` is the `sync` flag
+    /// the commit actually used: only an fsynced commit may advance the durable
+    /// watermark, and an fsync of the shared WAL file covers every earlier
+    /// unsynced batch too, so the store is a high-water mark for both.
+    fn record_success(&self, max_seq: u64, synced: bool) {
+        self.committed_seq.store(max_seq, Ordering::Release);
+        if synced {
+            // `fetch_max`, not `store`: `publish_synced_through` writes this
+            // from the out-of-band sync task, so this is not a single-writer
+            // cell even though `committed_seq` is.
+            self.synced_seq.fetch_max(max_seq, Ordering::AcqRel);
+        }
         self.last_flush_ok.store(true, Ordering::Release);
     }
 
@@ -269,8 +288,17 @@ impl FlushOutcomes {
         *self.last_error.lock().unwrap() = Some(error.to_string());
     }
 
+    /// Highest sequence whose batch reached RocksDB. Says nothing about fsync —
+    /// see [`Self::durable_sequence`].
+    pub(super) fn committed_sequence(&self) -> u64 {
+        self.committed_seq.load(Ordering::Acquire)
+    }
+
+    /// Highest sequence an fsync has covered — the only number that may be
+    /// called *durable*. In `periodic`/`async` this trails
+    /// [`Self::committed_sequence`] until the next out-of-band sync.
     pub(super) fn durable_sequence(&self) -> u64 {
-        self.durable_seq.load(Ordering::Acquire)
+        self.synced_seq.load(Ordering::Acquire)
     }
 
     pub(super) fn flush_failures(&self) -> u64 {
@@ -290,7 +318,14 @@ impl FlushOutcomes {
     }
 
     /// Confirm that every WAL entry assigned after `after_seq` (through
-    /// `target_seq`) is durable.
+    /// `target_seq`) reached storage.
+    ///
+    /// "Reached storage" is deliberately the *committed* sequence, not the
+    /// synced one: whether committing implies fsync is the durability mode's
+    /// decision (see the durability-mode rows in
+    /// `.scratch/hardening/specs/persistence-failure-modes.md`), and an operator who chose
+    /// `periodic`/`async` must not have every `Durability::Confirm` write fail
+    /// because it demanded an fsync the mode does not perform.
     ///
     /// `flush_result` is the outcome of the explicit flush that drained the
     /// buffer. On top of it, this checks for failures of *background*
@@ -315,19 +350,29 @@ impl FlushOutcomes {
                 .unwrap_or_else(|| "unknown flush error".to_string());
             return Err(std::io::Error::other(format!(
                 "WAL flush failed for entries after sequence {after_seq} \
-                 (durable through {}): {detail}",
-                self.durable_sequence()
+                 (committed through {}): {detail}",
+                self.committed_sequence()
             )));
         }
         // Defensive: with an Ok flush and no overlapping failure, everything
         // through `target_seq` must have committed.
-        let durable = self.durable_sequence();
-        if durable < target_seq {
+        let committed = self.committed_sequence();
+        if committed < target_seq {
             return Err(std::io::Error::other(format!(
-                "WAL durable sequence {durable} below confirmation target {target_seq}"
+                "WAL committed sequence {committed} below confirmation target {target_seq}"
             )));
         }
         Ok(())
+    }
+}
+
+impl crate::rocks::DurableSyncTarget for FlushOutcomes {
+    fn committed_sequence(&self) -> u64 {
+        FlushOutcomes::committed_sequence(self)
+    }
+
+    fn publish_synced_through(&self, seq: u64) {
+        self.synced_seq.fetch_max(seq, Ordering::AcqRel);
     }
 }
 
@@ -497,7 +542,7 @@ impl<S: WriteSink> FlushEngine<S> {
     /// (3) commit it as its own batch. Higher-seq entries that follow are applied
     /// after this returns, into a fresh batch committed later — so post-flush
     /// writes correctly survive the tombstone. The outcome is recorded under the
-    /// clear's `seq` even when the CF is empty (nothing staged), so the durable
+    /// clear's `seq` even when the CF is empty (nothing staged), so the committed
     /// sequence still advances past it.
     ///
     /// This barrier outranks an open write group: the tombstone's range bound
@@ -529,13 +574,13 @@ impl<S: WriteSink> FlushEngine<S> {
         WalBytes::inc_by(&*self.metrics, size_estimate as u64, &self.shard_label);
 
         // (3) Commit the clear as its own batch, recording the outcome under
-        // `seq`. `commit` of an empty batch (empty CF) is a durable no-op, which
-        // still lets the durable sequence advance past the clear.
+        // `seq`. `commit` of an empty batch (empty CF) is a no-op commit, which
+        // still lets the committed sequence advance past the clear.
         let start = Instant::now();
         self.last_flush = Instant::now();
         match self.sink.commit(self.is_sync) {
             Ok(()) => {
-                self.outcomes.record_success(seq);
+                self.outcomes.record_success(seq, self.is_sync);
                 self.lag
                     .last_flush_timestamp_ms
                     .store(current_timestamp_ms(), Ordering::Release);
@@ -563,7 +608,8 @@ impl<S: WriteSink> FlushEngine<S> {
     }
 
     /// Commit the staged batch and record the outcome — success advances the
-    /// durable sequence; failure records the loss (counters, highest failed
+    /// committed sequence (and, when that commit fsynced, the durable one);
+    /// failure records the loss (counters, highest failed
     /// sequence, rate-limited log). Returns the commit result so an explicit
     /// flush can report it to its waiter.
     fn flush(&mut self) -> std::io::Result<()> {
@@ -590,7 +636,7 @@ impl<S: WriteSink> FlushEngine<S> {
         self.last_flush = Instant::now();
         match result {
             Ok(()) => {
-                self.outcomes.record_success(max_seq);
+                self.outcomes.record_success(max_seq, self.is_sync);
                 self.lag
                     .last_flush_timestamp_ms
                     .store(current_timestamp_ms(), Ordering::Release);
@@ -752,9 +798,12 @@ pub fn spawn_periodic_sync(
         loop {
             ticker.tick().await;
             let _span = tracing::info_span!("wal_sync").entered();
-            match rocks.flush() {
-                Ok(()) => rocks.record_wal_watermark(),
-                Err(e) => tracing::warn!(error = %e, "Failed to sync WAL"),
+            // `durable_sync`, not a bare `flush`: the flush is what makes the
+            // committed writes durable, and the durability watermark every
+            // shard reports only advances when something publishes the
+            // sequence that flush covered.
+            if let Err(e) = rocks.durable_sync() {
+                tracing::warn!(error = %e, "Failed to sync WAL");
             }
         }
     };
