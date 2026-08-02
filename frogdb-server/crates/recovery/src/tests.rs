@@ -7,13 +7,13 @@
 
 use std::path::Path;
 
+use frogdb_config::{ClusterConfigSection, PersistenceConfig, ReplicationConfigSection};
 use frogdb_core::persistence::{RocksConfig, RocksStore};
 use frogdb_core::sync::Arc;
 use frogdb_core::{KeyMetadata, NoopMetricsRecorder, Store, Value, serialize};
 use tempfile::TempDir;
 
-use super::{RecoveryInputs, RecoveryPhase, recover};
-use crate::config::{ClusterConfigSection, PersistenceConfig, ReplicationConfigSection};
+use crate::{RecoveryInputs, RecoveryPhase, recover};
 
 /// Build a `PersistenceConfig` with serde defaults, overriding the two fields the
 /// recovery seam cares about.

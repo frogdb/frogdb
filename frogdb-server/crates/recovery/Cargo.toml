@@ -1,0 +1,22 @@
+[package]
+name = "frogdb-recovery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Startup crash-recovery orchestration: staged checkpoints, shard restore, replication/cluster state"
+
+[dependencies]
+frogdb-config.workspace = true
+frogdb-core.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# test-support exposes RocksStore's single-key put/get accessors to the seam
+# tests (src/tests.rs), which synthesize a data dir without a server boot;
+# dev-only, kept out of the production build by resolver "2".
+frogdb-persistence = { workspace = true, features = ["test-support"] }
+serde_json.workspace = true
+tempfile.workspace = true

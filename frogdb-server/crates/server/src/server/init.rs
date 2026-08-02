@@ -264,7 +264,7 @@ pub(super) async fn init_infrastructure(
 
     // Run crash recovery through the orchestrator seam: install staged
     // checkpoint, open RocksDB, restore per-shard stores.
-    let recovered = crate::recovery::recover(&crate::recovery::RecoveryInputs::from_config(
+    let recovered = frogdb_recovery::recover(&frogdb_recovery::RecoveryInputs::from_config(
         config,
         num_shards,
         metrics_recorder.clone(),

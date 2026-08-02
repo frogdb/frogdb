@@ -246,7 +246,7 @@ pub(super) fn spawn_shard_workers(
         // Recover search indexes from RocksDB through the lifecycle seam.
         //
         // This recovery step deliberately lives outside the recovery
-        // orchestrator (`crate::recovery`): `IndexLifecycleManager::recover`
+        // orchestrator (`frogdb_recovery`): `IndexLifecycleManager::recover`
         // opens per-shard tantivy + usearch handles that are not `Send`, so it
         // runs here at worker-spawn time and the manager is installed into the
         // worker it was built for (proposal 06 "Search-index recovery

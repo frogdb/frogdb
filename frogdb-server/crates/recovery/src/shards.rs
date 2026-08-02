@@ -12,10 +12,10 @@ use frogdb_core::sync::Arc;
 use frogdb_core::{ExpiryIndex, HashMapStore};
 use tracing::info;
 
-use super::RecoveryInputs;
+use crate::RecoveryInputs;
 
 /// Phase 2: open RocksDB (with optional warm-tier column families).
-pub(super) fn open_rocks(inputs: &RecoveryInputs<'_>) -> Result<Arc<RocksStore>> {
+pub(crate) fn open_rocks(inputs: &RecoveryInputs<'_>) -> Result<Arc<RocksStore>> {
     let config = inputs.persistence;
 
     // The operator-vs-invariant knob partition lives in `RocksConfig::from_persistence`
@@ -39,7 +39,7 @@ pub(super) fn open_rocks(inputs: &RecoveryInputs<'_>) -> Result<Arc<RocksStore>>
 ///
 /// When the database has no existing data this returns `num_shards` fresh empty
 /// stores; otherwise it replays every shard's persisted state.
-pub(super) fn restore(
+pub(crate) fn restore(
     inputs: &RecoveryInputs<'_>,
     rocks: &Arc<RocksStore>,
 ) -> Result<(Vec<(HashMapStore, ExpiryIndex)>, RecoveryStats)> {

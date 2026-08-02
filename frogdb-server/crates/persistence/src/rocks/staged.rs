@@ -12,7 +12,7 @@
 //! 2. **Installer** — `RocksStore::load_staged_checkpoint`
 //!    (`rocks/checkpoint.rs`) swaps the staged dir in for the live database on
 //!    the next boot.
-//! 3. **Orchestrator** — server recovery (`server/src/recovery/`) runs the
+//! 3. **Orchestrator** — startup recovery (`frogdb-recovery`) runs the
 //!    installer before opening the DB and afterwards consumes the replication
 //!    metadata that the install carried into the data dir.
 //!

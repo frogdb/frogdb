@@ -71,6 +71,7 @@ frogdb-protocol.workspace = true
 frogdb-core.workspace = true
 frogdb-vll.workspace = true
 frogdb-txn.workspace = true
+frogdb-recovery.workspace = true
 frogdb-debug.workspace = true
 frogdb-replication.workspace = true
 frogdb-commands.workspace = true
@@ -129,10 +130,6 @@ hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
 [dev-dependencies]
 socket2.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
-# test-support exposes RocksStore's single-key put/get accessors to the recovery
-# seam tests (crates/server/src/recovery/tests.rs); dev-only, kept out of the
-# production build by resolver "2".
-frogdb-persistence = { workspace = true, features = ["test-support"] }
 futures.workspace = true
 shuttle.workspace = true
 turmoil.workspace = true

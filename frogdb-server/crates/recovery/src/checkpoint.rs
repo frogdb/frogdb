@@ -15,11 +15,11 @@ use anyhow::Result;
 use frogdb_core::persistence::RocksStore;
 use tracing::{error, info};
 
-use super::RecoveryInputs;
+use crate::RecoveryInputs;
 
 /// Ensure the data directory exists, then install a staged full-sync checkpoint
 /// if one is present. Returns `true` iff a checkpoint was installed this boot.
-pub(super) fn install_staged(inputs: &RecoveryInputs<'_>) -> Result<bool> {
+pub(crate) fn install_staged(inputs: &RecoveryInputs<'_>) -> Result<bool> {
     // Ensure data directory exists.
     fs::create_dir_all(inputs.data_dir)?;
 

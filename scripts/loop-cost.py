@@ -40,8 +40,8 @@ AREAS: dict[str, tuple[str, str, list[str]]] = {
         [],
     ),
     "persistence": (
-        "frogdb-server",
-        "frogdb-server/crates/server/src/recovery/mod.rs",
+        "frogdb-recovery",
+        "frogdb-server/crates/recovery/src/lib.rs",
         [],
     ),
     "replication": (

@@ -14,13 +14,13 @@ temp dir. Several files here are load-bearing — `scripts/coverage-depth.py` wr
 |---|---|--:|--:|---|
 | [testing-improvements-round2](testing-improvements-round2/) | active | 95 | 0 | round-2 testing-gap audit; 249 findings → 95 issues, incl. **~40 suspected live defects** |
 | [arch-deepening](arch-deepening/) | active | 15 | 5 | architecture deepening rounds; proposals backlog empty, issues backlog is not |
-| [concurrency-testing](concurrency-testing/) | active | 4 | 7 | concurrency invariant testing; phases 1–5 shipped, incl. one **real un-root-caused bug** (issue 11) |
+| [concurrency-testing](concurrency-testing/) | active | 4 | 7 | concurrency invariant testing; phases 1–5 shipped. Issue 11 Finding A was a harness defect, fixed; B and C still open |
 | [replication-cluster-rework](replication-cluster-rework/) | active | 8 | 2 | four rework PRDs, all merged 2026-07-30; follow-ups outstanding |
-| [hardening](hardening/) | active | 2 | 0 | foundation-hardening campaign; failure-mode specs + mutation gates, txn/vll **locked** 2026-08-01 |
+| [hardening](hardening/) | active | 1 | 1 | foundation-hardening campaign; failure-mode specs + mutation gates, txn/vll **locked** 2026-08-01 |
 | [naming-cleanup](naming-cleanup/) | active | 1 | 7 | canonical terminology; decisions now canon in `CONTEXT.md` files |
 | [testing-improvements](testing-improvements/) | archive-of-record | 3 | 64 | round-1 testing-gap audit. **Do not delete** — live write target + 10 inbound refs |
 
-Totals: **128 open, 85 done** across 213 issues.
+Totals: **127 open, 86 done** across 213 issues.
 
 ## Conventions
 
