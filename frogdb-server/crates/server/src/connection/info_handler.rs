@@ -156,22 +156,30 @@ impl ConnectionHandler {
             secondary_window,
         };
 
-        // Same source LASTSAVE reports, so the two commands agree.
-        let last_save_unix = self
-            .admin
-            .snapshot_coordinator
-            .last_save_time()
-            .map(|instant| {
-                use std::time::{SystemTime, UNIX_EPOCH};
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default();
-                now.as_secs().saturating_sub(instant.elapsed().as_secs())
-            });
+        // One read of the coordinator's save history: the same value LASTSAVE
+        // reports, plus the outcome/counters, so no two fields can describe
+        // different moments.
+        let save_stats = self.admin.snapshot_coordinator.stats();
+        let last_save_unix = save_stats.last_save_time.map(|saved_at| {
+            use std::time::UNIX_EPOCH;
+            saved_at
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        });
+        let last_bgsave_secs = save_stats.last_duration.map(|d| d.as_secs());
+        // Elapsed at *read* time, from the same stats value: a hung save reports
+        // a growing number rather than a frozen one.
+        let current_bgsave_secs = save_stats.current_save_elapsed().map(|d| d.as_secs());
         let persistence = PersistenceSnapshot {
             durability_mode: config.durability_mode(),
             bgsave_in_progress: self.admin.snapshot_coordinator.in_progress(),
             last_save_unix,
+            saves: save_stats.saves,
+            bgsave_failures: save_stats.failures,
+            last_bgsave_error: save_stats.last_error,
+            last_bgsave_secs,
+            current_bgsave_secs,
         };
 
         let baseline = crate::latency_test::get_global_baseline().map(|info| BaselineSnapshot {

@@ -112,9 +112,9 @@ mod tests {
     use super::*;
     use frogdb_core::persistence::{
         SnapshotError, SnapshotHandle, SnapshotMode, SnapshotRequest, SnapshotScheduler,
+        SnapshotStats,
     };
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::Instant;
 
     /// Minimal coordinator that records how many periodic saves were started and
     /// carries the live cadence on a real [`SnapshotScheduler`] (the same seam the
@@ -144,8 +144,8 @@ mod tests {
                 self.starts.fetch_add(1, Ordering::SeqCst) + 1,
             ))
         }
-        fn last_save_time(&self) -> Option<Instant> {
-            None
+        fn stats(&self) -> SnapshotStats {
+            SnapshotStats::default()
         }
         fn in_progress(&self) -> bool {
             false

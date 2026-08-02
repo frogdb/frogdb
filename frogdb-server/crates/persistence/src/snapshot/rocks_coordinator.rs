@@ -3,7 +3,7 @@ use super::handle::SnapshotHandle;
 use super::metadata::{SnapshotConfig, SnapshotMetadataFile};
 use super::scheduler::SnapshotScheduler;
 use super::stager::SnapshotStager;
-use super::{SnapshotCoordinator, SnapshotError, SnapshotMode, SnapshotRequest};
+use super::{SnapshotCoordinator, SnapshotError, SnapshotMode, SnapshotRequest, SnapshotStats};
 use crate::rocks::RocksStore;
 use frogdb_types::metrics::definitions::{
     PersistenceErrors, SnapshotDuration, SnapshotEpoch, SnapshotInProgress, SnapshotLastTimestamp,
@@ -24,8 +24,7 @@ pub struct RocksSnapshotCoordinator {
     snapshot_dir: PathBuf,
     num_shards: usize,
     scheduler: Arc<SnapshotScheduler>,
-    last_save_time: Arc<RwLock<Option<Instant>>>,
-    last_metadata: Arc<RwLock<Option<SnapshotMetadataFile>>>,
+    stats: Arc<RwLock<SnapshotStats>>,
     max_snapshots: usize,
     metrics_recorder: Arc<dyn MetricsRecorder>,
     pre_snapshot_hook: Arc<RwLock<Option<PreSnapshotHook>>>,
@@ -41,10 +40,14 @@ impl RocksSnapshotCoordinator {
         std::fs::create_dir_all(&config.snapshot_dir)?;
         let ns = rs.num_shards();
         let (ie, lm) = Self::load_latest_metadata(&config.snapshot_dir).unwrap_or((0, None));
-        let lst = if lm.is_some() {
-            Some(Instant::now())
-        } else {
-            None
+        // Seed the last-save time from the newest complete snapshot's *own*
+        // recorded completion time, not from "now": the artifact on disk may be
+        // days old, and a boot is not a save. A complete snapshot with no
+        // `completed_at_ms` (a hand-edited or pre-versioned metadata file) seeds
+        // `None` — "unknown" is reported as "never saved", never as "just now".
+        let stats = SnapshotStats {
+            last_save_time: lm.as_ref().and_then(|m| m.completed_at()),
+            ..SnapshotStats::default()
         };
         let scheduler = Arc::new(SnapshotScheduler::with_epoch(ie));
         // Seed the live periodic cadence from config. The periodic task reads it
@@ -55,8 +58,7 @@ impl RocksSnapshotCoordinator {
             snapshot_dir: config.snapshot_dir,
             num_shards: ns,
             scheduler,
-            last_save_time: Arc::new(RwLock::new(lst)),
-            last_metadata: Arc::new(RwLock::new(lm)),
+            stats: Arc::new(RwLock::new(stats)),
             max_snapshots: config.max_snapshots,
             metrics_recorder: mr,
             pre_snapshot_hook: Arc::new(RwLock::new(None)),
@@ -96,6 +98,11 @@ impl RocksSnapshotCoordinator {
     /// [`run_loop`]. Called once the scheduler has already claimed the slot for
     /// `epoch` (via `try_begin` / `request`).
     fn spawn_run(&self, epoch: u64) {
+        // Stamp the start *here*, not inside the spawned task: the slot is
+        // already claimed, so `in_progress()` is true from this point on and
+        // `rdb_current_bgsave_time_sec` must not read `-1` in the window before
+        // the runtime polls the task.
+        let started = self.stats.write().unwrap().record_start();
         SnapshotInProgress::set(&*self.metrics_recorder, 1.0);
         SnapshotEpoch::set(&*self.metrics_recorder, epoch as f64);
         tracing::info!(epoch, "Snapshot started");
@@ -104,14 +111,15 @@ impl RocksSnapshotCoordinator {
             rocks_store: self.rocks_store.clone(),
             snapshot_dir: self.snapshot_dir.clone(),
             data_dir: self.data_dir.clone(),
-            last_save_time: self.last_save_time.clone(),
-            last_metadata: self.last_metadata.clone(),
+            stats: self.stats.clone(),
             metrics: self.metrics_recorder.clone(),
             pre_snapshot_hook: self.pre_snapshot_hook.clone(),
             num_shards: self.num_shards,
             max_snapshots: self.max_snapshots,
         };
-        tokio::spawn(run_loop(run, epoch).instrument(tracing::info_span!("snapshot_create")));
+        tokio::spawn(
+            run_loop(run, epoch, started).instrument(tracing::info_span!("snapshot_create")),
+        );
     }
 }
 impl SnapshotCoordinator for RocksSnapshotCoordinator {
@@ -123,8 +131,8 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
         self.spawn_run(epoch);
         Ok(SnapshotHandle::new(epoch))
     }
-    fn last_save_time(&self) -> Option<Instant> {
-        *self.last_save_time.read().unwrap()
+    fn stats(&self) -> SnapshotStats {
+        self.stats.read().unwrap().clone()
     }
     fn in_progress(&self) -> bool {
         self.scheduler.in_progress()
@@ -153,8 +161,7 @@ struct SnapshotRun {
     rocks_store: Arc<RocksStore>,
     snapshot_dir: PathBuf,
     data_dir: PathBuf,
-    last_save_time: Arc<RwLock<Option<Instant>>>,
-    last_metadata: Arc<RwLock<Option<SnapshotMetadataFile>>>,
+    stats: Arc<RwLock<SnapshotStats>>,
     metrics: Arc<dyn MetricsRecorder>,
     pre_snapshot_hook: Arc<RwLock<Option<PreSnapshotHook>>>,
     num_shards: usize,
@@ -206,13 +213,21 @@ impl SnapshotRun {
                 let elapsed = started.elapsed();
                 let sequence = md.sequence_number;
                 let path = self.snapshot_dir.join(format!("snapshot_{epoch:05}"));
-                *self.last_save_time.write().unwrap() = Some(Instant::now());
-                *self.last_metadata.write().unwrap() = Some(md.clone());
+                // The artifact's own recorded completion time, so the value
+                // reported now is the same one a later boot reads back out of
+                // `metadata.json` (a metadata file with no completion time is
+                // not produced by `mark_complete`; fall back to now rather than
+                // dropping the save's timestamp).
+                let completed_at = md.completed_at().unwrap_or_else(SystemTime::now);
+                self.stats
+                    .write()
+                    .unwrap()
+                    .record_success(completed_at, elapsed);
                 SnapshotDuration::observe(&*self.metrics, elapsed.as_secs_f64());
                 SnapshotSizeBytes::set(&*self.metrics, md.size_bytes as f64);
                 SnapshotLastTimestamp::set(
                     &*self.metrics,
-                    SystemTime::now()
+                    completed_at
                         .duration_since(UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs_f64(),
@@ -228,10 +243,15 @@ impl SnapshotRun {
             }
             Ok(Err(e)) => {
                 PersistenceErrors::inc(&*self.metrics, PersistenceErrorType::Snapshot);
+                self.stats.write().unwrap().record_failure(e.to_string());
                 tracing::error!(epoch, error = %e, "Snapshot failed");
             }
             Err(e) => {
                 PersistenceErrors::inc(&*self.metrics, PersistenceErrorType::Snapshot);
+                self.stats
+                    .write()
+                    .unwrap()
+                    .record_failure(format!("snapshot task panicked: {e}"));
                 tracing::error!(epoch, error = %e, "Snapshot task panicked");
             }
         }
@@ -241,9 +261,11 @@ impl SnapshotRun {
 /// One background save, then coalesced re-runs, until the scheduler reports idle.
 /// The reschedule handshake lives entirely in
 /// [`SnapshotScheduler::finish_and_maybe_rebegin`].
-async fn run_loop(run: SnapshotRun, mut epoch: u64) {
+/// `started` is the instant [`RocksSnapshotCoordinator::spawn_run`] published as
+/// this run's start; each coalesced follow-up re-stamps it, so the duration this
+/// loop measures and the one `INFO` reports as in-flight are the same window.
+async fn run_loop(run: SnapshotRun, mut epoch: u64, mut started: Instant) {
     loop {
-        let started = Instant::now();
         let result = run.execute(epoch).await;
         run.record(epoch, started, result);
 
@@ -254,6 +276,7 @@ async fn run_loop(run: SnapshotRun, mut epoch: u64) {
             }
             Some(next) => {
                 epoch = next;
+                started = run.stats.write().unwrap().record_start();
                 SnapshotEpoch::set(&*run.metrics, epoch as f64);
                 tracing::info!(epoch, "Starting scheduled snapshot");
             }

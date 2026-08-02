@@ -346,6 +346,20 @@ pub struct PersistenceSnapshot {
     pub bgsave_in_progress: bool,
     /// Unix time (seconds) of the last successful save, if any.
     pub last_save_unix: Option<u64>,
+    /// Successful background saves in this process (Redis `rdb_saves`).
+    pub saves: u64,
+    /// Failed background saves in this process. Cumulative — a later success
+    /// does not reset it.
+    pub bgsave_failures: u64,
+    /// Cause of the most recent *failed* save, cleared by the next success.
+    /// `Some` is exactly the `rdb_last_bgsave_status:err` condition.
+    pub last_bgsave_error: Option<String>,
+    /// Whole seconds the last successful save took (`rdb_last_bgsave_time_sec`).
+    /// `None` until one completes in this process, rendered as Redis' `-1`.
+    pub last_bgsave_secs: Option<u64>,
+    /// Whole seconds the in-flight save has been running
+    /// (`rdb_current_bgsave_time_sec`); `None` when none is, rendered as `-1`.
+    pub current_bgsave_secs: Option<u64>,
 }
 
 /// Latency-histogram handles for the Latencystats section.

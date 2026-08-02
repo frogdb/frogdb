@@ -1,6 +1,6 @@
 # LASTSAVE is restamped to the boot time, so a stale snapshot reports as fresh
 
-Status: needs-triage
+Status: done
 Type: bug (observability / Redis parity)
 Severity: likelihood 3/3 (every restart of a node with an existing snapshot), consequence 2/3
 (a "backup is stale" alarm can never fire after a restart) — score 6
@@ -58,3 +58,40 @@ A coordinator test that writes a complete `metadata.json` with a `completed_at_m
 constructs a fresh `RocksSnapshotCoordinator` over that directory, and asserts `last_save_time()`
 reflects the metadata rather than the construction time. The snapshot-dir fixtures for this already
 exist in `frogdb-persistence`'s `snapshot::tests`.
+
+## Resolution
+
+Candidate fix 1 (store a wall-clock time, not an `Instant`), as filed and as issue 03 wanted for
+the same struct — both were done in one change. `last_save_time` is now
+`Option<SystemTime>` inside `SnapshotStats`, and the boot seed reads the value
+`load_latest_metadata` used to parse and throw away:
+
+```rust
+let stats = SnapshotStats {
+    last_save_time: lm.as_ref().and_then(|m| m.completed_at()),
+    ..SnapshotStats::default()
+};
+```
+
+**Truth source: `SnapshotMetadataFile::completed_at_ms`**, exposed as `completed_at()`, in
+preference to the checkpoint directory's or manifest's mtime. It is written by `mark_complete` at
+finalize time, lives *inside* the durable artifact (so it survives a copy that rewrites mtimes, and
+a hand-touched directory cannot age or freshen it), and it is the same field the completing process
+stamps into `SnapshotStats` — so the value reported right after a save and the value reported after
+the next restart are the same bytes. A complete snapshot carrying no `completed_at_ms`, or an
+incomplete one, seeds `None`: unknown is reported as "never saved" (`LASTSAVE` 0), never as "just
+now". `SnapshotCoordinator::last_save_time` is now a provided method over `stats()`, so `LASTSAVE`
+and `rdb_last_save_time` read one value; the elapsed-time arithmetic and its double-truncation
+comment in `handle_lastsave` are gone.
+
+`Instant` vs `SystemTime`: the reported time may predate the process, which a monotonic clock
+cannot represent — that impossibility was the original bug. The metric
+`SnapshotLastTimestamp` is now set from the same wall-clock value.
+
+Forcing tests: `lastsave_reports_the_snapshot_time_after_restart` (e2e: save, shut down, age the
+artifact's `completed_at_ms` by 30 days, restart, assert `LASTSAVE`/`rdb_last_save_time` report the
+aged value and that `rdb_saves` stays 0 — a boot is not a save),
+`test_coordinator_seeds_last_save_from_snapshot_metadata`, and
+`test_coordinator_seeds_none_without_a_usable_completion_time`.
+
+Spec: new row FM-PERSISTENCE-042, which documents the truth-source choice.

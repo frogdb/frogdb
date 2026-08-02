@@ -253,10 +253,39 @@ impl InfoSection for PersistenceSection {
             .field("rdb_changes_since_last_save", sh.dirty)
             .field("rdb_bgsave_in_progress", u8::from(p.bgsave_in_progress))
             .field("rdb_last_save_time", p.last_save_unix.unwrap_or(0))
-            .field("rdb_last_bgsave_status", "ok")
-            .field("rdb_last_bgsave_time_sec", -1)
-            .field("rdb_current_bgsave_time_sec", -1)
-            .field("rdb_saves", 0)
+            // Real save outcome, not a literal: `err` while the most recent
+            // finished save failed, back to `ok` on the next success (Redis
+            // semantics). The cause and the cumulative failure count are FrogDB
+            // extensions next to it — a status that flips back to `ok` must not
+            // erase the fact that saves were failing.
+            .field(
+                "rdb_last_bgsave_status",
+                if p.last_bgsave_error.is_some() {
+                    "err"
+                } else {
+                    "ok"
+                },
+            )
+            .field_opt(
+                "rdb_last_bgsave_error",
+                // INFO is a line-oriented format: fold any CR/LF in the cause
+                // into spaces so one error cannot forge extra fields.
+                p.last_bgsave_error
+                    .as_deref()
+                    .map(|e| e.replace(['\r', '\n'], " ")),
+            )
+            // Redis' sentinel for "no such save": `-1` until one completes, and
+            // `-1` for the current save whenever none is running.
+            .field(
+                "rdb_last_bgsave_time_sec",
+                p.last_bgsave_secs.map_or(-1, |s| s as i64),
+            )
+            .field(
+                "rdb_current_bgsave_time_sec",
+                p.current_bgsave_secs.map_or(-1, |s| s as i64),
+            )
+            .field("rdb_saves", p.saves)
+            .field("rdb_bgsave_failures", p.bgsave_failures)
             .field("rdb_last_cow_size", 0)
             .field("rdb_last_load_keys_expired", 0)
             .field("rdb_last_load_keys_loaded", 0)
@@ -798,6 +827,80 @@ mod tests {
         assert!(out.contains("rdb_changes_since_last_save:9\r\n"), "{out}");
         // Metrics disabled: totals are honestly absent.
         assert!(!out.contains("wal_writes_total"), "{out}");
+    }
+
+    // FM-PERSISTENCE-022
+    /// The save-outcome fields report the coordinator's real state: `err` with
+    /// the cause while the last save failed, `ok` once one succeeds, and a
+    /// failure counter that a later success does not erase.
+    #[test]
+    fn persistence_renders_the_real_bgsave_outcome() {
+        // No save attempted: `ok`, no cause, zero counters (Redis' initial state).
+        let src = sources();
+        let out = render(&PersistenceSection, &src);
+        assert!(out.contains("rdb_last_bgsave_status:ok\r\n"), "{out}");
+        assert!(!out.contains("rdb_last_bgsave_error"), "{out}");
+        assert!(out.contains("rdb_saves:0\r\n"), "{out}");
+        assert!(out.contains("rdb_bgsave_failures:0\r\n"), "{out}");
+        assert!(out.contains("rdb_last_save_time:0\r\n"), "{out}");
+
+        // Last save failed: `err`, the cause, and the failure counted. The
+        // save time still reports the last *successful* save.
+        let mut src = sources();
+        src.persistence.saves = 2;
+        src.persistence.bgsave_failures = 1;
+        src.persistence.last_save_unix = Some(1_700_000_000);
+        src.persistence.last_bgsave_error = Some("IO error: No space left\non device".to_string());
+        let out = render(&PersistenceSection, &src);
+        assert!(out.contains("rdb_last_bgsave_status:err\r\n"), "{out}");
+        assert!(
+            out.contains("rdb_last_bgsave_error:IO error: No space left on device\r\n"),
+            "the cause is reported with CR/LF folded to spaces: {out}"
+        );
+        assert!(out.contains("rdb_saves:2\r\n"), "{out}");
+        assert!(out.contains("rdb_bgsave_failures:1\r\n"), "{out}");
+        assert!(out.contains("rdb_last_save_time:1700000000\r\n"), "{out}");
+
+        // Recovered: status back to `ok`, cause gone, failure count retained.
+        src.persistence.last_bgsave_error = None;
+        src.persistence.saves = 3;
+        let out = render(&PersistenceSection, &src);
+        assert!(out.contains("rdb_last_bgsave_status:ok\r\n"), "{out}");
+        assert!(!out.contains("rdb_last_bgsave_error"), "{out}");
+        assert!(out.contains("rdb_saves:3\r\n"), "{out}");
+        assert!(
+            out.contains("rdb_bgsave_failures:1\r\n"),
+            "a success must not erase the failure history: {out}"
+        );
+    }
+
+    // FM-PERSISTENCE-022
+    /// The two save-duration fields carry Redis' `-1` sentinel only where Redis
+    /// means it — "no save has completed" and "no save is running" — and a real
+    /// second count everywhere else.
+    #[test]
+    fn persistence_renders_save_durations_with_redis_sentinels() {
+        let src = sources();
+        let out = render(&PersistenceSection, &src);
+        assert!(out.contains("rdb_last_bgsave_time_sec:-1\r\n"), "{out}");
+        assert!(out.contains("rdb_current_bgsave_time_sec:-1\r\n"), "{out}");
+
+        let mut src = sources();
+        src.persistence.bgsave_in_progress = true;
+        src.persistence.last_bgsave_secs = Some(7);
+        src.persistence.current_bgsave_secs = Some(2);
+        let out = render(&PersistenceSection, &src);
+        assert!(out.contains("rdb_last_bgsave_time_sec:7\r\n"), "{out}");
+        assert!(out.contains("rdb_current_bgsave_time_sec:2\r\n"), "{out}");
+        assert!(out.contains("rdb_bgsave_in_progress:1\r\n"), "{out}");
+
+        // A save that finished in under a second reports 0, not the -1 that
+        // would claim no save ever ran.
+        let mut src = sources();
+        src.persistence.last_bgsave_secs = Some(0);
+        let out = render(&PersistenceSection, &src);
+        assert!(out.contains("rdb_last_bgsave_time_sec:0\r\n"), "{out}");
+        assert!(out.contains("rdb_current_bgsave_time_sec:-1\r\n"), "{out}");
     }
 
     #[test]

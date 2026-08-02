@@ -142,30 +142,21 @@ fn handle_bgsave(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
 
 /// LASTSAVE — return the Unix timestamp of the last successful save.
 fn handle_lastsave(ctx: &ConnCtx<'_>) -> Response {
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::UNIX_EPOCH;
 
     match ctx.snapshot_coordinator.last_save_time() {
-        Some(instant) => {
-            // Convert Instant to Unix timestamp: work out how long ago the save
-            // was and subtract from the current wall-clock time. Subtract the
-            // full-precision `Duration`s first and truncate to whole seconds only
-            // once, at the end. The previous version truncated `elapsed` and
-            // `now` to whole seconds *separately* and then subtracted the
-            // truncated values, which double-truncates and can be off by up to
-            // 1s — e.g. now=100.1s, elapsed=10.9s (real save time 89.2s):
-            // floor(100.1) - floor(10.9) = 100 - 10 = 90, one second later than
-            // floor(89.2) = 89.
-            let elapsed = instant.elapsed();
-            let now = SystemTime::now()
+        // The coordinator keeps wall-clock time, seeded at boot from the newest
+        // complete snapshot's own `completed_at_ms`, so this is the save's real
+        // timestamp even when the save predates the process. No elapsed-time
+        // arithmetic, hence no truncation footgun.
+        Some(saved_at) => Response::Integer(
+            saved_at
                 .duration_since(UNIX_EPOCH)
-                .unwrap_or_default();
-            let save_time = now.checked_sub(elapsed).unwrap_or(Duration::ZERO);
-            Response::Integer(save_time.as_secs() as i64)
-        }
-        None => {
-            // No snapshot has been taken yet.
-            Response::Integer(0)
-        }
+                .map(|since_epoch| since_epoch.as_secs() as i64)
+                .unwrap_or(0),
+        ),
+        // No snapshot has ever been taken (Redis reports 0 here too).
+        None => Response::Integer(0),
     }
 }
 

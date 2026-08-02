@@ -115,8 +115,8 @@ pub use persistence::{
     CompressionType, DurabilityMode, HEADER_SIZE, NoopSnapshotCoordinator, RecoveryStats,
     RocksConfig, RocksSnapshotCoordinator, RocksStore, RocksWalWriter, SerializationError,
     SnapshotConfig, SnapshotCoordinator, SnapshotError, SnapshotHandle, SnapshotMetadata,
-    SnapshotMetadataFile, SnapshotRequest, WalConfig, WalFailurePolicy, WalLagStats, deserialize,
-    recover_all_shards, recover_shard, serialize, spawn_periodic_sync,
+    SnapshotMetadataFile, SnapshotRequest, SnapshotStats, WalConfig, WalFailurePolicy, WalLagStats,
+    deserialize, recover_all_shards, recover_shard, serialize, spawn_periodic_sync,
 };
 pub use pubsub::{
     ConnId, DEFAULT_PUBSUB_OUTPUT_BUFFER_HARD_LIMIT, Drained, GlobPattern, IntrospectionRequest,

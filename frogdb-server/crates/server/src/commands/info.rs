@@ -282,6 +282,15 @@ fn build_persistence_info(ctx: &mut CommandContext) -> String {
     // WAL lag lives on the shard worker's writer, out of reach of command
     // execution; the connection-level builder reports the real aggregated
     // values. No placeholder wal_* fields are emitted here.
+    //
+    // The `rdb_*` save fields below are *static placeholders* on this
+    // shard-local path (`redis.call('INFO')` inside a script): the snapshot
+    // coordinator is a connection-level dependency and a shard's
+    // `CommandContext` cannot reach it. A client's INFO goes through
+    // `crate::info::sections::PersistenceSection`, which reports the real save
+    // status, counters, and timestamp. Making the script path agree needs the
+    // coordinator plumbed onto the shard context — tracked by
+    // `.scratch/hardening/issues/open/03-bgsave-failure-invisible-to-clients.md`.
     format!(
         "# Persistence\r\n\
          loading:0\r\n\

@@ -59,13 +59,20 @@ impl SnapshotMetadataFile {
     pub fn is_complete(&self) -> bool {
         self.completion_marker.as_deref() == Some(COMPLETION_MARKER)
     }
+    /// Wall-clock completion time of this snapshot, if it recorded one.
+    ///
+    /// This is the durable truth behind `LASTSAVE` / `rdb_last_save_time`: it
+    /// survives the process that wrote it, so a restart reports the snapshot's
+    /// real age instead of the boot time.
+    pub fn completed_at(&self) -> Option<SystemTime> {
+        self.completed_at_ms
+            .map(|ms| UNIX_EPOCH + Duration::from_millis(ms))
+    }
     pub fn to_metadata(&self) -> SnapshotMetadata {
         SnapshotMetadata {
             epoch: self.epoch,
             started_at: UNIX_EPOCH + Duration::from_millis(self.started_at_ms),
-            completed_at: self
-                .completed_at_ms
-                .map(|ms| UNIX_EPOCH + Duration::from_millis(ms)),
+            completed_at: self.completed_at(),
             size_bytes: self.size_bytes,
         }
     }

@@ -801,3 +801,327 @@ fn test_scheduler_concurrent_request_storm() {
         assert_eq!(sched.current_epoch(), *ran.last().unwrap());
     }
 }
+
+// ---------------------------------------------------------------------------
+// RocksSnapshotCoordinator — save history (`SnapshotStats`).
+//
+// The coordinator is what `LASTSAVE` and `INFO persistence` read. Two truths
+// are pinned here: (1) the last-save time comes from the newest complete
+// snapshot's *own* recorded completion time, so a restart reports the
+// artifact's real age instead of the boot time; (2) a failed save is visible —
+// counted, with its cause — and does not move the last-save time.
+// ---------------------------------------------------------------------------
+
+use frogdb_types::traits::NoopMetricsRecorder;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+const THIRTY_DAYS: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
+/// A live coordinator over `snapshot_dir`, sharing `store`'s data dir.
+fn coordinator(
+    store: Arc<RocksStore>,
+    snapshot_dir: &Path,
+    data_dir: &Path,
+) -> Arc<RocksSnapshotCoordinator> {
+    Arc::new(
+        RocksSnapshotCoordinator::new(
+            store,
+            SnapshotConfig {
+                snapshot_dir: snapshot_dir.to_path_buf(),
+                snapshot_interval_secs: 0,
+                max_snapshots: 5,
+            },
+            Arc::new(NoopMetricsRecorder::new()),
+            data_dir.to_path_buf(),
+        )
+        .unwrap(),
+    )
+}
+
+/// Install a `snapshot_00007/metadata.json` written by some *earlier* process
+/// and point `latest` at it, exactly as a real save leaves the directory.
+/// `completed_at` selects what that metadata claims:
+/// - `Some(t)` — a complete snapshot that finished at `t`;
+/// - `None` — a torn snapshot with no completion marker.
+#[cfg(unix)]
+fn install_snapshot(snapshot_dir: &Path, completed_at: Option<SystemTime>) {
+    let dir = snapshot_dir.join("snapshot_00007");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut md = SnapshotMetadataFile::new(7, 42, 1);
+    if let Some(at) = completed_at {
+        md.mark_complete(4096);
+        md.completed_at_ms = Some(
+            at.duration_since(UNIX_EPOCH)
+                .expect("test timestamps are post-epoch")
+                .as_millis() as u64,
+        );
+    }
+    std::fs::write(
+        dir.join("metadata.json"),
+        serde_json::to_string(&md).unwrap(),
+    )
+    .unwrap();
+    let link = snapshot_dir.join("latest");
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink("snapshot_00007", link).unwrap();
+}
+
+/// Millisecond truncation: `completed_at_ms` is the on-disk resolution, so
+/// comparisons against a `SystemTime` must round the same way.
+fn as_millis(t: SystemTime) -> u128 {
+    t.duration_since(UNIX_EPOCH).unwrap().as_millis()
+}
+
+/// Wait for the background save to settle. `record` runs before the scheduler
+/// releases the slot, so an idle coordinator has already published its stats.
+async fn wait_idle(coord: &RocksSnapshotCoordinator) -> bool {
+    for _ in 0..1000 {
+        if !coord.in_progress() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    false
+}
+
+// FM-PERSISTENCE-042
+/// Boot seeding: the last-save time is the snapshot's own completion time — a
+/// month-old artifact reports as a month old, not as "saved just now". The
+/// save *counters* stay zero, because a boot is not a save.
+#[cfg(unix)]
+#[test]
+fn test_coordinator_seeds_last_save_from_snapshot_metadata() {
+    let db = TempDir::new().unwrap();
+    let store = Arc::new(make_store(db.path()));
+    let snap = TempDir::new().unwrap();
+    let data = TempDir::new().unwrap();
+    let completed_at = SystemTime::now() - THIRTY_DAYS;
+    install_snapshot(snap.path(), Some(completed_at));
+
+    let coord = coordinator(store, snap.path(), data.path());
+
+    let stats = coord.stats();
+    assert_eq!(
+        stats.last_save_time.map(as_millis),
+        Some(as_millis(completed_at)),
+        "the boot seed must be the artifact's recorded completion time"
+    );
+    assert_eq!(stats.saves, 0, "a boot is not a save");
+    assert_eq!(stats.failures, 0);
+    assert!(stats.last_error.is_none(), "recovery is not a failed save");
+    assert_eq!(
+        coord.last_save_time(),
+        stats.last_save_time,
+        "LASTSAVE and INFO must read the same value"
+    );
+}
+
+// FM-PERSISTENCE-042
+/// Unknown is reported as "never saved", never as "just now": a torn snapshot
+/// (no completion marker) and a complete one carrying no completion timestamp
+/// both seed `None`, so `LASTSAVE` answers 0 instead of inventing the boot time.
+#[cfg(unix)]
+#[test]
+fn test_coordinator_seeds_none_without_a_usable_completion_time() {
+    let db = TempDir::new().unwrap();
+    let data = TempDir::new().unwrap();
+
+    // Torn snapshot: never marked complete.
+    let snap = TempDir::new().unwrap();
+    install_snapshot(snap.path(), None);
+    let store = Arc::new(make_store(db.path()));
+    assert!(
+        coordinator(store, snap.path(), data.path())
+            .last_save_time()
+            .is_none(),
+        "an incomplete snapshot is not a save"
+    );
+
+    // Complete, but with no recorded completion time (hand-edited / pre-versioned).
+    let snap = TempDir::new().unwrap();
+    install_snapshot(snap.path(), Some(SystemTime::now()));
+    let md_path = snap.path().join("snapshot_00007").join("metadata.json");
+    let mut md: SnapshotMetadataFile =
+        serde_json::from_str(&std::fs::read_to_string(&md_path).unwrap()).unwrap();
+    md.completed_at_ms = None;
+    std::fs::write(&md_path, serde_json::to_string(&md).unwrap()).unwrap();
+    let db2 = TempDir::new().unwrap();
+    let store = Arc::new(make_store(db2.path()));
+    assert!(
+        coordinator(store, snap.path(), data.path())
+            .last_save_time()
+            .is_none(),
+        "an unknown completion time must not be reported as 'now'"
+    );
+
+    // No snapshot at all.
+    let snap = TempDir::new().unwrap();
+    let db3 = TempDir::new().unwrap();
+    let store = Arc::new(make_store(db3.path()));
+    assert!(
+        coordinator(store, snap.path(), data.path())
+            .last_save_time()
+            .is_none()
+    );
+}
+
+// FM-PERSISTENCE-022
+/// A failed background save is visible: counted, with its cause, and it does
+/// **not** stamp a save time. A later success clears the cause and stamps the
+/// new artifact's completion time, but the failure count is cumulative — an
+/// operator sampling after the recovery still sees that saves were failing.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_coordinator_records_failed_then_recovered_save() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let db = TempDir::new().unwrap();
+    let store = Arc::new(make_store(db.path()));
+    let snap = TempDir::new().unwrap();
+    let data = TempDir::new().unwrap();
+    let coord = coordinator(store, snap.path(), data.path());
+
+    // Read-execute only: the stager cannot create its staging directory.
+    let original = std::fs::metadata(snap.path()).unwrap().permissions();
+    std::fs::set_permissions(snap.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+    coord.start_snapshot().unwrap();
+    let settled = wait_idle(&coord).await;
+    // Restore before asserting, or a failure leaks an undeletable TempDir.
+    std::fs::set_permissions(snap.path(), original).unwrap();
+    assert!(settled, "the failing save never settled");
+
+    let stats = coord.stats();
+    assert_eq!(stats.failures, 1);
+    assert_eq!(stats.saves, 0);
+    assert!(
+        stats.last_error.is_some(),
+        "the failure cause must be retained for INFO"
+    );
+    assert!(
+        stats.last_save_time.is_none(),
+        "a failed save must not stamp a save time"
+    );
+
+    // Recovery.
+    coord.start_snapshot().unwrap();
+    assert!(wait_idle(&coord).await, "the recovery save never settled");
+
+    let stats = coord.stats();
+    assert_eq!(stats.saves, 1);
+    assert_eq!(
+        stats.failures, 1,
+        "a success must not erase the failure history"
+    );
+    assert!(stats.last_error.is_none(), "a success clears the cause");
+    let md: SnapshotMetadataFile = serde_json::from_str(
+        &std::fs::read_to_string(snap.path().join("latest").join("metadata.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        stats.last_save_time,
+        md.completed_at(),
+        "the reported save time must be the artifact's own"
+    );
+}
+
+// FM-PERSISTENCE-022
+/// Save durations are measured, not guessed: `last_duration` is absent until a
+/// save completes (Redis renders `-1`), `current_started_at` is live for exactly
+/// the window a save owns the scheduler slot — from the moment `start_snapshot`
+/// claims it, before the background task is even polled — and a completed save
+/// leaves a duration behind with no phantom save in flight.
+#[tokio::test]
+async fn test_coordinator_reports_last_and_current_save_duration() {
+    let db = TempDir::new().unwrap();
+    let store = Arc::new(make_store(db.path()));
+    let snap = TempDir::new().unwrap();
+    let data = TempDir::new().unwrap();
+    let coord = coordinator(store, snap.path(), data.path());
+
+    // Nothing saved yet: no duration to report, nothing in flight.
+    let stats = coord.stats();
+    assert!(stats.last_duration.is_none(), "no save has completed yet");
+    assert!(stats.current_save_elapsed().is_none(), "nothing is running");
+
+    // Hold the save inside the pre-snapshot hook so the in-flight window is
+    // observable without racing the stager.
+    coord.set_pre_snapshot_hook(Arc::new(|| {
+        Box::pin(async {
+            tokio::time::sleep(Duration::from_millis(120)).await;
+        })
+    }));
+    coord.start_snapshot().unwrap();
+
+    // Stamped synchronously with the slot claim: no window where a save is
+    // in progress but reports `-1`.
+    assert!(coord.in_progress());
+    let first = coord
+        .stats()
+        .current_save_elapsed()
+        .expect("a running save must report its elapsed time");
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    let second = coord.stats().current_save_elapsed().unwrap();
+    assert!(
+        second > first,
+        "the in-flight elapsed time must grow ({second:?} !> {first:?}) — a hung \
+         save is visible as a rising number, not a frozen one"
+    );
+
+    assert!(wait_idle(&coord).await, "the save never settled");
+    let stats = coord.stats();
+    assert_eq!(stats.saves, 1);
+    assert!(
+        stats.current_save_elapsed().is_none(),
+        "a finished save must not still look in flight"
+    );
+    let elapsed = stats
+        .last_duration
+        .expect("a completed save has a duration");
+    assert!(
+        elapsed >= Duration::from_millis(120),
+        "the duration must cover the whole save, hook included: {elapsed:?}"
+    );
+}
+
+// FM-PERSISTENCE-022
+/// A failed save leaves no duration behind: `rdb_last_bgsave_time_sec` answers
+/// "how long does a save take here", and an attempt that died on `mkdir` is no
+/// evidence about that. It must also clear the in-flight marker, or a permanent
+/// failure would look like a save running forever.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_failed_save_leaves_no_duration_and_nothing_in_flight() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let db = TempDir::new().unwrap();
+    let store = Arc::new(make_store(db.path()));
+    let snap = TempDir::new().unwrap();
+    let data = TempDir::new().unwrap();
+    let coord = coordinator(store, snap.path(), data.path());
+
+    let original = std::fs::metadata(snap.path()).unwrap().permissions();
+    std::fs::set_permissions(snap.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+    coord.start_snapshot().unwrap();
+    let settled = wait_idle(&coord).await;
+    std::fs::set_permissions(snap.path(), original).unwrap();
+    assert!(settled, "the failing save never settled");
+
+    let stats = coord.stats();
+    assert_eq!(stats.failures, 1);
+    assert!(
+        stats.last_duration.is_none(),
+        "a failed attempt is not a save duration"
+    );
+    assert!(
+        stats.current_save_elapsed().is_none(),
+        "a failed save must clear the in-flight marker"
+    );
+
+    // A later success does supply one, and does not resurrect the in-flight marker.
+    coord.start_snapshot().unwrap();
+    assert!(wait_idle(&coord).await, "the recovery save never settled");
+    let stats = coord.stats();
+    assert!(stats.last_duration.is_some());
+    assert!(stats.current_save_elapsed().is_none());
+}

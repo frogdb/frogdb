@@ -2649,3 +2649,248 @@ async fn test_tiered_spilled_key_past_ttl_does_not_resurrect() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// Snapshot observability: INFO / LASTSAVE must tell the truth about saves
+// ============================================================================
+
+/// Raw string value of an `INFO <section>` field (panics if absent).
+fn info_field_str(info: &str, name: &str) -> String {
+    let prefix = format!("{name}:");
+    info.lines()
+        .map(|l| l.trim_end())
+        .find_map(|l| l.strip_prefix(prefix.as_str()))
+        .unwrap_or_else(|| panic!("field {name} missing from INFO:\n{info}"))
+        .to_string()
+}
+
+/// Persistence-only config with the periodic snapshot task disabled, so the only
+/// saves are the `BGSAVE`s the test issues.
+fn snapshot_observability_config(
+    data_dir: &std::path::Path,
+    snapshot_dir: &std::path::Path,
+) -> TestServerConfig {
+    TestServerConfig {
+        persistence: true,
+        data_dir: Some(data_dir.to_path_buf()),
+        snapshot_dir: Some(snapshot_dir.to_path_buf()),
+        num_shards: Some(1),
+        snapshot_interval_secs: Some(0),
+        ..Default::default()
+    }
+}
+
+// FM-PERSISTENCE-022
+/// A background save that fails must be visible to a client polling `INFO
+/// persistence`: `rdb_last_bgsave_status` flips to `err`, the failure counter
+/// moves, `rdb_saves` does not, and `LASTSAVE` stays at "never saved". The next
+/// successful save clears the error back to `ok` (Redis semantics).
+#[cfg(unix)]
+#[tokio::test]
+async fn bgsave_failure_is_visible_in_info_persistence() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let data_root = tempfile::tempdir().unwrap();
+    let snapshot_root = tempfile::tempdir().unwrap();
+    let server = TestServer::start_standalone_with_config(snapshot_observability_config(
+        &data_root.path().join("data"),
+        snapshot_root.path(),
+    ))
+    .await;
+    let mut client = server.connect().await;
+    assert_ok(&client.command(&["SET", "k", "v"]).await);
+
+    let read_info = |resp: &Response| String::from_utf8(unwrap_bulk(resp).to_vec()).unwrap();
+
+    // Healthy baseline: nothing has been attempted, so nothing has failed.
+    let info = read_info(&client.command(&["INFO", "persistence"]).await);
+    assert_eq!(info_field_str(&info, "rdb_last_bgsave_status"), "ok");
+    assert_eq!(info_field_u64(&info, "rdb_bgsave_failures"), 0, "{info}");
+    assert_eq!(info_field_u64(&info, "rdb_saves"), 0, "{info}");
+
+    // Break the snapshot directory: the stager cannot create its staging dir, so
+    // the background save fails after `BGSAVE` has already replied.
+    let mut perms = std::fs::metadata(snapshot_root.path())
+        .unwrap()
+        .permissions();
+    perms.set_mode(0o500);
+    std::fs::set_permissions(snapshot_root.path(), perms).unwrap();
+
+    let resp = client.command(&["BGSAVE"]).await;
+    assert!(
+        matches!(&resp, Response::Simple(msg)
+            if String::from_utf8_lossy(msg).contains("Background saving started")),
+        "Unexpected BGSAVE response: {resp:?}"
+    );
+
+    let mut failed_info = String::new();
+    let mut reported = false;
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        failed_info = read_info(&client.command(&["INFO", "persistence"]).await);
+        if info_field_str(&failed_info, "rdb_last_bgsave_status") == "err" {
+            reported = true;
+            break;
+        }
+    }
+
+    // Make the directory writable again *before* asserting, so a failure still
+    // leaves a removable temp dir behind.
+    let mut perms = std::fs::metadata(snapshot_root.path())
+        .unwrap()
+        .permissions();
+    perms.set_mode(0o700);
+    std::fs::set_permissions(snapshot_root.path(), perms).unwrap();
+
+    assert!(
+        reported,
+        "a failed BGSAVE must report rdb_last_bgsave_status:err:\n{failed_info}"
+    );
+    assert_eq!(
+        info_field_u64(&failed_info, "rdb_bgsave_failures"),
+        1,
+        "{failed_info}"
+    );
+    assert_eq!(
+        info_field_u64(&failed_info, "rdb_saves"),
+        0,
+        "a failed save is not a save:\n{failed_info}"
+    );
+    assert_eq!(
+        info_field_u64(&failed_info, "rdb_last_save_time"),
+        0,
+        "a failed save must not stamp a save time:\n{failed_info}"
+    );
+    assert_eq!(client.command(&["LASTSAVE"]).await, Response::Integer(0));
+    assert_eq!(
+        info_field_str(&failed_info, "rdb_last_bgsave_time_sec"),
+        "-1",
+        "a failed attempt is not a save duration:\n{failed_info}"
+    );
+    assert_eq!(
+        info_field_str(&failed_info, "rdb_current_bgsave_time_sec"),
+        "-1",
+        "a failed save must not look like one still running:\n{failed_info}"
+    );
+
+    // Recovery: the next save succeeds and clears the error state.
+    let resp = client.command(&["BGSAVE"]).await;
+    assert!(
+        matches!(&resp, Response::Simple(msg)
+            if String::from_utf8_lossy(msg).contains("Background saving")),
+        "Unexpected BGSAVE response: {resp:?}"
+    );
+    let mut recovered_info = String::new();
+    let mut recovered = false;
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        recovered_info = read_info(&client.command(&["INFO", "persistence"]).await);
+        if info_field_u64(&recovered_info, "rdb_saves") >= 1 {
+            recovered = true;
+            break;
+        }
+    }
+    assert!(
+        recovered,
+        "a successful BGSAVE must count in rdb_saves:\n{recovered_info}"
+    );
+    assert_eq!(
+        info_field_str(&recovered_info, "rdb_last_bgsave_status"),
+        "ok",
+        "a successful save must clear the error status:\n{recovered_info}"
+    );
+    assert_eq!(
+        info_field_u64(&recovered_info, "rdb_bgsave_failures"),
+        1,
+        "the failure counter is cumulative, not reset by a success:\n{recovered_info}"
+    );
+    assert!(
+        info_field_u64(&recovered_info, "rdb_last_save_time") > 0,
+        "{recovered_info}"
+    );
+    assert!(
+        info_field_str(&recovered_info, "rdb_last_bgsave_time_sec")
+            .parse::<i64>()
+            .unwrap()
+            >= 0,
+        "a completed save must report how long it took, not Redis' -1 \
+         sentinel:\n{recovered_info}"
+    );
+    assert_eq!(
+        info_field_str(&recovered_info, "rdb_current_bgsave_time_sec"),
+        "-1",
+        "nothing is running once the save has been counted:\n{recovered_info}"
+    );
+
+    drop(client);
+    server.shutdown().await;
+}
+
+// FM-PERSISTENCE-042
+/// `LASTSAVE` and `rdb_last_save_time` must report the *snapshot's own*
+/// completion time across a restart. The artifact's recorded completion time is
+/// aged on disk while the server is down (a 30-day-old backup, without waiting
+/// 30 days); a restart must report that time, not the boot time.
+#[tokio::test]
+async fn lastsave_reports_the_snapshot_time_after_restart() {
+    let data_root = tempfile::tempdir().unwrap();
+    let snapshot_root = tempfile::tempdir().unwrap();
+    let data_dir = data_root.path().join("data");
+
+    let server = TestServer::start_standalone_with_config(snapshot_observability_config(
+        &data_dir,
+        snapshot_root.path(),
+    ))
+    .await;
+    let mut client = server.connect().await;
+    assert_ok(&client.command(&["SET", "k", "v"]).await);
+    let _ = client.command(&["BGSAVE"]).await;
+    let checkpoint = wait_for_snapshot_checkpoint(snapshot_root.path()).await;
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Age the artifact: rewrite its recorded completion time to 30 days ago.
+    let metadata_path = checkpoint.parent().unwrap().join("metadata.json");
+    let raw = std::fs::read_to_string(&metadata_path).unwrap();
+    let mut json: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let aged_ms = now_ms - 30 * 24 * 60 * 60 * 1000;
+    json["completed_at_ms"] = serde_json::json!(aged_ms);
+    std::fs::write(&metadata_path, serde_json::to_string_pretty(&json).unwrap()).unwrap();
+
+    // --- Restart over the aged snapshot ---
+    let server = TestServer::start_standalone_with_config(snapshot_observability_config(
+        &data_dir,
+        snapshot_root.path(),
+    ))
+    .await;
+    let mut client = server.connect().await;
+
+    let aged_secs = (aged_ms / 1000) as i64;
+    assert_eq!(
+        unwrap_integer(&client.command(&["LASTSAVE"]).await),
+        aged_secs,
+        "LASTSAVE must report the snapshot's own completion time, not the boot time"
+    );
+    let info = client.command(&["INFO", "persistence"]).await;
+    let info = String::from_utf8(unwrap_bulk(&info).to_vec()).unwrap();
+    assert_eq!(
+        info_field_u64(&info, "rdb_last_save_time"),
+        aged_secs as u64,
+        "rdb_last_save_time must agree with LASTSAVE:\n{info}"
+    );
+    // A restart is not a save: the boot-seeded state reports no *attempt*.
+    assert_eq!(
+        info_field_str(&info, "rdb_last_bgsave_status"),
+        "ok",
+        "{info}"
+    );
+    assert_eq!(info_field_u64(&info, "rdb_saves"), 0, "{info}");
+
+    drop(client);
+    server.shutdown().await;
+}
