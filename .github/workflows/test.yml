@@ -313,7 +313,13 @@ jobs:
         path: ~/go/bin/dashboard-linter
         key: dashboard-linter-${{ runner.os }}
     - name: Install dashboard-linter
-      run: test -x ~/go/bin/dashboard-linter || go install github.com/grafana/dashboard-linter@latest
+      run: |
+        if [ -x ~/go/bin/dashboard-linter ]; then
+          exit 0
+        fi
+        git clone --depth 1 -b v0.2.0 https://github.com/grafana/dashboard-linter.git /tmp/dashboard-linter-src
+        mkdir -p ~/go/bin
+        go build -C /tmp/dashboard-linter-src -o ~/go/bin/dashboard-linter .
     - name: Lint Grafana dashboard
       run: dashboard-linter lint --strict frogdb-server/ops/grafana/frogdb-overview.json
   docs-gen-check:
