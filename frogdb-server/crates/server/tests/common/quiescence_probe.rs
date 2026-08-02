@@ -218,6 +218,76 @@ fn parse_waiters(detail: &OperationResult) -> Vec<WaiterOrdinal> {
     out
 }
 
+/// One journaled wait-queue registration. Distinct from [`WaiterOrdinal`]
+/// (the point-in-time `DEBUG WAITQUEUE` dump) because the journal also carries
+/// the blocking command name, which the exact FIFO checker needs to line a
+/// client's registrations up against its `BLPOP`/`BRPOP` operations.
+#[derive(Debug, Clone)]
+pub struct WaitLogEntry {
+    pub key: Vec<u8>,
+    pub conn_id: u64,
+    pub registration_seq: u64,
+    /// Blocking command name as the shard recorded it (`BLPOP`, `BZPOPMIN`, ...).
+    pub op: String,
+}
+
+/// One shard's `DEBUG WAITQUEUE-LOG` journal: every registration the shard's
+/// wait queue recorded over the whole run, in registration order, plus whether
+/// the journal hit its cap and dropped records.
+#[derive(Debug, Clone, Default)]
+pub struct WaitQueueLogSnapshot {
+    pub shard_id: usize,
+    /// True when the shard's journal overflowed. A truncated journal makes
+    /// "no ordinal for this waiter" stop implying "this waiter never parked",
+    /// so the exact FIFO checker must refuse to judge (see issue 16).
+    pub truncated: bool,
+    pub registrations: Vec<WaitLogEntry>,
+}
+
+/// Parse a `DEBUG WAITQUEUE-LOG` reply: per-shard `{truncated, registrations}`
+/// where each registration carries `{registration_seq, conn_id, key, op}`.
+///
+/// Unlike [`parse_waitqueue`] (a point-in-time dump of who is parked *now*),
+/// this is the event-driven journal appended inside `ShardWaitQueue::register`,
+/// so a waiter that parked and was served between two polls still appears.
+pub fn parse_waitqueue_log(reply: &OperationResult) -> Vec<WaitQueueLogSnapshot> {
+    shard_entries(reply)
+        .into_iter()
+        .map(|(shard_id, detail)| WaitQueueLogSnapshot {
+            shard_id,
+            truncated: field(detail, "truncated")
+                .and_then(as_int)
+                .is_some_and(|n| n != 0),
+            registrations: field(detail, "registrations")
+                .and_then(as_array)
+                .map(parse_log_entries)
+                .unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// Flatten a shard's `registrations` array into [`WaitLogEntry`]s. Entries
+/// missing a field are dropped - the runner separately asserts the journal is
+/// non-empty when the workload blocks, so a systematic decode failure cannot
+/// pass as "nothing ever parked".
+fn parse_log_entries(entries: &[OperationResult]) -> Vec<WaitLogEntry> {
+    entries
+        .iter()
+        .filter_map(|e| {
+            let key = field(e, "key").and_then(as_bytes)?;
+            let op = field(e, "op").and_then(as_bytes)?;
+            let conn_id = field(e, "conn_id").and_then(as_int)?;
+            let registration_seq = field(e, "registration_seq").and_then(as_int)?;
+            Some(WaitLogEntry {
+                key: key.to_vec(),
+                conn_id: conn_id.max(0) as u64,
+                registration_seq: registration_seq.max(0) as u64,
+                op: String::from_utf8_lossy(op).into_owned(),
+            })
+        })
+        .collect()
+}
+
 /// Parse a `DEBUG MEMORY-CHECK` reply (always a per-shard map, no sentinel).
 pub fn parse_memory_check(reply: &OperationResult) -> Vec<MemoryCheckSnapshot> {
     shard_entries(reply)

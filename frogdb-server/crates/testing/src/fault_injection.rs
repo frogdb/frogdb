@@ -135,8 +135,70 @@ pub fn lose_stream_entry(history: &History) -> History {
     rebuild(&recs)
 }
 
+/// Corruption: turn the first no-op `DEL` (a `0` reply — the key did not
+/// exist, nothing changed) into an effective one (`1`), whether the DEL is
+/// top-level or a sub-command of a committed EXEC. Under a WATCH on that key,
+/// the corrupted history contains a real interfering write, so a committed
+/// EXEC that ignored it is a genuine missed dirty-key. Trips
+/// `check_watch_no_false_negative` (WatchFalseNegative) — while the
+/// *uncorrupted* history must pass, which is exactly the distinction the
+/// result-aware `written_keys_of` restores.
+pub fn make_del_effective(history: &History) -> History {
+    let mut recs: Vec<Operation> = history.operations().to_vec();
+    // id -> args of the matching invoke, for the EXEC sub-command layout.
+    let invoke_args: HashMap<u64, Vec<bytes::Bytes>> = recs
+        .iter()
+        .filter(|o| o.kind == OpKind::Invoke)
+        .map(|o| (o.id, o.args.clone()))
+        .collect();
+    for o in recs.iter_mut() {
+        if o.kind != OpKind::Return {
+            continue;
+        }
+        match o.function.as_str() {
+            "del" | "delete" | "unlink" => {
+                if o.result.as_deref() == Some(b"0") {
+                    o.result = Some(bytes::Bytes::from_static(b"1"));
+                    break;
+                }
+            }
+            "exec" => {
+                let Some(r) = &o.result else { continue };
+                let Some(cmds) = invoke_args
+                    .get(&o.id)
+                    .and_then(|a| crate::partition::parse_exec_commands(a))
+                else {
+                    continue;
+                };
+                let mut fields: Vec<String> = String::from_utf8_lossy(r)
+                    .split('|')
+                    .map(str::to_string)
+                    .collect();
+                let mut changed = false;
+                for (i, (name, _)) in cmds.iter().enumerate() {
+                    if matches!(name.as_str(), "del" | "delete" | "unlink")
+                        && fields.get(i).is_some_and(|f| f == "0")
+                    {
+                        fields[i] = "1".to_string();
+                        changed = true;
+                        break;
+                    }
+                }
+                if changed {
+                    o.result = Some(bytes::Bytes::from(fields.join("|")));
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    rebuild(&recs)
+}
+
 /// Corruption: swap the serve order of the two earliest blocking-pop hits so a
-/// later waiter returns first. Trips `check_fifo_wake_order` (FifoViolation).
+/// later waiter returns first. Trips `check_fifo_wake_order_exact`
+/// (FifoViolation) when registration ordinals say the swapped waiter
+/// registered later.
 pub fn reorder_completions(history: &History) -> History {
     let mut recs: Vec<Operation> = history.operations().to_vec();
     let idxs: Vec<usize> = recs
@@ -159,9 +221,7 @@ pub fn reorder_completions(history: &History) -> History {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conservation::{
-        ConservationViolation, check_exactly_once_delivery, check_fifo_wake_order,
-    };
+    use crate::conservation::{ConservationViolation, check_exactly_once_delivery};
     use crate::history::History;
     use bytes::Bytes;
     use std::collections::HashMap;
@@ -225,44 +285,104 @@ mod tests {
     }
 
     #[test]
-    fn original_fifo_history_passes() {
-        assert!(check_fifo_wake_order(&valid_fifo_history()).is_ok());
-    }
-
-    #[test]
-    fn reorder_completions_is_caught() {
-        let corrupt = reorder_completions(&valid_fifo_history());
-        assert!(matches!(
-            check_fifo_wake_order(&corrupt),
-            Err(ConservationViolation::FifoViolation { .. })
-        ));
-    }
-
-    #[test]
     fn reorder_completions_is_caught_by_exact_checker() {
         use crate::conservation::{WaiterRegistrationOrder, check_fifo_wake_order_exact};
-        // Fixed registration order matching the original (legal) invoke/serve
-        // order: client 1 registered before client 2.
+        // Fixed registration order matching the original (legal) serve order:
+        // client 1 registered before client 2.
         let mut order = WaiterRegistrationOrder::default();
-        order.insert(b("k"), 1, 1);
-        order.insert(b("k"), 2, 2);
+        order.insert(b("k"), 1, 1, "BLPOP");
+        order.insert(b("k"), 2, 2, "BLPOP");
 
         let original = valid_fifo_history();
-        assert!(check_fifo_wake_order_exact(&original, &order).is_ok());
+        let cov = check_fifo_wake_order_exact(&original, &order).expect("legal serve order");
+        assert_eq!(
+            cov.pairs_compared, 1,
+            "the original must be judged, not skipped"
+        );
 
         // Swap the serve order (client 2 served before client 1) without
         // changing the registration order fixture: client 2 (registered
         // second) is now served before client 1 (registered first) -> a FIFO
-        // violation. This particular swap would also be caught by the
-        // invoke-proxy checker; the point here is to exercise the exact
-        // checker's ordinal-comparison path end to end. The discriminating
-        // case where registration order and invoke order *disagree* — and only
-        // the exact checker can see it — lives in
-        // `conservation::tests::exact_fifo_uses_registration_order_not_invoke_order`.
+        // violation. The discriminating case where registration order and
+        // invoke order *disagree* lives in
+        // `conservation::tests::exact_fifo_uses_registration_order_not_invoke_order`;
+        // the case where MISSING ordinals must produce no verdict at all is
+        // `conservation::tests::fifo_without_ordinals_yields_no_verdict`.
         let corrupt = reorder_completions(&original);
         assert!(matches!(
             check_fifo_wake_order_exact(&corrupt, &order),
             Err(ConservationViolation::FifoViolation { .. })
+        ));
+    }
+
+    /// WATCH k; another client DELs k but the key does not exist (reply 0);
+    /// the watcher's EXEC commits. Legal: nothing mutated k, so no watcher was
+    /// dirtied.
+    fn valid_noop_del_watch_history() -> History {
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k")]);
+        h.respond(w, Some(b("OK")));
+        let d = h.invoke(2, "del", vec![b("k")]);
+        h.respond(d, Some(b("0")));
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
+        h.respond(e, Some(b("OK")));
+        h
+    }
+
+    /// Same, with the no-op DEL wrapped in another client's committed EXEC.
+    fn valid_noop_del_in_exec_watch_history() -> History {
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k")]);
+        h.respond(w, Some(b("OK")));
+        let d = h.invoke(
+            2,
+            "exec",
+            vec![
+                b("2"),
+                b("set"),
+                b("2"),
+                b("other"),
+                b("v"),
+                b("del"),
+                b("1"),
+                b("k"),
+            ],
+        );
+        h.respond(d, Some(b("OK|0")));
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
+        h.respond(e, Some(b("OK")));
+        h
+    }
+
+    #[test]
+    fn noop_del_watch_history_passes() {
+        use crate::conservation::check_watch_no_false_negative;
+        // The checker must NOT report on either legal history: a DEL that
+        // deleted nothing is not a write (issue 13 — this exact shape was
+        // reported as a WATCH false negative before the fix).
+        assert!(check_watch_no_false_negative(&valid_noop_del_watch_history()).is_ok());
+        assert!(check_watch_no_false_negative(&valid_noop_del_in_exec_watch_history()).is_ok());
+    }
+
+    #[test]
+    fn make_del_effective_is_caught() {
+        use crate::conservation::{ConservationViolation, check_watch_no_false_negative};
+        // Flip the no-op DEL to an effective one: now a REAL missed write sits
+        // in the watch window, and the checker must still catch it.
+        let corrupt = make_del_effective(&valid_noop_del_watch_history());
+        assert!(matches!(
+            check_watch_no_false_negative(&corrupt),
+            Err(ConservationViolation::WatchFalseNegative { .. })
+        ));
+    }
+
+    #[test]
+    fn make_del_effective_inside_exec_is_caught() {
+        use crate::conservation::{ConservationViolation, check_watch_no_false_negative};
+        let corrupt = make_del_effective(&valid_noop_del_in_exec_watch_history());
+        assert!(matches!(
+            check_watch_no_false_negative(&corrupt),
+            Err(ConservationViolation::WatchFalseNegative { .. })
         ));
     }
 

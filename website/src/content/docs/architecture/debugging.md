@@ -37,6 +37,7 @@ FrogDB-specific subcommands, useful for diagnosing the shard/VLL machinery:
 | `VLL [shard_id]` | Dump the VLL transaction queue for a shard |
 | `LOCKTABLE` | Dump the per-shard VLL lock table |
 | `WAITQUEUE` | Dump the per-shard blocking wait queue |
+| `WAITQUEUE-LOG` | Dump the per-shard wait-queue *registration journal* — every waiter registration in order, with `truncated` set when the journal overflowed. Test-support surface: the journal is only recorded when `frogdb-core`'s `wait-queue-log` feature is enabled (the server's `turmoil` feature enables it for simulation tests), so a production build always reports empty journals. Unlike `WAITQUEUE` (who is parked *right now*), it survives waiters that were already served, which is what the exact FIFO wake-order checker needs |
 | `PUBSUB LIMITS` | Pub/sub subscription limits |
 | `TRACING STATUS \| RECENT [count]` | Tracing state and recent spans |
 | `BUNDLE GENERATE [DURATION <s>] \| LIST` | Generate or list diagnostic bundles |

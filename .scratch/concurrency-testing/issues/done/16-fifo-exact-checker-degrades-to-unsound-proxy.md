@@ -1,6 +1,6 @@
 # 16 — exact FIFO checker silently degrades to an unsound invoke-order proxy (checker false positive)
 
-Status: ready-for-agent
+Status: done
 Type: bug
 Origin: post-harness-fix re-verification of issue 11 Finding B (2026-08-02) — the surviving
 MultiWaiter "FIFO wake order violated" reports are **not** a product bug.
@@ -111,3 +111,16 @@ checker into a random-verdict generator.
   the counter behind `invoke_time`.
 - Issue 11 — Finding B (ii), where this class was first reported as a possible product bug.
 - Issue 14 — the reproducibility defect that makes this class appear and vanish between runs.
+
+## Resolution
+
+Fixed 2026-08-02 (checker-repair batch; finished by session coordinator after agent stalls).
+Registration ordinals are now captured event-driven at registration time: `ShardWaitQueue`
+keeps an append-only registration journal behind the test-only `wait-queue-log` cargo feature,
+read via `DEBUG WAITQUEUE-LOG` (with an explicit truncation marker so a reader can tell
+"no more registrations" from "log stopped recording"). The polling probe that missed
+short-lived waiters is no longer the source of truth. The checker never silently proxies:
+`check_fifo_wake_order_exact` reports `FifoCoverage` in the `InvariantReport` — incomplete
+ordinals mean "coverage collapsed: this run proves nothing about wake order", never an
+arrival-order verdict in either direction. Self-test pins that incomplete ordinals produce no
+FIFO verdict.

@@ -113,15 +113,26 @@ impl Model for ZSetModel {
                     (Some(_), None) => None,
                     (Some(k), Some(r)) => {
                         let z = state.zsets.get(k)?;
-                        // DIVERGENCE: on score ties we pop the lexicographically
-                        // smallest member for both MIN and MAX (Redis' exact tie
-                        // rule is not modeled in phase 1; workloads avoid ties).
+                        // A sorted set is ordered by `(score asc, member lex
+                        // asc)`. BZPOPMIN takes the FIRST element of that order
+                        // — on a score tie, the lexicographically *smallest*
+                        // member; BZPOPMAX takes the LAST — on a tie, the
+                        // lexicographically *greatest*. FrogDB implements the
+                        // same rule (`SkipList::pop_first`/`pop_last` over a
+                        // `(score, member)`-ordered list), so both directions
+                        // are modelled exactly: score ties are routine under the
+                        // generator (five members drawn from 100 scores, with
+                        // re-scoring), and getting MAX's tie-break backwards
+                        // rejects the server's correct answer.
                         let (member, score) = z
                             .iter()
                             .min_by(|(am, asc), (bm, bsc)| {
                                 let ord = asc.partial_cmp(bsc).unwrap_or(std::cmp::Ordering::Equal);
-                                let ord = if want_min { ord } else { ord.reverse() };
-                                ord.then_with(|| am.cmp(bm))
+                                if want_min {
+                                    ord.then_with(|| am.cmp(bm))
+                                } else {
+                                    ord.reverse().then_with(|| bm.cmp(am))
+                                }
                             })
                             .map(|(m, s)| (m.clone(), *s))?;
                         let mut new = state.clone();
@@ -221,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn bzpop_tie_break_lex_smallest() {
+    fn bzpop_tie_break_follows_sorted_set_order() {
         let s = ZSetState::default();
         let s = ZSetModel::step(
             &s,
@@ -230,13 +241,36 @@ mod tests {
             Some(&b("2")),
         )
         .unwrap();
-        // BZPOPMIN: equal scores -> lexicographically smallest member (a) wins.
+        // BZPOPMIN takes the first element of `(score, member)` order: on a
+        // score tie the lexicographically smallest member (a).
         assert!(ZSetModel::step(&s, "bzpopmin", &[b("z"), b("0")], Some(&b("z|a|1"))).is_some());
         assert!(ZSetModel::step(&s, "bzpopmin", &[b("z"), b("0")], Some(&b("z|b|1"))).is_none());
-        // BZPOPMAX: per documented divergence, ties also resolve to the
-        // lexicographically smallest member (a), not the largest.
-        assert!(ZSetModel::step(&s, "bzpopmax", &[b("z"), b("0")], Some(&b("z|a|1"))).is_some());
-        assert!(ZSetModel::step(&s, "bzpopmax", &[b("z"), b("0")], Some(&b("z|b|1"))).is_none());
+        // BZPOPMAX takes the last: on a score tie the lexicographically
+        // GREATEST member (b), matching Redis and `SkipList::pop_last`.
+        assert!(ZSetModel::step(&s, "bzpopmax", &[b("z"), b("0")], Some(&b("z|b|1"))).is_some());
+        assert!(ZSetModel::step(&s, "bzpopmax", &[b("z"), b("0")], Some(&b("z|a|1"))).is_none());
+    }
+
+    #[test]
+    fn bzpopmax_tie_pops_lex_greatest_issue_15_case() {
+        // The exact sub-history from issue 15: `{m0:55, m1:55, m4:23}` with a
+        // tie at the top score. The server (correctly) pops `m1`; a model that
+        // demands `m0` rejects a legal reply and declares the whole key
+        // non-linearizable.
+        let s = ZSetState::default();
+        let s = ZSetModel::step(&s, "zadd", &[b("z"), b("55"), b("m0")], Some(&b("1"))).unwrap();
+        let s = ZSetModel::step(&s, "zadd", &[b("z"), b("55"), b("m1")], Some(&b("1"))).unwrap();
+        let s = ZSetModel::step(&s, "zadd", &[b("z"), b("23"), b("m4")], Some(&b("1"))).unwrap();
+
+        let popped =
+            ZSetModel::step(&s, "bzpopmax", &[b("z"), b("5")], Some(&b("z|m1|55"))).unwrap();
+        assert!(ZSetModel::step(&s, "bzpopmax", &[b("z"), b("5")], Some(&b("z|m0|55"))).is_none());
+        // The tied loser stays behind and is the next BZPOPMAX.
+        assert!(
+            ZSetModel::step(&popped, "bzpopmax", &[b("z"), b("5")], Some(&b("z|m0|55"))).is_some()
+        );
+        // BZPOPMIN on the same state takes the unique lowest score.
+        assert!(ZSetModel::step(&s, "bzpopmin", &[b("z"), b("5")], Some(&b("z|m4|23"))).is_some());
     }
 
     #[test]

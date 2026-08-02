@@ -1036,6 +1036,37 @@ pub struct WaitQueueWaiterInfo {
     pub has_deadline: bool,
 }
 
+/// Response for `DEBUG WAITQUEUE-LOG` — a per-shard journal of every blocking
+/// registration the shard recorded, in registration order.
+///
+/// `DEBUG WAITQUEUE` can only show waiters that are *still parked* when it is
+/// read, so sampling it misses every waiter that parked and was served between
+/// two samples. This journal is written at registration time, so it is complete
+/// by construction (unless `truncated`).
+#[derive(Debug, Clone, Default)]
+pub struct WaitQueueLogInfo {
+    /// Shard identifier.
+    pub shard_id: usize,
+    /// True if the journal hit its cap and stopped recording — the entries are
+    /// then a prefix, not the whole registration history.
+    pub truncated: bool,
+    /// Registrations in order, one per (waiter, key) pair.
+    pub entries: Vec<WaitQueueLogEntryInfo>,
+}
+
+/// One journaled registration.
+#[derive(Debug, Clone)]
+pub struct WaitQueueLogEntryInfo {
+    /// Shard-wide monotonic registration ordinal (smaller = registered earlier).
+    pub registration_seq: u64,
+    /// Connection id of the waiter.
+    pub conn_id: u64,
+    /// The key parked on (lossy UTF-8 for display).
+    pub key: String,
+    /// Blocking command name (e.g. "BLPOP").
+    pub op: String,
+}
+
 /// Response for `DEBUG MEMORY-CHECK` — tracked vs recomputed live footprint.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryCheckInfo {

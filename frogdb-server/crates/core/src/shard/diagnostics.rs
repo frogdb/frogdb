@@ -13,8 +13,8 @@ use super::message::ScatterOp;
 use super::types::{
     BigKeyInfo, BigKeysScanResponse, ExpiryIndexCheckInfo, InfoShardSnapshot, LockTableInfo,
     MemoryCheckInfo, ShardMemoryStats, TieredCounts, VllContinuationLockInfo, VllKeyIntentInfo,
-    VllPendingOpInfo, VllQueueInfo, WaitQueueInfo, WaitQueueKeyInfo, WaitQueueWaiterInfo,
-    WalLagStatsResponse,
+    VllPendingOpInfo, VllQueueInfo, WaitQueueInfo, WaitQueueKeyInfo, WaitQueueLogEntryInfo,
+    WaitQueueLogInfo, WaitQueueWaiterInfo, WalLagStatsResponse,
 };
 use super::worker::ShardWorker;
 
@@ -252,6 +252,30 @@ impl ShardWorker {
             shard_id: self.shard_id(),
             total_waiters: self.wait_queue.waiter_count(),
             keys,
+        }
+    }
+
+    /// Collect the blocking-registration journal for `DEBUG WAITQUEUE-LOG`.
+    ///
+    /// Unlike [`Self::collect_wait_queue_info`], which is a snapshot of the
+    /// waiters parked *right now*, this returns every registration the shard
+    /// has recorded since start — the seam that makes exact FIFO wake-order
+    /// checking possible without racing short parks.
+    pub(crate) fn collect_wait_queue_log(&self) -> WaitQueueLogInfo {
+        WaitQueueLogInfo {
+            shard_id: self.shard_id(),
+            truncated: self.wait_queue.registration_log_truncated(),
+            entries: self
+                .wait_queue
+                .registration_log()
+                .iter()
+                .map(|r| WaitQueueLogEntryInfo {
+                    registration_seq: r.registration_seq,
+                    conn_id: r.conn_id,
+                    key: Self::format_key_for_display(&r.key),
+                    op: r.op.to_string(),
+                })
+                .collect(),
         }
     }
 

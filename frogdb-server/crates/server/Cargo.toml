@@ -22,7 +22,7 @@ shuttle = ["dep:shuttle", "frogdb-core/shuttle"]
 # through `common::sim_harness`'s canonicalizer and `simulation.rs`'s
 # round-trip cases, so the stream family has to be compiled in whenever the
 # simulation tests are built. No other exotic family appears in the sim suite.
-turmoil = ["dep:turmoil", "frogdb-config/turmoil", "frogdb-net/turmoil", "frogdb-core/fake-wal", "cmd-stream"]
+turmoil = ["dep:turmoil", "frogdb-config/turmoil", "frogdb-net/turmoil", "frogdb-core/fake-wal", "frogdb-core/wait-queue-log", "cmd-stream"]
 causal-profile = ["dep:tokio-coz"]
 profiling = ["dep:tracing-flame"]
 
