@@ -394,15 +394,20 @@ mod determinism {
         assert_digests_equal(&label, &digest_a, &digest_b);
     }
 
-    // These are `#[ignore]`d on arrival, per the audit's R0 note: the assertion has to exist
+    // These were `#[ignore]`d on arrival, per the audit's R0 note: the assertion has to exist
     // before the remediation steps have a pass/fail signal, but a red test in `just concurrency`
     // would block every unrelated change until the last step lands. Each is un-ignored by the
     // step that makes it pass.
+    //
+    // The two profiles that generate streams are still ignored, for a cause no in-scope step
+    // addresses: `XADD *` mints its ID from `SystemTime::now()`, and nothing in the codebase
+    // virtualizes wall-clock time, so every stream entry carries a real-time millisecond into
+    // the reply. That is audit item A15; the ignore lifts when a virtual wall clock exists.
 
     /// Mixed: the broadest command vocabulary (all six type families), including the
     /// TTL-bearing commands whose expiry decisions read the clock.
     #[test]
-    #[ignore = "harness is not yet reproducible; see determinism audit R3/R4"]
+    #[ignore = "A15: `XADD *` mints stream IDs from the real wall clock; see determinism audit"]
     fn run_is_reproducible_mixed_seed_0() {
         assert_run_is_reproducible(0, Profile::Mixed, 4, 30, 2);
     }
@@ -410,9 +415,9 @@ mod determinism {
     /// MultiWaiter: concurrent blocking pops on shared keys. The wake order is decided by
     /// waiter registration and timeout expiry, i.e. entirely by the clock and the shard
     /// event loop's scheduling — the configuration whose invariant verdict was observed to
-    /// flap run to run.
+    /// flap run to run. Generates no streams, so it is free of the wall-clock ID problem
+    /// and holds the line for R3 (blocking deadlines) and R4 (expiry clock).
     #[test]
-    #[ignore = "harness is not yet reproducible; see determinism audit R3/R4"]
     fn run_is_reproducible_multiwaiter_seed_10() {
         assert_run_is_reproducible(10, Profile::MultiWaiter, 4, 30, 2);
     }
@@ -420,7 +425,7 @@ mod determinism {
     /// TxHeavy at a longer script length: WATCH/EXEC version checks plus enough sim time
     /// for TTLs to actually elapse, so the active-expiry cycle participates in the run.
     #[test]
-    #[ignore = "harness is not yet reproducible; see determinism audit R3/R4"]
+    #[ignore = "A15: `XADD *` mints stream IDs from the real wall clock; see determinism audit"]
     fn run_is_reproducible_txheavy_seed_3() {
         assert_run_is_reproducible(3, Profile::TxHeavy, 4, 60, 2);
     }
