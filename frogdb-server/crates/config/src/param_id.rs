@@ -183,6 +183,9 @@ param_id_enum! {
         // The hot-shard feature's kill switch: read per dispatched command by
         // every shard worker and per report by the collector.
         HotshardsEnabled => "hotshards-enabled",
+        // The opt-in MISCONF write-refusal latch: read by the pre-dispatch
+        // write gauntlet on every WRITE-flagged command.
+        StopWritesOnSaveError => "stop-writes-on-save-error",
     }
 }
 
@@ -255,6 +258,10 @@ param_id_enum! {
         // task is spawned at startup, so both are GET-only.
         TlsWatchCerts => "tls-watch-certs",
         TlsWatchDebounceMs => "tls-watch-debounce-ms",
+        // === persistence hardening round: recovery policy (immutable) ===
+        // Recovery has finished before the first connection exists, so there is
+        // no live seam a SET could act on; GET reports the startup value.
+        RecoveryOnDecodeFailure => "recovery-on-decode-failure",
     }
 }
 
@@ -329,8 +336,9 @@ mod tests {
         // added by 13-01 Pass 2b + 26 added by the config-mutability round (23
         // promoted from `ImmutableParamId` once their live seams landed, plus
         // the 3 new `hotshards-*` rows) + 1 added by the hot-shard hardening
-        // round (`hotshards-enabled`).
-        assert_eq!(MutableParamId::ALL.len(), 73);
+        // round (`hotshards-enabled`) + 1 added by the persistence hardening
+        // round (`stop-writes-on-save-error`).
+        assert_eq!(MutableParamId::ALL.len(), 74);
         // 16 original immutable ids + 22 promote-immutable params added by 13-01
         // Pass 2a (26 classified, minus 4 metrics OTLP/bind rows downgraded to
         // justify as dead config) + 20 promote-immutable startup-consumed params
@@ -339,7 +347,8 @@ mod tests {
         // cadence, TLS ciphersuites) + 1 promote-immutable param added by
         // issue-29 (`pubsub-output-buffer-hard-limit`) + 2 added by the
         // config-mutability round (`tls-watch-*`), minus the 23 that same round
-        // promoted to `MutableParamId`.
-        assert_eq!(ImmutableParamId::ALL.len(), 45);
+        // promoted to `MutableParamId` + 1 added by the persistence hardening
+        // round (`recovery-on-decode-failure`).
+        assert_eq!(ImmutableParamId::ALL.len(), 46);
     }
 }

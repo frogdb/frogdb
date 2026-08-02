@@ -93,6 +93,13 @@ pub fn recover_all_shards(
         total_stats.keys_expired_skipped += stats.keys_expired_skipped;
         total_stats.bytes_loaded += stats.bytes_loaded;
         total_stats.keys_failed += stats.keys_failed;
+        // First-wins across the whole database, not just within a shard: shards
+        // are walked in ascending id and the hot tier before the warm one, so
+        // folding here — after this shard's hot pass, before its warm pass —
+        // makes "first" mean the same thing at both levels.
+        if let Some(failure) = stats.first_failure {
+            total_stats.record_first_failure(|| failure);
+        }
 
         // Recover warm entries if warm tier is enabled
         if rocks.warm_enabled() {

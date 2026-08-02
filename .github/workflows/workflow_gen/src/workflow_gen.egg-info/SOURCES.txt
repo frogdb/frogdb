@@ -18,6 +18,7 @@ src/workflow_gen/workflows/deploy_docs.py
 src/workflow_gen/workflows/fuzz.py
 src/workflow_gen/workflows/jepsen_nightly.py
 src/workflow_gen/workflows/link_check.py
+src/workflow_gen/workflows/regression_nightly.py
 src/workflow_gen/workflows/release.py
 src/workflow_gen/workflows/release_please.py
 src/workflow_gen/workflows/test.py

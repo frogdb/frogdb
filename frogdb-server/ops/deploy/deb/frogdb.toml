@@ -49,6 +49,10 @@ wal-failure-policy = "continue"
 snapshot-dir = "/var/lib/frogdb/snapshots"
 snapshot-interval-secs = 3600
 max-snapshots = 5
+stop-writes-on-save-error = false
+
+[recovery]
+on-decode-failure = "continue"
 
 [http]
 enabled = true

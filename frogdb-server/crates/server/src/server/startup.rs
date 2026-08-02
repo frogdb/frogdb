@@ -147,6 +147,11 @@ mod tests {
         fn stats(&self) -> SnapshotStats {
             SnapshotStats::default()
         }
+        /// This double never fails a save (it never runs one), so it matches its
+        /// own default `stats()`, whose `last_error` is `None`.
+        fn last_save_failed(&self) -> bool {
+            false
+        }
         fn in_progress(&self) -> bool {
             false
         }

@@ -139,6 +139,80 @@ impl SnapshotStats {
     }
 }
 
+/// The save history plus the one bit of it the *write path* needs cheaply.
+///
+/// [`SnapshotStats`] answers every `INFO`/`LASTSAVE` question, but it lives
+/// behind an `RwLock` and cloning it to ask one boolean question would put a
+/// lock acquisition (and, once a cause is retained, a `String` allocation) on
+/// every write a server accepts. The `-MISCONF` refusal
+/// (`snapshot.stop-writes-on-save-error`) asks exactly that one question, so the
+/// answer is mirrored into an `AtomicBool`.
+///
+/// A mirror is a second copy of the truth and can drift; this type is what makes
+/// drift impossible rather than merely unlikely. It owns both fields and is the
+/// only way to write either, so the only two methods that can move the bool are
+/// the same two that write `last_error` — `last_save_failed()` and
+/// `stats().last_error.is_some()` are the same fact by construction.
+#[derive(Debug, Default)]
+pub struct SaveHistory {
+    stats: std::sync::RwLock<SnapshotStats>,
+    /// Mirrors `stats.last_error.is_some()`. Relaxed throughout: it guards no
+    /// other memory, and a write that races a save's completion by one
+    /// instruction is a write that raced the save itself.
+    failed: std::sync::atomic::AtomicBool,
+}
+
+impl SaveHistory {
+    /// Seed the history (from the newest complete snapshot on disk, at boot).
+    ///
+    /// The latch is derived from the seed rather than assumed clear, so the
+    /// invariant holds from the first instant this type exists. In practice a
+    /// boot seed carries no cause — it is built from the newest *complete*
+    /// snapshot, so a fresh process never refuses writes for a failure nobody
+    /// observed — but deriving costs nothing and does not depend on that
+    /// staying true.
+    pub(crate) fn new(stats: SnapshotStats) -> Self {
+        let failed = stats.last_error.is_some();
+        Self {
+            stats: std::sync::RwLock::new(stats),
+            failed: std::sync::atomic::AtomicBool::new(failed),
+        }
+    }
+
+    /// See [`SnapshotStats::record_start`].
+    pub(crate) fn record_start(&self) -> Instant {
+        self.stats.write().unwrap().record_start()
+    }
+
+    /// See [`SnapshotStats::record_success`]. Clears the refusal latch: a save
+    /// succeeded, so whatever was broken is not broken now.
+    pub(crate) fn record_success(&self, completed_at: SystemTime, elapsed: Duration) {
+        let mut stats = self.stats.write().unwrap();
+        stats.record_success(completed_at, elapsed);
+        self.failed
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// See [`SnapshotStats::record_failure`]. Sets the refusal latch.
+    pub(crate) fn record_failure(&self, error: String) {
+        let mut stats = self.stats.write().unwrap();
+        stats.record_failure(error);
+        self.failed
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The whole history, published in one lock acquisition so no two `INFO`
+    /// fields can describe different moments.
+    pub(crate) fn snapshot(&self) -> SnapshotStats {
+        self.stats.read().unwrap().clone()
+    }
+
+    /// Whether the most recent save attempt failed, without touching the lock.
+    pub(crate) fn last_save_failed(&self) -> bool {
+        self.failed.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
 pub trait SnapshotCoordinator: Send + Sync {
     fn start_snapshot(&self) -> Result<SnapshotHandle, SnapshotError>;
     /// Save history: outcome, counters, and the last successful save's time.
@@ -149,6 +223,16 @@ pub trait SnapshotCoordinator: Send + Sync {
     fn last_save_time(&self) -> Option<SystemTime> {
         self.stats().last_save_time
     }
+    /// Whether the most recent save attempt failed with no success since —
+    /// exactly Redis' `rdb_last_bgsave_status:err`, and exactly the condition
+    /// `snapshot.stop-writes-on-save-error` refuses client writes on.
+    ///
+    /// Deliberately not defaulted to `self.stats().last_error.is_some()`: this
+    /// is read on the write path, and a default would silently put an `RwLock`
+    /// acquisition and a `String` clone there for every implementor that forgot
+    /// to override it. Implementors back it with [`SaveHistory`], which keeps
+    /// the two answers identical by construction.
+    fn last_save_failed(&self) -> bool;
     fn in_progress(&self) -> bool;
     /// Atomically request a background save, coalescing with any in-flight run.
     /// `mode` selects the no-queue (`Immediate`) vs coalesce (`Schedule`)

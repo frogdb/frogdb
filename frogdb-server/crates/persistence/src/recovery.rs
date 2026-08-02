@@ -40,6 +40,57 @@ pub struct RecoveryStats {
 
     /// Number of stale warm keys skipped (hot copy exists).
     pub warm_keys_stale: u64,
+
+    /// Context for the **first** key that failed to deserialize, or `None` when
+    /// none did.
+    ///
+    /// `keys_failed` is a count, and a count is not something an operator can
+    /// act on. This carries the one example needed to start diagnosing: which
+    /// shard, which tier, which key, and what the decoder said. First rather
+    /// than last because the first failure in iteration order is the one a
+    /// truncated or format-shifted column family produces at its boundary —
+    /// and because "first" is stable across reruns where "last" is not.
+    pub first_failure: Option<DecodeFailure>,
+}
+
+/// Where a single decode failure happened, and what the decoder said about it.
+///
+/// Recorded first-wins ([`RecoveryStats::record_first_failure`]) so this is one
+/// concrete example, never a summary: the count in
+/// [`RecoveryStats::keys_failed`] is what says how widespread the problem is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodeFailure {
+    /// Shard whose column family the key was read from.
+    pub shard_id: usize,
+    /// Tier the key was read from: `true` for the warm CF, `false` for the hot
+    /// CF. Load-bearing for diagnosis — a warm-only failure points at tiered
+    /// storage rather than at the primary dataset.
+    pub warm: bool,
+    /// The raw key bytes. Kept raw rather than pre-rendered: keys are arbitrary
+    /// binary, and the rendering (lossy, truncated) belongs to whoever formats
+    /// the message, not to the capture site.
+    pub key: Bytes,
+    /// The deserializer's own error text.
+    pub error: String,
+}
+
+impl RecoveryStats {
+    /// Record `failure` as the first decode failure, if none has been recorded.
+    ///
+    /// Idempotent after the first call — every later failure is counted in
+    /// `keys_failed` and dropped here. Deliberately not `Option::get_or_insert`
+    /// at the call sites: those would build the `DecodeFailure` (and its
+    /// `String`) for every failing key just to throw it away.
+    ///
+    /// Public because the same first-wins rule has to hold when *per-shard*
+    /// stats are folded into a whole-database total (`recover_all_shards` in
+    /// the store crate); one shared method is what keeps the two levels from
+    /// disagreeing about which failure is "first".
+    pub fn record_first_failure(&mut self, failure: impl FnOnce() -> DecodeFailure) {
+        if self.first_failure.is_none() {
+            self.first_failure = Some(failure());
+        }
+    }
 }
 
 /// Error during recovery of the on-disk format.
@@ -117,6 +168,12 @@ pub fn recover_shard_into<S: RestoreSink>(
                     "Failed to deserialize key during recovery"
                 );
                 stats.keys_failed += 1;
+                stats.record_first_failure(|| DecodeFailure {
+                    shard_id,
+                    warm: false,
+                    key: Bytes::copy_from_slice(&key),
+                    error: e.to_string(),
+                });
             }
         }
     }
@@ -183,6 +240,12 @@ pub fn recover_warm_shard_into<S: RestoreSink>(
                     "Failed to deserialize warm key during recovery"
                 );
                 stats.keys_failed += 1;
+                stats.record_first_failure(|| DecodeFailure {
+                    shard_id,
+                    warm: true,
+                    key: Bytes::copy_from_slice(&key),
+                    error: e.to_string(),
+                });
             }
         }
     }
@@ -525,5 +588,76 @@ mod tests {
         );
         assert_eq!(stats.warm_keys_loaded, 0);
         assert_eq!(sink.hot.len(), 1, "recovery continued past both bad values");
+    }
+
+    // FM-PERSISTENCE-047
+    /// The refusal message needs *one* concrete example, so the format layer
+    /// captures the first failure's shard, tier, key, and decoder error — and
+    /// keeps the first one. Asserted at this layer rather than only through the
+    /// recovery orchestrator because this is where the tier is decided: the
+    /// warm scan shares `keys_failed` with the hot scan, so a warm failure that
+    /// overwrote the hot one would point an operator at tiered storage for a
+    /// problem in the primary dataset.
+    #[test]
+    fn the_first_decode_failure_is_captured_with_its_tier_and_key() {
+        let tmp = TempDir::new().unwrap();
+        let rocks =
+            RocksStore::open_with_warm(tmp.path(), 1, &RocksConfig::default(), true).unwrap();
+
+        // Iteration is key-ordered, so `a_rot` is read before `b_rot`.
+        rocks.put(0, b"a_rot", b"garbage").unwrap();
+        rocks.put(0, b"b_rot", b"more garbage").unwrap();
+        rocks.put_warm(0, b"c_warm_rot", b"warm garbage").unwrap();
+
+        let mut sink = MockSink::default();
+        let mut stats = recover_shard_into(&rocks, 0, &mut sink).unwrap();
+
+        let first = stats
+            .first_failure
+            .clone()
+            .expect("a decode failure must carry its context");
+        assert_eq!(first.shard_id, 0);
+        assert!(!first.warm, "the hot tier is where this one failed");
+        assert_eq!(first.key, Bytes::from_static(b"a_rot"), "first, not last");
+        assert!(!first.error.is_empty(), "the decoder's own words are kept");
+
+        recover_warm_shard_into(&rocks, 0, &mut sink, &mut stats).unwrap();
+        assert_eq!(stats.keys_failed, 3, "all three are still counted");
+        assert_eq!(
+            stats.first_failure.as_ref(),
+            Some(&first),
+            "a later failure, on either tier, does not displace the first"
+        );
+    }
+
+    // FM-PERSISTENCE-047
+    /// `record_first_failure` takes a closure so a database with a million bad
+    /// keys allocates one `DecodeFailure`, not a million. That is only true if
+    /// the closure is skipped once a failure is held — a property no
+    /// caller-side assertion can see, so it is asserted here directly.
+    #[test]
+    fn recording_a_later_failure_does_not_even_build_it() {
+        let mut stats = RecoveryStats::default();
+        let mut builds = 0;
+        let mut record = |key: &'static [u8], builds: &mut u32| {
+            stats.record_first_failure(|| {
+                *builds += 1;
+                DecodeFailure {
+                    shard_id: 3,
+                    warm: false,
+                    key: Bytes::from_static(key),
+                    error: "bad header".to_string(),
+                }
+            });
+        };
+
+        record(b"first", &mut builds);
+        record(b"second", &mut builds);
+
+        assert_eq!(builds, 1, "the second failure never built a DecodeFailure");
+        assert_eq!(
+            stats.first_failure.as_ref().map(|f| f.key.clone()),
+            Some(Bytes::from_static(b"first"))
+        );
     }
 }

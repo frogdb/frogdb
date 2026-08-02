@@ -424,6 +424,12 @@ pub struct StaticConfig {
     /// Cert-watcher debounce window in ms. Immutable: consumed when the watcher
     /// task is spawned.
     pub tls_watch_debounce_ms: u64,
+    /// Recovery's decode-failure policy (`continue` / `refuse`).
+    /// Immutable in the strongest sense available:
+    /// recovery has finished before the listener accepts a connection, so there
+    /// is no moment at which a `CONFIG SET` could change what it did. Recorded
+    /// here so CONFIG GET / REWRITE report the policy the boot actually used.
+    pub recovery_on_decode_failure: String,
 }
 
 impl StaticConfig {
@@ -526,6 +532,7 @@ impl StaticConfig {
             // --- config-mutability round: newly-exposed immutable params ---
             tls_watch_certs: config.tls.watch_certs,
             tls_watch_debounce_ms: config.tls.watch_debounce_ms,
+            recovery_on_decode_failure: config.recovery.on_decode_failure.clone(),
         }
     }
 }
@@ -785,6 +792,16 @@ pub struct ConfigManager {
     /// is built after this manager, so `apply` writes here first and then pushes
     /// the new cadence into [`Self::snapshot_coordinator`] when it is published.
     snapshot_interval_secs: Arc<AtomicU64>,
+    /// Whether a failed background save should refuse client writes with
+    /// `-MISCONF` until a save succeeds.
+    ///
+    /// Off by default, unlike Redis' `stop-writes-on-bgsave-error`: FrogDB's
+    /// durability is the WAL, so a failed save costs backup freshness, not
+    /// acknowledged data. This cell is only the operator's half of the
+    /// condition — the other half is [`Self::snapshot_coordinator`]'s
+    /// `last_save_failed()`, and [`Self::refuse_writes_on_save_error`] is the
+    /// one place the two are combined.
+    stop_writes_on_save_error: Arc<AtomicBool>,
     /// Live snapshot coordinator, published by server init once persistence is
     /// up. `None` only before that point (and in unit tests).
     snapshot_coordinator:
@@ -950,6 +967,9 @@ impl ConfigManager {
             snapshot_interval_secs: Arc::new(AtomicU64::new(
                 config.snapshot.snapshot_interval_secs,
             )),
+            stop_writes_on_save_error: Arc::new(AtomicBool::new(
+                config.snapshot.stop_writes_on_save_error,
+            )),
             snapshot_coordinator: std::sync::OnceLock::new(),
             replication_lag_threshold_bytes: Arc::new(AtomicU64::new(
                 config.replication.replication_lag_threshold_bytes,
@@ -996,6 +1016,25 @@ impl ConfigManager {
                 c.set_periodic_interval_secs(secs);
             }
         }
+    }
+
+    /// Whether client writes must be refused with `-MISCONF` right now.
+    ///
+    /// Both halves are required, and in this order: the operator opted in
+    /// **and** the last background save actually failed. The flag is checked
+    /// first because it is a relaxed atomic load and it is false on essentially
+    /// every deployment, so the default configuration never reaches the
+    /// coordinator at all.
+    ///
+    /// With no coordinator published — persistence disabled, or the window
+    /// before server init publishes one — there is no save that could have
+    /// failed, so writes are not refused.
+    pub fn refuse_writes_on_save_error(&self) -> bool {
+        self.stop_writes_on_save_error.load(Ordering::Relaxed)
+            && self
+                .snapshot_coordinator
+                .get()
+                .is_some_and(|c| c.last_save_failed())
     }
 
     /// Publish the live primary-side replication lag thresholds.
@@ -1567,6 +1606,14 @@ impl ConfigManager {
                 name: id.name(),
                 getter: |mgr| mgr.static_config.tls_watch_debounce_ms.to_string(),
                 toml_getter: |mgr| mgr.static_config.tls_watch_debounce_ms.to_toml_value(),
+            },
+            // Consumed by recovery, which ran to completion before this manager
+            // could serve a CONFIG command at all — GET-only because there is
+            // nothing left for a SET to affect.
+            RecoveryOnDecodeFailure => ParamMeta {
+                name: id.name(),
+                getter: |mgr| mgr.static_config.recovery_on_decode_failure.clone(),
+                toml_getter: |mgr| mgr.static_config.recovery_on_decode_failure.to_toml_value(),
             },
         }
     }
@@ -2854,6 +2901,27 @@ impl ConfigManager {
                     Ok(())
                 },
                 render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            // The `-MISCONF` opt-in. Live-settable in both
+            // directions on purpose: turning it on is how an operator who just
+            // learned their backups are failing stops accepting writes without
+            // a restart, and turning it off is how they resume serving while
+            // the disk is being fixed. Nothing is pushed anywhere on apply —
+            // the write path reads this cell through
+            // `refuse_writes_on_save_error()` per command.
+            StopWritesOnSaveError => Box::new(ConfigParam::<bool, ConfigManager> {
+                name: id.name(),
+                parse: |s| parse_yes_no("stop-writes-on-save-error", s),
+                validate: ConfigParam::no_validate,
+                default: || frogdb_config::persistence::DEFAULT_STOP_WRITES_ON_SAVE_ERROR,
+                get: |mgr| mgr.stop_writes_on_save_error.load(Ordering::Relaxed),
+                apply: |mgr, v| {
+                    mgr.stop_writes_on_save_error.store(v, Ordering::Relaxed);
+                    info!(enabled = v, "Refuse-writes-on-save-error toggled");
+                    Ok(())
+                },
+                render: |v| yes_no(*v),
                 propagation: Propagation::None,
             }),
             // KiB on the wire, bytes in the shared cell every shard's WAL flush
@@ -4169,8 +4237,15 @@ port = 6379
         assert!(result.is_ok());
 
         let contents = std::fs::read_to_string(&config_path).unwrap();
-        // No-op params should not appear in the file
-        assert!(!contents.contains("save"));
+        // No-op params should not appear in the file. Matched as a whole key
+        // rather than a substring: real keys such as
+        // `stop-writes-on-save-error` legitimately contain "save".
+        assert!(
+            !contents
+                .lines()
+                .any(|line| line.trim_start().starts_with("save")),
+            "{contents}"
+        );
     }
 
     #[test]
@@ -4757,6 +4832,99 @@ maxmemory = 0
         );
     }
 
+    /// A coordinator whose save outcome the test drives directly. The real ones
+    /// only fail when the filesystem does, which is not a thing a config unit
+    /// test should have to arrange.
+    struct FailableCoordinator {
+        failed: AtomicBool,
+    }
+
+    impl frogdb_core::SnapshotCoordinator for FailableCoordinator {
+        fn start_snapshot(
+            &self,
+        ) -> Result<frogdb_core::persistence::SnapshotHandle, frogdb_core::persistence::SnapshotError>
+        {
+            Ok(frogdb_core::persistence::SnapshotHandle::new(1))
+        }
+        fn stats(&self) -> frogdb_core::persistence::SnapshotStats {
+            frogdb_core::persistence::SnapshotStats {
+                last_error: self
+                    .failed
+                    .load(Ordering::Relaxed)
+                    .then(|| "disk full".to_string()),
+                ..Default::default()
+            }
+        }
+        fn last_save_failed(&self) -> bool {
+            self.failed.load(Ordering::Relaxed)
+        }
+        fn in_progress(&self) -> bool {
+            false
+        }
+        fn request_snapshot(
+            &self,
+            _mode: frogdb_core::persistence::SnapshotMode,
+        ) -> frogdb_core::persistence::SnapshotRequest {
+            frogdb_core::persistence::SnapshotRequest::Coalesced
+        }
+        fn periodic_interval_secs(&self) -> u64 {
+            0
+        }
+        fn set_periodic_interval_secs(&self, _secs: u64) {}
+    }
+
+    // FM-PERSISTENCE-046
+    /// The `-MISCONF` condition is a conjunction, and every one of its four
+    /// combinations matters: the opt-in alone must not refuse (that would break
+    /// every deployment that turns it on preventively), a failed save alone must
+    /// not refuse (that is the default, and the whole point of the default), and
+    /// the flag is live in *both* directions so an operator can stop the
+    /// bleeding and then resume serving without a restart.
+    #[test]
+    fn refuse_writes_on_save_error_requires_both_the_flag_and_a_failed_save() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+
+        // No coordinator published yet: there is no save that could have failed.
+        assert!(!manager.refuse_writes_on_save_error());
+        manager.set("stop-writes-on-save-error", "yes").unwrap();
+        assert!(
+            !manager.refuse_writes_on_save_error(),
+            "the opt-in alone must not refuse writes"
+        );
+
+        let coordinator = Arc::new(FailableCoordinator {
+            failed: AtomicBool::new(false),
+        });
+        manager.set_snapshot_coordinator(coordinator.clone());
+        assert!(
+            !manager.refuse_writes_on_save_error(),
+            "a healthy coordinator plus the opt-in is still not a refusal"
+        );
+
+        coordinator.failed.store(true, Ordering::Relaxed);
+        assert!(
+            manager.refuse_writes_on_save_error(),
+            "both halves present: writes are refused"
+        );
+
+        manager.set("stop-writes-on-save-error", "no").unwrap();
+        assert!(
+            !manager.refuse_writes_on_save_error(),
+            "turning the opt-in off must resume writes while the save is still \
+             failing — that is the operator's escape hatch"
+        );
+
+        // The default is off, and this is what says so.
+        let default_manager = ConfigManager::new(&test_config());
+        assert_eq!(default_manager.get("stop-writes-on-save-error")[0].1, "no");
+        default_manager.set_snapshot_coordinator(coordinator);
+        assert!(
+            !default_manager.refuse_writes_on_save_error(),
+            "a failed save alone must not refuse writes under the default"
+        );
+    }
+
     #[test]
     fn batch_size_threshold_set_reaches_the_shared_wal_cell() {
         let config = test_config();
@@ -5181,6 +5349,7 @@ maxmemory = 0
             ("hotshards-hot-threshold-percent", "44"),
             ("hotshards-default-period-secs", "9"),
             ("snapshot-interval-secs", "1234"),
+            ("stop-writes-on-save-error", "yes"),
             ("batch-size-threshold-kb", "256"),
             ("replication-lag-threshold-secs", "17"),
             ("self-fence-on-replica-loss", "no"),
@@ -5201,6 +5370,7 @@ maxmemory = 0
             "hot-threshold-percent = 44",
             "default-period-secs = 9",
             "snapshot-interval-secs = 1234",
+            "stop-writes-on-save-error = true",
             "batch-size-threshold-kb = 256",
             "replication-lag-threshold-secs = 17",
             "self-fence-on-replica-loss = false",
@@ -5266,6 +5436,7 @@ maxmemory = 0
         ("tracing-sampling-rate", "0.25"),
         ("latency-bands-enabled", "yes"),
         ("snapshot-interval-secs", "1234"),
+        ("stop-writes-on-save-error", "yes"),
         ("batch-size-threshold-kb", "256"),
         ("replication-lag-threshold-secs", "17"),
         ("replica-freshness-timeout-ms", "8000"),

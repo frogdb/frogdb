@@ -1178,6 +1178,87 @@ async fn test_coordinator_records_failed_then_recovered_save() {
     );
 }
 
+// FM-PERSISTENCE-046
+/// The refusal latch and the cause `INFO` reports are the same fact, at every
+/// point in a save's life: clear before anything runs, set the moment a save
+/// fails, clear again the moment one succeeds.
+///
+/// The write path reads `last_save_failed()` (an atomic) while `INFO` reads
+/// `stats().last_error` (behind a lock), so this is the test that keeps the two
+/// from drifting — a server that refuses writes while `rdb_last_bgsave_status`
+/// says `ok` would be unresolvable by the operator it is blocking.
+#[cfg(unix)]
+#[tokio::test]
+async fn save_error_latch_mirrors_the_retained_cause() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let db = TempDir::new().unwrap();
+    let store = Arc::new(make_store(db.path()));
+    let snap = TempDir::new().unwrap();
+    let data = TempDir::new().unwrap();
+    let coord = coordinator(store, snap.path(), data.path());
+
+    assert!(
+        !coord.last_save_failed(),
+        "a boot that has run no save has no failure to latch"
+    );
+    assert_eq!(coord.last_save_failed(), coord.stats().last_error.is_some());
+
+    // Read-execute only: the stager cannot create its staging directory.
+    let original = std::fs::metadata(snap.path()).unwrap().permissions();
+    std::fs::set_permissions(snap.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+    coord.start_snapshot().unwrap();
+    let settled = wait_idle(&coord).await;
+    std::fs::set_permissions(snap.path(), original).unwrap();
+    assert!(settled, "the failing save never settled");
+
+    assert!(coord.last_save_failed(), "a failed save latches");
+    assert_eq!(
+        coord.last_save_failed(),
+        coord.stats().last_error.is_some(),
+        "the latch and the INFO cause must agree after a failure"
+    );
+
+    coord.start_snapshot().unwrap();
+    assert!(wait_idle(&coord).await, "the recovery save never settled");
+
+    assert!(
+        !coord.last_save_failed(),
+        "a successful save clears the latch, so writes resume without a restart"
+    );
+    assert_eq!(
+        coord.last_save_failed(),
+        coord.stats().last_error.is_some(),
+        "the latch and the INFO cause must agree after a recovery"
+    );
+    assert_eq!(
+        coord.stats().failures,
+        1,
+        "clearing the latch must not rewrite the failure history"
+    );
+}
+
+// FM-PERSISTENCE-046
+/// The no-op coordinator never latches, because it never fails: a deployment
+/// with persistence disabled must not be able to refuse writes over a backup it
+/// does not take. Asserted across the same request paths a real coordinator
+/// takes, so a future no-op that grows a failure path is caught here.
+#[test]
+fn noop_coordinator_never_latches_a_save_error() {
+    let coord = NoopSnapshotCoordinator::new();
+
+    assert!(!coord.last_save_failed());
+    coord.start_snapshot().unwrap();
+    assert!(!coord.last_save_failed(), "a no-op save cannot fail");
+    coord.request_snapshot(SnapshotMode::Schedule);
+    coord.request_snapshot(SnapshotMode::Immediate);
+    assert!(!coord.last_save_failed());
+    assert!(
+        coord.stats().last_error.is_none(),
+        "the latch and the INFO cause agree here too"
+    );
+}
+
 // FM-PERSISTENCE-020
 /// A pre-snapshot hook that cannot complete fails the save instead of cutting a
 /// checkpoint the drain never covered.
