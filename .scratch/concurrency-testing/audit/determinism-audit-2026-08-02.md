@@ -251,9 +251,14 @@ field. Benign; listed so a future sweep does not re-litigate them.
   commutative `total += count`.
 - `server/src/server/shard_supervisor.rs:112` — `futures::future::select_all` over shard join
   handles; fail-stop path, aborts regardless of which shard is reported first.
-- `types/src/skiplist.rs:140` — unseeded RNG for skiplist level. Internal structure only; ZSet
-  iteration is score-then-member ordered, so no reply changes. Flag if a future `ZSCAN` ever
-  iterates in skiplist-node order.
+- ~~`types/src/skiplist.rs:140` — unseeded RNG for skiplist level. Internal structure only; ZSet
+  iteration is score-then-member ordered, so no reply changes.~~ **CORRECTED 2026-08-02: this is
+  class A.** Iteration order is indeed unaffected, but the level height is *observable*:
+  `memory_size()` charges `levels.len() * size_of::<Link>()` (8 bytes) per node, and the
+  memory-conservation checker reads exactly that number. It was the last divergence in the
+  MultiWaiter digest after R4 — an 8-byte delta equal to one `Link`. Fixed by giving each
+  `SkipList` its own seeded `SmallRng` (commit `faaf7f2d`). Lesson for the rest of class B: "no
+  reply changes" is not the bar when a checker observes derived state such as memory accounting.
 
 ## 4. Class C — already injectable / virtualized / structurally safe (~38)
 
@@ -499,21 +504,59 @@ Each step names the issue-14 acceptance criterion it advances. **Add the byte-id
 assertion test (criterion 1) first**, marked `#[ignore]`, so every step below has a pass/fail signal
 instead of a digest eyeballed by hand.
 
-| # | Change | Cost | Expected effect on issue 14 |
+| # | Change | Cost | Expected effect on issue 14 | Status (2026-08-02) |
+|---|---|---|---|---|
+| **R0** | Add the "run the same `Workload` twice, assert histories equal" test. Also fix `repro_path` to key on `(seed, profile, ops)`. | XS | Criteria 1 (harness) and 4. Without R0 the rest is unmeasurable. | **DONE** `12cca673` |
+| **R1** | Set `--cfg tokio_unstable` for turmoil builds. Prefer `[build] rustflags` in `.cargo/config.toml` (it must apply to the whole dependency graph, and turmoil's block is compiled in turmoil's own crate) with the `concurrency*` recipes inheriting it. | XS | **Criterion 3, verbatim.** Also switches on `UnhandledPanic::ShutdownRuntime` so host panics fail the test. Expect: `select!` order reproducible; issue 14 already showed this alone is insufficient. | **DONE** `12cca673` |
+| **R2** | Seed the chaos injector: give `ChaosConfig` a `SmallRng` from the workload seed; replace `rand::rng()` at `config/mod.rs:232,262`. | XS | Removes 2 A-sites that are *inside the turmoil feature*. Any profile with jitter or reset probability becomes reproducible. | **DONE** `12cca673` |
+| **R3** | **Clock-domain unification, phase 1 — the blocking path.** `server/src/connection/blocking.rs:44` and `blocking/coordinator.rs:78,87` → `tokio::time::Instant`; thread a virtual `now` into `core/src/shard/blocking.rs:170,303` and `wait_queue::collect_expired`. | S | **The single highest-value change.** Directly targets `MultiWaiter`, the profile issue 14 shows flapping 0/1/0/0. | **DONE** `b48fd3a7` |
+| **R4** | **Clock-domain unification, phase 2 — expiry.** `event_loop.rs:177` sources `now` from `tokio::time::Instant`; `active_expiry.rs`'s 25 ms real budget becomes either a virtual-clock budget or an op-count under sim; `store/hashmap.rs:558,1392,1543,1555` take an injected `now`. Fix the false comment at `hashmap.rs:543` while there. | S–M | Removes the largest cluster of A-sites (A5–A11) and makes TTL behaviour under sim mean what the code already claims it means. | **DONE** `00dfb0ab` |
+| **R5** | Sweep the remaining `std::time::Instant` imports in product crates to `tokio::time::Instant` (55 files, mechanical `sed`), leaving `SystemTime` alone. Add a `just lint-clock-seam` grep gate, in the style of the existing `lint-turmoil-features` / `lint-metrics-chokepoint` recipes, forbidding `std::time::Instant::now` outside an allowlist. | M | Closes A18–A23 and prevents regression. This is FDB's "no direct time calls" rule, enforced the way this repo already enforces its other seams. | not started |
+| **R6** | Enable `frogdb-core/shard-driver` from the `turmoil` feature and use `run_one_expiry_cycle` / the waiter sweep from the harness where possible, instead of racing the `select!`. | S | Removes A51's expiry and waiter branches from the race entirely for driven tests. The seam already exists and is unused by the sim. | not started |
+| **R7** | Add `biased;` + a priority comment to A51–A55, matching the existing convention. | S | Makes those five loops deterministic *by construction*, not merely by seed — so a future tokio version that changes its RNG cannot silently invalidate pinned seeds. | not started |
+| **R8** | Seeded RNG through `CommandContext` / `ShardWorker` for A26–A36, A39. Per-shard seed = `(workload_seed, shard_id)`. | M | Removes the remaining 13 unseeded-RNG sites. Needed before any `SRANDMEMBER`/`SPOP`/`RANDOMKEY`/`ZRANDMEMBER` profile can be pinned. | not started |
+| **R9** | Deterministic ordering for the 11 hash-order sites: `BTreeMap<ConnId,_>` for pubsub (A40–A43) and the client registry (A49–A50); a tiebreaker on `id` in `eviction_candidates` (A48, one line); seedable `ahash::RandomState` — or `IndexMap` — for `HashEncoding::HashMap`, `SetEncoding::HashSet`, and the `griddle` keyspace (A44–A47). Sort `all_keys()` for `KEYS` (A46). | M | Removes the last class that can change a *reply value* for an identical state. Only fully effective once R3–R8 make the operation sequence stable. | not started |
+| **R10** | Inline the four `spawn_blocking` bodies and the `rocks/reclaim.rs` thread under `#[cfg(feature = "turmoil")]`. | S | Closes A56 and the conditional thread leaks; matters for full-resync / snapshot / cluster suites, not for `MultiWaiter`. | not started |
+| **R11** | Close the three `frogdb-net` bypasses: add a `resolve()` with a `turmoil::lookup` arm to `frogdb-net` and use it in `commands/replication.rs:133` (A57); route `migrate.rs:246` through `crate::net` (A59); either adapt or `cfg`-off the observability HTTP listener under turmoil (A58). Delete the vestigial `core/src/shard/connection.rs` `NewConnection`. Extend `just lint-turmoil-features` to also grep for raw `tokio::net::` outside the allowlisted default arms. | S–M | No effect on `MultiWaiter`; required before any `REPLICAOF`-by-hostname or `MIGRATE` scenario can be simulated at all, and the lint prevents the next bypass. | not started |
+| **R12** | Once R0–R9 hold: re-verify issue 11's findings and re-pin surviving classes by seed. | — | **Criterion 5.** | open (criterion 5) |
+
+
+### 6.1 Measured outcome of R0–R4 (2026-08-02)
+
+Method: the R0 test (`concurrency_workload::determinism::*`) — generate the same `Workload` twice,
+run both, diff the digests and report the first differing line. Four in-process pairs per stage.
+
+| Stage | seed 0 / Mixed / 30 | seed 3 / TxHeavy / 60 | seed 10 / MultiWaiter / 30 |
 |---|---|---|---|
-| **R0** | Add the "run the same `Workload` twice, assert histories equal" test. Also fix `repro_path` to key on `(seed, profile, ops)`. | XS | Criteria 1 (harness) and 4. Without R0 the rest is unmeasurable. |
-| **R1** | Set `--cfg tokio_unstable` for turmoil builds. Prefer `[build] rustflags` in `.cargo/config.toml` (it must apply to the whole dependency graph, and turmoil's block is compiled in turmoil's own crate) with the `concurrency*` recipes inheriting it. | XS | **Criterion 3, verbatim.** Also switches on `UnhandledPanic::ShutdownRuntime` so host panics fail the test. Expect: `select!` order reproducible; issue 14 already showed this alone is insufficient. |
-| **R2** | Seed the chaos injector: give `ChaosConfig` a `SmallRng` from the workload seed; replace `rand::rng()` at `config/mod.rs:232,262`. | XS | Removes 2 A-sites that are *inside the turmoil feature*. Any profile with jitter or reset probability becomes reproducible. |
-| **R3** | **Clock-domain unification, phase 1 — the blocking path.** `server/src/connection/blocking.rs:44` and `blocking/coordinator.rs:78,87` → `tokio::time::Instant`; thread a virtual `now` into `core/src/shard/blocking.rs:170,303` and `wait_queue::collect_expired`. | S | **The single highest-value change.** Directly targets `MultiWaiter`, the profile issue 14 shows flapping 0/1/0/0. |
-| **R4** | **Clock-domain unification, phase 2 — expiry.** `event_loop.rs:177` sources `now` from `tokio::time::Instant`; `active_expiry.rs`'s 25 ms real budget becomes either a virtual-clock budget or an op-count under sim; `store/hashmap.rs:558,1392,1543,1555` take an injected `now`. Fix the false comment at `hashmap.rs:543` while there. | S–M | Removes the largest cluster of A-sites (A5–A11) and makes TTL behaviour under sim mean what the code already claims it means. |
-| **R5** | Sweep the remaining `std::time::Instant` imports in product crates to `tokio::time::Instant` (55 files, mechanical `sed`), leaving `SystemTime` alone. Add a `just lint-clock-seam` grep gate, in the style of the existing `lint-turmoil-features` / `lint-metrics-chokepoint` recipes, forbidding `std::time::Instant::now` outside an allowlist. | M | Closes A18–A23 and prevents regression. This is FDB's "no direct time calls" rule, enforced the way this repo already enforces its other seams. |
-| **R6** | Enable `frogdb-core/shard-driver` from the `turmoil` feature and use `run_one_expiry_cycle` / the waiter sweep from the harness where possible, instead of racing the `select!`. | S | Removes A51's expiry and waiter branches from the race entirely for driven tests. The seam already exists and is unused by the sim. |
-| **R7** | Add `biased;` + a priority comment to A51–A55, matching the existing convention. | S | Makes those five loops deterministic *by construction*, not merely by seed — so a future tokio version that changes its RNG cannot silently invalidate pinned seeds. |
-| **R8** | Seeded RNG through `CommandContext` / `ShardWorker` for A26–A36, A39. Per-shard seed = `(workload_seed, shard_id)`. | M | Removes the remaining 13 unseeded-RNG sites. Needed before any `SRANDMEMBER`/`SPOP`/`RANDOMKEY`/`ZRANDMEMBER` profile can be pinned. |
-| **R9** | Deterministic ordering for the 11 hash-order sites: `BTreeMap<ConnId,_>` for pubsub (A40–A43) and the client registry (A49–A50); a tiebreaker on `id` in `eviction_candidates` (A48, one line); seedable `ahash::RandomState` — or `IndexMap` — for `HashEncoding::HashMap`, `SetEncoding::HashSet`, and the `griddle` keyspace (A44–A47). Sort `all_keys()` for `KEYS` (A46). | M | Removes the last class that can change a *reply value* for an identical state. Only fully effective once R3–R8 make the operation sequence stable. |
-| **R10** | Inline the four `spawn_blocking` bodies and the `rocks/reclaim.rs` thread under `#[cfg(feature = "turmoil")]`. | S | Closes A56 and the conditional thread leaks; matters for full-resync / snapshot / cluster suites, not for `MultiWaiter`. |
-| **R11** | Close the three `frogdb-net` bypasses: add a `resolve()` with a `turmoil::lookup` arm to `frogdb-net` and use it in `commands/replication.rs:133` (A57); route `migrate.rs:246` through `crate::net` (A59); either adapt or `cfg`-off the observability HTTP listener under turmoil (A58). Delete the vestigial `core/src/shard/connection.rs` `NewConnection`. Extend `just lint-turmoil-features` to also grep for raw `tokio::net::` outside the allowlisted default arms. | S–M | No effect on `MultiWaiter`; required before any `REPLICAOF`-by-hostname or `MIGRATE` scenario can be simulated at all, and the lint prevents the next bypass. |
-| **R12** | Once R0–R9 hold: re-verify issue 11's findings and re-pin surviving classes by seed. | — | **Criterion 5.** |
+| baseline (pre-R1) | differs at line 6 | differs at line 160 | differs at line 6 |
+| after R1 + R2 | line 6 | line 160 | line 6 |
+| after R3 | line 6 | line 160 | line 258 — whole op history, final states and `regorder` identical; only a `tracked_bytes` delta |
+| after R4 | line 6 | line 160 | line 259 — shard 0 byte-identical, shard 1 off by 8 bytes |
+| after the skiplist seed | line 6 | line 160 | **identical**, and identical across processes too (3 processes, digest hash `b20c18c709cd10e8`) |
+
+R2 was a predicted no-op on these three: the profiles run with jitter 0 and reset probability 0, so
+the chaos RNG is never drawn from. It removes the sites regardless, which is what makes any
+jitter-bearing profile reproducible.
+
+**What still differs, and why.** Both surviving cases diverge on the *same* thing: `XADD *` mints
+its stream ID from `SystemTime::now()` (**A15**), and nothing in the codebase virtualizes wall-clock
+time, so every stream entry carries a real millisecond straight into the reply —
+
+```
+A[6] op[6] ... fn=xadd args=[{t17}st1,*,f0,jbp] result=1785711185292-0
+B[6] op[6] ... fn=xadd args=[{t17}st1,*,f0,jbp] result=1785711185393-0
+```
+
+No step in R0–R7 addresses A15; a virtual `SystemTime` seam is its own piece of work. The two
+stream-generating tests therefore stay `#[ignore]`d with that reason recorded, and `MultiWaiter`
+(stream-free) is the case that holds the line in `just concurrency`.
+
+**Also corrected while measuring.** Three turmoil `simulation::*_realpath` tests set a 10 ms TTL and
+then relied on it *not* elapsing across the setup round-trips, which was true only while expiry read
+the OS clock. With expiry on the timer's clock, the sim's own per-hop latency now genuinely elapses
+10 ms. Their TTLs moved to 60 s (the tests force expiry with `DEBUG EXPIRE-BACKDATE` anyway, so the
+value was never load-bearing) and their doc comments — several of which asserted the old real-clock
+behaviour as a design fact — were corrected.
 
 **Prediction.** R1+R2+R3 should be enough to make `MultiWaiter` byte-identical across repeats; R4
 extends that to any profile that touches TTLs; R8+R9 are required before profiles that use random
@@ -535,3 +578,11 @@ client-visible hash-order in replies**.
   `start_paused(true)` produces the drift described in §0/A1. It follows from `start_paused` freezing
   the virtual clock at runtime-build time while the std clock advances, but it is worth confirming
   empirically with a two-line probe before R3 is written, since R3's design depends on it.
+  **CONFIRMED 2026-08-02 by probe, before R3 was written.** Under `start_paused(true)`, converting
+  a deadline built as `std::time::Instant::now() + timeout` into a `tokio::time::Instant` yields
+  `timeout + (real time elapsed since the runtime was built)` measured on the *virtual* clock. The
+  virtual clock auto-advances whenever every task is idle, so in a turmoil sim it overtakes real
+  time immediately and such a deadline is already in the past on arrival — an effective timeout of
+  zero, i.e. blocking commands that time out instantly. A deadline built as
+  `tokio::time::Instant::now() + timeout` is exact. This is why R3 moves the whole blocking path to
+  the timer's clock rather than converting at the boundary.

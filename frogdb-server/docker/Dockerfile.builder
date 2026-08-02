@@ -71,7 +71,9 @@ RUN cargo chef prepare --recipe-path recipe.json
 # ---------------------------------------------------------------------------
 FROM mise-base AS builder
 
-# System RocksDB + compression libs + jemalloc build deps
+# System RocksDB + compression libs + jemalloc build deps.
+# gcc: aws-lc-sys (pulled in transitively) runs a link probe that needs -lgcc,
+# which the clang-only toolchain doesn't provide on Alpine.
 RUN apk add --no-cache \
     rocksdb-dev \
     snappy-dev \
@@ -81,7 +83,8 @@ RUN apk add --no-cache \
     openssl-dev \
     pkgconf \
     make \
-    mold
+    mold \
+    gcc
 
 RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/root/.cargo/git \
