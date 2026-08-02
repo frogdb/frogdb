@@ -80,6 +80,7 @@ mod integration {
         assert_eq!(zset.get_score(b"charlie"), Some(75.25));
     }
 
+    // FM-PERSISTENCE-036
     #[test]
     fn test_expiry_roundtrip() {
         let tmp = TempDir::new().unwrap();

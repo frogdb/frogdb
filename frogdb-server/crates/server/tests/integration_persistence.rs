@@ -172,6 +172,8 @@ async fn test_deleted_keys_stay_deleted_after_restart() {
 // Test 4: BGSAVE snapshot + WAL replay both survive restart
 // ============================================================================
 
+// FM-PERSISTENCE-019
+// FM-PERSISTENCE-021
 #[tokio::test]
 async fn test_bgsave_snapshot_survives_restart() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1628,6 +1630,7 @@ async fn wait_for_snapshot_checkpoint(snapshot_dir: &std::path::Path) -> std::pa
     );
 }
 
+// FM-PERSISTENCE-021
 /// End-to-end: populate a server, `BGSAVE`, then restore the produced snapshot
 /// artifact into a *fresh* data directory via the documented operator procedure
 /// and assert every key/type survives — while a key written *after* the snapshot
@@ -1775,6 +1778,7 @@ async fn test_bgsave_snapshot_restores_into_fresh_data_dir() {
     server.shutdown().await;
 }
 
+// FM-PERSISTENCE-021
 /// A server restored from a BGSAVE artifact must behave like any live server:
 /// subsequent writes are WAL-durable and replay on a later restart, layered on
 /// top of the installed checkpoint.
@@ -1973,6 +1977,7 @@ async fn hammer_bgsave(
     }
 }
 
+// FM-PERSISTENCE-019
 /// Concurrent single-shard `MULTI`/`EXEC` transactions while `BGSAVE` fires
 /// repeatedly. Each transaction rewrites every key of one hash-tag group to a
 /// single generation value; the restored checkpoint must show, for every group,
@@ -2246,6 +2251,7 @@ async fn test_checkpoint_cross_shard_mset_contract_under_concurrent_bgsave() {
     server.shutdown().await;
 }
 
+// FM-PERSISTENCE-019
 /// Concurrent-BGSAVE stress: several clients spam `BGSAVE` while writers stream
 /// updates. Every reply must be an accepted simple string (no error, no hang),
 /// the server must stay responsive, and a baseline dataset written before the

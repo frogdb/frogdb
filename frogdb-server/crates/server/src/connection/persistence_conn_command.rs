@@ -251,6 +251,7 @@ mod tests {
         Bytes::copy_from_slice(s.as_bytes())
     }
 
+    // FM-PERSISTENCE-015
     #[tokio::test]
     async fn bgsave_starts_a_snapshot() {
         let fx = Fixture::new();
@@ -261,6 +262,7 @@ mod tests {
         );
     }
 
+    // FM-PERSISTENCE-022
     #[tokio::test]
     async fn bgsave_starts_each_time_under_instant_completion() {
         // The no-op coordinator now completes instantly (proposal 21): a save
@@ -280,6 +282,7 @@ mod tests {
         );
     }
 
+    // FM-PERSISTENCE-015
     #[tokio::test]
     async fn bgsave_schedule_starts_when_idle() {
         // With instant completion there is no save in flight to coalesce with, so
@@ -296,6 +299,7 @@ mod tests {
         );
     }
 
+    // FM-PERSISTENCE-022
     #[tokio::test]
     async fn lastsave_returns_zero_when_never_saved() {
         let fx = Fixture::new();
@@ -303,6 +307,7 @@ mod tests {
         assert_eq!(resp, Response::Integer(0));
     }
 
+    // FM-PERSISTENCE-022
     #[tokio::test]
     async fn lastsave_returns_timestamp_after_save() {
         let fx = Fixture::new();
@@ -432,6 +437,7 @@ mod tests {
             .as_secs() as i64
     }
 
+    // FM-PERSISTENCE-015
     /// D#6: overlap two real `BGSAVE`s so the second genuinely observes a save
     /// in flight. `RocksSnapshotCoordinator`'s pre-snapshot hook is used as a
     /// deterministic gate — the first save's background task blocks in the hook
@@ -493,6 +499,7 @@ mod tests {
         );
     }
 
+    // FM-PERSISTENCE-022
     /// D#7: `LASTSAVE` against the real coordinator returns `0` before any save,
     /// the actual last-save Unix time (within the ±1s the fixed single-truncation
     /// conversion should now hold to) after a completed save, and does not

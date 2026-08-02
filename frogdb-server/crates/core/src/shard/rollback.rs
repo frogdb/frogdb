@@ -262,6 +262,7 @@ mod tests {
     // Tests
     // ========================================================================
 
+    // FM-PERSISTENCE-006
     #[test]
     fn test_rollback_missing_key() {
         let mut worker = make_test_worker();
@@ -285,6 +286,7 @@ mod tests {
         );
     }
 
+    // FM-PERSISTENCE-006
     #[test]
     fn test_rollback_existing_key() {
         let mut worker = make_test_worker();
@@ -311,6 +313,7 @@ mod tests {
         assert_eq!(val.as_string().unwrap().as_bytes().as_ref(), b"original");
     }
 
+    // FM-PERSISTENCE-006
     #[test]
     fn test_rollback_preserves_expiry() {
         let mut worker = make_test_worker();
@@ -341,6 +344,7 @@ mod tests {
         assert_eq!(exp.unwrap(), original_expiry);
     }
 
+    // FM-PERSISTENCE-006
     #[test]
     fn test_rollback_rename() {
         let mut worker = make_test_worker();
@@ -369,6 +373,7 @@ mod tests {
         assert!(!worker.store.contains(b"dst"), "dest should be removed");
     }
 
+    // FM-PERSISTENCE-006
     #[test]
     fn test_rollback_del_restores_key() {
         let mut worker = make_test_worker();
@@ -390,6 +395,7 @@ mod tests {
         assert_eq!(val.as_string().unwrap().as_bytes().as_ref(), b"precious");
     }
 
+    // FM-PERSISTENCE-006
     #[test]
     fn test_snapshot_arc_efficiency() {
         let mut worker = make_test_worker();
@@ -411,6 +417,7 @@ mod tests {
         worker.rollback_snapshot(snapshot);
     }
 
+    // FM-PERSISTENCE-005
     #[test]
     fn test_continue_mode_default() {
         let worker = make_test_worker();
@@ -420,6 +427,7 @@ mod tests {
         );
     }
 
+    // FM-PERSISTENCE-006
     #[test]
     fn test_rollback_mode_flag_toggle() {
         let mut worker = make_test_worker();
@@ -435,6 +443,7 @@ mod tests {
         );
     }
 
+    // FM-PERSISTENCE-006
     #[test]
     fn test_rollback_clears_added_expiry() {
         // Key had no expiry → command adds expiry → rollback clears it
@@ -461,5 +470,165 @@ mod tests {
             worker.store.get_expiry(b"noexp").is_none(),
             "expiry should be cleared after rollback"
         );
+    }
+}
+
+/// End-to-end tests for the two `wal-failure-policy` settings, driven through
+/// [`ShardWorker::execute_command`] against a fake WAL sink with an injected
+/// write failure. The units above cover snapshot capture and restore in
+/// isolation; these pin what a *client* sees when the WAL rejects a write, which
+/// is the part the policy is actually about.
+#[cfg(test)]
+mod wal_failure_policy_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU8, Ordering};
+
+    use bytes::Bytes;
+    use tokio::sync::mpsc;
+
+    use crate::command::{
+        Arity, Command, CommandContext, CommandFlags, ExecutionStrategy, WaiterWake, WalStrategy,
+    };
+    use crate::command_spec::{
+        AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec, ReindexSpec,
+    };
+    use crate::noop::NoopMetricsRecorder;
+    use crate::persistence::FakeFailure;
+    use crate::registry::CommandRegistry;
+    use crate::shard::FakeWalRegistry;
+    use crate::shard::builder::{ShardWorkerBuilder, WalMode};
+    use crate::shard::message::{ShardReceiver, ShardSender};
+    use crate::shard::worker::ShardWorker;
+    use crate::store::{HashMapStore, Store};
+    use crate::types::Value;
+    use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
+
+    /// A `SET` that really writes to the store, so a rollback has something to
+    /// undo and a `continue`-policy ack has something to leave behind.
+    struct MockSet;
+    impl Command for MockSet {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "SET",
+                arity: Arity::AtLeast(2),
+                flags: CommandFlags::WRITE,
+                keys: KeySpec::First,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::PersistFirstKey,
+                wakes: WaiterWake::None,
+                event: EventSpec::Suppressed,
+                requires_same_slot: false,
+                reindex: ReindexSpec::None,
+                lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
+                strategy: ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+
+        fn execute(
+            &self,
+            ctx: &mut CommandContext,
+            args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            ctx.store
+                .set(args[0].clone(), Value::string(args[1].clone()));
+            Ok(Response::ok())
+        }
+    }
+
+    /// A shard whose WAL is a fake sink that fails its first write, with the
+    /// failure policy driven by the shared `ConfigManager`-style flag.
+    fn worker_with_failing_wal(policy: Arc<AtomicU8>) -> ShardWorker {
+        FakeWalRegistry::clear();
+        let mut registry = CommandRegistry::new();
+        registry.register(MockSet);
+        let (msg_tx, msg_rx) = mpsc::channel(16);
+        let (_conn_tx, conn_rx) = mpsc::channel(16);
+        ShardWorkerBuilder::new(0, 1)
+            .with_message_rx(ShardReceiver::new(msg_rx))
+            .with_new_conn_rx(conn_rx)
+            .with_shard_senders(Arc::new(vec![ShardSender::new(msg_tx)]))
+            .with_registry(Arc::new(registry))
+            .with_metrics(Arc::new(NoopMetricsRecorder::new()))
+            .with_store(HashMapStore::new())
+            .with_wal_mode(WalMode::Fake)
+            .with_fake_wal_failure(FakeFailure::AtWriteIndex(0))
+            .with_wal_failure_policy(policy)
+            .build()
+    }
+
+    fn set(key: &'static str, value: &'static str) -> ParsedCommand {
+        ParsedCommand::new(
+            Bytes::from_static(b"SET"),
+            vec![
+                Bytes::from_static(key.as_bytes()),
+                Bytes::from_static(value.as_bytes()),
+            ],
+        )
+    }
+
+    // FM-PERSISTENCE-006
+    #[tokio::test]
+    async fn wal_failure_in_rollback_mode_replies_ioerr_and_restores_the_key() {
+        // `rollback` (policy 1): the client is told the write did not happen, and
+        // the in-memory state is put back so the reply and the keyspace agree.
+        let mut worker = worker_with_failing_wal(Arc::new(AtomicU8::new(1)));
+        worker
+            .store
+            .set(Bytes::from_static(b"k"), Value::string("original"));
+
+        let response = worker
+            .execute_command(&set("k", "updated"), 1, ProtocolVersion::Resp2, false)
+            .await;
+
+        match response {
+            Response::Error(msg) => {
+                let msg = String::from_utf8_lossy(&msg).to_string();
+                assert!(
+                    msg.starts_with("IOERR WAL persistence failed:"),
+                    "expected an IOERR refusal, got {msg:?}"
+                );
+            }
+            other => panic!("expected an error reply, got {other:?}"),
+        }
+
+        let value = worker.store.get(b"k").expect("key must still exist");
+        assert_eq!(
+            value.as_string().unwrap().as_bytes().as_ref(),
+            b"original",
+            "a refused write must leave the previous value in place"
+        );
+    }
+
+    // FM-PERSISTENCE-005
+    #[tokio::test]
+    async fn wal_failure_in_continue_mode_acks_the_write_and_keeps_it_in_memory() {
+        // `continue` (policy 0, the default): the same WAL failure is acknowledged
+        // as success and the mutation stays in memory — a write that is live but
+        // not durable. This is the deliberate divergence from Redis' MISCONF
+        // behavior, and it is pinned so a change to it is a visible spec edit.
+        let policy = Arc::new(AtomicU8::new(0));
+        let mut worker = worker_with_failing_wal(policy.clone());
+        assert!(
+            !worker.persistence.should_rollback(),
+            "policy 0 is `continue`, the default"
+        );
+
+        let response = worker
+            .execute_command(&set("k", "acked"), 1, ProtocolVersion::Resp2, false)
+            .await;
+
+        assert!(
+            matches!(response, Response::Simple(ref s) if s.as_ref() == b"OK"),
+            "continue mode acknowledges the write, got {response:?}"
+        );
+        let value = worker.store.get(b"k").expect("key present in memory");
+        assert_eq!(value.as_string().unwrap().as_bytes().as_ref(), b"acked");
+
+        // Same worker, same injected failure, one flag flip: the very next write
+        // is refused instead. The policy is the only difference.
+        policy.store(1, Ordering::Relaxed);
+        assert!(worker.persistence.should_rollback());
     }
 }

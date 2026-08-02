@@ -165,6 +165,7 @@ fn is_warm_cf(name: &str) -> bool {
 mod tests {
     use super::*;
 
+    // FM-PERSISTENCE-031
     /// A fresh (empty) directory takes its whole layout from config: shards and
     /// search-meta for every shard, warm only when the flag is on, and no
     /// `default` (RocksDB creates it implicitly on first open).
@@ -180,6 +181,7 @@ mod tests {
         );
     }
 
+    // FM-PERSISTENCE-031
     /// Fresh + warm-on stamps the warm CFs into the layout too.
     #[test]
     fn fresh_dir_warm_on_includes_warm() {
@@ -198,6 +200,7 @@ mod tests {
         );
     }
 
+    // FM-PERSISTENCE-030
     /// A matching existing layout reconciles to the same required set, with the
     /// persisted `default` surfaced first in open order.
     #[test]
@@ -222,6 +225,7 @@ mod tests {
         );
     }
 
+    // FM-PERSISTENCE-030
     /// Invariant 1: a persisted shard count that disagrees with config is a
     /// hard `ShardCountMismatch`, carrying both counts and the path.
     #[test]
@@ -241,6 +245,7 @@ mod tests {
         }
     }
 
+    // FM-PERSISTENCE-031
     /// Invariant 2: persisted warm CFs + warm configured off is a hard
     /// `WarmTierMismatch` — reopening warm-off would orphan the warm data.
     #[test]
@@ -258,6 +263,7 @@ mod tests {
         }
     }
 
+    // FM-PERSISTENCE-031
     /// Persisted warm CFs + warm still on reconciles cleanly, keeping the warm
     /// CFs in the required set.
     #[test]
@@ -273,6 +279,7 @@ mod tests {
         assert_eq!(m.warm_names(), ["tiered_warm_0", "tiered_warm_1"]);
     }
 
+    // FM-PERSISTENCE-031
     /// First-enable (off -> on): no persisted warm CFs but warm now configured
     /// on. Not an error — the warm CFs are added to the required set so the open
     /// path creates them fresh.
@@ -290,6 +297,7 @@ mod tests {
         assert!(m.required().any(|cf| cf == "tiered_warm_0"));
     }
 
+    // FM-PERSISTENCE-030
     /// `count_persisted_shards` counts only `shard_<n>` families with a
     /// non-empty all-digit suffix; warm, search-meta, `default`, and a
     /// non-numeric `shard_meta` are all ignored.

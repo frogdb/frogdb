@@ -1609,6 +1609,7 @@ async fn test_ft_survives_restart() {
 // Snapshot coordination
 // ============================================================================
 
+// FM-PERSISTENCE-019
 /// Test that BGSAVE can be triggered while search indexes exist and that
 /// the search data remains intact after the snapshot process runs.
 #[tokio::test]

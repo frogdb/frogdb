@@ -1196,6 +1196,7 @@ mod persistence_tests {
         assert!(p.wal_writer().is_none());
     }
 
+    // FM-PERSISTENCE-005
     #[test]
     fn should_rollback_follows_shared_flag() {
         let mut p = persistence();

@@ -51,6 +51,7 @@ async fn test_wal_delete() {
     wal.flush_async().await.unwrap();
     assert!(rocks.get(0, b"key").unwrap().is_none());
 }
+// FM-PERSISTENCE-013
 #[tokio::test]
 async fn test_wal_batch_threshold() {
     let tmp = TempDir::new().unwrap();
@@ -78,6 +79,7 @@ async fn test_wal_batch_threshold() {
     wal.flush_async().await.unwrap();
     assert!(rocks.get(0, b"bigkey").unwrap().is_some());
 }
+// FM-PERSISTENCE-013
 /// Propagation truth: storing a new batch-size threshold on the live handle
 /// retunes the flush thread's batching decision WITHOUT restarting it. A huge
 /// initial threshold (and far-off timeout) leaves the first write staged; after
@@ -138,6 +140,7 @@ async fn test_wal_batch_threshold_live_retune() {
         "lowered batch-size threshold should have flushed the staged entry without restart"
     );
 }
+// FM-PERSISTENCE-035
 #[tokio::test]
 async fn test_wal_sequence() {
     let tmp = TempDir::new().unwrap();
@@ -153,6 +156,7 @@ async fn test_wal_sequence() {
     assert_eq!(wal.write_delete(b"k1").await.unwrap(), 3);
     assert_eq!(wal.sequence(), 3);
 }
+// FM-PERSISTENCE-010
 #[tokio::test]
 async fn test_wal_drop_flushes_pending() {
     let tmp = TempDir::new().unwrap();
@@ -181,6 +185,7 @@ async fn test_wal_drop_flushes_pending() {
     }
     assert!(rocks.get(0, b"dropkey").unwrap().is_some());
 }
+// FM-PERSISTENCE-013
 #[tokio::test]
 async fn test_wal_backpressure_no_data_loss() {
     let tmp = TempDir::new().unwrap();
@@ -504,6 +509,7 @@ fn test_sink_happy_path_batches_and_advances_durable_sequence() {
     wal.shutdown();
 }
 
+// FM-PERSISTENCE-014
 #[test]
 fn test_sink_stages_merge_operand_in_order() {
     let mut wal = TestWal::spawn(1024 * 1024, Duration::from_secs(60));
@@ -527,6 +533,7 @@ fn test_sink_stages_merge_operand_in_order() {
     wal.shutdown();
 }
 
+// FM-PERSISTENCE-012
 /// A `Clear` entry is a flush barrier: it drains lower-seq entries into their
 /// own committed batch, commits itself as a second batch, and lets higher-seq
 /// entries land in a third — so a clear can neither drop a post-clear write nor
@@ -561,6 +568,7 @@ fn test_sink_clear_is_a_flush_barrier_between_batches() {
     wal.shutdown();
 }
 
+// FM-PERSISTENCE-012
 /// A standalone clear (no surrounding writes) advances the durable sequence
 /// past itself, so a durable-through confirmation succeeds. (The RocksDB
 /// empty-CF path — where the range delete stages nothing — is exercised by the
@@ -675,6 +683,7 @@ fn test_sink_write_group_survives_the_size_threshold() {
     wal.shutdown();
 }
 
+// FM-PERSISTENCE-011
 /// An explicit flush inside a group is still honoured. The producer is gone or
 /// is asking for durability now; answering "after your group closes" would
 /// deadlock it. The shard never does this — it flushes only after closing —
@@ -694,6 +703,7 @@ fn test_sink_explicit_flush_inside_a_group_is_honoured() {
     wal.shutdown();
 }
 
+// FM-PERSISTENCE-010
 /// A producer that dies mid-group does not strand its entries: the disconnect
 /// drain commits what is staged. The group can never be closed, and losing the
 /// writes outright would be strictly worse than committing a prefix nobody can
@@ -717,6 +727,7 @@ fn test_sink_unclosed_group_commits_on_disconnect() {
     assert_eq!(wal.outcomes.durable_sequence(), 2);
 }
 
+// FM-PERSISTENCE-011
 /// Groups nest: only the outermost close re-arms the flush triggers, so a
 /// caller that wraps a batch cannot have its atomicity broken by an inner
 /// group closing early.
@@ -757,6 +768,7 @@ fn test_sink_size_threshold_triggers_commit_without_explicit_flush() {
     wal.shutdown();
 }
 
+// FM-PERSISTENCE-007
 /// Regression pin: an acked write cannot outrun a swallowed flush failure.
 ///
 /// A size-threshold background flush fails and drops the batch; the follow-up
@@ -787,6 +799,7 @@ fn test_sink_size_threshold_flush_error_surfaces_on_confirm() {
     wal.shutdown();
 }
 
+// FM-PERSISTENCE-007
 #[test]
 fn test_sink_timeout_flush_error_surfaces_on_confirm() {
     let mut wal = TestWal::spawn(1024 * 1024, Duration::from_millis(20));
@@ -804,6 +817,7 @@ fn test_sink_timeout_flush_error_surfaces_on_confirm() {
     wal.shutdown();
 }
 
+// FM-PERSISTENCE-010
 #[test]
 fn test_sink_disconnect_drain_error_recorded() {
     let mut wal = TestWal::spawn(1024 * 1024, Duration::from_secs(60));
@@ -817,6 +831,7 @@ fn test_sink_disconnect_drain_error_recorded() {
     assert_eq!(wal.outcomes.durable_sequence(), 0);
 }
 
+// FM-PERSISTENCE-005
 /// Failure attribution is precise: a failure that only covered *earlier*
 /// sequences does not fail a later command's confirmation, while a
 /// confirmation spanning the failed range does fail — and recovery is honest
@@ -853,6 +868,7 @@ fn test_sink_failure_attribution_and_recovery() {
     wal.shutdown();
 }
 
+// FM-PERSISTENCE-005
 #[test]
 fn test_sink_stage_failure_recorded_and_surfaced() {
     let mut wal = TestWal::spawn(1024 * 1024, Duration::from_secs(60));
@@ -872,6 +888,7 @@ fn test_sink_stage_failure_recorded_and_surfaced() {
     wal.shutdown();
 }
 
+// FM-PERSISTENCE-013
 #[tokio::test]
 async fn test_wal_lag_stats() {
     let tmp = TempDir::new().unwrap();
@@ -899,6 +916,7 @@ async fn test_wal_lag_stats() {
     assert_eq!(s.lost_ops, 0);
 }
 
+// FM-PERSISTENCE-012
 /// Proposal 48 end-to-end: a FLUSHDB clear through the real WAL pipeline
 /// (write_clear → flush barrier → tombstone commit) triggers the asynchronous
 /// post-clear reclamation, post-clear writes survive it, and nothing is
@@ -1204,6 +1222,7 @@ fn key(i: u32) -> Vec<u8> {
     format!("k{i:04}").into_bytes()
 }
 
+// FM-PERSISTENCE-002
 /// The seam wiring itself: `Sync` mode fsyncs on every commit, `Periodic` and
 /// `Async` never do at the commit seam. This behaviourally pins
 /// `FlushEngine::is_sync` -> `WriteOptions::set_sync` — previously only
@@ -1228,6 +1247,7 @@ fn test_fsync_seam_sync_flag_matches_mode() {
     }
 }
 
+// FM-PERSISTENCE-002
 /// Sync mode: **zero acked-write loss**. Every write is fsynced at commit, so a
 /// page-cache-severing crash cannot drop any acknowledged write.
 #[test]
@@ -1261,6 +1281,7 @@ fn test_sync_mode_zero_acked_write_loss() {
     }
 }
 
+// FM-PERSISTENCE-003
 /// Periodic mode: the loss window is **bounded by the last periodic fsync**.
 /// Writes committed before a periodic sync survive a crash; only writes since
 /// that sync (the current flush interval) are at risk — never an unbounded
@@ -1312,6 +1333,7 @@ fn test_periodic_mode_loss_bounded_by_flush_interval() {
     );
 }
 
+// FM-PERSISTENCE-004
 /// Async mode, worst case: with no out-of-band fsync, the entire window of
 /// acked-but-unsynced writes is lost. Nothing at the commit seam bounds it.
 #[test]
@@ -1332,6 +1354,7 @@ fn test_async_mode_unbounded_loss_without_fsync() {
     );
 }
 
+// FM-PERSISTENCE-004
 /// Async mode window is bounded only by the *next out-of-band fsync* (RocksDB
 /// memtable flush, or a manual sync), and it can reach arbitrarily far back:
 /// data fsynced by such a flush survives, everything written since is lost with
@@ -1369,6 +1392,7 @@ fn test_async_mode_window_bounded_only_by_external_fsync() {
     );
 }
 
+// FM-PERSISTENCE-013
 /// The WAL writer must *adopt* the shared threshold cell handed to it, not copy
 /// the number out of `WalConfig`. This is the seam CONFIG SET
 /// `batch-size-threshold-kb` writes into: the manager owns the cell, every

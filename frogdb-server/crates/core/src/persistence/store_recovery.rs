@@ -130,6 +130,7 @@ mod unit_tests {
 
     use super::super::rocks::RocksConfig;
 
+    // FM-PERSISTENCE-029
     #[test]
     fn test_recover_empty_shard() {
         let tmp = TempDir::new().unwrap();
@@ -142,6 +143,7 @@ mod unit_tests {
         assert_eq!(stats.keys_loaded, 0);
     }
 
+    // FM-PERSISTENCE-033
     #[test]
     fn test_recover_with_data() {
         let tmp = TempDir::new().unwrap();
@@ -176,6 +178,7 @@ mod unit_tests {
         assert_eq!(v2.as_string().unwrap().as_bytes().as_ref(), b"world");
     }
 
+    // FM-PERSISTENCE-036
     #[test]
     fn test_recover_with_expiry() {
         let tmp = TempDir::new().unwrap();
@@ -198,6 +201,7 @@ mod unit_tests {
         assert!(expiry_index.get(b"future_key").is_some());
     }
 
+    // FM-PERSISTENCE-036
     #[test]
     fn test_recover_skips_expired() {
         let tmp = TempDir::new().unwrap();
@@ -232,6 +236,7 @@ mod unit_tests {
         assert!(store.get(b"expired_key").is_none());
     }
 
+    // FM-PERSISTENCE-033
     #[test]
     fn test_recover_sorted_set() {
         let tmp = TempDir::new().unwrap();
@@ -261,6 +266,8 @@ mod unit_tests {
         assert_eq!(zset.get_score(b"member2"), Some(2.0));
     }
 
+    // FM-PERSISTENCE-033
+    // FM-PERSISTENCE-041
     #[test]
     fn test_recover_all_shards() {
         let tmp = TempDir::new().unwrap();

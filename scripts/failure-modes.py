@@ -17,6 +17,13 @@ directions, so neither can drift:
 `Forced by | MISSING` is an error: a failure mode nobody forces is a gap, and
 the campaign closes gaps by writing the test, not by lowering the spec.
 
+The one exception is a mode that is real but needs machinery the campaign has
+not built yet (disk-full injection, a torn-file harness). Those may write
+`Forced by | MISSING ([gap: <file>](<link>))`, naming a filed issue under
+`.scratch/hardening/issues/`; the link is resolved relative to the spec and the
+file must exist. That form warns instead of failing, so the gap stays visible
+in every lint run without blocking the spec on machinery that does not exist.
+
 Usage:
     failure-modes.py                          # runs `cargo nextest list`
     failure-modes.py --nextest-output list.txt  # reuse a listing (CI)
@@ -58,6 +65,8 @@ ROW_RE = re.compile(r"^\|\s*([^|]+?)\s*\|\s*(.*?)\s*\|\s*$")
 FM_TAG_RE = re.compile(r"\bFM-([A-Z]+)-(\d+)\b")
 FN_RE = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
 BACKTICKED_RE = re.compile(r"`([^`]+)`")
+# `MISSING ([gap: 03-disk-full-injection.md](../issues/03-disk-full-injection.md))`
+MISSING_GAP_RE = re.compile(r"MISSING\s*\(\[gap:[^\]]*\]\(([^)]+)\)\)")
 
 # Every FM row carries the full schema; a missing field is a half-specified
 # failure mode.
@@ -159,9 +168,24 @@ def parse_forced_by(mode: FailureMode, errors: list[str]) -> list[str]:
     if not cell:
         return []
     if "MISSING" in cell:
-        errors.append(
-            f"{mode.where()}: {mode.id} ({mode.title}) is forced by no test "
-            "(`Forced by | MISSING`) — write the test, do not weaken the row"
+        gap = MISSING_GAP_RE.search(cell)
+        if gap is None:
+            errors.append(
+                f"{mode.where()}: {mode.id} ({mode.title}) is forced by no test "
+                "(`Forced by | MISSING`) — write the test, or file a gap issue and "
+                "cite it as `MISSING ([gap: <file>](<link>))`"
+            )
+            return []
+        target = (mode.spec.parent / gap.group(1)).resolve()
+        if not target.is_file():
+            errors.append(
+                f"{mode.where()}: {mode.id} cites gap issue `{gap.group(1)}`, which does not exist"
+            )
+            return []
+        print(
+            f"warning: {mode.where()}: {mode.id} ({mode.title}) is forced by no "
+            f"test; tracked by {gap.group(1)}",
+            file=sys.stderr,
         )
         return []
     names = [name.strip() for name in BACKTICKED_RE.findall(cell)]

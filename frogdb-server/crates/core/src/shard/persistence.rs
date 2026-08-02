@@ -604,6 +604,7 @@ mod tests {
         assert!(absent.recorded().is_empty());
     }
 
+    // FM-PERSISTENCE-014
     // `MergeHllDelta` routes to the merge surface carrying exactly its pairs.
     #[tokio::test]
     async fn merge_hll_delta_routes_to_merge() {
@@ -624,6 +625,7 @@ mod tests {
         );
     }
 
+    // FM-PERSISTENCE-012
     // `ClearShard` routes to the keyless clear surface.
     #[tokio::test]
     async fn clear_shard_routes_to_clear() {
@@ -634,6 +636,7 @@ mod tests {
         assert_eq!(t.recorded(), vec![Write::Clear]);
     }
 
+    // FM-PERSISTENCE-008
     // A failing target surfaces the error — this is what a `Confirm` persist
     // propagates via `?` (and what `FireAndForget` swallows with a log).
     #[tokio::test]
@@ -691,6 +694,7 @@ mod tests {
         [Bytes::copy_from_slice(key)]
     }
 
+    // FM-PERSISTENCE-002
     // Confirm snapshots the sequence *before* the first write and calls
     // `flush_through` exactly once, with that snapshot, after every write.
     #[tokio::test]
@@ -714,6 +718,7 @@ mod tests {
         assert_eq!(t.flushed(), vec![0]);
     }
 
+    // FM-PERSISTENCE-005
     // FireAndForget never flushes, and a failing write is logged and does not
     // abort the writes that follow it (pins the effect-path swallow behavior).
     #[tokio::test]
@@ -737,6 +742,7 @@ mod tests {
         assert!(t.flushed().is_empty(), "FireAndForget must never flush");
     }
 
+    // FM-PERSISTENCE-007
     // Confirm propagates an injected `flush_through` failure even though every
     // write succeeded.
     #[tokio::test]
@@ -752,6 +758,7 @@ mod tests {
         assert_eq!(t.recorded(), vec![Write::Set(b"a".to_vec())]);
     }
 
+    // FM-PERSISTENCE-008
     // Confirm propagates a write failure via `?` and never reaches the flush.
     #[tokio::test]
     async fn confirm_write_failure_aborts_before_flush() {
@@ -772,6 +779,7 @@ mod tests {
         );
     }
 
+    // FM-PERSISTENCE-009
     // No WAL configured -> no writes, no flush, Ok(()) — for both durabilities.
     #[tokio::test]
     async fn no_wal_short_circuits() {
@@ -868,6 +876,7 @@ mod tests {
         );
     }
 
+    // FM-PERSISTENCE-008
     // If the group cannot be opened the WAL channel is gone: skip the writes
     // (they would all fail), do not emit an unmatched close, and propagate under
     // Confirm while FireAndForget logs and returns Ok.

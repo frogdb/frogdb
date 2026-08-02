@@ -537,6 +537,7 @@ mod tests {
         assert!(!harness.verify_string_key(0, b"missing_key", "any"));
     }
 
+    // FM-PERSISTENCE-033
     #[test]
     fn test_harness_crash_and_recover() {
         let mut harness = CrashTestHarness::new();

@@ -37,6 +37,7 @@ use tempfile::TempDir;
 mod durability_mode {
     use super::*;
 
+    // FM-PERSISTENCE-002
     /// Test 1.1: Sync mode guarantees - every acknowledged write survives crash.
     ///
     /// With DurabilityMode::Sync, every write is fsync'd before returning.
@@ -76,6 +77,7 @@ mod durability_mode {
         }
     }
 
+    // FM-PERSISTENCE-003
     /// Test 1.2: Periodic mode - data survives after interval passes.
     ///
     /// With Periodic mode, data is synced at regular intervals.
@@ -119,6 +121,7 @@ mod durability_mode {
         }
     }
 
+    // FM-PERSISTENCE-003
     /// Test 1.3: Periodic mode - recovery plumbing after an immediate crash.
     ///
     /// NOTE: `crash()` here drops the `RocksStore` handle and `recover()`
@@ -165,6 +168,7 @@ mod durability_mode {
         );
     }
 
+    // FM-PERSISTENCE-004
     /// Test 1.4: Async mode - recovery plumbing after a crash.
     ///
     /// NOTE: like `test_periodic_mode_within_window`, `crash()`+`recover()`
@@ -206,6 +210,7 @@ mod durability_mode {
         );
     }
 
+    // FM-PERSISTENCE-004
     /// Test 1.5: Explicit sync_wal ensures durability.
     #[test]
     fn test_explicit_sync_wal() {
@@ -493,6 +498,7 @@ mod recovery_correctness {
         assert!(bf.as_bloom_filter().is_some());
     }
 
+    // FM-PERSISTENCE-036
     /// Test 3.2: Expiry filtering during recovery.
     ///
     /// Expired keys should be filtered out during recovery and not
@@ -535,6 +541,7 @@ mod recovery_correctness {
         assert!(stores[0].0.get(b"expired_key").is_none());
     }
 
+    // FM-PERSISTENCE-036
     /// Test 3.3: Expiry index is rebuilt correctly.
     ///
     /// Keys with TTL should have their expiry tracked in the expiry index
@@ -629,6 +636,7 @@ mod recovery_correctness {
         assert_eq!(metadata.lfu_counter, 42);
     }
 
+    // FM-PERSISTENCE-041
     /// Test 3.6: Multiple shards recover independently.
     #[test]
     fn test_multi_shard_recovery() {
@@ -660,6 +668,7 @@ mod recovery_correctness {
         assert_eq!(stores[3].0.len(), 40);
     }
 
+    // FM-PERSISTENCE-029
     /// Test 3.7: Empty shard recovery.
     #[test]
     fn test_empty_shard_recovery() {
@@ -687,6 +696,7 @@ mod recovery_correctness {
 mod fault_injection {
     use super::*;
 
+    // FM-PERSISTENCE-017
     /// Test 4.1: Recovery handles corrupted snapshot metadata gracefully.
     #[test]
     fn test_corrupted_snapshot_metadata() {
@@ -719,6 +729,7 @@ mod fault_injection {
         assert!(result.is_ok() || result.is_err());
     }
 
+    // FM-PERSISTENCE-017
     /// Test 4.2: Recovery with incomplete snapshot (no completion marker).
     #[test]
     fn test_incomplete_snapshot_skipped() {
@@ -744,6 +755,7 @@ mod fault_injection {
         assert!(!metadata.is_complete());
     }
 
+    // FM-PERSISTENCE-034
     /// Test 4.3: Database recovery after unclean shutdown.
     ///
     /// RocksDB should recover gracefully from an unclean shutdown
@@ -782,6 +794,7 @@ mod fault_injection {
         assert_eq!(stores[0].0.len(), 50);
     }
 
+    // FM-PERSISTENCE-033
     /// Test 4.4: Recovery with mixed successful and failed deserializations.
     ///
     /// If some keys fail to deserialize, recovery should continue with
@@ -908,6 +921,7 @@ mod stress {
         }
     }
 
+    // FM-PERSISTENCE-034
     /// Test 5.3: Repeated crash and recovery cycles.
     #[test]
     fn test_repeated_crash_cycles() {
@@ -982,6 +996,7 @@ mod stress {
 mod disk_failure {
     use super::*;
 
+    // FM-PERSISTENCE-017
     /// Test 6.1: Recovery after truncated metadata.json
     #[test]
     fn test_truncated_metadata_recovery() {
@@ -1004,6 +1019,7 @@ mod disk_failure {
         assert!(result.is_err(), "Truncated JSON should fail to parse");
     }
 
+    // FM-PERSISTENCE-017
     /// Test 6.2: Recovery handles missing completion marker.
     #[test]
     fn test_missing_completion_marker() {
@@ -1023,6 +1039,7 @@ mod disk_failure {
         assert!(!metadata.is_complete(), "Should not be marked complete");
     }
 
+    // FM-PERSISTENCE-034
     /// Test 6.3: Recovery from valid data despite snapshot directory issues.
     ///
     /// Even if snapshot directory is corrupted, WAL-based recovery should work.
@@ -1124,6 +1141,7 @@ mod disk_failure {
 mod edge_cases {
     use super::*;
 
+    // FM-PERSISTENCE-029
     /// Test 7.1: Empty database recovery.
     #[test]
     fn test_empty_database_recovery() {
@@ -1237,6 +1255,7 @@ mod edge_cases {
         ));
     }
 
+    // FM-PERSISTENCE-036
     /// Test 7.6: Immediate expiry recovery.
     ///
     /// Keys that expire exactly at recovery time should be filtered.
@@ -1277,6 +1296,7 @@ mod edge_cases {
 mod async_wal {
     use super::*;
 
+    // FM-PERSISTENCE-035
     /// Test async WAL writer crash recovery.
     #[tokio::test]
     async fn test_async_wal_writer_recovery() {
@@ -1318,6 +1338,7 @@ mod async_wal {
         assert_eq!(stores[0].0.len(), 50);
     }
 
+    // FM-PERSISTENCE-035
     /// Test WAL writer sequence numbers survive crash.
     #[tokio::test]
     async fn test_wal_sequence_persistence() {

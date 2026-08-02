@@ -4,6 +4,7 @@ use crate::rocks::{RocksConfig, RocksStore};
 use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
+// FM-PERSISTENCE-016
 #[test]
 fn test_noop_coordinator() {
     let c = NoopSnapshotCoordinator::new();
@@ -23,6 +24,7 @@ fn test_noop_coordinator() {
     assert_eq!(h2.epoch(), 2);
     assert!(!c.in_progress());
 }
+// FM-PERSISTENCE-016
 #[test]
 fn test_noop_start_advances_epoch_monotonically() {
     // Deliberate semantic flip (proposal 21): under instant completion there is
@@ -35,6 +37,7 @@ fn test_noop_start_advances_epoch_monotonically() {
     assert_eq!(h1.epoch(), 1);
     assert_eq!(h2.epoch(), 2);
 }
+// FM-PERSISTENCE-016
 #[test]
 fn test_noop_request_always_starts_when_quiescent() {
     // Backing the no-op with the real scheduler + instant completion means a
@@ -56,6 +59,7 @@ fn test_noop_request_always_starts_when_quiescent() {
         SnapshotRequest::Started(6)
     );
 }
+// FM-PERSISTENCE-016
 #[test]
 fn test_noop_concurrent_request_storm_settles_idle() {
     use std::sync::Arc;
@@ -98,6 +102,7 @@ fn test_noop_concurrent_request_storm_settles_idle() {
         }
     }
 }
+// FM-PERSISTENCE-017
 #[test]
 fn test_handle_is_bare_epoch_carrier() {
     // The handle is now always a bare epoch carrier (proposal 21): it holds no
@@ -106,6 +111,7 @@ fn test_handle_is_bare_epoch_carrier() {
     let h = SnapshotHandle::new(3);
     assert_eq!(h.epoch(), 3);
 }
+// FM-PERSISTENCE-017
 #[test]
 fn test_metadata_file_new() {
     let m = SnapshotMetadataFile::new(1, 12345, 4);
@@ -113,6 +119,7 @@ fn test_metadata_file_new() {
     assert_eq!(m.epoch, 1);
     assert!(!m.is_complete());
 }
+// FM-PERSISTENCE-017
 #[test]
 fn test_metadata_file_complete() {
     let mut m = SnapshotMetadataFile::new(1, 12345, 4);
@@ -120,6 +127,7 @@ fn test_metadata_file_complete() {
     assert!(m.is_complete());
     assert_eq!(m.size_bytes, 5_000_000);
 }
+// FM-PERSISTENCE-017
 #[test]
 fn test_metadata_to_metadata() {
     let mut mf = SnapshotMetadataFile::new(5, 99999, 8);
@@ -128,6 +136,7 @@ fn test_metadata_to_metadata() {
     assert_eq!(m.epoch, 5);
     assert!(m.started_at.elapsed().unwrap() < Duration::from_secs(1));
 }
+// FM-PERSISTENCE-017
 #[test]
 fn test_metadata_serialization() {
     let mut m = SnapshotMetadataFile::new(3, 54321, 2);
@@ -137,6 +146,7 @@ fn test_metadata_serialization() {
     assert_eq!(d.epoch, 3);
     assert!(d.is_complete());
 }
+// FM-PERSISTENCE-017
 /// Old metadata files written before `num_keys` was deleted still deserialize:
 /// serde ignores the unknown field.
 #[test]
@@ -157,12 +167,14 @@ fn test_metadata_deserializes_legacy_num_keys_field() {
     assert_eq!(d.size_bytes, 123);
     assert!(d.is_complete());
 }
+// FM-PERSISTENCE-018
 #[test]
 fn test_config_default() {
     let c = SnapshotConfig::default();
     assert_eq!(c.snapshot_interval_secs, 3600);
     assert_eq!(c.max_snapshots, 5);
 }
+// FM-PERSISTENCE-018
 #[test]
 fn test_cleanup_old_snapshots() {
     let td = std::env::temp_dir().join(format!("frogdb_snap_cleanup_{}", std::process::id()));
@@ -179,6 +191,7 @@ fn test_cleanup_old_snapshots() {
     assert_eq!(c, 3);
     std::fs::remove_dir_all(&td).unwrap();
 }
+// FM-PERSISTENCE-018
 #[test]
 fn test_cleanup_unlimited() {
     let td = std::env::temp_dir().join(format!("frogdb_snap_unlim_{}", std::process::id()));
@@ -245,6 +258,7 @@ fn write_search_sidecar(data_dir: &Path) {
     std::fs::write(shard.join("meta.json"), b"{}").unwrap();
 }
 
+// FM-PERSISTENCE-017
 /// Happy path: a complete `snapshot_NNNNN/{checkpoint,metadata.json}` is
 /// promoted, the staging dir is gone, and `latest` points at the new snapshot.
 #[test]
@@ -272,6 +286,7 @@ fn test_stager_happy_path() {
     );
 }
 
+// FM-PERSISTENCE-017
 /// Decision guard (proposal 23, DELETE branch): a snapshot excludes the
 /// search-index sidecar. Even with a fully-populated `<data_dir>/search` tree
 /// present, the promoted `snapshot_NNNNN` contains the RocksDB checkpoint and
@@ -309,6 +324,7 @@ fn test_stager_excludes_search_sidecar() {
     );
 }
 
+// FM-PERSISTENCE-017
 /// The checkpoint stage failing aborts cleanly: nothing is promoted and no
 /// staging dir leaks. Here `snapshot_dir` is a regular file, so the staging
 /// checkpoint dir cannot be created.
@@ -346,6 +362,7 @@ fn test_stager_checkpoint_failure_aborts_cleanly() {
 // still covered by `test_stager_checkpoint_failure_aborts_cleanly` and
 // `test_stager_promote_rename_failure_leaves_no_leak`.)
 
+// FM-PERSISTENCE-017
 /// Promote-rename failure leaves no leak (flag 2 regression): the final
 /// `tmp -> snapshot_NNNNN` rename fails onto a non-empty target, and the RAII
 /// guard reclaims the checkpoint-sized staging dir. Before the fix this path
@@ -378,6 +395,7 @@ fn test_stager_promote_rename_failure_leaves_no_leak() {
     );
 }
 
+// FM-PERSISTENCE-017
 /// Crash window: a `.snapshot_NNNNN.tmp` left by a crashed prior run is reclaimed
 /// rather than wedging the epoch with `Directory not empty`.
 #[test]
@@ -403,6 +421,7 @@ fn test_stager_reclaims_stale_tmp() {
     assert!(!stale.exists(), "the stale staging dir must be reclaimed");
 }
 
+// FM-PERSISTENCE-018
 /// Post-install non-fatal: a `latest` repoint failure (here `latest` is an
 /// occupied directory) does not fail the snapshot — it is already durably
 /// installed; only a warning is logged.
@@ -431,6 +450,7 @@ fn test_stager_symlink_failure_is_nonfatal() {
     assert!(!snap.path().join(".snapshot_00001.tmp").exists());
 }
 
+// FM-PERSISTENCE-018
 /// Consecutive epochs leave a consistent on-disk state: retention keeps the
 /// newest `max_snapshots`, evicts the rest, and `latest` tracks the newest.
 #[test]
@@ -482,6 +502,7 @@ fn test_stager_retention_across_epochs() {
 use super::SnapshotRequest;
 use super::scheduler::SnapshotScheduler;
 
+// FM-PERSISTENCE-015
 /// Begin while idle claims the slot and mints epoch 1.
 #[test]
 fn test_scheduler_begin_while_idle() {
@@ -492,6 +513,7 @@ fn test_scheduler_begin_while_idle() {
     assert_eq!(s.current_epoch(), 1);
 }
 
+// FM-PERSISTENCE-015
 /// `with_epoch` resumes the counter from a recovered epoch.
 #[test]
 fn test_scheduler_resumes_epoch() {
@@ -531,6 +553,7 @@ fn test_noop_coordinator_periodic_interval_seam() {
     assert_eq!(coord.periodic_interval_secs(), 42);
 }
 
+// FM-PERSISTENCE-015
 /// Begin while a save is running is rejected (the `AlreadyInProgress` guard).
 #[test]
 fn test_scheduler_begin_while_running_rejected() {
@@ -541,6 +564,7 @@ fn test_scheduler_begin_while_running_rejected() {
     assert_eq!(s.current_epoch(), 1);
 }
 
+// FM-PERSISTENCE-015
 /// A request during a run coalesces; any number of requests fold into one flag.
 #[test]
 fn test_scheduler_request_while_running_coalesces() {
@@ -554,6 +578,7 @@ fn test_scheduler_request_while_running_coalesces() {
     assert_eq!(s.current_epoch(), 1);
 }
 
+// FM-PERSISTENCE-015
 /// Pin the deliberate plain-BGSAVE vs BGSAVE-SCHEDULE distinction through the one
 /// `request_mode` seam: `Immediate` while a save runs reports `AlreadyRunning`
 /// WITHOUT arming a follow-up (the no-queue regression guard), whereas `Schedule`
@@ -590,6 +615,7 @@ fn test_scheduler_request_mode_immediate_no_queue_vs_schedule_arms() {
     );
 }
 
+// FM-PERSISTENCE-016
 /// Finish with a pending reschedule re-runs exactly once (the double-CAS loop).
 #[test]
 fn test_scheduler_finish_with_pending_reschedule_reruns_once() {
@@ -612,6 +638,7 @@ fn test_scheduler_finish_with_pending_reschedule_reruns_once() {
     assert_eq!(s.current_epoch(), 2);
 }
 
+// FM-PERSISTENCE-016
 /// Finish with nothing scheduled goes idle (no phantom rerun).
 #[test]
 fn test_scheduler_finish_without_schedule_idles() {
@@ -622,6 +649,7 @@ fn test_scheduler_finish_without_schedule_idles() {
     assert_eq!(s.current_epoch(), 1);
 }
 
+// FM-PERSISTENCE-016
 /// A request after everything idles starts a fresh save (not a phantom coalesce).
 #[test]
 fn test_scheduler_request_after_finish_starts() {
@@ -632,6 +660,7 @@ fn test_scheduler_request_after_finish_starts() {
     assert!(s.in_progress());
 }
 
+// FM-PERSISTENCE-016
 /// Pin the exact former lost-wakeup window. A requester observed
 /// `in_progress == true`, but by the time it arms the follow-up the runner has
 /// already finished and consumed nothing (its `scheduled.swap` ran before the
@@ -665,6 +694,7 @@ fn test_scheduler_arm_follow_up_after_runner_exit_starts() {
     assert!(!s.is_scheduled());
 }
 
+// FM-PERSISTENCE-015
 /// The legacy `schedule()` protocol only arms a follow-up while a save runs.
 #[test]
 fn test_scheduler_schedule_only_while_running() {
@@ -676,6 +706,7 @@ fn test_scheduler_schedule_only_while_running() {
     assert!(s.is_scheduled());
 }
 
+// FM-PERSISTENCE-015
 /// Relocated from the (deleted) `NoopSnapshotCoordinator::schedule_snapshot`
 /// trait-surface tests: `schedule()` on an idle scheduler is refused.
 #[test]
@@ -684,6 +715,7 @@ fn test_schedule_false() {
     assert!(!s.schedule());
 }
 
+// FM-PERSISTENCE-015
 /// Relocated: `schedule()` while a save runs arms the coalesced follow-up.
 #[test]
 fn test_schedule_true() {
@@ -693,6 +725,7 @@ fn test_schedule_true() {
     assert!(s.is_scheduled());
 }
 
+// FM-PERSISTENCE-016
 /// Epochs are monotonic across a full begin → coalesce → rebegin → begin cycle.
 #[test]
 fn test_scheduler_epoch_monotonic_across_cycle() {
@@ -704,6 +737,7 @@ fn test_scheduler_epoch_monotonic_across_cycle() {
     assert_eq!(s.try_begin(), Some(3));
 }
 
+// FM-PERSISTENCE-016
 /// Concurrent request storm: whichever thread wins `Started` owns the run and
 /// drains coalesced follow-ups; every other request folds in. Across many
 /// randomized interleavings the invariants must hold:

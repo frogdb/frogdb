@@ -282,6 +282,7 @@ async fn test_slowlog_get_default_count() {
 // BGSAVE / LASTSAVE Tests
 // ============================================================================
 
+// FM-PERSISTENCE-022
 #[tokio::test]
 async fn test_bgsave_basic() {
     let server = TestServer::start_standalone().await;
@@ -305,6 +306,7 @@ async fn test_bgsave_basic() {
     server.shutdown().await;
 }
 
+// FM-PERSISTENCE-022
 #[tokio::test]
 async fn test_lastsave_basic() {
     let server = TestServer::start_standalone().await;
@@ -324,6 +326,7 @@ async fn test_lastsave_basic() {
     server.shutdown().await;
 }
 
+// FM-PERSISTENCE-022
 #[tokio::test]
 async fn test_bgsave_then_lastsave() {
     let server = TestServer::start_standalone().await;
@@ -363,6 +366,7 @@ async fn test_bgsave_then_lastsave() {
     server.shutdown().await;
 }
 
+// FM-PERSISTENCE-015
 #[tokio::test]
 async fn test_bgsave_concurrent_returns_already_in_progress() {
     let server = TestServer::start_standalone().await;

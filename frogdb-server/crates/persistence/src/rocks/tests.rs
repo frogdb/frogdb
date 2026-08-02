@@ -3,6 +3,7 @@ use rocksdb::{DBCompressionType, WriteBatch};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
+// FM-PERSISTENCE-029
 #[test]
 fn test_open_and_write() {
     let t = TempDir::new().unwrap();
@@ -44,6 +45,7 @@ fn test_iterate() {
     s.put(0, b"c", b"3").unwrap();
     assert_eq!(s.iter_cf(0).unwrap().count(), 3);
 }
+// FM-PERSISTENCE-029
 #[test]
 fn test_has_data() {
     let t = TempDir::new().unwrap();
@@ -52,6 +54,7 @@ fn test_has_data() {
     s.put(0, b"k", b"v").unwrap();
     assert!(s.has_data());
 }
+// FM-PERSISTENCE-029
 #[test]
 fn test_reopen() {
     let t = TempDir::new().unwrap();
@@ -69,6 +72,7 @@ fn test_reopen() {
         Some(b"d".to_vec())
     );
 }
+// FM-PERSISTENCE-014
 #[test]
 fn hll_merge_operand_folds_and_survives_reopen() {
     use crate::serialization::{deserialize, serialize, serialize_hll_delta};
@@ -114,6 +118,7 @@ fn hll_merge_operand_folds_and_survives_reopen() {
     assert_eq!(h.count_no_cache(), reference.count_no_cache());
 }
 
+// FM-PERSISTENCE-014
 #[test]
 fn hll_batch_merge_folds_operand() {
     use crate::serialization::{deserialize, serialize, serialize_hll_delta};
@@ -147,6 +152,7 @@ fn hll_batch_merge_folds_operand() {
     assert_eq!(h.count_no_cache(), reference.count_no_cache());
 }
 
+// FM-PERSISTENCE-030
 #[test]
 fn test_invalid_shard() {
     let t = TempDir::new().unwrap();
@@ -156,6 +162,7 @@ fn test_invalid_shard() {
         Err(RocksError::InvalidShardId(5))
     ));
 }
+// FM-PERSISTENCE-031
 #[test]
 fn test_warm_cf_disabled() {
     let t = TempDir::new().unwrap();
@@ -184,6 +191,7 @@ fn test_warm_cf_iter() {
     assert_eq!(s.iter_warm_cf(0).unwrap().count(), 3);
     assert_eq!(s.iter_warm_cf(1).unwrap().count(), 0);
 }
+// FM-PERSISTENCE-031
 #[test]
 fn test_warm_cf_reopen() {
     let t = TempDir::new().unwrap();
@@ -201,6 +209,7 @@ fn test_warm_cf_reopen() {
         Some(b"d".to_vec())
     );
 }
+// FM-PERSISTENCE-030
 #[test]
 fn test_warm_cf_invalid_shard() {
     let t = TempDir::new().unwrap();
@@ -211,6 +220,7 @@ fn test_warm_cf_invalid_shard() {
     ));
 }
 
+// FM-PERSISTENCE-031
 /// A data directory written with the warm tier enabled cannot reopen with it
 /// disabled: the persisted `tiered_warm_*` column families would be left
 /// unopened and RocksDB would reject the whole DB with a cryptic "column
@@ -232,6 +242,7 @@ fn test_warm_toggle_on_then_off_fails() {
     }
 }
 
+// FM-PERSISTENCE-031
 /// Enabling the warm tier on a directory that never had it is a legitimate
 /// first-enable: the warm CFs are created fresh and empty, the open succeeds,
 /// warm ops work, and the pre-existing hot data is intact. Pins that the guard
@@ -252,6 +263,7 @@ fn test_warm_toggle_off_then_on_succeeds() {
     assert_eq!(s.get_warm(0, b"w").unwrap(), Some(b"v".to_vec()));
 }
 
+// FM-PERSISTENCE-030
 /// Growing the shard count (4 → 8) must fail loudly. Without the guard this
 /// silently "succeeds" but misroutes every key under the new hash space.
 #[test]
@@ -276,6 +288,7 @@ fn test_reopen_with_more_shards_fails() {
     }
 }
 
+// FM-PERSISTENCE-030
 /// Shrinking the shard count (8 → 2) must also fail loudly with our clear error
 /// rather than RocksDB's cryptic "column families not opened".
 #[test]
@@ -295,6 +308,7 @@ fn test_reopen_with_fewer_shards_fails() {
     ));
 }
 
+// FM-PERSISTENCE-030
 /// Reopening with the matching shard count still succeeds with data intact.
 #[test]
 fn test_reopen_with_matching_shards_succeeds() {
@@ -308,6 +322,7 @@ fn test_reopen_with_matching_shards_succeeds() {
     assert_eq!(s.get(3, b"k").unwrap(), Some(b"v".to_vec()));
 }
 
+// FM-PERSISTENCE-030
 /// The warm-tier and search-meta column families must not be miscounted as data
 /// shards. A warm-enabled store has 3 column families per shard, so without the
 /// `shard_<n>`-only filter the persisted count would be inflated and a matching
@@ -333,6 +348,7 @@ fn test_shard_count_validation_ignores_warm_cfs() {
     ));
 }
 
+// FM-PERSISTENCE-032
 /// A failing column-family enumeration on an *existing* database must abort the
 /// open, not be swallowed into an empty CF list. Swallowing it coerces the
 /// reopen onto the fresh-open path, which silently skips BOTH reopen guards (the
@@ -414,6 +430,7 @@ fn backup_dirs(parent: &Path, base: &str) -> Vec<PathBuf> {
         .collect()
 }
 
+// FM-PERSISTENCE-025
 /// No `checkpoint_ready` marker → nothing to install; the live db is untouched.
 #[test]
 fn test_load_staged_checkpoint_absent_marker_is_noop() {
@@ -426,6 +443,7 @@ fn test_load_staged_checkpoint_absent_marker_is_noop() {
     assert!(backup_dirs(t.path(), "data").is_empty());
 }
 
+// FM-PERSISTENCE-025
 /// A path with no parent (the staging area is a sibling of the db dir) can hold
 /// no staged checkpoint: return `Ok(false)` rather than erroring.
 #[test]
@@ -433,6 +451,7 @@ fn test_load_staged_checkpoint_no_parent_is_noop() {
     assert!(!RocksStore::load_staged_checkpoint(Path::new("")).unwrap());
 }
 
+// FM-PERSISTENCE-025
 /// Happy path: a complete staged checkpoint wins, the previous live db is moved
 /// aside into a `*_backup_*` dir (recoverable, not deleted), and the staging
 /// marker is consumed.
@@ -460,6 +479,7 @@ fn test_load_staged_checkpoint_installs_and_backs_up_old_db() {
     assert_eq!(read_db(&backups[0], b"k"), Some(b"old".to_vec()));
 }
 
+// FM-PERSISTENCE-025
 /// First full sync onto a node with no existing db: install with no backup.
 #[test]
 fn test_load_staged_checkpoint_first_sync_no_existing_db() {
@@ -477,6 +497,7 @@ fn test_load_staged_checkpoint_first_sync_no_existing_db() {
     );
 }
 
+// FM-PERSISTENCE-024
 /// A partially-staged checkpoint (no RocksDB `CURRENT` manifest) must be
 /// refused with a clear error, leaving the original live db untouched. Without
 /// the guard the live db is renamed aside and a fresh empty db opens in its
@@ -508,6 +529,7 @@ fn test_load_staged_checkpoint_incomplete_dir_refuses_and_preserves_data() {
     );
 }
 
+// FM-PERSISTENCE-025
 /// Crash window: the install renamed the live db to `*_backup_*` but crashed
 /// *before* renaming the staged dir into place. On reboot the on-disk layout is
 /// {no live db, `checkpoint_ready` present, leftover backup present}. Recovery
@@ -540,6 +562,7 @@ fn test_load_staged_checkpoint_crash_after_backup_recovers() {
     );
 }
 
+// FM-PERSISTENCE-025
 /// Crash window: the install completed (staged dir renamed into place) but the
 /// process died before anything else. On reboot `checkpoint_ready` is gone, so
 /// install is a no-op and re-running it is idempotent — the freshly installed
@@ -566,6 +589,7 @@ fn test_load_staged_checkpoint_idempotent_after_success() {
     );
 }
 
+// FM-PERSISTENCE-026
 /// A stale `*_backup_*` dir left by an earlier crash must not block a new
 /// install: the new backup gets a distinct timestamped name and the install
 /// succeeds. Retention (keep the newest `BACKUP_RETENTION = 1`) then prunes
@@ -602,6 +626,7 @@ fn test_load_staged_checkpoint_prunes_older_backups() {
     assert!(!stale_backup.exists(), "the stale backup must be pruned");
 }
 
+// FM-PERSISTENCE-026
 /// Retention when the crash-after-backup window recovers: the only backup is
 /// the leftover from the interrupted install (no new backup is created since
 /// there is no live db), so retention keeps it — the previous data survives.
@@ -626,6 +651,7 @@ fn test_load_staged_checkpoint_crash_recovery_keeps_lone_backup() {
     );
 }
 
+// FM-PERSISTENCE-026
 /// `prune_backups` picks "newest" by the numeric timestamp suffix — string
 /// order would rank `_2` above `_10` and delete the wrong directory.
 #[test]
@@ -648,6 +674,7 @@ fn test_prune_backups_orders_numerically_not_lexically() {
     );
 }
 
+// FM-PERSISTENCE-026
 /// `prune_backups` with at most `keep` backups is a no-op; files that merely
 /// share the backup prefix are ignored (only directories are backups).
 #[test]
@@ -724,6 +751,7 @@ fn wait_reclaim_idle(s: &RocksStore) {
 use frogdb_types::traits::MetricsRecorder as _;
 use std::sync::Mutex;
 
+// FM-PERSISTENCE-012
 /// Proposal 48 test 1 (functional): after a clear plus the full reclamation
 /// pass (DeleteFilesInRange + forced bottommost CompactRange), the data is
 /// still gone across a restart — compaction must not resurrect anything —
@@ -806,6 +834,7 @@ fn clear_reclamation_shrinks_sst_bytes() {
     );
 }
 
+// FM-PERSISTENCE-012
 /// Proposal 48 test 3 (concurrency): writes accepted immediately after the
 /// tombstone commit must survive the full asynchronous reclamation pass, and
 /// the pre-clear keys must stay gone. Exercises the real spawn path.
@@ -1151,6 +1180,7 @@ fn reopen_and_measure(db_dir: &Path) -> (usize, u64) {
     (survivors, dropped)
 }
 
+// FM-PERSISTENCE-034
 /// A byte flipped in the *middle* of the WAL (not the tail) fails a record
 /// checksum mid-log. `PointInTime` recovery — the mode FrogDB pins — truncates
 /// at the first corrupt record and drops every valid record after it. Asserts
@@ -1184,6 +1214,7 @@ fn wal_mid_log_bitflip_drops_suffix_and_signals() {
     );
 }
 
+// FM-PERSISTENCE-034
 /// Truncating the WAL mid-file cuts the log at an arbitrary point, dropping the
 /// records past the cut. This is the documented "torn tail" case; `PointInTime`
 /// recovers the valid prefix. Even though this truncation is *expected* on an
@@ -1215,6 +1246,7 @@ fn wal_truncation_recovers_prefix_and_signals() {
     );
 }
 
+// FM-PERSISTENCE-035
 /// A clean reopen of an intact WAL recovers every record and raises no
 /// dropped-records signal: the watermark comparison must not false-alarm when
 /// recovery reaches (or exceeds) the recorded durable sequence.
@@ -1235,6 +1267,7 @@ fn wal_clean_reopen_recovers_all_without_signal() {
     );
 }
 
+// FM-PERSISTENCE-034
 /// The pinned recovery mode is an explicit choice, not RocksDB's inherited
 /// default. This guards against a silent library-default change: the acceptance
 /// criterion is that the mode is *set in code*, and the corruption tests above

@@ -52,6 +52,9 @@ fn seed_db(db_dir: &Path, num_shards: usize, key: &[u8], val: &str) {
     drop(rocks);
 }
 
+// FM-PERSISTENCE-027
+// FM-PERSISTENCE-029
+// FM-PERSISTENCE-041
 #[test]
 fn fresh_boot_creates_empty_shards() {
     let tmp = TempDir::new().unwrap();
@@ -86,6 +89,8 @@ fn fresh_boot_creates_empty_shards() {
     }
 }
 
+// FM-PERSISTENCE-009
+// FM-PERSISTENCE-028
 #[test]
 fn persistence_disabled_touches_nothing() {
     let tmp = TempDir::new().unwrap();
@@ -114,6 +119,8 @@ fn persistence_disabled_touches_nothing() {
     );
 }
 
+// FM-PERSISTENCE-027
+// FM-PERSISTENCE-041
 #[test]
 fn restart_with_data_restores_keys() {
     let tmp = TempDir::new().unwrap();
@@ -147,6 +154,7 @@ fn restart_with_data_restores_keys() {
     assert_eq!(value.as_string().unwrap().as_bytes().as_ref(), b"hello");
 }
 
+// FM-PERSISTENCE-037
 #[test]
 fn corrupt_functions_file_is_tolerated() {
     let tmp = TempDir::new().unwrap();
@@ -175,6 +183,8 @@ fn corrupt_functions_file_is_tolerated() {
     );
 }
 
+// FM-PERSISTENCE-028
+// FM-PERSISTENCE-038
 #[test]
 fn standalone_does_not_persist_replication_state() {
     let tmp = TempDir::new().unwrap();
@@ -202,6 +212,7 @@ fn standalone_does_not_persist_replication_state() {
     );
 }
 
+// FM-PERSISTENCE-038
 #[test]
 fn primary_loads_and_persists_replication_state() {
     let tmp = TempDir::new().unwrap();
@@ -229,6 +240,8 @@ fn primary_loads_and_persists_replication_state() {
     );
 }
 
+// FM-PERSISTENCE-027
+// FM-PERSISTENCE-039
 #[test]
 fn staged_replication_metadata_is_adopted_and_consumed() {
     let tmp = TempDir::new().unwrap();
@@ -271,6 +284,100 @@ fn staged_replication_metadata_is_adopted_and_consumed() {
     assert!(db_dir.join(&repl_cfg.state_file).exists());
 }
 
+// FM-PERSISTENCE-038
+#[test]
+fn corrupt_replication_state_is_regenerated() {
+    // Both ways the persisted state can be unusable: unparseable bytes, and
+    // well-formed JSON whose replication id fails validation. Neither may be
+    // fatal, and neither may leave the bad file behind.
+    for (label, contents) in [
+        ("unparseable", "{ this is not json".to_string()),
+        (
+            "invalid replication id",
+            "{\"replication_id\":\"nothex\",\"offset_at_save\":99}".to_string(),
+        ),
+    ] {
+        let tmp = TempDir::new().unwrap();
+        let db_dir = tmp.path().join("db");
+        let repl_cfg = replication_config("primary");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        let state_path = db_dir.join(&repl_cfg.state_file);
+        std::fs::write(&state_path, &contents).unwrap();
+
+        let cfg = persistence_config(&db_dir, true);
+        let cluster_cfg = cluster_config(false);
+        let inputs = RecoveryInputs {
+            data_dir: &cfg.data_dir,
+            persistence: &cfg,
+            replication: &repl_cfg,
+            cluster: &cluster_cfg,
+            num_shards: 1,
+            warm_enabled: false,
+            metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
+        };
+
+        let recovered =
+            recover(&inputs).unwrap_or_else(|e| panic!("{label} state must not be fatal: {e}"));
+
+        // A fresh identity at offset 0 — which forces a full resync rather than
+        // offering a peer a position neither side can honour.
+        assert_eq!(
+            recovered.replication.replication_id.len(),
+            40,
+            "{label}: regenerated replication id"
+        );
+        assert!(
+            recovered
+                .replication
+                .replication_id
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit()),
+            "{label}: regenerated id is hex"
+        );
+        assert_eq!(
+            recovered.replication.offset_at_save, 0,
+            "{label}: offset 0 forces a full resync"
+        );
+
+        // The bad file is replaced, so the next boot is clean too.
+        let rewritten = std::fs::read_to_string(&state_path).unwrap();
+        assert!(
+            rewritten.contains(&recovered.replication.replication_id),
+            "{label}: regenerated state written back over the bad file"
+        );
+    }
+}
+
+// FM-PERSISTENCE-040
+#[test]
+fn cluster_storage_open_failure_is_a_recovery_error() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    std::fs::create_dir_all(&db_dir).unwrap();
+    // A plain file where the Raft store's directory must be: the open fails, and
+    // a cluster node must refuse to start rather than fall back to standalone.
+    std::fs::write(db_dir.join("raft"), b"not a directory").unwrap();
+
+    let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(true);
+    let inputs = RecoveryInputs {
+        data_dir: &cfg.data_dir,
+        persistence: &cfg,
+        replication: &repl_cfg,
+        cluster: &cluster_cfg,
+        num_shards: 1,
+        warm_enabled: false,
+        metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
+    };
+
+    let err = recover(&inputs)
+        .err()
+        .expect("unopenable raft storage must error");
+    assert_eq!(err.phase, RecoveryPhase::OpenClusterStorage);
+}
+
+// FM-PERSISTENCE-040
 #[test]
 fn cluster_mode_opens_raft_storage() {
     let tmp = TempDir::new().unwrap();
@@ -300,6 +407,8 @@ fn cluster_mode_opens_raft_storage() {
     );
 }
 
+// FM-PERSISTENCE-027
+// FM-PERSISTENCE-030
 #[test]
 fn shard_count_mismatch_is_a_recovery_error() {
     let tmp = TempDir::new().unwrap();
@@ -327,6 +436,8 @@ fn shard_count_mismatch_is_a_recovery_error() {
     assert_eq!(err.phase, RecoveryPhase::OpenRocks);
 }
 
+// FM-PERSISTENCE-025
+// FM-PERSISTENCE-027
 #[test]
 fn staged_checkpoint_is_installed() {
     let tmp = TempDir::new().unwrap();
@@ -376,6 +487,7 @@ fn staged_checkpoint_is_installed() {
     assert!(backed_up, "old database backed up to db_backup_*");
 }
 
+// FM-PERSISTENCE-024
 #[test]
 fn incomplete_staged_checkpoint_is_refused_without_touching_live_db() {
     let tmp = TempDir::new().unwrap();
