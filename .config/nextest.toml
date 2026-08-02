@@ -85,3 +85,20 @@ slow-timeout = { period = "60s" }
 [[profile.default.overrides]]
 filter = "test(tcl_pfcount_multiple_keys_merge) | test(tcl_hll_large_element)"
 slow-timeout = { period = "30s", terminate-after = 3 }
+
+# SCAN's full-iteration stress test drives a whole keyspace SCAN to completion
+# while inserting 50k distinct keys between batches to force griddle resizes
+# mid-scan. `scan_filtered` is O(N log N) per call by design (the content-hash
+# cursor requires ordering the live keyspace on every batch), so a full drain of
+# the resulting 55k-key table costs ~88 sorts of 55k entries — ~3s of pure,
+# single-threaded, unoptimized CPU with no I/O and no sleeping. That is inherent
+# to the property, not padding: 97% of the time is the product-code scan, and
+# the key count is what buys the ~3.5 griddle doublings the test asserts.
+#
+# This is NOT masking a hang — the test passes in ~2-3s run alone. It gets
+# killed only when 8-way `test-threads` parallelism starves it against the
+# cluster/turmoil suites, which stretched it past the default 15s hard kill in
+# the 2026-08-01 full-suite run. Give it headroom instead of shrinking N.
+[[profile.default.overrides]]
+filter = "test(scan_full_iteration_survives_resizes_mid_scan)"
+slow-timeout = { period = "15s", terminate-after = 3 }
