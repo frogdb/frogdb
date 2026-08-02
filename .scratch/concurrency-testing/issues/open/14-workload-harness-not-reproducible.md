@@ -125,3 +125,7 @@ in the filename.
   `mod regressions`.
 - Issue 11 — the findings whose seed pinning this invalidates.
 - Issues 12, 13, 15 — the three classes re-verified under this constraint.
+- [`../../audit/determinism-audit-2026-08-02.md`](../../audit/determinism-audit-2026-08-02.md) —
+  exhaustive product-code determinism audit: 59 class-A sites, all three suspects above confirmed
+  plus unseeded chaos injection and hash-order in client-visible replies, with a cheapest-first
+  remediation order (R0–R12) mapped onto the acceptance criteria.

@@ -67,11 +67,15 @@ pub struct ReplicationIdentity {
     /// applier claims a group before, never after, handing it to a shard.
     ///
     /// "Claimed" is not quite "applied to the keyspace" in two admitted-failure
-    /// cases: a group whose `apply_group` returns `Err` keeps its claim (the
-    /// node has already diverged for that write, and stalling the offset would
-    /// desynchronise every later frame), and a crash between a claim and its
-    /// shard write leaves the persisted offset a group ahead of the data. Both
-    /// are tracked in
+    /// cases. A group whose `apply_group` returns `Err` keeps its claim, because
+    /// un-claiming it would desynchronise every later frame's stream position —
+    /// but the history stops there: the failure is latched, the applier refuses
+    /// every further claim on it, and the link is dropped for a full resync, so
+    /// the over-claim can never be handed to a sibling as `+CONTINUE`
+    /// (issue 08, first case). The one that remains is a crash between a claim and
+    /// its shard write, which leaves the persisted offset a group ahead of the
+    /// data; closing it means persisting the applied offset from the shard's own
+    /// write path, and it is tracked in
     /// `.scratch/replication-cluster-rework/issues/08`.
     applied: AppliedOffset,
 }

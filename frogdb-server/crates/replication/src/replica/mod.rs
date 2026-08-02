@@ -21,14 +21,14 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 use crate::BoxedStream;
-use crate::frame::ReplicationFrame;
+use crate::apply::StreamedFrame;
 use crate::identity::ReplicationIdentity;
 use crate::state::ReplicationState;
 
 use connection::SyncType;
 pub use connection::{ConnectionState, ReplicaConnection};
 use offset::ReplicaOffset;
-pub use offset::{AppliedOffset, ReplicaApplyStint};
+pub use offset::{AppliedOffset, Claim, ReplicaApplyStint};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -97,7 +97,7 @@ pub struct ReplicaReplicationHandler {
     listening_port: u16,
     state: Arc<RwLock<ReplicationState>>,
     state_path: PathBuf,
-    frame_tx: mpsc::Sender<ReplicationFrame>,
+    frame_tx: mpsc::Sender<StreamedFrame>,
     shutdown: tokio::sync::watch::Sender<bool>,
     data_dir: PathBuf,
     /// The live applied offset — the canonical home of "how far this replica has
@@ -158,7 +158,7 @@ impl ReplicaReplicationHandler {
         identity: ReplicationIdentity,
         state_path: PathBuf,
         data_dir: PathBuf,
-    ) -> (Self, mpsc::Receiver<ReplicationFrame>) {
+    ) -> (Self, mpsc::Receiver<StreamedFrame>) {
         let (frame_tx, frame_rx) = mpsc::channel(10000);
         let (shutdown, _) = tokio::sync::watch::channel(false);
         let state = identity.state();

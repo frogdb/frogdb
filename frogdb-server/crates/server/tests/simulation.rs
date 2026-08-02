@@ -4565,36 +4565,24 @@ fn run_spop_replication_convergence(seed: u64) {
             }
         }
 
-        // Quiescent equality: each key's members identical on both nodes.
-        // WAIT acks cover the offset, not the replica's apply loop, so poll
-        // briefly for the last frame(s) to be applied before declaring
-        // divergence.
+        // Quiescent equality: each key's members identical on both nodes, read
+        // immediately after the `WAIT` above and with no polling. That is the
+        // whole content of the ACK contract — an acked offset means every frame
+        // at or below it has been applied to its shard, so
+        // a replica that acked the workload has already applied it. This loop
+        // used to poll for 10 s per key, working around the receipt-only ACK
+        // instead of asserting the contract (issue 76).
         let replica_addr = (turmoil::lookup("replica"), SERVER_PORT);
         let mut replica = RespConn::connect(replica_addr).await?;
         for key in keys {
             let p_members = resp_sorted_members(&primary.cmd(&[b"SMEMBERS", key]).await?);
-            let mut attempts = 0u32;
-            loop {
-                let r_members = resp_sorted_members(&replica.cmd(&[b"SMEMBERS", key]).await?);
-                if r_members == p_members {
-                    break;
-                }
-                attempts += 1;
-                assert!(
-                    attempts < 40,
-                    "seed {seed}: divergence on {:?}: primary {:?} vs replica {:?}",
-                    String::from_utf8_lossy(key),
-                    p_members
-                        .iter()
-                        .map(|m| String::from_utf8_lossy(m).into_owned())
-                        .collect::<Vec<_>>(),
-                    r_members
-                        .iter()
-                        .map(|m| String::from_utf8_lossy(m).into_owned())
-                        .collect::<Vec<_>>(),
-                );
-                tokio::time::sleep(Duration::from_millis(250)).await;
-            }
+            let r_members = resp_sorted_members(&replica.cmd(&[b"SMEMBERS", key]).await?);
+            assert_eq!(
+                r_members,
+                p_members,
+                "seed {seed}: WAIT returned before the replica applied {:?}",
+                String::from_utf8_lossy(key),
+            );
         }
 
         Ok(())
@@ -4608,6 +4596,11 @@ fn run_spop_replication_convergence(seed: u64) {
 /// Property test: random SADD/SPOP interleavings on a primary+replica pair
 /// converge to identical sets after quiescence, across several turmoil seeds
 /// (each seed = a different message-timing schedule AND a different workload).
+///
+/// Doubles as the level-4 forcing test for the ACK contract: the per-key
+/// comparison runs immediately after `WAIT 1` returns, with no polling, so a
+/// replica that acked a frame it had not applied fails here.
+// FM-REPLICATION-008
 #[test]
 fn test_spop_replication_convergence_random_workload() {
     for seed in [1u64, 7, 42] {

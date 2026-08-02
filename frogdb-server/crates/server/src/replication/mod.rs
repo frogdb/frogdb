@@ -21,7 +21,6 @@ pub use frogdb_replication_runtime::{
 
 // Re-export from frogdb-replication for backward compatibility.
 pub use frogdb_replication::{
-    LagThresholdConfig, LagThresholds, PrimaryReplicationHandler, ReplicaConnection,
-    ReplicaReplicationHandler, ReplicationIdentity, SharedReplicationState, SplitBrainBufferConfig,
-    WaitVerdict,
+    BacklogConfig, LagThresholdConfig, LagThresholds, PrimaryReplicationHandler, ReplicaConnection,
+    ReplicaReplicationHandler, ReplicationIdentity, SharedReplicationState, WaitVerdict,
 };

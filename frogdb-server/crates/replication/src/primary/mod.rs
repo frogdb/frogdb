@@ -33,8 +33,8 @@ use crate::state::ReplicationState;
 use crate::tracker::ReplicationTrackerImpl;
 use crate::wait_coordinator::WaitCoordinator;
 
-pub use replay::{FullResyncReason, PartialSyncReplay, ReplayDecision, ReplayGrant};
-pub use ring_buffer::{ReplicationRingBuffer, SplitBrainBufferConfig};
+pub use replay::{BacklogTtl, FullResyncReason, PartialSyncReplay, ReplayDecision, ReplayGrant};
+pub use ring_buffer::{BacklogConfig, ReplicationRingBuffer};
 
 /// Injected work that must complete before a `FULLRESYNC` checkpoint is cut.
 ///
@@ -215,11 +215,11 @@ impl PrimaryReplicationHandler {
         rocks_store: Option<Arc<RocksStore>>,
         data_dir: PathBuf,
         lag_config: LagThresholdConfig,
-        split_brain_config: SplitBrainBufferConfig,
+        backlog_config: BacklogConfig,
         write_timeout_ms: u64,
     ) -> Self {
         let (wal_broadcast, _) = broadcast::channel(10000);
-        let replay = PartialSyncReplay::new(&split_brain_config);
+        let replay = PartialSyncReplay::new(&backlog_config);
         let offsets = Arc::new(OffsetCoordinator::new(tracker.clone(), &identity));
         let wait = WaitCoordinator::new(offsets.clone(), tracker.clone());
         let lag_thresholds = Arc::new(LagThresholds::new(
@@ -447,6 +447,33 @@ impl PrimaryReplicationHandler {
     /// already holds `max_clients` and friends.
     pub fn lag_thresholds(&self) -> Arc<LagThresholds> {
         self.lag_thresholds.clone()
+    }
+
+    /// The live backlog-TTL seam, handed out for the same reason as
+    /// [`Self::lag_thresholds`] (see [`BacklogTtl`]).
+    pub fn backlog_ttl(&self) -> Arc<BacklogTtl> {
+        self.replay.backlog_ttl()
+    }
+
+    /// One tick of the backlog TTL, driven by the server's maintenance task.
+    ///
+    /// Redis does this in `replicationCron`: once the backlog has gone
+    /// `repl-backlog-ttl` seconds with no replica attached, free it. Returns
+    /// whether this tick freed it, so the caller can log the transition once.
+    pub fn expire_idle_backlog(&self) -> bool {
+        let replicas = self.tracker.replica_count();
+        let freed = self
+            .replay
+            .expire_backlog_if_idle(replicas, std::time::Instant::now());
+        if freed {
+            tracing::info!(
+                ttl_secs = self.replay.backlog_ttl().secs(),
+                offset = self.offsets.current(),
+                "Replication backlog freed after its TTL elapsed with no replicas; \
+                 the next PSYNC will be answered with a full resync"
+            );
+        }
+        freed
     }
 
     /// Retune the byte-lag disconnect threshold on every streaming session.

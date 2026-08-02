@@ -119,6 +119,7 @@ split-brain-buffer-size = 10000
 split-brain-buffer-max-mb = 64
 self-fence-on-replica-loss = true
 replica-freshness-timeout-ms = 3000
+backlog-ttl-secs = 3600
 replica-write-timeout-ms = 5000
 
 [slowlog]

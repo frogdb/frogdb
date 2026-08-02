@@ -4,7 +4,7 @@
 //! by *mutability* — the one fact that decides which server-side lifecycle
 //! serves it:
 //!
-//! - [`MutableParamId`] — the 73 runtime-mutable parameters (59 real
+//! - [`MutableParamId`] — the 74 runtime-mutable parameters (60 real
 //!   `ConfigParam` lifecycles + 14 Redis-compat no-ops). Served by the server's
 //!   `build_typed_params`.
 //! - [`ImmutableParamId`] — the 45 restart-required parameters. Served by the
@@ -176,6 +176,7 @@ param_id_enum! {
         ReplicationLagThresholdSecs => "replication-lag-threshold-secs",
         SelfFenceOnReplicaLoss => "self-fence-on-replica-loss",
         ReplicaFreshnessTimeoutMs => "replica-freshness-timeout-ms",
+        ReplBacklogTtl => "repl-backlog-ttl",
         // Hot-shard collector (`SharedHotShardConfig`), re-read per `collect()`.
         HotshardsHotThresholdPercent => "hotshards-hot-threshold-percent",
         HotshardsWarmThresholdPercent => "hotshards-warm-threshold-percent",
@@ -329,8 +330,9 @@ mod tests {
         // added by 13-01 Pass 2b + 26 added by the config-mutability round (23
         // promoted from `ImmutableParamId` once their live seams landed, plus
         // the 3 new `hotshards-*` rows) + 1 added by the hot-shard hardening
-        // round (`hotshards-enabled`).
-        assert_eq!(MutableParamId::ALL.len(), 73);
+        // round (`hotshards-enabled`) + 1 added by the replication hardening
+        // round (`repl-backlog-ttl`).
+        assert_eq!(MutableParamId::ALL.len(), 74);
         // 16 original immutable ids + 22 promote-immutable params added by 13-01
         // Pass 2a (26 classified, minus 4 metrics OTLP/bind rows downgraded to
         // justify as dead config) + 20 promote-immutable startup-consumed params

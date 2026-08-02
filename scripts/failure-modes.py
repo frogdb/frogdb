@@ -61,6 +61,14 @@ NEXTEST_CRATES = [
     "frogdb-replication-runtime",
 ]
 
+# Feature-gated suites a row may also name, listed separately because their
+# tests do not exist in the default feature resolution. The turmoil simulations
+# (`frogdb-server/crates/server/tests/simulation.rs`) are the end-to-end forcing
+# tests for the replication wire contracts.
+NEXTEST_FEATURE_VARIANTS = [
+    ("frogdb-server", "turmoil"),
+]
+
 # `## FM-TXN-001 — title`
 HEADING_RE = re.compile(r"^##\s+(FM-([A-Z]+)-(\d+))\s*(?:[—-]\s*(.*))?$")
 # `| Field | Value |`
@@ -249,6 +257,16 @@ def cargo_env() -> dict[str, str]:
     return env
 
 
+def run_listing(cmd: list[str]) -> str:
+    """`cargo nextest list` output, or exit with its error."""
+    proc = subprocess.run(
+        cmd, cwd=REPO, env=cargo_env(), capture_output=True, text=True, check=False
+    )
+    if proc.returncode != 0:
+        sys.exit(f"{' '.join(cmd)} failed:\n{proc.stderr}")
+    return proc.stdout
+
+
 def load_test_paths(nextest_output: Path | None) -> set[str]:
     """The set of test paths `cargo nextest list` knows about.
 
@@ -261,12 +279,19 @@ def load_test_paths(nextest_output: Path | None) -> set[str]:
         cmd = ["cargo", "nextest", "list", "--color", "never"]
         for crate in NEXTEST_CRATES:
             cmd += ["-p", crate]
-        proc = subprocess.run(
-            cmd, cwd=REPO, env=cargo_env(), capture_output=True, text=True, check=False
-        )
-        if proc.returncode != 0:
-            sys.exit(f"cargo nextest list failed:\n{proc.stderr}")
-        text = proc.stdout
+        text = run_listing(cmd)
+        # Feature-gated suites are invisible to the default listing, so a row
+        # that names one would look like a typo. Each variant is a separate
+        # feature resolution and therefore a separate build fingerprint; they
+        # coexist in `target/` rather than evicting each other, so the cost is
+        # one build the first time and seconds afterwards.
+        for crate, feature in NEXTEST_FEATURE_VARIANTS:
+            text += run_listing(
+                [
+                    *["cargo", "nextest", "list", "--color", "never"],
+                    *["-p", crate, "--features", feature],
+                ]
+            )
 
     paths: set[str] = set()
     for line in text.splitlines():

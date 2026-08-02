@@ -1,4 +1,6 @@
-//! Split-brain replication ring buffer.
+//! The replication backlog: a bounded ring of recent commands, keyed by
+//! replication offset, serving both partial-resync replay and split-brain
+//! divergence capture.
 
 use bytes::Bytes;
 use std::collections::VecDeque;
@@ -7,23 +9,29 @@ use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 /// `start` sentinel: this buffer has never been armed, so it claims no history.
 const UNARMED: i64 = -1;
 
-/// Configuration for the split-brain replication ring buffer.
+/// Configuration for the replication backlog.
 #[derive(Debug, Clone)]
-pub struct SplitBrainBufferConfig {
-    /// Whether split-brain logging is enabled.
+pub struct BacklogConfig {
+    /// Whether the backlog is populated at all. When `false` nothing is
+    /// buffered, every PSYNC full-resyncs, and split-brain capture is empty.
     pub enabled: bool,
     /// Maximum number of recent commands to retain.
     pub max_entries: usize,
     /// Maximum memory in bytes for buffered commands.
     pub max_bytes: usize,
+    /// Seconds with zero connected replicas after which the backlog is freed
+    /// and its window closed — Redis `repl-backlog-ttl`. 0 = never free. See
+    /// [`crate::primary::BacklogTtl`].
+    pub ttl_secs: u64,
 }
 
-impl Default for SplitBrainBufferConfig {
+impl Default for BacklogConfig {
     fn default() -> Self {
         Self {
             enabled: true,
             max_entries: 10_000,
             max_bytes: 64 * 1024 * 1024,
+            ttl_secs: 3600,
         }
     }
 }

@@ -29,9 +29,84 @@
 //! with it and [`PartialSyncReplay::can_replay`] would need a per-shard window.
 
 use bytes::Bytes;
+use parking_lot::Mutex;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
-use crate::primary::ring_buffer::{ReplicationRingBuffer, SplitBrainBufferConfig};
+use crate::primary::ring_buffer::{BacklogConfig, ReplicationRingBuffer};
 use crate::state::ReplicationState;
+
+/// How long the backlog outlives its last replica (Redis `repl-backlog-ttl`).
+///
+/// The backlog is armed for the whole of a primary stint, so a node that once
+/// had a replica keeps buffering every write for the rest of the process's life
+/// — memory and a push per write spent on resume history nobody is waiting for.
+/// This is the bound: once the replica count has been zero for `secs`, the
+/// buffer is freed and the window closed. Freeing is safe because a resume
+/// below the floor already degrades to a full resync; the TTL only decides how
+/// long the cheap path stays on offer.
+///
+/// `secs == 0` disables the timer, matching Redis's `repl-backlog-ttl 0`.
+///
+/// Live-mutable: `CONFIG SET repl-backlog-ttl` stores into the atomic and the
+/// next tick uses it, including against an idle window that is already running.
+#[derive(Debug)]
+pub struct BacklogTtl {
+    secs: AtomicU64,
+    /// When the replica count last fell to zero. `None` whenever a replica is
+    /// attached, so a reconnect inside the window restarts the clock rather
+    /// than resuming it.
+    idle_since: Mutex<Option<Instant>>,
+}
+
+impl BacklogTtl {
+    /// Seed the TTL (0 = never free).
+    pub fn new(secs: u64) -> Self {
+        Self {
+            secs: AtomicU64::new(secs),
+            idle_since: Mutex::new(None),
+        }
+    }
+
+    /// Seconds with zero replicas before the backlog is freed (0 = disabled).
+    pub fn secs(&self) -> u64 {
+        self.secs.load(Ordering::Relaxed)
+    }
+
+    /// Retune the TTL. Reachable from `ConfigManager` for
+    /// `CONFIG SET repl-backlog-ttl`.
+    pub fn set_secs(&self, secs: u64) {
+        self.secs.store(secs, Ordering::Relaxed);
+    }
+
+    /// Advance the idle clock and report whether the backlog is now due to be
+    /// freed. Returns `true` exactly once per idle window: the clock is cleared
+    /// as it fires, so a still-replica-less primary does not free again on
+    /// every subsequent tick.
+    fn due(&self, replica_count: usize, now: Instant) -> bool {
+        let secs = self.secs();
+        let mut idle = self.idle_since.lock();
+        if secs == 0 || replica_count > 0 {
+            *idle = None;
+            return false;
+        }
+        match *idle {
+            None => {
+                *idle = Some(now);
+                false
+            }
+            Some(start) => {
+                if now.duration_since(start) >= Duration::from_secs(secs) {
+                    *idle = None;
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+}
 
 /// Owns the replication backlog and the partial-sync grant decision.
 ///
@@ -44,6 +119,10 @@ pub struct PartialSyncReplay {
     /// Whether the backlog is populated. When `false`, [`Self::record`] is a
     /// no-op and every grant falls back to a full resync ([`FullResyncReason::Disabled`]).
     enabled: bool,
+    /// How long the window stays open with no replicas attached (see
+    /// [`BacklogTtl`]). Shared by `Arc` with `ConfigManager` so
+    /// `CONFIG SET repl-backlog-ttl` retunes it live.
+    ttl: Arc<BacklogTtl>,
 }
 
 /// The decision PSYNC acts on. Total: every PSYNC resolves to exactly one arm.
@@ -96,11 +175,19 @@ pub enum FullResyncReason {
 impl PartialSyncReplay {
     /// Build the replay owner from the backlog config. The backlog is always
     /// constructed (so accessors are infallible); writes are gated on `enabled`.
-    pub fn new(config: &SplitBrainBufferConfig) -> Self {
+    pub fn new(config: &BacklogConfig) -> Self {
         Self {
             backlog: ReplicationRingBuffer::new(config.max_entries, config.max_bytes),
             enabled: config.enabled,
+            ttl: Arc::new(BacklogTtl::new(config.ttl_secs)),
         }
+    }
+
+    /// The live TTL seam. Handed out as an `Arc` so `ConfigManager` can retune
+    /// `repl-backlog-ttl` without routing through the handler, the same way it
+    /// holds [`crate::primary::LagThresholds`].
+    pub fn backlog_ttl(&self) -> Arc<BacklogTtl> {
+        self.ttl.clone()
     }
 
     /// Record one broadcast command into the backlog. Called by
@@ -181,6 +268,33 @@ impl PartialSyncReplay {
         self.backlog_start().is_some()
     }
 
+    /// One tick of the backlog TTL: free the buffer and close the window if it
+    /// has now gone [`BacklogTtl::secs`] seconds without a replica. Returns
+    /// whether it freed.
+    ///
+    /// The `now` is a parameter rather than an `Instant::now()` inside so the
+    /// timer is testable without sleeping.
+    ///
+    /// A node with no window armed never starts the clock: there is nothing to
+    /// free, and the window a later promotion arms should get its own full TTL
+    /// rather than inherit one that has been running since boot.
+    ///
+    /// Freeing touches the ring buffer and nothing else. It is not a stint
+    /// change: the replication id, the failover window and every offset stay
+    /// exactly where they were, so a replica that comes back afterwards is
+    /// answered `+FULLRESYNC` (no armed floor) rather than a `+CONTINUE` over
+    /// history that has been dropped.
+    pub fn expire_backlog_if_idle(&self, replica_count: usize, now: Instant) -> bool {
+        if !self.has_resume_history() {
+            return false;
+        }
+        if !self.ttl.due(replica_count, now) {
+            return false;
+        }
+        self.reset_backlog();
+        true
+    }
+
     /// The single entry point. A pure decision over `(state, req_offset, current)`
     /// plus the backlog's current contents; performs no I/O. PSYNC turns the
     /// result into the `+CONTINUE`/`+FULLRESYNC` reply.
@@ -255,10 +369,21 @@ mod tests {
     use crate::frame::serialize_command_to_resp;
 
     fn enabled_replay() -> PartialSyncReplay {
-        PartialSyncReplay::new(&SplitBrainBufferConfig {
+        PartialSyncReplay::new(&BacklogConfig {
             enabled: true,
             max_entries: 1000,
             max_bytes: 64 * 1024 * 1024,
+            ttl_secs: 0,
+        })
+    }
+
+    /// Same, with the backlog TTL set (0 = never free).
+    fn ttl_replay(ttl_secs: u64) -> PartialSyncReplay {
+        PartialSyncReplay::new(&BacklogConfig {
+            enabled: true,
+            max_entries: 1000,
+            max_bytes: 64 * 1024 * 1024,
+            ttl_secs,
         })
     }
 
@@ -404,10 +529,11 @@ mod tests {
     fn evicted_offset_falls_back_to_full_not_truncated() {
         // Tight entry cap so early commands are evicted; requesting an offset
         // below the new oldest must FULLRESYNC, never a truncated Continue.
-        let replay = PartialSyncReplay::new(&SplitBrainBufferConfig {
+        let replay = PartialSyncReplay::new(&BacklogConfig {
             enabled: true,
             max_entries: 3,
             max_bytes: 64 * 1024 * 1024,
+            ttl_secs: 0,
         });
         let state = ReplicationState::new();
         let (pushed, head) = seed(&replay, 10);
@@ -423,10 +549,11 @@ mod tests {
 
     #[test]
     fn boundary_req_equals_oldest_continues() {
-        let replay = PartialSyncReplay::new(&SplitBrainBufferConfig {
+        let replay = PartialSyncReplay::new(&BacklogConfig {
             enabled: true,
             max_entries: 3,
             max_bytes: 64 * 1024 * 1024,
+            ttl_secs: 0,
         });
         let state = ReplicationState::new();
         let (pushed, head) = seed(&replay, 10);
@@ -458,12 +585,171 @@ mod tests {
         assert_eq!(grant.resume_offset, head);
     }
 
+    /// Freeing is on a clock, not on the disconnect: the window survives the
+    /// last replica by exactly `repl-backlog-ttl` seconds, then the buffer is
+    /// emptied and the floor disarmed.
+    // FM-REPLICATION-009
+    #[test]
+    fn an_idle_backlog_is_freed_once_its_ttl_elapses() {
+        let replay = ttl_replay(60);
+        let (_pushed, head) = seed(&replay, 5);
+        assert!(replay.has_resume_history());
+        let t0 = Instant::now();
+        // First idle tick only starts the clock.
+        assert!(!replay.expire_backlog_if_idle(0, t0));
+        assert!(!replay.expire_backlog_if_idle(0, t0 + Duration::from_secs(59)));
+        assert!(replay.backlog_start().is_some(), "still inside the window");
+        // At the deadline it frees: buffer empty, window closed.
+        assert!(replay.expire_backlog_if_idle(0, t0 + Duration::from_secs(60)));
+        assert_eq!(replay.backlog_start(), None);
+        assert_eq!(replay.oldest_offset(), None);
+        assert!(replay.extract_backlog(0, head).is_empty());
+    }
+
+    /// The clock is idle time, not age: any tick that sees a replica clears it,
+    /// so a replica that reconnects inside the window still gets its
+    /// `+CONTINUE`, and the window it leaves behind starts over.
+    // FM-REPLICATION-009
+    #[test]
+    fn a_replica_reconnecting_before_the_ttl_still_resumes() {
+        let replay = ttl_replay(60);
+        let state = ReplicationState::new();
+        let (pushed, head) = seed(&replay, 5);
+        let t0 = Instant::now();
+        assert!(!replay.expire_backlog_if_idle(0, t0));
+        // The replica comes back at t0+30 and the resume is granted.
+        assert!(!replay.expire_backlog_if_idle(1, t0 + Duration::from_secs(30)));
+        let grant = assert_continue(replay.handle_partial_sync_request(
+            &state,
+            &state.replication_id,
+            pushed[1].0,
+            head,
+        ));
+        assert_eq!(grant.resume_offset, head);
+        // It leaves again at t0+31; the deadline is 31+60, not 0+60.
+        assert!(!replay.expire_backlog_if_idle(0, t0 + Duration::from_secs(31)));
+        assert!(!replay.expire_backlog_if_idle(0, t0 + Duration::from_secs(90)));
+        assert!(replay.backlog_start().is_some());
+        assert!(replay.expire_backlog_if_idle(0, t0 + Duration::from_secs(91)));
+    }
+
+    /// A replica attached the whole time never lets the clock start, whatever
+    /// the tick count.
+    // FM-REPLICATION-009
+    #[test]
+    fn a_connected_replica_never_starts_the_ttl_clock() {
+        let replay = ttl_replay(1);
+        let (_pushed, _head) = seed(&replay, 3);
+        let t0 = Instant::now();
+        for tick in 0..600u64 {
+            assert!(
+                !replay.expire_backlog_if_idle(1, t0 + Duration::from_secs(tick)),
+                "freed while a replica was attached (tick {tick})"
+            );
+        }
+        assert!(replay.backlog_start().is_some());
+    }
+
+    /// `repl-backlog-ttl 0` parks the timer (Redis's disable value), and the
+    /// knob is live: a `CONFIG SET` retunes a window that is already idling.
+    // FM-REPLICATION-009
+    #[test]
+    fn a_ttl_of_zero_never_frees_the_backlog() {
+        let replay = ttl_replay(0);
+        let (_pushed, _head) = seed(&replay, 3);
+        let t0 = Instant::now();
+        for hour in 0..48u64 {
+            assert!(!replay.expire_backlog_if_idle(0, t0 + Duration::from_secs(hour * 3600)));
+        }
+        assert!(replay.backlog_start().is_some());
+        // Live retune: enabling it mid-idle-window frees on the next deadline
+        // (the clock starts from the tick that follows the CONFIG SET, since a
+        // 0 TTL keeps clearing it).
+        replay.backlog_ttl().set_secs(60);
+        let t1 = t0 + Duration::from_secs(48 * 3600);
+        assert!(!replay.expire_backlog_if_idle(0, t1));
+        assert!(replay.expire_backlog_if_idle(0, t1 + Duration::from_secs(60)));
+        // And back off again: a re-armed window with the TTL at 0 stays.
+        replay.arm_backlog_floor(4096);
+        replay.backlog_ttl().set_secs(0);
+        assert!(!replay.expire_backlog_if_idle(0, t1 + Duration::from_secs(120)));
+        assert_eq!(replay.backlog_start(), Some(4096));
+    }
+
+    /// The point of the free: the floor is disarmed with the buffer, so the
+    /// next PSYNC is answered `+FULLRESYNC` rather than a `+CONTINUE` over a
+    /// hole — including from the replica that was exactly caught up.
+    // FM-REPLICATION-009
+    #[test]
+    fn a_freed_backlog_full_resyncs_the_next_psync() {
+        let replay = ttl_replay(60);
+        let state = ReplicationState::new();
+        let (pushed, head) = seed(&replay, 5);
+        let t0 = Instant::now();
+        assert!(!replay.expire_backlog_if_idle(0, t0));
+        assert!(replay.expire_backlog_if_idle(0, t0 + Duration::from_secs(60)));
+        for req in [0, pushed[1].0, head] {
+            assert_full(
+                replay.handle_partial_sync_request(&state, &state.replication_id, req, head),
+                FullResyncReason::BacklogEvicted,
+            );
+        }
+    }
+
+    /// A node with no window armed has nothing to free and must not start a
+    /// clock: the window a later stint arms gets its own full TTL rather than
+    /// inheriting one that has been running since boot.
+    // FM-REPLICATION-009
+    #[test]
+    fn an_unarmed_backlog_never_starts_the_ttl_clock() {
+        let replay = ttl_replay(60);
+        assert!(!replay.has_resume_history());
+        let t0 = Instant::now();
+        for tick in 0..200u64 {
+            assert!(!replay.expire_backlog_if_idle(0, t0 + Duration::from_secs(tick)));
+        }
+        // A stint arms the window at t0+200; its deadline is 200+60.
+        replay.arm_backlog_floor(4096);
+        assert!(!replay.expire_backlog_if_idle(0, t0 + Duration::from_secs(200)));
+        assert!(!replay.expire_backlog_if_idle(0, t0 + Duration::from_secs(259)));
+        assert!(replay.expire_backlog_if_idle(0, t0 + Duration::from_secs(260)));
+    }
+
+    /// The tick runs at 1 Hz forever; the free is a transition, so it reports
+    /// `true` exactly once per idle window and stays quiet afterwards (the
+    /// caller logs on `true`).
+    // FM-REPLICATION-009
+    #[test]
+    fn the_ttl_fires_once_per_idle_window_not_once_per_tick() {
+        let replay = ttl_replay(5);
+        seed(&replay, 3);
+        let t0 = Instant::now();
+        let mut fired = 0;
+        for tick in 0..100u64 {
+            if replay.expire_backlog_if_idle(0, t0 + Duration::from_secs(tick)) {
+                fired += 1;
+            }
+        }
+        assert_eq!(fired, 1, "the free is a transition, not a per-tick action");
+        // A new stint arms a fresh window; that one is freed once too.
+        replay.arm_backlog_floor(4096);
+        let t1 = t0 + Duration::from_secs(100);
+        let mut fired = 0;
+        for tick in 0..100u64 {
+            if replay.expire_backlog_if_idle(0, t1 + Duration::from_secs(tick)) {
+                fired += 1;
+            }
+        }
+        assert_eq!(fired, 1);
+    }
+
     #[test]
     fn disabled_backlog_always_full_resyncs() {
-        let replay = PartialSyncReplay::new(&SplitBrainBufferConfig {
+        let replay = PartialSyncReplay::new(&BacklogConfig {
             enabled: false,
             max_entries: 1000,
             max_bytes: 64 * 1024 * 1024,
+            ttl_secs: 0,
         });
         let state = ReplicationState::new();
         // record is a no-op when disabled.

@@ -25,6 +25,11 @@ use anyhow::Result;
 /// Handles for all spawned subsystem tasks.
 ///
 /// Collected during startup so shutdown can cleanly stop everything.
+/// How often the backlog-TTL ticker runs. Matches Redis's 1 Hz
+/// `replicationCron`: the TTL is measured in seconds, so a second of slack on a
+/// timer whose default is an hour costs nothing.
+const BACKLOG_TTL_TICK: Duration = Duration::from_secs(1);
+
 pub(super) struct SubsystemHandles {
     pub http_server: Option<JoinHandle<()>>,
     pub system_collector: Option<JoinHandle<()>>,
@@ -43,6 +48,10 @@ pub(super) struct SubsystemHandles {
     pub shard_supervisor: Option<JoinHandle<()>>,
     pub periodic_sync_handle: Option<JoinHandle<()>>,
     pub periodic_snapshot_handle: Option<JoinHandle<()>>,
+    /// Ticks the replication backlog's idle TTL (Redis `replicationCron`'s
+    /// backlog-freeing job). Present on every role, because the primary handler
+    /// it drives is built on every role.
+    pub backlog_ttl_handle: Option<JoinHandle<()>>,
 }
 
 impl Server {
@@ -457,6 +466,23 @@ impl Server {
                 None
             };
 
+        // Tick the replication backlog's idle TTL. Redis frees the backlog from
+        // `replicationCron` for the same reason: once no replica has been
+        // attached for `repl-backlog-ttl` seconds, buffering every write costs
+        // memory and a push for resume history nobody is waiting for. The tick
+        // is cheap (a replica count and one mutex) and reads the TTL live, so a
+        // `CONFIG SET repl-backlog-ttl` applies without a restart — including
+        // `0`, which parks the timer.
+        let backlog_ttl_handle = self.primary_replication_handler.clone().map(|handler| {
+            spawn(async move {
+                let mut ticker = tokio::time::interval(BACKLOG_TTL_TICK);
+                loop {
+                    ticker.tick().await;
+                    handler.expire_idle_backlog();
+                }
+            })
+        });
+
         // Create MONITOR broadcaster (shared across all connections)
         let monitor_broadcaster = Arc::new(crate::monitor::MonitorBroadcaster::new(
             self.config.monitor.channel_capacity,
@@ -658,6 +684,7 @@ impl Server {
             shard_supervisor,
             periodic_sync_handle,
             periodic_snapshot_handle,
+            backlog_ttl_handle,
         })
     }
 
@@ -737,6 +764,11 @@ impl Server {
             handler
                 .shutdown_downstream_sessions(Duration::from_secs(2))
                 .await;
+        }
+
+        // Stop the backlog-TTL ticker
+        if let Some(handle) = handles.backlog_ttl_handle {
+            handle.abort();
         }
 
         // Stop failure detector task if running

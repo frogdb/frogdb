@@ -812,6 +812,15 @@ pub struct ConfigManager {
     /// actually streamed from this node.
     replication_self_fence:
         std::sync::OnceLock<Arc<frogdb_replication_runtime::ReplicationQuorumChecker>>,
+    /// Configured replication-backlog idle TTL, in seconds.
+    ///
+    /// Authority for CONFIG GET/REWRITE, and the value pushed into the live
+    /// [`frogdb_replication::BacklogTtl`] below.
+    backlog_ttl_secs: Arc<AtomicU64>,
+    /// Live backlog TTL, published on every role for the same reason as the lag
+    /// thresholds: the primary handler that owns the backlog is built on every
+    /// role, so a SET governs this node the moment it becomes a primary.
+    backlog_ttl: std::sync::OnceLock<Arc<frogdb_replication::BacklogTtl>>,
     /// Serializes the whole CONFIG SET lifecycle (see [`Self::set`]).
     set_lock: Mutex<()>,
 }
@@ -958,6 +967,8 @@ impl ConfigManager {
                 config.replication.replication_lag_threshold_secs,
             )),
             replication_lag_thresholds: std::sync::OnceLock::new(),
+            backlog_ttl_secs: Arc::new(AtomicU64::new(config.replication.backlog_ttl_secs)),
+            backlog_ttl: std::sync::OnceLock::new(),
             self_fence_on_replica_loss: Arc::new(AtomicBool::new(
                 config.replication.self_fence_on_replica_loss,
             )),
@@ -1011,6 +1022,19 @@ impl ConfigManager {
         {
             t.set_threshold_bytes(self.replication_lag_threshold_bytes.load(Ordering::Relaxed));
             t.set_threshold_secs(self.replication_lag_threshold_secs.load(Ordering::Relaxed));
+        }
+    }
+
+    /// Publish the live replication-backlog TTL.
+    ///
+    /// Called on every role (the backlog's owner exists on every role). Syncs
+    /// the configured value into the handle on publish, so a `CONFIG SET` that
+    /// landed before the handler was wired is not lost.
+    pub fn set_backlog_ttl(&self, ttl: Arc<frogdb_replication::BacklogTtl>) {
+        if self.backlog_ttl.set(ttl).is_ok()
+            && let Some(t) = self.backlog_ttl.get()
+        {
+            t.set_secs(self.backlog_ttl_secs.load(Ordering::Relaxed));
         }
     }
 
@@ -3004,6 +3028,32 @@ impl ConfigManager {
                         c.set_freshness_timeout_ms(v);
                     }
                     info!(timeout_ms = v, "Replica freshness window updated");
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+
+            // Live seam on every role, same story again: the backlog belongs to
+            // the primary handler, which exists on every role, and the ticker
+            // that reads this re-reads it every second.
+            ReplBacklogTtl => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "repl-backlog-ttl".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || frogdb_config::replication::DEFAULT_BACKLOG_TTL_SECS,
+                get: |mgr| mgr.backlog_ttl_secs.load(Ordering::Relaxed),
+                apply: |mgr, v| {
+                    mgr.backlog_ttl_secs.store(v, Ordering::Relaxed);
+                    if let Some(t) = mgr.backlog_ttl.get() {
+                        t.set_secs(v);
+                    }
+                    info!(ttl_secs = v, "Replication backlog TTL updated");
                     Ok(())
                 },
                 render: |v| v.to_string(),

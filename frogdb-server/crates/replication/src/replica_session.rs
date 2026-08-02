@@ -1055,7 +1055,7 @@ mod tests {
     //! left the replica registered as `Syncing` until process restart.
     use super::*;
     use crate::frame::serialize_command_to_resp;
-    use crate::primary::SplitBrainBufferConfig;
+    use crate::primary::BacklogConfig;
     use crate::primary::{LagThresholdConfig, PrimaryReplicationHandler};
     use crate::state::ReplicationState;
     use crate::tracker::ReplicationTrackerImpl;
@@ -1157,10 +1157,11 @@ mod tests {
                 threshold_secs: 0,
                 cooldown: Duration::from_secs(0),
             },
-            SplitBrainBufferConfig {
+            BacklogConfig {
                 enabled: false,
                 max_entries: 0,
                 max_bytes: 0,
+                ttl_secs: 0,
             },
             0,
         ))
@@ -1187,10 +1188,11 @@ mod tests {
                 threshold_secs: 0,
                 cooldown: Duration::from_secs(0),
             },
-            SplitBrainBufferConfig {
+            BacklogConfig {
                 enabled: true,
                 max_entries: 10_000,
                 max_bytes: 64 * 1024 * 1024,
+                ttl_secs: 0,
             },
             0,
         ))
@@ -2212,10 +2214,11 @@ mod tests {
                 threshold_secs: 0,
                 cooldown: Duration::from_secs(0),
             },
-            SplitBrainBufferConfig {
+            BacklogConfig {
                 enabled: true,
                 max_entries: 3,
                 max_bytes: 64 * 1024 * 1024,
+                ttl_secs: 0,
             },
             0,
         ));

@@ -551,7 +551,7 @@ impl RealReplicaStreamer {
         primary: SocketAddr,
     ) -> (
         crate::replication::ReplicaReplicationHandler,
-        tokio::sync::mpsc::Receiver<frogdb_core::ReplicationFrame>,
+        tokio::sync::mpsc::Receiver<frogdb_core::StreamedFrame>,
     ) {
         use crate::replication::ReplicaReplicationHandler;
 

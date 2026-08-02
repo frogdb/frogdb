@@ -481,6 +481,12 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
         // the collector reads it per `collect()`. ---
         rows.push(pick(HotShardsConfig::PARAMS, "hotshards-enabled"));
 
+        // --- replication hardening round: the backlog's idle TTL, appended last
+        // so the golden snapshot's first 118 rows stay byte-identical.
+        // Live-mutable: the primary's backlog-TTL ticker re-reads it every
+        // second, so a SET arms, retunes or parks the timer on the spot. ---
+        rows.push(pick(ReplicationConfigSection::PARAMS, "repl-backlog-ttl"));
+
         rows
     });
 
@@ -1333,6 +1339,13 @@ mod tests {
             mutable: true,
             noop: false,
         },
+        ConfigParamInfo {
+            name: "repl-backlog-ttl",
+            section: Some("replication"),
+            field: Some("backlog-ttl-secs"),
+            mutable: true,
+            noop: false,
+        },
     ];
 
     #[test]
@@ -1368,8 +1381,9 @@ mod tests {
         // tls-watch ×2 promote-immutable), giving 117 — its other 23 promotions
         // only flipped `mutable` on existing rows and added no new ones. The
         // hot-shard hardening round appended the feature's mutable kill switch
-        // (`hotshards-enabled`), giving 118.
-        assert_eq!(GOLDEN_SNAPSHOT.len(), 118);
+        // (`hotshards-enabled`), giving 118. The replication hardening round
+        // appended the backlog's idle TTL (`repl-backlog-ttl`), giving 119.
+        assert_eq!(GOLDEN_SNAPSHOT.len(), 119);
     }
 
     #[test]

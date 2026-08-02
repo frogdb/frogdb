@@ -675,6 +675,14 @@
           "mutable": false
         },
         {
+          "name": "backlog-ttl-secs",
+          "type": "integer",
+          "default": 3600,
+          "description": "Seconds with zero connected replicas after which the replication backlog\nis freed and its resume window closed (Redis `repl-backlog-ttl`).\n0 = keep the backlog forever.\n\nFreeing costs a reconnecting replica a full resync instead of a\n`+CONTINUE`; keeping it costs ring-buffer memory and a push per write for\nresume history nobody may ever ask for.",
+          "config_param": "repl-backlog-ttl",
+          "mutable": true
+        },
+        {
           "name": "connect-timeout-ms",
           "type": "integer",
           "default": 5000,
