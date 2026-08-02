@@ -72,6 +72,37 @@ impl ExpiryResult {
     }
 }
 
+/// One cycle's elapsed-time budget.
+///
+/// Both readings come from [`crate::clock`], the clock the rest of the expiry
+/// domain uses, rather than from `Instant::now()` directly. That matters twice
+/// over. In production it is the same monotonic reading as before. Under a
+/// paused runtime (the turmoil simulation) the clock does not advance while a
+/// cycle runs — nothing inside `run_cycle` awaits, and a paused timer only moves
+/// when the runtime goes idle — so the budget is never exhausted and the cycle
+/// deletes exactly the set that was due. That is the point: with a real-time
+/// budget, *how many keys a simulated run expired* depended on how loaded the
+/// machine running the test was, which made the sweep's visible effect
+/// irreproducible. The batch cap still bounds the per-scan allocation, and the
+/// index is finite, so an unbudgeted cycle still terminates.
+struct Budget {
+    start: Instant,
+    limit: Duration,
+}
+
+impl Budget {
+    fn start(limit: Duration) -> Self {
+        Self {
+            start: crate::clock::now(),
+            limit,
+        }
+    }
+
+    fn exhausted(&self) -> bool {
+        crate::clock::now().duration_since(self.start) > self.limit
+    }
+}
+
 /// Owns the active-expiry decision + deletion. Holds the cycle's tunables so the
 /// budget/sampling policy can evolve without touching the event loop.
 pub struct ActiveExpiryCoordinator {
@@ -120,11 +151,11 @@ impl ActiveExpiryCoordinator {
     /// batches, so the scan is covered by the budget too.
     pub fn run_cycle(&mut self, store: &mut dyn Store, now: Instant) -> ExpiryResult {
         let mut result = ExpiryResult::default();
-        let start = Instant::now();
+        let budget = Budget::start(self.budget);
 
         // --- Key-level expiry ---
         loop {
-            if start.elapsed() > self.budget {
+            if budget.exhausted() {
                 result.budget_exhausted = true;
                 return result;
             }
@@ -135,7 +166,7 @@ impl ActiveExpiryCoordinator {
             }
             let mut progressed = false;
             for key in batch {
-                if start.elapsed() > self.budget {
+                if budget.exhausted() {
                     result.budget_exhausted = true;
                     return result;
                 }
@@ -165,7 +196,7 @@ impl ActiveExpiryCoordinator {
         // key is purged once (purging removes all its expired fields).
         let mut seen: HashSet<Bytes> = HashSet::new();
         loop {
-            if start.elapsed() > self.budget {
+            if budget.exhausted() {
                 result.budget_exhausted = true;
                 return result;
             }
@@ -185,7 +216,7 @@ impl ActiveExpiryCoordinator {
             }
             let mut purged_any = false;
             for key in keys {
-                if start.elapsed() > self.budget {
+                if budget.exhausted() {
                     result.budget_exhausted = true;
                     return result;
                 }

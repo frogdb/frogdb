@@ -7,6 +7,7 @@
 //! - PERSIST - remove expiration
 
 use bytes::Bytes;
+use frogdb_core::clock;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
     EventSpec, ExecutionStrategy, KeySpec, KeyspaceEventFlags, LookupSpec, WaiterWake, WalStrategy,
@@ -14,11 +15,27 @@ use frogdb_core::{
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+/// One reading of both clocks, taken together.
+///
+/// Every conversion below has to relate an absolute wall-clock timestamp to the
+/// monotonic deadline the store holds, which needs a point where the two clocks
+/// are pinned to each other. Sampling them independently — as each of these
+/// helpers used to — means the pairing is off by however long the two calls took,
+/// and that gap lands directly in an `EXPIRETIME`/`TTL` reply. One sample per
+/// conversion makes the pairing exact and the reply a function of the inputs.
+///
+/// The monotonic half comes from [`frogdb_core::clock`] so it agrees with every
+/// deadline comparison in the store. The wall-clock half is still the real OS
+/// clock: nothing in the codebase virtualizes wall time, so absolute
+/// `EXPIRETIME`-style replies remain real-time values.
+fn now_pair() -> (Instant, SystemTime) {
+    (clock::now(), SystemTime::now())
+}
+
 /// Helper to convert Unix timestamp (seconds) to Instant.
 pub(crate) fn unix_secs_to_instant(ts: u64) -> Option<Instant> {
     let target = UNIX_EPOCH + Duration::from_secs(ts);
-    let now_system = SystemTime::now();
-    let now_instant = Instant::now();
+    let (now_instant, now_system) = now_pair();
 
     if let Ok(duration) = target.duration_since(now_system) {
         Some(now_instant + duration)
@@ -31,8 +48,7 @@ pub(crate) fn unix_secs_to_instant(ts: u64) -> Option<Instant> {
 /// Helper to convert Unix timestamp (milliseconds) to Instant.
 pub(crate) fn unix_ms_to_instant(ts: u64) -> Option<Instant> {
     let target = UNIX_EPOCH + Duration::from_millis(ts);
-    let now_system = SystemTime::now();
-    let now_instant = Instant::now();
+    let (now_instant, now_system) = now_pair();
 
     if let Ok(duration) = target.duration_since(now_system) {
         Some(now_instant + duration)
@@ -44,8 +60,7 @@ pub(crate) fn unix_ms_to_instant(ts: u64) -> Option<Instant> {
 
 /// Helper to convert Instant to Unix timestamp (seconds).
 pub(crate) fn instant_to_unix_secs(instant: Instant) -> i64 {
-    let now_instant = Instant::now();
-    let now_system = SystemTime::now();
+    let (now_instant, now_system) = now_pair();
 
     if instant > now_instant {
         let duration = instant.duration_since(now_instant);
@@ -75,8 +90,7 @@ pub(crate) fn instant_to_unix_secs(instant: Instant) -> i64 {
 
 /// Helper to convert Instant to Unix timestamp (milliseconds).
 pub(crate) fn instant_to_unix_ms(instant: Instant) -> i64 {
-    let now_instant = Instant::now();
-    let now_system = SystemTime::now();
+    let (now_instant, now_system) = now_pair();
 
     if instant > now_instant {
         let duration = instant.duration_since(now_instant);
@@ -284,7 +298,7 @@ impl Command for ExpireCommand {
             return Ok(Response::Integer(if deleted { 1 } else { 0 }));
         }
 
-        let expires_at = Instant::now() + Duration::from_secs(seconds as u64);
+        let expires_at = clock::now() + Duration::from_secs(seconds as u64);
 
         // Check GT/LT conditions
         // GT on key without TTL: return 0 (Redis behavior: GT requires existing TTL to compare)
@@ -373,7 +387,7 @@ impl Command for PexpireCommand {
             return Ok(Response::Integer(if deleted { 1 } else { 0 }));
         }
 
-        let expires_at = Instant::now() + Duration::from_millis(ms as u64);
+        let expires_at = clock::now() + Duration::from_millis(ms as u64);
 
         // Check GT/LT conditions
         if conditions.gt {
@@ -454,7 +468,7 @@ impl Command for ExpireatCommand {
         let expires_at = unix_secs_to_instant(timestamp as u64).ok_or(CommandError::NotInteger)?;
 
         // If already expired, delete the key
-        if expires_at <= Instant::now() {
+        if expires_at <= clock::now() {
             let deleted = ctx.store.delete(key);
             return Ok(Response::Integer(if deleted { 1 } else { 0 }));
         }
@@ -538,7 +552,7 @@ impl Command for PexpireatCommand {
         let expires_at = unix_ms_to_instant(timestamp_ms as u64).ok_or(CommandError::NotInteger)?;
 
         // If already expired, delete the key
-        if expires_at <= Instant::now() {
+        if expires_at <= clock::now() {
             let deleted = ctx.store.delete(key);
             return Ok(Response::Integer(if deleted { 1 } else { 0 }));
         }
@@ -599,7 +613,7 @@ impl Command for TtlCommand {
 
         match ctx.store.get_expiry(key) {
             Some(expires_at) => {
-                let now = Instant::now();
+                let now = clock::now();
                 if expires_at <= now {
                     // Already expired (lazy expiry will clean it up)
                     Ok(Response::Integer(-2))
@@ -652,7 +666,7 @@ impl Command for PttlCommand {
 
         match ctx.store.get_expiry(key) {
             Some(expires_at) => {
-                let now = Instant::now();
+                let now = clock::now();
                 if expires_at <= now {
                     Ok(Response::Integer(-2))
                 } else {
@@ -737,7 +751,7 @@ impl Command for ExpiretimeCommand {
 
         match ctx.store.get_expiry(key) {
             Some(expires_at) => {
-                if expires_at <= Instant::now() {
+                if expires_at <= clock::now() {
                     // Already expired (lazy expiry will clean it up): report
                     // "no such key", matching TTL/PTTL — never a deadline that
                     // has already gone by.
@@ -787,7 +801,7 @@ impl Command for PexpiretimeCommand {
 
         match ctx.store.get_expiry(key) {
             Some(expires_at) => {
-                if expires_at <= Instant::now() {
+                if expires_at <= clock::now() {
                     // Already expired (lazy expiry will clean it up): report
                     // "no such key", matching TTL/PTTL — never a deadline that
                     // has already gone by.

@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use bytes::Bytes;
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
@@ -401,7 +401,8 @@ impl ShardWorker {
             metadata.expires_at = expires_at;
         }
         let frame = crate::persistence::serialize(&value, &metadata);
-        let ttl_ms = expires_at.map(|exp| exp.duration_since(Instant::now()).as_millis() as i64);
+        let ttl_ms =
+            expires_at.map(|exp| exp.duration_since(crate::clock::now()).as_millis() as i64);
         Some((Bytes::from(frame), ttl_ms))
     }
 
@@ -1029,7 +1030,7 @@ impl ShardWorker {
         // This matches Redis behavior where FLUSHDB of only-expired keys does
         // not dirty WATCH state.
         let total_count = self.store.len() as u64;
-        let expired_count = self.store.get_expired_keys(std::time::Instant::now()).len() as u64;
+        let expired_count = self.store.get_expired_keys(crate::clock::now()).len() as u64;
         let live_count = total_count.saturating_sub(expired_count);
         self.store.clear();
         if total_count > 0 {
@@ -1085,7 +1086,7 @@ impl ShardWorker {
                 if let Some(ms) = expiry_ms
                     && *ms > 0
                 {
-                    let expires_at = Instant::now() + Duration::from_millis(*ms as u64);
+                    let expires_at = crate::clock::now() + Duration::from_millis(*ms as u64);
                     self.store.set_expiry(dest_key, expires_at);
                 }
 
@@ -1177,7 +1178,10 @@ pub(super) mod scatter_effect_tests {
     use super::*;
 
     use std::sync::Mutex;
+    // These tests fabricate deadlines directly rather than going through the
+    // expiry domain's clock seam; under a non-paused test runtime the two agree.
     use std::sync::atomic::{AtomicU32, AtomicU64};
+    use std::time::Instant;
 
     use tokio::sync::{mpsc, oneshot};
 

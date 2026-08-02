@@ -25,6 +25,9 @@ rand.workspace = true
 smallvec.workspace = true
 usearch.workspace = true
 shuttle = { workspace = true, optional = true }
+# `time` only: the expiry domain reads its monotonic clock through tokio so it
+# follows a paused runtime's timer (see `crate::clock`).
+tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
 proptest.workspace = true
