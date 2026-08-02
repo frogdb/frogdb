@@ -1,26 +1,31 @@
 //! Crash-recovery orchestrator.
 //!
-//! Startup recovery used to be smeared across `server/startup.rs`,
-//! `server/init.rs`, `server/replication_init.rs`, `server/cluster_init.rs`, and
-//! `server/shards.rs`, with the recovery-order invariant existing only as the
-//! incidental top-to-bottom layout of `Server::with_listeners()`. This module
-//! owns that invariant: a single seam [`recover`] over a set of ordered phases.
+//! Startup recovery used to be smeared across the server crate's
+//! `server/startup.rs`, `server/init.rs`, `server/replication_init.rs`,
+//! `server/cluster_init.rs`, and `server/shards.rs`, with the recovery-order
+//! invariant existing only as the incidental top-to-bottom layout of
+//! `Server::with_listeners()`. This crate owns that invariant: a single seam
+//! [`recover`] over a set of ordered phases.
 //!
 //! The seam is deliberately deep — one function, plain-data inputs and outputs —
 //! over phases of filesystem + RocksDB internals. Inputs are config + data dir;
 //! outputs are recovered handles and plain data. No live components, no
-//! listeners, no spawned tasks: wiring stays in `init.rs`/`mod.rs`. Because the
-//! orchestrator spawns nothing and returns data, it sidesteps the `crate::net` /
+//! listeners, no spawned tasks: wiring stays in the server's `init.rs`/`mod.rs`.
+//! That is also why recovery needs no host trait: nothing here reaches into
+//! `Server`/`Subsystems` state, so there are no server-coupled effects to invert
+//! (contrast `frogdb_txn`'s `TxnHost`, ADR 0002). Because the orchestrator
+//! spawns nothing and returns data, it sidesteps the server's `net` /
 //! `cfg(turmoil)` abstractions entirely and its tests run as plain unit tests in
-//! both build flavors.
+//! both build flavors — and, since this crate depends on neither the server nor
+//! any async-network crate, they build without the server's 130K-LOC test binary.
 //!
 //! The recovery-order invariant, readable top to bottom in [`recover`]:
 //! **install staged checkpoint → open RocksDB → restore shard stores → restore
 //! functions → restore replication state → open cluster storage**.
 //!
 //! One recovery step deliberately stays out of the seam: per-shard search-index
-//! recovery, now owned by `frogdb_core::IndexLifecycleManager::recover` and
-//! invoked from `server/shards.rs` at worker-spawn time. It opens non-`Send`
+//! recovery, owned by `frogdb_core::IndexLifecycleManager::recover` and invoked
+//! from the server's `server/shards.rs` at worker-spawn time. It opens non-`Send`
 //! tantivy + usearch handles directly into each worker as it is constructed, so
 //! shipping them through [`RecoveredState`] is awkward; the lifecycle seam
 //! (proposal 15) gives that site a real, testable home while keeping the `Send`
@@ -28,12 +33,11 @@
 
 use std::path::Path;
 
+use frogdb_config::{ClusterConfigSection, Config, PersistenceConfig, ReplicationConfigSection};
 use frogdb_core::persistence::{RecoveryStats, RocksStore};
 use frogdb_core::sync::Arc;
 use frogdb_core::{ClusterStorage, ExpiryIndex, HashMapStore, MetricsRecorder, ReplicationState};
 use tracing::info;
-
-use crate::config::{ClusterConfigSection, Config, PersistenceConfig, ReplicationConfigSection};
 
 mod checkpoint;
 mod cluster;
@@ -45,7 +49,7 @@ mod shards;
 mod tests;
 
 /// What recovery reads. Pure data — no sockets, channels, or running components.
-pub(crate) struct RecoveryInputs<'a> {
+pub struct RecoveryInputs<'a> {
     /// Data directory root (equal to `persistence.data_dir`).
     pub data_dir: &'a Path,
     /// Persistence configuration.
@@ -88,7 +92,7 @@ impl<'a> RecoveryInputs<'a> {
 
 /// What recovery produces. Opened handles + plain data; component wiring happens
 /// later in the init phases.
-pub(crate) struct RecoveredState {
+pub struct RecoveredState {
     /// Open store; `None` when persistence is disabled.
     pub rocks: Option<Arc<RocksStore>>,
     /// One entry per shard, in shard order. Always exactly `num_shards` long — a
@@ -109,12 +113,10 @@ pub(crate) struct RecoveredState {
     /// Part of the recovery output contract and asserted by the seam tests. The
     /// wiring layer does not consume it yet; a later phase will surface the
     /// staged `replication_metadata.json` alongside it (see proposal 06).
-    #[allow(dead_code)]
     pub installed_staged_checkpoint: bool,
     /// Aggregate recovery statistics (keys loaded, expired, bytes, duration).
     ///
     /// Logged during the restore phase and asserted by the seam tests.
-    #[allow(dead_code)]
     pub stats: RecoveryStats,
 }
 
@@ -122,7 +124,7 @@ pub(crate) struct RecoveredState {
 /// operators get "recovery failed during OpenRocks" instead of a bare anyhow
 /// chain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RecoveryPhase {
+pub enum RecoveryPhase {
     /// Install a staged full-sync checkpoint (filesystem rename surgery on the
     /// data dir, before the DB can be opened).
     InstallStagedCheckpoint,
@@ -141,7 +143,7 @@ pub(crate) enum RecoveryPhase {
 /// Error from a recovery phase, tagged with the phase that failed.
 #[derive(Debug, thiserror::Error)]
 #[error("recovery failed during {phase:?}: {source}")]
-pub(crate) struct RecoveryError {
+pub struct RecoveryError {
     /// The phase that failed.
     pub phase: RecoveryPhase,
     /// The underlying cause.
@@ -164,7 +166,7 @@ impl RecoveryError {
 /// Synchronous: recovery is filesystem + RocksDB iteration. Today's startup
 /// already blocks the runtime here, so a synchronous seam is behavior-preserving;
 /// wrapping the call in `spawn_blocking` is a follow-up.
-pub(crate) fn recover(inputs: &RecoveryInputs<'_>) -> Result<RecoveredState, RecoveryError> {
+pub fn recover(inputs: &RecoveryInputs<'_>) -> Result<RecoveredState, RecoveryError> {
     // Persistence phases (1-4) only run when persistence is enabled AND backed
     // by RocksDB; otherwise the on-disk store does not exist and we start with
     // fresh per-shard stores. The `fake` WAL mode is enabled-but-RocksDB-less:

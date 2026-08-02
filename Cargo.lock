@@ -1803,6 +1803,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "frogdb-recovery"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "frogdb-config",
+ "frogdb-core",
+ "frogdb-persistence",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "frogdb-redis-regression"
 version = "0.1.0"
 dependencies = [
@@ -1891,8 +1905,8 @@ dependencies = [
  "frogdb-debug",
  "frogdb-macros",
  "frogdb-net",
- "frogdb-persistence",
  "frogdb-protocol",
+ "frogdb-recovery",
  "frogdb-replication",
  "frogdb-search",
  "frogdb-telemetry",

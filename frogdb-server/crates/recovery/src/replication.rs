@@ -21,10 +21,10 @@ use anyhow::Result;
 use frogdb_core::ReplicationState;
 use tracing::{info, warn};
 
-use super::RecoveryInputs;
+use crate::RecoveryInputs;
 
 /// Load and reconcile the persisted replication state.
-pub(super) fn restore_state(inputs: &RecoveryInputs<'_>) -> Result<ReplicationState> {
+pub(crate) fn restore_state(inputs: &RecoveryInputs<'_>) -> Result<ReplicationState> {
     // Standalone mode never read or wrote a replication state file; return a
     // fresh in-memory state and touch no disk.
     if !(inputs.replication.is_primary() || inputs.replication.is_replica()) {

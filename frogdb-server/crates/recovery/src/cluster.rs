@@ -12,10 +12,10 @@
 use anyhow::Result;
 use frogdb_core::ClusterStorage;
 
-use super::RecoveryInputs;
+use crate::RecoveryInputs;
 
 /// Open the Raft cluster storage when cluster mode is enabled, else `None`.
-pub(super) fn open_storage(inputs: &RecoveryInputs<'_>) -> Result<Option<ClusterStorage>> {
+pub(crate) fn open_storage(inputs: &RecoveryInputs<'_>) -> Result<Option<ClusterStorage>> {
     if !inputs.cluster.enabled {
         return Ok(None);
     }

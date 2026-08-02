@@ -81,7 +81,7 @@ pub fn spawn_periodic_snapshot_task(coordinator: Arc<dyn SnapshotCoordinator>) -
 /// durability mode is `periodic`.
 ///
 /// This is a runtime concern, deliberately kept out of the synchronous recovery
-/// seam (`crate::recovery`): recovery returns opened handles and plain data, and
+/// seam (`frogdb_recovery`): recovery returns opened handles and plain data, and
 /// the caller decides what background tasks to spawn afterwards. When `rocks` is
 /// `None` (persistence disabled) or the mode is not `periodic`, no task is
 /// spawned.

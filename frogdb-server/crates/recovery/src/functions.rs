@@ -8,7 +8,7 @@
 use anyhow::Result;
 use tracing::warn;
 
-use super::RecoveryInputs;
+use crate::RecoveryInputs;
 
 /// Read persisted function libraries from `functions.fdb`.
 ///
@@ -16,7 +16,7 @@ use super::RecoveryInputs;
 /// An unreadable or corrupt file is *not* a recovery failure: it is logged and
 /// treated as "no functions", matching the prior inline behavior — a corrupt
 /// function library should not block the database from starting.
-pub(super) fn restore(inputs: &RecoveryInputs<'_>) -> Result<Vec<(String, String)>> {
+pub(crate) fn restore(inputs: &RecoveryInputs<'_>) -> Result<Vec<(String, String)>> {
     let functions_path = inputs.data_dir.join("functions.fdb");
     match frogdb_core::load_from_file(&functions_path) {
         Ok(libraries) => Ok(libraries),
