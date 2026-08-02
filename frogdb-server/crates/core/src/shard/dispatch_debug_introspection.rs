@@ -20,6 +20,9 @@ impl ShardWorker {
             DebugIntrospectionMsg::GetWaitQueueInfo { response_tx } => {
                 let _ = response_tx.send(self.collect_wait_queue_info());
             }
+            DebugIntrospectionMsg::GetWaitQueueLog { response_tx } => {
+                let _ = response_tx.send(self.collect_wait_queue_log());
+            }
             DebugIntrospectionMsg::MemoryCheck { response_tx } => {
                 let _ = response_tx.send(self.collect_memory_check());
             }

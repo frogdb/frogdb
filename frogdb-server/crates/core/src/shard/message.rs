@@ -771,6 +771,12 @@ pub enum DebugIntrospectionMsg {
         response_tx: oneshot::Sender<super::types::WaitQueueInfo>,
     },
 
+    /// Get the registration journal from this shard (DEBUG WAITQUEUE-LOG).
+    GetWaitQueueLog {
+        /// Channel to send the response.
+        response_tx: oneshot::Sender<super::types::WaitQueueLogInfo>,
+    },
+
     /// Recompute live memory and report tracked vs recomputed (DEBUG MEMORY-CHECK).
     MemoryCheck {
         /// Channel to send the response.
@@ -1076,6 +1082,7 @@ impl DebugIntrospectionMsg {
         match self {
             DebugIntrospectionMsg::GetLockTableInfo { .. } => "GetLockTableInfo",
             DebugIntrospectionMsg::GetWaitQueueInfo { .. } => "GetWaitQueueInfo",
+            DebugIntrospectionMsg::GetWaitQueueLog { .. } => "GetWaitQueueLog",
             DebugIntrospectionMsg::MemoryCheck { .. } => "MemoryCheck",
             DebugIntrospectionMsg::ExpiryIndexCheck { .. } => "ExpiryIndexCheck",
             DebugIntrospectionMsg::ExpireBackdate { .. } => "ExpireBackdate",

@@ -12,8 +12,8 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use frogdb_testing::{
-    HashModel, History, KVModel, ListModel, StreamGroupModel, WaiterRegistrationOrder, ZSetModel,
-    check_exactly_once_delivery, check_fifo_wake_order, check_fifo_wake_order_exact,
+    FifoCoverage, HashModel, History, KVModel, ListModel, StreamGroupModel,
+    WaiterRegistrationOrder, ZSetModel, check_exactly_once_delivery, check_fifo_wake_order_exact,
     check_linearizability_bounded, check_pel_conservation, check_watch_no_false_negative,
     default_keys_of, is_errored_exec_result, partition_by_key,
 };
@@ -45,6 +45,11 @@ pub struct InvariantReport {
     pub keys_checked: usize,
     /// True once the tier-4 quiescence stage ran (snapshots were supplied).
     pub quiescence_checked: bool,
+    /// How much of the blocking-pop serve order the exact FIFO checker was
+    /// actually able to judge. `judged_pops == 0` with `served_pops > 0` means
+    /// coverage collapsed: the run proves nothing about wake order (it is not
+    /// a pass). There is deliberately no fallback proxy — see issue 16.
+    pub fifo_coverage: FifoCoverage,
 }
 
 impl InvariantReport {
@@ -103,11 +108,13 @@ fn model_for(sub: &History) -> Option<Family> {
 /// `quiescence` carries the tier-4 DEBUG snapshots gathered once the server
 /// quiesced; pass `None` to skip the stage (e.g. non-turmoil unit self-tests).
 ///
-/// `registration_order` carries the mid-run `DEBUG WAITQUEUE` observations
-/// (per-`(key, client_id)` registration ordinals) correlated via the CLIENT ID
-/// map; when present, stage 3 runs [`check_fifo_wake_order_exact`] instead of
-/// the invoke-time proxy [`check_fifo_wake_order`]. Pass `None` for unit
-/// self-tests that have no live prober.
+/// `registration_order` carries the `DEBUG WAITQUEUE-LOG` registration journal
+/// (per-`(key, client_id)` registration ordinals, recorded event-driven inside
+/// `ShardWaitQueue::register`) correlated via the CLIENT ID map. Stage 3 always
+/// runs [`check_fifo_wake_order_exact`]; `None` (or ordinals that do not pin a
+/// pop down) yields *no verdict* for the pops involved rather than a fallback
+/// proxy — the arrival-order proxy was unsound in both directions (issue 16).
+/// The resulting coverage lands in [`InvariantReport::fifo_coverage`].
 pub fn check_all(
     history: &History,
     final_elements: &HashMap<Bytes, Vec<Bytes>>,
@@ -181,15 +188,35 @@ pub fn check_all_with(
             .violations
             .push(format!("exactly-once delivery: {e}"));
     }
-    // Exact when the mid-run prober supplied per-waiter registration ordinals
-    // (a key whose served waiters are all known is judged only by ordinals);
-    // otherwise the invoke-time proxy.
-    let fifo_result = match registration_order {
-        Some(order) => check_fifo_wake_order_exact(history, order),
-        None => check_fifo_wake_order(history),
+    // Exact-only: judged strictly from registration ordinals. Missing or
+    // ambiguous ordinals mean "not judged", never a proxy verdict.
+    let empty_order;
+    let order = match registration_order {
+        Some(order) => order,
+        None => {
+            empty_order = WaiterRegistrationOrder::default();
+            &empty_order
+        }
     };
-    if let Err(e) = fifo_result {
-        report.violations.push(format!("FIFO wake order: {e}"));
+    match check_fifo_wake_order_exact(history, order) {
+        Ok(coverage) => {
+            // Only a *parked* pop can be judged, so the collapse signal is
+            // registrations that went unattributed - not served pops, most of
+            // which found data present and never entered the queue.
+            if coverage.registrations > coverage.attributed {
+                eprintln!(
+                    "FIFO coverage gap: {}/{} journaled registration(s) attributed \
+                     ({} of {} served blocking pops judged; journal complete={})",
+                    coverage.attributed,
+                    coverage.registrations,
+                    coverage.judged_pops,
+                    coverage.served_pops,
+                    coverage.complete
+                );
+            }
+            report.fifo_coverage = coverage;
+        }
+        Err(e) => report.violations.push(format!("FIFO wake order: {e}")),
     }
     if let Err(e) = check_watch_no_false_negative(history) {
         report.violations.push(format!("WATCH false-negative: {e}"));

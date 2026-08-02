@@ -10,11 +10,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
+use frogdb_testing::WaiterRegistrationOrder;
 use frogdb_testing::workload::Workload;
-use frogdb_testing::{WaiterOrdinal, WaiterRegistrationOrder};
 use turmoil::net::TcpStream;
 
-use super::quiescence_probe::{QuiescenceSnapshots, parse_waitqueue};
+use super::quiescence_probe::{QuiescenceSnapshots, parse_waitqueue_log};
 use super::sim_harness::{OperationHistory, OperationResult, SimConfig, build_sim};
 use super::sim_helpers::{
     SERVER_HOST, SERVER_PORT, encode_command, real_frogdb_server,
@@ -46,18 +46,20 @@ pub struct CapturedRun {
     pub history: frogdb_testing::History,
     pub final_elements: std::collections::HashMap<Bytes, Vec<Bytes>>,
     pub quiescence: QuiescenceSnapshots,
-    /// True registration order gathered by the mid-run `DEBUG WAITQUEUE`
-    /// prober, correlated to workload clients via the CLIENT ID map. Feeds the
-    /// exact FIFO wake-order checker. Empty when no waiter was ever observed
-    /// (e.g. a workload with no blocking pops).
+    /// True registration order read from the `DEBUG WAITQUEUE-LOG` journal
+    /// after the workload drained, correlated to workload clients via the
+    /// CLIENT ID map. Feeds the exact FIFO wake-order checker. Empty when no
+    /// waiter ever parked (e.g. a workload with no blocking pops).
+    ///
+    /// The journal is event-driven (appended inside `ShardWaitQueue::register`)
+    /// rather than sampled: the previous mid-run `DEBUG WAITQUEUE` prober only
+    /// saw waiters that happened to still be parked at a poll instant, which
+    /// for typical park times captured almost nothing (issue 16).
     pub registration_order: WaiterRegistrationOrder,
 }
 
-/// Prober cadence: how often (sim-ms) the prober samples `DEBUG WAITQUEUE`.
-/// Well under the multi-waiter blocking timeout so every concurrent waiter's
-/// registration ordinal is observed while it is parked. Doubles as the poll
-/// cadence of the workload-completion latch below.
-const PROBE_INTERVAL_MS: u64 = 50;
+/// Poll cadence (sim-ms) of the workload-completion latch the drainer waits on.
+const LATCH_POLL_MS: u64 = 50;
 
 /// Sim-time (ms) the drainer waits *after every workload client has finished*
 /// before reading final list state, so an in-flight deferred blocking serve has
@@ -74,7 +76,7 @@ const PROBE_INTERVAL_MS: u64 = 50;
 /// the readback is now latched to actual client completion instead.
 const DRAIN_SETTLE_MS: u64 = 500;
 
-/// Hard ceiling (sim-ms) on how long the drainer/prober will wait for the
+/// Hard ceiling (sim-ms) on how long the drainer will wait for the
 /// workload clients to finish. Reaching it means a client is wedged (or the
 /// workload genuinely outgrew the sim window); the run fails loudly rather than
 /// reading a half-finished store and reporting phantom element loss.
@@ -94,8 +96,8 @@ async fn await_clients_finished(finished: &AtomicUsize, expected: usize) -> bool
         if waited >= DRAIN_DEADLINE_MS {
             return false;
         }
-        tokio::time::sleep(Duration::from_millis(PROBE_INTERVAL_MS)).await;
-        waited += PROBE_INTERVAL_MS;
+        tokio::time::sleep(Duration::from_millis(LATCH_POLL_MS)).await;
+        waited += LATCH_POLL_MS;
     }
     true
 }
@@ -150,18 +152,15 @@ pub fn run_workload_capturing(
     }
 
     // client_id → server conn_id, populated by each client's `CLIENT ID` at
-    // connect. Inverted after the sim to correlate WAITQUEUE waiter conn_ids
-    // back to workload clients. `CLIENT ID` returns `conn_state.id()`, the SAME
+    // connect. Inverted after the sim to correlate WAITQUEUE-LOG registration
+    // conn_ids back to workload clients. `CLIENT ID` returns `conn_state.id()`, the SAME
     // id the shard records for a blocking waiter (both are `self.state.id`; see
     // client_conn_command.rs::conn_id and connection/handlers/blocking.rs's
     // BlockWait), so this join is over one id space.
     let client_ids: Arc<Mutex<HashMap<u64, u64>>> = Arc::new(Mutex::new(HashMap::new()));
 
-    // Mid-run prober observations: (shard, waiter ordinal) folded on every poll.
-    let waiter_obs: Arc<Mutex<Vec<(u16, WaiterOrdinal)>>> = Arc::new(Mutex::new(Vec::new()));
-
     // Post-workload PING sweep: AND-fold, across every workload client (NOT
-    // the prober — it's not a workload client), whether its connection still
+    // the drainer — it's not a workload client), whether its connection still
     // replied `+PONG` after its scripted ops finished. A leaked/wedged
     // connection or a shard that stopped servicing one is a bug even when the
     // wait queue looks empty, so this feeds `QuiescenceSnapshots::
@@ -169,7 +168,7 @@ pub fn run_workload_capturing(
     let connections_responsive: Arc<Mutex<bool>> = Arc::new(Mutex::new(true));
 
     // Workload-completion latch: each client bumps this once its scripted ops
-    // (and trailing PING) are done. The prober and the drainer key off it
+    // (and trailing PING) are done. The drainer keys off it
     // instead of a fixed wall-clock deadline, so the final-state readback can
     // never race a still-running client script (see `DRAIN_SETTLE_MS`).
     let clients_finished: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
@@ -188,7 +187,7 @@ pub fn run_workload_capturing(
             let mut buf = vec![0u8; 65536];
             let mut acc: Vec<u8> = Vec::with_capacity(4096);
 
-            // Register this client's server-side conn_id for the WAITQUEUE join.
+            // Register this client's server-side conn_id for the journal join.
             if let Some(conn_id) = client_id_query(&mut stream, &mut buf, &mut acc).await? {
                 client_ids.lock().unwrap().insert(script.client_id, conn_id);
             }
@@ -215,40 +214,6 @@ pub fn run_workload_capturing(
         });
     }
 
-    // Prober: a dedicated read-only client that polls `DEBUG WAITQUEUE` every
-    // ~50 sim-ms for as long as any workload client is still running, folding
-    // every observed waiter's registration ordinal into `waiter_obs`.
-    // Long-timeout multi-waiter pops stay parked far longer than the cadence,
-    // so each concurrent waiter is captured while blocked. Keying the loop off
-    // the completion latch (rather than a fixed deadline) means it covers the
-    // *whole* workload however long the scripts run, and stops immediately once
-    // they are done instead of padding every run to a fixed sim duration.
-    let obs_out = waiter_obs.clone();
-    let prober_finished = clients_finished.clone();
-    sim.client("prober", async move {
-        let addr = turmoil::lookup(SERVER_HOST);
-        let mut stream = connect_with_retry(addr).await?;
-        let mut buf = vec![0u8; 65536];
-        let mut acc: Vec<u8> = Vec::with_capacity(4096);
-        let mut elapsed = 0u64;
-        while prober_finished.load(Ordering::SeqCst) < num_client_scripts
-            && elapsed < DRAIN_DEADLINE_MS
-        {
-            tokio::time::sleep(Duration::from_millis(PROBE_INTERVAL_MS)).await;
-            elapsed += PROBE_INTERVAL_MS;
-            let waitqueue = debug_probe(&mut stream, &mut buf, &mut acc, b"WAITQUEUE").await?;
-            let snaps = parse_waitqueue(&waitqueue);
-            let mut obs = obs_out.lock().unwrap();
-            for snap in snaps {
-                let shard = snap.shard_id as u16;
-                for w in snap.waiters {
-                    obs.push((shard, w));
-                }
-            }
-        }
-        Ok::<(), Box<dyn std::error::Error>>(())
-    });
-
     // Drainer: after all clients finish, read final list contents for every
     // key (LRANGE); non-list keys reply WRONGTYPE and are skipped.
     let final_elements: Arc<Mutex<std::collections::HashMap<Bytes, Vec<Bytes>>>> =
@@ -261,6 +226,12 @@ pub fn run_workload_capturing(
     let drain_finished = clients_finished.clone();
     let drain_raced = Arc::new(Mutex::new(false));
     let drain_raced_out = drain_raced.clone();
+    // The wait-queue registration journal, read once after the drain: it holds
+    // every registration of the whole run, so nothing has to be sampled while
+    // waiters happen to be parked.
+    let wait_log: Arc<Mutex<Vec<super::quiescence_probe::WaitQueueLogSnapshot>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let wait_log_out = wait_log.clone();
     sim.client("drainer", async move {
         // Wait for actual client completion, not a fixed wall-clock deadline:
         // a readback taken while a client is still pushing would report every
@@ -300,6 +271,13 @@ pub fn run_workload_capturing(
         *quiescence_out.lock().unwrap() =
             QuiescenceSnapshots::from_replies(&locktable, &waitqueue, &memory, &expiry);
 
+        // Registration journal for the exact FIFO wake-order checker. Read
+        // here (not sampled mid-run) because it is append-only for the life of
+        // the server, so one post-drain read sees every waiter that ever
+        // parked, including ones served between two former poll instants.
+        let wq_log = debug_probe(&mut stream, &mut buf, &mut acc, b"WAITQUEUE-LOG").await?;
+        *wait_log_out.lock().unwrap() = parse_waitqueue_log(&wq_log);
+
         Ok::<(), Box<dyn std::error::Error>>(())
     });
 
@@ -329,25 +307,33 @@ pub fn run_workload_capturing(
         .iter()
         .map(|(&client_id, &conn_id)| (conn_id, client_id))
         .collect();
-    // Key-encoding round-trip guard: the WAITQUEUE dump renders each parked key
+    // Key-encoding round-trip guard: the journal renders each registered key
     // via `format_key_for_display` (lossy UTF-8), which must reproduce the
     // served-key bytes the recorder joins on. The generator's keys are all
-    // drawn from `key_space`, so an observed waiter key that is NOT in it means
-    // the display encoding diverged and the `(served_key, client_id)` join
-    // would silently miss — fail loudly instead.
+    // drawn from `key_space`, so a journaled key that is NOT in it means the
+    // display encoding diverged and the `(served_key, client_id)` join would
+    // silently miss — fail loudly instead.
     let key_space: std::collections::HashSet<Bytes> =
         Workload::key_space(workload.seed).into_iter().collect();
     let mut registration_order = WaiterRegistrationOrder::default();
-    for (_shard, w) in waiter_obs.lock().unwrap().iter() {
-        let key = Bytes::from(w.key.clone());
-        assert!(
-            key_space.contains(&key),
-            "prober observed waiter on key {:?} outside the workload key space — \
-             WAITQUEUE key encoding does not round-trip to the served key",
-            String::from_utf8_lossy(&w.key)
-        );
-        if let Some(&client_id) = conn_to_client.get(&w.conn_id) {
-            registration_order.insert(key, client_id, w.registration_seq);
+    for snap in wait_log.lock().unwrap().iter() {
+        if snap.truncated {
+            // Records were dropped, so a missing ordinal no longer proves the
+            // waiter never parked. The checker refuses to judge rather than
+            // guessing (issue 16).
+            registration_order.mark_truncated();
+        }
+        for w in &snap.registrations {
+            let key = Bytes::from(w.key.clone());
+            assert!(
+                key_space.contains(&key),
+                "wait-queue journal recorded a registration on key {:?} outside the workload \
+                 key space — the key encoding does not round-trip to the served key",
+                String::from_utf8_lossy(&w.key)
+            );
+            if let Some(&client_id) = conn_to_client.get(&w.conn_id) {
+                registration_order.insert(key, client_id, w.registration_seq, &w.op);
+            }
         }
     }
 
