@@ -3163,13 +3163,15 @@ fn test_role_command_standalone() {
 ///
 /// Determinism: active expiry is disabled up front with
 /// `DEBUG SET-ACTIVE-EXPIRE 0` (debug.rs -> ObservabilityMsg::SetActiveExpire), so
-/// no sim sweep tick can race the TTL-elapse-to-EXEC window. Key expiry is
-/// evaluated against the real wall clock (`std::time::Instant`), not turmoil's
-/// virtual clock, so the TTL is elapsed with `DEBUG EXPIRE-BACKDATE k 50` (see the
-/// call site) — which rewrites k's deadline directly into the past — rather than a
-/// real `std::thread::sleep`: deterministic and instant, no wall-clock stall
-/// inside the sim. Backdate rewrites only the timestamp (no purge, no version
-/// bump), so k stays physically present for the lazy check under test.
+/// no sim sweep tick can race the TTL-elapse-to-EXEC window. Key expiry reads
+/// `frogdb_types::clock::now()` — the tokio timer's clock, which under turmoil is
+/// virtual — so the TTL must be long enough (60s) that the sim's own per-hop
+/// latency cannot elapse it while the setup commands round-trip. The TTL is then
+/// elapsed with `DEBUG EXPIRE-BACKDATE k 50` (see the call site), which rewrites
+/// k's deadline directly into the past: exact and instant, with no sleep of
+/// either kind and no dependence on how many hops the setup took. Backdate
+/// rewrites only the timestamp (no purge, no version bump), so k stays physically
+/// present for the lazy check under test.
 #[test]
 fn watch_lazy_expiry_false_negative_realpath() {
     // Verifies the FIXED behavior on the real connection path: an `EXEC` over a
@@ -3235,12 +3237,12 @@ fn watch_lazy_expiry_false_negative_realpath() {
         let reply = round_trip(
             &mut stream,
             &mut buf,
-            &encode_command(&[b"PEXPIRE", b"k", b"10"]),
+            &encode_command(&[b"PEXPIRE", b"k", b"60000"]),
         )
         .await?;
         assert!(
             matches!(parse_simple_response(&reply), OperationResult::Integer(1)),
-            "PEXPIRE k 10 should reply :1, got {reply:?}"
+            "PEXPIRE k 60000 should reply :1, got {reply:?}"
         );
 
         // WATCH k while still live — records the current (post-PEXPIRE) per-shard
@@ -3253,12 +3255,12 @@ fn watch_lazy_expiry_false_negative_realpath() {
 
         // Elapse the TTL WITHOUT touching k and (with active expiry off) without
         // any sweep removing it. Key expiry is evaluated against
-        // `std::time::Instant::now()` (KeyMetadata::is_expired,
-        // types/src/types/mod.rs), the real wall clock — NOT tokio's virtual
-        // clock — so a `tokio::time::sleep` would advance only virtual time and
-        // leave k physically live. `DEBUG EXPIRE-BACKDATE` rewrites k's deadline
-        // 50ms into the past directly (deterministic and instant under turmoil,
-        // no real-clock stall): k is now logically expired but still physically
+        // `frogdb_types::clock::now()` (KeyMetadata::is_expired,
+        // types/src/types/mod.rs), which is the tokio timer's clock and therefore
+        // virtual here — sleeping would work, but the amount to sleep would have
+        // to track the TTL. `DEBUG EXPIRE-BACKDATE` rewrites k's deadline
+        // 50ms into the past directly (exact and instant, no sleep of either
+        // kind): k is now logically expired but still physically
         // present, because backdate rewrites only the timestamp — it never purges
         // and never bumps the version — active expiry is off, and nothing has
         // accessed it. Only a lazy check will remove it.
@@ -3340,12 +3342,12 @@ fn watch_lazy_expiry_false_negative_realpath() {
 /// paths diverged. The fix drains those waiters in `apply_expiry_effects`, so
 /// TTL/active-expiry and DEL converge to the same `NOGROUP`.
 ///
-/// Real-path shape (Task-8 dual-clock conventions): key expiry is evaluated
-/// against the real wall clock (`std::time::Instant`), not turmoil's virtual
-/// clock, so the 10ms TTL is elapsed with `DEBUG EXPIRE-BACKDATE st 50` — which
-/// rewrites `st`'s deadline directly into the past (deterministic and instant, no
-/// real `std::thread::sleep`); a `tokio::time::sleep` would advance only virtual
-/// time and leave `st` physically live. The active-expiry sweep itself runs on the
+/// Real-path shape: key expiry is evaluated against `frogdb_types::clock::now()`,
+/// the tokio timer's clock, which under turmoil is virtual. The TTL is set long
+/// (60s) so the sim's own per-hop latency cannot elapse it during setup, and is
+/// then elapsed with `DEBUG EXPIRE-BACKDATE st 50` — which rewrites `st`'s
+/// deadline directly into the past, exact and instant, independent of how many
+/// hops the setup took. The active-expiry sweep itself runs on the
 /// shard's 100ms virtual-time interval, so a `tokio::time::sleep` window after the
 /// backdate lets a sweep fire while `st` is genuinely past its TTL.
 #[test]
@@ -3445,23 +3447,23 @@ fn xreadgroup_ttl_no_nogroup_realpath() {
         // Give the blocker ample virtual time to connect and register its wait.
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        // PEXPIRE st 10 — a 10ms real-clock TTL; the key is still live.
+        // PEXPIRE st 60000 — a TTL far longer than the sim latency the remaining
+        // setup costs, so only the backdate below can elapse it.
         let reply = round_trip(
             &mut stream,
             &mut buf,
-            &encode_command(&[b"PEXPIRE", b"st", b"10"]),
+            &encode_command(&[b"PEXPIRE", b"st", b"60000"]),
         )
         .await?;
         assert!(
             matches!(parse_simple_response(&reply), OperationResult::Integer(1)),
-            "PEXPIRE st 10 should reply :1, got {reply:?}"
+            "PEXPIRE st 60000 should reply :1, got {reply:?}"
         );
 
         // Elapse the TTL by rewriting `st`'s deadline 50ms into the past with
-        // `DEBUG EXPIRE-BACKDATE`. Key expiry checks `std::time::Instant::now()`,
-        // not turmoil's virtual clock, so a `tokio::time::sleep` would advance
-        // only virtual time and leave `st` live; backdate makes it deterministic
-        // and instant (no real-clock stall). Backdate rewrites only the timestamp
+        // `DEBUG EXPIRE-BACKDATE`. Key expiry checks `frogdb_types::clock::now()`,
+        // the tokio timer's clock; backdating is exact and instant and does not
+        // depend on the TTL value. Backdate rewrites only the timestamp
         // — it never purges — so `st` is logically expired but still physically
         // present until the sweep runs.
         let reply = round_trip(
@@ -3531,10 +3533,11 @@ fn xreadgroup_ttl_no_nogroup_realpath() {
 /// makes the watch snapshot the post-PEXPIRE version. The only thing that could
 /// invalidate the watch in the window is the lazy purge under test.
 ///
-/// Clock: TTL expiry uses the real `std::time::Instant`; a `tokio::time::sleep`
-/// under turmoil advances only virtual time, so the 10ms TTL is elapsed with
+/// Clock: TTL expiry reads `frogdb_types::clock::now()`, the tokio timer's clock,
+/// which under turmoil is virtual — hence the 60s TTL, long enough that the sim's
+/// own per-hop latency cannot elapse it during setup. It is then elapsed with
 /// `DEBUG EXPIRE-BACKDATE k 50` — rewriting k's deadline directly into the past
-/// (F3 precedent), deterministic and instant with no real `std::thread::sleep`.
+/// (F3 precedent), exact and instant with no sleep of either kind.
 /// Ordering between the watcher (conn A) and the third-party reader (conn B) is
 /// made deterministic with `tokio::sync::Notify` handshakes (permit-storing
 /// `notify_one`, race-free).
@@ -3592,14 +3595,14 @@ fn regression_watch_read_lazy_purge_aborts_realpath() {
         round_trip(
             &mut stream,
             &mut buf,
-            &encode_command(&[b"PEXPIRE", b"k", b"10"]),
+            &encode_command(&[b"PEXPIRE", b"k", b"60000"]),
         )
         .await?;
         // WATCH the still-live key (snapshots the post-PEXPIRE version).
         round_trip(&mut stream, &mut buf, &encode_command(&[b"WATCH", b"k"])).await?;
 
-        // Elapse the real-clock TTL by rewriting k's deadline 50ms into the past
-        // (deterministic and instant under turmoil, no `std::thread::sleep`).
+        // Elapse the TTL by rewriting k's deadline 50ms into the past (exact and
+        // instant, and independent of the TTL value).
         // Backdate rewrites only the timestamp — no purge, no version bump — so k
         // is now logically expired but still physically present (active expiry
         // off, nothing has touched it).
@@ -3692,9 +3695,11 @@ fn regression_watch_read_lazy_purge_aborts_realpath() {
 ///
 /// Ordering: conn B sets the TTL BEFORE its own WATCH (PEXPIRE is a bump), so
 /// B's watch snapshots the post-PEXPIRE version — the only invalidation source
-/// in the window is A's WATCH-time purge under test. The 10ms TTL is elapsed with
-/// `DEBUG EXPIRE-BACKDATE k 50` — rewriting k's deadline directly into the past
-/// (real-clock `Instant`), deterministic and instant with no `std::thread::sleep`;
+/// in the window is A's WATCH-time purge under test. The TTL is 60s — expiry runs
+/// on the tokio timer's clock, virtual under turmoil, so a short TTL would elapse
+/// on the sim's own per-hop latency during setup — and is elapsed with
+/// `DEBUG EXPIRE-BACKDATE k 50`, rewriting k's deadline directly into the past,
+/// exact and instant with no sleep of either kind;
 /// the B->A->B sequence is pinned with `tokio::sync::Notify` handshakes.
 ///
 /// Regression pin (gap 4): the case unfixable at the coarse per-shard version,
@@ -3755,15 +3760,15 @@ fn regression_watch_second_watcher_aborts_realpath() {
         round_trip(
             &mut stream,
             &mut buf,
-            &encode_command(&[b"PEXPIRE", b"k", b"10"]),
+            &encode_command(&[b"PEXPIRE", b"k", b"60000"]),
         )
         .await?;
         // WATCH k while it is still LIVE (snapshots the post-PEXPIRE version).
         round_trip(&mut stream, &mut buf, &encode_command(&[b"WATCH", b"k"])).await?;
 
-        // Elapse the real-clock TTL by rewriting k's deadline 50ms into the past
-        // with `DEBUG EXPIRE-BACKDATE` (deterministic and instant under turmoil,
-        // no `std::thread::sleep`; rewrites only the timestamp — no purge, no
+        // Elapse the TTL by rewriting k's deadline 50ms into the past
+        // with `DEBUG EXPIRE-BACKDATE` (exact and instant, independent of the TTL
+        // value; rewrites only the timestamp — no purge, no
         // version bump). k is now logically expired, physically present.
         let reply = round_trip(
             &mut stream,
