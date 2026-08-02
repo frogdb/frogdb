@@ -453,6 +453,7 @@ mod tests {
                     Box::pin(async move {
                         entered.notify_one();
                         release.notified().await;
+                        Ok(())
                     })
                 }));
         }

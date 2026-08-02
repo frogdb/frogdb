@@ -608,3 +608,171 @@ fn incomplete_staged_checkpoint_is_refused_without_touching_live_db() {
         .any(|e| e.file_name().to_string_lossy().starts_with("db_backup_"));
     assert!(!backed_up, "live db must not be backed up on refusal");
 }
+
+/// A metrics recorder that keeps counter totals, so a test can assert what
+/// recovery actually emitted rather than only what it returned.
+#[derive(Default)]
+struct RecordingMetricsRecorder {
+    counters: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+}
+
+impl RecordingMetricsRecorder {
+    fn total(&self, name: &str) -> u64 {
+        self.counters
+            .lock()
+            .unwrap()
+            .get(name)
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl frogdb_core::MetricsRecorder for RecordingMetricsRecorder {
+    fn increment_counter(&self, name: &str, value: u64, _labels: &[(&str, &str)]) {
+        *self
+            .counters
+            .lock()
+            .unwrap()
+            .entry(name.to_string())
+            .or_default() += value;
+    }
+    fn record_gauge(&self, _name: &str, _value: f64, _labels: &[(&str, &str)]) {}
+    fn record_histogram(&self, _name: &str, _value: f64, _labels: &[(&str, &str)]) {}
+}
+
+/// Write `value` under `key` in shard 0 without going through the serializer,
+/// so recovery meets bytes it cannot decode.
+fn seed_raw(db_dir: &Path, num_shards: usize, entries: &[(&[u8], &[u8])]) {
+    let rocks = RocksStore::open(db_dir, num_shards, &RocksConfig::default()).unwrap();
+    for (key, value) in entries {
+        rocks.put(0, key, value).unwrap();
+    }
+    rocks.flush().unwrap();
+    drop(rocks);
+}
+
+/// Build recovery inputs for a data dir that already exists on disk.
+fn inputs_for<'a>(
+    cfg: &'a PersistenceConfig,
+    repl: &'a ReplicationConfigSection,
+    cluster: &'a ClusterConfigSection,
+    num_shards: usize,
+    metrics: Arc<dyn frogdb_core::MetricsRecorder>,
+) -> RecoveryInputs<'a> {
+    RecoveryInputs {
+        data_dir: &cfg.data_dir,
+        persistence: cfg,
+        replication: repl,
+        cluster,
+        num_shards,
+        warm_enabled: false,
+        metrics_recorder: metrics,
+    }
+}
+
+// FM-PERSISTENCE-045
+/// A data directory holding data of which *nothing* decodes is a broken (or
+/// foreign) database, not an empty one: recovery refuses rather than booting an
+/// empty keyspace that the WAL and snapshot cadence would then overwrite.
+#[test]
+fn wholly_undecodable_database_refuses_to_start() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    seed_raw(
+        &db_dir,
+        2,
+        &[
+            (b"one", b"not a serialized value"),
+            (b"two", b"nor is this one"),
+        ],
+    );
+
+    let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(false);
+    let inputs = inputs_for(
+        &cfg,
+        &repl_cfg,
+        &cluster_cfg,
+        2,
+        Arc::new(NoopMetricsRecorder::new()),
+    );
+
+    let err = recover(&inputs)
+        .err()
+        .expect("a wholly undecodable database must not boot");
+    assert_eq!(err.phase, RecoveryPhase::RestoreShards);
+    let msg = err.to_string();
+    assert!(
+        msg.contains("2 key(s)") && msg.contains(&db_dir.display().to_string()),
+        "the refusal must name the scale and the directory: {msg}"
+    );
+}
+
+// FM-PERSISTENCE-033
+/// One bad value among good ones is skipped, counted, and metered — the boot
+/// still succeeds, because a single corrupt key must not cost the keyspace.
+#[test]
+fn partial_decode_failure_is_counted_and_metered() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    seed_db(&db_dir, 2, b"good", "value");
+    seed_raw(&db_dir, 2, &[(b"bad", b"not a serialized value")]);
+
+    let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(false);
+    let metrics = Arc::new(RecordingMetricsRecorder::default());
+    let inputs = inputs_for(&cfg, &repl_cfg, &cluster_cfg, 2, metrics.clone());
+
+    let recovered = recover(&inputs).expect("one bad key must not fail the boot");
+    assert_eq!(recovered.stats.keys_failed, 1);
+    assert_eq!(recovered.stats.keys_loaded, 1);
+    assert_eq!(
+        metrics.total("frogdb_recovery_keys_failed_total"),
+        1,
+        "the skip must be visible to monitoring, not only in the log"
+    );
+}
+
+// FM-PERSISTENCE-033
+// FM-PERSISTENCE-045
+/// A key that decoded and was then dropped for being expired still counts as
+/// decoded: the database is readable, so a lone corrupt key beside it takes the
+/// skip-and-count path rather than the refusal, even though the recovered
+/// keyspace is empty.
+#[test]
+fn expired_keys_count_as_decoded_so_one_bad_key_does_not_refuse() {
+    use std::time::Duration;
+
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    {
+        let rocks = RocksStore::open(&db_dir, 2, &RocksConfig::default()).unwrap();
+        let value = Value::string("gone");
+        let mut metadata = KeyMetadata::new(value.memory_size());
+        metadata.expires_at = Some(std::time::Instant::now() + Duration::from_millis(1));
+        rocks
+            .put(0, b"expiring", &serialize(&value, &metadata))
+            .unwrap();
+        rocks.put(0, b"bad", b"not a serialized value").unwrap();
+        rocks.flush().unwrap();
+    }
+    std::thread::sleep(Duration::from_millis(10));
+
+    let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(false);
+    let inputs = inputs_for(
+        &cfg,
+        &repl_cfg,
+        &cluster_cfg,
+        2,
+        Arc::new(NoopMetricsRecorder::new()),
+    );
+
+    let recovered = recover(&inputs).expect("a decodable-but-expired key means the db is readable");
+    assert_eq!(recovered.stats.keys_loaded, 0);
+    assert_eq!(recovered.stats.keys_expired_skipped, 1);
+    assert_eq!(recovered.stats.keys_failed, 1);
+}

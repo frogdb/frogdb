@@ -135,7 +135,13 @@ pub(super) fn init_replication(
         primary_handler.set_pre_checkpoint_hook(Arc::new(move || {
             let senders = senders.clone();
             Box::pin(async move {
-                super::checkpoint_quiesce::quiesce_shards_for_checkpoint(&senders).await;
+                // A shard that cannot be drained fails the resync (issue 05):
+                // its acknowledged writes would be missing from the replica's
+                // base dataset with nothing in the backlog to replay them, so
+                // the handshake is dropped and the replica retries.
+                super::checkpoint_quiesce::quiesce_shards_for_checkpoint(&senders)
+                    .await
+                    .map_err(std::io::Error::other)
             })
         }));
     }

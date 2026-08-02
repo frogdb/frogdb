@@ -180,6 +180,10 @@ impl ConnectionHandler {
             last_bgsave_error: save_stats.last_error,
             last_bgsave_secs,
             current_bgsave_secs,
+            // Fixed at boot: recovery finished before any connection existed.
+            load_keys_loaded: self.admin.recovery_stats.keys_loaded,
+            load_keys_expired: self.admin.recovery_stats.keys_expired_skipped,
+            load_keys_failed: self.admin.recovery_stats.keys_failed,
         };
 
         let baseline = crate::latency_test::get_global_baseline().map(|info| BaselineSnapshot {

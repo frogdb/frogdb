@@ -287,8 +287,14 @@ impl InfoSection for PersistenceSection {
             .field("rdb_saves", p.saves)
             .field("rdb_bgsave_failures", p.bgsave_failures)
             .field("rdb_last_cow_size", 0)
-            .field("rdb_last_load_keys_expired", 0)
-            .field("rdb_last_load_keys_loaded", 0)
+            // What this boot's recovery did, fixed for the life of the process
+            // (Redis reports the same two about its last RDB load). The failed
+            // count is a FrogDB extension: an undecodable value is skipped
+            // rather than fatal, so without a count a boot can lose keys and
+            // look identical to one that never had them.
+            .field("rdb_last_load_keys_expired", p.load_keys_expired)
+            .field("rdb_last_load_keys_loaded", p.load_keys_loaded)
+            .field("rdb_last_load_keys_failed", p.load_keys_failed)
             .field("aof_enabled", 0)
             .field("aof_rewrite_in_progress", 0)
             .field("aof_rewrite_scheduled", 0)
@@ -871,6 +877,33 @@ mod tests {
         assert!(
             out.contains("rdb_bgsave_failures:1\r\n"),
             "a success must not erase the failure history: {out}"
+        );
+    }
+
+    // FM-PERSISTENCE-033
+    /// The three load fields report what *this boot's* recovery actually did,
+    /// including the FrogDB-only failed count — the only positive signal that a
+    /// boot dropped keys, since a smaller keyspace cannot say so by itself.
+    #[test]
+    fn persistence_renders_the_real_load_stats() {
+        // A boot that loaded nothing reports zeros — the same rendering as the
+        // old hardcoded fields, which is why nobody noticed they were fake.
+        let src = sources();
+        let out = render(&PersistenceSection, &src);
+        assert!(out.contains("rdb_last_load_keys_loaded:0\r\n"), "{out}");
+        assert!(out.contains("rdb_last_load_keys_expired:0\r\n"), "{out}");
+        assert!(out.contains("rdb_last_load_keys_failed:0\r\n"), "{out}");
+
+        let mut src = sources();
+        src.persistence.load_keys_loaded = 4_200;
+        src.persistence.load_keys_expired = 17;
+        src.persistence.load_keys_failed = 3;
+        let out = render(&PersistenceSection, &src);
+        assert!(out.contains("rdb_last_load_keys_loaded:4200\r\n"), "{out}");
+        assert!(out.contains("rdb_last_load_keys_expired:17\r\n"), "{out}");
+        assert!(
+            out.contains("rdb_last_load_keys_failed:3\r\n"),
+            "skipped-undecodable keys must be reportable: {out}"
         );
     }
 

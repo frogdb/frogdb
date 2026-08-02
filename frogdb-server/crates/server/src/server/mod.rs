@@ -114,6 +114,9 @@ pub struct Server {
     /// Snapshot coordinator (shared across all shards).
     snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
 
+    /// What startup recovery loaded/skipped, for INFO persistence' load fields.
+    recovery_stats: frogdb_core::persistence::RecoveryStats,
+
     /// Metrics recorder.
     metrics_recorder: Arc<dyn MetricsRecorder>,
 
@@ -413,6 +416,7 @@ impl Server {
             periodic_sync_handle: infra.periodic_sync_handle,
             periodic_snapshot_handle: infra.periodic_snapshot_handle,
             snapshot_coordinator: infra.snapshot_coordinator,
+            recovery_stats: infra.recovery_stats,
             metrics_recorder: infra.metrics_recorder,
             prometheus_recorder: infra.prometheus_recorder,
             keyspace_stats: infra.keyspace_stats,

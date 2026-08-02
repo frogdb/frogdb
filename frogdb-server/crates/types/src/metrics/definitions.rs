@@ -216,6 +216,15 @@ define_metrics! {
     /// Total committed records dropped by point-in-time WAL recovery on corruption
     counter WalRecoveryDroppedRecords("frogdb_wal_recovery_dropped_records_total") {}
 
+    // Raised at boot by startup recovery when a stored value cannot be
+    // deserialized. Skipping such a key is deliberate (one bad value must not
+    // take the whole keyspace down), so this counter is the only positive
+    // signal that a boot lost keys — the keyspace size alone cannot say whether
+    // it shrank. A *wholly* undecodable database refuses to start instead, so a
+    // running server with a non-zero value here decoded at least one key.
+    /// Total keys skipped at startup because their stored value failed to deserialize
+    counter RecoveryKeysFailed("frogdb_recovery_keys_failed_total") {}
+
     /// Total HyperLogLog register-delta operands persisted as WAL merges
     /// (dense-HLL PFADD writes that took the merge-delta path instead of a
     /// full value Put).

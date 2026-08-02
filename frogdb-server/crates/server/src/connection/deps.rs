@@ -10,8 +10,10 @@ use std::time::Duration;
 use frogdb_core::{
     AclManager, ClusterNetworkFactory, ClusterRaft, ClusterState, CommandLatencyHistograms,
     CommandRegistry, MetricsRecorder, NoopMetricsRecorder, ReplicationTrackerImpl, ShardSender,
-    SharedFunctionRegistry, SharedHotkeySession, command::QuorumChecker, new_shared_hotkey_session,
-    persistence::SnapshotCoordinator,
+    SharedFunctionRegistry, SharedHotkeySession,
+    command::QuorumChecker,
+    new_shared_hotkey_session,
+    persistence::{RecoveryStats, SnapshotCoordinator},
 };
 use frogdb_debug::MemoryDiagConfig;
 use frogdb_telemetry::SharedTracer;
@@ -69,6 +71,12 @@ pub struct AdminDeps {
 
     /// Cursor store for FT.AGGREGATE WITHCURSOR / FT.CURSOR READ/DEL.
     pub cursor_store: Arc<AggregateCursorStore>,
+
+    /// What this process' startup recovery loaded, skipped as expired, and
+    /// skipped as undecodable — the source for INFO persistence' `rdb_last_load_*`
+    /// fields. Plain data, fixed at boot: recovery has already finished by the
+    /// time any connection exists, so there is nothing to share or lock.
+    pub recovery_stats: RecoveryStats,
 }
 
 // ============================================================================

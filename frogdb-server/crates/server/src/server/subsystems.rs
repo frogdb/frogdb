@@ -498,6 +498,7 @@ impl Server {
                 snapshot_coordinator: self.snapshot_coordinator.clone(),
                 function_registry: self.function_registry.clone(),
                 cursor_store: cursor_store.clone(),
+                recovery_stats: self.recovery_stats.clone(),
             },
             cluster: ClusterDeps {
                 cluster_state: self.cluster_state.clone(),

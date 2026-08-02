@@ -4,7 +4,7 @@
     "source": "frogdb-server/crates/telemetry/src/definitions.rs",
     "regenerate": "just docs-gen"
   },
-  "count": 92,
+  "count": 93,
   "metrics": [
     {
       "name": "frogdb_active_version",
@@ -590,6 +590,13 @@
           "type": "string"
         }
       ]
+    },
+    {
+      "name": "frogdb_recovery_keys_failed_total",
+      "type": "counter",
+      "help": "Total keys skipped at startup because their stored value failed to deserialize",
+      "group": "recovery",
+      "labels": []
     },
     {
       "name": "frogdb_scatter_gather_duration_seconds",

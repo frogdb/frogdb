@@ -23,6 +23,11 @@ pub enum SnapshotError {
     Io(#[from] std::io::Error),
     #[error("Internal error: {0}")]
     Internal(String),
+    /// The pre-snapshot hook ([`PreSnapshotHook`]) could not complete, so
+    /// cutting now would produce an artifact missing acknowledged writes. The
+    /// save is failed rather than cut; see the hook's docs.
+    #[error("Pre-snapshot quiesce failed: {0}")]
+    PreSnapshot(String),
 }
 /// How a background-save request should behave when a save is already running.
 ///

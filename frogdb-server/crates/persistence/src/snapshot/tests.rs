@@ -1178,6 +1178,65 @@ async fn test_coordinator_records_failed_then_recovered_save() {
     );
 }
 
+// FM-PERSISTENCE-020
+/// A pre-snapshot hook that cannot complete fails the save instead of cutting a
+/// checkpoint the drain never covered.
+///
+/// In production the hook drains every shard's WAL flush engine; a shard whose
+/// task is gone fails it. What must not happen is the old behaviour: cutting
+/// anyway, reporting success, advancing `LASTSAVE`, and leaving a
+/// silently-incomplete artifact as the newest snapshot on disk. So: the cause
+/// reaches `INFO` through `last_error`, the failure is counted, no save time is
+/// stamped, and nothing is written under the snapshot directory. The next save
+/// with a healthy drain succeeds normally.
+#[tokio::test]
+async fn test_failed_pre_snapshot_hook_fails_the_save_and_cuts_nothing() {
+    let db = TempDir::new().unwrap();
+    let store = Arc::new(make_store(db.path()));
+    let snap = TempDir::new().unwrap();
+    let data = TempDir::new().unwrap();
+    let coord = coordinator(store, snap.path(), data.path());
+
+    coord.set_pre_snapshot_hook(Arc::new(|| {
+        Box::pin(async {
+            Err(SnapshotError::PreSnapshot(
+                "WAL drain: 1 of 4 shard(s) did not drain (shard [2])".to_string(),
+            ))
+        })
+    }));
+    coord.start_snapshot().unwrap();
+    assert!(wait_idle(&coord).await, "the failing save never settled");
+
+    let stats = coord.stats();
+    assert_eq!(stats.failures, 1);
+    assert_eq!(stats.saves, 0, "an undrained checkpoint is not a save");
+    assert!(
+        stats
+            .last_error
+            .as_deref()
+            .is_some_and(|e| e.contains("did not drain")),
+        "the quiesce cause must reach INFO verbatim: {:?}",
+        stats.last_error
+    );
+    assert!(
+        stats.last_save_time.is_none(),
+        "a save that never cut must not advance LASTSAVE"
+    );
+    assert!(
+        !snap.path().join("snapshot_00001").exists() && !snap.path().join("latest").exists(),
+        "nothing may be published when the drain failed"
+    );
+
+    // A healthy drain saves normally: the refusal is per-attempt, not sticky.
+    coord.set_pre_snapshot_hook(Arc::new(|| Box::pin(async { Ok(()) })));
+    coord.start_snapshot().unwrap();
+    assert!(wait_idle(&coord).await, "the recovery save never settled");
+    let stats = coord.stats();
+    assert_eq!(stats.saves, 1);
+    assert_eq!(stats.failures, 1, "the failure history survives a success");
+    assert!(stats.last_error.is_none(), "a success clears the cause");
+}
+
 // FM-PERSISTENCE-022
 /// Save durations are measured, not guessed: `last_duration` is absent until a
 /// save completes (Redis renders `-1`), `current_started_at` is live for exactly
@@ -1202,6 +1261,7 @@ async fn test_coordinator_reports_last_and_current_save_duration() {
     coord.set_pre_snapshot_hook(Arc::new(|| {
         Box::pin(async {
             tokio::time::sleep(Duration::from_millis(120)).await;
+            Ok(())
         })
     }));
     coord.start_snapshot().unwrap();

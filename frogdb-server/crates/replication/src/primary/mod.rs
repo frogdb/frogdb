@@ -42,8 +42,13 @@ pub use ring_buffer::{ReplicationRingBuffer, SplitBrainBufferConfig};
 /// storage engine hold every acknowledged write — the owner of the shards
 /// installs this hook (see `checkpoint_quiesce` in the server crate) and the
 /// full-sync path awaits it immediately before `create_checkpoint`.
+///
+/// A failure fails the resync. The checkpoint is the replica's entire dataset
+/// and nothing in the backlog can replay the writes the hook did not flush, so
+/// an incomplete drain would hand the replica a permanent, undetectable hole;
+/// dropping the connection instead costs one reconnect backoff (issue 05).
 pub type PreCheckpointHook =
-    Arc<dyn Fn() -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+    Arc<dyn Fn() -> std::pin::Pin<Box<dyn Future<Output = io::Result<()>> + Send>> + Send + Sync>;
 
 /// Injected access to the primary's live keyspace, one serialized dataset blob
 /// per shard, used when a `FULLRESYNC` has no RocksDB to checkpoint.

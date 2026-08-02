@@ -291,22 +291,22 @@ and no synchronous `SAVE` — the command is an explicit `-ERR ... not supported
 | Trigger | A checkpoint (BGSAVE, or the replication FULLRESYNC path) is taken while clients are writing under the default non-`sync` durability, where a write is acknowledged as soon as it is staged in its shard's flush engine. |
 | Observable | The restored checkpoint contains every write the server had already replied to when the cut began, including search-index state. Writes landing *during* the drain may or may not be captured — the safe direction. |
 | NOT observable | A restored checkpoint missing an acknowledged write because it was still sitting in a flush engine at cut time. A drain that blocks the command pipeline, stalls writers, or costs one flush latency *per shard* instead of one overall. |
-| Invariant | `quiesce_shards_for_checkpoint` is a **drain, not a freeze**: two fan-out waves of ack-carrying messages (flush search indexes, then flush WAL) down the same FIFO channel the writes travelled. The `WalPersistence` effect enqueues a write's WAL entry before `ReplicationBroadcast` acknowledges it, so the drain message is behind every acknowledged write by construction — the argument is about *ordering*, not timing, which is why no lock is needed. Both waves send to all shards first and then await, so the cost is one flush latency, not `num_shards` of them. |
+| Invariant | `quiesce_shards_for_checkpoint` is a **drain, not a freeze**: two fan-out waves of ack-carrying messages (flush search indexes, then flush WAL) down the same FIFO channel the writes travelled. The `WalPersistence` effect enqueues a write's WAL entry before `ReplicationBroadcast` acknowledges it, so the drain message is behind every acknowledged write by construction — the argument is about *ordering*, not timing, which is why no lock is needed. Both waves send to all shards first and then await, so the cost is one flush latency, not `num_shards` of them. A shard that cannot complete a wave fails the cut rather than dropping out of it — [FM-PERSISTENCE-020](#fm-persistence-020--a-shard-that-cannot-drain-fails-the-checkpoint). |
 | Outcome variant | n/a (storage-layer invariant) |
 | Forced by | `test_checkpoint_preserves_single_shard_multi_atomicity_under_concurrent_bgsave`, `test_bgsave_snapshot_survives_restart`, `test_concurrent_bgsave_stress_restores_cleanly`, `test_ft_search_bgsave_flushes_search` |
 | Bug refs | `.scratch/testing-improvements/issues/43-checkpoint-cross-shard-cut.md`; commit `ebdf7d9e` (the full-resync half of the same drain) |
 
-## FM-PERSISTENCE-020 — a wedged shard drops out of the drain silently
+## FM-PERSISTENCE-020 — a shard that cannot drain fails the checkpoint
 
 | Field | Value |
 |---|---|
-| Trigger | One shard cannot service the quiesce message — its task has panicked, its channel is closed, or it is blocked long enough that the checkpoint proceeds without it. |
-| Observable | Current behavior: the checkpoint is cut anyway and reported as successful, with that shard's staged-but-uncommitted writes absent from the artifact. There is **no log line, no metric, and no counter** from the quiesce itself; the drain returns `()` and has no channel to report a partial result. |
-| NOT observable | The checkpoint aborting or reporting the partial drain — a gap, not a guarantee, and worse on the FULLRESYNC path, where the uncaptured writes are missing from the replica permanently rather than just from one artifact. |
-| Invariant | `fan_out` uses `let _ =` on both the send and the receive, deliberately matching pre-existing behavior so a wedged shard cannot hang a checkpoint. Forcing this needs a shard harness that can wedge one shard mid-checkpoint and inspect the artifact; the campaign has not built it. |
-| Outcome variant | n/a (no outcome is reported — that is the gap) |
-| Forced by | MISSING ([gap: 05-quiesce-partial-drain-is-silent.md](../issues/open/05-quiesce-partial-drain-is-silent.md)) |
-| Bug refs | `.scratch/hardening/issues/05` |
+| Trigger | One shard cannot complete a wave of the pre-checkpoint drain ([FM-PERSISTENCE-019](#fm-persistence-019--every-write-acknowledged-before-the-cut-is-in-the-cut)): its channel is closed (task ended or panicked) or the ack responder is dropped without answering. |
+| Observable | No artifact is cut. `quiesce_shards_for_checkpoint` returns `QuiesceIncomplete` naming the wave (`search-index flush` / `WAL drain`), the failing shard indices, and the shard count, and logs it at `ERROR`. `BGSAVE`/periodic saves turn it into `SnapshotError::PreSnapshot`, which records a failure through the normal path — `rdb_last_bgsave_status:err`, `rdb_last_bgsave_error` carrying the cause, `rdb_bgsave_failures` incremented, `rdb_saves` and `LASTSAVE` unchanged, and the previous snapshot left as the newest on disk. `FULLRESYNC` fails the handshake before writing the checkpoint, so the replica retries on its reconnect backoff. |
+| NOT observable | A checkpoint reported as successful, or shipped to a replica, while missing acknowledged writes still staged in a shard's flush engine. A *slow* shard failing the drain: there is no timeout, so a slow shard still blocks and is waited for. A partially-written checkpoint directory or a `sync_checkpoint_path` left set after the failed FULLRESYNC. |
+| Invariant | `fan_out` collects every failure instead of returning at the first, so the error names the full blast radius; `send` errors and `rx.await` errors are treated identically (both mean the shard task is gone). Because there is no timeout, a failure can only mean "this shard is not running" — never "this shard is busy" — which is what makes failing the cut the right response rather than a liveness hazard. The failure is logged once, in `fan_out`, the only place that knows *which* shards; both callers only translate it into their own error type. No new metric: the BGSAVE path already flows into `frogdb_persistence_errors{type="snapshot"}` via `record_failure`. |
+| Outcome variant | `BGSAVE`: save reported failed, previous snapshot retained. `FULLRESYNC`: handshake dropped with `pre-checkpoint drain failed for FULLRESYNC: …`, no checkpoint on disk. |
+| Forced by | `quiesce_succeeds_when_every_shard_acks`, `quiesce_fails_when_a_shard_channel_is_closed`, `quiesce_fails_when_a_shard_drops_the_ack`, `quiesce_reports_every_undrained_shard`, `test_failed_pre_snapshot_hook_fails_the_save_and_cuts_nothing`, `fullresync_fails_when_the_pre_checkpoint_drain_fails` |
+| Bug refs | `.scratch/hardening/issues/05` (fixed) |
 
 ## FM-PERSISTENCE-021 — a snapshot is restored by an explicit operator install, never at boot
 
@@ -427,7 +427,7 @@ rows below are that decision, phase by phase.
 | Invariant | `has_data()` is a first-key-exists probe across the shard column families, run *after* the open — so RocksDB has already replayed its WAL and any recovered rows are visible to the probe. There is no separate FrogDB-level WAL replay path to get this wrong. |
 | Outcome variant | n/a |
 | Forced by | `fresh_boot_creates_empty_shards`, `test_has_data`, `test_empty_database_recovery`, `test_empty_shard_recovery`, `test_recover_empty_shard`, `test_open_and_write`, `test_reopen` |
-| Bug refs | `.scratch/hardening/issues/06` (a mistyped `data-dir` is indistinguishable from a first boot) |
+| Bug refs | `.scratch/hardening/issues/06` (a mistyped `data-dir` is indistinguishable from a first boot — still open; the decode-failure halves are [FM-PERSISTENCE-033](#fm-persistence-033--an-undecodable-key-is-skipped-counted-and-surfaced--never-fatal-on-its-own) / [FM-PERSISTENCE-045](#fm-persistence-045--a-wholly-undecodable-database-refuses-to-start)) |
 
 ## FM-PERSISTENCE-030 — a shard-count change refuses to start
 
@@ -465,17 +465,29 @@ rows below are that decision, phase by phase.
 | Forced by | `test_cf_enumeration_failure_propagates_and_preserves_data` |
 | Bug refs | none |
 
-## FM-PERSISTENCE-033 — an undecodable key is skipped and counted, never fatal — and nothing checks the count
+## FM-PERSISTENCE-033 — an undecodable key is skipped, counted, and surfaced — never fatal on its own
 
 | Field | Value |
 |---|---|
 | Trigger | A stored value fails to deserialize during restore: a truncated payload, an invalid header, an unknown type byte from a future version. |
-| Observable | The key is skipped, `stats.keys_failed` increments, a `WARN` names the key, and recovery continues with every other key intact. Ten good keys and one corrupt one recover as ten keys loaded, one failed. |
-| NOT observable | One bad value aborting recovery and taking the whole keyspace down with it. Silent skipping with no counter. **Also not observable — and this is the gap:** any refusal, however extreme the count. `keys_failed` is summed, returned in `RecoveryStats`, and consulted by nobody, so a database whose every value fails to decode recovers "successfully" with an empty keyspace, a clean startup, and only WARN lines to say otherwise. |
-| Invariant | Per-key `SerializationError` is caught inside `recover_shard_into` and converted to a counter; only a `RocksError` from the iteration itself propagates. The `Serialization` variant on the recovery error enum therefore exists but is never returned by the recovery path. |
-| Outcome variant | `RecoveryStats::keys_failed` |
-| Forced by | `test_partial_recovery_on_corruption`, `test_recover_with_data`, `test_recover_all_shards`, `test_recover_sorted_set`, `test_harness_crash_and_recover` |
-| Bug refs | `.scratch/hardening/issues/06` |
+| Observable | The key is skipped, `stats.keys_failed` increments, a `WARN` names the key, and recovery continues with every other key intact. Ten good keys and one corrupt one recover as ten keys loaded, one failed. A boot that skipped anything additionally raises one `ERROR` naming the totals and the data dir, increments `frogdb_recovery_keys_failed_total` by the count, and reports it for the life of the process as `rdb_last_load_keys_failed` in `INFO persistence` — next to `rdb_last_load_keys_loaded` / `rdb_last_load_keys_expired`, which report the same boot's real numbers rather than Redis-shaped zeros. |
+| NOT observable | One bad value aborting recovery and taking the whole keyspace down with it (the extreme case is [FM-PERSISTENCE-045](#fm-persistence-045--a-wholly-undecodable-database-refuses-to-start), which is about the *whole* database, not one key). Silent skipping with no counter, or a counter that reaches nobody: a shrunken keyspace on its own cannot say whether keys were lost, so the count is the only positive signal. The load fields moving after startup — they describe the boot, so they are constants for the life of the process, like Redis'. |
+| Invariant | Per-key `SerializationError` is caught inside `recover_shard_into` and converted to a counter; only a `RocksError` from the iteration itself propagates. The `Serialization` variant on the recovery error enum therefore exists but is never returned by the recovery path. The surfacing happens once, at the orchestrator seam (`frogdb_recovery::shards::restore`), against the aggregate — not per shard — so one boot produces one ERROR and one metric increment. `RecoveryStats` reaches INFO by being carried on `AdminDeps`, the same way the snapshot coordinator's stats do. |
+| Outcome variant | `RecoveryStats::keys_failed` → `frogdb_recovery_keys_failed_total` + `rdb_last_load_keys_failed` |
+| Forced by | `test_partial_recovery_on_corruption`, `test_recover_with_data`, `test_recover_all_shards`, `test_recover_sorted_set`, `test_harness_crash_and_recover`, `partial_decode_failure_is_counted_and_metered`, `expired_keys_count_as_decoded_so_one_bad_key_does_not_refuse`, `persistence_renders_the_real_load_stats` |
+| Bug refs | `.scratch/hardening/issues/06` (narrowed: the surfacing half is fixed here, the partial-corruption threshold and the wrong-data-dir marker stay open) |
+
+## FM-PERSISTENCE-045 — a wholly undecodable database refuses to start
+
+| Field | Value |
+|---|---|
+| Trigger | Recovery finds data in the directory ([FM-PERSISTENCE-029](#fm-persistence-029--an-empty-data-directory-boots-fresh-instead-of-failing) is the no-data case) and **every** value in it fails to deserialize: a format change, a truncated or bit-rotted column family, a directory written by something that is not FrogDB. |
+| Observable | Startup fails during `RestoreShards` with the data dir, the failed-key count, and the remediation in the message ("restore from a snapshot, or point `data-dir` at the right directory"). Nothing is written: the refusal happens before any shard worker, WAL, or snapshot cadence exists. |
+| NOT observable | The catastrophic shape this replaces: a clean boot with an empty keyspace, `LOADING` cleared, writes accepted, and the WAL/snapshot cadence starting to overwrite the undecodable-but-present data with the new empty state — the operator's only signal being WARN lines that scrolled past. |
+| Invariant | The predicate is *nothing decoded at all*: `keys_failed > 0` **and** `keys_loaded + keys_expired_skipped + warm_keys_loaded + warm_keys_stale == 0`. It needs no configuration because it has no judgement in it — a database that yielded not one decodable value is broken by any threshold anyone would pick. A single decoded key (including one that decoded and was then dropped as expired, and including a warm-tier key) takes the boot back to the skip-and-count path of FM-PERSISTENCE-033. A partial-corruption threshold — "refuse above N%" — is deliberately *not* implemented: that one is policy, needs a config knob and an override, and stays open on issue 06. |
+| Outcome variant | `RecoveryPhase::RestoreShards` |
+| Forced by | `wholly_undecodable_database_refuses_to_start`, `expired_keys_count_as_decoded_so_one_bad_key_does_not_refuse` |
+| Bug refs | `.scratch/hardening/issues/06` (the unambiguous half of its candidate fix 1) |
 
 ## FM-PERSISTENCE-034 — WAL replay is point-in-time: a torn tail truncates, it does not refuse
 

@@ -411,6 +411,7 @@ mod tests {
                 snapshot_coordinator,
                 function_registry,
                 cursor_store: Arc::new(crate::cursor_store::AggregateCursorStore::new()),
+                recovery_stats: Default::default(),
             },
             cluster: ClusterDeps::default(),
             observability: ObservabilityDeps::default(),

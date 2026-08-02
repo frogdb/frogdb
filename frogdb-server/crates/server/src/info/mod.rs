@@ -360,6 +360,18 @@ pub struct PersistenceSnapshot {
     /// Whole seconds the in-flight save has been running
     /// (`rdb_current_bgsave_time_sec`); `None` when none is, rendered as `-1`.
     pub current_bgsave_secs: Option<u64>,
+    /// Keys restored by this boot's recovery (`rdb_last_load_keys_loaded`).
+    ///
+    /// This and the two below describe the *load*, so they are constants for the
+    /// life of the process — Redis' semantics for the same fields.
+    pub load_keys_loaded: u64,
+    /// Keys this boot's recovery dropped because their TTL had already passed
+    /// (`rdb_last_load_keys_expired`).
+    pub load_keys_expired: u64,
+    /// Keys this boot's recovery skipped because their stored value would not
+    /// deserialize (`rdb_last_load_keys_failed`, a FrogDB extension). Non-zero
+    /// means the keyspace came back smaller than what is on disk.
+    pub load_keys_failed: u64,
 }
 
 /// Latency-histogram handles for the Latencystats section.

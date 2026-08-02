@@ -53,6 +53,10 @@ pub(super) struct InitResult {
     pub new_conn_receivers: Vec<mpsc::Receiver<frogdb_core::shard::NewConnection>>,
     pub rocks_store: Option<Arc<RocksStore>>,
     pub recovered_stores: Vec<(HashMapStore, ExpiryIndex)>,
+    /// What the restore phase loaded, expired, and could not decode. Plain data,
+    /// carried to the connection layer so INFO persistence' `rdb_last_load_*`
+    /// fields report this boot instead of hardcoded zeros.
+    pub recovery_stats: frogdb_core::persistence::RecoveryStats,
     /// Replication state recovered by phase 5 (reconciled with staged metadata),
     /// consumed by the replication init phase to construct the handler.
     pub recovered_replication: frogdb_core::ReplicationState,
@@ -274,6 +278,7 @@ pub(super) async fn init_infrastructure(
     let persisted_functions = recovered.functions;
     let recovered_replication = recovered.replication;
     let recovered_raft_storage = recovered.raft_storage;
+    let recovery_stats = recovered.stats;
 
     // Runtime concern: spawn the periodic WAL sync task after recovery.
     let periodic_sync_handle = startup::spawn_wal_sync_if_periodic(
@@ -356,7 +361,18 @@ pub(super) async fn init_infrastructure(
                 // acknowledged write instead of being a silently-incomplete
                 // recovery artifact (issue 13). Shared with the FULLRESYNC
                 // checkpoint path — see [`super::checkpoint_quiesce`].
-                super::checkpoint_quiesce::quiesce_shards_for_checkpoint(&senders).await;
+                //
+                // A shard that cannot be drained fails the save (issue 05): the
+                // coordinator reports `err` with this cause, does not advance
+                // `LASTSAVE`, and cuts nothing, so the newest snapshot on disk
+                // stays the last complete one. The replication-offset save
+                // below is skipped with it — there is no snapshot for that
+                // offset to describe.
+                if let Err(e) =
+                    super::checkpoint_quiesce::quiesce_shards_for_checkpoint(&senders).await
+                {
+                    return Err(frogdb_core::SnapshotError::PreSnapshot(e.to_string()));
+                }
                 // Persist the replication offset that matches this snapshot's
                 // data — but only while this node is actually a primary. The
                 // handler is constructed on every role (so a promotion has live
@@ -372,6 +388,7 @@ pub(super) async fn init_infrastructure(
                 {
                     warn!(error = %e, "Failed to persist replication state before snapshot");
                 }
+                Ok(())
             })
         }));
     }
@@ -451,6 +468,7 @@ pub(super) async fn init_infrastructure(
         new_conn_receivers,
         rocks_store,
         recovered_stores,
+        recovery_stats,
         recovered_replication,
         recovered_raft_storage,
         periodic_sync_handle,

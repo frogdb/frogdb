@@ -253,6 +253,7 @@ mod broadcast_timeout_routing_tests {
             snapshot_coordinator: Arc::new(frogdb_core::NoopSnapshotCoordinator::new()),
             function_registry: frogdb_core::SharedFunctionRegistry::default(),
             cursor_store: Arc::new(crate::cursor_store::AggregateCursorStore::new()),
+            recovery_stats: Default::default(),
         };
         let mut config = ConnectionConfig::default_for_testing(2);
         config.scatter_gather_timeout = timeout;

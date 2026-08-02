@@ -18,7 +18,17 @@ use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::task::JoinError;
 use tracing::Instrument;
-pub type PreSnapshotHook = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+/// Work that must complete before a checkpoint is cut, injected by the owner of
+/// the shards (see `checkpoint_quiesce` in the server crate).
+///
+/// It returns a result because the work it does — draining every shard's WAL
+/// flush engine — is what makes the artifact contain every acknowledged write.
+/// A hook that cannot finish means the checkpoint would be silently incomplete,
+/// so the save is failed instead of cut: the run reports `err` through
+/// [`SnapshotStats`](super::SnapshotStats), leaves `LASTSAVE` alone, and leaves
+/// the previous snapshot as the newest one on disk (issue 05).
+pub type PreSnapshotHook =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<(), SnapshotError>> + Send>> + Send + Sync>;
 pub struct RocksSnapshotCoordinator {
     rocks_store: Arc<RocksStore>,
     snapshot_dir: PathBuf,
@@ -223,8 +233,14 @@ impl SnapshotRun {
         // Clone out of the lock into a local first, so the read guard is dropped
         // before the `.await` (guards are not `Send`).
         let hook = self.pre_snapshot_hook.read().unwrap().clone();
-        if let Some(hook) = hook {
-            hook().await;
+        if let Some(hook) = hook
+            && let Err(e) = hook().await
+        {
+            // The hook is what makes the cut contain every acknowledged write;
+            // without it the artifact is a silently incomplete one. Report the
+            // save as failed and cut nothing, so the newest snapshot on disk
+            // stays the last known-good one.
+            return Ok(Err(e));
         }
         let snapshot_dir = self.snapshot_dir.clone();
         let data_dir = self.data_dir.clone();

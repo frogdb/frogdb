@@ -469,8 +469,20 @@ impl ReplicaSession {
             // backlog tail to replay them from and the replica is missing them
             // forever. So: drain first, cut second. Same contract the snapshot
             // coordinator's pre-snapshot hook honours (issue 13).
-            if let Some(drain) = handler.pre_checkpoint_hook() {
-                drain().await;
+            if let Some(drain) = handler.pre_checkpoint_hook()
+                && let Err(e) = drain().await
+            {
+                // A shard that could not be drained leaves its acknowledged
+                // writes out of the checkpoint, and for a full resync that hole
+                // is permanent (nothing in the backlog replays them). Fail the
+                // sync — the replica retries `PSYNC ? -1` on its reconnect
+                // backoff — rather than shipping a dataset known to be missing
+                // writes. Same reasoning as the checkpoint failure below, and
+                // likewise nothing is staged, so there is nothing to clean up.
+                tracing::error!(error = %e, "Pre-checkpoint drain failed for FULLRESYNC");
+                return Err(io::Error::other(format!(
+                    "pre-checkpoint drain failed for FULLRESYNC: {e}"
+                )));
             }
 
             let path_clone = checkpoint_path.clone();
@@ -1714,6 +1726,7 @@ mod tests {
                         ran_before_the_cut.store(!checkpoint_path.exists(), Ordering::SeqCst);
                     }
                     store.put(0, b"drained", b"v").unwrap();
+                    Ok(())
                 })
             }));
         }
@@ -1755,6 +1768,78 @@ mod tests {
             checkpoint.get(0, b"drained").unwrap().as_deref(),
             Some(&b"v"[..]),
             "the checkpoint must carry writes the drain committed"
+        );
+    }
+
+    // FM-PERSISTENCE-020
+    /// A drain that cannot complete fails the resync instead of shipping a
+    /// dataset that is missing acknowledged writes.
+    ///
+    /// The checkpoint is the replica's entire base dataset: writes made before
+    /// it attached were never broadcast, so nothing in the backlog can replay
+    /// what an undrained shard left behind — the hole would be permanent and
+    /// invisible. Failing drops the connection and the replica retries `PSYNC ?
+    /// -1` on its backoff, which costs one reconnect. No checkpoint may be cut
+    /// or staged for cleanup on that path.
+    #[tokio::test]
+    async fn fullresync_fails_when_the_pre_checkpoint_drain_fails() {
+        let dir = TempDir::new().unwrap();
+        let rocks_path = dir.path().join("rocks");
+        let store = Arc::new(
+            RocksStore::open(&rocks_path, 1, &RocksConfig::default())
+                .expect("open rocksdb for test"),
+        );
+        store.put(0, b"early", b"v").unwrap();
+
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler(
+            tracker.clone(),
+            Some(store.clone()),
+            dir.path().to_path_buf(),
+        );
+        let repl_id = handler.state.read().replication_id.clone();
+        let session = tracker.register_replica(addr());
+        let checkpoint_path = dir.path().join(format!("fullsync_{}", session.id()));
+
+        handler.set_pre_checkpoint_hook(Arc::new(move || {
+            Box::pin(async {
+                Err(io::Error::other(
+                    "WAL drain: 1 of 2 shard(s) did not drain (shard [1])",
+                ))
+            })
+        }));
+
+        let (mut client, server) = tokio::io::duplex(64);
+        let task = tokio::spawn({
+            let session = session.clone();
+            let handler = handler.clone();
+            let server: BoxedStream = Box::new(server);
+            async move { session.handle_full(server, repl_id, &handler).await }
+        });
+        // The `+FULLRESYNC` line is written before the cut, so it still arrives;
+        // what must not follow is a checkpoint. Dropping the client afterwards
+        // keeps the assertions honest about *why* the sync failed: without the
+        // drain check it would fail on a checkpoint-stream write instead, with a
+        // cut checkpoint on disk.
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
+        drop(client);
+
+        let err = task
+            .await
+            .unwrap()
+            .expect_err("an incomplete drain must fail the full resync");
+        assert!(
+            err.to_string().contains("did not drain"),
+            "the drain's cause must reach the failure: {err}"
+        );
+        assert!(
+            !checkpoint_path.exists(),
+            "no checkpoint may be cut once the drain has failed"
+        );
+        assert!(
+            session.inner.read().sync_checkpoint_path.is_none(),
+            "nothing was staged, so nothing may be marked for cleanup"
         );
     }
 

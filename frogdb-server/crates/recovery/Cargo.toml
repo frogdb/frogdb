@@ -9,6 +9,9 @@ description = "Startup crash-recovery orchestration: staged checkpoints, shard r
 [dependencies]
 frogdb-config.workspace = true
 frogdb-core.workspace = true
+# For the typed metric handles (`frogdb_types::metrics::definitions`); the
+# chokepoint lint forbids emitting metrics by raw string name.
+frogdb-types.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

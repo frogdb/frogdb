@@ -1810,6 +1810,7 @@ dependencies = [
  "frogdb-config",
  "frogdb-core",
  "frogdb-persistence",
+ "frogdb-types",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
