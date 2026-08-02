@@ -1263,7 +1263,7 @@ async fn test_runtime_full_resync_installs_snapshot_into_live_store() {
     );
 
     // Per key, not one wait then instant reads: the install is documented as
-    // atomic *per shard* only (`LiveCheckpointInstaller::install`), so seeing
+    // atomic *per shard* only (`LiveSnapshotInstaller::install`), so seeing
     // `m0` proves only that `m0`'s shard has swapped. Every other key gets its
     // own bounded wait.
     for i in 0..5 {
@@ -1296,6 +1296,87 @@ async fn test_runtime_full_resync_installs_snapshot_into_live_store() {
             .as_deref(),
         Some("streamed"),
         "streaming must resume from the installed snapshot's offset"
+    );
+
+    node.shutdown().await;
+    master.shutdown().await;
+}
+
+/// Issue 67: a primary running with `persistence.enabled = false` must still
+/// hand a full resync its whole dataset.
+///
+/// This is the end-to-end forcing test. Every node here is persistence-disabled
+/// — the configuration the turmoil sims and most deployments-without-durability
+/// use — so the primary has no RocksDB to checkpoint. The old behaviour answered
+/// `PSYNC ? -1` with a data-less minimal RDB: the replica adopted the
+/// replid/offset, reported `master_link_status:up`, and kept serving its own
+/// forked keyspace forever. Against that behaviour every assertion below fails:
+/// `p*` stayed readable and `m*` never arrived, on this boot or any later one
+/// (there is no staged checkpoint for a restart to pick up either).
+// FM-REPLICATION-001
+#[tokio::test]
+async fn test_full_resync_from_a_persistence_disabled_primary_transfers_the_dataset() {
+    // The whole point: no RocksDB anywhere. `persistence` defaults to false;
+    // spelled out because it is the condition under test.
+    let config = || TestServerConfig {
+        persistence: false,
+        ..Default::default()
+    };
+    let master = TestServer::start_primary_with_config(config()).await;
+    let node = TestServer::start_primary_with_config(config()).await;
+
+    // Enough keys to cover every shard several times over: a dataset export
+    // that dropped a shard, or an install that skipped one, must not be able to
+    // pass by luck of routing.
+    const KEYS: usize = 20;
+    for i in 0..KEYS {
+        assert_ok(&master.send("SET", &[&format!("m{i}"), "from-master"]).await);
+        assert_ok(&node.send("SET", &[&format!("p{i}"), "forked"]).await);
+    }
+    // A TTL survives the dataset the same way it survives a checkpoint.
+    assert_ok(&master.send("SET", &["m-ttl", "v", "EX", "600"]).await);
+
+    let master_port = master.port().to_string();
+    assert_ok(&node.send("REPLICAOF", &["127.0.0.1", &master_port]).await);
+
+    // Per key, not one wait then instant reads: the install is atomic per shard
+    // only, so each key gets its own bounded wait.
+    for i in 0..KEYS {
+        let key = format!("m{i}");
+        assert_eq!(
+            wait_for_value(&node, &key, Some("from-master"), Duration::from_secs(20))
+                .await
+                .as_deref(),
+            Some("from-master"),
+            "the master's key {key} must be live on the replica after a full resync \
+             served without persistence"
+        );
+        let forked = format!("p{i}");
+        assert_eq!(
+            wait_for_value(&node, &forked, None, Duration::from_secs(10)).await,
+            None,
+            "the replica's forked key {forked} must be gone — a full sync replaces the keyspace"
+        );
+    }
+    assert_eq!(
+        parse_integer(&node.send("DBSIZE", &[]).await),
+        Some(KEYS as i64 + 1),
+        "the replica's keyspace is exactly the master's: no stale keys, none missing"
+    );
+    let ttl = parse_integer(&node.send("TTL", &["m-ttl"]).await).unwrap_or(-1);
+    assert!(
+        (1..=600).contains(&ttl),
+        "an expiring key keeps its TTL across the dataset transfer, got {ttl}"
+    );
+
+    // The link is genuinely up, not merely claimed: streamed writes still land.
+    assert_ok(&master.send("SET", &["m-after", "streamed"]).await);
+    assert_eq!(
+        wait_for_value(&node, "m-after", Some("streamed"), Duration::from_secs(10))
+            .await
+            .as_deref(),
+        Some("streamed"),
+        "streaming must resume from the dataset's offset"
     );
 
     node.shutdown().await;

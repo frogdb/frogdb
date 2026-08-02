@@ -1,6 +1,6 @@
 # Persistence-disabled primary serves a data-less full sync: replica keeps its stale keyspace
 
-Status: needs-triage
+Status: done
 Type: bug
 Origin: Follow-up filed from issue 61 (live checkpoint install) — discovered while attempting to
 strengthen the turmoil failover sim's failback convergence assertion.
@@ -45,12 +45,12 @@ persistence machinery in the sim.
 
 ## Acceptance criteria
 
-- [ ] A replica with pre-existing divergent keys that full-syncs from a persistence-disabled
+- [x] A replica with pre-existing divergent keys that full-syncs from a persistence-disabled
       primary ends with a live keyspace identical to the primary's (or the configuration is
       explicitly rejected with a documented error).
-- [ ] Turmoil failover sim's failback assertion strengthened from durable-subset to full-keyspace
+- [x] Turmoil failover sim's failback assertion strengthened from durable-subset to full-keyspace
       equality (if option 1), deleting the boundary comment referencing issue 61/65.
-- [ ] Integration test covering the persistence-disabled full-sync path end-to-end.
+- [x] Integration test covering the persistence-disabled full-sync path end-to-end.
 
 ## Blocked by
 
@@ -63,3 +63,39 @@ None — issue 61 (live install seam) is merged and provides the installer this 
 - frogdb-server/crates/server/src/replication/install.rs (`LiveCheckpointInstaller`, issue 61)
 - frogdb-server/crates/server/tests/simulation.rs (`test_replication_failover_wgl_linearizable`,
   durable-subset boundary)
+
+## Resolution
+
+Option 1 (diskless-style live snapshot, Redis `repl-diskless-sync` parity). A primary with
+`persistence.enabled = false` now serializes its live keyspace into the full-sync envelope, and
+the replica installs it through the issue-61 install seam. Spec:
+[FM-REPLICATION-001](../../../hardening/specs/replication-failure-modes.md) (with -002 for the
+shard export/install seam and -003 for the blob framing).
+
+What was built:
+
+- **Primary side.** `replica_session::stream_live_dataset` replaces the minimal-RDB branch: it
+  pulls one blob per shard from an injected `LiveSnapshotSource` and writes them under a new
+  `$FROGDB_SNAPSHOT` marker, per-blob headers named `shard-<n>.dataset`, and the same
+  `FullSyncMetadata` trailer the checkpoint path uses. `create_minimal_rdb` and the RDB opcode
+  constants are gone.
+- **Export.** `ReplicationMsg::ExportSnapshot` asks each shard for its keyspace on the shard's own
+  task; expired keys are dropped, and a value that is not resident in memory fails the export
+  rather than shipping a silent subset. Framing lives in
+  `frogdb-persistence/src/serialization/dataset.rs` and is all-or-nothing on decode.
+- **Install.** `CheckpointInstaller` became `SnapshotInstaller` over a `FullSyncPayload`
+  (`StagedCheckpoint(PathBuf)` | `LiveDataset(Vec<Vec<u8>>)`); the live arm routes every decoded
+  key through `shard_for_key` for the *receiving* node's shard count and installs into every
+  shard, so no shard keeps a forked key.
+- **Refusal, not a fake payload.** A primary that cannot produce a dataset (failed checkpoint cut,
+  no live-snapshot source wired) now fails the sync; the replica's `psync` rejects any FULLRESYNC
+  marker it cannot install, so an old primary's minimal RDB fails loudly instead of being adopted.
+  `psync` also rewinds the offset to 0 on FULLRESYNC and adopts the granted offset only after the
+  install succeeds.
+
+Tests: `test_full_resync_from_a_persistence_disabled_primary_transfers_the_dataset`
+(integration_replication), four wire-level tests in `replica/connection.rs` and two in
+`replica_session.rs`, seven shard-level export/install tests, four framing tests. The turmoil
+failback assertion in `run_replication_failover` is strengthened from the durable subset to
+whole-keyspace convergence (split-brain keys gone from the demoted node, equal `DBSIZE`), and the
+boundary note is deleted.

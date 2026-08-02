@@ -103,6 +103,18 @@ impl FullSyncMetadata {
 /// RDB payload). Sent as `$FROGDB_CHECKPOINT\r\n` at the head of the envelope.
 pub const CHECKPOINT_MARKER: &str = "FROGDB_CHECKPOINT";
 
+/// Wire marker identifying a FrogDB *live dataset* stream: the same envelope,
+/// but the bodies are per-shard dataset blobs serialized straight out of the
+/// primary's memory rather than checkpoint files.
+///
+/// A primary with `persistence.enabled = false` has no RocksDB to checkpoint,
+/// yet it still owes a full resync the whole dataset (Redis's diskless
+/// replication ships the RDB over the socket for exactly this reason — no
+/// persistence configured never means no dataset on the wire). Marking the two
+/// payload kinds apart keeps the replica's handling honest: files are staged to
+/// disk and installed from there, blobs are installed directly.
+pub const SNAPSHOT_MARKER: &str = "FROGDB_SNAPSHOT";
+
 /// Upper bounds on the length-prefixed counts in the envelope. These reject a
 /// malformed or hostile length *before* it drives an allocation, so a corrupt
 /// stream yields a clean [`io::ErrorKind::InvalidData`] instead of a capacity
@@ -150,9 +162,28 @@ impl CheckpointStreamCodec {
         w: &mut W,
         file_count: usize,
     ) -> io::Result<()> {
-        w.write_all(format!("${CHECKPOINT_MARKER}\r\n").as_bytes())
-            .await?;
-        w.write_all(format!("{file_count}\r\n").as_bytes()).await?;
+        Self::write_marked_prelude(w, CHECKPOINT_MARKER, file_count).await
+    }
+
+    /// Write `$FROGDB_SNAPSHOT\r\n<count>\r\n`, ahead of the dataset blobs.
+    ///
+    /// Same grammar as [`write_prelude`](Self::write_prelude) — only the marker
+    /// differs, so the replica can tell a staged-to-disk checkpoint from an
+    /// installed-directly live dataset before it reads a single body.
+    pub async fn write_snapshot_prelude<W: AsyncWriteExt + Unpin>(
+        w: &mut W,
+        blob_count: usize,
+    ) -> io::Result<()> {
+        Self::write_marked_prelude(w, SNAPSHOT_MARKER, blob_count).await
+    }
+
+    async fn write_marked_prelude<W: AsyncWriteExt + Unpin>(
+        w: &mut W,
+        marker: &str,
+        count: usize,
+    ) -> io::Result<()> {
+        w.write_all(format!("${marker}\r\n").as_bytes()).await?;
+        w.write_all(format!("{count}\r\n").as_bytes()).await?;
         Ok(())
     }
 

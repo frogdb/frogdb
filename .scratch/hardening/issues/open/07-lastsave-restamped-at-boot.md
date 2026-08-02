@@ -1,6 +1,6 @@
 # LASTSAVE is restamped to the boot time, so a stale snapshot reports as fresh
 
-Status: open
+Status: needs-triage
 Type: bug (observability / Redis parity)
 Severity: likelihood 3/3 (every restart of a node with an existing snapshot), consequence 2/3
 (a "backup is stale" alarm can never fire after a restart) — score 6

@@ -6282,6 +6282,18 @@ async fn failover_plain_get(conn: &mut RespConn, key: &[u8]) -> std::io::Result<
     }
 }
 
+/// `DBSIZE` as a plain integer — the whole-keyspace half of the failback
+/// convergence assertion, which a per-key comparison cannot make (it cannot see
+/// keys that exist only on the node that should not have them).
+async fn failover_dbsize(conn: &mut RespConn) -> std::io::Result<i64> {
+    match conn.cmd(&[b"DBSIZE"]).await? {
+        RespValue::Int(n) => Ok(n),
+        other => Err(std::io::Error::other(format!(
+            "unexpected DBSIZE reply {other:?}"
+        ))),
+    }
+}
+
 /// One seeded replication-failover run (issue 23).
 ///
 /// Timeline (all coordinated through `phase` so it is replayable per seed):
@@ -6301,14 +6313,16 @@ async fn failover_plain_get(conn: &mut RespConn, key: &[u8]) -> std::io::Result<
 /// 5. **Heal + failback**: `release` the isolation; the original primary has
 ///    recovered, so fail back — demote the temporary promoted node to a replica
 ///    of the recovered original (which can serve PSYNC), wait for re-attach
-///    (WAIT 1), and assert the durable (confirmed) data set converges on both
-///    nodes and that split-brain post-failover writes never reached the original.
+///    (WAIT 1), and assert the two nodes converge on one keyspace: every
+///    confirmed key holds its value on both, and the split-brain post-failover
+///    writes are gone from *both* — they never reached the original, and the
+///    failback full resync wiped them from the demoted node.
 ///    (This scenario deliberately re-syncs toward the recovered boot-primary;
 ///    the opposite direction is `run_replication_failover_chain`. These hosts run
-///    persistence-disabled,
-///    so the full resync ships a *data-less* minimal RDB and the demoted node's
-///    forked live keys survive — see the boundary note at the assertion. Live
-///    reconvergence of a RocksDB-backed demoted node is issue 61, asserted in
+///    persistence-disabled, which is exactly the configuration issue 67 fixed:
+///    the primary serializes its live dataset into the full-sync envelope, so
+///    the demoted node adopts it with no RocksDB on either side. The
+///    checkpoint-backed path is asserted in
 ///    `integration_replication::test_runtime_full_resync_installs_snapshot_into_live_store`.)
 /// 6. Feed the recorded client history to the WGL checker; assert linearizable
 ///    and conclusive.
@@ -6644,21 +6658,49 @@ fn run_replication_failover(seed: u64) {
             );
         }
 
-        // Boundary of *this* simulation, not of the product: these hosts run with
-        // persistence disabled (see `real_frogdb_primary`), so a full resync ships
-        // the minimal RDB — an envelope with no dataset in it. There is no
-        // snapshot for the failed-back node to adopt, so its forked live keys
-        // survive here no matter what the install path does. Flushing on that
-        // path would delete confirmed data the primary never re-streams, so the
-        // data-less full sync is deliberately left alone.
-        //
-        // A RocksDB-backed node *does* full-resync into its live keyspace (issue
-        // 61): the checkpoint path installs the master's snapshot before adopting
-        // its offset, wiping the demoted node's forked keys with no restart. That
-        // is asserted in
-        // `integration_replication::test_runtime_full_resync_installs_snapshot_into_live_store`,
-        // which cannot live here because RocksDB + `spawn_blocking` would inject
-        // real threads and real I/O into a seeded deterministic run.
+        // Full convergence, not just the durable subset (issue 67). These hosts
+        // run persistence-disabled (see `real_frogdb_primary`), which used to
+        // mean the failback full resync shipped a data-less minimal RDB: the
+        // demoted node adopted the new replid/offset and kept its own forked
+        // keyspace forever. A persistence-disabled primary now serializes its
+        // live dataset into the full-sync envelope (the first row of
+        // `.scratch/hardening/specs/replication-failure-modes.md`), so the
+        // failed-back node adopts the original's keyspace wholesale — the
+        // split-brain writes it accepted while promoted are gone from it too,
+        // and the two nodes hold the *same* keyspace, not merely the same
+        // confirmed subset.
+        let mut converged = false;
+        let mut leftover: Option<Vec<u8>> = None;
+        let mut sizes = (0i64, 0i64);
+        for _ in 0..80 {
+            leftover = None;
+            for i in 0..N_POST {
+                if failover_plain_get(&mut new_primary, &post_key(i))
+                    .await?
+                    .is_some()
+                {
+                    leftover = Some(post_key(i));
+                    break;
+                }
+            }
+            sizes = (
+                failover_dbsize(&mut orig_primary).await?,
+                failover_dbsize(&mut new_primary).await?,
+            );
+            if leftover.is_none() && sizes.0 == sizes.1 {
+                converged = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(
+            converged,
+            "seed {seed}: failed-back node did not converge on the original's keyspace: \
+             leftover split-brain key {:?}, dbsize original {} vs failed-back {}",
+            leftover.as_ref().map(|k| String::from_utf8_lossy(k).into_owned()),
+            sizes.0,
+            sizes.1
+        );
 
         Ok(())
     });

@@ -40,22 +40,44 @@ pub type ConnectFactory = Arc<
         + Sync,
 >;
 
-/// Installs a staged full-resync checkpoint into the **live** keyspace.
+/// The dataset a full resync delivered, in whichever shape the primary had it.
 ///
-/// Called with the staged-checkpoint directory
-/// ([`CheckpointStager::staged_dir`]) after the stage commits and *before* the
-/// replica adopts the snapshot's offset and resumes streaming. The replication
-/// crate owns no store, so the server crate injects the implementation the same
-/// way it injects [`ConnectFactory`]; without it a demoted node would keep
-/// serving its own forked keyspace until the next boot.
+/// Both shapes describe the same thing — the primary's whole keyspace at the
+/// granted offset — and both are installed the same way; they differ only in
+/// where the bytes are when the installer is handed them.
+#[derive(Debug, Clone)]
+pub enum FullSyncPayload {
+    /// A committed staged checkpoint directory
+    /// ([`CheckpointStager::staged_dir`]): the primary had RocksDB and cut a
+    /// checkpoint from it.
+    ///
+    /// [`CheckpointStager::staged_dir`]: crate::fullsync::CheckpointStager::staged_dir
+    StagedCheckpoint(PathBuf),
+    /// One dataset blob per primary shard, serialized straight out of the
+    /// primary's memory because it runs with `persistence.enabled = false` and
+    /// has no checkpoint to cut (issue 67).
+    ///
+    /// The blobs are opaque to this crate; their framing belongs to
+    /// `frogdb_persistence::serialization::dataset`, and the installer routes
+    /// each decoded key to *its own* shard, so the two nodes' shard counts do
+    /// not have to agree.
+    LiveDataset(Vec<Vec<u8>>),
+}
+
+/// Installs a received full-resync dataset into the **live** keyspace.
+///
+/// Called with the [`FullSyncPayload`] after it has been received in full and
+/// *before* the replica adopts the snapshot's offset and resumes streaming. The
+/// replication crate owns no store, so the server crate injects the
+/// implementation the same way it injects [`ConnectFactory`]; without it a
+/// demoted node would keep serving its own forked keyspace until the next boot.
 ///
 /// An `Err` is fatal to the sync attempt: the caller rewinds its offset to 0 so
 /// the next reconnect asks for a fresh full resync rather than streaming deltas
 /// onto a keyspace that never adopted the base snapshot.
-///
-/// [`CheckpointStager::staged_dir`]: crate::fullsync::CheckpointStager::staged_dir
-pub type CheckpointInstaller =
-    Arc<dyn Fn(PathBuf) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send>> + Send + Sync>;
+pub type SnapshotInstaller = Arc<
+    dyn Fn(FullSyncPayload) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send>> + Send + Sync,
+>;
 
 /// Default connection factory: plain TCP.
 pub fn plain_tcp_connect_factory() -> ConnectFactory {
@@ -110,10 +132,10 @@ pub struct ReplicaReplicationHandler {
     /// stamped into each [`ReplicaConnection`] built in [`Self::connect_and_sync`].
     ack_interval: Duration,
     /// Installs a received full-resync checkpoint into the live keyspace before
-    /// streaming resumes (see [`CheckpointInstaller`]). `None` means nothing was
+    /// streaming resumes (see [`SnapshotInstaller`]). `None` means nothing was
     /// wired: the checkpoint is staged for the next boot only, which is the
     /// pre-issue-61 behaviour and is warned about loudly at sync time.
-    checkpoint_installer: Option<CheckpointInstaller>,
+    snapshot_installer: Option<SnapshotInstaller>,
 }
 
 /// Default spontaneous-ACK cadence when config supplies nothing (1s, matching
@@ -163,7 +185,7 @@ impl ReplicaReplicationHandler {
             connect_factory: plain_tcp_connect_factory(),
             link_up: Arc::new(AtomicBool::new(false)),
             ack_interval: DEFAULT_ACK_INTERVAL,
-            checkpoint_installer: None,
+            snapshot_installer: None,
         };
         (handler, frame_rx)
     }
@@ -226,8 +248,8 @@ impl ReplicaReplicationHandler {
     /// Must be called by every construction site that has shards to install into
     /// (boot-configured replica and runtime `REPLICAOF` demotion alike),
     /// otherwise a full resync only stages for the next boot.
-    pub fn set_checkpoint_installer(&mut self, installer: CheckpointInstaller) {
-        self.checkpoint_installer = Some(installer);
+    pub fn set_snapshot_installer(&mut self, installer: SnapshotInstaller) {
+        self.snapshot_installer = Some(installer);
     }
 
     /// Wire the cluster-bus HealthProbe atomic. The handler adopts `offset` as
@@ -340,7 +362,7 @@ impl ReplicaReplicationHandler {
             offsets,
             link_up: self.link_up.clone(),
             ack_interval: self.ack_interval,
-            checkpoint_installer: self.checkpoint_installer.clone(),
+            snapshot_installer: self.snapshot_installer.clone(),
         };
         // Whatever ends this attempt — clean close, a handshake/sync error, or
         // the caller dropping the stream — the link is no longer up. `conn`
@@ -350,9 +372,11 @@ impl ReplicaReplicationHandler {
             conn.handshake(self.listening_port).await?;
             let sync_type = conn.psync().await?;
             match sync_type {
-                SyncType::FullSyncRdb { rdb_size } => conn.receive_rdb(rdb_size).await?,
                 SyncType::FullSyncCheckpoint { file_count } => {
                     conn.receive_checkpoint(file_count).await?
+                }
+                SyncType::FullSyncSnapshot { blob_count } => {
+                    conn.receive_snapshot(blob_count).await?
                 }
                 SyncType::PartialSync => {}
             }

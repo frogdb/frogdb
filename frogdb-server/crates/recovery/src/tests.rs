@@ -284,6 +284,89 @@ fn staged_replication_metadata_is_adopted_and_consumed() {
     assert!(db_dir.join(&repl_cfg.state_file).exists());
 }
 
+/// A save that cannot land must not take the staging file with it.
+///
+/// The staged metadata is the only durable carrier of the offset that matches
+/// the freshly installed snapshot; until the state file holds it, consuming it
+/// destroys the only copy and the next boot resumes from the *pre*-full-sync
+/// offset against post-full-sync data (issue 08).
+///
+/// The save is failed at its atomic-write step by parking a **directory** where
+/// `ReplicationState::save` wants to put its `.tmp` file — deterministic, no
+/// permission games, and it leaves the data dir writable so the consume step is
+/// genuinely able to run (a read-only dir would fail the consume too, and the
+/// test would pass for the wrong reason).
+// FM-PERSISTENCE-039
+#[test]
+fn staged_metadata_survives_a_failed_state_save() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    std::fs::create_dir_all(&db_dir).unwrap();
+
+    let repl_cfg = replication_config("replica");
+    let state_path = db_dir.join(&repl_cfg.state_file);
+
+    // A pre-full-sync state file: the stale position that must not survive as
+    // the node's durable answer.
+    let stale_id = "b".repeat(40);
+    std::fs::write(
+        &state_path,
+        format!(
+            "{{\"replication_id\":\"{}\",\"offset_at_save\":100}}",
+            stale_id
+        ),
+    )
+    .unwrap();
+
+    // Staged metadata from the installed checkpoint.
+    let staged_id = "a".repeat(40);
+    std::fs::write(
+        db_dir.join("replication_metadata.json"),
+        format!(
+            "{{\"replication_id\":\"{}\",\"replication_offset\":4242}}",
+            staged_id
+        ),
+    )
+    .unwrap();
+
+    // Block the atomic write: `save` writes `<state_file stem>.tmp` and renames.
+    std::fs::create_dir_all(state_path.with_extension("tmp")).unwrap();
+
+    // Persistence disabled so no other phase needs the data dir; phase 5 runs
+    // either way (replication does not require persistence).
+    let cfg = persistence_config(&db_dir, false);
+    let cluster_cfg = cluster_config(false);
+    let inputs = RecoveryInputs {
+        data_dir: &db_dir,
+        persistence: &cfg,
+        replication: &repl_cfg,
+        cluster: &cluster_cfg,
+        num_shards: 1,
+        warm_enabled: false,
+        metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
+    };
+
+    let recovered = recover(&inputs).expect("a failed state save is not fatal");
+
+    // This boot is still correct: the in-memory state carries the staged values.
+    assert_eq!(recovered.replication.replication_id, staged_id);
+    assert_eq!(recovered.replication.offset_at_save, 4242);
+
+    // The save could not land, so the staging file is the only copy of the
+    // post-full-sync offset and must still be there for the next boot.
+    assert!(
+        db_dir.join("replication_metadata.json").exists(),
+        "staged metadata must survive a failed save so the next boot can re-adopt it"
+    );
+
+    // And the stale state file is untouched — nothing half-written.
+    let on_disk = std::fs::read_to_string(&state_path).unwrap();
+    assert!(
+        on_disk.contains(&stale_id),
+        "the unwritable state file keeps its previous contents: {on_disk}"
+    );
+}
+
 // FM-PERSISTENCE-038
 #[test]
 fn corrupt_replication_state_is_regenerated() {

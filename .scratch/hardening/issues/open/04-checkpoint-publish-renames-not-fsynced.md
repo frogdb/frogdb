@@ -1,6 +1,6 @@
 # Checkpoint publication relies on rename atomicity without fsyncing anything
 
-Status: open
+Status: needs-triage
 Type: bug (durability)
 Severity: likelihood 1/3 (power loss / kernel panic only — a process crash is unaffected),
 consequence 3/3 (a snapshot reported complete is absent or truncated after reboot) — score 3

@@ -32,6 +32,7 @@ the forcing test, then change the code.
 | `specs/txn-failure-modes.md` | LOCKED 2026-08-01 (phase 1, `frogdb-txn` 100% vs 90% gate) |
 | `specs/vll-failure-modes.md` | LOCKED 2026-08-01 (phase 1, `frogdb-vll` 100% vs 90% gate) |
 | `specs/persistence-failure-modes.md` | draft — phase 2 |
+| `specs/replication-failure-modes.md` | draft — phase 2c (full-sync payload path) |
 | `specs/blocking-failure-modes.md` | draft |
 
 ## Issues

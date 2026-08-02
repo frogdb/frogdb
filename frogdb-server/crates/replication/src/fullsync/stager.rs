@@ -7,14 +7,14 @@
 //! `replication_metadata.json`. It is pure `tokio::fs` + [`StagedCheckpoint`]
 //! path math: it touches no socket and no `RocksStore`. Installing the staged
 //! snapshot is a different party entirely — either the runtime **Installer**
-//! (`CheckpointInstaller`, which loads it into the live keyspace before
+//! (`SnapshotInstaller`, which loads it into the live keyspace before
 //! streaming resumes) or, if the process restarts first, the boot-time one
 //! (`RocksStore::load_staged_checkpoint`).
 //!
 //! **Contract: `commit` *stages* the checkpoint — it does NOT install it.** The
 //! returned [`StagedOutcome`] tells the caller which replication identity/offset
 //! the staged snapshot corresponds to; the caller installs it (via its
-//! `CheckpointInstaller`), then adopts the offset and proceeds to live
+//! `SnapshotInstaller`), then adopts the offset and proceeds to live
 //! streaming. The staged dir at [`CheckpointStager::staged_dir`] is left in
 //! place so a crash between stage and install still converges on the next boot.
 //!

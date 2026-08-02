@@ -1,6 +1,6 @@
 # Recovery has no corruption threshold and cannot tell an empty database from the wrong one
 
-Status: open
+Status: needs-triage
 Type: bug (data safety)
 Severity: likelihood 2/3 (a mistyped data-dir is an ordinary operator slip; wholesale value
 corruption is rare), consequence 3/3 (an empty keyspace comes up healthy and is then written to,

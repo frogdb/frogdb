@@ -1,11 +1,19 @@
-//! Installing a received full-resync checkpoint into the **live** keyspace.
+//! Installing a received full-resync dataset into the **live** keyspace.
 //!
-//! The replication crate stages a full-sync checkpoint on disk but owns no
-//! store, so it delegates the install through the injected
-//! [`CheckpointInstaller`] seam. This module is the server-side implementation:
-//! it reads the staged RocksDB and replaces each shard's live keyspace with the
-//! snapshot it holds, before the replica adopts the snapshot's offset and
-//! resumes streaming.
+//! The replication crate receives a full sync but owns no store, so it delegates
+//! the install through the injected [`SnapshotInstaller`] seam. This module is
+//! the server-side implementation: it turns whichever [`FullSyncPayload`] landed
+//! into per-shard entries and replaces each shard's live keyspace with them,
+//! before the replica adopts the snapshot's offset and resumes streaming.
+//!
+//! Two payload shapes, one destination:
+//!
+//! - [`FullSyncPayload::StagedCheckpoint`] — the primary had RocksDB; the staged
+//!   DB is opened and scanned shard by shard.
+//! - [`FullSyncPayload::LiveDataset`] — the primary ran with
+//!   `persistence.enabled = false` and serialized its keyspace out of RAM
+//!   (issue 67); the blobs are decoded and each key routed to *this* node's
+//!   shard for it, so the two nodes' shard counts need not agree.
 //!
 //! Without it a runtime `REPLICAOF <new-master>` left the demoted node serving
 //! its own (possibly forked) keyspace until the next reboot — issue 61.
@@ -23,29 +31,30 @@
 //! snapshot on the next boot, which is idempotent.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::config::Config;
 use bytes::Bytes;
 use frogdb_core::persistence::{RocksConfig, RocksStore, deserialize, recover_shard_into};
+use frogdb_core::shard::shard_for_key;
 use frogdb_core::sync::Arc;
 use frogdb_core::{
     KeyMetadata, KeyType, ReplicationMsg, ShardSender, SnapshotEntry, Value,
     persistence::RestoreSink,
 };
-use frogdb_replication::replica::CheckpointInstaller;
+use frogdb_replication::replica::{FullSyncPayload, SnapshotInstaller};
 use std::collections::HashSet;
 use std::time::Instant;
 use tokio::sync::oneshot;
 
-/// Reads a staged full-resync checkpoint and installs it into the live shards.
-pub struct LiveCheckpointInstaller {
+/// Reads a received full-resync dataset and installs it into the live shards.
+pub struct LiveSnapshotInstaller {
     shard_senders: Arc<Vec<ShardSender>>,
     rocks_config: RocksConfig,
     warm_enabled: bool,
 }
 
-impl LiveCheckpointInstaller {
+impl LiveSnapshotInstaller {
     pub fn new(
         shard_senders: Arc<Vec<ShardSender>>,
         rocks_config: RocksConfig,
@@ -62,10 +71,7 @@ impl LiveCheckpointInstaller {
     /// replica handler holds. Single construction site for both wiring points
     /// (boot-configured replica and runtime `REPLICAOF` demotion) so the two can
     /// not drift apart.
-    pub fn for_config(
-        config: &Config,
-        shard_senders: Arc<Vec<ShardSender>>,
-    ) -> CheckpointInstaller {
+    pub fn for_config(config: &Config, shard_senders: Arc<Vec<ShardSender>>) -> SnapshotInstaller {
         Self::new(
             shard_senders,
             RocksConfig::from_persistence(&config.persistence),
@@ -75,12 +81,75 @@ impl LiveCheckpointInstaller {
     }
 
     /// Erase this into the injectable seam the replica handler holds.
-    pub fn into_installer(self) -> CheckpointInstaller {
+    pub fn into_installer(self) -> SnapshotInstaller {
         let installer = Arc::new(self);
-        Arc::new(move |staged_dir: PathBuf| {
+        Arc::new(move |payload: FullSyncPayload| {
             let installer = installer.clone();
-            Box::pin(async move { installer.install(&staged_dir).await })
+            Box::pin(async move {
+                match payload {
+                    FullSyncPayload::StagedCheckpoint(dir) => installer.install(&dir).await,
+                    FullSyncPayload::LiveDataset(blobs) => installer.install_dataset(blobs).await,
+                }
+            })
         })
+    }
+
+    /// Decode a live dataset and replace every shard's live keyspace with it.
+    ///
+    /// The blobs are the *primary's* shards, which say nothing about this node's
+    /// partitioning: each decoded key is routed through [`shard_for_key`] for
+    /// this node's shard count. Every shard is then installed — including the
+    /// ones the dataset has no keys for, because an install is a replace and a
+    /// skipped shard would keep its forked keys (the very bug this path exists
+    /// to close).
+    ///
+    /// The install ordering and its per-shard (not cross-shard) atomicity are
+    /// identical to [`Self::install`]; see that method's note.
+    async fn install_dataset(&self, blobs: Vec<Vec<u8>>) -> io::Result<()> {
+        let start = Instant::now();
+        let num_shards = self.shard_senders.len();
+        if num_shards == 0 {
+            return Err(io::Error::other(
+                "no shards wired: cannot install a live-dataset full resync",
+            ));
+        }
+
+        // Decoding a whole keyspace is CPU-bound; keep it off the runtime for
+        // the same reason the checkpoint path spawns its RocksDB scan.
+        let blob_count = blobs.len();
+        let per_shard = tokio::task::spawn_blocking(move || route_dataset(blobs, num_shards))
+            .await
+            .map_err(|e| io::Error::other(format!("dataset decode task failed: {e}")))??;
+
+        let total: usize = per_shard.iter().map(Vec::len).sum();
+        self.install_per_shard(per_shard).await?;
+
+        tracing::info!(
+            keys = total,
+            blobs = blob_count,
+            shards = num_shards,
+            duration_ms = start.elapsed().as_millis() as u64,
+            "Installed full-resync live dataset into the live keyspace"
+        );
+        Ok(())
+    }
+
+    /// Hand each shard its entries and wait for the ack, shard by shard.
+    async fn install_per_shard(&self, per_shard: Vec<Vec<SnapshotEntry>>) -> io::Result<()> {
+        for (shard_id, entries) in per_shard.into_iter().enumerate() {
+            let (response_tx, response_rx) = oneshot::channel();
+            self.shard_senders[shard_id]
+                .send(ReplicationMsg::InstallSnapshot {
+                    entries,
+                    response_tx,
+                })
+                .await
+                .map_err(|_| io::Error::other(format!("shard {shard_id} is gone")))?;
+            response_rx.await.map_err(|_| {
+                io::Error::other(format!("shard {shard_id} dropped the install ack"))
+            })?;
+        }
+        Ok(())
     }
 
     /// Read `staged_dir` and replace every shard's live keyspace with it.
@@ -110,19 +179,7 @@ impl LiveCheckpointInstaller {
         .map_err(|e| io::Error::other(format!("snapshot read task failed: {e}")))??;
 
         let total: usize = per_shard.iter().map(Vec::len).sum();
-        for (shard_id, entries) in per_shard.into_iter().enumerate() {
-            let (response_tx, response_rx) = oneshot::channel();
-            self.shard_senders[shard_id]
-                .send(ReplicationMsg::InstallSnapshot {
-                    entries,
-                    response_tx,
-                })
-                .await
-                .map_err(|_| io::Error::other(format!("shard {shard_id} is gone")))?;
-            response_rx.await.map_err(|_| {
-                io::Error::other(format!("shard {shard_id} dropped the install ack"))
-            })?;
-        }
+        self.install_per_shard(per_shard).await?;
 
         tracing::info!(
             keys = total,
@@ -132,6 +189,31 @@ impl LiveCheckpointInstaller {
         );
         Ok(())
     }
+}
+
+/// Decode the primary's dataset blobs and bucket every key by *this* node's
+/// partitioning.
+///
+/// Blocking: pure CPU over the whole keyspace. A blob that does not decode fails
+/// the whole install — the dataset is installed as a complete replacement, so a
+/// partially decoded one would silently drop keys the replica then claims to
+/// hold. Expired keys are dropped at the source (the exporting shard), so
+/// nothing here has to second-guess a TTL against the local clock.
+fn route_dataset(blobs: Vec<Vec<u8>>, num_shards: usize) -> io::Result<Vec<Vec<SnapshotEntry>>> {
+    let mut per_shard: Vec<Vec<SnapshotEntry>> = vec![Vec::new(); num_shards];
+    for (index, blob) in blobs.iter().enumerate() {
+        let entries = frogdb_core::persistence::read_entries(blob)
+            .map_err(|e| io::Error::other(format!("dataset blob {index} did not decode: {e}")))?;
+        for entry in entries {
+            let shard = shard_for_key(&entry.key, num_shards);
+            per_shard[shard].push(SnapshotEntry {
+                key: entry.key,
+                value: entry.value,
+                metadata: entry.metadata,
+            });
+        }
+    }
+    Ok(per_shard)
 }
 
 /// Read every shard's entries out of the staged checkpoint DB.

@@ -843,7 +843,7 @@ pub enum ReplicationMsg {
     ///
     /// Sent once per shard by the replica's full-sync driver after the primary's
     /// checkpoint has been staged and read back (see
-    /// `frogdb_replication::replica::CheckpointInstaller`). The handler clears
+    /// `frogdb_replication::replica::SnapshotInstaller`). The handler clears
     /// the shard and restores `entries` **without yielding**, so no client can
     /// observe a half-installed keyspace on this shard; the install is atomic
     /// per shard, not across shards (see `ShardWorker::install_snapshot`).
@@ -856,6 +856,30 @@ pub enum ReplicationMsg {
         entries: Vec<SnapshotEntry>,
         /// Completion ack.
         response_tx: oneshot::Sender<()>,
+    },
+
+    /// Serialize this shard's live keyspace into one dataset blob.
+    ///
+    /// The read direction of [`Self::InstallSnapshot`], used when a primary
+    /// serves a full resync with no RocksDB behind it (`persistence.enabled =
+    /// false`): there is no checkpoint to cut, so the dataset the replica needs
+    /// is taken straight out of RAM. The blob's framing is owned by
+    /// `frogdb_persistence::serialization::dataset`, so the replica's installer
+    /// can read it back without this crate's types crossing the wire.
+    ///
+    /// Snapshot semantics are per shard, the same as `InstallSnapshot`: the
+    /// export runs inside the shard task without yielding, so it captures that
+    /// shard at one instant, but the shards are exported one after another.
+    /// That is the granularity the checkpoint path has too — the offset granted
+    /// to the replica is captured *before* the export, so the dataset can only
+    /// run ahead of the offset, never behind it, and the difference is replayed
+    /// from the backlog at the streaming handoff.
+    ExportSnapshot {
+        /// The serialized dataset blob (empty for an empty shard), or the
+        /// reason it could not be produced. An export that cannot see a key's
+        /// value must fail rather than omit it: the blob is installed as a
+        /// *complete* dataset, so a partial one is silent data loss.
+        response_tx: oneshot::Sender<Result<Vec<u8>, String>>,
     },
 }
 
@@ -1085,6 +1109,7 @@ impl ReplicationMsg {
     pub fn probe_type_str(&self) -> &'static str {
         match self {
             ReplicationMsg::InstallSnapshot { .. } => "InstallSnapshot",
+            ReplicationMsg::ExportSnapshot { .. } => "ExportSnapshot",
         }
     }
 }

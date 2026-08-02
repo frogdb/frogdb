@@ -1,6 +1,6 @@
 # A shard that drops out of the checkpoint quiesce does so silently
 
-Status: open
+Status: needs-triage
 Type: bug (observability)
 Severity: likelihood 1/3 (needs a wedged, panicked, or shutting-down shard), consequence 3/3
 (a checkpoint or full-sync artifact is missing acknowledged writes with no signal) — score 3

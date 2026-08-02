@@ -47,7 +47,8 @@ SOURCE_ROOTS = [REPO / "frogdb-server/crates"]
 # these compiles their test binaries: seconds warm for frogdb-txn/frogdb-vll/
 # frogdb-recovery, ~15-25s for frogdb-server (one big `main` binary).
 # frogdb-persistence, frogdb-recovery and frogdb-core carry the storage-side
-# rows (see persistence-failure-modes.md).
+# rows (see persistence-failure-modes.md); frogdb-replication carries the
+# full-sync wire rows (see replication-failure-modes.md).
 # Pass --nextest-output to reuse a listing produced by an earlier step.
 NEXTEST_CRATES = [
     "frogdb-txn",
@@ -56,6 +57,7 @@ NEXTEST_CRATES = [
     "frogdb-persistence",
     "frogdb-recovery",
     "frogdb-core",
+    "frogdb-replication",
 ]
 
 # `## FM-TXN-001 — title`

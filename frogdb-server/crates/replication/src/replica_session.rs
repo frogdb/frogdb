@@ -31,25 +31,14 @@ use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::broadcast;
 
-use frogdb_types::ADVERTISED_REDIS_VERSION;
-
 use crate::BoxedStream;
 use crate::frame::{ReplconfCodec, ReplicationFrame};
 use crate::fullsync::{
     CheckpointChecksum, CheckpointFileHeader, CheckpointStreamCodec, FullSyncMetadata,
-    calculate_file_checksum, stream_file_to_writer,
+    calculate_bytes_checksum, calculate_file_checksum, stream_file_to_writer,
 };
 use crate::primary::{LAG_CHECK_INTERVAL, LagThresholds, PrimaryReplicationHandler};
 use crate::tracker::ReplicationTrackerImpl;
-
-// ============================================================================
-// RDB Format Constants (used by the minimal-RDB fallback)
-// ============================================================================
-
-const RDB_OPCODE_AUX: u8 = 0xFA;
-const RDB_OPCODE_SELECTDB: u8 = 0xFE;
-const RDB_OPCODE_RESIZEDB: u8 = 0xFB;
-const RDB_OPCODE_EOF: u8 = 0xFF;
 
 /// Lifecycle phase of a replica session.
 ///
@@ -491,11 +480,21 @@ impl ReplicaSession {
 
             match result {
                 Err(e) => {
-                    // Checkpoint creation failed — fall back to minimal RDB.
+                    // Checkpoint creation failed. There is nothing else this
+                    // node can honestly put on the wire: the replica has already
+                    // been granted `snapshot_offset`, and any payload that is
+                    // not this primary's dataset would leave it streaming deltas
+                    // onto a keyspace that never took the base snapshot (issue
+                    // 67 — that is exactly what the old minimal-RDB fallback
+                    // did). Failing the sync drops the connection, and the
+                    // replica retries `PSYNC ? -1` on its reconnect backoff.
+                    //
                     // sync_checkpoint_path is intentionally NOT set, so the exit
                     // handler won't try to clean a directory that doesn't exist.
                     tracing::error!(error = %e, "Failed to create checkpoint for FULLRESYNC");
-                    self.send_minimal_rdb(&mut stream).await?;
+                    return Err(io::Error::other(format!(
+                        "failed to create checkpoint for FULLRESYNC: {e}"
+                    )));
                 }
                 Ok(()) => {
                     // Mark for cleanup *only after* successful creation.
@@ -512,8 +511,12 @@ impl ReplicaSession {
                 }
             }
         } else {
-            // No persistence — minimal RDB only.
-            self.send_minimal_rdb(&mut stream).await?;
+            // No RocksDB to checkpoint (`persistence.enabled = false`), which
+            // does not excuse this primary from shipping its dataset: Redis
+            // serves a diskless full sync by serializing the keyspace straight
+            // to the socket, and so does this branch (issue 67).
+            self.stream_live_dataset(&mut stream, handler, &replication_id, snapshot_offset)
+                .await?;
         }
 
         tracing::info!(
@@ -640,13 +643,101 @@ impl ReplicaSession {
         (transferred as f64 / total as f64) * 100.0
     }
 
-    /// Send a minimal valid RDB to the replica (used for empty databases or
-    /// as a fallback when checkpoint creation fails).
-    async fn send_minimal_rdb(&self, stream: &mut BoxedStream) -> io::Result<()> {
-        let empty_rdb = create_minimal_rdb();
-        let header = format!("${}\r\n", empty_rdb.len());
-        stream.write_all(header.as_bytes()).await?;
-        stream.write_all(&empty_rdb).await?;
+    /// Stream the live keyspace to the replica: the full-sync payload of a
+    /// primary that has no RocksDB to checkpoint (issue 67).
+    ///
+    /// Structurally identical to [`Self::stream_checkpoint`] — same envelope,
+    /// same combined checksum, same trailing metadata — with per-shard dataset
+    /// blobs in place of checkpoint files. Only the prelude marker differs, so
+    /// the replica knows to install the bodies directly instead of staging them
+    /// to a disk it is not using either.
+    ///
+    /// **No pre-checkpoint drain.** The drain exists to push acknowledged writes
+    /// out of the shards' flush engines *into RocksDB* before the cut. Here the
+    /// shards themselves are the source, so an acknowledged write is in the
+    /// export by construction; there is nothing to wait for.
+    ///
+    /// **`replication_offset` is captured by the caller before this runs**, which
+    /// keeps the `offset <= data` direction the checkpoint path relies on: writes
+    /// landing during the export only add data, and `(offset, current]` is
+    /// replayed from the backlog at the streaming handoff.
+    async fn stream_live_dataset(
+        &self,
+        stream: &mut BoxedStream,
+        handler: &Arc<PrimaryReplicationHandler>,
+        replication_id: &str,
+        replication_offset: u64,
+    ) -> io::Result<()> {
+        // No source wired means no way to read the keyspace, and a full resync
+        // with no dataset is precisely the bug: fail the sync instead.
+        let Some(source) = handler.live_snapshot_source() else {
+            return Err(io::Error::other(
+                "no live-snapshot source wired: a primary without persistence cannot serve \
+                 a FULLRESYNC",
+            ));
+        };
+
+        self.set_phase(Phase::PreparingCheckpoint);
+        let blobs = source().await?;
+
+        let total_size: u64 = blobs.iter().map(|b| b.len() as u64).sum();
+        self.inner.write().sync_total_bytes = total_size;
+        self.sync_bytes_transferred.store(0, Ordering::Release);
+        self.set_phase(Phase::StreamingCheckpoint);
+        self.inner.write().sync_started_at = Some(Instant::now());
+
+        tracing::info!(
+            replica_id = self.id,
+            blob_count = blobs.len(),
+            total_size,
+            "Streaming live dataset to replica"
+        );
+
+        CheckpointStreamCodec::write_snapshot_prelude(stream, blobs.len()).await?;
+
+        // The blob names are positional (`shard-<n>.dataset`) and feed the
+        // combined checksum in wire order, exactly as filenames do for a
+        // checkpoint — so a reordered or dropped blob fails verification.
+        let mut combined = CheckpointChecksum::new();
+        for (shard_id, blob) in blobs.iter().enumerate() {
+            let name = format!("shard-{shard_id}.dataset");
+            CheckpointStreamCodec::write_file_header(
+                stream,
+                &CheckpointFileHeader {
+                    name: name.clone(),
+                    size: blob.len() as u64,
+                },
+            )
+            .await?;
+            stream.write_all(blob).await?;
+            self.sync_bytes_transferred
+                .fetch_add(blob.len() as u64, Ordering::Relaxed);
+            combined.update_file(&name, &calculate_bytes_checksum(blob));
+        }
+
+        CheckpointStreamCodec::write_metadata(
+            stream,
+            &FullSyncMetadata {
+                rdb_size: total_size,
+                checksum: combined.finalize(),
+                replication_id: replication_id.to_string(),
+                replication_offset,
+            },
+        )
+        .await?;
+
+        tracing::info!(
+            replica_id = self.id,
+            blobs = blobs.len(),
+            total_bytes = total_size,
+            elapsed_ms = self
+                .inner
+                .read()
+                .sync_started_at
+                .map(|t| t.elapsed().as_millis() as u64)
+                .unwrap_or_default(),
+            "Live dataset streaming complete"
+        );
         Ok(())
     }
 
@@ -940,40 +1031,6 @@ struct LagBreach {
     time_exceeded: bool,
 }
 
-/// Append an RDB length-prefixed string using the 6-bit length encoding
-/// (valid for strings under 64 bytes, which covers every AUX field FrogDB emits).
-fn push_rdb_short_string(rdb: &mut Vec<u8>, s: &[u8]) {
-    debug_assert!(
-        s.len() < 64,
-        "string too long for 6-bit RDB length encoding"
-    );
-    rdb.push(s.len() as u8);
-    rdb.extend_from_slice(s);
-}
-
-/// Build a minimal valid RDB suitable for empty databases or fallbacks.
-pub(crate) fn create_minimal_rdb() -> Vec<u8> {
-    let mut rdb = Vec::new();
-    // Magic + version
-    rdb.extend_from_slice(b"REDIS");
-    rdb.extend_from_slice(b"0011");
-    // AUX redis-ver:<ADVERTISED_REDIS_VERSION>
-    rdb.push(RDB_OPCODE_AUX);
-    push_rdb_short_string(&mut rdb, b"redis-ver");
-    push_rdb_short_string(&mut rdb, ADVERTISED_REDIS_VERSION.as_bytes());
-    // SELECTDB 0
-    rdb.push(RDB_OPCODE_SELECTDB);
-    rdb.push(0x00);
-    // RESIZEDB 0,0
-    rdb.push(RDB_OPCODE_RESIZEDB);
-    rdb.push(0x00);
-    rdb.push(0x00);
-    // EOF + 8-byte CRC64 (zeros — not validated by FrogDB)
-    rdb.push(RDB_OPCODE_EOF);
-    rdb.extend_from_slice(&[0u8; 8]);
-    rdb
-}
-
 #[cfg(test)]
 mod tests {
     //! `ReplicaSession::run` lifecycle tests.
@@ -999,6 +1056,74 @@ mod tests {
 
     fn addr() -> SocketAddr {
         "127.0.0.1:9001".parse().unwrap()
+    }
+
+    /// Wire a live-snapshot source returning `blobs`, standing in for the
+    /// server crate's shard export. A persistence-disabled primary needs one to
+    /// serve a full resync at all (issue 67).
+    fn with_live_dataset(handler: &Arc<PrimaryReplicationHandler>, blobs: Vec<Vec<u8>>) {
+        handler.set_live_snapshot_source(Arc::new(move || {
+            let blobs = blobs.clone();
+            Box::pin(async move { Ok(blobs) })
+        }));
+    }
+
+    /// One dataset blob holding `entries`, in the framing the shard workers
+    /// produce and the replica's installer consumes.
+    fn dataset_blob(entries: &[(&str, &str)]) -> Vec<u8> {
+        use frogdb_types::types::{KeyMetadata, Value};
+        let mut blob = Vec::new();
+        for (key, val) in entries {
+            let value = Value::string(Bytes::from(val.to_string()));
+            let metadata = KeyMetadata::new(value.memory_size());
+            frogdb_persistence::append_entry(&mut blob, key.as_bytes(), &value, &metadata);
+        }
+        blob
+    }
+
+    /// Read a whole live-dataset envelope off the wire, returning the blob
+    /// bodies and the trailing metadata frame.
+    ///
+    /// Byte-at-a-time on the raw stream rather than through a `BufReader`, so
+    /// the caller can keep decoding replication frames from the same client
+    /// afterwards without losing buffered bytes to a reader it dropped.
+    async fn drain_live_dataset(
+        client: &mut tokio::io::DuplexStream,
+    ) -> (Vec<Vec<u8>>, FullSyncMetadata) {
+        async fn dollar_len(client: &mut tokio::io::DuplexStream) -> usize {
+            read_response_line(client)
+                .await
+                .trim()
+                .trim_start_matches('$')
+                .parse()
+                .unwrap()
+        }
+
+        let marker = read_response_line(client).await;
+        assert_eq!(
+            marker.trim(),
+            "$FROGDB_SNAPSHOT",
+            "a persistence-disabled primary must announce a dataset envelope"
+        );
+        let count: usize = read_response_line(client).await.trim().parse().unwrap();
+
+        let mut blobs = Vec::with_capacity(count);
+        for _ in 0..count {
+            // `$<name_len>\r\n<name>\r\n$<size>\r\n<size bytes>`.
+            let name_len = dollar_len(client).await;
+            let mut name = vec![0u8; name_len + 2];
+            client.read_exact(&mut name).await.unwrap();
+            let size = dollar_len(client).await;
+            let mut blob = vec![0u8; size];
+            client.read_exact(&mut blob).await.unwrap();
+            blobs.push(blob);
+        }
+
+        let meta_len = dollar_len(client).await;
+        let mut meta = vec![0u8; meta_len + 2];
+        client.read_exact(&mut meta).await.unwrap();
+        let metadata = FullSyncMetadata::from_bytes(&meta[..meta_len]).expect("metadata parses");
+        (blobs, metadata)
     }
 
     fn make_handler(
@@ -1134,24 +1259,26 @@ mod tests {
     /// F1: writes broadcast during the full-sync handoff (after the snapshot
     /// offset is captured, before the live stream is joined) must NOT be lost.
     ///
-    /// A tiny duplex buffer blocks the session inside `send_minimal_rdb`,
+    /// A tiny duplex buffer blocks the session inside `stream_live_dataset`,
     /// opening a deterministic window: the test reads the FULLRESYNC line
     /// (proving the snapshot offset is captured), then broadcasts commands while
-    /// the session is blocked, then drains the RDB. When the session reaches
+    /// the session is blocked, then drains the dataset. When the session reaches
     /// `start_streaming` it must replay those commands from the backlog. Under
     /// the pre-fix code (subscribe-only, no replay) they would have been dropped
     /// and this test would hang waiting for frames that never arrive.
+    // FM-REPLICATION-004
     #[tokio::test]
     async fn full_sync_replays_writes_made_during_handoff() {
         let dir = TempDir::new().unwrap();
         let tracker = Arc::new(ReplicationTrackerImpl::new());
-        // No rocks store -> minimal-RDB full sync; backlog enabled so the
+        // No rocks store -> live-dataset full sync; backlog enabled so the
         // handoff window can be replayed.
         let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
+        with_live_dataset(&handler, vec![dataset_blob(&[("seed", "v")])]);
         let repl_id = handler.state.read().replication_id.clone();
 
-        // Tiny buffer forces the session to block writing the RDB, giving us a
-        // window to broadcast "during" the handoff.
+        // Tiny buffer forces the session to block writing the dataset, giving us
+        // a window to broadcast "during" the handoff.
         let (mut client, server) = tokio::io::duplex(32);
         let session = tracker.register_replica(addr());
 
@@ -1176,7 +1303,7 @@ mod tests {
         let line = read_response_line(&mut client).await;
         assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
 
-        // 2. Broadcast while the session is blocked in send_minimal_rdb. These
+        // 2. Broadcast while the session is blocked streaming the dataset. These
         //    advance the live offset and land in the backlog, after the snapshot
         //    offset and before start_streaming's replay extract.
         let mut expected = Vec::new();
@@ -1189,13 +1316,10 @@ mod tests {
             ));
         }
 
-        // 3. Drain the minimal RDB ("$<len>\r\n<rdb bytes>"), unblocking the
-        //    session so it proceeds to the streaming handoff.
-        let rdb_header = read_response_line(&mut client).await;
-        let rdb_len: usize = rdb_header.trim().trim_start_matches('$').parse().unwrap();
-        let mut rdb = vec![0u8; rdb_len];
-        client.read_exact(&mut rdb).await.unwrap();
-        assert_eq!(&rdb[0..5], b"REDIS");
+        // 3. Drain the dataset envelope, unblocking the session so it proceeds
+        //    to the streaming handoff.
+        let (blobs, _) = drain_live_dataset(&mut client).await;
+        assert_eq!(blobs.len(), 1);
 
         // 4. The handoff replays exactly the 4 writes — none lost. A regression
         //    (subscribe-only handoff) drops them, so the frames never arrive;
@@ -1346,14 +1470,32 @@ mod tests {
         assert_eq!(session.phase(), Phase::Disconnecting);
     }
 
-    /// Full sync without a RocksStore: emits FULLRESYNC + minimal RDB, then
-    /// enters streaming. Closing the client triggers normal cleanup; no
-    /// checkpoint directory should exist (it was never created).
+    /// Issue 67: a full sync served without a RocksStore carries the primary's
+    /// **dataset**, not an empty envelope.
+    ///
+    /// This is the forcing test at the wire level. The old behaviour answered
+    /// `PSYNC ? -1` with a data-less minimal RDB (`REDIS0011`… + EOF): the
+    /// replica adopted the replid/offset, flipped to `Streaming`, and kept every
+    /// key it already had. Here the envelope must be a `$FROGDB_SNAPSHOT` whose
+    /// bodies decode to the primary's keys, and whose combined checksum and
+    /// replid/offset match what was granted — everything a replica needs to
+    /// replace its keyspace rather than keep it.
+    ///
+    /// Closing the client triggers normal cleanup; no checkpoint directory
+    /// should exist (it was never created).
+    // FM-REPLICATION-001
     #[tokio::test]
-    async fn run_full_sync_minimal_rdb_path() {
+    async fn run_full_sync_without_rocks_streams_the_live_dataset() {
         let dir = TempDir::new().unwrap();
         let tracker = Arc::new(ReplicationTrackerImpl::new());
         let handler = make_handler(tracker.clone(), None, dir.path().to_path_buf());
+        with_live_dataset(
+            &handler,
+            vec![
+                dataset_blob(&[("a", "1"), ("b", "2")]),
+                dataset_blob(&[("c", "3")]),
+            ],
+        );
         let repl_id = handler.state.read().replication_id.clone();
 
         let (mut client, server) = tokio::io::duplex(64 * 1024);
@@ -1368,7 +1510,7 @@ mod tests {
                     .run(
                         server,
                         SyncKind::Full {
-                            replication_id: repl_id,
+                            replication_id: repl_id.clone(),
                         },
                         handler,
                     )
@@ -1376,31 +1518,81 @@ mod tests {
             }
         });
 
-        // Read until we've consumed FULLRESYNC + the minimal RDB.
-        let mut all = Vec::new();
-        let mut buf = [0u8; 4096];
-        let mut saw_redis_magic = false;
-        for _ in 0..10 {
-            let n = client.read(&mut buf).await.unwrap();
-            if n == 0 {
-                break;
-            }
-            all.extend_from_slice(&buf[..n]);
-            if all.windows(5).any(|w| w == b"REDIS") {
-                saw_redis_magic = true;
-                break;
-            }
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
+
+        let (blobs, metadata) = drain_live_dataset(&mut client).await;
+
+        // The dataset is really on the wire: one blob per shard, decoding to
+        // the primary's keys. The old minimal-RDB payload had none of this.
+        let keys: Vec<String> = blobs
+            .iter()
+            .flat_map(|b| frogdb_persistence::read_entries(b).expect("blob decodes"))
+            .map(|e| String::from_utf8(e.key.to_vec()).unwrap())
+            .collect();
+        assert_eq!(keys, vec!["a", "b", "c"]);
+
+        // Verified end to end the same way a checkpoint is, so a truncated or
+        // reordered dataset cannot pass as the primary's keyspace.
+        let mut combined = CheckpointChecksum::new();
+        for (shard_id, blob) in blobs.iter().enumerate() {
+            combined.update_file(
+                &format!("shard-{shard_id}.dataset"),
+                &calculate_bytes_checksum(blob),
+            );
         }
-        assert!(saw_redis_magic, "should see REDIS magic in the RDB");
-        assert!(all.starts_with(b"+FULLRESYNC"));
+        assert_eq!(combined.finalize(), metadata.checksum);
+        assert_eq!(
+            metadata.rdb_size,
+            blobs.iter().map(Vec::len).sum::<usize>() as u64
+        );
+        assert_eq!(
+            metadata.replication_id,
+            handler.state.read().replication_id,
+            "the dataset carries the identity the FULLRESYNC granted"
+        );
+        assert_eq!(
+            metadata.replication_offset, 0,
+            "and the offset captured before the export"
+        );
 
         drop(client);
         let result = task.await.unwrap();
         assert!(result.is_ok());
 
         assert_eq!(tracker.replica_count(), 0);
-        // Minimal-RDB path never sets sync_checkpoint_path, so no dir to clean.
+        // The dataset path never sets sync_checkpoint_path, so no dir to clean.
         assert!(session.inner.read().sync_checkpoint_path.is_none());
+    }
+
+    /// A primary that cannot read its own keyspace fails the sync instead of
+    /// sending an envelope with nothing in it — the shape issue 67 was about.
+    // FM-REPLICATION-001
+    #[tokio::test]
+    async fn full_sync_without_a_live_snapshot_source_fails_the_sync() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        // No rocks store *and* no live-snapshot source: nothing to send.
+        let handler = make_handler(tracker.clone(), None, dir.path().to_path_buf());
+        let repl_id = handler.state.read().replication_id.clone();
+
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let session = tracker.register_replica(addr());
+        let task = tokio::spawn({
+            let session = session.clone();
+            let handler = handler.clone();
+            let server: BoxedStream = Box::new(server);
+            async move { session.handle_full(server, repl_id, &handler).await }
+        });
+
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
+
+        let err = task.await.unwrap().expect_err("the sync must fail");
+        assert!(
+            err.to_string().contains("no live-snapshot source"),
+            "got: {err}"
+        );
     }
 
     /// Mid-fullsync drop with a real checkpoint directory — the regression

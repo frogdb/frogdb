@@ -45,6 +45,21 @@ pub use ring_buffer::{ReplicationRingBuffer, SplitBrainBufferConfig};
 pub type PreCheckpointHook =
     Arc<dyn Fn() -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
+/// Injected access to the primary's live keyspace, one serialized dataset blob
+/// per shard, used when a `FULLRESYNC` has no RocksDB to checkpoint.
+///
+/// Same reason [`PreCheckpointHook`] exists: the replication crate owns no
+/// shards. The owner of the shards installs this (see `live_snapshot_source` in
+/// the server crate) and the full-sync path calls it in place of
+/// `create_checkpoint` when `persistence.enabled = false`. The blobs are opaque
+/// here — their framing belongs to `frogdb_persistence::serialization::dataset`,
+/// so shard-level types never cross into this crate.
+pub type LiveSnapshotSource = Arc<
+    dyn Fn() -> std::pin::Pin<Box<dyn Future<Output = io::Result<Vec<Vec<u8>>>> + Send>>
+        + Send
+        + Sync,
+>;
+
 /// The split-brain divergence window this (demoted) Primary computed against the
 /// last offset the cluster had acknowledged — the writes it committed past that
 /// point and must surrender to the new Primary.
@@ -148,6 +163,13 @@ pub struct PrimaryReplicationHandler {
     /// construction because the shards are wired up later; a handler without one
     /// cuts the checkpoint straight from whatever RocksDB currently holds.
     pre_checkpoint_hook: RwLock<Option<PreCheckpointHook>>,
+    /// Reads the live keyspace for a FULLRESYNC served without RocksDB (see
+    /// [`LiveSnapshotSource`]). Installed after construction for the same reason
+    /// the pre-checkpoint hook is. A handler without one cannot serve a full
+    /// resync at all when persistence is disabled — it fails the sync rather
+    /// than sending an empty dataset the replica would mistake for the
+    /// primary's (issue 67).
+    live_snapshot_source: RwLock<Option<LiveSnapshotSource>>,
     /// Directory for storing temporary checkpoint data.
     pub(crate) data_dir: PathBuf,
     /// Live proactive lag-disconnect thresholds, shared with every streaming
@@ -216,6 +238,7 @@ impl PrimaryReplicationHandler {
             wal_broadcast,
             rocks_store,
             pre_checkpoint_hook: RwLock::new(None),
+            live_snapshot_source: RwLock::new(None),
             data_dir,
             lag_thresholds,
             lag_cooldown: lag_config.cooldown,
@@ -238,6 +261,18 @@ impl PrimaryReplicationHandler {
     /// runs.
     pub(crate) fn pre_checkpoint_hook(&self) -> Option<PreCheckpointHook> {
         self.pre_checkpoint_hook.read().clone()
+    }
+
+    /// Install the reader for the live keyspace (see [`LiveSnapshotSource`]).
+    /// Set once during wiring; replacing it supersedes the previous reader.
+    pub fn set_live_snapshot_source(&self, source: LiveSnapshotSource) {
+        *self.live_snapshot_source.write() = Some(source);
+    }
+
+    /// The installed live-snapshot reader, cloned out so no lock is held while
+    /// it runs.
+    pub(crate) fn live_snapshot_source(&self) -> Option<LiveSnapshotSource> {
+        self.live_snapshot_source.read().clone()
     }
 
     /// The WAIT quorum seam. The handler itself is the production

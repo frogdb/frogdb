@@ -1,11 +1,16 @@
-//! Replication-lifecycle dispatch: installing a full-resync snapshot into the
-//! live keyspace.
+//! Replication-lifecycle dispatch: moving a full-resync snapshot in and out of
+//! the live keyspace.
 //!
 //! A replica that takes a runtime `REPLICAOF <new-master>` (or boots into a
 //! full resync) must adopt the master's dataset *live* — otherwise it keeps
 //! serving its own, possibly forked, keyspace and only reconverges on restart
 //! (issue 61). The snapshot is read off disk by the replication driver and
 //! delivered here, one message per shard.
+//!
+//! The export direction is the same idea served from the primary's side: a
+//! primary running with `persistence.enabled = false` has no RocksDB to
+//! checkpoint, so the dataset a full resync owes its replica is serialized out
+//! of RAM here instead (issue 67).
 
 use super::message::{ReplicationMsg, SnapshotEntry};
 use super::persistence::WalTarget;
@@ -25,8 +30,61 @@ impl ShardWorker {
                 self.install_snapshot(entries).await;
                 let _ = response_tx.send(());
             }
+            ReplicationMsg::ExportSnapshot { response_tx } => {
+                let _ = response_tx.send(self.export_snapshot());
+            }
         }
         false
+    }
+
+    /// Serialize this shard's live keyspace into one dataset blob.
+    ///
+    /// **Consistency window.** Like `install_snapshot`, this runs to completion
+    /// without an `.await` inside the shard's own task, so the blob is one
+    /// instant of *this* shard. Across shards the exports are sequential, which
+    /// is the same granularity the checkpoint path has, and it is safe for the
+    /// same reason: the offset granted to the replica is captured before the
+    /// export starts, so the exported data can only run *ahead* of that offset,
+    /// and the `(offset, current]` window is replayed from the backlog at the
+    /// streaming handoff.
+    ///
+    /// **Expired keys are dropped**, not exported: they are already invisible to
+    /// clients here, and shipping them would resurrect them on a replica whose
+    /// clock disagrees. This matches the checkpoint path, where the flush engine
+    /// has already tombstoned them.
+    ///
+    /// **A warm (spilled) value fails the export.** This path exists precisely
+    /// because there is no RocksDB, so a value that is not hot has nowhere to be
+    /// read back from; skipping it would hand the replica a subset of the
+    /// keyspace while claiming a full sync. The caller turns the error into a
+    /// failed sync, which the replica retries.
+    fn export_snapshot(&self) -> Result<Vec<u8>, String> {
+        let mut blob = Vec::new();
+        let mut exported = 0usize;
+        for key in self.store.all_keys() {
+            let Some(metadata) = self.store.get_metadata(&key) else {
+                continue;
+            };
+            if metadata.is_expired() {
+                continue;
+            }
+            let Some(value) = self.store.get_hot(&key) else {
+                return Err(format!(
+                    "shard {} cannot export key of {} bytes: its value is not resident in memory",
+                    self.shard_id(),
+                    key.len()
+                ));
+            };
+            frogdb_persistence::append_entry(&mut blob, &key, &value, &metadata);
+            exported += 1;
+        }
+        tracing::debug!(
+            shard_id = self.shard_id(),
+            keys = exported,
+            bytes = blob.len(),
+            "Exported live keyspace for a full resync"
+        );
+        Ok(blob)
     }
 
     /// Replace this shard's live keyspace with `entries`.
@@ -103,6 +161,7 @@ mod tests {
     use crate::shard::execution::scatter_effect_tests::scatter_worker;
     use crate::types::{KeyMetadata, Value};
     use std::sync::Arc;
+    use std::time::{Duration, Instant};
 
     fn worker() -> ShardWorker {
         scatter_worker(Arc::new(NoopBroadcaster))
@@ -120,6 +179,7 @@ mod tests {
 
     /// The install is a replace, not a merge: pre-existing (forked) keys are
     /// gone and only the snapshot's keys remain.
+    // FM-REPLICATION-002
     #[tokio::test]
     async fn install_snapshot_replaces_the_live_keyspace() {
         let mut worker = worker();
@@ -143,6 +203,7 @@ mod tests {
 
     /// An install bumps the WATCH version so a transaction watching a key the
     /// snapshot replaced aborts instead of committing against stale state.
+    // FM-REPLICATION-002
     #[tokio::test]
     async fn install_snapshot_bumps_the_watch_version() {
         let mut worker = worker();
@@ -158,6 +219,7 @@ mod tests {
 
     /// An empty snapshot still clears: a demoted node whose new master has no
     /// keys must not keep serving its own.
+    // FM-REPLICATION-002
     #[tokio::test]
     async fn install_empty_snapshot_clears_the_shard() {
         let mut worker = worker();
@@ -172,6 +234,7 @@ mod tests {
 
     /// Installing into an untouched shard changes nothing observable and must
     /// not bump the WATCH version (the pipeline's no-op rule).
+    // FM-REPLICATION-002
     #[tokio::test]
     async fn install_empty_snapshot_into_empty_shard_is_a_no_op() {
         let mut worker = worker();
@@ -180,5 +243,79 @@ mod tests {
         worker.install_snapshot(Vec::new()).await;
 
         assert_eq!(worker.get_key_version(b"k"), before);
+    }
+
+    /// The export is the exact inverse of the install: what a persistence-less
+    /// primary serializes out of RAM is what a replica installs.
+    // FM-REPLICATION-002
+    #[tokio::test]
+    async fn export_snapshot_round_trips_through_install() {
+        let mut source = worker();
+        source
+            .store
+            .set(Bytes::from("a"), Value::string(Bytes::from("1")));
+        source
+            .store
+            .set(Bytes::from("b"), Value::string(Bytes::from("2")));
+
+        let blob = source.export_snapshot().expect("hot keyspace exports");
+        let entries: Vec<SnapshotEntry> = frogdb_persistence::read_entries(&blob)
+            .expect("blob decodes")
+            .into_iter()
+            .map(|e| SnapshotEntry {
+                key: e.key,
+                value: e.value,
+                metadata: e.metadata,
+            })
+            .collect();
+
+        let mut target = worker();
+        target
+            .store
+            .set(Bytes::from("forked"), Value::string(Bytes::from("old")));
+        target.install_snapshot(entries).await;
+
+        assert_eq!(target.store.len(), 2);
+        assert!(!target.store.contains(b"forked"));
+        let a = target.store.get_hot(b"a").expect("exported key is live");
+        let Value::String(s) = a.as_ref() else {
+            panic!("expected a string value")
+        };
+        assert_eq!(s.as_bytes(), Bytes::from("1"));
+    }
+
+    /// An empty shard exports an empty blob — which still clears the replica,
+    /// because the install is a replace.
+    // FM-REPLICATION-002
+    #[tokio::test]
+    async fn export_of_an_empty_shard_is_an_empty_blob() {
+        let worker = worker();
+        assert!(worker.export_snapshot().expect("empty export").is_empty());
+    }
+
+    /// Keys past their TTL are already invisible here; exporting them would
+    /// resurrect them on the replica.
+    // FM-REPLICATION-002
+    #[tokio::test]
+    async fn export_snapshot_drops_expired_keys() {
+        let mut worker = worker();
+        worker
+            .store
+            .set(Bytes::from("live"), Value::string(Bytes::from("v")));
+        worker
+            .store
+            .set(Bytes::from("dead"), Value::string(Bytes::from("v")));
+        worker
+            .store
+            .set_expiry(b"dead", Instant::now() - Duration::from_secs(1));
+
+        let blob = worker.export_snapshot().expect("export succeeds");
+        let keys: Vec<Bytes> = frogdb_persistence::read_entries(&blob)
+            .expect("blob decodes")
+            .into_iter()
+            .map(|e| e.key)
+            .collect();
+
+        assert_eq!(keys, vec![Bytes::from("live")]);
     }
 }

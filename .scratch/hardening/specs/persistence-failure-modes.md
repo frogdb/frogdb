@@ -270,7 +270,7 @@ and no synchronous `SAVE` — the command is an explicit `-ERR ... not supported
 | Invariant | `install()` is the commit point; everything after it is wrapped in warn-only `if let Err`. `cleanup_old_snapshots` filters to directories named `snapshot_<u64>`, sorts by parsed epoch, and deletes only the oldest overflow; a delete failure warns and the loop continues. |
 | Outcome variant | n/a (warn-only; the save still reports success) |
 | Forced by | `test_stager_symlink_failure_is_nonfatal`, `test_stager_retention_across_epochs`, `test_cleanup_old_snapshots`, `test_cleanup_unlimited`, `test_config_default` |
-| Bug refs | `.scratch/hardening/issues/03-bgsave-failure-invisible-to-clients.md` (the failure surface these warnings do *not* reach) |
+| Bug refs | `.scratch/hardening/issues/03` (the failure surface these warnings do *not* reach) |
 
 ## FM-PERSISTENCE-019 — every write acknowledged before the cut is in the cut
 
@@ -293,8 +293,8 @@ and no synchronous `SAVE` — the command is an explicit `-ERR ... not supported
 | NOT observable | The checkpoint aborting or reporting the partial drain — a gap, not a guarantee, and worse on the FULLRESYNC path, where the uncaptured writes are missing from the replica permanently rather than just from one artifact. |
 | Invariant | `fan_out` uses `let _ =` on both the send and the receive, deliberately matching pre-existing behavior so a wedged shard cannot hang a checkpoint. Forcing this needs a shard harness that can wedge one shard mid-checkpoint and inspect the artifact; the campaign has not built it. |
 | Outcome variant | n/a (no outcome is reported — that is the gap) |
-| Forced by | MISSING ([gap: 05-quiesce-partial-drain-is-silent.md](../issues/05-quiesce-partial-drain-is-silent.md)) |
-| Bug refs | `.scratch/hardening/issues/05-quiesce-partial-drain-is-silent.md` |
+| Forced by | MISSING ([gap: 05-quiesce-partial-drain-is-silent.md](../issues/open/05-quiesce-partial-drain-is-silent.md)) |
+| Bug refs | `.scratch/hardening/issues/05` |
 
 ## FM-PERSISTENCE-021 — a snapshot is restored by an explicit operator install, never at boot
 
@@ -318,7 +318,7 @@ and no synchronous `SAVE` — the command is an explicit `-ERR ... not supported
 | Invariant | `SnapshotRun::record` only stamps `last_save_time`/`last_metadata` on `Ok`, which is why `LASTSAVE` is honest. `PersistenceSnapshot` carries no failure field, so there is nothing for `PersistenceSection::render` to report even if it wanted to — the fix is a plumbing change, not a formatting one. |
 | Outcome variant | `frogdb_persistence_errors{type="snapshot"}` (the only truthful surface) |
 | Forced by | `lastsave_tracks_real_bgsave_and_ignores_failed_saves`, `lastsave_returns_zero_when_never_saved`, `lastsave_returns_timestamp_after_save`, `bgsave_starts_each_time_under_instant_completion`, `test_lastsave_basic`, `test_bgsave_then_lastsave`, `test_bgsave_basic` |
-| Bug refs | `.scratch/hardening/issues/03-bgsave-failure-invisible-to-clients.md`, `.scratch/hardening/issues/07-lastsave-restamped-at-boot.md` |
+| Bug refs | `.scratch/hardening/issues/03`, `.scratch/hardening/issues/07` |
 
 ## FM-PERSISTENCE-023 — the renames that publish a checkpoint are not fsynced
 
@@ -329,8 +329,8 @@ and no synchronous `SAVE` — the command is an explicit `-ERR ... not supported
 | NOT observable | Any claim that a completed `BGSAVE` is power-loss durable. Note the WAL watermark side-file is deliberately *not* fsynced for the opposite reason (FM-PERSISTENCE-035): it may only lag, so an unsynced write can under-report but never false-alarm. |
 | Invariant | Rename atomicity is relied on and tested (crash-window tests inject the process-crash cases); rename *durability* is neither argued nor tested. Forcing it needs a power-loss/barrier harness — filesystem fault injection the campaign has not built. |
 | Outcome variant | n/a |
-| Forced by | MISSING ([gap: 04-checkpoint-publish-renames-not-fsynced.md](../issues/04-checkpoint-publish-renames-not-fsynced.md)) |
-| Bug refs | `.scratch/hardening/issues/04-checkpoint-publish-renames-not-fsynced.md` |
+| Forced by | MISSING ([gap: 04-checkpoint-publish-renames-not-fsynced.md](../issues/open/04-checkpoint-publish-renames-not-fsynced.md)) |
+| Bug refs | `.scratch/hardening/issues/04` |
 
 ---
 
@@ -415,7 +415,7 @@ rows below are that decision, phase by phase.
 | Invariant | `has_data()` is a first-key-exists probe across the shard column families, run *after* the open — so RocksDB has already replayed its WAL and any recovered rows are visible to the probe. There is no separate FrogDB-level WAL replay path to get this wrong. |
 | Outcome variant | n/a |
 | Forced by | `fresh_boot_creates_empty_shards`, `test_has_data`, `test_empty_database_recovery`, `test_empty_shard_recovery`, `test_recover_empty_shard`, `test_open_and_write`, `test_reopen` |
-| Bug refs | `.scratch/hardening/issues/06-recovery-has-no-corruption-or-emptiness-threshold.md` (a mistyped `data-dir` is indistinguishable from a first boot) |
+| Bug refs | `.scratch/hardening/issues/06` (a mistyped `data-dir` is indistinguishable from a first boot) |
 
 ## FM-PERSISTENCE-030 — a shard-count change refuses to start
 
@@ -463,7 +463,7 @@ rows below are that decision, phase by phase.
 | Invariant | Per-key `SerializationError` is caught inside `recover_shard_into` and converted to a counter; only a `RocksError` from the iteration itself propagates. The `Serialization` variant on the recovery error enum therefore exists but is never returned by the recovery path. |
 | Outcome variant | `RecoveryStats::keys_failed` |
 | Forced by | `test_partial_recovery_on_corruption`, `test_recover_with_data`, `test_recover_all_shards`, `test_recover_sorted_set`, `test_harness_crash_and_recover` |
-| Bug refs | `.scratch/hardening/issues/06-recovery-has-no-corruption-or-emptiness-threshold.md` |
+| Bug refs | `.scratch/hardening/issues/06` |
 
 ## FM-PERSISTENCE-034 — WAL replay is point-in-time: a torn tail truncates, it does not refuse
 
@@ -525,17 +525,17 @@ rows below are that decision, phase by phase.
 | Forced by | `corrupt_replication_state_is_regenerated`, `primary_loads_and_persists_replication_state`, `standalone_does_not_persist_replication_state` |
 | Bug refs | none |
 
-## FM-PERSISTENCE-039 — staged full-sync metadata outranks the state file and is consumed exactly once
+## FM-PERSISTENCE-039 — staged full-sync metadata outranks the state file and is consumed only once it is durable
 
 | Field | Value |
 |---|---|
-| Trigger | A boot that installs a staged full-sync checkpoint whose `replication_metadata.json` disagrees with the node's own persisted replication state. |
-| Observable | The staged replid and offset win unconditionally — no comparison, no `max()`, no "only if newer" — the reconciled state is written back, and the staging file is removed so a later boot does not re-adopt it. Adoption is wholesale: the primary's history replaces this node's, dropping any secondary id / failover window. |
-| NOT observable | The node keeping its old offset for a dataset that was wholly replaced — the offset would name a position in a history the data no longer belongs to. Corrupt staged metadata being trusted: it is treated as absent, falling back to a full resync rather than crashing or adopting garbage. |
-| Invariant | Offset durability is coupled to snapshot durability by shipping the metadata *inside* the checkpoint (compare Redis' RDB aux fields), which is exactly why the install must precede this phase (FM-PERSISTENCE-027). Known asymmetry: persisting the reconciled state is warn-only while consuming the staging file is unconditional, so a failed save plus a successful consume silently falls back to the stale offset on the next boot. |
+| Trigger | A boot that installs a staged full-sync checkpoint whose `replication_metadata.json` disagrees with the node's own persisted replication state — including the sub-case where writing the reconciled state back fails (a full disk, a permissions change, a transient IO error). |
+| Observable | The staged replid and offset win unconditionally — no comparison, no `max()`, no "only if newer" — the reconciled state is written back, and the staging file is removed **after** that write succeeds, so a later boot uses the state file. Adoption is wholesale: the primary's history replaces this node's, dropping any secondary id / failover window. When the write back fails the boot still proceeds on the correct in-memory state, and the staging file is *left in place* so the next boot re-adopts it. |
+| NOT observable | The node keeping its old offset for a dataset that was wholly replaced — the offset would name a position in a history the data no longer belongs to. Corrupt staged metadata being trusted: it is treated as absent, falling back to a full resync rather than crashing or adopting garbage. A failed save that still consumes the staging file, which would destroy the only durable copy of the post-full-sync offset and leave the next boot resuming from a *plausible but wrong* position (issue 08). |
+| Invariant | Offset durability is coupled to snapshot durability by shipping the metadata *inside* the checkpoint (compare Redis' RDB aux fields), which is exactly why the install must precede this phase (FM-PERSISTENCE-027). Consumption is ordered after a successful `ReplicationState::save`: the staging file is the only durable carrier of the snapshot's offset until the state file holds it, so it is dropped only once that hand-off is complete. Re-adoption on a later boot is idempotent — the metadata describes a dataset that is already installed — so "consumed exactly once" is a liveness property (it does get consumed, on the first boot that can persist it), not a correctness one. |
 | Outcome variant | `RecoveredState::{replication, installed_staged_checkpoint}` |
-| Forced by | `staged_replication_metadata_is_adopted_and_consumed` |
-| Bug refs | `.scratch/hardening/issues/08-staged-metadata-consumed-after-failed-save.md` (the asymmetry above); `.scratch/testing-improvements/issues/67-minimal-rdb-fullsync-carries-no-dataset.md` (the inverse case: a persistence-disabled primary hands over a replid and offset with no dataset behind them, so there is no staged metadata to reconcile and the replica keeps a stale keyspace) |
+| Forced by | `staged_replication_metadata_is_adopted_and_consumed`, `staged_metadata_survives_a_failed_state_save` |
+| Bug refs | `.scratch/hardening/issues/08` (fixed — the consume was unconditional while the save was warn-only); `.scratch/testing-improvements/issues/67` (fixed — the inverse case: a persistence-disabled primary handed over a replid and offset with no dataset behind them, so there was no staged metadata to reconcile and the replica kept a stale keyspace; that primary now ships its live dataset, see [FM-REPLICATION-001](replication-failure-modes.md)) |
 
 ## FM-PERSISTENCE-040 — cluster storage that will not open refuses to start
 
@@ -570,7 +570,7 @@ named above, so a change here is a visible spec edit rather than a silent drift.
 
 | Mode | FrogDB | Redis | Rationale |
 |---|---|---|---|
-| FM-PERSISTENCE-005 | A WAL failure under the default `continue` policy acknowledges the write; the server keeps accepting writes indefinitely | The first failed background save flips `stop-writes-on-bgsave-error`, and every subsequent write is refused with `-MISCONF Redis is configured to save RDB snapshots, but is currently not able to persist on disk` | FrogDB has no MISCONF equivalent at all. The only refusal is per-write `-IOERR` under the non-default `wal-failure-policy = rollback` (FM-PERSISTENCE-006), which covers failures the shard observes at write time — not a persistently broken disk. **Flagged as a spec gap, not a settled decision:** an operator migrating from Redis will expect writes to stop, and instead gets acknowledged writes that are not on disk. Tracked by `.scratch/hardening/issues/03-bgsave-failure-invisible-to-clients.md`. |
+| FM-PERSISTENCE-005 | A WAL failure under the default `continue` policy acknowledges the write; the server keeps accepting writes indefinitely | The first failed background save flips `stop-writes-on-bgsave-error`, and every subsequent write is refused with `-MISCONF Redis is configured to save RDB snapshots, but is currently not able to persist on disk` | FrogDB has no MISCONF equivalent at all. The only refusal is per-write `-IOERR` under the non-default `wal-failure-policy = rollback` (FM-PERSISTENCE-006), which covers failures the shard observes at write time — not a persistently broken disk. **Flagged as a spec gap, not a settled decision:** an operator migrating from Redis will expect writes to stop, and instead gets acknowledged writes that are not on disk. Tracked by `.scratch/hardening/issues/03`. |
 | FM-PERSISTENCE-022 | `INFO persistence` reports `rdb_last_bgsave_status:ok` unconditionally | `rdb_last_bgsave_status:err` after a failed `BGSAVE` | A hardcoded literal with no failure state plumbed behind it. `LASTSAVE` *is* honest (it does not advance on failure), which makes the `INFO` field the only lying surface. Real bug, filed as issue 03; row states current behavior. |
 | FM-PERSISTENCE-021 | A `BGSAVE` artifact is never loaded at boot; restoring it is an explicit operator install into a fresh data dir via `checkpoint_ready` | Redis loads `dump.rdb` at startup | FrogDB restarts recover from RocksDB + its WAL, which is strictly more current than the last snapshot. A snapshot is a *backup artifact*, not the boot path; auto-loading one would roll the keyspace back to the last cut. |
 | FM-PERSISTENCE-015 | `BGSAVE` while a save is running replies with the `+` simple string `Background save already in progress` | `-ERR Background save already in progress` | A RESP client that treats only `-` replies as errors reads a rejected `BGSAVE` as success. Pinned as-is rather than fixed, because the wire shape is observable by raw-protocol clients; changing it is a separate, testable change (issue 45). |

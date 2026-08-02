@@ -1,5 +1,4 @@
 use crate::primary::ring_buffer::ReplicationRingBuffer;
-use crate::replica_session::create_minimal_rdb;
 use bytes::Bytes;
 
 /// Build a primary handler with an enabled split-brain backlog for the
@@ -222,14 +221,6 @@ fn divergence_record_no_streaming_replicas_uses_zero_floor() {
         vec![o0, o1, current],
         "entire backlog is divergent"
     );
-}
-
-#[test]
-fn test_create_minimal_rdb() {
-    let rdb = create_minimal_rdb();
-    assert_eq!(&rdb[0..5], b"REDIS");
-    assert_eq!(&rdb[5..9], b"0011");
-    assert!(rdb.contains(&0xFF));
 }
 
 // The `parse_replconf_ack` unit tests moved to the `ReplconfCodec` golden

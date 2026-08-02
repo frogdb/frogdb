@@ -16,6 +16,7 @@
 //! - SortedSet: [len:u32]([score:f64][member_len:u32][member_bytes]...)
 
 mod collections;
+pub mod dataset;
 mod frame;
 mod marker;
 mod probabilistic;
@@ -33,6 +34,7 @@ use frogdb_types::types::{KeyMetadata, Value};
 pub(crate) use frame::FrameReader;
 pub(crate) use marker::TypeMarker;
 
+pub use dataset::{DatasetEntry, append_entry, read_entries};
 pub use probabilistic::{merge_hll_serialized, partial_merge_hll_deltas, serialize_hll_delta};
 
 /// Size of the serialization header in bytes.

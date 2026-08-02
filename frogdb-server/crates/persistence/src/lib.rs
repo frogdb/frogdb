@@ -22,8 +22,8 @@ pub use recovery::{
 };
 pub use rocks::{CfTier, CompressionType, RocksConfig, RocksStore, StagedCheckpoint};
 pub use serialization::{
-    HEADER_SIZE, SerializationError, deserialize, merge_hll_serialized, partial_merge_hll_deltas,
-    serialize, serialize_hll_delta,
+    DatasetEntry, HEADER_SIZE, SerializationError, append_entry, deserialize, merge_hll_serialized,
+    partial_merge_hll_deltas, read_entries, serialize, serialize_hll_delta,
 };
 pub use snapshot::{
     NoopSnapshotCoordinator, PreSnapshotHook, RocksSnapshotCoordinator, SnapshotConfig,

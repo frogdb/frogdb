@@ -1,6 +1,6 @@
 # A failed BGSAVE is invisible to every client-facing surface
 
-Status: open
+Status: needs-triage
 Type: bug (observability / Redis parity)
 Severity: likelihood 2/3 (any snapshot failure — full disk, permissions, IO error), consequence 3/3
 (an operator believes backups are running when none have succeeded for weeks) — score 6

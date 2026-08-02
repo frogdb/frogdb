@@ -2,7 +2,8 @@
 
 use crate::frame::serialize_command_to_resp;
 use crate::fullsync::{
-    CHECKPOINT_MARKER, CheckpointStager, CheckpointStreamCodec, receive_checkpoint_files,
+    CHECKPOINT_MARKER, CheckpointChecksum, CheckpointStager, CheckpointStreamCodec,
+    SNAPSHOT_MARKER, calculate_bytes_checksum, receive_checkpoint_files,
 };
 use crate::state::ReplicationState;
 use bytes::Bytes;
@@ -12,8 +13,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::CheckpointInstaller;
 use super::offset::ReplicaOffset;
+use super::{FullSyncPayload, SnapshotInstaller};
 use parking_lot::RwLock;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
@@ -87,9 +88,19 @@ impl std::fmt::Display for ConnectionState {
     }
 }
 
+/// What the primary answered a `PSYNC` with, and therefore what has to be read
+/// off the socket next.
+///
+/// There is deliberately no "plain RDB" arm: a FrogDB primary answers a full
+/// resync with a checkpoint envelope (it has RocksDB) or a dataset envelope (it
+/// does not), and both carry the primary's actual keyspace. The data-less
+/// minimal RDB that used to be sent when persistence was disabled left the
+/// replica serving its own stale keyspace while it believed it was in sync
+/// (issue 67), so the payload that expressed it no longer exists on either side.
+#[derive(Debug)]
 pub(crate) enum SyncType {
-    FullSyncRdb { rdb_size: usize },
     FullSyncCheckpoint { file_count: usize },
+    FullSyncSnapshot { blob_count: usize },
     PartialSync,
 }
 
@@ -115,7 +126,7 @@ pub struct ReplicaConnection {
     /// resumes; cloned in from the owning handler. `None` in tests and in any
     /// wiring that has no shards, which degrades to the staged-for-next-boot
     /// behaviour (warned about in [`Self::receive_checkpoint`]).
-    pub(crate) checkpoint_installer: Option<CheckpointInstaller>,
+    pub(crate) snapshot_installer: Option<SnapshotInstaller>,
 }
 
 impl ReplicaConnection {
@@ -195,11 +206,21 @@ impl ReplicaConnection {
                 self.state
                     .write()
                     .adopt_replication_history(new_repl_id.clone());
-                if !self.offsets.reset_to(new_offset) {
+                // Rewind to 0 rather than adopting the granted offset here. The
+                // granted offset describes the dataset that is about to arrive,
+                // and this node does not hold it yet: if the payload never
+                // lands (socket dies, checksum mismatch, install fails), an
+                // adopted offset would let the *next* reconnect ask for a
+                // partial resync from a position this node's stale keyspace
+                // never reached — and be granted `+CONTINUE`, silently forking.
+                // At 0 the reconnect sends `PSYNC ? -1` and retries the full
+                // resync, which is the only safe answer. The granted offset is
+                // adopted by the receive path once the dataset is installed.
+                if !self.offsets.reset_to(0) {
                     // A promotion froze the heads (or a newer stream took them)
                     // while this sync was in flight: this connection no longer
-                    // owns the node's history and must not adopt an offset the
-                    // freshly minted window and backlog floor know nothing of.
+                    // owns the node's history and must not move heads the
+                    // freshly minted window and backlog floor were built around.
                     return Err(io::Error::other(
                         "replication stream retired during FULLRESYNC",
                     ));
@@ -211,23 +232,32 @@ impl ReplicaConnection {
                 if !line.starts_with('$') {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
-                        "expected RDB size prefix or checkpoint marker",
+                        "expected a checkpoint or dataset marker",
                     ));
                 }
+                // Marker detection stays here (raw, byte-at-a-time reads) so the
+                // payload-kind decision is not entangled with the envelope, but
+                // the count parse routes through the codec.
                 let marker = &line[1..];
-                if marker == CHECKPOINT_MARKER {
-                    // Marker detection stays here (raw, byte-at-a-time reads) so
-                    // the RDB-vs-checkpoint decision is not entangled with the
-                    // envelope, but the count parse routes through the codec.
-                    let line_buf = read_resp_line(&mut self.stream).await?;
-                    let file_count = CheckpointStreamCodec::parse_file_count(&line_buf)?;
-                    tracing::info!(file_count = file_count, "FrogDB checkpoint FULLRESYNC");
-                    Ok(SyncType::FullSyncCheckpoint { file_count })
+                if marker == CHECKPOINT_MARKER || marker == SNAPSHOT_MARKER {
+                    let count_line = read_resp_line(&mut self.stream).await?;
+                    let count = CheckpointStreamCodec::parse_file_count(&count_line)?;
+                    if marker == CHECKPOINT_MARKER {
+                        tracing::info!(file_count = count, "FrogDB checkpoint FULLRESYNC");
+                        Ok(SyncType::FullSyncCheckpoint { file_count: count })
+                    } else {
+                        tracing::info!(blob_count = count, "FrogDB live-dataset FULLRESYNC");
+                        Ok(SyncType::FullSyncSnapshot { blob_count: count })
+                    }
                 } else {
-                    let rdb_size: usize = marker.parse().map_err(|_| {
-                        io::Error::new(io::ErrorKind::InvalidData, "invalid RDB size")
-                    })?;
-                    Ok(SyncType::FullSyncRdb { rdb_size })
+                    // Anything else — including the data-less minimal RDB older
+                    // primaries sent when persistence was disabled — carries no
+                    // dataset this node can install, and accepting it would mean
+                    // keeping a stale keyspace while claiming to be synced.
+                    Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("unsupported FULLRESYNC payload marker: {marker}"),
+                    ))
                 }
             } else {
                 Err(io::Error::new(
@@ -263,16 +293,64 @@ impl ReplicaConnection {
         }
     }
 
-    pub(crate) async fn receive_rdb(&mut self, rdb_size: usize) -> io::Result<()> {
-        tracing::info!(size = rdb_size, "Receiving RDB data");
-        let mut rdb_data = vec![0u8; rdb_size];
-        self.stream.read_exact(&mut rdb_data).await?;
-        if rdb_data.len() >= 9 && &rdb_data[0..5] == b"REDIS" {
-            tracing::info!(size = rdb_data.len(), "RDB data received successfully");
-        } else {
+    /// Receive a live-dataset full sync — the payload a primary running without
+    /// persistence sends in place of a checkpoint — and install it.
+    ///
+    /// Same envelope as the checkpoint path and the same ordering rules; only
+    /// the landing differs. Nothing is staged to disk, because there is no
+    /// RocksDB on either side of this sync to stage *into*: the blobs go
+    /// straight to the installer, which decodes them and pushes each key to its
+    /// own shard.
+    ///
+    /// The trailing metadata's combined checksum is verified over the blobs
+    /// exactly as [`CheckpointStager::commit`] verifies it over the files, so a
+    /// corrupted or truncated dataset fails the sync instead of being installed
+    /// as if it were the primary's keyspace.
+    ///
+    /// **Durability note.** The offset this sync adopts is in memory until the
+    /// next replication-state save. A crash in that window leaves the installed
+    /// dataset with a state file that still names the *previous* offset; the
+    /// replica then reconnects from there and, since its keyspace is at or ahead
+    /// of that point, re-applies a tail it already holds. That is idempotent for
+    /// the replicated write stream, and it is the same window the checkpoint
+    /// path has between install and metadata consumption.
+    pub(crate) async fn receive_snapshot(&mut self, blob_count: usize) -> io::Result<()> {
+        tracing::info!(blob_count = blob_count, "Receiving FrogDB live dataset");
+        let mut reader = BufReader::new(&mut self.stream);
+        let mut blobs: Vec<Vec<u8>> = Vec::with_capacity(blob_count);
+        let mut combined = CheckpointChecksum::new();
+        for _ in 0..blob_count {
+            let header = CheckpointStreamCodec::read_file_header(&mut reader).await?;
+            let mut blob = vec![
+                0u8;
+                usize::try_from(header.size).map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "dataset blob size overflows usize",
+                    )
+                })?
+            ];
+            reader.read_exact(&mut blob).await?;
+            combined.update_file(&header.name, &calculate_bytes_checksum(&blob));
+            blobs.push(blob);
+        }
+        let metadata = CheckpointStreamCodec::read_metadata(&mut reader).await?;
+        if combined.finalize() != metadata.checksum {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "invalid RDB header",
+                "live-dataset checksum mismatch",
+            ));
+        }
+
+        self.install_payload(FullSyncPayload::LiveDataset(blobs))
+            .await?;
+
+        self.state
+            .write()
+            .adopt_replication_history(metadata.replication_id.clone());
+        if !self.offsets.reset_to(metadata.replication_offset) {
+            return Err(io::Error::other(
+                "replication stream retired during dataset sync",
             ));
         }
         self.set_state(ConnectionState::Streaming);
@@ -285,7 +363,7 @@ impl ReplicaConnection {
     /// This is a thin driver over three seams: [`receive_checkpoint_files`] owns
     /// the transport loop (socket → scratch dir + combined checksum),
     /// [`CheckpointStager::commit`] owns verify → commit → metadata against the
-    /// staged-checkpoint contract, and the injected [`CheckpointInstaller`] owns
+    /// staged-checkpoint contract, and the injected [`SnapshotInstaller`] owns
     /// loading the staged snapshot into the live shards. What stays here is the
     /// ordering and the only step that belongs to the connection — adopting the
     /// staged offset into live replication state, then flipping to `Streaming`.
@@ -319,7 +397,8 @@ impl ReplicaConnection {
 
         let outcome = stager.commit(incoming, computed, &metadata).await?;
 
-        self.install_staged_checkpoint(stager.staged_dir()).await?;
+        self.install_payload(FullSyncPayload::StagedCheckpoint(stager.staged_dir()))
+            .await?;
 
         // Adopt the staged offset into live state — the one step that must stay
         // on the connection, because it mutates `ReplicationState` + the shared
@@ -328,33 +407,44 @@ impl ReplicaConnection {
             .write()
             .adopt_replication_history(outcome.replication_id.clone());
         if !self.offsets.reset_to(outcome.replication_offset) {
-            // See `receive_rdb`: the stream was retired mid-sync, so adopting
-            // the checkpoint's offset would overwrite a frozen boundary.
+            // The stream was retired mid-sync, so adopting the checkpoint's
+            // offset would overwrite a frozen boundary.
             return Err(io::Error::other(
                 "replication stream retired during checkpoint sync",
             ));
         }
         // The live keyspace now matches the snapshot, so the connection moves
-        // into live WAL streaming (see `connect_and_sync`) exactly like the RDB
-        // fullsync path — the link is up from here, matching `receive_rdb`.
+        // into live WAL streaming (see `connect_and_sync`) — the link is up from
+        // here, exactly as in `receive_snapshot`.
         self.set_state(ConnectionState::Streaming);
         Ok(())
     }
 
-    /// Hand the staged snapshot to the injected installer, rewinding the offset
+    /// Hand the received dataset to the injected installer, rewinding the offset
     /// on failure so the next reconnect asks for a fresh full resync instead of
     /// streaming deltas onto a keyspace that never adopted the base snapshot.
-    async fn install_staged_checkpoint(&mut self, staged_dir: PathBuf) -> io::Result<()> {
-        let Some(installer) = self.checkpoint_installer.clone() else {
-            tracing::warn!(
-                checkpoint_dir = %staged_dir.display(),
-                "No checkpoint installer wired: the snapshot is staged for the next boot only, \
-                 so this node keeps serving its previous keyspace until it restarts"
-            );
+    async fn install_payload(&mut self, payload: FullSyncPayload) -> io::Result<()> {
+        let Some(installer) = self.snapshot_installer.clone() else {
+            match &payload {
+                FullSyncPayload::StagedCheckpoint(dir) => tracing::warn!(
+                    checkpoint_dir = %dir.display(),
+                    "No snapshot installer wired: the checkpoint is staged for the next boot only, \
+                     so this node keeps serving its previous keyspace until it restarts"
+                ),
+                // A live dataset has no on-disk staging to fall back on, so
+                // there is nothing to adopt now or later: fail the sync rather
+                // than let the offset advance over a keyspace that never took
+                // the snapshot.
+                FullSyncPayload::LiveDataset(_) => {
+                    return Err(io::Error::other(
+                        "no snapshot installer wired: cannot install a live-dataset full resync",
+                    ));
+                }
+            }
             return Ok(());
         };
-        if let Err(e) = installer(staged_dir).await {
-            tracing::error!(error = %e, "Failed to install full-resync checkpoint into the live keyspace");
+        if let Err(e) = installer(payload).await {
+            tracing::error!(error = %e, "Failed to install the full-resync dataset into the live keyspace");
             // Best effort: if the stream was retired meanwhile, the heads belong
             // to whoever retired it and the rewind is neither possible nor
             // needed.
@@ -436,7 +526,7 @@ mod tests {
             offsets,
             link_up: Arc::new(AtomicBool::new(false)),
             ack_interval: Duration::from_secs(1),
-            checkpoint_installer: None,
+            snapshot_installer: None,
         };
 
         let mut client = client;
@@ -511,7 +601,7 @@ mod tests {
     async fn checkpoint_fixture(
         tmp: &std::path::Path,
         offset: u64,
-        installer: Option<CheckpointInstaller>,
+        installer: Option<SnapshotInstaller>,
     ) -> CheckpointFixture {
         let files = vec![
             ("CURRENT".to_string(), b"MANIFEST-000005\n".to_vec()),
@@ -537,7 +627,7 @@ mod tests {
             offsets: offsets.clone(),
             link_up: link_up.clone(),
             ack_interval: Duration::from_secs(1),
-            checkpoint_installer: installer,
+            snapshot_installer: installer,
         };
 
         // Feed the whole checkpoint body, then close so no read blocks.
@@ -597,14 +687,17 @@ mod tests {
         let recorder = {
             let seen = seen.clone();
             let offsets = offsets.clone();
-            Arc::new(move |dir: PathBuf| {
+            Arc::new(move |payload: FullSyncPayload| {
                 let seen = seen.clone();
                 let offsets = offsets.clone();
                 Box::pin(async move {
+                    let FullSyncPayload::StagedCheckpoint(dir) = payload else {
+                        panic!("a checkpoint sync must hand the installer a staged dir")
+                    };
                     seen.lock().unwrap().push((dir, offsets.current()));
                     Ok(())
                 }) as Pin<Box<dyn Future<Output = io::Result<()>> + Send>>
-            }) as CheckpointInstaller
+            }) as SnapshotInstaller
         };
 
         let mut f = checkpoint_fixture(tmp.path(), 4242, Some(recorder)).await;
@@ -631,10 +724,10 @@ mod tests {
     #[tokio::test]
     async fn receive_checkpoint_install_failure_rewinds_offset_for_full_resync() {
         let tmp = tempfile::tempdir().unwrap();
-        let failing = Arc::new(|_dir: PathBuf| {
+        let failing = Arc::new(|_payload: FullSyncPayload| {
             Box::pin(async { Err(io::Error::other("shard install failed")) })
                 as Pin<Box<dyn Future<Output = io::Result<()>> + Send>>
-        }) as CheckpointInstaller;
+        }) as SnapshotInstaller;
 
         let mut f = checkpoint_fixture(tmp.path(), 4242, Some(failing)).await;
         let err = f.conn.receive_checkpoint(f.file_count).await.unwrap_err();
@@ -646,6 +739,283 @@ mod tests {
         assert_eq!(
             psync_request_args(&f.state.read().replication_id, f.offsets.current()),
             ("?".to_string(), -1),
+        );
+    }
+
+    // ---- live-dataset full sync (issue 67) --------------------------------
+
+    /// What the recording installer saw: the blobs it was handed, paired with
+    /// the live offset at the moment of the call — the install-before-adopt
+    /// ordering is asserted on that pairing, so both halves travel together.
+    type InstalledDatasets = Arc<std::sync::Mutex<Vec<(Vec<Vec<u8>>, u64)>>>;
+
+    /// Encode a live-dataset envelope body — per-blob frames + trailing
+    /// metadata, without the prelude `psync` already consumed.
+    async fn encode_dataset_body(
+        blobs: &[Vec<u8>],
+        replication_id: &str,
+        offset: u64,
+        corrupt: bool,
+    ) -> Vec<u8> {
+        let named: Vec<(String, Vec<u8>)> = blobs
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (format!("shard-{i}.dataset"), b.clone()))
+            .collect();
+        let mut buf: Vec<u8> = Vec::new();
+        let mut combined = CheckpointChecksum::new();
+        for (name, payload) in &named {
+            CheckpointStreamCodec::write_file_header(
+                &mut buf,
+                &CheckpointFileHeader {
+                    name: name.clone(),
+                    size: payload.len() as u64,
+                },
+            )
+            .await
+            .unwrap();
+            buf.write_all(payload).await.unwrap();
+            // Fold the *pristine* bytes even when the wire carries mutated ones,
+            // so `corrupt` reproduces a payload that no longer matches its
+            // advertised checksum.
+            combined.update_file(name, &calculate_bytes_checksum(payload));
+        }
+        if corrupt {
+            let last = buf.len() - 1;
+            buf[last] ^= 0xFF;
+        }
+        let metadata = FullSyncMetadata {
+            rdb_size: named.iter().map(|(_, p)| p.len() as u64).sum(),
+            checksum: combined.finalize(),
+            replication_id: replication_id.to_string(),
+            replication_offset: offset,
+        };
+        CheckpointStreamCodec::write_metadata(&mut buf, &metadata)
+            .await
+            .unwrap();
+        buf
+    }
+
+    /// A connection fed a live-dataset body, ready for `receive_snapshot`.
+    async fn dataset_fixture(
+        tmp: &std::path::Path,
+        blobs: Vec<Vec<u8>>,
+        offset: u64,
+        corrupt: bool,
+        installer: Option<SnapshotInstaller>,
+    ) -> CheckpointFixture {
+        let body = encode_dataset_body(&blobs, "primary-replid", offset, corrupt).await;
+
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let state = Arc::new(RwLock::new(ReplicationState::new()));
+        let offsets = ReplicaOffset::new(
+            state.clone(),
+            Arc::new(AtomicU64::new(0)),
+            AppliedOffset::detached(0),
+        );
+        let link_up = Arc::new(AtomicBool::new(false));
+
+        let conn = ReplicaConnection {
+            stream: Box::new(server),
+            _primary_addr: "127.0.0.1:6379".parse().unwrap(),
+            state: state.clone(),
+            connection_state: ConnectionState::Syncing,
+            data_dir: tmp.join("db"),
+            offsets: offsets.clone(),
+            link_up: link_up.clone(),
+            ack_interval: Duration::from_secs(1),
+            snapshot_installer: installer,
+        };
+
+        client.write_all(&body).await.unwrap();
+        client.shutdown().await.unwrap();
+        drop(client);
+
+        CheckpointFixture {
+            conn,
+            file_count: blobs.len(),
+            state,
+            offsets,
+            link_up,
+        }
+    }
+
+    /// Issue 67: the dataset a persistence-disabled primary sends reaches the
+    /// installer *before* the offset is adopted, and nothing is staged to disk.
+    ///
+    /// The old behaviour had no dataset to hand over at all: the replica took
+    /// the replid/offset off a minimal RDB and flipped to `Streaming` with its
+    /// previous keyspace intact.
+    // FM-REPLICATION-001
+    #[tokio::test]
+    async fn receive_snapshot_installs_the_dataset_before_adopting_offset() {
+        let tmp = tempfile::tempdir().unwrap();
+        // (blobs handed to the installer, live offset at install time).
+        let seen: InstalledDatasets = Arc::default();
+        let blobs = vec![b"shard-zero-bytes".to_vec(), b"shard-one".to_vec()];
+
+        let mut f = {
+            let seen = seen.clone();
+            // The fixture owns the offsets, so capture them through a cell the
+            // recorder can read once the fixture exists.
+            let observed: Arc<std::sync::Mutex<Option<ReplicaOffset>>> = Arc::default();
+            let recorder_offsets = observed.clone();
+            let recorder = Arc::new(move |payload: FullSyncPayload| {
+                let seen = seen.clone();
+                let offsets = recorder_offsets.lock().unwrap().clone();
+                Box::pin(async move {
+                    let FullSyncPayload::LiveDataset(blobs) = payload else {
+                        panic!("a dataset sync must hand the installer blobs")
+                    };
+                    let at = offsets.expect("offsets wired").current();
+                    seen.lock().unwrap().push((blobs, at));
+                    Ok(())
+                }) as Pin<Box<dyn Future<Output = io::Result<()>> + Send>>
+            }) as SnapshotInstaller;
+            let f = dataset_fixture(tmp.path(), blobs.clone(), 4242, false, Some(recorder)).await;
+            *observed.lock().unwrap() = Some(f.offsets.clone());
+            f
+        };
+
+        f.conn.receive_snapshot(f.file_count).await.unwrap();
+
+        assert_eq!(
+            seen.lock().unwrap().clone(),
+            vec![(blobs, 0)],
+            "the blobs reach the installer once, before the offset is adopted"
+        );
+        assert_eq!(
+            f.offsets.current(),
+            4242,
+            "offset adopted after the install"
+        );
+        assert_eq!(f.state.read().replication_id, "primary-replid");
+        assert_eq!(f.conn.connection_state, ConnectionState::Streaming);
+        assert!(f.link_up.load(Ordering::Acquire));
+
+        // Nothing was staged: there is no RocksDB on this path.
+        let staged = frogdb_persistence::rocks::staged::StagedCheckpoint::in_parent(tmp.path());
+        assert!(!staged.exists(), "a live dataset must not stage to disk");
+    }
+
+    /// Issue 67: with no installer wired there is no disk staging to fall back
+    /// on, so the sync fails rather than advancing the offset over a keyspace
+    /// that never took the dataset.
+    // FM-REPLICATION-001
+    #[tokio::test]
+    async fn receive_snapshot_without_an_installer_fails_the_sync() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut f = dataset_fixture(tmp.path(), vec![b"blob".to_vec()], 4242, false, None).await;
+
+        let err = f.conn.receive_snapshot(f.file_count).await.unwrap_err();
+
+        assert!(
+            err.to_string().contains("no snapshot installer"),
+            "got: {err}"
+        );
+        assert_eq!(f.offsets.current(), 0, "rewound so PSYNC asks ? -1");
+        assert_ne!(f.conn.connection_state, ConnectionState::Streaming);
+        assert!(!f.link_up.load(Ordering::Acquire));
+    }
+
+    /// A corrupted dataset must fail the sync, not be installed as if it were
+    /// the primary's keyspace — the same coverage the checkpoint path gets.
+    // FM-REPLICATION-001
+    #[tokio::test]
+    async fn receive_snapshot_rejects_a_corrupted_dataset() {
+        let tmp = tempfile::tempdir().unwrap();
+        let installed = Arc::new(AtomicBool::new(false));
+        let installer = {
+            let installed = installed.clone();
+            Arc::new(move |_payload: FullSyncPayload| {
+                installed.store(true, Ordering::Release);
+                Box::pin(async { Ok(()) }) as Pin<Box<dyn Future<Output = io::Result<()>> + Send>>
+            }) as SnapshotInstaller
+        };
+
+        let mut f = dataset_fixture(
+            tmp.path(),
+            vec![b"payload-bytes".to_vec()],
+            4242,
+            true,
+            Some(installer),
+        )
+        .await;
+
+        let err = f.conn.receive_snapshot(f.file_count).await.unwrap_err();
+
+        assert!(err.to_string().contains("checksum mismatch"), "got: {err}");
+        assert!(
+            !installed.load(Ordering::Acquire),
+            "a dataset that fails verification never reaches the shards"
+        );
+        assert_eq!(f.offsets.current(), 0);
+        assert_ne!(f.conn.connection_state, ConnectionState::Streaming);
+    }
+
+    /// Issue 67: the data-less minimal RDB an older primary sent when
+    /// persistence was disabled is rejected outright.
+    ///
+    /// This is the bug's signature at the protocol boundary. Before the fix the
+    /// `$<size>` arm parsed it, threw the bytes away, and returned success —
+    /// after which the replica reported `master_link_status:up` while serving
+    /// its own stale keyspace. There is now no payload shape that carries an
+    /// offset without a dataset behind it.
+    // FM-REPLICATION-001
+    #[tokio::test]
+    async fn psync_rejects_a_payload_that_carries_no_dataset() {
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let state = Arc::new(RwLock::new(ReplicationState::new()));
+        let offsets = ReplicaOffset::new(
+            state.clone(),
+            Arc::new(AtomicU64::new(500)),
+            AppliedOffset::detached(500),
+        );
+        let mut conn = ReplicaConnection {
+            stream: Box::new(server),
+            _primary_addr: "127.0.0.1:6379".parse().unwrap(),
+            state: state.clone(),
+            connection_state: ConnectionState::Connected,
+            data_dir: PathBuf::from("/tmp/frogdb-test"),
+            offsets: offsets.clone(),
+            link_up: Arc::new(AtomicBool::new(false)),
+            ack_interval: Duration::from_secs(1),
+            snapshot_installer: None,
+        };
+
+        let task = tokio::spawn(async move {
+            let r = conn.psync().await;
+            (r, conn.connection_state)
+        });
+
+        // Drain the PSYNC request, then answer it the way a pre-fix primary did.
+        let mut buf = vec![0u8; 512];
+        let n = client.read(&mut buf).await.unwrap();
+        assert!(n > 0, "the replica must have sent a PSYNC request");
+        client
+            .write_all(b"+FULLRESYNC 0123456789012345678901234567890123456789 4242\r\n")
+            .await
+            .unwrap();
+        client.write_all(b"$88\r\n").await.unwrap();
+        client.write_all(&[0u8; 88]).await.unwrap();
+
+        let (result, connection_state) = task.await.unwrap();
+        let err = result.expect_err("a data-less payload must fail the sync");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string()
+                .contains("unsupported FULLRESYNC payload marker"),
+            "got: {err}"
+        );
+        assert_ne!(
+            connection_state,
+            ConnectionState::Streaming,
+            "the link must not come up on a sync that transferred no dataset"
+        );
+        assert_eq!(
+            offsets.current(),
+            0,
+            "the granted offset is not adopted, so the retry is a full resync"
         );
     }
 }

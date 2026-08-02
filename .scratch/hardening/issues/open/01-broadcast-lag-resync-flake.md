@@ -30,6 +30,11 @@ cross-references this test's failure pattern. The assertion is a WAIT-ack count 
 healthy replica while a LagProxy throttles the other —
 a 1s write timeout that presumably starves under CPU contention.
 
+Hit twice more on 2026-08-02 during the phase-2c full-sync work (`just test frogdb-server`
+1913/1914, and once in a 185-test `just core-test-e2e replication` run), same assertion, same
+message. Passed in isolation and on two consecutive reruns of the same filter, so still
+load-dependent and still unrelated to the diff under test.
+
 ## Next steps
 
 - Root-cause whether the 1s LagProxy write timeout or the WAIT deadline is the load-sensitive

@@ -139,6 +139,14 @@ pub(super) fn init_replication(
             })
         }));
     }
+    // Issue 67: with `persistence.enabled = false` there is no RocksDB to
+    // checkpoint, and a full resync that carries no dataset leaves the replica
+    // serving its own stale keyspace. Wired for every role and every config —
+    // a node can be told to serve a full resync at any point, and the reader is
+    // only consulted when there is no store to checkpoint.
+    primary_handler.set_live_snapshot_source(crate::replication::live_snapshot_source(
+        shard_senders.clone(),
+    ));
     let replication_broadcaster: SharedBroadcaster = Arc::new(RoleGatedBroadcaster {
         inner: primary_handler.clone(),
         is_replica: is_replica_flag.clone(),
@@ -179,7 +187,7 @@ pub(super) fn init_replication(
         handler.set_ack_interval(config.replication.ack_interval_ms);
         // Issue 61: a received full resync must land in the live keyspace, not
         // just on disk for the next boot.
-        handler.set_checkpoint_installer(crate::replication::LiveCheckpointInstaller::for_config(
+        handler.set_snapshot_installer(crate::replication::LiveSnapshotInstaller::for_config(
             config,
             shard_senders.clone(),
         ));

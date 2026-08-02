@@ -47,11 +47,23 @@ pub(crate) fn restore_state(inputs: &RecoveryInputs<'_>) -> Result<ReplicationSt
                 "Adopting replication offset from staged full-sync checkpoint"
             );
             repl_state.apply_staged_metadata(&meta);
-            if let Err(e) = repl_state.save(&state_path) {
-                warn!(error = %e, "Failed to persist reconciled replication state");
+            match repl_state.save(&state_path) {
+                // The state file now carries the snapshot's position, so the
+                // staging file has nothing left to say: consume it and later
+                // restarts read the state file.
+                Ok(()) => frogdb_core::consume_staged_replication_metadata(inputs.data_dir),
+                // The write did not land, so the staging file is still the only
+                // durable copy of the offset that matches the installed
+                // snapshot. Keeping it costs one idempotent re-adoption on the
+                // next boot (the metadata describes data that is already
+                // there); consuming it would leave that boot resuming from the
+                // pre-full-sync offset against post-full-sync data.
+                Err(e) => warn!(
+                    error = %e,
+                    "Failed to persist reconciled replication state; keeping the staged \
+                     metadata so the next boot re-adopts it"
+                ),
             }
-            // Consume the staging file so later restarts use the state file.
-            frogdb_core::consume_staged_replication_metadata(inputs.data_dir);
         }
         Ok(None) => {}
         Err(e) => {

@@ -1,6 +1,6 @@
 # Staged replication metadata is consumed even when persisting the reconciled state failed
 
-Status: open
+Status: done
 Type: bug (data safety / replication)
 Severity: likelihood 1/3 (needs a write failure on the state file in the window after a full sync),
 consequence 3/3 (a replica resumes from an offset that does not match its dataset, silently) —
@@ -61,3 +61,31 @@ A `frogdb-recovery` seam test that stages a `replication_metadata.json`, makes t
 unwritable (a read-only file, or a directory where the file should be), runs `recover`, and asserts
 the staging file still exists afterwards. The existing
 `staged_replication_metadata_is_adopted_and_consumed` test has all the fixtures.
+
+## Resolution
+
+Candidate fix 1 (only consume after a successful save), as filed. In
+`frogdb-server/crates/recovery/src/replication.rs` the consume is now the `Ok` arm of the save:
+
+```rust
+match repl_state.save(&state_path) {
+    Ok(()) => frogdb_core::consume_staged_replication_metadata(inputs.data_dir),
+    Err(e) => warn!(
+        error = %e,
+        "Failed to persist reconciled replication state; keeping the staged metadata so the \
+         next boot re-adopts it"
+    ),
+}
+```
+
+The boot still proceeds on the correct in-memory state — a full disk stays a degraded boot, not an
+outage — but the staging file survives, so the next boot re-adopts it. Re-adoption is idempotent:
+the metadata describes a dataset that is already installed.
+
+Forcing test: `staged_metadata_survives_a_failed_state_save` (`frogdb-recovery`), which blocks the
+atomic write by creating a *directory* where `ReplicationState::save` needs its temp file, then
+asserts the staging file is still present after `recover` and that the in-memory state adopted the
+staged replid/offset anyway.
+
+Spec: FM-PERSISTENCE-039 retitled to "…consumed only once it is durable"; the failed-save case is
+now stated in Observable/NOT observable and the consumption ordering in Invariant.

@@ -480,7 +480,7 @@ pub struct RealReplicaStreamer {
     /// `REPLICAOF <new-master>` demotion is exactly the case where the old
     /// keyspace has forked from the new master's and must be replaced rather
     /// than staged for a reboot that may never come.
-    checkpoint_installer: frogdb_replication::replica::CheckpointInstaller,
+    snapshot_installer: frogdb_replication::replica::SnapshotInstaller,
     #[cfg(not(feature = "turmoil"))]
     tls: Option<ReplicaTlsConfig>,
 }
@@ -521,8 +521,8 @@ impl RealReplicaStreamer {
             None
         };
 
-        let checkpoint_installer =
-            crate::replication::LiveCheckpointInstaller::for_config(config, shard_senders.clone());
+        let snapshot_installer =
+            crate::replication::LiveSnapshotInstaller::for_config(config, shard_senders.clone());
 
         Self {
             identity,
@@ -534,7 +534,7 @@ impl RealReplicaStreamer {
             is_replica_flag,
             shared_offset,
             ack_interval_ms: config.replication.ack_interval_ms,
-            checkpoint_installer,
+            snapshot_installer,
             #[cfg(not(feature = "turmoil"))]
             tls,
         }
@@ -565,7 +565,7 @@ impl RealReplicaStreamer {
 
         let mut handler = handler;
         handler.set_ack_interval(self.ack_interval_ms);
-        handler.set_checkpoint_installer(self.checkpoint_installer.clone());
+        handler.set_snapshot_installer(self.snapshot_installer.clone());
 
         // Publish this stream's applied offset into the cluster-bus HealthProbe
         // atomic, mirroring the boot-time replica path in `init_replication`, so
@@ -1089,7 +1089,7 @@ mod tests {
             is_replica_flag: Arc::new(AtomicBool::new(false)),
             shared_offset,
             ack_interval_ms: 1000,
-            checkpoint_installer: crate::replication::LiveCheckpointInstaller::new(
+            snapshot_installer: crate::replication::LiveSnapshotInstaller::new(
                 Arc::new(Vec::new()),
                 frogdb_core::persistence::RocksConfig::default(),
                 false,
